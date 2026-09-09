@@ -8,6 +8,7 @@ import { AppRuntimeProvider, Field, Form, ModalsHost, ToastProvider, defaultWidg
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { WorkflowInputPreviewProvider } from "./workflow-input-preview";
 
 const mocks = vi.hoisted(() => ({
   workflowStatus: "DRAFT",
@@ -30,7 +31,20 @@ vi.mock("@angee/refine", async (importOriginal) => {
     ...actual,
     useAngeeResourceSave: () => ({ save: vi.fn(), fetching: false, error: null, reset: vi.fn() }),
     useAuthoredQuery: (_document: unknown, variables?: unknown) => ({
-      data: variables == null
+      data: variables != null && typeof variables === "object" && "owner" in variables
+        ? {
+            workflow_map_body_candidates: {
+              status: "SUCCESS",
+              revision: 1,
+              current_revision: 1,
+              diagnostics: [],
+              candidates: [
+                { id: "step_body", client_key: null, step_key: "body", label: "Process item", eligible: true, reason: null },
+                { id: "step_free", client_key: null, step_key: "free", label: "Free step", eligible: true, reason: null },
+              ],
+            },
+          }
+        : variables == null
         ? {
             workflow_step_operations: [
               {
@@ -69,6 +83,28 @@ vi.mock("@angee/refine", async (importOriginal) => {
                 effect_description: "",
                 idempotent: true,
                 subject_declaration: "",
+                outcomes: [],
+              },
+              {
+                key: "map",
+                label: "Map",
+                category: "Control",
+                defaults: { config: { items: "input", target_step: "" } },
+                config_schema: {
+                  type: "object",
+                  properties: {
+                    target_step: { type: "string", label: "Body" },
+                    items: { anyOf: [{ type: "string" }, { type: "array", items: {} }], label: "Items" },
+                  },
+                  required: ["target_step", "items"],
+                },
+                description: "Run one step for every item.",
+                selectable: true,
+                effect: "NONE",
+                effect_description: "",
+                idempotent: true,
+                subject_declaration: "",
+                map_body_operation: true,
                 outcomes: [],
               },
               {
@@ -232,7 +268,7 @@ function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>
   } as DataProvider;
   const dataResources = [workflowResource, stepResource, edgeResource];
   const node = { ...mocks.record, position: { x: 0, y: 0 }, clientKey: undefined };
-  const initialNodes = initial?.nodes ?? { step_1: node };
+  const initialNodes: Record<string, Record<string, unknown>> = initial?.nodes ?? { step_1: node };
   const initialEdges = initial?.edges ?? {};
   render(
     <Refine resources={[...refineResourcesFromDataResources(dataResources)]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
@@ -252,7 +288,21 @@ function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>
                       definition: { revision: 1, nodes: initialNodes, edges: initialEdges, readiness: initial?.readiness ?? [] },
                     },
                   }}
-                  recordTabs={[{ id: "editor", label: "Editor", render: (context) => { canvasSurface = context.form; return initial?.history ? <CanvasHistoryHarness context={context} /> : <WorkflowCanvas context={context} />; }, keepMounted: true }]}
+                  recordTabs={[{ id: "editor", label: "Editor", render: (context) => {
+                    canvasSurface = context.form;
+                    const canvas = initial?.history
+                      ? <CanvasHistoryHarness context={context} />
+                      : <WorkflowCanvas context={context} />;
+                    return <WorkflowInputPreviewProvider value={{
+                      prepare: (identity) => {
+                        const target = initialNodes[identity];
+                        return target?.id
+                          ? { workflow: "workflow_1", expectedRevision: 1, edit: {}, target: { id: String(target.id) } }
+                          : null;
+                      },
+                      stale: vi.fn(),
+                    }}>{canvas}</WorkflowInputPreviewProvider>;
+                  }, keepMounted: true }]}
                   defaultRecordTab="editor"
                   overviewTab={{ label: "Settings", position: "last" }}
                 >{initial?.settings ? <Field name="name" /> : null}</Form>
@@ -462,6 +512,24 @@ describe("WorkflowCanvas native narrow inspector", () => {
     expect((await screen.findByLabelText("Mode") as HTMLInputElement).value).toBe("safe");
     expect(Object.values(canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { join_rule: string }>).some((node) => node.join_rule === "ONE_SUCCESS")).toBe(true);
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add after" }));
+    const secondSearch = await screen.findByPlaceholderText("Search operations…");
+    fireEvent.change(secondSearch, { target: { value: "Wait until" } });
+    fireEvent.keyDown(secondSearch, { key: "ArrowDown" });
+    fireEvent.keyDown(secondSearch, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const authoredNodes = Object.values(canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { position: { y: number } }>).sort(
+      (left, right) => left.position.y - right.position.y,
+    );
+    expect(authoredNodes).toHaveLength(3);
+    expect(authoredNodes[1]!.position.y).toBeGreaterThan(
+      authoredNodes[0]!.position.y + workflowNodeStyles.HANDLER.height,
+    );
+    expect(authoredNodes[2]!.position.y).toBeGreaterThan(
+      authoredNodes[1]!.position.y + workflowNodeStyles.HANDLER.height,
+    );
+    expect(Object.keys(canvasSurface!.form.getValues("definition.edges") ?? {})).toHaveLength(2);
   });
 
   test("places an addition below a legacy-positioned source without moving occupied or manual nodes", async () => {
@@ -482,6 +550,9 @@ describe("WorkflowCanvas native narrow inspector", () => {
     const values = canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { id: string; position: { x?: number; y?: number } }>;
     const created = Object.values(values).find((node) => node.id === "")!;
     expect(created.position.y).toBeGreaterThan(0);
+    expect(created.position.y).toBeGreaterThan(
+      values.step_1!.position.y! + workflowNodeStyles.HANDLER.height,
+    );
     expect(created.position.x).not.toBe(24);
     expect(values.step_1!.position).toEqual({ x: 24, y: 24 });
     expect(values.occupied!.position).toEqual({ x: 24, y: 176 });
@@ -697,6 +768,59 @@ describe("WorkflowCanvas native narrow inspector", () => {
     expect(canvasSurface!.form.getValues("definition.nodes.step_1.input_binding")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Redo" }));
     expect(canvasSurface!.form.getValues("definition.nodes.step_1.input_binding")).toEqual({});
+  });
+
+  test("shows Map membership separately and changes the body in one history action", async () => {
+    renderCanvas({ history: true, nodes: {
+      map: { ...mocks.record, id: "step_map", key: "map", name: "Import each", step_class: "map", config: { items: "input", target_step: "body" }, position: { x: 0, y: 0 }, clientKey: undefined },
+      body: { ...mocks.record, id: "step_body", key: "body", name: "Process item", is_entry: false, position: { x: 0, y: 180 }, clientKey: undefined },
+      free: { ...mocks.record, id: "step_free", key: "free", name: "Free step", is_entry: false, position: { x: 220, y: 180 }, clientKey: undefined },
+    } });
+
+    const mapNode = await screen.findByTestId("rf__node-map");
+    expect(mapNode.getAttribute("aria-label")).toContain("Map");
+    expect(canvasSurface!.form.getValues("definition.nodes.map.config.target_step")).toBe("body");
+    fireEvent.click(mapNode);
+    expect(await screen.findByLabelText("Body step")).toBeTruthy();
+    const inputPath = await screen.findByLabelText("Input path");
+    fireEvent.change(inputPath, { target: { value: "subject.contacts" } });
+    fireEvent.blur(inputPath);
+    expect(canvasSurface!.form.getValues("definition.nodes.map.config.items")).toBe("subject.contacts");
+    expect(await screen.findByLabelText("Existing expression")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Fixed list" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.map.config.items")).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.map.config.items")).toBe("subject.contacts");
+    const body = await screen.findByLabelText("Body step");
+    fireEvent.click(body);
+    const freeStep = await screen.findByRole("option", { name: "Free step" });
+    fireEvent.pointerDown(freeStep, { pointerType: "mouse" });
+    fireEvent.click(freeStep);
+    await waitFor(() => expect(canvasSurface!.form.getValues("definition.nodes.map.config.target_step")).toBe("free"));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(canvasSurface!.form.getValues("definition.nodes.map.config.target_step")).toBe("body");
+  });
+
+  test("adds a Map body and its declaration as one undoable graph edit", async () => {
+    renderCanvas({ history: true, nodes: {
+      map: { ...mocks.record, id: "step_map", key: "map", name: "Import each", step_class: "map", config: { items: "input", target_step: "missing" }, position: { x: 0, y: 0 }, clientKey: undefined },
+    } });
+    fireEvent.click(await screen.findByTestId("rf__node-map"));
+    fireEvent.click(await screen.findByRole("button", { name: "Add body step" }));
+    const search = await screen.findByPlaceholderText("Search operations…");
+    fireEvent.change(search, { target: { value: "Wait until" } });
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const nodes = canvasSurface!.form.getValues("definition.nodes") as unknown as Record<string, { key: string }>;
+    const created = Object.entries(nodes).find(([identity]) => identity !== "map");
+    expect(created).toBeTruthy();
+    expect(canvasSurface!.form.getValues("definition.nodes.map.config.target_step")).toBe(created![1].key);
+    expect(canvasSurface!.form.getValues("definition.edges")).toEqual({});
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(Object.keys(canvasSurface!.form.getValues("definition.nodes") ?? {})).toEqual(["map"]);
+    expect(canvasSurface!.form.getValues("definition.nodes.map.config.target_step")).toBe("missing");
   });
 
   test("keeps only the persisted nonselectable operation readable", async () => {

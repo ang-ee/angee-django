@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from rebac import actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend as rebac_backend
 
+from angee.workflows.attempts import ArtifactSpec, RecoveryCapability, RecoveryMode
 from angee.workflows.steps import StepEffect, StepImpl, StepOutcome, StepResult
 
 
@@ -107,6 +108,13 @@ class NotePublishStep(NoteWorkflowStep):
     effect_description = "Changes the current note from in review to active."
     idempotent = False
 
+    @classmethod
+    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
+        """Reconcile publication state without assuming the earlier write failed."""
+
+        del attempt
+        return RecoveryCapability(mode=RecoveryMode.RECONCILE)
+
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Recheck access and atomically move an in-review Note to active."""
 
@@ -117,4 +125,39 @@ class NotePublishStep(NoteWorkflowStep):
         )
         with actor_context(to_subject_ref(actor)):
             output = note.publish()
-        return StepResult.done(output=output, outcome="published")
+        return StepResult.done(
+            output=output,
+            outcome="published",
+            artifacts=[ArtifactSpec(target=note, label="Published note")],
+        )
+
+    def run_recovery(
+        self,
+        step_run: Any,
+        *,
+        now: datetime,
+        source_attempt: Any,
+        mode: RecoveryMode,
+    ) -> StepResult:
+        """Reconcile an uncertain publication before attempting another write."""
+
+        if mode is not RecoveryMode.RECONCILE:
+            return super().run_recovery(
+                step_run,
+                now=now,
+                source_attempt=source_attempt,
+                mode=mode,
+            )
+        note, _actor = self.writable_note_subject(step_run)
+        if note.status == note.Status.ACTIVE:
+            output = {
+                "id": str(note.sqid),
+                "title": note.title,
+                "status": str(note.status),
+            }
+            return StepResult.done(
+                output=output,
+                outcome="published",
+                artifacts=[ArtifactSpec(target=note, label="Published note")],
+            )
+        return self.run(step_run, now=now)

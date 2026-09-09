@@ -170,4 +170,17 @@ class MapConfig(WorkflowStepConfig):
     def non_empty_items(cls, value: str | list[Any]) -> str | list[Any]:
         if not value:
             raise ValueError("map items must be a non-empty expression or list")
+        if isinstance(value, str):
+            map_items_expression_path(value)
         return value
+
+
+def map_items_expression_path(value: str) -> tuple[str, tuple[str, ...]]:
+    """Parse the established Map expression grammar for authoring and runtime."""
+
+    root, *path = value.split(".")
+    if root not in {"subject", "run", "input"}:
+        raise ValueError("map items expression must start with subject, run, or input")
+    if any(not part for part in path):
+        raise ValueError("map items expression path segments cannot be empty")
+    return root, tuple(path)

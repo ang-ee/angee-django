@@ -12,12 +12,14 @@ from django.core.exceptions import ValidationError
 from django.db import router
 
 from angee.base.scoping import system_queryset
+from angee.workflows.attempts import json_values_equal
 from angee.workflows.graph import (
     GraphDiagnostic,
     GraphIdentity,
     GraphInputSource,
     GraphLocation,
     GraphLocationKind,
+    GraphMapBodyCandidate,
     WorkflowGraph,
 )
 
@@ -117,10 +119,51 @@ class PublicationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class DefinitionChange:
+    """One semantic or presentation difference between two saved definitions."""
+
+    kind: str
+    change: str
+    key: str
+    field: str | None
+    before: Any
+    after: Any
+    presentation_only: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DefinitionComparison:
+    """A coherent comparison of an immutable version and one saved draft."""
+
+    source: Any
+    draft: Any
+    draft_revision: int
+    source_definition: dict[str, Any]
+    draft_definition: dict[str, Any]
+    changes: tuple[DefinitionChange, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DefinitionRestoreResult:
+    """The new canonical draft snapshot after restoring an immutable version."""
+
+    source: Any
+    snapshot: DefinitionSnapshot
+
+
+@dataclass(frozen=True, slots=True)
 class DefinitionInputSources:
     revision: int
     target: GraphIdentity
     sources: tuple[GraphInputSource, ...]
+    readiness: tuple[GraphDiagnostic, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DefinitionMapBodyCandidates:
+    revision: int
+    owner: GraphIdentity
+    candidates: tuple[GraphMapBodyCandidate, ...]
     readiness: tuple[GraphDiagnostic, ...]
 
 
@@ -247,6 +290,33 @@ class WorkflowDefinitionManagerMixin:
                     graph.diagnostics(),
                 )
 
+    def definition_map_body_candidates(
+        self,
+        workflow: Any,
+        *,
+        expected_revision: int,
+        edit: DefinitionEdit,
+        owner: EndpointRef,
+    ) -> DefinitionMapBodyCandidates:
+        """Project Map bodies from one exact unsaved definition without persisting it."""
+
+        self._validate_expected_revision(workflow, expected_revision)
+        with self._definition_caller(workflow):
+            alias = router.db_for_write(self.model, instance=workflow)
+            with self._definition_read(workflow.pk, using=alias) as locked:
+                if locked.draft_revision != expected_revision:
+                    raise StaleDefinitionError(expected=expected_revision, current=locked.draft_revision)
+                state = _DefinitionState(self, locked, edit, alias=alias, action="read")
+                state.preflight()
+                owner_identity = state.target_identity(owner)
+                graph = state.graph()
+                return DefinitionMapBodyCandidates(
+                    locked.draft_revision,
+                    owner_identity,
+                    graph.map_body_candidates(owner_identity),
+                    graph.diagnostics(),
+                )
+
     def publish_definition(self, workflow: Any, *, expected_revision: int) -> PublicationResult:
         """Publish the exact saved revision or return its identical publication."""
 
@@ -267,6 +337,77 @@ class WorkflowDefinitionManagerMixin:
                 published = draft.publish()
                 projected = self.using(alias).with_action("read").with_lineage_projection().get(pk=published.pk)
                 return PublicationResult(draft.draft_revision, projected, True)
+
+    def compare_definition(self, workflow: Any, source: Any) -> DefinitionComparison:
+        """Compare two exact saved lineage definitions under one coherent lock."""
+
+        with self._definition_caller(workflow):
+            alias = router.db_for_write(self.model, instance=workflow)
+            self.using(alias).with_action("read").get(pk=workflow.pk)
+            self.using(alias).with_action("read").get(pk=source.pk)
+            with self._definition_write(
+                (workflow.pk, source.pk), using=alias, _allow_status_transition=True
+            ) as rows:
+                by_id = {row.pk: row for row in rows}
+                draft = by_id[workflow.pk]
+                locked_source = by_id[source.pk]
+                _validate_version_source(draft, locked_source)
+                source_definition = locked_source._definition_signature()
+                draft_definition = draft._definition_signature()
+                return DefinitionComparison(
+                    source=locked_source,
+                    draft=draft,
+                    draft_revision=draft.draft_revision,
+                    source_definition=source_definition,
+                    draft_definition=draft_definition,
+                    changes=_definition_changes(source_definition, draft_definition),
+                )
+
+    def restore_definition(
+        self,
+        workflow: Any,
+        source: Any,
+        *,
+        expected_revision: int,
+    ) -> DefinitionRestoreResult:
+        """Replace one exact saved draft with an immutable lineage version."""
+
+        self._validate_expected_revision(workflow, expected_revision)
+        with self._definition_caller(workflow):
+            alias = router.db_for_write(self.model, instance=workflow)
+            self.using(alias).with_action("write").get(pk=workflow.pk)
+            self.using(alias).with_action("read").get(pk=source.pk)
+            with self._definition_write(
+                (workflow.pk, source.pk), using=alias, _allow_status_transition=True
+            ) as rows:
+                by_id = {row.pk: row for row in rows}
+                draft = by_id[workflow.pk]
+                locked_source = by_id[source.pk]
+                _validate_version_source(draft, locked_source)
+                if draft.draft_revision != expected_revision:
+                    raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
+                draft.edges.all().delete()
+                draft.steps.all().delete()
+                for field_name in self._WORKFLOW_FIELDS:
+                    if field_name == "error_workflow":
+                        draft.error_workflow_id = locked_source.error_workflow_id
+                    else:
+                        setattr(draft, field_name, copy.deepcopy(getattr(locked_source, field_name)))
+                draft.save(update_fields=[*sorted(self._WORKFLOW_FIELDS), "updated_at"])
+                locked_source._copy_definition_to(draft)
+                projected_revision = self._definition_revision(draft.pk, draft.draft_revision)
+                draft.draft_revision = projected_revision
+                nodes = tuple(draft.steps.order_by("key", "pk"))
+                edges = tuple(draft.edges.select_related("source", "target").order_by("pk"))
+                snapshot = DefinitionSnapshot(
+                    projected_revision,
+                    draft,
+                    nodes,
+                    edges,
+                    WorkflowGraph.from_rows(draft, nodes, edges).diagnostics(),
+                )
+                result = DefinitionRestoreResult(source=locked_source, snapshot=snapshot)
+            return result
 
     @staticmethod
     def _validate_expected_revision(workflow: Any, expected_revision: int) -> None:
@@ -715,6 +856,68 @@ def _edge_signature(edge: Any) -> tuple[GraphIdentity, GraphIdentity, str]:
     source = getattr(edge.source, "_definition_identity", GraphIdentity(existing_id=edge.source_id))
     target = getattr(edge.target, "_definition_identity", GraphIdentity(existing_id=edge.target_id))
     return source, target, str(edge.condition)
+
+
+def _validate_version_source(draft: Any, source: Any) -> None:
+    """Require one mutable head and one real immutable publication in its lineage."""
+
+    if draft.published_from_id is not None or str(draft.status) != "draft":
+        raise ValidationError({"workflow": "Restore and comparison require the editable lineage head."})
+    if source.published_from_id != draft.pk or str(source.status) not in {"published", "archived"}:
+        raise ValidationError({"source": "Select a published version from this workflow lineage."})
+
+
+def _definition_changes(before: dict[str, Any], after: dict[str, Any]) -> tuple[DefinitionChange, ...]:
+    """Describe saved definition changes using stable domain identities."""
+
+    changes: list[DefinitionChange] = []
+    for field_name in sorted(set(before["workflow"]) | set(after["workflow"])):
+        old = before["workflow"].get(field_name)
+        new = after["workflow"].get(field_name)
+        if not json_values_equal(old, new):
+            changes.append(DefinitionChange("settings", "changed", "workflow", field_name, old, new))
+
+    before_steps = {item["key"]: item for item in before["steps"]}
+    after_steps = {item["key"]: item for item in after["steps"]}
+    for key in sorted(before_steps.keys() | after_steps.keys()):
+        old_step = before_steps.get(key)
+        new_step = after_steps.get(key)
+        if old_step is None:
+            changes.append(DefinitionChange("step", "added", key, None, None, new_step))
+            continue
+        if new_step is None:
+            changes.append(DefinitionChange("step", "removed", key, None, old_step, None))
+            continue
+        for field_name in sorted(set(old_step) | set(new_step)):
+            if field_name == "key":
+                continue
+            old = old_step.get(field_name)
+            new = new_step.get(field_name)
+            if not json_values_equal(old, new):
+                changes.append(
+                    DefinitionChange(
+                        "step",
+                        "changed",
+                        key,
+                        field_name,
+                        old,
+                        new,
+                        presentation_only=field_name in {"name", "position"},
+                    )
+                )
+
+    def edge_key(item: dict[str, Any]) -> tuple[str, str, str]:
+        return str(item["source"]), str(item["target"]), str(item["condition"])
+
+    before_edges = {edge_key(item): item for item in before["edges"]}
+    after_edges = {edge_key(item): item for item in after["edges"]}
+    for key in sorted(before_edges.keys() | after_edges.keys()):
+        label = f"{key[0]} → {key[1]} [{key[2]}]"
+        if key not in before_edges:
+            changes.append(DefinitionChange("connection", "added", label, None, None, after_edges[key]))
+        elif key not in after_edges:
+            changes.append(DefinitionChange("connection", "removed", label, None, before_edges[key], None))
+    return tuple(changes)
 
 
 def _edit_identity(item: NodePatch | NodeDelete | EdgePatch | EdgeDelete) -> GraphIdentity:

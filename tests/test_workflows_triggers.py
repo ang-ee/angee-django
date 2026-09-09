@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 import strawberry
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.test.utils import CaptureQueriesContext
@@ -26,7 +27,6 @@ from angee.graphql.events import ChangePayload
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.integrate.models import Bridge
-from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import HandlerStep, StepResult
 from tests.conftest import SchemaAddon, execute_schema, result_data
@@ -313,13 +313,179 @@ def test_event_trigger_refire_dedupes_by_subject(
     """Saving the same matching subject again does not create a second run."""
 
     del workflow_trigger_tables, no_workflow_queue
-    _event_trigger(condition={"state": "ready"})
+    trigger = _event_trigger(condition={"state": "ready"})
+    assert trigger.config["admission_policy"] == "once_per_subject"
     subject = TriggerSubject.objects.create(name="first", state="ready")
 
     subject.name = "second"
     subject.save(update_fields=["name"])
 
     assert len(_runs_for_subject(subject)) == 1
+
+
+def test_event_admission_policy_has_legacy_default_and_readable_summaries() -> None:
+    declarations = importlib.import_module("angee.workflows.trigger_declarations")
+
+    legacy = declarations.EventTriggerConfig.model_validate({"model": "tests.TriggerSubject"})
+    each = declarations.EventTriggerConfig.model_validate(
+        {"model": "tests.TriggerSubject", "admission_policy": "each_change"}
+    )
+
+    assert legacy.admission_policy == declarations.EventAdmissionPolicy.ONCE_PER_SUBJECT
+    assert legacy.summary_for("Trigger subject") == "When Trigger subject changes, once per subject"
+    assert each.summary_for("Trigger subject") == "When Trigger subject changes, for each matching change"
+
+
+def test_event_trigger_each_change_uses_publisher_occurrence_identity(
+    workflow_trigger_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """One publisher occurrence starts once while later changes to the same subject remain distinct."""
+
+    del workflow_trigger_tables, no_workflow_queue
+    trigger = _event_trigger(
+        condition={"state": "ready"},
+        config={"admission_policy": "each_change"},
+    )
+    subject = TriggerSubject.objects.create(name="first", state="draft")
+    TriggerSubject.objects.filter(pk=subject.pk).update(state="ready")
+    subject.refresh_from_db()
+    now = timezone.now()
+
+    first = Trigger.objects.start_event(
+        trigger.pk,
+        subject=subject,
+        occurrence_id="change-1",
+        timestamp=now,
+    )
+    duplicate = Trigger.objects.start_event(
+        trigger.pk,
+        subject=subject,
+        occurrence_id="change-1",
+        timestamp=now,
+    )
+    second = Trigger.objects.start_event(
+        trigger.pk,
+        subject=subject,
+        occurrence_id="change-2",
+        timestamp=now + timedelta(seconds=1),
+    )
+
+    assert first is not None
+    assert duplicate is not None
+    assert duplicate.pk == first.pk
+    assert second is not None
+    assert second.pk != first.pk
+    with system_context(reason="inspect event occurrence runs"):
+        occurrences = list(WorkflowRun.objects.order_by("pk").values_list("occurrence_id", flat=True))
+    assert occurrences == ["change-1", "change-2"]
+    trigger.refresh_from_db()
+    assert trigger.hourly_fire_count == 2
+
+
+def test_event_trigger_each_change_declines_unidentified_legacy_payload(
+    workflow_trigger_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Each-change rules never fabricate occurrence identity for a legacy publisher payload."""
+
+    del workflow_trigger_tables, no_workflow_queue
+    trigger = _event_trigger(condition={"state": "ready"}, config={"admission_policy": "each_change"})
+    subject = TriggerSubject.objects.create(name="legacy", state="draft")
+    subject.state = "ready"
+
+    assert Trigger.objects.start_event(
+        trigger.pk,
+        subject=subject,
+        occurrence_id=None,
+        timestamp=timezone.now(),
+    ) is None
+    assert _run_count() == 0
+
+
+def test_event_duplicate_after_publication_replacement_returns_original_pinned_run(
+    workflow_trigger_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """A retried occurrence resolves to its original run after a newer publication exists."""
+
+    del workflow_trigger_tables, no_workflow_queue
+    trigger = _event_trigger(
+        condition={"state": "ready"},
+        config={"admission_policy": "each_change"},
+    )
+    subject = TriggerSubject.objects.create(name="publication", state="draft")
+    TriggerSubject.objects.filter(pk=subject.pk).update(state="ready")
+    subject.refresh_from_db()
+    first = Trigger.objects.start_event(
+        trigger.pk,
+        subject=subject,
+        occurrence_id="stable-change",
+        timestamp=timezone.now(),
+    )
+    assert first is not None
+    with system_context(reason="replace workflow publication after event admission"):
+        head = Workflow.objects.get(pk=trigger.workflow_id)
+        entry = head.steps.get(is_entry=True)
+        entry.name = "New entry"
+        entry.save(update_fields={"name", "updated_at"})
+        head.publish()
+
+    duplicate = Trigger.objects.start_event(
+        trigger.pk,
+        subject=subject,
+        occurrence_id="stable-change",
+        timestamp=timezone.now(),
+    )
+
+    assert duplicate is not None
+    assert duplicate.pk == first.pk
+    assert duplicate.workflow_id == first.workflow_id
+    assert _run_count() == 1
+
+
+def test_event_failed_admission_rolls_back_counters_and_remains_retryable(
+    workflow_trigger_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed atomic run creation consumes neither the occurrence nor rate-limit facts."""
+
+    del workflow_trigger_tables, no_workflow_queue
+    trigger = _event_trigger(
+        condition={"state": "ready"},
+        config={"admission_policy": "each_change"},
+    )
+    subject = TriggerSubject.objects.create(name="retryable", state="draft")
+    TriggerSubject.objects.filter(pk=subject.pk).update(state="ready")
+    subject.refresh_from_db()
+    ContentType.objects.get_for_model(subject, for_concrete_model=False)
+    original = WorkflowRun.objects._start_locked
+
+    def fail_start(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        raise RuntimeError("admission failed")
+
+    monkeypatch.setattr(WorkflowRun.objects, "_start_locked", fail_start)
+    with pytest.raises(RuntimeError, match="admission failed"):
+        Trigger.objects.start_event(
+            trigger.pk,
+            subject=subject,
+            occurrence_id="retryable-change",
+            timestamp=timezone.now(),
+        )
+    trigger.refresh_from_db()
+    assert trigger.hourly_fire_count == 0
+    assert trigger.last_fire_at is None
+    monkeypatch.setattr(WorkflowRun.objects, "_start_locked", original)
+
+    admitted = Trigger.objects.start_event(
+        trigger.pk,
+        subject=subject,
+        occurrence_id="retryable-change",
+        timestamp=timezone.now(),
+    )
+    assert admitted is not None
 
 
 def test_event_trigger_cooldown_and_hourly_cap_are_locked_facts(
@@ -375,15 +541,14 @@ def test_event_trigger_start_error_is_logged_and_does_not_break_save(
     """Engine start failures are isolated to the trigger dispatch path."""
 
     del workflow_trigger_tables, no_workflow_queue
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
+    importlib.import_module("angee.workflows.triggers")
     _event_trigger(condition={"state": "ready"})
 
     def fail_start(*args: Any, **kwargs: Any) -> None:
         del args, kwargs
         raise RuntimeError("start failed")
 
-    monkeypatch.setattr(engine, "start", fail_start)
-    monkeypatch.setattr(workflow_triggers.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(Trigger.objects, "start_event", fail_start)
 
     TriggerSubject.objects.create(name="start-error", state="ready")
 
@@ -683,6 +848,96 @@ def test_schedule_preview_projects_invalid_drafts_as_typed_data(
     }
 
 
+def test_event_condition_draft_preserves_json_scalar_presence_and_invalid_opaque(
+    workflow_trigger_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The authored GraphQL projection carries false, zero and null without coercion."""
+
+    del workflow_trigger_tables
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {"console": {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}}
+            )
+        ]
+    ).build("console")
+    class Discovery:
+        def change_publisher_models(self) -> tuple[type[models.Model], ...]:
+            return (TriggerSubject,)
+
+        def names(self) -> tuple[str, ...]:
+            return ("public",)
+
+        def resources(self, _name: str) -> tuple[object, ...]:
+            return (type("Resource", (), {"model": TriggerSubject})(),)
+
+    monkeypatch.setattr(workflows_schema.GraphQLSchemas, "from_discovery", lambda: Discovery())
+    monkeypatch.setattr(workflows_schema, "readable_model_field_names", lambda _resource: {"name", "state"})
+    admin = _platform_admin("workflow-trigger-condition-admin")
+    catalogue_query = """
+      query EventConditionCatalogue($model: String!, $condition: JSON) {
+        workflow_event_condition_draft(model: $model, condition: $condition) {
+          fields { name scalar lookups { name key label value_schema } }
+        }
+      }
+    """
+    publishers_query = """
+      query EventPublishers { workflow_trigger_publishers { model } }
+    """
+    publishers = result_data(execute_schema(schema, publishers_query, user=admin))["workflow_trigger_publishers"]
+    fields_by_scalar: dict[str, tuple[str, str]] = {}
+    for publisher in publishers:
+        model = publisher["model"]
+        result = execute_schema(schema, catalogue_query, {"model": model, "condition": {}}, user=admin)
+        assert result.errors is None
+        for field in result_data(result)["workflow_event_condition_draft"]["fields"]:
+            fields_by_scalar.setdefault(field["scalar"], (model, field["name"]))
+            assert all(
+                lookup["key"] and lookup["label"] and lookup["value_schema"]
+                for lookup in field["lookups"]
+            )
+
+    draft_query = """
+      query EventConditionDraft($model: String!, $condition: JSON) {
+        workflow_event_condition_draft(model: $model, condition: $condition) {
+          clauses { field lookup value source_key }
+          opaque condition errors
+        }
+      }
+    """
+    model, field = next(iter(fields_by_scalar.values()))
+    condition = {field: None, "opaque_false": False, "opaque_zero": 0}
+    result = execute_schema(schema, draft_query, {"model": model, "condition": condition}, user=admin)
+    assert result.errors is None
+    draft = result_data(result)["workflow_event_condition_draft"]
+    assert draft["clauses"][0]["value"] is None
+    assert draft["opaque"] == {"opaque_false": False, "opaque_zero": 0}
+    assert draft["condition"] == condition
+
+    malformed = execute_schema(schema, draft_query, {"model": model, "condition": None}, user=admin)
+    assert malformed.errors is None
+    assert result_data(malformed)["workflow_event_condition_draft"]["errors"] == [
+        "Condition must be a JSON object."
+    ]
+
+    encode_query = """
+      query InvalidOpaque($model: String!, $condition: JSON, $opaque: JSON) {
+        workflow_event_condition_draft(model: $model, condition: $condition, clauses: [], opaque: $opaque) {
+          condition errors
+        }
+      }
+    """
+    original = {field: None}
+    result = execute_schema(schema, encode_query, {"model": model, "condition": original, "opaque": []}, user=admin)
+    assert result.errors is None
+    assert result_data(result)["workflow_event_condition_draft"] == {
+        "condition": original,
+        "errors": ["Opaque condition entries must be a JSON object."],
+    }
+
+
 def test_trigger_list_projects_summary_and_blocker_without_per_row_queries(
     workflow_trigger_tables: None,
 ) -> None:
@@ -701,6 +956,11 @@ def test_trigger_list_projects_summary_and_blocker_without_per_row_queries(
         draft = Workflow.objects.create(name="Trigger list")
         Step.objects.create(workflow=draft, key="start", name="Start", is_entry=True)
         draft.publish()
+        Trigger.objects.create(
+            workflow=draft,
+            kind=workflow_models.TriggerKind.EVENT,
+            config={"model": TriggerSubject._meta.label_lower, "condition": {}, "admission_policy": "each_change"},
+        )
         Trigger.objects.create(workflow=draft, kind=workflow_models.TriggerKind.MANUAL, config={})
         Trigger.objects.create(workflow=draft, kind=workflow_models.TriggerKind.MANUAL, config={})
     admin = _platform_admin("workflow-trigger-list-admin")
@@ -713,7 +973,11 @@ def test_trigger_list_projects_summary_and_blocker_without_per_row_queries(
     with CaptureQueriesContext(connection) as queries:
         rows = result_data(execute_schema(schema, query, user=admin))["workflow_triggers"]
 
-    assert [row["summary"] for row in rows] == ["Manual start", "Manual start"]
+    assert [row["summary"] for row in rows] == [
+        "When trigger subject changes, for each matching change",
+        "Manual start",
+        "Manual start",
+    ]
     trigger_selects = [
         item["sql"] for item in queries.captured_queries
         if Trigger._meta.db_table in item["sql"] and item["sql"].lstrip().upper().startswith("SELECT")
@@ -736,6 +1000,8 @@ def _event_trigger(
     model: type[models.Model] = TriggerSubject,
 ) -> Trigger:
     """Create an event trigger attached to a publishable workflow lineage."""
+
+    ContentType.objects.clear_cache()
 
     trigger_config = {
         "model": model._meta.label_lower,

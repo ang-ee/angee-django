@@ -257,8 +257,15 @@ export function GraphView<
   React.useImperativeHandle(geometryRef, () => ({
     nodeBounds: (id) => {
       const instance = instanceRef.current;
-      if (!instance?.getNode(id)) return undefined;
-      return instance.getNodesBounds([id]);
+      const node = instance?.getNode(id);
+      if (!instance || !node) return undefined;
+      const bounds = instance.getNodesBounds([id]);
+      const declared = nodeStyleFor(node.data.node.kind, nodeStyles);
+      return {
+        ...bounds,
+        width: bounds.width > 0 ? bounds.width : declared.width,
+        height: bounds.height > 0 ? bounds.height : declared.height,
+      };
     },
     nodeSize: (kind) => {
       const style = nodeStyleFor(kind, nodeStyles);

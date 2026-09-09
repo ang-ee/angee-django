@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, cast
 
 from croniter import CroniterBadCronError, croniter
@@ -16,6 +17,13 @@ TriggerKindName = Literal["manual", "event", "schedule"]
 PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
 MAX_PREVIEW_OCCURRENCES = 10
+
+
+class EventAdmissionPolicy(StrEnum):
+    """Durable admission identity used for matching event deliveries."""
+
+    ONCE_PER_SUBJECT = "once_per_subject"
+    EACH_CHANGE = "each_change"
 
 
 class TriggerConfig(BaseModel):
@@ -51,6 +59,10 @@ class EventTriggerConfig(TriggerConfig):
 
     model: str = Field(min_length=1, title="Model")
     condition: dict[str, Any] | None = Field(default_factory=dict, json_schema_extra={"widget": "json"})
+    admission_policy: EventAdmissionPolicy = Field(
+        default=EventAdmissionPolicy.ONCE_PER_SUBJECT,
+        title="Run frequency",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -71,7 +83,17 @@ class EventTriggerConfig(TriggerConfig):
         return value.strip().lower() if isinstance(value, str) else value
 
     def summary(self) -> str:
-        return f"When {self.model} changes"
+        return self.summary_for(self.model)
+
+    def summary_for(self, model_label: str) -> str:
+        """Return the event summary with an authorized projection label."""
+
+        cadence = (
+            "for each matching change"
+            if self.admission_policy == EventAdmissionPolicy.EACH_CHANGE
+            else "once per subject"
+        )
+        return f"When {model_label} changes, {cadence}"
 
 
 class ScheduleTriggerConfig(TriggerConfig):
@@ -211,6 +233,7 @@ def schedule_draft_preview(config: object, *, now: datetime, count: int = 3) -> 
 
 
 __all__ = [
+    "EventAdmissionPolicy",
     "EventTriggerConfig",
     "ManualTriggerConfig",
     "ScheduleTriggerConfig",

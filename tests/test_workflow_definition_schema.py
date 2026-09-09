@@ -46,6 +46,45 @@ query InputSources(
 }
 """
 
+MAP_BODIES = """
+query MapBodies(
+  $workflow: ID!
+  $revision: Int!
+  $edit: WorkflowDefinitionEditInput!
+  $owner: WorkflowEndpointInput!
+) {
+  workflow_map_body_candidates(
+    workflow: $workflow
+    expected_revision: $revision
+    edit: $edit
+    owner: $owner
+  ) {
+    status revision current_revision
+    candidates { id client_key step_key label eligible reason }
+    diagnostics { code field id client_key }
+  }
+}
+"""
+
+COMPARE = """
+query CompareDefinition($workflow: ID!, $source: ID!) {
+  workflow_definition_comparison(workflow: $workflow, source: $source) {
+    source_id source_version draft_id draft_revision
+    counts { steps_added steps_removed steps_changed connections_added connections_removed settings_changed }
+    changes { kind change key field before after presentation_only }
+  }
+}
+"""
+
+RESTORE = """
+mutation RestoreDefinition($workflow: ID!, $source: ID!, $revision: Int!) {
+  restore_workflow_definition(workflow: $workflow, source: $source, expected_revision: $revision) {
+    status current_revision
+    snapshot { workflow { id status } revision nodes { key name } edges { source target condition } }
+  }
+}
+"""
+
 
 def _draft() -> tuple[Workflow, Step]:
     with system_context(reason="test definition GraphQL setup"):
@@ -59,6 +98,37 @@ def _draft() -> tuple[Workflow, Step]:
         )
         workflow.refresh_from_db()
     return workflow, entry
+
+
+def test_version_comparison_and_restore_keep_one_coherent_saved_revision(workflow_tables: None) -> None:
+    del workflow_tables
+    admin = _platform_admin("definition-version-admin")
+    workflow, entry = _draft()
+    with system_context(reason="definition version GraphQL setup"):
+        publication = workflow.publish()
+        workflow.refresh_from_db()
+        entry.name = "Later draft"
+        entry.save(update_fields={"name"})
+        workflow.refresh_from_db()
+
+    variables = {"workflow": workflow.sqid, "source": publication.sqid}
+    comparison = result_data(execute_schema(_console_schema(), COMPARE, variables, user=admin))[
+        "workflow_definition_comparison"
+    ]
+    assert comparison["source_id"] == publication.sqid
+    assert comparison["draft_revision"] == workflow.draft_revision
+    assert comparison["counts"]["steps_changed"] == 1
+
+    stale = result_data(
+        execute_schema(_console_schema(), RESTORE, {**variables, "revision": workflow.draft_revision - 1}, user=admin)
+    )["restore_workflow_definition"]
+    assert stale["status"] == "STALE"
+    restored = result_data(
+        execute_schema(_console_schema(), RESTORE, {**variables, "revision": workflow.draft_revision}, user=admin)
+    )["restore_workflow_definition"]
+    assert restored["status"] == "SUCCESS"
+    assert restored["snapshot"]["workflow"]["id"] == workflow.sqid
+    assert restored["snapshot"]["nodes"][0]["name"] == "Entry"
 
 
 def test_definition_mutation_preserves_omission_correlates_rows_and_reports_readiness(
@@ -171,6 +241,53 @@ def test_source_preview_uses_unsaved_topology_and_keeps_stale_baseline_separate(
     assert ambiguous["status"] == "STRUCTURAL"
     assert ambiguous["sources"] == []
     assert ambiguous["diagnostics"][0]["code"] == "reference_invalid"
+
+
+def test_map_body_preview_uses_prospective_graph_without_persisting_membership(workflow_tables: None) -> None:
+    del workflow_tables
+    schema = _console_schema()
+    admin = _platform_admin("definition-map-body-admin")
+    workflow, entry = _draft()
+    edit = {
+        "node_creates": [
+            {
+                "client_key": "map",
+                "fields": {
+                    "key": "map",
+                    "name": "Map",
+                    "step_class": "map",
+                    "config": {"items": "input", "target_step": "body"},
+                },
+            },
+            {
+                "client_key": "body",
+                "fields": {"key": "body", "name": "Body", "step_class": "agent_session"},
+            },
+            {
+                "client_key": "free",
+                "fields": {"key": "free", "name": "Free", "step_class": "agent_session"},
+            },
+        ],
+        "edge_creates": [
+            {"client_key": "to-map", "source": {"id": entry.sqid}, "target": {"client_key": "map"}},
+        ],
+    }
+    variables = {
+        "workflow": workflow.sqid,
+        "revision": workflow.draft_revision,
+        "edit": edit,
+        "owner": {"client_key": "map"},
+    }
+
+    preview = result_data(execute_schema(schema, MAP_BODIES, variables, user=admin))["workflow_map_body_candidates"]
+
+    assert preview["status"] == "SUCCESS"
+    candidates = {item["step_key"]: item for item in preview["candidates"]}
+    assert candidates["body"]["eligible"] is True
+    assert candidates["free"]["eligible"] is True
+    assert candidates["map"]["eligible"] is False
+    with system_context(reason="verify Map body preview is read only"):
+        assert workflow.steps.count() == 1
 
 
 def test_definition_mutation_returns_structural_and_stale_without_losing_data(workflow_tables: None) -> None:

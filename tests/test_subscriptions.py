@@ -286,6 +286,13 @@ def test_subscription_resolver_denies_without_current_actor(
     assert calls == []
 
 
+def test_change_occurrence_identity_round_trips_and_legacy_payloads_remain_unidentified() -> None:
+    payload = ChangePayload(model="tests.Row", id="1", action="update", occurrence_id="change-1")
+    assert ChangePayload.from_mapping(payload.as_message()).occurrence_id == "change-1"
+    assert ChangePayload.from_mapping({"model": "tests.Row", "id": "1", "action": "update"}).occurrence_id is None
+    assert payload.redacted({"secret"}).occurrence_id == "change-1"
+
+
 def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     """``publish_change`` drops a row whose ``broadcasts_changes()`` returns False.
 

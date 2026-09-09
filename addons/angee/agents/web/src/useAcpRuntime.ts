@@ -26,6 +26,7 @@ import {
   type AgentChatView,
   type McpServerConfig,
 } from "./documents";
+import type { AgentSessionRecord } from "./session-contributions";
 
 // Re-mint the route token this far before it expires, so the socket reconnects while
 // the old one is still valid rather than after the agent has dropped it.
@@ -63,6 +64,8 @@ export interface AcpRuntime {
   clearRecord: () => void;
   /** Render the `<system_context>` for the current view, for the session info panel. */
   renderContext: () => Promise<string>;
+  /** Present only for the authoritative persisted AgentSession transport. */
+  sessionRecord?: AgentSessionRecord;
 }
 
 /**

@@ -60,6 +60,8 @@ export {
   type FormSpecFieldType,
   type FormSpecRelationCreate,
 } from "./form/form-spec";
+export { structuredFieldErrorPaths } from "./form/field-values";
+export { useUnsavedChangesNavigationGuard } from "./form/use-unsaved-changes-navigation-guard";
 export {
   ActionFormDialog,
   type ActionFormDialogProps,

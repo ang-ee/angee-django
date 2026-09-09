@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.signals import post_save
@@ -16,6 +17,7 @@ from rebac import system_context
 from rebac.models import active_relationship_model
 
 from angee.workflows.attempts import (
+    ArtifactSpec,
     AttemptCause,
     AttemptInput,
     AttemptResult,
@@ -25,14 +27,15 @@ from angee.workflows.attempts import (
     InvocationAdmission,
     JsonPresence,
     LeaseRevocationReason,
+    RecoveryMode,
     deserialize_decision_specs,
     json_values_equal,
     serialize_decision_specs,
     validate_json_presence,
 )
 from angee.workflows.models import RunStatus, StepRunStatus
-from angee.workflows.steps import GateStep, StepResult
-from tests.workflows import Decision, StepAttempt, StepRun, WorkflowRun, workflow_with_steps
+from angee.workflows.steps import GateStep, StepImpl, StepResult
+from tests.workflows import Decision, StepArtifact, StepAttempt, StepRun, WorkflowRun, workflow_with_steps
 
 pytest_plugins = ("tests.workflows",)
 User = get_user_model()
@@ -132,6 +135,144 @@ def test_step_result_converts_to_retained_envelope_without_inventing_null_presen
     assert suspended.kind == AttemptResultKind.SUSPEND
     assert suspended.checkpoint_present and suspended.checkpoint == {"value": None}
     assert suspended.decisions == (decision,)
+
+
+def test_step_result_retains_explicit_ordered_artifact_associations() -> None:
+    first, second = object(), object()
+    envelope = StepResult.done(
+        output=None,
+        artifacts=(
+            ArtifactSpec(target=first, label="First"),
+            ArtifactSpec(target=second, label="Second"),
+        ),
+    ).to_attempt_result()
+
+    assert envelope.artifacts_present
+    assert envelope.artifacts == (
+        ArtifactSpec(target=first, label="First"),
+        ArtifactSpec(target=second, label="Second"),
+    )
+
+
+def test_default_recovery_only_permits_explicit_fresh_replay() -> None:
+    class ReplayableStep(StepImpl):
+        def run(self, step_run: object, *, now: object) -> StepResult:
+            del step_run, now
+            return StepResult.done(outcome="replayed")
+
+    implementation = ReplayableStep()
+    result = implementation.run_recovery(
+        object(), now=timezone.now(), source_attempt=object(), mode=RecoveryMode.FRESH
+    )
+    assert result.outcome == "replayed"
+    with pytest.raises(ValidationError, match="does not implement reconciliation"):
+        implementation.run_recovery(
+            object(), now=timezone.now(), source_attempt=object(), mode=RecoveryMode.RECONCILE
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_artifact_batch_is_retained_once_and_part_of_duplicate_result_identity(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(
+        attempt.pk, lease_token=attempt.lease_token, at=timezone.now()
+    )
+    result = AttemptResult(
+        AttemptResultKind.DONE,
+        artifacts_present=True,
+        artifacts=(ArtifactSpec(scheduled_step_run.run.workflow, "Workflow result"),),
+    )
+    first = StepAttempt.objects.finalize(
+        attempt.pk, lease_token=attempt.lease_token, result=result, recorded_at=timezone.now()
+    )
+    duplicate = StepAttempt.objects.finalize(
+        attempt.pk, lease_token=attempt.lease_token, result=result, recorded_at=timezone.now()
+    )
+
+    assert first.recorded and not duplicate.recorded
+    with system_context(reason="inspect retained artifact"):
+        artifact = StepArtifact.objects.get(attempt=attempt)
+    assert artifact.declaration_index == 0
+    assert artifact.label == "Workflow result"
+    with pytest.raises(ValidationError, match="different result"):
+        StepAttempt.objects.finalize(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            result=AttemptResult(
+                AttemptResultKind.DONE,
+                artifacts_present=True,
+                artifacts=(ArtifactSpec(scheduled_step_run.run.workflow, "Changed"),),
+            ),
+            recorded_at=timezone.now(),
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_artifact_batch_authority_is_spent_before_save_signals(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(
+        attempt.pk, lease_token=attempt.lease_token, at=timezone.now()
+    )
+    target = scheduled_step_run.run.workflow
+    content_type = ContentType.objects.get_for_model(target, for_concrete_model=False)
+
+    def reenter(sender: object, instance: object, **kwargs: object) -> None:
+        del sender, instance, kwargs
+        StepArtifact.objects._record_for_attempt(
+            attempt,
+            ((content_type.pk, target.pk, "Forged artifact"),),
+            using="default",
+        )
+
+    post_save.connect(reenter, sender=StepArtifact, weak=False)
+    try:
+        with pytest.raises(RuntimeError, match="exact attempt finalization"):
+            StepAttempt.objects.finalize(
+                attempt.pk,
+                lease_token=attempt.lease_token,
+                result=AttemptResult(
+                    AttemptResultKind.DONE,
+                    artifacts_present=True,
+                    artifacts=(ArtifactSpec(target, "Expected artifact"),),
+                ),
+                recorded_at=timezone.now(),
+            )
+    finally:
+        post_save.disconnect(reenter, sender=StepArtifact)
+
+    attempt.refresh_from_db()
+    assert attempt.result_recorded_at is None
+    with system_context(reason="inspect artifact signal rollback"):
+        assert not StepArtifact.objects.filter(attempt=attempt).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_late_unapplied_result_still_retains_explicit_artifact(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(
+        attempt.pk, lease_token=attempt.lease_token, at=timezone.now()
+    )
+    StepAttempt.objects.cancel_current(scheduled_step_run.pk, at=timezone.now())
+    finalization = StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.DONE,
+            artifacts_present=True,
+            artifacts=(ArtifactSpec(scheduled_step_run.run.workflow, "Late artifact"),),
+        ),
+        recorded_at=timezone.now(),
+    )
+
+    assert finalization.recorded and not finalization.applied
+    with system_context(reason="inspect late artifact"):
+        assert StepArtifact.objects.filter(attempt=attempt, label="Late artifact").exists()
 
 
 def test_gate_normalizes_legacy_naive_deadlines_before_retained_roundtrip() -> None:

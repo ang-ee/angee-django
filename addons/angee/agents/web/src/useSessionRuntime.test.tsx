@@ -97,6 +97,10 @@ describe("useSessionRuntime", () => {
       turn("atn_2", "Second", [textUpdate("Second")]),
     ]);
     const rendered = renderHook(() => useSessionRuntime("agt_1", VIEW));
+    expect(rendered.result.current.sessionRecord).toEqual({
+      type: "agents/agent_session",
+      sqid: "ase_1",
+    });
     const firstMessages = latestMessages();
 
     hookMocks.latestData = { agent_sessions: [{ id: "ase_1", status: "IDLE" }] };
@@ -171,6 +175,59 @@ describe("useSessionRuntime", () => {
       ).toBe(true),
     );
   });
+
+  test("reconnect retries a rejected or empty session start", async () => {
+    hookMocks.latestData = { agent_sessions: [] };
+    hookMocks.startSession
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ start_agent_session: {} })
+      .mockResolvedValueOnce({ start_agent_session: { id: "ase_retry" } });
+    const rendered = renderHook(() => useSessionRuntime("agt_1", VIEW));
+    await waitFor(() => expect(rendered.result.current.error).toBe("offline"));
+
+    act(() => rendered.result.current.reconnect());
+    rendered.rerender();
+    await waitFor(() => expect(rendered.result.current.error).toBe("Failed to start the agent session."));
+
+    act(() => rendered.result.current.reconnect());
+    rendered.rerender();
+    await waitFor(() => expect(hookMocks.startSession).toHaveBeenCalledTimes(3));
+  });
+
+  test("a late post from the previous agent cannot clear or fail the current post", async () => {
+    hookMocks.latestData = { agent_sessions: [{ id: "ase_a", status: "IDLE" }] };
+    hookMocks.turnsData = sessionTurns([], "ase_a");
+    const pendingA = deferredPost();
+    const pendingB = deferredPost();
+    hookMocks.postMessage.mockImplementation(({ session }: { session: string }) => (
+      session === "ase_a" ? pendingA.promise : pendingB.promise
+    ));
+    const rendered = renderHook(
+      ({ agentId }: { agentId: string }) => useSessionRuntime(agentId, VIEW),
+      { initialProps: { agentId: "agt_a" } },
+    );
+    let postA!: Promise<void>;
+    act(() => { postA = latestRuntimeConfig().onNew(message("first")); });
+
+    hookMocks.latestData = { agent_sessions: [{ id: "ase_b", status: "IDLE" }] };
+    hookMocks.turnsData = sessionTurns([], "ase_b");
+    rendered.rerender({ agentId: "agt_b" });
+    const postB = latestRuntimeConfig().onNew(message("second"));
+    await waitFor(() => expect(latestRuntimeConfig().isRunning).toBe(true));
+
+    await act(async () => {
+      pendingA.reject(new Error("old failure"));
+      await postA;
+    });
+    expect(rendered.result.current.error).toBeNull();
+    expect(latestRuntimeConfig().isRunning).toBe(true);
+
+    await act(async () => {
+      pendingB.resolve({ post_agent_message: { id: "atn_b" } });
+      await postB;
+    });
+    expect(latestRuntimeConfig().isRunning).toBe(false);
+  });
 });
 
 function operationName(document: unknown): string {
@@ -207,10 +264,34 @@ function latestMessages(): Array<Record<string, unknown>> {
   return (config?.messages ?? []) as Array<Record<string, unknown>>;
 }
 
+function latestRuntimeConfig(): {
+  isRunning: boolean;
+  onNew: (message: never) => Promise<void>;
+} {
+  return (hookMocks.externalConfigs.at(-1) ?? {}) as {
+    isRunning: boolean;
+    onNew: (message: never) => Promise<void>;
+  };
+}
+
+function message(text: string) {
+  return { content: [{ type: "text", text }] } as never;
+}
+
 function deferredSession() {
   let resolve!: (value: { start_agent_session: { id: string } }) => void;
   const promise = new Promise<{ start_agent_session: { id: string } }>((done) => {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+function deferredPost() {
+  let resolve!: (value: { post_agent_message: { id: string } }) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<{ post_agent_message: { id: string } }>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }

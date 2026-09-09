@@ -22,6 +22,7 @@ import { useAgentsT } from "../i18n";
 import { AgentChooser } from "./AgentChooser";
 import { SlashCommandComposer } from "./slash-commands";
 import type { AgentChatView, McpServerConfig, AgentRosterItem } from "../documents";
+import { AgentSessionContributions } from "../session-contributions";
 
 /**
  * Chat with a running agent over ACP. The session is minted per `agentId`; the browser
@@ -95,6 +96,7 @@ function AgentChatContent({
     clearRecord,
     renderContext,
   } = runtimeState;
+  const sessionRecord = runtimeState.sessionRecord;
   const effectiveModelHandle = runtimeState.modelHandle || modelHandle;
   const ready = status === "ready";
   const statusLabel = t(`chat.status.${status}`);
@@ -201,6 +203,7 @@ function AgentChatContent({
               <Glyph name="arrow-down" className="h-4 w-4" />
             </ThreadPrimitive.ScrollToBottom>
           </div>
+          <AgentSessionContributions session={sessionRecord} />
           <SlashCommandComposer commands={availableCommands}>
             <ComposerPrimitive.Root className="border-t border-border-subtle p-3">
               <MessageComposer

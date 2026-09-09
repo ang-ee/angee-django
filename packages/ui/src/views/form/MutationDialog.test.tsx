@@ -36,6 +36,28 @@ describe("MutationDialog", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledWith({}));
   });
 
+  test("a domain readiness gate blocks buttons and form submission until ready", async () => {
+    const submit = vi.fn();
+    const view = render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Plan" fields={[]}
+        submitLabel="Start" parseValues={(values) => values} onSubmit={submit}
+        canSubmit={() => false} />
+    </AppRuntimeProvider>);
+    const button = screen.getByRole("button", { name: "Start" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.submit(button.closest("form")!);
+    expect(submit).not.toHaveBeenCalled();
+
+    view.rerender(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Plan" fields={[]}
+        submitLabel="Start" parseValues={(values) => values} onSubmit={submit}
+        canSubmit={() => true} />
+    </AppRuntimeProvider>);
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.submit(button.closest("form")!);
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+  });
+
   test("a transport failure permits retry without changing valid dialog values", async () => {
     const submit = vi.fn().mockRejectedValueOnce(new Error("Try again")).mockResolvedValueOnce({ ok: true });
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>

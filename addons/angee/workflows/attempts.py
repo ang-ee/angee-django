@@ -40,6 +40,47 @@ class AttemptCause(StrEnum):
     TEST_FIXTURE = "test_fixture"
 
 
+class RecoveryMode(StrEnum):
+    """How an implementation can safely recover one retained failure."""
+
+    FRESH = "fresh"
+    RECONCILE = "reconcile"
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryCapability:
+    """Operation-owned recovery admission for an exact retained attempt."""
+
+    mode: RecoveryMode | None
+    unavailable_reason: str = ""
+
+    @property
+    def available(self) -> bool:
+        return self.mode is not None
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryPlan:
+    """Authorized summary of one exact retained recovery candidate."""
+
+    attempt_id: str
+    run_id: str
+    workflow_id: str
+    workflow_revision: int
+    step_id: str
+    step_key: str
+    map_index: int | None
+    capability: RecoveryCapability
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactSpec:
+    """One explicit result artifact in declaration order."""
+
+    target: Any
+    label: str
+
+
 class AttemptResultKind(StrEnum):
     """Closed result variants that the attempt owner can project."""
 
@@ -198,6 +239,8 @@ class AttemptResult:
     waiting_kind: str = ""
     requested_until: datetime | None = None
     decisions: tuple[DecisionSpec, ...] = ()
+    artifacts_present: bool = False
+    artifacts: tuple[ArtifactSpec, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

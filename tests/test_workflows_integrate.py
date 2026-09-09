@@ -11,6 +11,7 @@ from typing import Any, ClassVar
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.test import override_settings
 from rebac import system_context
 
@@ -518,6 +519,14 @@ def test_map_partial_failure_lands_only_successful_units(
     assert len(failed_results) == 1
     assert "aux archive ingest exploded" in failed_results[0]["error"]
     assert set(FixtureArchiveIngest.landed) == {(file.content_hash, target)}
+    with system_context(reason="inspect failed archive Map unit"):
+        failed_unit = StepRun.objects.select_related("current_attempt").get(
+            run=run,
+            step__key="execute_unit",
+            map_index=0,
+        )
+    with pytest.raises(ValidationError, match="does not support recovery"):
+        engine.recover(failed_unit.current_attempt, request_key="unsafe-retry", actor=operator)
 
 
 @override_settings(ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES=_HETEROGENEOUS_EXTRACTORS)

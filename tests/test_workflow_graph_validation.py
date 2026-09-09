@@ -48,6 +48,11 @@ class TargetStep(LegacyOutcomeStep):
     input_model = DeclaredInput
 
 
+class SubjectStep(LegacyOutcomeStep):
+    key = "subject_contract"
+    subject_declaration = "notes.note"
+
+
 def node(
     key: str,
     impl: type[StepImpl],
@@ -87,6 +92,59 @@ def graph(nodes: list[GraphNode], edges: list[GraphEdge] | None = None, *, max_s
 
 def codes(value: WorkflowGraph) -> set[str]:
     return {diagnostic.code for diagnostic in value.diagnostics()}
+
+
+def test_map_body_candidates_use_graph_ownership_and_explain_exclusions() -> None:
+    """Map authoring exposes only unattached ordinary steps without guessing from keys."""
+
+    value = graph(
+        [
+            node("map", MapStep, {"target_step": "body", "items": "input"}, entry=True),
+            node("body", TargetStep),
+            node("free", TargetStep),
+            node("connected", TargetStep),
+            node("nested", MapStep, {"target_step": "missing", "items": "input"}),
+        ],
+        [edge("body", "connected")],
+    )
+
+    candidates = {item.key: item for item in value.map_body_candidates(GraphIdentity(client_key="node-map"))}
+
+    assert candidates["free"].eligible is True
+    assert candidates["body"].eligible is False
+    assert candidates["connected"].eligible is False
+    assert candidates["nested"].eligible is False
+    assert candidates["body"].reason
+    assert "connection" in candidates["connected"].reason.lower()
+
+
+def test_operation_subject_contract_requires_matching_workflow_declaration() -> None:
+    subject_node = node("subject", SubjectStep, entry=True)
+    missing = graph([subject_node])
+    matching = WorkflowGraph(
+        missing.identity,
+        missing.max_steps,
+        missing.nodes,
+        missing.edges,
+        "notes.note",
+    )
+
+    assert "subject_declaration_mismatch" in codes(missing)
+    assert "subject_declaration_mismatch" not in codes(matching)
+
+
+@pytest.mark.parametrize("items", ["input.", "unknown.items", "run..items"])
+def test_map_item_expressions_reject_unreadable_paths_during_readiness(items: str) -> None:
+    """The declaration owner rejects malformed expressions before runtime expansion."""
+
+    value = graph(
+        [
+            node("map", MapStep, {"target_step": "body", "items": items}, entry=True),
+            node("body", TargetStep),
+        ]
+    )
+
+    assert "config_invalid" in codes(value)
 
 
 def test_representative_note_party_and_internal_agent_graphs_are_ready() -> None:

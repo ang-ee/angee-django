@@ -49,10 +49,12 @@ def test_two_due_scans_claim_one_schedule_occurrence(workflow_engine_tables: Non
         trigger = Trigger.objects.create(
             workflow=workflow,
             kind=workflow_models.TriggerKind.SCHEDULE,
-            enabled=True,
             config={"interval_seconds": 3600},
-            next_fire_at=now,
         )
+        trigger.enable()
+        trigger.refresh_from_db()
+        assert trigger.next_fire_at is not None
+        now = trigger.next_fire_at
     starting = Barrier(2)
 
     def start_due() -> int | None:

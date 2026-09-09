@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Literal
 
@@ -204,6 +204,22 @@ def test_typed_config_projects_native_input_constraints() -> None:
     assert spec["properties"]["attempts"]["maximum"] == 5
     assert spec["properties"]["names"]["minItems"] == 1
     assert spec["properties"]["names"]["maxItems"] == 3
+
+
+def test_typed_config_projects_native_date_widgets() -> None:
+    """Pydantic date formats use the existing FormSpec date controls."""
+
+    class DateConfig(BaseModel):
+        day: date
+        moment: datetime
+
+    class DateImpl(ImplBase):
+        config_model = DateConfig
+
+    spec = DateImpl.config_form_spec()
+    assert spec is not None
+    assert spec["properties"]["day"]["widget"] == "date"
+    assert spec["properties"]["moment"]["widget"] == "datetime"
 
 
 def test_typed_config_projects_integer_exclusive_bounds_exactly() -> None:

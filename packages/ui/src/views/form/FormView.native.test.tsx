@@ -210,6 +210,23 @@ test("form extras receive the native create and edit form contexts", async () =>
   expect(extras).toHaveBeenCalled();
 });
 
+test("composed field validation participates in the native submit resolver", async () => {
+  const f = await fixture();
+  const unregister = f.surface().registerFieldValidation(
+    "title",
+    (value) => value === "Blocked" ? "Title is blocked" : undefined,
+  );
+
+  fireEvent.change(screen.getByLabelText("title"), { target: { value: "Blocked" } });
+  await act(async () => f.surface().submitForm());
+  expect(f.update).not.toHaveBeenCalled();
+  expect(f.surface().form.getFieldState("title").error?.message).toBe("Title is blocked");
+
+  unregister();
+  await act(async () => f.surface().submitForm());
+  await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
+});
+
 test("an editable metadata relation drops a stale expanded option when its id changes", async () => {
   await fixture({
     publicView: true,

@@ -83,6 +83,13 @@ const agentsMenu: readonly BaseMenuItem[] = [
 // The side-chatter entry the addon contributes as the global chatter "agents" tab (below),
 // bound to the active page's view, to chat with the user's agent about what they're viewing.
 export { AgentChatterPane };
+export {
+  AGENT_SESSION_SLOT,
+  AgentSessionContributions,
+  type AgentSessionContribution,
+  type AgentSessionContributionContext,
+  type AgentSessionRecord,
+} from "./session-contributions";
 
 const agents = defineBaseAddon({
   id: AGENTS_ID,

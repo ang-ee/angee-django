@@ -121,9 +121,9 @@ class _ConfigFormSpecProjector:
             )
             scalar_projection: dict[str, Any] = {"type": schema_type}
             if "format" in schema:
-                if schema_type != "string" or schema["format"] != "date-time":
+                if schema_type != "string" or schema["format"] not in {"date", "date-time"}:
                     self._unsupported(path, f"format {schema['format']!r}")
-                scalar_projection["widget"] = "datetime"
+                scalar_projection["widget"] = "date" if schema["format"] == "date" else "datetime"
             for constraint in constraints:
                 if constraint in schema:
                     scalar_projection[constraint] = schema[constraint]

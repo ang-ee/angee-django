@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   snapshot: {} as Record<string, unknown>,
   save: vi.fn(),
   publish: vi.fn(),
+  test: vi.fn(),
   refetch: vi.fn(),
 }));
 
@@ -15,8 +16,17 @@ vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
-    useAuthoredQuery: () => ({ data: { workflow_definition: state.snapshot }, isFetching: false, refetch: state.refetch }),
-    useAuthoredMutation: (document: unknown) => [String(document).includes("Publish") ? state.publish : state.save, { fetching: false }],
+    useAuthoredQuery: (document: unknown) => {
+      const name = String(document);
+      const data = name.includes("Operations") ? { workflow_step_operations: [] }
+        : name.includes("TestPlan") ? { workflow_test_plan: { operations: [], required_fixtures: [], diagnostics: [], freshness: [] } }
+        : name.includes("RepairContext") ? { workflow_test_repair_context: null }
+        : name.includes("FixtureSources") ? { workflow_test_fixture_sources: { items: [], next_after: null } }
+        : name.includes("FixtureSource") ? { workflow_test_fixture_source: null }
+        : { workflow_definition: state.snapshot };
+      return { data, isFetching: false, error: null, refetch: state.refetch };
+    },
+    useAuthoredMutation: (document: unknown) => [String(document).includes("Publish") ? state.publish : String(document).includes("Test") ? state.test : state.save, { fetching: false }],
   };
 });
 
@@ -24,6 +34,15 @@ vi.mock("../documents.console", () => ({
   WorkflowDefinitionDocument: "WorkflowDefinition",
   SaveWorkflowDefinitionDocument: "SaveWorkflowDefinition",
   PublishWorkflowDefinitionDocument: "PublishWorkflowDefinition",
+  TestWorkflowDefinitionDocument: "TestWorkflowDefinition",
+  WorkflowStepOperationsDocument: "WorkflowStepOperations",
+  WorkflowTestRepairContextDocument: "WorkflowTestRepairContext",
+  WorkflowTestPlanDocument: "WorkflowTestPlan",
+  WorkflowTestFixtureSourcesDocument: "WorkflowTestFixtureSources",
+  WorkflowTestFixtureSourceDocument: "WorkflowTestFixtureSource",
+  WorkflowDefinitionComparisonDocument: "WorkflowDefinitionComparison",
+  WorkflowLaunchDocument: "WorkflowLaunch",
+  RestoreWorkflowDefinitionDocument: "RestoreWorkflowDefinition",
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -35,7 +54,11 @@ vi.mock("@angee/ui", async (importOriginal) => {
     useRouteHref: () => (_route: string, parameters: { id: string }) => `/workflows/${parameters.id}`,
   };
 });
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@tanstack/react-router")>(),
+  useNavigate: () => vi.fn(),
+  useSearch: () => ({}),
+}));
 
 function FormProbe(props: Record<string, unknown>): React.ReactElement {
   const source = props.acknowledgedSource as { record: Record<string, unknown> | null; values: Values | null; reload: () => void } | undefined;

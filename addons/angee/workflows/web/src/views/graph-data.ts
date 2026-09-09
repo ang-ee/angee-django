@@ -44,21 +44,24 @@ export const workflowNodeStyles = {
 
 export function workflowGraphNodes(
   steps: readonly WorkflowGraphStep[],
-  statusByStep = new Map<string, WorkflowRunStepRun>(),
+  statusByStep: ReadonlyMap<string, { status: string; detail?: React.ReactNode }> = new Map(),
+  includePositions = true,
 ): GraphViewNode<WorkflowGraphNodeKind, { step: WorkflowGraphStep }>[] {
   return steps.map((step) => {
     const stepRun = statusByStep.get(step.id);
     const kind = workflowNodeKind(stepRun?.status ?? step.step_class);
+    const title = step.name || step.key;
+    const detail = stepRun ? stepRun.detail ?? stepRun.status : step.join_rule;
     return {
       id: step.id,
       kind,
-      title: step.name || step.key,
+      title,
       code: step.key,
-      detail: stepRun
-        ? stepRun.outcome || stepRun.status
-        : step.join_rule,
+      detail,
+      ariaLabel: [title, step.key !== title ? step.key : null, typeof detail === "string" ? detail : null]
+        .filter(Boolean).join(" · "),
       highlighted: step.is_entry,
-      position: positionFromJson(step.position),
+      position: includePositions ? positionFromJson(step.position) : undefined,
       meta: { step },
     };
   });
@@ -67,14 +70,19 @@ export function workflowGraphNodes(
 export function workflowGraphEdges(
   edges: readonly WorkflowGraphEdge[],
 ): GraphViewEdge<WorkflowGraphEdgeKind, { edge: WorkflowGraphEdge }>[] {
-  return edges.map((edge) => ({
-    id: edge.id,
-    source: edge.source.id,
-    target: edge.target.id,
-    kind: edge.condition ? "condition" : "default",
-    label: edge.condition || undefined,
-    meta: { edge },
-  }));
+  return edges.map((edge) => {
+    const source = edge.source.name || edge.source.key;
+    const target = edge.target.name || edge.target.key;
+    return {
+      id: edge.id,
+      source: edge.source.id,
+      target: edge.target.id,
+      kind: edge.condition ? "condition" : "default",
+      label: edge.condition || undefined,
+      ariaLabel: [source, edge.condition || "continues", target].join(" · "),
+      meta: { edge },
+    };
+  });
 }
 
 export function workflowNodeKind(value: string): WorkflowGraphNodeKind {

@@ -51,7 +51,7 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     publish_requests: list[None] = []
     monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda: publish_requests.append(None))
     workflow = workflow_with_steps(
-        steps=({"key": "start", "config": {"outcome": "done"}},),
+        steps=({"key": "start", "step_class": "wait", "config": {"until": "2099-01-01T00:00:00Z"}},),
         edges=(),
     )
     supplied = {"value": [1]}
@@ -79,7 +79,7 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     absent.input_present = True
     absent.input = None
     with system_context(reason="verify immutable workflow input"):
-        with pytest.raises(TypeError, match="input is immutable"):
+        with pytest.raises(TypeError, match="creation facts are immutable"):
             WorkflowRun.objects.bulk_update([absent], ["input_present", "input"])
 
 
@@ -99,7 +99,7 @@ def test_start_rejects_malformed_input_presence_before_writes(
     invalid: JsonPresence,
 ) -> None:
     workflow = workflow_with_steps(
-        steps=({"key": "start", "config": {"outcome": "done"}},),
+        steps=({"key": "start", "step_class": "wait", "config": {"until": "2099-01-01T00:00:00Z"}},),
         edges=(),
     )
 
@@ -1151,7 +1151,7 @@ def test_postgres_lock_sql_scopes_joined_engine_queries_to_self(
         pytest.skip("active Django connection is not PostgreSQL")
 
     workflow = workflow_with_steps(
-        steps=({"key": "start", "config": {"outcome": "done"}},),
+        steps=({"key": "start", "step_class": "wait", "config": {"until": "2099-01-01T00:00:00Z"}},),
         edges=(),
     )
     run = start_run(workflow)

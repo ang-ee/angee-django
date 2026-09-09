@@ -16,17 +16,31 @@ from django.utils import timezone
 from rebac import system_context, to_subject_ref
 
 from angee.workflows import engine
-from angee.workflows.attempts import AttemptCause, AttemptResultKind, JsonPresence
+from angee.workflows.attempts import (
+    ArtifactSpec,
+    AttemptCause,
+    AttemptInput,
+    AttemptResult,
+    AttemptResultKind,
+    JsonPresence,
+    RecoveryCapability,
+    RecoveryMode,
+)
 from angee.workflows.definitions import StaleDefinitionError
+from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunOrigin, WorkflowStatus
+from angee.workflows.steps import StepImpl, StepResult
 from angee.workflows.test_contracts import TestFixtureRole, TestFixtureSpec
 from angee.workflows.test_contracts import TestScope as WorkflowTestScope
 from tests.workflows import (
     Edge,
     Step,
+    StepArtifact,
     StepAttempt,
+    StepRun,
     Workflow,
     WorkflowDispatch,
+    WorkflowRecoveryEvidence,
     WorkflowRun,
     WorkflowTestFixture,
     advance_once,
@@ -34,6 +48,160 @@ from tests.workflows import (
 
 pytest_plugins = ("tests.workflows",)
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+class _ReconcilingTestStep(StepImpl):
+    calls: list[tuple[int, int]] = []
+
+    @classmethod
+    def recovery_capability(cls, *, attempt: object) -> RecoveryCapability:
+        del attempt
+        return RecoveryCapability(RecoveryMode.RECONCILE)
+
+    def run_recovery(
+        self,
+        step_run: object,
+        *,
+        now: object,
+        source_attempt: object,
+        mode: RecoveryMode,
+    ) -> StepResult:
+        del now
+        assert mode is RecoveryMode.RECONCILE
+        self.calls.append((step_run.pk, source_attempt.pk))
+        return StepResult.done(
+            {"reconciled": True},
+            outcome="done",
+            artifacts=(ArtifactSpec(target=step_run.run.workflow, label="Recovered workflow"),),
+        )
+
+
+def test_recovery_reuses_exact_input_and_records_nonduplicated_artifacts(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del workflow_engine_tables, no_workflow_queue
+    actor = get_user_model().objects.create_user(username="recovery-owner")
+    workflow, step = _draft(owner=actor)
+    with system_context(reason="recovery source setup"):
+        source_run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status="running",
+            created_by=actor,
+            input_present=True,
+            input={"exact": None},
+        )
+        source_step_run = StepRun.objects.create(
+            run=source_run,
+            step=step,
+            status="scheduled",
+        )
+    source = StepAttempt.objects.claim(
+        source_step_run,
+        input=AttemptInput(True, {"exact": None}, {"kind": "run_input"}),
+        claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(source.pk, lease_token=source.lease_token, at=timezone.now())
+    StepAttempt.objects.finalize(
+        source.pk,
+        lease_token=source.lease_token,
+        result=AttemptResult(AttemptResultKind.ERROR, error="uncertain publication"),
+        recorded_at=timezone.now(),
+    )
+    monkeypatch.setattr(type(step), "resolve_impl", lambda self, field: _ReconcilingTestStep)
+    _ReconcilingTestStep.calls = []
+
+    recovery = WorkflowRun.objects.start_recovery(source, request_key="recover-once", actor=actor)
+    duplicate = WorkflowRun.objects.start_recovery(source, request_key="recover-once", actor=actor)
+    assert duplicate.pk == recovery.pk
+    with system_context(reason="recovery admission inspection"):
+        evidence = WorkflowRecoveryEvidence.objects.filter(run=recovery)
+        assert evidence.count() == 0
+        advance = WorkflowDispatch.objects.get(run=recovery, kind=WorkflowDispatchKind.ADVANCE)
+    assert engine.advance_dispatch(advance.pk)["claimed"] == 1
+    with system_context(reason="recovery invocation inspection"):
+        recovery_step = StepRun.objects.get(run=recovery, step=step)
+        attempt = StepAttempt.objects.get(pk=recovery_step.current_attempt_id)
+        execute = WorkflowDispatch.objects.get(step_attempt=attempt)
+    assert attempt.input_present and attempt.input == {"exact": None}
+    assert engine.execute_dispatch(execute.pk, attempt.pk, attempt.lease_token)["executed"] == 1
+
+    with system_context(reason="recovery result inspection"):
+        attempt.refresh_from_db()
+        artifacts = list(StepArtifact.objects.filter(attempt=attempt))
+    assert _ReconcilingTestStep.calls == [(recovery_step.pk, source.pk)]
+    assert attempt.recovery_source_attempt_id == source.pk
+    assert attempt.artifacts_present
+    assert [(artifact.declaration_index, artifact.label) for artifact in artifacts] == [
+        (0, "Recovered workflow")
+    ]
+
+
+def test_repair_test_retains_exact_source_attempt_and_original_input(
+    workflow_engine_tables: None,
+) -> None:
+    del workflow_engine_tables
+    actor = get_user_model().objects.create_user(username="repair-owner")
+    workflow, step = _draft(owner=actor)
+    with system_context(reason="repair source setup"):
+        source_run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status="running",
+            created_by=actor,
+            input_present=True,
+            input=None,
+        )
+        source_step_run = StepRun.objects.create(
+            run=source_run, step=step, status="scheduled"
+        )
+    source = StepAttempt.objects.claim(source_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(source.pk, lease_token=source.lease_token, at=timezone.now())
+    StepAttempt.objects.finalize(
+        source.pk,
+        lease_token=source.lease_token,
+        result=AttemptResult(AttemptResultKind.ERROR, error="broken input mapping"),
+        recorded_at=timezone.now(),
+    )
+
+    repaired = WorkflowRun.objects.start_test(
+        workflow,
+        expected_revision=workflow.draft_revision,
+        request_key="repair-test",
+        subject=None,
+        actor=actor,
+        input=JsonPresence(True, None),
+        scope=WorkflowTestScope.NODE,
+        selected_step=step,
+        repair_source_attempt=source,
+    )
+    duplicate = WorkflowRun.objects.start_test(
+        workflow,
+        expected_revision=workflow.draft_revision,
+        request_key="repair-test",
+        subject=None,
+        actor=actor,
+        input=JsonPresence(True, None),
+        scope=WorkflowTestScope.NODE,
+        selected_step=step,
+        repair_source_attempt=source,
+    )
+
+    assert duplicate.pk == repaired.pk
+    assert repaired.test_repair_source_attempt_id == source.pk
+    assert repaired.input_present and repaired.input is None
+    with pytest.raises(ValidationError, match="repair evidence"):
+        WorkflowRun.objects.start_test(
+            workflow,
+            expected_revision=workflow.draft_revision,
+            request_key="repair-test",
+            subject=None,
+            actor=actor,
+            input=JsonPresence(True, None),
+            scope=WorkflowTestScope.NODE,
+            selected_step=step,
+            repair_source_attempt=None,
+        )
 
 
 def test_output_fixture_is_immutable_nonphysical_retained_evidence(
@@ -1257,6 +1425,51 @@ def test_test_mutation_preserves_omitted_and_explicit_null_input(
         null_run = WorkflowRun.objects.get(sqid=null["id"])
     assert (absent_run.input_present, absent_run.input) == (False, None)
     assert (null_run.input_present, null_run.input) == (True, None)
+
+
+def test_test_plan_and_launch_share_node_scope_source_and_fixture_transport(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    del workflow_engine_tables, no_workflow_queue
+    from tests.conftest import execute_schema, result_data
+    from tests.test_workflows import _console_schema
+
+    actor = get_user_model().objects.create_user(username="snapshot-node-graphql")
+    workflow, selected = _draft(owner=actor)
+    plan_query = """
+      query Plan($workflow: ID!, $revision: Int!, $source: ID!) {
+        workflow_test_plan(
+          workflow: $workflow expected_revision: $revision scope: NODE selected_step: $source
+        ) {
+          revision scope source_step_id snapshot_step_id is_current
+          operations { step_id key effect replaced_by_output outcomes { key label description } }
+          required_fixtures { role step_id step_key item_index_required satisfied }
+          diagnostics { code field }
+        }
+      }
+    """
+    variables = {"workflow": workflow.sqid, "revision": workflow.draft_revision, "source": selected.sqid}
+    plan = result_data(execute_schema(_console_schema(), plan_query, variables, user=actor))["workflow_test_plan"]
+    assert plan["scope"] == "NODE"
+    assert plan["source_step_id"] == selected.sqid
+    assert plan["snapshot_step_id"] is None
+    assert plan["operations"][0]["outcomes"] == []
+
+    mutation = """
+      mutation Launch($workflow: ID!, $revision: Int!, $source: ID!) {
+        start_workflow_test(
+          workflow: $workflow expected_revision: $revision request_key: "node-graphql"
+          scope: NODE source_step: $source fixtures: []
+        ) { ok id validation_errors }
+      }
+    """
+    launch = result_data(execute_schema(_console_schema(), mutation, variables, user=actor))["start_workflow_test"]
+    assert launch["ok"] is True
+    with system_context(reason="verify GraphQL node launch"):
+        run = WorkflowRun.objects.get(sqid=launch["id"])
+    assert run.test_scope == WorkflowTestScope.NODE
+    assert run.test_source_step_id == selected.pk
 
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL test-launch serialization contract")

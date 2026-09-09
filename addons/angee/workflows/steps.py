@@ -32,8 +32,16 @@ from pydantic import BaseModel
 from rebac import system_context
 
 from angee.base.impl import ImplBase, ImplChoice
-from angee.workflows.attempts import AttemptResult, AttemptResultKind, DecisionSpec, JsonPresence
-from angee.workflows.configs import GateConfig, MapConfig, WaitConfig
+from angee.workflows.attempts import (
+    ArtifactSpec,
+    AttemptResult,
+    AttemptResultKind,
+    DecisionSpec,
+    JsonPresence,
+    RecoveryCapability,
+    RecoveryMode,
+)
+from angee.workflows.configs import GateConfig, MapConfig, WaitConfig, map_items_expression_path
 from angee.workflows.data_contracts import DataContract, model_data_contract
 
 _MODEL_LABEL_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
@@ -100,6 +108,7 @@ class StepOperation:
     effect_description: str
     idempotent: bool | None
     subject_declaration: str
+    map_body_operation: bool
 
     @property
     def input_schema(self) -> dict[str, Any] | None:
@@ -132,6 +141,8 @@ class StepResult:
     resume_state: dict[str, Any] | None = None
     decisions: tuple[DecisionSpec, ...] = ()
     waiting_kind: Literal["scheduled", "approval", "external"] | str = ""
+    artifacts_present: bool = False
+    artifacts: tuple[ArtifactSpec, ...] = ()
 
     def to_attempt_result(self) -> AttemptResult:
         """Convert the implementation result into the retained closed envelope."""
@@ -148,13 +159,27 @@ class StepResult:
             waiting_kind=self.waiting_kind,
             requested_until=self.until,
             decisions=self.decisions,
+            artifacts_present=self.artifacts_present,
+            artifacts=self.artifacts,
         )
 
     @classmethod
-    def done(cls, output: Any = None, outcome: str = "") -> Self:
+    def done(
+        cls,
+        output: Any = None,
+        outcome: str = "",
+        *,
+        artifacts: tuple[ArtifactSpec, ...] | list[ArtifactSpec] | None = None,
+    ) -> Self:
         """Return a completed step result."""
 
-        return cls(kind="done", output=output, outcome=outcome)
+        return cls(
+            kind="done",
+            output=output,
+            outcome=outcome,
+            artifacts_present=artifacts is not None,
+            artifacts=tuple(artifacts or ()),
+        )
 
     @classmethod
     def wait(
@@ -207,6 +232,28 @@ class StepImpl(ImplBase):
     map_body_operation: ClassVar[bool] = False
 
     @classmethod
+    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
+        """Return the explicit safe recovery mode for one retained failure."""
+
+        del attempt
+        return RecoveryCapability(mode=None, unavailable_reason="This operation does not support recovery.")
+
+    def run_recovery(
+        self,
+        step_run: Any,
+        *,
+        now: datetime,
+        source_attempt: Any,
+        mode: RecoveryMode,
+    ) -> StepResult:
+        """Run one admitted recovery through the operation-owned safe behavior."""
+
+        del source_attempt
+        if mode is RecoveryMode.FRESH:
+            return self.run(step_run, now=now)
+        raise ValidationError({"recovery": "This operation does not implement reconciliation."})
+
+    @classmethod
     def input_contract(cls) -> DataContract:
         """Return Pydantic's declared validation shape for operation input."""
 
@@ -249,6 +296,7 @@ class StepImpl(ImplBase):
             effect_description=cls.effect_description,
             idempotent=cls.idempotent,
             subject_declaration=cls.subject_declaration,
+            map_body_operation=cls.map_body_operation,
         )
 
     @classmethod
@@ -522,15 +570,16 @@ class MapStep(StepImpl):
             return expression
         if not isinstance(expression, str) or not expression:
             raise ValidationError({"config": "Map steps require an items expression."})
-        root, *path = expression.split(".")
+        try:
+            root, path = map_items_expression_path(expression)
+        except ValueError as error:
+            raise ValidationError({"config": str(error)}) from error
         if root == "subject":
             value = step_run.run.subject
         elif root == "run":
             value = step_run.run
         elif root == "input":
             value = step_run.input
-        else:
-            raise ValidationError({"config": "Map items expression must start with subject, run, or input."})
         for part in path:
             value = cls.lookup(value, part)
         return value

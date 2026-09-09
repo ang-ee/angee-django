@@ -774,6 +774,85 @@ def test_public_decision_schema_query_count_stays_flat_for_three_rows(
     )
 
 
+def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Decision reads stay assignee-scoped while journal links require their own read access."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-resource-assignee")
+    stranger = User.objects.create_user(username="wdc-resource-stranger")
+    admin = _platform_admin("wdc-resource-admin")
+    decision = _opened_decision([assignee], None)
+    query = """
+        query DecisionReads($id: String!, $run: String!) {
+          workflow_decisions(where: {step_run__run: {_eq: $run}}, limit: 10) {
+            id
+            source_run_id
+            source_execution_id
+            source_attempt_id
+          }
+          workflow_decisions_by_pk(id: $id) {
+            id
+            source_run_id
+            source_execution_id
+            source_attempt_id
+          }
+          workflow_decisions_aggregate { aggregate { count } }
+        }
+    """
+    public = _schema("public")
+    variables = {"id": str(decision.sqid), "run": str(decision.step_run.run.sqid)}
+
+    assigned = result_data(_execute(public, query, variables, user=assignee))
+    denied = result_data(_execute(public, query, variables, user=stranger))
+    privileged = result_data(_execute(public, query, variables, user=admin))
+    console_query = """
+        query ConsoleDecision($id: String!) {
+          workflow_decisions_by_pk(id: $id) { id step_run { id } }
+        }
+    """
+    console = _schema("console")
+    assigned_console = result_data(
+        _execute(console, console_query, {"id": str(decision.sqid)}, user=assignee)
+    )
+    privileged_console = result_data(
+        _execute(console, console_query, {"id": str(decision.sqid)}, user=admin)
+    )
+
+    assert assigned["workflow_decisions"] == [
+        {
+            "id": str(decision.sqid),
+            "source_run_id": None,
+            "source_execution_id": None,
+            "source_attempt_id": None,
+        }
+    ]
+    assert assigned["workflow_decisions_by_pk"] == assigned["workflow_decisions"][0]
+    assert assigned["workflow_decisions_aggregate"]["aggregate"]["count"] == 1
+    assert denied["workflow_decisions"] == []
+    assert denied["workflow_decisions_by_pk"] is None
+    assert denied["workflow_decisions_aggregate"]["aggregate"]["count"] == 0
+    assert privileged["workflow_decisions_by_pk"]["source_run_id"] == str(
+        decision.step_run.run.sqid
+    )
+    assert privileged["workflow_decisions_by_pk"]["source_execution_id"] == str(
+        decision.step_run.sqid
+    )
+    assert privileged["workflow_decisions_by_pk"]["source_attempt_id"] == str(
+        decision.suspension_attempt.sqid
+    )
+    assert assigned_console["workflow_decisions_by_pk"] == {
+        "id": str(decision.sqid),
+        "step_run": None,
+    }
+    assert privileged_console["workflow_decisions_by_pk"] == {
+        "id": str(decision.sqid),
+        "step_run": {"id": str(decision.step_run.sqid)},
+    }
+
+
 def test_public_decide_mutation_uses_actor_scoped_act_permission(
     workflow_gate_tables: None,
     no_workflow_queue: None,

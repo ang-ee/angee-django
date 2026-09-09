@@ -30,6 +30,7 @@ export interface WorkflowOperationChoice {
   selectable: boolean;
   effect: string;
   effect_description: string;
+  map_body_operation?: boolean;
   outcomes?: readonly WorkflowOutcomeChoice[];
 }
 

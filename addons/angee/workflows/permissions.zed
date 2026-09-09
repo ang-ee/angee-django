@@ -71,6 +71,20 @@ definition workflows/step_attempt {
     permission read = step_run->read + admin->member
 }
 
+definition workflows/step_artifact {
+    relation attempt: workflows/step_attempt // rebac:field=attempt
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = attempt->read + admin->member
+}
+
+definition workflows/recovery_evidence {
+    relation run: workflows/run // rebac:field=run
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = run->read + admin->member
+}
+
 definition workflows/decision {
     relation assignee: auth/user | angee/role#member
     relation requester: auth/user

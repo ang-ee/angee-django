@@ -96,6 +96,24 @@ class WorkflowTestSetupPlan:
         return not self.freshness
 
 
+@dataclass(frozen=True, slots=True)
+class WorkflowTestRepairContext:
+    """Authorized identities and original run inputs for testing a draft repair."""
+
+    source_attempt_id: str
+    source_run_id: str
+    source_workflow_id: str
+    source_revision: int
+    draft_workflow_id: str
+    draft_revision: int
+    source_step_key: str
+    source_step_id: str
+    current_source_step_id: str | None
+    subject: object | None
+    input: JsonPresence
+    fixtures: tuple[TestFixtureSourceSummary, ...]
+
+
 def validate_test_fixture_spec(spec: TestFixtureSpec) -> TestFixtureSpec:
     """Validate fixture scalar and exact JSON facts before graph admission."""
 

@@ -21,7 +21,7 @@ import {
   type Fields,
   type HttpError,
 } from "@refinedev/core";
-import { set, useForm, type FieldErrors, type UseFormReturn } from "react-hook-form";
+import { get, set, useForm, type FieldErrors, type UseFormReturn } from "react-hook-form";
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
@@ -144,6 +144,11 @@ export interface FormViewSaveSurface {
   fieldReadOnly: (field: FieldDescriptor) => boolean;
   startFieldInteraction: (path: string) => void;
   commitFieldInteraction: (path: string) => void;
+  /** Register submit-time validation owned by a composed controlled editor. */
+  registerFieldValidation: (
+    name: string,
+    validate: (value: unknown, values: FormValues) => string | undefined,
+  ) => () => void;
   /** Request departure through the same owner as routed unsaved-change guards. */
   requestLeave: () => Promise<boolean>;
 }
@@ -307,14 +312,23 @@ export function useFormViewSave({
     return isCreate ? emptyValues : record
       ? recordToValues(record, formFields, linesSeed(seedLineRows)) : emptyValues;
   }, [acknowledgedSource, emptyValues, formFields, isCreate, linesSeed, record, seedLineRows]);
+  const composedValidators = React.useRef(new Map<
+    string,
+    (value: unknown, values: FormValues) => string | undefined
+  >());
   const form = useForm<FormValues>({
     defaultValues: emptyValues,
     shouldUnregister: false,
     resolver: (formValues) => {
       const missing = missingRequiredFieldNames(formValues, formFields, requiredFieldNames);
-      return missing.length ? {
-        values: {}, errors: requiredErrors(missing, t("form.required")),
-      } : { values: formValues, errors: {} };
+      const errors = requiredErrors(missing, t("form.required"));
+      for (const [name, validate] of composedValidators.current) {
+        const message = validate(get(formValues, name), formValues);
+        if (message) set(errors, name, { type: "composed", message });
+      }
+      return Object.keys(errors).length
+        ? { values: {}, errors }
+        : { values: formValues, errors: {} };
     },
   });
   const { reset, resetDefaultValues, resetField, clearErrors, getFieldState, setError, setValue } = form;
@@ -673,6 +687,17 @@ export function useFormViewSave({
     },
     [onFieldInteractionCommit],
   );
+  const registerFieldValidation = React.useCallback((
+    name: string,
+    validate: (value: unknown, values: FormValues) => string | undefined,
+  ) => {
+    composedValidators.current.set(name, validate);
+    return () => {
+      if (composedValidators.current.get(name) === validate) {
+        composedValidators.current.delete(name);
+      }
+    };
+  }, []);
 
   return {
     form,
@@ -697,6 +722,7 @@ export function useFormViewSave({
     fieldReadOnly,
     startFieldInteraction,
     commitFieldInteraction,
+    registerFieldValidation,
     requestLeave,
   };
 }

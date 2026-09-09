@@ -268,6 +268,7 @@ export function FormViewOverview({
     ? resolveField(bodyField, bodyValues)
     : undefined;
   const renderField = (field: FieldDescriptor): React.ReactNode => {
+    if (field.hidden) return null;
     const relation = surface.relationByField.get(field.name);
     return (
       <BoundFormField

@@ -9,8 +9,7 @@ from typing import Any
 
 from croniter import CroniterBadCronError
 from django.apps import apps
-from django.core.exceptions import FieldError
-from django.db import OperationalError, ProgrammingError, models, transaction
+from django.db import OperationalError, ProgrammingError, models
 from django.db.models.signals import post_delete, post_save
 from django.utils import timezone
 from rebac import system_context
@@ -18,7 +17,6 @@ from rebac import system_context
 from angee.base.identity import instance_from_public_id
 from angee.graphql.events import ChangePayload
 from angee.graphql.publishing import change_published
-from angee.workflows import engine
 from angee.workflows.models import TriggerKind
 
 _EVENT_TRIGGER_DISPATCH_UID = "angee-workflows-event-triggers"
@@ -132,25 +130,14 @@ def _on_change_published(
         return
     for trigger in triggers:
         try:
-            matches = trigger.condition_matches(sender, instance)
-        except FieldError, ValueError, TypeError:
-            logger.exception("Skipping workflow event trigger %s after condition evaluation failed.", trigger.pk)
-            continue
-        if not matches:
-            continue
-        claimed = trigger_model.objects.claim_due_event(trigger.pk, timestamp=timezone.now())
-        if claimed is not None:
-            _enqueue_start(claimed, subject=instance)
-
-
-def _enqueue_start(trigger: Any, *, subject: models.Model | None, dedup_key: str | None = None) -> None:
-    def start() -> None:
-        try:
-            engine.start(trigger.workflow, subject=subject, actor=None, trigger=trigger, dedup_key=dedup_key)
+            trigger_model.objects.start_event(
+                trigger.pk,
+                subject=instance,
+                occurrence_id=payload.occurrence_id,
+                timestamp=timezone.now(),
+            )
         except Exception:
-            logger.exception("Workflow trigger %s failed to start workflow.", trigger.pk)
-
-    transaction.on_commit(start)
+            logger.exception("Workflow event trigger %s failed admission.", trigger.pk)
 
 
 def _enabled_event_model_labels() -> frozenset[str]:

@@ -12,6 +12,7 @@ from rebac import system_context
 
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
+from angee.workflows.attempts import RecoveryMode
 from angee.workflows_parties.autoconfig import SETTINGS as WORKFLOWS_PARTIES_SETTINGS
 from angee.workflows_parties.steps import DedupeExecuteStepImpl
 from tests.test_messaging import (
@@ -237,6 +238,17 @@ def test_apply_unit_is_idempotent_on_retry(workflows_parties_tables: None) -> No
     assert first.output == {"action": "merge", "result": "merged"}
     second = unit.run(step_run, now=None)  # type: ignore[arg-type]
     assert second.output == {"action": "merge", "result": "already_merged"}
+    capability = unit.recovery_capability(
+        attempt=SimpleNamespace(step_run=SimpleNamespace(step=step_run.step))
+    )
+    assert capability.mode == RecoveryMode.FRESH
+
+    prepare = unit.recovery_capability(
+        attempt=SimpleNamespace(
+            step_run=SimpleNamespace(step=SimpleNamespace(config={"mode": "prepare"}))
+        )
+    )
+    assert prepare.available is False
 
 
 def test_autoconfig_registers_the_three_step_keys() -> None:

@@ -5,15 +5,17 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, cast
+from uuid import uuid4
 
 import strawberry
-from angee.base.identity import public_id_of
-from angee.base.serialization import json_safe
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from rebac import ObjectRef
 from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
+
+from angee.base.identity import public_id_of
+from angee.base.serialization import json_safe
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +30,9 @@ class ChangePayload:
 
     action: str
     """Change action: create, update, or delete."""
+
+    occurrence_id: str | None = None
+    """Publisher-created identity for this observable change occurrence."""
 
     changed_fields: tuple[str, ...] | None = None
     """Updated model fields when Django saved a partial update."""
@@ -73,6 +78,7 @@ class ChangePayload:
             model=instance._meta.label,
             id=public_id_of(instance),
             action=action,
+            occurrence_id=uuid4().hex,
             changed_fields=changed_fields,
             changed_values=changed_values,
             resource_id=resource_id,
@@ -92,6 +98,11 @@ class ChangePayload:
             model=str(payload["model"]),
             id=str(payload["id"]),
             action=str(payload["action"]),
+            occurrence_id=(
+                str(payload["occurrence_id"])
+                if payload.get("occurrence_id") is not None
+                else None
+            ),
             changed_fields=changed_fields,
             changed_values=dict(values) if isinstance(values, Mapping) else None,
             resource_id=str(payload["resource_id"]) if payload.get("resource_id") is not None else None,
@@ -113,6 +124,8 @@ class ChangePayload:
             "changed_fields": list(self.changed_fields) if self.changed_fields is not None else None,
             "changed_values": dict(self.changed_values) if self.changed_values is not None else None,
         }
+        if self.occurrence_id is not None:
+            payload["occurrence_id"] = self.occurrence_id
         if self.resource_id is not None:
             payload["resource_id"] = self.resource_id
         if self.read_resource_type is not None and self.read_resource_id is not None:
@@ -206,6 +219,7 @@ class ChangeEvent:
     model: str
     id: strawberry.ID
     action: str
+    occurrence_id: str | None = None
     changed_fields: list[str] | None = None
     changed_values: JSON | None = None
 
@@ -218,6 +232,7 @@ class ChangeEvent:
             model=payload.model,
             id=strawberry.ID(payload.id),
             action=payload.action,
+            occurrence_id=payload.occurrence_id,
             changed_fields=list(payload.changed_fields) if payload.changed_fields is not None else None,
             changed_values=cast(JSON | None, payload.changed_values),
         )

@@ -105,6 +105,15 @@ class StepAttempt(workflow_models.StepAttempt):
         rebac_id_attr = "sqid"
 
 
+class StepArtifact(workflow_models.StepArtifact):
+    """Concrete explicit result artifact model for source-addon runtime tests."""
+
+    class Meta(workflow_models.StepArtifact.Meta):
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_step_artifact"
+
+
 class WorkflowTestFixture(workflow_models.WorkflowTestFixture):
     """Concrete retained workflow test fixture model."""
 
@@ -112,6 +121,15 @@ class WorkflowTestFixture(workflow_models.WorkflowTestFixture):
         abstract = False
         app_label = "workflows"
         db_table = "test_workflows_test_fixture"
+
+
+class WorkflowRecoveryEvidence(workflow_models.WorkflowRecoveryEvidence):
+    """Concrete retained recovery evidence model."""
+
+    class Meta(workflow_models.WorkflowRecoveryEvidence.Meta):
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_recovery_evidence"
 
 
 class Decision(workflow_models.Decision):
@@ -140,7 +158,9 @@ WORKFLOW_RUNTIME_MODELS = (
     WorkflowRun,
     StepRun,
     StepAttempt,
+    StepArtifact,
     WorkflowTestFixture,
+    WorkflowRecoveryEvidence,
     Decision,
     WorkflowDispatch,
 )

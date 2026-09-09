@@ -23,6 +23,7 @@ from pydantic import JsonValue
 from rebac import actor_context, system_context
 from rebac.actors import to_subject_ref
 
+from angee.workflows.attempts import RecoveryCapability, RecoveryMode
 from angee.workflows.steps import DecisionSpec, StepImpl, StepResult, positive_int
 
 _EXECUTE_MODES = frozenset({"prepare", "unit"})
@@ -129,6 +130,15 @@ class DedupeExecuteStepImpl(StepImpl):
     label = "Apply duplicate decisions"
     category = "Activity"
     deterministic = False
+
+    @classmethod
+    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
+        """Allow fresh replay only for the idempotent per-pair Map body."""
+
+        config = getattr(getattr(getattr(attempt, "step_run", None), "step", None), "config", None)
+        if isinstance(config, Mapping) and config.get("mode") == "unit":
+            return RecoveryCapability(RecoveryMode.FRESH)
+        return RecoveryCapability(None, "Only an individual duplicate-decision item can be recovered.")
 
     @classmethod
     def validate_config(cls, config: Any) -> None:

@@ -70,7 +70,9 @@ export function useSessionRuntime(
   const [error, setError] = React.useState<string | null>(null);
   const [recordAttached, setRecordAttached] = React.useState(true);
   const [clearedThrough, setClearedThrough] = React.useState(0);
-  const startingRef = React.useRef<string | null>(null);
+  const [startRequest, retryStart] = React.useReducer((value) => value + 1, 0);
+  const startingRef = React.useRef<{ agentId: string; sequence: number } | null>(null);
+  const requestSequence = React.useRef(0);
   const activeAgentRef = React.useRef(agentId);
   const turnMessagesRef = React.useRef(new Map<string, CachedTurnMessages>());
 
@@ -98,26 +100,33 @@ export function useSessionRuntime(
     setPosting(false);
     setError(null);
     startingRef.current = null;
+    requestSequence.current += 1;
     turnMessagesRef.current.clear();
   }, [agentId]);
 
   React.useEffect(() => {
     let active = true;
     if (initialSessionId !== undefined || latest.isFetching || reusableId !== undefined) return;
-    if (startingRef.current === agentId) return;
-    startingRef.current = agentId;
+    if (startingRef.current?.agentId === agentId) return;
+    const attempt = { agentId, sequence: ++requestSequence.current };
+    startingRef.current = attempt;
     void startSession({ agent: agentId, context: view })
       .then((data) => {
         const id = data?.start_agent_session.id;
-        if (active && id) setStartedSessionId(id);
+        if (!active || activeAgentRef.current !== agentId || startingRef.current !== attempt) return;
+        startingRef.current = null;
+        if (id) setStartedSessionId(id);
+        else setError("Failed to start the agent session.");
       })
       .catch((caught) => {
-        if (active) setError(messageOf(caught, "Failed to start the agent session."));
+        if (!active || activeAgentRef.current !== agentId || startingRef.current !== attempt) return;
+        startingRef.current = null;
+        setError(messageOf(caught, "Failed to start the agent session."));
       });
     return () => {
       active = false;
     };
-  }, [agentId, initialSessionId, latest.isFetching, reusableId, startSession, view]);
+  }, [agentId, initialSessionId, latest.isFetching, reusableId, startRequest, startSession, view]);
 
   const allMessages = React.useMemo(
     () => transcriptMessages(sessionId ?? "", displayedTurns, turnMessagesRef.current),
@@ -139,17 +148,26 @@ export function useSessionRuntime(
     async (message: AppendMessage): Promise<void> => {
       const text = message.content.map((part) => part.type === "text" ? part.text : "").join("").trim();
       if (!sessionId || !text) return;
+      const request = ++requestSequence.current;
+      const requestAgent = agentId;
+      const requestSession = sessionId;
       setPosting(true);
       setError(null);
       try {
         await postMessage({ session: sessionId, text });
       } catch (caught) {
-        setError(messageOf(caught, "The agent did not accept the message."));
+        if (activeAgentRef.current === requestAgent && requestSequence.current === request) {
+          setError(messageOf(caught, "The agent did not accept the message."));
+        }
       } finally {
-        setPosting(false);
+        if (
+          activeAgentRef.current === requestAgent
+          && requestSequence.current === request
+          && sessionId === requestSession
+        ) setPosting(false);
       }
     },
-    [postMessage, sessionId],
+    [agentId, postMessage, sessionId],
   );
   const clear = React.useCallback(() => setClearedThrough(allMessages.length), [allMessages.length]);
   const onCancel = React.useCallback(async (): Promise<void> => setPosting(false), []);
@@ -157,9 +175,14 @@ export function useSessionRuntime(
   const clearRecord = React.useCallback((): void => setRecordAttached(false), []);
   const reconnect = React.useCallback(() => {
     setClearedThrough(0);
+    if (!sessionId) {
+      startingRef.current = null;
+      setError(null);
+      retryStart();
+    }
     latest.refetch();
     turns.refetch();
-  }, [latest.refetch, turns.refetch]);
+  }, [latest.refetch, sessionId, turns.refetch]);
   const renderContext = React.useCallback(async (): Promise<string> => {
     try {
       const data = await renderPrompt({ id: agentId, view });
@@ -204,6 +227,9 @@ export function useSessionRuntime(
     attachRecord,
     clearRecord,
     renderContext,
+    sessionRecord: displayedSession
+      ? { type: "agents/agent_session" as const, sqid: displayedSession.id }
+      : undefined,
   };
 }
 

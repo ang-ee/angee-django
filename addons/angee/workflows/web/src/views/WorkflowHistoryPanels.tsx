@@ -32,6 +32,7 @@ export function WorkflowRunsPanel({ workflowId }: { workflowId: string }): React
       rowHref={(row) => routeHref("workflows.run", { id: row.id })}
     >
       <Column field="created_at" header={t("runs.started")} />
+      <Column field="origin" header={t("runs.origin")} />
       <Column field="status" widget="statusBadge" />
       <Column field="updated_at" />
     </List>
@@ -49,7 +50,7 @@ export function WorkflowVersionsPanel({ workflowId }: { workflowId: string }): R
     <List<WorkflowCollectionRow>
       resource={WORKFLOW_MODEL}
       scope="local"
-      baseFilter={{ published_from: { exact: lineage.id } }}
+      baseFilter={workflowVersionsFilter(lineage.id)}
       rowHref={(row) => routeHref("workflows.workflow", { id: row.id })}
     >
       <Column field="version" />
@@ -58,6 +59,13 @@ export function WorkflowVersionsPanel({ workflowId }: { workflowId: string }): R
       <Column field="updated_at" />
     </List>
   );
+}
+
+export function workflowVersionsFilter(lineageId: string) {
+  return {
+    published_from: { exact: lineageId },
+    status: { inList: ["PUBLISHED", "ARCHIVED"] },
+  };
 }
 
 export function workflowRunLineageFilter(lineageId: string) {

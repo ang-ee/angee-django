@@ -13,7 +13,9 @@ from angee.base.mixins import ARCHIVE_FLAG_FIELD
 RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list"})
 """Supported resource field kind names."""
 
-RESOURCE_FIELD_SCALARS = frozenset({"ID", "String", "Boolean", "Int", "Float", "Decimal", "DateTime", "Date", "JSON"})
+RESOURCE_FIELD_SCALARS = frozenset(
+    {"ID", "String", "Boolean", "Int", "Float", "Decimal", "DateTime", "Date", "UUID", "JSON"}
+)
 """Supported GraphQL scalar families in data-resource field metadata."""
 
 RESOURCE_FIELD_WIDGETS = frozenset(
@@ -31,7 +33,10 @@ def is_to_many_relation(field: models.Field[Any, Any]) -> bool:
 def is_to_one_relation(field: models.Field[Any, Any]) -> bool:
     """Return whether ``field`` is a forward to-one relation."""
 
-    return bool(getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False))
+    return bool(
+        (getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False))
+        and getattr(field, "related_model", None) is not None
+    )
 
 
 def resource_field_kind(

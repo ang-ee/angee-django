@@ -8,6 +8,7 @@ import { GraphView } from "./GraphView";
 
 const reactFlowMock = vi.hoisted(() => ({
   lastProps: undefined as Record<string, unknown> | undefined,
+  zeroBounds: false,
 }));
 
 vi.mock("@xyflow/react", async () => {
@@ -32,7 +33,11 @@ vi.mock("@xyflow/react", async () => {
         getNode: (id: string) => nodes.find((node) => node.id === id),
         getEdge: (id: string) => (props.edges as Array<{ id: string }>).find((edge) => edge.id === id),
         getNodes: () => nodes,
-        getNodesBounds: (selected: Array<string | typeof nodes[number]>) => bounds(selected.map((item) => typeof item === "string" ? nodes.find((node) => node.id === item)! : item)),
+        getNodesBounds: (selected: Array<string | typeof nodes[number]>) => {
+          const resolved = selected.map((item) => typeof item === "string" ? nodes.find((node) => node.id === item)! : item);
+          const value = bounds(resolved);
+          return reactFlowMock.zeroBounds ? { ...value, width: 0, height: 0 } : value;
+        },
         getIntersectingNodes: (rect: { x: number; y: number; width: number; height: number }) => nodes.filter((node) => intersects(node, rect)),
       });
       return React.createElement(
@@ -47,6 +52,7 @@ vi.mock("@xyflow/react", async () => {
 afterEach(() => {
   cleanup();
   reactFlowMock.lastProps = undefined;
+  reactFlowMock.zeroBounds = false;
 });
 
 const nodes = [
@@ -135,6 +141,17 @@ describe("GraphView", () => {
     expect(geometry.current?.nodeBounds("draft")).toEqual({ x: 0, y: 0, width: 1000, height: 72 });
     const position = geometry.current!.firstFreePosition("handler", { x: 100, y: 0 });
     expect(geometry.current!.intersects({ ...position, width: 160, height: 72 })).toBe(false);
+  });
+
+  test("uses declared dimensions while native measurement is pending", () => {
+    reactFlowMock.zeroBounds = true;
+    const geometry = createRef<import("./GraphView").GraphViewGeometry<"handler" | "gate">>();
+    render(<GraphView geometryRef={geometry} nodes={nodes} edges={edges} nodeStyles={nodeStyles} />);
+
+    expect(geometry.current?.nodeBounds("draft")).toEqual(expect.objectContaining({
+      width: nodeStyles.handler.width,
+      height: nodeStyles.handler.height,
+    }));
   });
 
   test("lays out self-loops and dangling edges instead of crashing", () => {

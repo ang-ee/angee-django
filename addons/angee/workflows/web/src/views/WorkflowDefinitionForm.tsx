@@ -1,10 +1,12 @@
 import * as React from "react";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { modelLabelSegment, useSchemaFieldMetadata } from "@angee/metadata";
+import { extractActionOutcome, ResourceContext, useAuthoredMutation, useAuthoredQuery, type ActionOutcome } from "@angee/refine";
 import {
   Button,
   ErrorBanner,
   Field,
   Form,
+  formLevelMessage,
   Group,
   LoadingPanel,
   Statusline,
@@ -17,12 +19,14 @@ import {
   type RegisteredFormProps,
   useRouteHref,
 } from "@angee/ui";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 
 import {
   PublishWorkflowDefinitionDocument,
   SaveWorkflowDefinitionDocument,
+  TestWorkflowDefinitionDocument,
   WorkflowDefinitionDocument,
+  WorkflowTestRepairContextDocument,
 } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
 import {
@@ -33,6 +37,8 @@ import {
 } from "./workflow-definition-state";
 import { DefinitionHistoryProvider, useDefinitionHistory } from "./workflow-definition-history";
 import { inputPreviewRequest, WorkflowInputPreviewProvider } from "./workflow-input-preview";
+import { fixtureInput, WorkflowTestLaunchProvider, WorkflowTestSetup, type WorkflowTestSetupValues } from "./WorkflowTestSetup";
+import { WorkflowVersionReview } from "./WorkflowVersionReview";
 
 export const WORKFLOW_MODEL = "workflows.Workflow";
 
@@ -46,12 +52,41 @@ function WorkflowCreateForm({ resource: _resource, ...props }: RegisteredFormPro
 
 function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useWorkflowsT();
+  const metadata = useSchemaFieldMetadata();
+  const { resources: registeredResources } = React.useContext(ResourceContext);
+  const subjectOptions = React.useMemo(() => {
+    const resources = metadata.resources.filter((resource) => resource.roots.detail && resource.recordRepresentation);
+    const labelsByModel = new Map(registeredResources.flatMap((resource) => {
+      const modelLabel = resource.meta?.modelLabel;
+      const label = resource.meta?.label;
+      return typeof modelLabel === "string" && typeof label === "string" ? [[modelLabel, label] as const] : [];
+    }));
+    const labels = resources.map((resource) => labelsByModel.get(resource.modelLabel) ?? modelLabelSegment(resource.modelLabel));
+    const counts = new Map<string, number>();
+    for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+    return resources
+      .map((resource, index) => {
+        const label = labels[index] ?? resource.modelLabel;
+        return {
+          value: resource.modelLabel.toLowerCase(),
+          label: (counts.get(label) ?? 0) > 1 ? `${label} · ${resource.appLabel}` : label,
+        };
+      })
+      .sort((left, right) => left.label.localeCompare(right.label));
+  }, [metadata.resources, registeredResources]);
   const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const repairAttempt = typeof search.repairAttempt === "string" ? search.repairAttempt : "";
   const routeHref = useRouteHref();
   const definition = useAuthoredQuery(
     WorkflowDefinitionDocument,
     { workflow: id ?? "" },
     { models: [WORKFLOW_MODEL, "workflows.Step", "workflows.Edge"] },
+  );
+  const repair = useAuthoredQuery(
+    WorkflowTestRepairContextDocument,
+    { sourceAttempt: repairAttempt },
+    { enabled: Boolean(repairAttempt), models: ["workflows.WorkflowRun", "workflows.StepAttempt"] },
   );
   const [saveDefinition] = useAuthoredMutation(SaveWorkflowDefinitionDocument, {
     invalidateModels: [WORKFLOW_MODEL, "workflows.Step", "workflows.Edge"],
@@ -59,6 +94,27 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
   const [publishDefinition, publishState] = useAuthoredMutation(PublishWorkflowDefinitionDocument, {
     invalidateModels: [WORKFLOW_MODEL],
   });
+  const [testDefinition] = useAuthoredMutation(TestWorkflowDefinitionDocument, {
+    invalidateModels: ["workflows.WorkflowRun"],
+  });
+  const [testOpen, setTestOpen] = React.useState(false);
+  const [testDirty, setTestDirty] = React.useState(false);
+  const [testDefinitionValues, setTestDefinitionValues] = React.useState<WorkflowDefinitionValues | null>(null);
+  const [testSelectedNodeKey, setTestSelectedNodeKey] = React.useState<string | null>(null);
+  const [startedTest, setStartedTest] = React.useState<{ id: string; revision: number } | null>(null);
+  const [testRequestAmbiguous, setTestRequestAmbiguous] = React.useState(false);
+  const appliedRepairAttempt = React.useRef<string | null>(null);
+  const pendingTest = React.useRef<{
+    values: WorkflowTestSetupValues;
+    requestKey: string;
+    subjectDeclaration: string;
+    repairSourceAttempt?: string;
+    selectedNodeKey: string | null;
+    selectedStepId?: string;
+    revision?: number;
+    resolve: (value: ActionOutcome | undefined) => void;
+    reject: (reason: unknown) => void;
+  } | null>(null);
   const [stale, setStale] = React.useState(false);
   const [staleReview, setStaleReview] = React.useState<WorkflowDefinitionValues | null>(null);
   const [reviewOpen, setReviewOpen] = React.useState(false);
@@ -91,6 +147,37 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     });
   }, [id, projected, snapshot]);
   const values = acknowledged?.values ?? null;
+  React.useEffect(() => {
+    const context = repair.data?.workflow_test_repair_context;
+    if (
+      !context
+      || !values
+      || context.draft_workflow_id !== id
+      || appliedRepairAttempt.current === repairAttempt
+    ) return;
+    appliedRepairAttempt.current = repairAttempt;
+    setTestSelectedNodeKey(context.source_step_key);
+    setTestDefinitionValues(values);
+    setTestDirty(Boolean(formSurface.current?.formIsDirty));
+    setTestOpen(true);
+  }, [id, repair.data?.workflow_test_repair_context, repairAttempt, values]);
+  const repairValues = React.useMemo<WorkflowTestSetupValues | undefined>(() => {
+    const context = repair.data?.workflow_test_repair_context;
+    if (!context) return undefined;
+    return {
+      ...(context.subject?.id ? { subjectId: context.subject.id } : {}),
+      inputPresent: context.input_present,
+      input: context.input,
+      fixtures: context.fixtures.map((fixture) => ({
+        stepKey: fixture.step_key,
+        role: fixture.role,
+        ...(fixture.item_index == null ? {} : { itemIndex: fixture.item_index }),
+        mode: "captured" as const,
+        valuePresent: false,
+        capturedAttempt: fixture.attempt_id,
+      })),
+    };
+  }, [repair.data?.workflow_test_repair_context]);
   const source = React.useMemo<FormViewAcknowledgedSource>(() => ({
     record: acknowledged?.record ?? null,
     values,
@@ -117,6 +204,44 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     },
   }), [acknowledged?.values, id]);
 
+  const launchTest = React.useCallback(async (
+    request: NonNullable<typeof pendingTest.current>,
+  ): Promise<ActionOutcome | undefined> => {
+    if (!id) return undefined;
+    return extractActionOutcome(await testDefinition({
+      workflow: id,
+      expectedRevision: request.revision ?? 0,
+      requestKey: request.requestKey,
+      ...(request.values.subjectId && request.subjectDeclaration ? {
+        subject: { subject_declaration: request.subjectDeclaration, id: request.values.subjectId },
+      } : {}),
+      ...(request.values.inputPresent ? { input: request.values.input } : {}),
+      fixtures: request.values.fixtures.map(fixtureInput),
+      ...(request.repairSourceAttempt ? { repairSourceAttempt: request.repairSourceAttempt } : {}),
+      ...(request.selectedStepId
+        ? { scope: "NODE", sourceStep: request.selectedStepId }
+        : { scope: "WHOLE" }),
+    }), "start_workflow_test") ?? undefined;
+  }, [id, testDefinition]);
+
+  const deliverTest = React.useCallback(async (
+    request: NonNullable<typeof pendingTest.current>,
+  ): Promise<ActionOutcome | undefined> => {
+    try {
+      const outcome = await launchTest(request);
+      if (!outcome || (outcome.ok && !outcome.id)) throw new Error(t("test.failed"));
+      if (!outcome.ok && pendingTest.current === request) pendingTest.current = null;
+      setTestRequestAmbiguous(false);
+      if (!outcome.ok) {
+        throw new Error(formLevelMessage(outcome, new Set()) ?? outcome.message);
+      }
+      return outcome;
+    } catch (error) {
+      if (pendingTest.current === request) setTestRequestAmbiguous(true);
+      throw error;
+    }
+  }, [launchTest, t]);
+
   const submit = React.useCallback<FormSubmit>(async (_data, context) => {
     if (!id || acknowledged?.record.id !== id) return null;
     const baseline = context.baselineValues as WorkflowDefinitionValues;
@@ -134,7 +259,13 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
         setReviewOpen(false);
         setReviewCandidate(null);
       }
-      throw definitionSubmitError(payload, submitted);
+      const error = definitionSubmitError(payload, submitted);
+      const pending = pendingTest.current;
+      if (pending && pending.revision === undefined) {
+        pending.reject(error);
+        if (pendingTest.current === pending) pendingTest.current = null;
+      }
+      throw error;
     }
     const accepted = acceptedDefinition(submitted, payload);
     history.rebase(baseline, submitted, payload);
@@ -145,12 +276,65 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     setStaleReview(null);
     setReviewOpen(false);
     setReviewCandidate(null);
+    if (pendingTest.current && pendingTest.current.revision === undefined) {
+      pendingTest.current.revision = payload.revision;
+      if (pendingTest.current.selectedNodeKey) {
+        pendingTest.current.selectedStepId = accepted.definition.nodes[
+          pendingTest.current.selectedNodeKey
+        ]?.id;
+      }
+    }
     return acknowledgeFormSubmit(
       record,
       accepted,
       reconcileDefinition,
     );
   }, [acknowledged?.record, history, id, saveDefinition]);
+
+  const requestTest = React.useCallback((setup: WorkflowTestSetupValues) => {
+    const surface = formSurface.current;
+    return new Promise<ActionOutcome | undefined>((resolve, reject) => {
+      const retained = pendingTest.current;
+      const request = retained ?? {
+        values: setup,
+        requestKey: newTestRequestKey(),
+        subjectDeclaration: testDefinitionValues?.subject_declaration ?? "",
+        selectedNodeKey: testSelectedNodeKey,
+        repairSourceAttempt: repairAttempt || undefined,
+        selectedStepId: testSelectedNodeKey
+          ? testDefinitionValues?.definition.nodes[testSelectedNodeKey]?.id
+            ?? values?.definition.nodes[testSelectedNodeKey]?.id
+          : undefined,
+        resolve,
+        reject,
+      };
+      request.resolve = resolve;
+      request.reject = reject;
+      pendingTest.current = request;
+      if (retained?.revision !== undefined) {
+        void deliverTest(retained).then(resolve, reject);
+        return;
+      }
+      if (!surface?.formIsDirty) {
+        request.revision ??= testDefinitionValues?.definition.revision ?? values?.definition.revision ?? 0;
+        void deliverTest(request).then(resolve, reject);
+        return;
+      }
+      void surface.submitForm().then(() => {
+        if (pendingTest.current !== request) return;
+        if (!request.revision) {
+          pendingTest.current = null;
+          reject(new Error(t("test.failed")));
+        } else void deliverTest(request).then(resolve, reject);
+      }, (error) => {
+        if (pendingTest.current === request && request.revision === undefined) {
+          pendingTest.current = null;
+          setTestRequestAmbiguous(false);
+        }
+        reject(error);
+      });
+    });
+  }, [deliverTest, t, testDefinitionValues, testSelectedNodeKey, values]);
 
   const reviewLatest = React.useCallback(async () => {
     setReloadError(null);
@@ -195,6 +379,18 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     }
   }, [acknowledged?.record, id, publishDefinition]);
 
+  const openTest = React.useCallback((nodeKey: string | null) => {
+    if (!pendingTest.current) {
+      setTestDirty(Boolean(formSurface.current?.formIsDirty));
+      setTestDefinitionValues(
+        (formSurface.current?.form.getValues() as WorkflowDefinitionValues | undefined) ?? values,
+      );
+      setTestSelectedNodeKey(nodeKey);
+      setTestRequestAmbiguous(false);
+    }
+    setTestOpen(true);
+  }, [values]);
+
   if (!acknowledged) {
     return definition.error
       ? <ErrorBanner description={definitionFailureMessage(definition.error)} />
@@ -209,7 +405,8 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       <ErrorBanner description={reloadError} />
       <div className="flex gap-2"><Button type="button" size="sm" variant="secondary" onClick={() => setReviewOpen(false)}>{t("form.cancelReview")}</Button><Button type="button" size="sm" variant="danger" disabled={!reviewCandidate} onClick={discardAndReload}>{t("form.discardReload")}</Button></div>
     </section> : null}
-    <DefinitionHistoryProvider value={history}><WorkflowInputPreviewProvider value={inputPreview}><Form
+    {startedTest ? <Statusline><StatusSegment><span>{t(repairAttempt ? "test.repairStarted" : "test.started", { revision: startedTest.revision })} <a className="underline" href={routeHref("workflows.run", { id: startedTest.id })} target="_blank" rel="noreferrer">{t("test.openRun")}</a></span></StatusSegment></Statusline> : null}
+    <WorkflowTestLaunchProvider onTestStep={(nodeKey) => openTest(nodeKey)}><DefinitionHistoryProvider value={history}><WorkflowInputPreviewProvider value={inputPreview}><Form
       key={formGeneration}
       {...props}
       resource={WORKFLOW_MODEL}
@@ -222,28 +419,56 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       onDiscarded={history.reset}
       toolbarStart={(context) => {
         formSurface.current = context.form;
-        return readOnly ? <Button type="button" size="sm" variant="secondary" onClick={() => {
+        return readOnly ? <div className="flex items-center gap-2"><Button type="button" size="sm" variant="secondary" onClick={() => {
           if (values?.lineage_id) void navigate({ to: routeHref("workflows.workflow", { id: values.lineage_id }) });
-        }}>{t("form.openDraft")}</Button> : <DefinitionActions context={context} history={history} publishState={publishState} sourceLoading={Boolean(source.loading)} issues={values?.definition.readiness.length ?? 0} onPublish={publish} />;
+        }}>{t("form.openDraft")}</Button>{id && values?.lineage_id && Number(values.version) > 0 ? <WorkflowVersionReview
+          draftId={String(values.lineage_id)} sourceId={id} sourceVersion={Number(values.version)}
+          onRestored={(draftId) => { void navigate({ to: routeHref("workflows.workflow", { id: draftId }) }); }}
+        /> : null}</div> : <DefinitionActions context={context} history={history} publishState={publishState} sourceLoading={Boolean(source.loading)} issues={values?.definition.readiness.length ?? 0} onPublish={publish} onTest={() => openTest(null)} />;
       }}
     >
-      {workflowFields(t)}
+      {workflowFields(t, subjectOptions)}
       {props.children}
-    </Form>{values?.definition.readiness.length ? <Statusline><StatusSegment><span role="status" aria-live="polite">{t(values.definition.readiness.length === 1 ? "form.publishBlockedOne" : "form.publishBlockedMany", { count: values.definition.readiness.length })}</span></StatusSegment></Statusline> : null}</WorkflowInputPreviewProvider></DefinitionHistoryProvider>
+    </Form>{values?.definition.readiness.length ? <Statusline><StatusSegment><span role="status" aria-live="polite">{t(values.definition.readiness.length === 1 ? "form.publishBlockedOne" : "form.publishBlockedMany", { count: values.definition.readiness.length })}</span></StatusSegment></Statusline> : null}</WorkflowInputPreviewProvider></DefinitionHistoryProvider></WorkflowTestLaunchProvider>
+    <WorkflowTestSetup
+      open={testOpen}
+      onOpenChange={(open) => {
+        setTestOpen(open);
+      }}
+      workflowId={id ?? ""}
+      revision={testRequestAmbiguous ? pendingTest.current?.revision ?? 0 : testDefinitionValues?.definition.revision ?? values?.definition.revision ?? 0}
+      sourceStepId={testRequestAmbiguous ? pendingTest.current?.selectedStepId : repair.data?.workflow_test_repair_context?.current_source_step_id ?? (testSelectedNodeKey ? testDefinitionValues?.definition.nodes[testSelectedNodeKey]?.id ?? values?.definition.nodes[testSelectedNodeKey]?.id : undefined)}
+      previousRunId={repair.data?.workflow_test_repair_context?.source_run_id}
+      dirty={testRequestAmbiguous ? false : testDirty}
+      retrying={testRequestAmbiguous}
+      locked={testRequestAmbiguous}
+      retainedValues={testRequestAmbiguous ? pendingTest.current?.values : repairValues}
+      subjectDeclaration={testDefinitionValues?.subject_declaration ?? values?.subject_declaration ?? ""}
+      onSubmit={requestTest}
+      onStarted={(runId) => {
+        const revision = pendingTest.current?.revision ?? testDefinitionValues?.definition.revision ?? 0;
+        pendingTest.current = null;
+        if (repairAttempt || formSurface.current?.formIsDirty) {
+          setStartedTest({ id: runId, revision });
+        }
+        else void navigate({ to: routeHref("workflows.run", { id: runId }) });
+      }}
+    />
   </>);
 }
 
-function DefinitionActions({ context, history, publishState, sourceLoading, issues, onPublish }: {
+function DefinitionActions({ context, history, publishState, sourceLoading, issues, onPublish, onTest }: {
   context: RecordToolbarContext;
   history: ReturnType<typeof useDefinitionHistory>;
   publishState: { fetching: boolean };
   sourceLoading: boolean;
   issues: number;
   onPublish: (context: RecordToolbarContext) => Promise<void>;
+  onTest: () => void;
 }): React.ReactElement {
   const t = useWorkflowsT();
   const publishReason = issues ? t(issues === 1 ? "form.publishBlockedOne" : "form.publishBlockedMany", { count: issues }) : undefined;
-  return <><Button type="button" size="sm" variant="ghost" disabled={!history.canUndo} onClick={history.undo}>{t("form.undo")}</Button><Button type="button" size="sm" variant="ghost" disabled={!history.canRedo} onClick={history.redo}>{t("form.redo")}</Button><Button
+  return <><Button type="button" size="sm" variant="ghost" disabled={!history.canUndo} onClick={history.undo}>{t("form.undo")}</Button><Button type="button" size="sm" variant="ghost" disabled={!history.canRedo} onClick={history.redo}>{t("form.redo")}</Button><Button type="button" size="sm" variant="secondary" disabled={sourceLoading || context.form.pending} onClick={onTest}>{t("form.test")}</Button><Button
     type="button"
     size="sm"
     variant="secondary"
@@ -254,7 +479,11 @@ function DefinitionActions({ context, history, publishState, sourceLoading, issu
   >{t("form.publish")}</Button></>;
 }
 
-function workflowFields(t: ReturnType<typeof useWorkflowsT>): React.ReactElement {
+function newTestRequestKey(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+function workflowFields(t: ReturnType<typeof useWorkflowsT>, subjectOptions: readonly { value: string; label: string }[]): React.ReactElement {
   return <>
     <Field name="name" title />
     <Field name="description" />
@@ -262,6 +491,7 @@ function workflowFields(t: ReturnType<typeof useWorkflowsT>): React.ReactElement
       <Field name="status" readOnly widget="statusbar" />
       <Field name="version" readOnly />
       <Field name="lineage_id" label={t("form.lineage")} readOnly />
+      <Field name="subject_declaration" label={t("form.subjectDeclaration")} description={t("form.subjectDeclarationDescription")} widget="select" options={subjectOptions} />
       <Field name="error_workflow" />
       <Field name="max_steps" />
     </Group>

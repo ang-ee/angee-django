@@ -41,6 +41,8 @@ export interface FieldDescriptor extends FieldPresentation {
   defaultValue?: unknown;
   /** Render and submit this field only when the predicate matches form values (see `FieldProps`). */
   showWhen?: (values: Row) => boolean;
+  /** Keep this field in form values and mutation data without rendering a control. */
+  hidden?: boolean;
   /** Resolve implementation-dependent presentation from current form values. */
   resolve?: (values: Row) => FieldDescriptor;
   /** Load the chosen preset onto sibling fields when this field changes (see `FieldProps.prefill`). */

@@ -15,6 +15,7 @@ from rebac import app_settings, system_context
 from rebac.roles import grant
 
 from angee.workflows import engine
+from angee.workflows.attempts import RecoveryMode
 from angee.workflows.steps import StepEffect
 from example.notes.steps import (
     NotePublicationOutput,
@@ -108,6 +109,30 @@ class NoteWorkflowStepTests(TransactionTestCase):
         step_run = self.step_run(self.other)
         with self.assertRaisesMessage(ValidationError, "notes.Note subject"):
             NoteValidateForPublicationStep().run(step_run, now=datetime.now(UTC))
+
+    def test_publish_recovery_reconciles_an_already_active_note_without_another_write(self) -> None:
+        with system_context(reason="note workflow recovery fixture"):
+            note = Note.objects.create(
+                title="Already published",
+                body="Retained body.",
+                status=Note.Status.ACTIVE,
+                created_by=self.owner,
+            )
+        step_run = self.step_run(note)
+        history_count = note.history.count()
+
+        recovered = NotePublishStep().run_recovery(
+            step_run,
+            now=datetime.now(UTC),
+            source_attempt=object(),
+            mode=RecoveryMode.RECONCILE,
+        )
+
+        note.refresh_from_db()
+        self.assertEqual(recovered.outcome, "published")
+        self.assertEqual(recovered.output["status"], Note.Status.ACTIVE)
+        self.assertEqual(recovered.artifacts[0].target, note)
+        self.assertEqual(note.history.count(), history_count)
 
     def test_missing_run_creator_is_rejected(self) -> None:
         with system_context(reason="note workflow test note"):

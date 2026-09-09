@@ -6,16 +6,39 @@ from typing import cast
 
 import strawberry
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from strawberry.scalars import JSON
 
 from angee.agents.schema import AgentSessionType, AgentTurnType
+from angee.base.scoping import read_scoped_queryset
 from angee.graphql.actions import authorized_action_target
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, to_public_id
 from angee.iam.permissions import session_user
 from angee.workflows_agents import sessions
 
 Agent = apps.get_model("agents", "Agent")
 AgentSession = apps.get_model("agents", "AgentSession")
+WorkflowRun = apps.get_model("workflows", "WorkflowRun")
+
+
+@strawberry.type
+class AgentSessionWorkflowQuery:
+    """Bounded bridge from one readable session to its workflow Run."""
+
+    @strawberry.field
+    def agent_session_workflow_run(self, info: strawberry.Info, session: PublicID) -> PublicID | None:
+        """Return the session Run only when the caller may read both resources."""
+
+        actor = session_user(info)
+        target = authorized_action_target(info, AgentSession, session, "read")
+        try:
+            run = sessions.run_for(target)
+        except ValidationError:
+            return None
+        scoped = read_scoped_queryset(WorkflowRun, actor, action="read")
+        if scoped is None or not scoped.filter(pk=run.pk).exists():
+            return None
+        return to_public_id(WorkflowRun, run.pk)
 
 
 @strawberry.type
@@ -64,5 +87,5 @@ class AgentSessionMutation:
         return cast(AgentSessionType, sessions.close_session(target))
 
 
-schemas = {"console": {"mutation": [AgentSessionMutation]}}
+schemas = {"console": {"query": [AgentSessionWorkflowQuery], "mutation": [AgentSessionMutation]}}
 """GraphQL contributions installed by the workflows-agents addon."""

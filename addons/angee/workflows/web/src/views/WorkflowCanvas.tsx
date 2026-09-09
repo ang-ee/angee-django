@@ -12,6 +12,7 @@ import {
   CollapsibleTrigger,
   EmptyState,
   ErrorBanner,
+  FieldDescriptorControl,
   GraphView,
   Glyph,
   MutationDialog,
@@ -37,7 +38,7 @@ import {
 } from "@angee/ui";
 import { fieldsWithMetadataDefaults } from "@angee/ui/views/model-metadata-defaults";
 
-import { WorkflowStepOperationsDocument } from "../documents.console";
+import { WorkflowMapBodyCandidatesDocument, WorkflowStepOperationsDocument } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
 import { WorkflowOperationPicker, type WorkflowOperationChoice } from "./WorkflowOperationPicker";
 import { WorkflowInputBindingEditor, type OperationContract } from "./WorkflowInputBindingEditor";
@@ -46,6 +47,8 @@ import { graphWithDuplicate, graphWithOperation } from "./workflow-graph-authori
 import { EMPTY_WORKFLOW_EDITOR_SELECTION, workflowEditorSelection } from "./workflow-editor-state";
 import type { DefinitionEdge, DefinitionNode, WorkflowDefinitionValues } from "./workflow-definition-state";
 import { useDefinitionHistoryContext } from "./workflow-definition-history";
+import { useWorkflowTestLaunch } from "./WorkflowTestSetup";
+import { useWorkflowInputPreview } from "./workflow-input-preview";
 
 const STEP_MODEL = "workflows.Step";
 const EDGE_MODEL = "workflows.Edge";
@@ -75,7 +78,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
   const suppressDefaultInspectorFocus = React.useRef(false);
   const keyboardFocusSequence = React.useRef(0);
   const [keyboardFocus, setKeyboardFocus] = React.useState<{
-    kind: "node" | "edge";
+    kind: "node" | "edge" | "map";
     id: string;
     sequence: number;
   } | null>(null);
@@ -83,7 +86,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
   const diagnostics = values.definition?.readiness ?? [];
   const [pendingIssue, setPendingIssue] = React.useState<DefinitionDiagnostic | null>(null);
   const [issuesOpen, setIssuesOpen] = React.useState(false);
-  const [palette, setPalette] = React.useState<{ kind: "first" | "after" | "insert"; identity?: string; } | null>(null);
+  const [palette, setPalette] = React.useState<{ kind: "first" | "after" | "insert" | "map-body"; identity?: string; } | null>(null);
   const [connectOpen, setConnectOpen] = React.useState(false);
   React.useEffect(() => {
     if ((selectedStep && !Object.hasOwn(nodes, selectedStep)) || (selectedEdge && !Object.hasOwn(edges, selectedEdge))) {
@@ -98,6 +101,8 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
       focusField(`definition.nodes.${keyboardFocus.id}.name`);
     } else if (keyboardFocus.kind === "edge" && selectedEdge === keyboardFocus.id) {
       focusField(`definition.edges.${keyboardFocus.id}.condition`);
+    } else if (keyboardFocus.kind === "map" && selectedStep === keyboardFocus.id) {
+      focusField(`definition.nodes.${keyboardFocus.id}.config.target_step`);
     } else {
       return;
     }
@@ -129,24 +134,40 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
   React.useLayoutEffect(() => {
     if (canvasFocusRequest > 0 && !wide && !showingInspector) graphSurface.current?.focus();
   }, [canvasFocusRequest, showingInspector, wide]);
+  const mapOwnersByTarget = React.useMemo(() => {
+    const byKey = new Map<string, string>();
+    for (const [identity, node] of Object.entries(nodes)) {
+      byKey.set(node.key, byKey.has(node.key) ? "" : identity);
+    }
+    return new Map(Object.entries(nodes).flatMap(([ownerIdentity, owner]) => {
+      const operation = operationChoice(operations, owner.step_class);
+      const config = jsonObject(owner.config);
+      const targetKey = operation?.map_body_operation && typeof config.target_step === "string" ? config.target_step : "";
+      const targetIdentity = byKey.get(targetKey);
+      return targetIdentity ? [[targetIdentity, ownerIdentity] as const] : [];
+    }));
+  }, [nodes, operations]);
   const graphNodes = React.useMemo(() => Object.entries(nodes).map(([identity, node]) => {
     const operation = operationChoice(operations, node.step_class);
     const title = node.name || operation?.label || node.key;
     const issueCount = diagnosticsForNode(diagnostics, identity, node).length;
+    const mapOwner = mapOwnersByTarget.get(identity);
+    const mapOwnerLabel = mapOwner ? t("map.bodyOf", { source: nodes[mapOwner]?.name || nodes[mapOwner]?.key || mapOwner }) : null;
     const secondary = node.name && operation?.label && node.name !== operation.label ? operation.label : null;
     return {
       id: identity,
       kind: workflowNodeKind(node.step_class),
       kindLabel: operation?.category || t("canvas.operationUnavailableShort"),
-      ariaLabel: [title, secondary, operation?.category, node.is_entry ? t("canvas.start") : null, issueCount ? issueLabel(issueCount, t) : null].filter(Boolean).join(", "),
+      ariaLabel: [title, secondary, operation?.category, mapOwnerLabel, node.is_entry ? t("canvas.start") : null, issueCount ? issueLabel(issueCount, t) : null].filter(Boolean).join(", "),
       title,
-      detail: [secondary, node.is_entry ? t("canvas.start") : null, issueCount ? issueLabel(issueCount, t) : null].filter(Boolean).join(" · "),
+      detail: [secondary, mapOwnerLabel, node.is_entry ? t("canvas.start") : null, issueCount ? issueLabel(issueCount, t) : null].filter(Boolean).join(" · "),
       selected: identity === selectedStep,
       position: graphPosition(node.position),
       meta: { node },
     };
-  }) satisfies GraphViewNode<WorkflowGraphNodeKind, { node: DefinitionNode; }>[], [diagnostics, nodes, operations, selectedStep, t]);
-  const graphEdges = React.useMemo(() => Object.entries(edges).map(([identity, edge]) => {
+  }) satisfies GraphViewNode<WorkflowGraphNodeKind, { node: DefinitionNode; }>[], [diagnostics, mapOwnersByTarget, nodes, operations, selectedStep, t]);
+  const graphEdges = React.useMemo<GraphViewEdge<"condition" | "default" | "map", WorkflowCanvasEdgeMeta>[]>(() => {
+    const ordinary = Object.entries(edges).map(([identity, edge]) => {
     const outcome = outcomeChoiceForEdge(edge, nodes, operations);
     const outcomeLabel = outcome?.label ?? edge.condition;
     return {
@@ -157,9 +178,34 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
       label: outcomeLabel || undefined,
       selected: identity === selectedEdge,
       ariaLabel: edgeAriaLabel(edge, nodes, outcomeLabel, diagnosticsForEdge(diagnostics, identity, edge).length, t),
-      meta: { edge },
+      meta: { edge, mapOwner: null },
     };
-  }) satisfies GraphViewEdge<"condition" | "default", { edge: DefinitionEdge; }>[], [diagnostics, edges, nodes, operations, selectedEdge, t]);
+    });
+    const byKey = new Map<string, string>();
+    for (const [identity, node] of Object.entries(nodes)) {
+      if (node.key && !byKey.has(node.key)) byKey.set(node.key, identity);
+      else if (node.key) byKey.set(node.key, "");
+    }
+    const mapped = Object.entries(nodes).flatMap(([identity, node]) => {
+      const operation = operationChoice(operations, node.step_class);
+      const config = jsonObject(node.config);
+      const targetKey = operation?.map_body_operation && typeof config.target_step === "string"
+        ? config.target_step
+        : "";
+      const target = byKey.get(targetKey);
+      if (!target) return [];
+      return [{
+        id: `map-body:${identity}`,
+        source: identity,
+        target,
+        kind: "map" as const,
+        label: t("map.eachItem"),
+        ariaLabel: t("map.eachItemAria", { source: node.name || node.key, target: nodes[target]?.name || targetKey }),
+        meta: { edge: null, mapOwner: identity },
+      }];
+    });
+    return [...ordinary, ...mapped];
+  }, [diagnostics, edges, nodes, operations, selectedEdge, t]);
   const currentGraph = React.useCallback(() => ({
     nodes: (context.form.form.getValues("definition.nodes") ?? {}) as Record<string, DefinitionNode>,
     edges: (context.form.form.getValues("definition.edges") ?? {}) as Record<string, DefinitionEdge>,
@@ -184,6 +230,7 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
     const latest = currentGraph();
     const operation = operations.find((choice) => choice.key === operationKey);
     if (!operation?.selectable) return;
+    if (palette.kind === "map-body" && operation.map_body_operation) return;
     if (palette.identity && palette.kind === "after" && !latest.nodes[palette.identity]) return;
     if (palette.identity && palette.kind === "insert" && !latest.edges[palette.identity]) return;
     const clientKey = `node-${crypto.randomUUID()}`;
@@ -195,7 +242,9 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
       step_class: operation.key, config: jsonObject(defaults.config), config_errors: {}, join_rule: typeof defaults.join_rule === "string" ? defaults.join_rule : "ALL_SUCCESS",
       input_binding: null, is_entry: Object.keys(latest.nodes).length === 0, position: {},
     };
-    const updated = graphWithOperation(node, palette, latest.nodes, latest.edges, graphGeometry.current);
+    const updated = palette.kind === "map-body" && palette.identity
+      ? graphWithMapBody(node, palette.identity, latest.nodes, latest.edges, graphGeometry.current)
+      : graphWithOperation(node, palette as { kind: "first" | "after" | "insert"; identity?: string }, latest.nodes, latest.edges, graphGeometry.current);
     if (!updated) return;
     perform(() => {
       context.form.form.setValue("definition.nodes", updated.nodes as never, { shouldDirty: true, shouldTouch: true });
@@ -278,14 +327,25 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
                 }
                 dispatchSelection({ type: "select-step", id: node.id });
               }}
+              edgeStyles={{ map: { stroke: "var(--info)", strokeWidth: 2, labelColor: "var(--info)" } }}
               onEdgeClick={(edge, activation) => {
+                if (edge.meta?.mapOwner) {
+                  if (activation.source === "keyboard") {
+                    setKeyboardFocus({ kind: "map", id: edge.meta.mapOwner, sequence: ++keyboardFocusSequence.current });
+                  }
+                  dispatchSelection({ type: "select-step", id: edge.meta.mapOwner });
+                  return;
+                }
                 if (activation.source === "keyboard") {
                   setKeyboardFocus({ kind: "edge", id: edge.id, sequence: ++keyboardFocusSequence.current });
                 }
                 dispatchSelection({ type: "select-edge", id: edge.id });
               }}
               onNodeSelect={(node) => { if (node) dispatchSelection({ type: "select-step", id: node.id }); }}
-              onEdgeSelect={(edge) => { if (edge) dispatchSelection({ type: "select-edge", id: edge.id }); }}
+              onEdgeSelect={(edge) => {
+                if (edge?.meta?.mapOwner) dispatchSelection({ type: "select-step", id: edge.meta.mapOwner });
+                else if (edge) dispatchSelection({ type: "select-edge", id: edge.id });
+              }}
             />
           )}
           <div className="absolute left-3 top-3"><Badge tone={readOnly ? "neutral" : "warning"}>{readOnly ? t("canvas.readOnlyVersion", { version: values.version ?? "?" }) : t("canvas.draft")}</Badge></div>
@@ -294,9 +354,11 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
         <SplitPaneHandle className={!wide ? "hidden" : undefined} />
         <SplitPane id="inspector" defaultSize={32} minSize={22} collapsible panelRef={inspectorPane.panelRef} onResize={inspectorPane.onResize} className={!wide && !showingInspector ? "hidden" : undefined}>
           {!wide && hasSelection ? <Button type="button" variant="ghost" size="sm" onClick={() => { dispatchSelection({ type: "show-canvas" }); requestCanvasFocus(); }}><Glyph name="chevron-left" />{t("canvas.back")}</Button> : null}
-        <CanvasInspector context={context} nodeKey={selectedStep} edgeKey={selectedEdge} node={selectedStep ? nodes[selectedStep] : undefined} edge={selectedEdge ? edges[selectedEdge] : undefined} nodes={nodes} operations={operations} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={declaredFields} onIssueFocused={() => setPendingIssue(null)} onSelectStep={(id) => { suppressDefaultInspectorFocus.current = false; dispatchSelection({ type: "select-step", id }); }} onAddAfter={(identity) => setPalette({ kind: "after", identity })} onInsert={(identity) => setPalette({ kind: "insert", identity })} onDuplicate={duplicateNode} onDelete={deleteNode} onDeleteEdge={deleteEdge} onMakeEntry={makeEntry} />
+        <CanvasInspector context={context} nodeKey={selectedStep} edgeKey={selectedEdge} node={selectedStep ? nodes[selectedStep] : undefined} edge={selectedEdge ? edges[selectedEdge] : undefined} nodes={nodes} operations={operations} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={declaredFields} onIssueFocused={() => setPendingIssue(null)} onSelectStep={(id) => { suppressDefaultInspectorFocus.current = false; dispatchSelection({ type: "select-step", id }); }} onAddAfter={(identity) => setPalette({ kind: "after", identity })} onAddMapBody={(identity) => setPalette({ kind: "map-body", identity })} onInsert={(identity) => setPalette({ kind: "insert", identity })} onDuplicate={duplicateNode} onDelete={deleteNode} onDeleteEdge={deleteEdge} onMakeEntry={makeEntry} />
         </SplitPane>
-        <WorkflowOperationPicker operations={operations as readonly WorkflowOperationChoice[]} open={palette !== null} onOpenChange={(open) => { if (!open) setPalette(null); }} onChoose={chooseOperation} loading={operationsQuery.isFetching} error={operationsQuery.error ? errorMessage(operationsQuery.error) : null} />
+        <WorkflowOperationPicker operations={(palette?.kind === "map-body"
+          ? operations.map((operation) => operation.map_body_operation ? { ...operation, selectable: false } : operation)
+          : operations) as readonly WorkflowOperationChoice[]} open={palette !== null} onOpenChange={(open) => { if (!open) setPalette(null); }} onChoose={chooseOperation} loading={operationsQuery.isFetching} error={operationsQuery.error ? errorMessage(operationsQuery.error) : null} />
         <MutationDialog
           open={connectOpen}
           onOpenChange={setConnectOpen}
@@ -333,15 +395,16 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
   );
 }
 
-function CanvasInspector({ context, nodeKey, edgeKey, node, edge, nodes, operations, diagnostics, pendingIssue, fields, onIssueFocused, onSelectStep, onAddAfter, onInsert, onDuplicate, onDelete, onDeleteEdge, onMakeEntry }: { context: RecordPanelContext; nodeKey: string | null; edgeKey: string | null; node?: DefinitionNode; edge?: DefinitionEdge; nodes: Record<string, DefinitionNode>; operations: readonly WorkflowOperationChoice[]; diagnostics: WorkflowDefinitionValues["definition"]["readiness"]; pendingIssue: DefinitionDiagnostic | null; fields: WorkflowCanvasFields; onIssueFocused: () => void; onSelectStep: (id: string) => void; onAddAfter: (id: string) => void; onInsert: (id: string) => void; onDuplicate: (id: string) => void; onDelete: (id: string) => void; onDeleteEdge: (id: string) => void; onMakeEntry: (id: string) => void; }): React.ReactElement {
+function CanvasInspector({ context, nodeKey, edgeKey, node, edge, nodes, operations, diagnostics, pendingIssue, fields, onIssueFocused, onSelectStep, onAddAfter, onAddMapBody, onInsert, onDuplicate, onDelete, onDeleteEdge, onMakeEntry }: { context: RecordPanelContext; nodeKey: string | null; edgeKey: string | null; node?: DefinitionNode; edge?: DefinitionEdge; nodes: Record<string, DefinitionNode>; operations: readonly WorkflowOperationChoice[]; diagnostics: WorkflowDefinitionValues["definition"]["readiness"]; pendingIssue: DefinitionDiagnostic | null; fields: WorkflowCanvasFields; onIssueFocused: () => void; onSelectStep: (id: string) => void; onAddAfter: (id: string) => void; onAddMapBody: (id: string) => void; onInsert: (id: string) => void; onDuplicate: (id: string) => void; onDelete: (id: string) => void; onDeleteEdge: (id: string) => void; onMakeEntry: (id: string) => void; }): React.ReactElement {
   const t = useWorkflowsT();
-  if (nodeKey && node) return <StepConfigPanel context={context} nodeKey={nodeKey} node={node} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={fields} onIssueFocused={onIssueFocused} nodes={nodes} onSelectStep={onSelectStep} onAddAfter={onAddAfter} onDuplicate={onDuplicate} onDelete={onDelete} onMakeEntry={onMakeEntry} />;
+  if (nodeKey && node) return <StepConfigPanel context={context} nodeKey={nodeKey} node={node} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={fields} onIssueFocused={onIssueFocused} nodes={nodes} onSelectStep={onSelectStep} onAddAfter={onAddAfter} onAddMapBody={onAddMapBody} onDuplicate={onDuplicate} onDelete={onDelete} onMakeEntry={onMakeEntry} />;
   if (edgeKey && edge) return <EdgeConfigPanel context={context} edgeKey={edgeKey} edge={edge} nodes={nodes} operations={operations} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={fields} onIssueFocused={onIssueFocused} onInsert={onInsert} onDelete={onDeleteEdge} />;
   return <div className="min-h-0 overflow-auto bg-sheet-1 p-4"><EmptyState icon="workflow-step" title={t("canvas.stepConfig")} description={t("canvas.selectStep")} /></div>;
 }
 
-function StepConfigPanel({ context, nodeKey, node, nodes, diagnostics, pendingIssue, fields, onIssueFocused, onSelectStep, onAddAfter, onDuplicate, onDelete, onMakeEntry }: { context: RecordPanelContext; nodeKey: string; node: DefinitionNode; nodes: Record<string, DefinitionNode>; diagnostics: WorkflowDefinitionValues["definition"]["readiness"]; pendingIssue: DefinitionDiagnostic | null; fields: WorkflowCanvasFields; onIssueFocused: () => void; onSelectStep: (id: string) => void; onAddAfter: (id: string) => void; onDuplicate: (id: string) => void; onDelete: (id: string) => void; onMakeEntry: (id: string) => void; }): React.ReactElement {
+function StepConfigPanel({ context, nodeKey, node, nodes, diagnostics, pendingIssue, fields, onIssueFocused, onSelectStep, onAddAfter, onAddMapBody, onDuplicate, onDelete, onMakeEntry }: { context: RecordPanelContext; nodeKey: string; node: DefinitionNode; nodes: Record<string, DefinitionNode>; diagnostics: WorkflowDefinitionValues["definition"]["readiness"]; pendingIssue: DefinitionDiagnostic | null; fields: WorkflowCanvasFields; onIssueFocused: () => void; onSelectStep: (id: string) => void; onAddAfter: (id: string) => void; onAddMapBody: (id: string) => void; onDuplicate: (id: string) => void; onDelete: (id: string) => void; onMakeEntry: (id: string) => void; }): React.ReactElement {
   const t = useWorkflowsT();
+  const testStep = useWorkflowTestLaunch();
   const history = useDefinitionHistoryContext();
   const perform = React.useCallback((action: () => void) => history ? history.perform(action) : action(), [history]);
   const operationsQuery = useAuthoredQuery(WorkflowStepOperationsDocument);
@@ -387,7 +450,11 @@ function StepConfigPanel({ context, nodeKey, node, nodes, diagnostics, pendingIs
     <Tabs value={tab} onValueChange={(value) => setTab(String(value))} variant="card">
       <Tabs.List><Tabs.Tab value="configuration">{t("input.configuration")}</Tabs.Tab><Tabs.Tab value="input">{t("input.tab")}</Tabs.Tab></Tabs.List>
       <Tabs.Panel value="configuration"><div className="grid gap-4">
-        {fields.step.config.map((field) => <BoundDescriptorField key={field.name} form={context.form} resource={STEP_MODEL} scope={scope} field={{ ...field, readOnly: invalidConfig || field.readOnly }} />)}
+        {operation?.map_body_operation ? <>
+          <MapBodyEditor context={context} nodeKey={nodeKey} node={node} onAdd={() => onAddMapBody(nodeKey)} />
+          <MapItemsEditor context={context} nodeKey={nodeKey} node={node} />
+        </> : null}
+        {fields.step.config.filter((field) => !operation?.map_body_operation || !["config.target_step", "config.items"].includes(field.name)).map((field) => <BoundDescriptorField key={field.name} form={context.form} resource={STEP_MODEL} scope={scope} field={{ ...field, readOnly: invalidConfig || field.readOnly }} />)}
         {invalidConfig || !implConfig.hasSchema(node.step_class) ? <BoundDescriptorField form={context.form} resource={STEP_MODEL} scope={scope} field={{ ...fields.step.rawConfig, widget: "json" }} /> : null}
         <CollapsibleRoot variant="section" open={advancedOpen} onOpenChange={setAdvancedOpen}><CollapsibleTrigger><CollapsibleIcon />{t("canvas.advanced")}</CollapsibleTrigger><CollapsiblePanel><div className="grid gap-4 pt-2"><BoundDescriptorField form={context.form} resource={STEP_MODEL} scope={scope} field={fields.step.key} /><BoundDescriptorField form={context.form} resource={STEP_MODEL} scope={scope} field={{ ...fields.step.joinRule, widget: "select", options: joinRuleOptions }} /></div></CollapsiblePanel></CollapsibleRoot>
       </div></Tabs.Panel>
@@ -407,8 +474,133 @@ function StepConfigPanel({ context, nodeKey, node, nodes, diagnostics, pendingIs
         onStructuralChange={(next) => perform(() => context.form.form.setValue(bindingName, next as never, { shouldDirty: true, shouldTouch: true }))}
       />}</BoundFormValue></Tabs.Panel>
     </Tabs>
-    {!context.form.formReadOnly ? <div className="flex flex-wrap gap-2"><Button type="button" size="sm" onClick={() => onAddAfter(nodeKey)}>{t("canvas.addAfter")}</Button><Button type="button" size="sm" variant="secondary" onClick={() => onDuplicate(nodeKey)}>{t("canvas.duplicate")}</Button>{!node.is_entry ? <Button type="button" size="sm" variant="secondary" onClick={() => onMakeEntry(nodeKey)}>{t("canvas.makeEntry")}</Button> : null}<Button type="button" size="sm" variant="danger" onClick={() => onDelete(nodeKey)}>{t("canvas.deleteStep")}</Button></div> : null}
+    {!context.form.formReadOnly ? <div className="flex flex-wrap gap-2">{testStep ? <Button type="button" size="sm" variant="secondary" onClick={() => testStep(nodeKey)}>{t("test.stepSubmit")}</Button> : null}<Button type="button" size="sm" onClick={() => onAddAfter(nodeKey)}>{t("canvas.addAfter")}</Button><Button type="button" size="sm" variant="secondary" onClick={() => onDuplicate(nodeKey)}>{t("canvas.duplicate")}</Button>{!node.is_entry ? <Button type="button" size="sm" variant="secondary" onClick={() => onMakeEntry(nodeKey)}>{t("canvas.makeEntry")}</Button> : null}<Button type="button" size="sm" variant="danger" onClick={() => onDelete(nodeKey)}>{t("canvas.deleteStep")}</Button></div> : null}
   </div>;
+}
+
+function MapBodyEditor({ context, nodeKey, node, onAdd }: {
+  context: RecordPanelContext;
+  nodeKey: string;
+  node: DefinitionNode;
+  onAdd: () => void;
+}): React.ReactElement {
+  const t = useWorkflowsT();
+  const preview = useWorkflowInputPreview();
+  const history = useDefinitionHistoryContext();
+  const request = React.useMemo(() => preview?.prepare(nodeKey) ?? null, [node, nodeKey, preview]);
+  const query = useAuthoredQuery(
+    WorkflowMapBodyCandidatesDocument,
+    request ? { ...request, owner: request.target } : undefined,
+    { enabled: request != null },
+  );
+  const response = query.data?.workflow_map_body_candidates;
+  React.useEffect(() => {
+    if (response?.status === "STALE") preview?.stale();
+  }, [preview, response?.status]);
+  const candidates = response?.status === "SUCCESS" ? response.candidates : [];
+  const config = jsonObject(node.config);
+  const currentKey = typeof config.target_step === "string" ? config.target_step : "";
+  const options = [
+    { value: "", label: t("map.chooseBody") },
+    ...candidates.map((candidate) => ({
+      value: candidate.step_key,
+      label: candidate.eligible ? candidate.label : t("map.unavailableBody", { label: `${candidate.label} — ${candidate.reason ?? ""}` }),
+      disabled: !candidate.eligible,
+    })),
+  ];
+  if (currentKey && !options.some((option) => option.value === currentKey)) {
+    options.push({ value: currentKey, label: t("map.unavailableBody", { label: currentKey }), disabled: false });
+  }
+  const changeBody = (targetStep: string): void => {
+    const action = () => context.form.form.setValue(
+      `definition.nodes.${nodeKey}.config`,
+      { ...config, target_step: targetStep } as never,
+      { shouldDirty: true, shouldTouch: true },
+    );
+    history ? history.perform(action) : action();
+  };
+  return <div className="grid gap-2">
+    <BoundFormValue form={context.form} name={`definition.nodes.${nodeKey}.config.target_step`}>{(binding) => <FieldDescriptorControl
+      field={{ name: "target_step", label: t("map.body"), description: t("map.bodyDescription"), widget: "select", options }}
+      value={currentKey}
+      readOnly={context.form.formReadOnly || query.isFetching}
+      messages={binding.messages}
+      controlRef={binding.controlRef}
+      onChange={(value) => changeBody(String(value ?? ""))}
+      onCommit={binding.onCommit}
+    />}</BoundFormValue>
+    {query.error ? <ErrorBanner description={t("map.candidatesError")} /> : null}
+    {response?.status === "STRUCTURAL" ? <ErrorBanner description={response.diagnostics.map((item) => item.message).join(" ")} /> : null}
+    {!context.form.formReadOnly ? <Button type="button" size="sm" variant="secondary" onClick={onAdd}>{t("map.addBody")}</Button> : null}
+  </div>;
+}
+
+function MapItemsEditor({ context, nodeKey, node }: {
+  context: RecordPanelContext;
+  nodeKey: string;
+  node: DefinitionNode;
+}): React.ReactElement {
+  const t = useWorkflowsT();
+  const history = useDefinitionHistoryContext();
+  const items = jsonObject(node.config).items;
+  const mode = Array.isArray(items) ? "literal" : items === "input" ? "input" : "expression";
+  const name = `definition.nodes.${nodeKey}.config.items`;
+  const setItems = (value: unknown): void => {
+    const action = () => context.form.form.setValue(name, value as never, { shouldDirty: true, shouldTouch: true });
+    history ? history.perform(action) : action();
+  };
+  return <div className="grid gap-2">
+    <span className="text-sm font-medium">{t("map.items")}</span>
+    <div className="flex flex-wrap gap-2">
+      <Button type="button" size="sm" variant={mode === "input" ? "primary" : "secondary"} disabled={context.form.formReadOnly} onClick={() => setItems("input")}>{t("map.itemsInput")}</Button>
+      <Button type="button" size="sm" variant={mode === "literal" ? "primary" : "secondary"} disabled={context.form.formReadOnly} onClick={() => setItems([])}>{t("map.itemsLiteral")}</Button>
+    </div>
+    <BoundFormValue form={context.form} name={name}>{(binding) => <FieldDescriptorControl
+      field={{
+        name: "items",
+        label: mode === "literal" ? t("map.itemsLiteralValue") : mode === "input" ? t("map.itemsInputPath") : t("map.itemsLegacy"),
+        description: mode === "expression" ? t("map.itemsLegacyDescription") : undefined,
+        widget: mode === "literal" ? "json" : "text",
+      }}
+      value={binding.value}
+      messages={binding.messages}
+      readOnly={context.form.formReadOnly}
+      controlRef={binding.controlRef}
+      onChange={binding.onChange}
+      onCommit={binding.onCommit}
+    />}</BoundFormValue>
+  </div>;
+}
+
+function graphWithMapBody(
+  body: DefinitionNode,
+  ownerIdentity: string,
+  nodes: Record<string, DefinitionNode>,
+  edges: Record<string, DefinitionEdge>,
+  geometry: GraphViewGeometry<WorkflowGraphNodeKind> | null,
+): { nodes: Record<string, DefinitionNode>; edges: Record<string, DefinitionEdge> } | null {
+  const owner = nodes[ownerIdentity];
+  if (!owner) return null;
+  const identity = body.clientKey || body.id;
+  const placed = graphWithOperation(
+    body,
+    { kind: "after", identity: ownerIdentity },
+    nodes,
+    edges,
+    geometry,
+  );
+  if (!placed) return null;
+  const nextNodes = placed.nodes;
+  return {
+    nodes: {
+      ...nextNodes,
+      [ownerIdentity]: {
+        ...owner,
+        config: { ...(owner.config ?? {}), target_step: nextNodes[identity]?.key ?? body.key },
+      },
+    },
+    edges,
+  };
 }
 
 function EdgeConfigPanel({ context, edgeKey, edge, nodes, operations, diagnostics, pendingIssue, fields, onIssueFocused, onInsert, onDelete }: { context: RecordPanelContext; edgeKey: string; edge: DefinitionEdge; nodes: Record<string, DefinitionNode>; operations: readonly WorkflowOperationChoice[]; diagnostics: WorkflowDefinitionValues["definition"]["readiness"]; pendingIssue: DefinitionDiagnostic | null; fields: WorkflowCanvasFields; onIssueFocused: () => void; onInsert: (id: string) => void; onDelete: (id: string) => void; }): React.ReactElement {
@@ -432,6 +624,7 @@ function EdgeConfigPanel({ context, edgeKey, edge, nodes, operations, diagnostic
 }
 
 type DefinitionDiagnostic = WorkflowDefinitionValues["definition"]["readiness"][number];
+type WorkflowCanvasEdgeMeta = { edge: DefinitionEdge | null; mapOwner: string | null };
 interface WorkflowCanvasFields {
   step: {
     name: FieldDescriptor;
@@ -523,6 +716,8 @@ function nodeDisplayName(identity: string, nodes: Record<string, DefinitionNode>
   return node?.name || node?.key || identity;
 }
 function operationChoice(operations: readonly WorkflowOperationChoice[], value: unknown): WorkflowOperationChoice | undefined {
+  const exact = operations.find((operation) => operation.key === value);
+  if (exact) return exact;
   const options = operations.map((operation) => ({ value: operation.key, label: operation.label }));
   const key = canonicalOptionValue(options, value);
   return operations.find((operation) => operation.key === key);

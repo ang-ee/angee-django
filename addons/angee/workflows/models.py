@@ -38,11 +38,12 @@ from angee.base.fields import StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import RecordRefMixin, canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
 from angee.resources.mixins import ResourceLoadMixin, ResourceWritePreparation
 from angee.workflows.attempts import (
+    ArtifactSpec,
     AttemptCause,
     AttemptClaim,
     AttemptFinalization,
@@ -59,6 +60,8 @@ from angee.workflows.attempts import (
     LeaseRevocationReason,
     MapExpansionPlan,
     MapItemSource,
+    RecoveryCapability,
+    RecoveryPlan,
     RetryIntent,
     deserialize_decision_specs,
     json_values_equal,
@@ -85,10 +88,12 @@ from angee.workflows.test_contracts import (
     TestFixtureSourceSummary,
     TestFixtureSpec,
     TestScope,
+    WorkflowTestRepairContext,
     WorkflowTestSetupPlan,
     validate_test_fixture_spec,
 )
 from angee.workflows.trigger_declarations import (
+    EventAdmissionPolicy,
     EventTriggerConfig,
     ScheduleTriggerConfig,
     TriggerConfig,
@@ -199,6 +204,37 @@ class _DecisionWriteSession:
 
 _decision_write_session: ContextVar[_DecisionWriteSession | None] = ContextVar(
     "workflow_decision_write_session", default=None
+)
+
+
+@dataclass(slots=True)
+class _ArtifactWriteCapability:
+    alias: str
+    connection_id: int
+    outer_atomic_id: int
+    attempt_id: int
+    declaration_index: int
+    instance_id: int
+    consumed: bool = False
+
+
+_artifact_write_capability: ContextVar[_ArtifactWriteCapability | None] = ContextVar(
+    "workflow_artifact_write_capability", default=None
+)
+
+
+@dataclass(slots=True)
+class _ArtifactBatchCapability:
+    alias: str
+    connection_id: int
+    outer_atomic_id: int
+    attempt_id: int
+    rows: tuple[tuple[int, int, str], ...]
+    consumed: bool = False
+
+
+_artifact_batch_capability: ContextVar[_ArtifactBatchCapability | None] = ContextVar(
+    "workflow_artifact_batch_capability", default=None
 )
 
 
@@ -346,6 +382,7 @@ class RunOrigin(models.TextChoices):
     TRIGGER = "trigger", "Trigger"
     SESSION = "session", "Session"
     ERROR_WORKFLOW = "error_workflow", "Error workflow"
+    RECOVERY = "recovery", "Recovery"
 
 
 class WaitingKind(models.TextChoices):
@@ -664,8 +701,11 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
     def update(self, **kwargs: Any) -> int:
         """Keep creation-time input presence outside collection mutation paths."""
 
-        if {"input", "input_present"} & kwargs.keys():
-            raise TypeError("Workflow run input is immutable.")
+        if {
+            "input", "input_present", "occurrence_id",
+            "test_repair_source_attempt", "test_repair_source_attempt_id",
+        } & kwargs.keys():
+            raise TypeError("Workflow run creation facts are immutable.")
         identity_fields = {
             "workflow",
             "workflow_id",
@@ -678,12 +718,22 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
             "test_step",
             "test_step_id",
             "test_source_step_id",
+            "test_repair_source_attempt",
+            "test_repair_source_attempt_id",
+            "recovery_source_attempt",
+            "recovery_source_attempt_id",
+            "recovery_request_actor_ref",
+            "recovery_mode",
         }
         with system_context(reason="workflows.runs.test_identity_guard"):
-            targets_test = models.QuerySet.filter(self, origin=RunOrigin.TEST).exists()
-        creates_test = "origin" in kwargs and str(kwargs["origin"]) == str(RunOrigin.TEST)
+            targets_test = models.QuerySet.filter(
+                self, origin__in=(RunOrigin.TEST, RunOrigin.RECOVERY)
+            ).exists()
+        creates_test = "origin" in kwargs and str(kwargs["origin"]) in {
+            str(RunOrigin.TEST), str(RunOrigin.RECOVERY)
+        }
         if identity_fields & kwargs.keys() and (targets_test or creates_test):
-            raise TypeError("Workflow test request identity is immutable.")
+            raise TypeError("Workflow test and recovery request identity is immutable.")
         return super().update(**kwargs)
 
     def bulk_update(
@@ -692,8 +742,11 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
         """Keep creation-time input presence outside bulk mutation paths."""
 
         field_names = tuple(fields)
-        if {"input", "input_present"} & set(field_names):
-            raise TypeError("Workflow run input is immutable.")
+        if {
+            "input", "input_present", "occurrence_id",
+            "test_repair_source_attempt", "test_repair_source_attempt_id",
+        } & set(field_names):
+            raise TypeError("Workflow run creation facts are immutable.")
         rows = list(objs)
         identity_fields = {
             "workflow",
@@ -707,13 +760,21 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
             "test_step",
             "test_step_id",
             "test_source_step_id",
+            "test_repair_source_attempt",
+            "test_repair_source_attempt_id",
+            "recovery_source_attempt",
+            "recovery_source_attempt_id",
+            "recovery_request_actor_ref",
+            "recovery_mode",
         }
         targets_test = system_queryset(self.model, using=self.db, lock=None).filter(
-            pk__in=[row.pk for row in rows], origin=RunOrigin.TEST
+            pk__in=[row.pk for row in rows], origin__in=(RunOrigin.TEST, RunOrigin.RECOVERY)
         ).exists()
-        creates_test = "origin" in field_names and any(str(row.origin) == str(RunOrigin.TEST) for row in rows)
+        creates_test = "origin" in field_names and any(
+            str(row.origin) in {str(RunOrigin.TEST), str(RunOrigin.RECOVERY)} for row in rows
+        )
         if identity_fields & set(field_names) and (targets_test or creates_test):
-            raise TypeError("Workflow test request identity is immutable.")
+            raise TypeError("Workflow test and recovery request identity is immutable.")
         return super().bulk_update(rows, field_names, batch_size=batch_size)
 
 
@@ -787,6 +848,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         trigger: Any = None,
         parent_step_run: Any = None,
         dedup_key: str | None = None,
+        occurrence_id: str | None = None,
         origin: RunOrigin | None = None,
         input: JsonPresence = JsonPresence(),
         available_at: datetime,
@@ -810,6 +872,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             trigger=trigger,
             parent_step_run=parent_step_run,
             dedup_key=dedup_key,
+            occurrence_id=occurrence_id,
             origin=origin,
             input=input,
             available_at=available_at,
@@ -828,6 +891,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         scope: TestScope = TestScope.WHOLE,
         selected_step: Any = None,
         fixtures: tuple[TestFixtureSpec, ...] = (),
+        repair_source_attempt: Any = None,
     ) -> Any:
         """Start or recover one idempotent whole-workflow test request."""
 
@@ -848,6 +912,21 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         authorized = read_scoped_queryset(workflow_model, actor, action="write")
         if authorized is None or not authorized.filter(pk=workflow.pk).exists():
             raise PermissionDenied("Test workflow access was denied.")
+        repair_context = None
+        if repair_source_attempt is not None:
+            repair_context = self.test_repair_context(repair_source_attempt, actor=actor)
+            if repair_context.draft_workflow_id != workflow_model.public_id_from_pk(head_id):
+                raise ValidationError(
+                    {"repair_source_attempt": "Repair evidence belongs to another workflow lineage."}
+                )
+            if (
+                scope is not TestScope.NODE
+                or selected_step is None
+                or repair_context.current_source_step_id != str(selected_step.sqid)
+            ):
+                raise ValidationError(
+                    {"repair_source_attempt": "Repair tests must select the source operation in the current draft."}
+                )
         with system_context(reason="workflows.runs.start_test"), transaction.atomic(using=alias):
             head = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=head_id)
             requested = head
@@ -870,6 +949,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 selected_identity = selected_step.pk if selected_step is not None else None
                 if existing.test_source_step_id != selected_identity:
                     raise ValidationError({"request_key": "Test launch selected-step facts do not match."})
+                if existing.test_repair_source_attempt_id != getattr(
+                    repair_source_attempt, "pk", None
+                ):
+                    raise ValidationError({"request_key": "Test launch repair evidence does not match."})
                 from angee.workflows.graph import WorkflowGraph
 
                 retry_graph = WorkflowGraph.from_workflow(existing.workflow)
@@ -905,6 +988,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                         {"selected_step": "The selected step must belong to this exact workflow revision."}
                     ) from error
                 selected_key = locked_selected.key
+                if repair_context is not None and (
+                    repair_context.current_source_step_id != str(locked_selected.sqid)
+                    or repair_context.source_step_key != locked_selected.key
+                ):
+                    raise ValidationError(
+                        {"repair_source_attempt": "Repair source identity changed; reload and try again."}
+                    )
             if workflow.published_from_id is None:
                 snapshot = workflow_model.objects.test_snapshot(
                     head,
@@ -945,7 +1035,162 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 test_scope=scope,
                 test_step=copied_test_step,
                 test_source_step_id=locked_selected.pk if selected_step is not None else None,
+                test_repair_source_attempt=repair_source_attempt,
                 test_fixture_rows=fixture_rows,
+                available_at=timezone.now(),
+                using=alias,
+            )
+
+    def start_recovery(
+        self,
+        source_attempt: Any,
+        *,
+        request_key: str,
+        actor: Any,
+    ) -> Any:
+        """Admit one linked same-revision recovery from exact retained evidence."""
+
+        if not isinstance(request_key, str) or not request_key.strip():
+            raise ValidationError({"request_key": "Recovery request keys must be non-empty strings."})
+        alias = self.db
+        attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
+        step_run_model = self.model._meta.apps.get_model("workflows", "StepRun")
+        source_run_id = system_queryset(attempt_model, using=alias, lock=None).values_list(
+            "step_run__run_id", flat=True
+        ).get(pk=source_attempt.pk)
+        readable = read_scoped_queryset(self.model, actor, action="read")
+        if readable is None or not readable.filter(pk=source_run_id).exists():
+            raise PermissionDenied("Recovery source evidence is unavailable.")
+        capability_source = (
+            system_queryset(attempt_model, using=alias, lock=None)
+            .select_related("step_run__step")
+            .get(pk=source_attempt.pk)
+        )
+        if capability_source.step_run.step_id is None:
+            raise ValidationError({"attempt": "Recovery source execution is unavailable."})
+        capability_step_class = capability_source.step_run.step.step_class
+        capability_config = copy.deepcopy(capability_source.step_run.step.config)
+        impl = capability_source.step_run.step.resolve_impl("step_class")
+        capability = impl.recovery_capability(attempt=capability_source)
+        if not capability.available:
+            raise ValidationError({"attempt": capability.unavailable_reason})
+        with system_context(reason="workflows.runs.start_recovery"), transaction.atomic(using=alias):
+            source_run = system_queryset(self.model, using=alias, lock=("self",)).select_related(
+                "workflow"
+            ).get(pk=source_run_id)
+            writable_workflows = read_scoped_queryset(
+                type(source_run.workflow), actor, action="write"
+            )
+            if writable_workflows is None or not writable_workflows.filter(
+                pk=source_run.workflow_id
+            ).exists():
+                raise PermissionDenied("Recovery workflow access was denied.")
+            source_subject = source_run.subject
+            if source_subject is not None:
+                readable_subjects = read_scoped_queryset(
+                    type(source_subject), actor, action="read"
+                )
+                if readable_subjects is None or not readable_subjects.filter(
+                    pk=source_subject.pk
+                ).exists():
+                    raise PermissionDenied("Recovery subject access was denied.")
+            locked_step_runs = list(
+                system_queryset(step_run_model, using=alias, lock=("self",))
+                .select_related("step")
+                .filter(run=source_run)
+                .order_by("pk")
+            )
+            source_step_run = next(
+                (row for row in locked_step_runs if row.pk == source_attempt.step_run_id),
+                None,
+            )
+            if source_step_run is None:
+                raise ValidationError({"attempt": "Recovery source execution is unavailable."})
+            locked_attempt = system_queryset(attempt_model, using=alias, lock=("self",)).get(
+                pk=source_attempt.pk
+            )
+            if (
+                source_step_run.run_id != source_run.pk
+                or source_step_run.step_id is None
+                or locked_attempt.step_run_id != source_step_run.pk
+                or source_step_run.step.step_class != capability_step_class
+                or not json_values_equal(source_step_run.step.config, capability_config)
+                or source_step_run.current_attempt_id != locked_attempt.pk
+                or source_step_run.status not in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
+                or not (
+                    (
+                        locked_attempt.result_kind in {
+                            str(AttemptResultKind.ERROR),
+                            str(AttemptResultKind.NO_RESULT),
+                            str(AttemptResultKind.PREPARATION_ERROR),
+                            str(AttemptResultKind.TRANSIENT_ERROR),
+                        }
+                        and locked_attempt.applied_at is not None
+                    )
+                    or (
+                        locked_attempt.result_recorded_at is None
+                        and locked_attempt.lease_revoked_at is not None
+                    )
+                )
+            ):
+                raise ValidationError({"attempt": "Recovery requires an applied retained failure."})
+            try:
+                actor_ref = str(to_subject_ref(actor))
+            except NoActorResolvedError as error:
+                raise PermissionDenied("Recovery requires an effective actor.") from error
+            dedup_key = f"recovery:{source_run.pk}:{locked_attempt.pk}:{request_key}"
+            existing = self.filter(dedup_key=dedup_key).first()
+            if existing is not None:
+                if (
+                    existing.recovery_source_attempt_id != locked_attempt.pk
+                    or existing.recovery_request_actor_ref != actor_ref
+                    or existing.recovery_mode != str(capability.mode)
+                ):
+                    raise ValidationError({"request_key": "Recovery request facts do not match."})
+                return existing
+            from angee.workflows.graph import GraphIdentity, WorkflowGraph
+
+            recovery_graph = WorkflowGraph.from_workflow(source_run.workflow)
+            accepted_step_ids = {
+                source.node_identity.existing_id
+                for source in recovery_graph.input_sources(
+                    GraphIdentity(existing_id=source_step_run.step_id)
+                )
+                if source.node_identity is not None
+                and source.node_identity.existing_id is not None
+            }
+            accepted_step_runs = [
+                row for row in locked_step_runs if row.step_id in accepted_step_ids
+            ]
+            accepted = list(
+                system_queryset(attempt_model, using=alias, lock=("self",))
+                .select_related("step_run__step")
+                .filter(
+                    step_run__in=accepted_step_runs,
+                    step_run__status=StepRunStatus.SUCCEEDED,
+                    step_run__current_attempt=models.F("pk"),
+                    effect_key=models.F("step_run__effect_key"),
+                    effect_generation=models.F("step_run__effect_generation"),
+                    result_kind=AttemptResultKind.DONE,
+                    applied_at__isnull=False,
+                    lease_revoked_at__isnull=True,
+                )
+                .exclude(step_run=source_step_run)
+                .order_by("pk")
+            )
+            return self._start_pinned_locked(
+                source_run.workflow,
+                source_subject,
+                actor,
+                dedup_key=dedup_key,
+                origin=cast(RunOrigin, RunOrigin.RECOVERY),
+                input=JsonPresence(source_run.input_present, source_run.input),
+                recovery_source_attempt=locked_attempt,
+                recovery_request_actor_ref=actor_ref,
+                recovery_mode=str(capability.mode),
+                recovery_evidence=tuple(accepted),
+                recovery_step=source_step_run.step,
+                recovery_map_index=source_step_run.map_index,
                 available_at=timezone.now(),
                 using=alias,
             )
@@ -1050,7 +1295,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     if run_access is None
                     else run_access.select_related("workflow", "test_step").filter(
                         pk=previous_run.pk,
-                        origin=RunOrigin.TEST,
                     ).first()
                 )
                 if locked_previous is None:
@@ -1058,13 +1302,22 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 previous_head_id = locked_previous.workflow.published_from_id or locked_previous.workflow_id
                 if previous_head_id != head.pk:
                     raise ValidationError({"previous_run": "Previous test evidence belongs to another lineage."})
-                previous_fixture_rows = list(
-                    locked_previous.test_fixtures.select_related("step", "captured_attempt")
+                previous_fixture_rows = (
+                    list(locked_previous.test_fixtures.select_related("step", "captured_attempt"))
+                    if locked_previous.origin == RunOrigin.TEST
+                    else []
                 )
                 previous_graph = WorkflowGraph.from_workflow(locked_previous.workflow)
+                previous_selected = (
+                    locked_previous.workflow.steps.filter(key=locked_selected.key).first()
+                    if locked_selected is not None
+                    else None
+                )
                 previous_selected_identity = (
                     GraphIdentity(existing_id=locked_previous.test_step_id)
                     if locked_previous.test_step_id is not None
+                    else GraphIdentity(existing_id=previous_selected.pk)
+                    if previous_selected is not None
                     else None
                 )
                 previous_plan = previous_graph.test_execution_plan(
@@ -1107,9 +1360,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     freshness = (*freshness, GraphFreshnessReason("input_changed", None, "input"))
                 selected_key = locked_selected.key if locked_selected is not None else None
                 if (
-                    (locked_previous.test_scope or TestScope.WHOLE) != scope
-                    or (locked_previous.test_step.key if locked_previous.test_step_id else None)
-                    != selected_key
+                    locked_previous.origin == RunOrigin.TEST
+                    and (
+                        (locked_previous.test_scope or TestScope.WHOLE) != scope
+                        or (locked_previous.test_step.key if locked_previous.test_step_id else None)
+                        != selected_key
+                    )
                 ):
                     freshness = (*freshness, GraphFreshnessReason("scope_changed", selected_key, "scope"))
                 actual_fixture_facts = [
@@ -1182,6 +1438,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 step_model = workflow_model._meta.apps.get_model("workflows", "Step")
                 if (
                     previous_run is not None
+                    and locked_previous.origin == RunOrigin.TEST
                     and locked_previous.workflow_id == requested.pk
                     and locked_previous.test_step_id == locked_selected.pk
                     and locked_previous.test_source_step_id is not None
@@ -1207,6 +1464,85 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 requires_map_item=plan.map_item,
                 freshness=freshness,
             )
+
+    def test_repair_context(self, source_attempt: Any, *, actor: Any) -> WorkflowTestRepairContext:
+        """Resolve an authorized retained attempt into current draft test identities."""
+
+        attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
+        readable_attempts = read_scoped_queryset(attempt_model, actor, action="read")
+        row = None if readable_attempts is None else readable_attempts.select_related(
+            "step_run__run__workflow", "step_run__step"
+        ).filter(pk=source_attempt.pk).first()
+        if row is None or row.step_run.step_id is None:
+            raise PermissionDenied("Repair source evidence is unavailable.")
+        source_run = row.step_run.run
+        readable_runs = read_scoped_queryset(self.model, actor, action="read")
+        if readable_runs is None or not readable_runs.filter(pk=source_run.pk).exists():
+            raise PermissionDenied("Repair source evidence is unavailable.")
+        workflow_model = self.model._meta.get_field("workflow").remote_field.model
+        head_id = source_run.workflow.published_from_id or source_run.workflow_id
+        writable = read_scoped_queryset(workflow_model, actor, action="write")
+        if writable is None:
+            raise PermissionDenied("Repair workflow access was denied.")
+        head = writable.filter(pk=head_id, status=WorkflowStatus.DRAFT).first()
+        if head is None:
+            raise PermissionDenied("Repair workflow access was denied.")
+        subject = source_run.subject
+        if subject is not None:
+            readable_subjects = read_scoped_queryset(type(subject), actor, action="read")
+            if readable_subjects is None or not readable_subjects.filter(pk=subject.pk).exists():
+                raise PermissionDenied("The source run subject is no longer available.")
+        source_step = row.step_run.step
+        current_step = system_queryset(
+            type(source_step), using=self.db, lock=None
+        ).filter(workflow=head, key=source_step.key).first()
+        fixture_summaries: tuple[TestFixtureSourceSummary, ...] = ()
+        if current_step is not None:
+            from angee.workflows.graph import GraphIdentity, WorkflowGraph
+
+            with system_context(reason="workflows.runs.test_repair_context"):
+                graph = WorkflowGraph.from_workflow(head)
+            plan = graph.test_plan(GraphIdentity(existing_id=current_step.pk))
+            admitted_keys = {
+                graph.nodes[identity].key for identity in plan.executable
+                if identity in graph.nodes and identity.existing_id != current_step.pk
+            }
+            candidates = (
+                system_queryset(attempt_model, using=self.db, lock=None).select_related(
+                    "step_run__step", "step_run__run", "step_run__step__workflow"
+                )
+                .filter(
+                    step_run__run=source_run,
+                    step_run__step__key__in=admitted_keys,
+                    result_kind=AttemptResultKind.DONE,
+                    applied_at__isnull=False,
+                    lease_revoked_at__isnull=True,
+                    output_present=True,
+                )
+                .order_by("step_run__step_id", "step_run__map_index", "pk")
+            )
+            fixture_summaries = tuple(
+                attempt_model.objects._fixture_source_summary(candidate, TestFixtureRole.OUTPUT)
+                for candidate in candidates
+            )
+        return WorkflowTestRepairContext(
+            source_attempt_id=row.sqid,
+            source_run_id=source_run.sqid,
+            source_workflow_id=source_run.workflow.sqid,
+            source_revision=(
+                source_run.workflow.draft_revision
+                if source_run.workflow.status == WorkflowStatus.TEST
+                else source_run.workflow.version
+            ),
+            draft_workflow_id=head.sqid,
+            draft_revision=head.draft_revision,
+            source_step_key=source_step.key,
+            source_step_id=source_step.sqid,
+            current_source_step_id=current_step.sqid if current_step is not None else None,
+            subject=subject,
+            input=JsonPresence(source_run.input_present, copy.deepcopy(source_run.input)),
+            fixtures=fixture_summaries,
+        )
 
     @staticmethod
     def _validate_test_scope_readiness(
@@ -1310,13 +1646,21 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         trigger: Any = None,
         parent_step_run: Any = None,
         dedup_key: str | None = None,
+        occurrence_id: str | None = None,
         origin: RunOrigin | None = None,
         input: JsonPresence = JsonPresence(),
         test_request_actor_ref: str = "",
         test_scope: TestScope | str = "",
         test_step: Any = None,
         test_source_step_id: int | None = None,
+        test_repair_source_attempt: Any = None,
         test_fixture_rows: tuple[Any, ...] = (),
+        recovery_source_attempt: Any = None,
+        recovery_request_actor_ref: str = "",
+        recovery_mode: str = "",
+        recovery_evidence: tuple[Any, ...] = (),
+        recovery_step: Any = None,
+        recovery_map_index: int = -1,
         available_at: datetime,
         using: str,
     ) -> Any:
@@ -1335,6 +1679,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 else RunOrigin.ERROR_WORKFLOW if parent_step_run is not None else RunOrigin.MANUAL
             ),
             "trigger": trigger,
+            "occurrence_id": occurrence_id,
             "parent_step_run": parent_step_run,
             "subject_content_type": content_type,
             "subject_object_id": object_id,
@@ -1344,6 +1689,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             "test_scope": test_scope,
             "test_step": test_step,
             "test_source_step_id": test_source_step_id,
+            "test_repair_source_attempt": test_repair_source_attempt,
+            "recovery_source_attempt": recovery_source_attempt,
+            "recovery_request_actor_ref": recovery_request_actor_ref,
+            "recovery_mode": recovery_mode,
             "created_by_id": owner_id,
             "updated_by_id": owner_id,
         }
@@ -1387,14 +1736,30 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             finally:
                 _test_fixture_batch_rows.reset(batch_token)
                 _test_fixture_write_run.reset(fixture_token)
+        if run.origin == RunOrigin.RECOVERY:
+            evidence_model = self.model._meta.apps.get_model("workflows", "WorkflowRecoveryEvidence")
+            connection = connections[using]
+            recovery_token = _recovery_write_run.set(
+                (using, id(connection), id(connection.atomic_blocks[0]), run.pk)
+            )
+            recovery_batch_token = _recovery_evidence_batch.set(
+                frozenset(attempt.pk for attempt in recovery_evidence)
+            )
+            try:
+                evidence_model.objects._create_for_run(run, recovery_evidence, using=using)
+            finally:
+                _recovery_evidence_batch.reset(recovery_batch_token)
+                _recovery_write_run.reset(recovery_token)
         if test_scope == TestScope.NODE:
             entries = [test_step] if test_step is not None else []
+        elif run.origin == RunOrigin.RECOVERY:
+            entries = [recovery_step] if recovery_step is not None else []
         else:
             entries = list(version.steps.filter(is_entry=True).order_by("pk"))
         if len(entries) != 1:
             raise ValidationError({"workflow": "Workflow version must have exactly one initial step."})
         step_run_model = self.model._meta.apps.get_model("workflows", "StepRun")
-        entry_index = -1
+        entry_index = recovery_map_index if run.origin == RunOrigin.RECOVERY else -1
         if test_scope == TestScope.NODE:
             map_fixture = next(
                 (fixture for fixture in fixtures if fixture.role == TestFixtureRole.MAP_ITEM),
@@ -1494,6 +1859,15 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     outcome = captured.outcome
                 else:
                     value = JsonPresence(True, captured.map_item)
+            if spec.role == TestFixtureRole.OUTPUT and outcome:
+                declared_outcomes = {
+                    declared.key
+                    for declared in step.resolve_impl("step_class").outcomes
+                }
+                if declared_outcomes and outcome not in declared_outcomes:
+                    raise ValidationError(
+                        {"fixtures": "Output fixture outcome is not declared by this operation."}
+                    )
             rows.append(
                 fixture_model(
                     step=step,
@@ -2505,20 +2879,81 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             )
             return trigger
 
-    def claim_due_event(self, trigger_id: int, *, timestamp: datetime) -> Any | None:
-        """Lock and record one enabled event trigger fire if rate limits allow it."""
+    def start_event(
+        self,
+        trigger_id: int,
+        *,
+        subject: models.Model,
+        occurrence_id: str | None,
+        timestamp: datetime,
+    ) -> Any | None:
+        """Atomically admit one matching event occurrence and its pinned run."""
 
-        with system_context(reason="workflows.event_triggers.claim"), transaction.atomic():
-            trigger = (
-                self.lock_if_supported()
-                .select_related("workflow")
-                .filter(pk=trigger_id, kind=TriggerKind.EVENT, enabled=True)
-                .first()
+        alias = self.db
+        discovered = system_queryset(self.model, using=alias, lock=None).filter(pk=trigger_id).values(
+            "workflow_id"
+        ).first()
+        if discovered is None:
+            return None
+        workflow_model = self.model._meta.get_field("workflow").remote_field.model
+        run_model = self.model._meta.apps.get_model("workflows", "WorkflowRun")
+        with system_context(reason="workflows.event_triggers.start"), transaction.atomic(using=alias):
+            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(
+                pk=discovered["workflow_id"]
             )
-            if trigger is None or not trigger.rate_limit_allows(timestamp=timestamp):
+            trigger = system_queryset(self.model, using=alias, lock=("self",)).filter(
+                pk=trigger_id
+            ).first()
+            if (
+                trigger is None
+                or trigger.workflow_id != head.pk
+                or trigger.kind != TriggerKind.EVENT
+                or not trigger.enabled
+            ):
                 return None
+            declaration = trigger.validated_config(require_publisher=True)
+            if not isinstance(declaration, EventTriggerConfig):
+                return None
+            if subject._meta.label_lower != declaration.model:
+                return None
+            if not trigger.condition_matches(type(subject), subject):
+                return None
+            content_type = ContentType.objects.get_for_model(subject, for_concrete_model=False)
+            occurrence_max_length = cast(int, run_model._meta.get_field("occurrence_id").max_length)
+            retained_occurrence = (
+                occurrence_id
+                if isinstance(occurrence_id, str)
+                and 0 < len(occurrence_id) <= occurrence_max_length
+                else None
+            )
+            if declaration.admission_policy == EventAdmissionPolicy.EACH_CHANGE:
+                if retained_occurrence is None:
+                    return None
+                dedup_key = f"event:{trigger.pk}:occurrence:{retained_occurrence}"
+                if len(dedup_key) > cast(int, run_model._meta.get_field("dedup_key").max_length):
+                    return None
+            else:
+                dedup_key = f"trigger:{trigger.pk}:subject:{content_type.pk}:{subject.pk}"
+            existing = system_queryset(run_model, using=alias, lock=None).filter(
+                dedup_key=dedup_key
+            ).first()
+            if existing is not None:
+                return existing
+            if not trigger.rate_limit_allows(timestamp=timestamp):
+                return None
+            run = run_model.objects._start_locked(
+                head,
+                subject,
+                None,
+                trigger=trigger,
+                dedup_key=dedup_key,
+                occurrence_id=retained_occurrence,
+                input=JsonPresence(),
+                available_at=timestamp,
+                using=alias,
+            )
             self._record_fire_locked(trigger, timestamp=timestamp)
-            return trigger
+            return run
 
     def claim_due_schedule(self, trigger_id: int, *, timestamp: datetime) -> tuple[Any, datetime] | None:
         """Lock and advance one due schedule trigger if rate limits allow it."""
@@ -2777,6 +3212,10 @@ class Trigger(AuditMixin, AngeeDataModel):
                 self.hourly_fire_count = locked.hourly_fire_count
                 self.next_fire_at = locked.next_fire_at
             self.full_clean()
+            if adding and self.kind == TriggerKind.EVENT and isinstance(self.config, dict):
+                declaration = self.validated_config()
+                if isinstance(declaration, EventTriggerConfig) and "admission_policy" not in self.config:
+                    self.config = {**self.config, "admission_policy": str(declaration.admission_policy)}
             rule_changed = persisted_rule is not None and persisted_rule != (self.kind, self.config)
             cadence_changed = False
             if rule_changed and self.enabled and persisted_rule is not None:
@@ -2949,6 +3388,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     subject_object_id = models.PositiveBigIntegerField(null=True, blank=True)
     subject = GenericForeignKey("subject_content_type", "subject_object_id")
     dedup_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
+    occurrence_id = models.CharField(max_length=255, null=True, blank=True, editable=False)
     test_request_actor_ref = models.CharField(max_length=255, blank=True, editable=False)
     test_scope = StateField(choices_enum=TestScope, blank=True, default="", editable=False)
     test_step = models.ForeignKey(
@@ -2960,6 +3400,24 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         editable=False,
     )
     test_source_step_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
+    test_repair_source_attempt = models.ForeignKey(
+        "workflows.StepAttempt",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="repair_test_runs",
+        editable=False,
+    )
+    recovery_source_attempt = models.ForeignKey(
+        "workflows.StepAttempt",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="recovery_runs",
+        editable=False,
+    )
+    recovery_request_actor_ref = models.CharField(max_length=255, blank=True, editable=False)
+    recovery_mode = models.CharField(max_length=32, blank=True, editable=False)
     input_present = models.BooleanField(default=False, editable=False)
     input = models.JSONField(null=True, blank=True, editable=False)
     wake_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -2987,6 +3445,13 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         rebac_resource_type = "workflows/run"
         rebac_id_attr = "sqid"
         constraints = (
+            models.CheckConstraint(
+                condition=(
+                    models.Q(origin=RunOrigin.TEST)
+                    | models.Q(test_repair_source_attempt__isnull=True)
+                ),
+                name="chk_wfr_test_repair_source",
+            ),
             models.CheckConstraint(
                 condition=models.Q(input_present=True) | models.Q(input__isnull=True),
                 name="chk_wfr_absent_input_null",
@@ -3022,6 +3487,25 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                     )
                 ),
                 name="chk_wfr_test_scope",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        origin=RunOrigin.RECOVERY,
+                        recovery_source_attempt__isnull=False,
+                        recovery_request_actor_ref__gt="",
+                        recovery_mode__gt="",
+                    )
+                    | (
+                        ~models.Q(origin=RunOrigin.RECOVERY)
+                        & models.Q(
+                            recovery_source_attempt__isnull=True,
+                            recovery_request_actor_ref="",
+                            recovery_mode="",
+                        )
+                    )
+                ),
+                name="chk_wfr_recovery_identity",
             ),
             models.UniqueConstraint(
                 fields=("parent_step_run",),
@@ -3188,6 +3672,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             "test_scope": self.test_scope,
             "test_step_id": self.test_step_id,
             "test_source_step_id": self.test_source_step_id,
+            "test_repair_source_attempt_id": self.test_repair_source_attempt_id,
         }
 
     def _raise_if_test_identity_changed(self) -> None:
@@ -3198,6 +3683,10 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                 raise ValidationError({"test_request_actor_ref": "Test runs require their requesting actor."})
             if self.origin != RunOrigin.TEST and self.test_request_actor_ref:
                 raise ValidationError({"test_request_actor_ref": "Only test runs have a requesting actor."})
+            if self.origin != RunOrigin.TEST and self.test_repair_source_attempt_id is not None:
+                raise ValidationError(
+                    {"test_repair_source_attempt": "Only test runs retain repair source evidence."}
+                )
             if self.origin == RunOrigin.TEST:
                 if self.test_scope not in TestScope:
                     raise ValidationError({"test_scope": "Test runs require a declared scope."})
@@ -3220,7 +3709,12 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             loaded = system_queryset(type(self), using=self._state.db, lock=None).values(
                 *current.keys()
             ).get(pk=self.pk)
-        if (loaded["origin"] == str(RunOrigin.TEST) or self.origin == RunOrigin.TEST) and loaded != current:
+        if (
+            loaded["origin"] == str(RunOrigin.TEST)
+            or self.origin == RunOrigin.TEST
+            or loaded["test_repair_source_attempt_id"] is not None
+            or self.test_repair_source_attempt_id is not None
+        ) and loaded != current:
             raise ValidationError("Workflow test request identity is immutable.")
 
     @classmethod
@@ -3230,6 +3724,8 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         instance = cast(Self, super().from_db(db, field_names, values))
         if "dedup_key" in field_names:
             instance._loaded_dedup_key = values[field_names.index("dedup_key")]
+        if "occurrence_id" in field_names:
+            instance._loaded_occurrence_id = values[field_names.index("occurrence_id")]
         if "input_present" in field_names:
             instance._loaded_input_present = values[field_names.index("input_present")]
         if "input" in field_names:
@@ -3243,6 +3739,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             "test_scope",
             "test_step_id",
             "test_source_step_id",
+            "test_repair_source_attempt_id",
         )
         if all(field in field_names for field in identity_fields):
             instance._loaded_test_identity = {
@@ -3259,6 +3756,9 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         loaded_dedup_key = getattr(self, "_loaded_dedup_key", self.dedup_key)
         if loaded_dedup_key != self.dedup_key:
             raise ValidationError({"dedup_key": "Workflow run dedup keys are immutable."})
+        loaded_occurrence_id = getattr(self, "_loaded_occurrence_id", self.occurrence_id)
+        if loaded_occurrence_id != self.occurrence_id:
+            raise ValidationError({"occurrence_id": "Workflow run occurrence identities are immutable."})
 
     def debit_budget(self, delta: Mapping[str, int]) -> None:
         """Atomically add usage deltas to this run's budget ledger."""
@@ -3281,6 +3781,15 @@ _test_fixture_batch_rows: ContextVar[frozenset[int]] = ContextVar(
 )
 _test_fixture_apply_ids: ContextVar[frozenset[int]] = ContextVar(
     "workflow_test_fixture_apply_ids", default=frozenset()
+)
+_recovery_write_run: ContextVar[tuple[str, int, int, int] | None] = ContextVar(
+    "workflow_recovery_write_run", default=None
+)
+_recovery_evidence_batch: ContextVar[frozenset[int]] = ContextVar(
+    "workflow_recovery_evidence_batch", default=frozenset()
+)
+_recovery_evidence_write_row: ContextVar[tuple[int, int, int, int, int] | None] = ContextVar(
+    "workflow_recovery_evidence_write_row", default=None
 )
 
 
@@ -3404,6 +3913,89 @@ class WorkflowTestFixture(AuditMixin, AngeeDataModel):
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise TypeError("Workflow test fixtures are retained admission facts.")
+
+
+class WorkflowRecoveryEvidenceQuerySet(AngeeQuerySet[Any]):
+    """Immutable accepted predecessor evidence for one recovery run."""
+
+    def update(self, **kwargs: Any) -> int:
+        raise TypeError("Recovery evidence is immutable admission data.")
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
+        raise TypeError("Recovery evidence can only be created by WorkflowRunManager.")
+
+    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
+        raise TypeError("Recovery evidence is immutable admission data.")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise TypeError("Recovery evidence is immutable admission data.")
+
+
+class WorkflowRecoveryEvidenceManager(AngeeManager.from_queryset(WorkflowRecoveryEvidenceQuerySet)):  # type: ignore[misc]
+    def _create_for_run(self, run: Any, attempts: tuple[Any, ...], *, using: str) -> tuple[Any, ...]:
+        connection = connections[using]
+        owner = _recovery_write_run.get()
+        expected = (using, id(connection), id(connection.atomic_blocks[0]), run.pk)
+        attempt_ids = frozenset(attempt.pk for attempt in attempts)
+        if (
+            owner != expected
+            or _recovery_evidence_batch.get() != attempt_ids
+            or run.origin != RunOrigin.RECOVERY
+        ):
+            raise RuntimeError("Recovery evidence requires its exact run admission transaction.")
+        _recovery_evidence_batch.set(frozenset())
+        rows: list[Any] = []
+        for attempt in attempts:
+            row = self.model(
+                run=run,
+                source_attempt=attempt,
+                step=attempt.step_run.step,
+                map_index=attempt.step_run.map_index,
+            )
+            token = _recovery_evidence_write_row.set(
+                (id(row), run.pk, attempt.pk, attempt.step_run.step_id, attempt.step_run.map_index)
+            )
+            try:
+                row.save(using=using, force_insert=True)
+            finally:
+                _recovery_evidence_write_row.reset(token)
+            rows.append(row)
+        return tuple(rows)
+
+
+class WorkflowRecoveryEvidence(AuditMixin, AngeeDataModel):
+    """Protected link to an accepted predecessor result reused by recovery."""
+
+    runtime = True
+    sqid_prefix = "wre_"
+    run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.PROTECT, related_name="recovery_evidence")
+    source_attempt = models.ForeignKey(
+        "workflows.StepAttempt", on_delete=models.PROTECT, related_name="reused_by_recoveries"
+    )
+    step = models.ForeignKey("workflows.Step", on_delete=models.PROTECT, related_name="recovery_evidence")
+    map_index = models.IntegerField(default=-1, editable=False)
+    objects = WorkflowRecoveryEvidenceManager()
+
+    class Meta:
+        abstract = True
+        ordering = ("run_id", "step_id", "map_index")
+        rebac_resource_type = "workflows/recovery_evidence"
+        rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(fields=("run", "step", "map_index"), name="uniq_wre_run_step_slot"),
+        )
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        expected = (
+            id(self), self.run_id, self.source_attempt_id, self.step_id, self.map_index
+        )
+        if not self._state.adding or _recovery_evidence_write_row.get() != expected:
+            raise TypeError("Recovery evidence can only be saved by WorkflowRunManager.")
+        _recovery_evidence_write_row.set(None)
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise TypeError("Recovery evidence is immutable admission data.")
 
 
 class StepRunQuerySet(AngeeQuerySet[Any]):
@@ -4149,6 +4741,59 @@ class StepAttemptQuerySet(AngeeQuerySet[Any]):
 class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # type: ignore[misc]
     """Allocate, lease, and finalize retained attempts under ancestor locks."""
 
+    def recovery_plan(self, attempt: Any, *, actor: Any) -> RecoveryPlan:
+        """Return the operation-owned recovery capability for authorized evidence."""
+
+        row = self.select_related("step_run__run__workflow", "step_run__step").filter(
+            pk=attempt.pk
+        ).first()
+        if row is None or row.step_run.step_id is None:
+            raise PermissionDenied("Recovery source evidence is unavailable.")
+        run_model = row.step_run._meta.get_field("run").remote_field.model
+        readable = read_scoped_queryset(run_model, actor, action="read")
+        if readable is None or not readable.filter(pk=row.step_run.run_id).exists():
+            raise PermissionDenied("Recovery source evidence is unavailable.")
+        step_run = row.step_run
+        workflow = step_run.run.workflow
+        writable = read_scoped_queryset(type(workflow), actor, action="write")
+        subject = step_run.run.subject
+        subject_readable = (
+            subject is None
+            or (
+                (scoped := read_scoped_queryset(type(subject), actor, action="read")) is not None
+                and scoped.filter(pk=subject.pk).exists()
+            )
+        )
+        admissible = (
+            writable is not None
+            and writable.filter(pk=workflow.pk).exists()
+            and subject_readable
+            and step_run.current_attempt_id == row.pk
+            and step_run.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
+            and (
+                (row.applied_at is not None and row.result_kind in {
+                    str(AttemptResultKind.ERROR), str(AttemptResultKind.NO_RESULT),
+                    str(AttemptResultKind.PREPARATION_ERROR), str(AttemptResultKind.TRANSIENT_ERROR),
+                })
+                or (row.result_recorded_at is None and row.lease_revoked_at is not None)
+            )
+        )
+        capability = (
+            step_run.step.resolve_impl("step_class").recovery_capability(attempt=row)
+            if admissible
+            else RecoveryCapability(None, "This retained attempt is not an admissible failure.")
+        )
+        return RecoveryPlan(
+            attempt_id=row.sqid,
+            run_id=step_run.run.sqid,
+            workflow_id=workflow.sqid,
+            workflow_revision=workflow.draft_revision if workflow.status == WorkflowStatus.TEST else workflow.version,
+            step_id=step_run.step.sqid,
+            step_key=step_run.step.key,
+            map_index=step_run.map_index if step_run.map_index >= 0 else None,
+            capability=capability,
+        )
+
     @staticmethod
     def _fixture_source_summary(attempt: Any, role: TestFixtureRole) -> TestFixtureSourceSummary:
         step = attempt.step_run.step
@@ -4469,6 +5114,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         """Validate one physical result before any retained write begins."""
 
         self._validate_result(result)
+        self._validated_artifacts(result)
         return result
 
     def record_map_expansion(
@@ -4863,7 +5509,14 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         map_item: MapItemSource | None = None,
         test_fixture: Any = None,
     ) -> Any:
-        if locked.effect_key is None:
+        recovery_source = (
+            locked.run.recovery_source_attempt
+            if cause == AttemptCause.MANUAL_RETRY and locked.run.origin == RunOrigin.RECOVERY
+            else None
+        )
+        if recovery_source is not None and locked.run.recovery_mode == "reconcile":
+            locked.effect_key = recovery_source.effect_key
+        elif locked.effect_key is None:
             locked.effect_key = uuid.uuid4()
         ordinal = locked.attempt + 1
         attempt = self.model(
@@ -4882,6 +5535,9 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             claimed_at=claimed_at,
             effect_key=locked.effect_key,
             effect_generation=locked.effect_generation,
+            recovery_source_attempt=recovery_source,
+            recovery_mode=(locked.run.recovery_mode if recovery_source is not None else ""),
+            intended_effect_key=(recovery_source.effect_key if recovery_source is not None else None),
         )
         self._save_attempt(attempt, alias=alias, force_insert=True)
         locked.attempt = ordinal
@@ -5123,6 +5779,27 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     {"map_item": "Current Map membership requires captured item provenance."}
                 )
             return
+        if step_run.run.origin == RunOrigin.RECOVERY:
+            source_id = step_run.run.recovery_source_attempt_id
+            if source_id is None:
+                raise ValidationError({"map_item": "Recovery Map item has no admitted source evidence."})
+            source = (
+                system_queryset(self.model, using=alias, lock=None)
+                .select_related("step_run")
+                .get(pk=source_id)
+            )
+            if (
+                source.map_expansion_id == map_item.expansion_attempt_id
+                and source.map_item_index == map_item.index
+                and source.map_item_present is map_item.value.present
+                and json_values_equal(source.map_item, map_item.value.value)
+                and source.step_run.step_id == step_run.step_id
+                and source.step_run.map_index == step_run.map_index
+            ):
+                return
+            raise ValidationError(
+                {"map_item": "Recovery Map item does not match admitted source evidence."}
+            )
         if (
             step_run.map_index != map_item.index
             or step_run.current_map_expansion_id != map_item.expansion_attempt_id
@@ -5199,13 +5876,44 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     SubjectRef.parse(declaration.requester)
             except (TypeError, ValueError, ValidationError) as error:
                 raise ValidationError({"decisions": "Decision declarations are invalid."}) from error
+        if not isinstance(result.artifacts_present, bool):
+            raise ValidationError({"artifacts": "Artifact presence must be a boolean."})
+        if not result.artifacts_present and result.artifacts:
+            raise ValidationError({"artifacts": "Absent artifacts cannot carry declarations."})
+
+    @staticmethod
+    def _validated_artifacts(result: AttemptResult) -> tuple[tuple[int, int, str], ...]:
+        rows: list[tuple[int, int, str]] = []
+        for declaration in result.artifacts:
+            if not isinstance(declaration, ArtifactSpec) or not isinstance(declaration.label, str):
+                raise ValidationError({"artifacts": "Artifact declarations are invalid."})
+            label = declaration.label.strip()
+            if not label or len(label) > 255:
+                raise ValidationError({"artifacts": "Artifact labels must contain at most 255 characters."})
+            target = declaration.target
+            if not isinstance(target, models.Model) or target.pk is None:
+                raise ValidationError({"artifacts": "Artifact targets must be saved records."})
+            canonical = canonical_record_target(target)
+            if type(canonical.object_id) is bool or not isinstance(canonical.object_id, int):
+                raise ValidationError({"artifacts": "Artifact targets require an integer record identity."})
+            rows.append((canonical.content_type.pk, canonical.object_id, label))
+        return tuple(rows)
 
     @staticmethod
     def _validate_claim_source(step_run: Any, cause: AttemptCause) -> None:
         if step_run.status == StepRunStatus.WAITING and cause != AttemptCause.CONTINUATION:
             raise ValidationError({"cause": "A waiting step run requires a continuation attempt."})
-        if step_run.status == StepRunStatus.SCHEDULED and cause != AttemptCause.INITIAL:
+        if step_run.status == StepRunStatus.SCHEDULED and cause not in {
+            AttemptCause.INITIAL,
+            AttemptCause.MANUAL_RETRY,
+        }:
             raise ValidationError({"cause": "A scheduled step run requires an initial attempt."})
+        if cause == AttemptCause.MANUAL_RETRY and (
+            step_run.run.origin != RunOrigin.RECOVERY
+            or step_run.run.recovery_source_attempt_id is None
+            or step_run.step_id != step_run.run.recovery_source_attempt.step_run.step_id
+        ):
+            raise ValidationError({"cause": "Manual retry requires the exact admitted recovery step."})
         if step_run.status not in {StepRunStatus.SCHEDULED, StepRunStatus.WAITING}:
             raise ValidationError({"step_run": "Only a scheduled or waiting step run can claim an attempt."})
 
@@ -5272,6 +5980,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             self._validate_result(result)
         except (TypeError, ValueError, PydanticSerializationError) as error:
             raise ValidationError({"decisions": "Decision declarations are invalid."}) from error
+        encoded_artifacts = self._validated_artifacts(result)
         alias = self.db
         unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
         with (
@@ -5308,6 +6017,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             attempt.waiting_kind = result.waiting_kind
             attempt.result_requested_until = result.requested_until
             attempt.result_decisions = encoded_decisions
+            attempt.artifacts_present = result.artifacts_present
             applicable = (
                 not run.is_terminal
                 and step_run.current_attempt_id == attempt.pk
@@ -5328,6 +6038,21 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     timer_intents = self._apply_result(run, step_run, attempt, result)
                 attempt.applied_at = recorded_at
             self._save_attempt(attempt, alias=alias)
+            if result.artifacts_present:
+                artifact_model = self.model._meta.apps.get_model("workflows", "StepArtifact")
+                connection = connections[alias]
+                capability = _ArtifactBatchCapability(
+                    alias,
+                    id(connection),
+                    id(connection.atomic_blocks[0]),
+                    attempt.pk,
+                    encoded_artifacts,
+                )
+                token = _artifact_batch_capability.set(capability)
+                try:
+                    artifact_model.objects._record_for_attempt(attempt, encoded_artifacts, using=alias)
+                finally:
+                    _artifact_batch_capability.reset(token)
             return AttemptFinalization(True, applicable, timer_intents, retry_intent)
 
     def _retry_intent_for(self, attempt: Any, *, alias: str) -> RetryIntent | None:
@@ -5464,6 +6189,15 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             and attempt.result_requested_until == result.requested_until
             and json_values_equal(
                 attempt.result_decisions, serialize_decision_specs(result.decisions)
+            )
+            and attempt.artifacts_present == result.artifacts_present
+            and (
+                not result.artifacts_present
+                or tuple(
+                    attempt.artifacts.order_by("declaration_index").values_list(
+                        "target_content_type_id", "target_object_id", "label"
+                    )
+                ) == StepAttemptManager._validated_artifacts(result)
             )
         )
 
@@ -5606,6 +6340,12 @@ class StepAttempt(AuditMixin, AngeeDataModel):
         related_name="applied_attempts",
         editable=False,
     )
+    recovery_source_attempt = models.ForeignKey(
+        "self", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="recovery_attempts", editable=False,
+    )
+    recovery_mode = models.CharField(max_length=32, blank=True, editable=False)
+    intended_effect_key = models.UUIDField(null=True, blank=True, editable=False)
     claimed_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
@@ -5631,6 +6371,7 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     waiting_kind = models.CharField(max_length=32, blank=True, default="")
     result_requested_until = models.DateTimeField(null=True, blank=True)
     result_decisions = models.JSONField(default=list, blank=True)
+    artifacts_present = models.BooleanField(default=False, editable=False)
     orchestration_error = models.TextField(blank=True, default="", editable=False)
     applied_at = models.DateTimeField(null=True, blank=True)
 
@@ -5721,6 +6462,25 @@ class StepAttempt(AuditMixin, AngeeDataModel):
                 ),
                 name="chk_wsa_test_fixture_cause",
             ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        cause=AttemptCause.MANUAL_RETRY,
+                        recovery_source_attempt__isnull=False,
+                        recovery_mode__gt="",
+                        intended_effect_key__isnull=False,
+                    )
+                    | (
+                        ~models.Q(cause=AttemptCause.MANUAL_RETRY)
+                        & models.Q(
+                            recovery_source_attempt__isnull=True,
+                            recovery_mode="",
+                            intended_effect_key__isnull=True,
+                        )
+                    )
+                ),
+                name="chk_wsa_recovery_attempt",
+            ),
         )
 
     @property
@@ -5759,6 +6519,121 @@ class StepAttempt(AuditMixin, AngeeDataModel):
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise TypeError("Step attempts are retained execution evidence and cannot be deleted.")
+
+
+class StepArtifactQuerySet(AngeeQuerySet[Any]):
+    """Read-only collection of explicit retained result artifacts."""
+
+    def update(self, **kwargs: Any) -> int:
+        raise TypeError("Workflow artifacts are immutable retained result evidence.")
+
+    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+        raise TypeError("Workflow artifacts can only be recorded during attempt finalization.")
+
+    def bulk_update(self, objs: Iterable[Any], fields: Iterable[str], batch_size: int | None = None) -> int:
+        raise TypeError("Workflow artifacts are immutable retained result evidence.")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise TypeError("Workflow artifacts are immutable retained result evidence.")
+
+
+class StepArtifactManager(AngeeManager.from_queryset(StepArtifactQuerySet)):  # type: ignore[misc]
+    """Record a validated artifact batch for one result inside its attempt transaction."""
+
+    def _record_for_attempt(
+        self,
+        attempt: Any,
+        rows: tuple[tuple[int, int, str], ...],
+        *,
+        using: str,
+    ) -> tuple[Any, ...]:
+        connection = connections[using]
+        capability = _artifact_batch_capability.get()
+        if (
+            capability is None
+            or capability.consumed
+            or capability.alias != using
+            or capability.connection_id != id(connection)
+            or not connection.in_atomic_block
+            or capability.outer_atomic_id != id(connection.atomic_blocks[0])
+            or capability.attempt_id != attempt.pk
+            or capability.rows != rows
+            or not _attempt_write_active(using, attempt.step_run_id)
+            or attempt.result_recorded_at is None
+            or not attempt.artifacts_present
+        ):
+            raise RuntimeError("Artifact recording requires the exact attempt finalization transaction.")
+        capability.consumed = True
+        created: list[Any] = []
+        for index, (content_type_id, object_id, label) in enumerate(rows):
+            artifact = self.model(
+                attempt=attempt,
+                declaration_index=index,
+                target_content_type_id=content_type_id,
+                target_object_id=object_id,
+                label=label,
+            )
+            capability = _ArtifactWriteCapability(
+                using,
+                id(connection),
+                id(connection.atomic_blocks[0]),
+                attempt.pk,
+                index,
+                id(artifact),
+            )
+            token = _artifact_write_capability.set(capability)
+            try:
+                artifact.save(using=using, force_insert=True)
+            finally:
+                _artifact_write_capability.reset(token)
+            created.append(artifact)
+        return tuple(created)
+
+
+class StepArtifact(AuditMixin, AngeeDataModel):
+    """Immutable ordered pointer explicitly emitted by one retained attempt result."""
+
+    runtime = True
+    sqid_prefix = "war_"
+    attempt = models.ForeignKey("workflows.StepAttempt", on_delete=models.PROTECT, related_name="artifacts")
+    declaration_index = models.PositiveIntegerField(editable=False)
+    label = models.CharField(max_length=255, editable=False)
+    target_content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, related_name="+")
+    target_object_id = models.PositiveBigIntegerField()
+    target = GenericForeignKey("target_content_type", "target_object_id")
+
+    objects = StepArtifactManager()
+
+    class Meta:
+        abstract = True
+        ordering = ("attempt_id", "declaration_index")
+        rebac_resource_type = "workflows/step_artifact"
+        rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(fields=("attempt", "declaration_index"), name="uniq_war_attempt_index"),
+        )
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        capability = _artifact_write_capability.get()
+        if (
+            capability is None
+            or capability.consumed
+            or capability.alias != alias
+            or capability.connection_id != id(connections[alias])
+            or not connections[alias].in_atomic_block
+            or capability.outer_atomic_id != id(connections[alias].atomic_blocks[0])
+            or capability.attempt_id != self.attempt_id
+            or capability.declaration_index != self.declaration_index
+            or capability.instance_id != id(self)
+            or not self._state.adding
+        ):
+            raise TypeError("Workflow artifacts can only be saved by StepArtifactManager.")
+        capability.consumed = True
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise TypeError("Workflow artifacts are immutable retained result evidence.")
 
 
 class DecisionQuerySet(AngeeQuerySet[Any]):

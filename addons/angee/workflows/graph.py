@@ -15,7 +15,7 @@ from pydantic import ValidationError as PydanticValidationError
 from angee.workflows.attempts import json_values_equal
 from angee.workflows.bindings import binding_error_details, parse_binding
 from angee.workflows.data_contracts import DataContract, model_data_contract
-from angee.workflows.steps import StepEffect, StepImpl, validate_retry_config
+from angee.workflows.steps import StepEffect, StepImpl, StepOutcome, validate_retry_config
 
 GraphLocationKind: TypeAlias = Literal["workflow", "node", "edge"]
 
@@ -79,6 +79,17 @@ class GraphInputSource:
 
 
 @dataclass(frozen=True, slots=True)
+class GraphMapBodyCandidate:
+    """One exact prospective step and its Map-body eligibility."""
+
+    identity: GraphIdentity
+    key: str
+    label: str
+    eligible: bool
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class GraphTestPlan:
     """One graph-owned node-test execution and fixture boundary."""
 
@@ -98,6 +109,7 @@ class GraphTestOperation:
     effect: StepEffect
     effect_description: str
     replaced_by_output: bool
+    outcomes: tuple[StepOutcome, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +164,7 @@ class WorkflowGraph:
     max_steps: int
     nodes: tuple[GraphNode, ...]
     edges: tuple[GraphEdge, ...]
+    subject_declaration: str = ""
 
     @classmethod
     def from_workflow(cls, workflow: Any) -> WorkflowGraph:
@@ -207,7 +220,13 @@ class WorkflowGraph:
             for edge in edges
         )
         max_steps = workflow.max_steps if type(workflow.max_steps) is int else 0
-        return cls(workflow_identity, max_steps, tuple(nodes), graph_edges)
+        return cls(
+            workflow_identity,
+            max_steps,
+            tuple(nodes),
+            graph_edges,
+            str(getattr(workflow, "subject_declaration", "")),
+        )
 
     def diagnostics(self) -> tuple[GraphDiagnostic, ...]:
         diagnostics = list(self.structural_diagnostics())
@@ -271,6 +290,46 @@ class WorkflowGraph:
                 )
             )
         return tuple(sources)
+
+    def map_body_candidates(
+        self,
+        owner_identity: GraphIdentity,
+    ) -> tuple[GraphMapBodyCandidate, ...]:
+        """Project Map-body choices from the same graph facts as readiness."""
+
+        by_id = {node.identity: node for node in self.nodes}
+        owner = by_id.get(owner_identity)
+        if owner is None or owner.impl is None or not owner.impl.map_body_operation:
+            return ()
+        targets, _ = self._maps()
+        connected = {
+            identity
+            for edge in self.edges
+            for identity in (edge.source_identity, edge.target_identity)
+        }
+        result: list[GraphMapBodyCandidate] = []
+        for node in sorted(self.nodes, key=lambda candidate: (candidate.key, str(candidate.identity))):
+            reason = None
+            if node.identity == owner.identity:
+                reason = "A Map cannot target itself."
+            elif node.is_entry:
+                reason = "The entry step cannot be a Map body."
+            elif node.impl and node.impl.map_body_operation:
+                reason = "A Map body cannot itself be a Map."
+            elif node.identity in connected:
+                reason = "A Map body cannot have ordinary connections."
+            elif any(candidate.identity != owner.identity for candidate in targets.get(node.identity, ())):
+                reason = "This step is already owned by another Map."
+            result.append(
+                GraphMapBodyCandidate(
+                    node.identity,
+                    node.key,
+                    node.name or node.key,
+                    reason is None,
+                    reason,
+                )
+            )
+        return tuple(result)
 
     def test_plan(self, selected_identity: GraphIdentity) -> GraphTestPlan:
         """Derive the exact executable node closure and fixture-source identities once."""
@@ -424,6 +483,7 @@ class WorkflowGraph:
                 effect=node.impl.effect if node.impl is not None else StepEffect.UNKNOWN,
                 effect_description=node.impl.effect_description if node.impl is not None else "",
                 replaced_by_output=(node.identity, None) in output_slots,
+                outcomes=node.impl.outcomes if node.impl is not None else (),
             )
             for node in self.nodes
             if node.identity in executable and node.identity not in omitted_operations
@@ -626,6 +686,19 @@ class WorkflowGraph:
             if not node.impl.is_executable(registered_key=node.operation_key):
                 result.append(
                     self._node(node, "operation_not_executable", "Operation cannot be executed.", "step_class")
+                )
+            required_subject = node.impl.subject_declaration
+            if required_subject and required_subject != self.subject_declaration:
+                result.append(
+                    self._node(
+                        node,
+                        "subject_declaration_mismatch",
+                        (
+                            f"This operation requires workflow subject {required_subject!r}; "
+                            "choose it in Works with."
+                        ),
+                        "step_class",
+                    )
                 )
             result.extend(self._config(node))
         return result

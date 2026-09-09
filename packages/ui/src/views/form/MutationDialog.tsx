@@ -203,6 +203,8 @@ export interface MutationDialogProps<
   onSubmit: (values: TValues) => TResult | Promise<TResult>;
   onSubmitted?: (result: TResult, values: TValues) => void;
   closeOnSubmit?: boolean;
+  /** Additional domain readiness gate evaluated from the current raw form values. */
+  canSubmit?: (values: Readonly<Record<string, unknown>>) => boolean;
   size?: DialogSize;
   placement?: DialogPlacement;
 }
@@ -235,6 +237,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   onSubmit,
   onSubmitted,
   closeOnSubmit = true,
+  canSubmit,
   size = "md",
   placement = "prompt",
 }: MutationDialogProps<TValues, TResult>): React.ReactElement {
@@ -264,8 +267,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   const values = useWatch({ control: form.control });
   const submitting = form.formState.isSubmitting;
   const error = form.formState.errors.root?.server?.message ?? null;
-  const ready = form.formState.isValid || (!form.formState.isDirty
+  const fieldsReady = form.formState.isValid || (!form.formState.isDirty
     && fields.every((field) => !field.required && !field.presenceRequired));
+  const ready = fieldsReady && (canSubmit?.(values) ?? true);
   const submittingRef = React.useRef(false);
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -293,7 +297,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     </>
   );
 
-  const submit = form.handleSubmit(async (collected) => {
+  const submitReady = form.handleSubmit(async (collected) => {
     if (submittingRef.current) return;
     submittingRef.current = true;
     form.clearErrors();
@@ -317,6 +321,13 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       submittingRef.current = false;
     }
   });
+  const submit = (event: React.FormEvent<HTMLFormElement>): void => {
+    if (!ready) {
+      event.preventDefault();
+      return;
+    }
+    void submitReady(event);
+  };
 
   return (
     <DialogForm

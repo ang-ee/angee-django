@@ -41,6 +41,7 @@ from angee.workflows.attempts import (
     InvocationAdmission,
     JsonPresence,
     MapItemSource,
+    RecoveryMode,
     map_child_input,
 )
 from angee.workflows.bindings import (
@@ -119,6 +120,16 @@ def start(
         dedup_key=dedup_key,
         origin=origin,
         input=input,
+    )
+
+
+def recover(source_attempt: Any, *, request_key: str, actor: Any) -> Any:
+    """Start or recover one exact same-revision retained recovery request."""
+
+    return _model("WorkflowRun").objects.start_recovery(
+        source_attempt,
+        request_key=request_key,
+        actor=actor,
     )
 
 
@@ -305,12 +316,31 @@ def execute_dispatch(
                 return {"executed": 0}
 
     with system_context(reason="workflows.engine.execute_dispatch.load"):
-        attempt = attempt_model.objects.select_related("step_run__run", "step_run__step").get(pk=attempt_id)
+        attempt = attempt_model.objects.select_related(
+            "step_run__run", "step_run__step", "recovery_source_attempt"
+        ).get(pk=attempt_id)
         step_run = attempt.step_run
         step_run.input = attempt.input if attempt.input_present else None
         impl_class = step_run.step.resolve_impl("step_class")
     try:
-        step_result = cast(Any, impl_class)().run(step_run, now=timestamp)
+        implementation = cast(Any, impl_class)()
+        if attempt.cause == AttemptCause.MANUAL_RETRY:
+            recovery_mode = RecoveryMode(attempt.recovery_mode)
+            capability = impl_class.recovery_capability(
+                attempt=attempt.recovery_source_attempt
+            )
+            if capability.mode is not recovery_mode:
+                raise ValidationError(
+                    {"recovery": "The operation's recovery capability changed after admission."}
+                )
+            step_result = implementation.run_recovery(
+                step_run,
+                now=timestamp,
+                source_attempt=attempt.recovery_source_attempt,
+                mode=recovery_mode,
+            )
+        else:
+            step_result = implementation.run(step_run, now=timestamp)
         result = (
             step_result.to_attempt_result()
             if step_result is not None
@@ -1744,7 +1774,13 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -
             cause = (
                 AttemptCause.CONTINUATION
                 if step_run.status == StepRunStatus.WAITING
-                else AttemptCause.INITIAL
+                else (
+                    AttemptCause.MANUAL_RETRY
+                    if run.origin == RunOrigin.RECOVERY
+                    and run.recovery_source_attempt_id is not None
+                    and run.recovery_source_attempt.step_run.step_id == step_run.step_id
+                    else AttemptCause.INITIAL
+                )
             )
             prepared = cast(_AttemptPreparation, preparation)
             if prepared.failure is not None:
@@ -1786,6 +1822,31 @@ def _prepare_attempt_input(
     run: Any, step_run: Any, *, source_rows: list[Any]
 ) -> _AttemptPreparation:
     """Resolve one immutable ordinary-step input before any physical invocation."""
+
+    if (
+        run.origin == RunOrigin.RECOVERY
+        and run.recovery_source_attempt_id is not None
+        and run.recovery_source_attempt.step_run.step_id == step_run.step_id
+        and run.recovery_source_attempt.step_run.map_index == step_run.map_index
+    ):
+        source = run.recovery_source_attempt
+        map_item = (
+            MapItemSource(
+                source.map_expansion_id,
+                source.map_item_index,
+                JsonPresence(source.map_item_present, source.map_item),
+            )
+            if source.map_expansion_id is not None and source.map_item_index is not None
+            else None
+        )
+        return _AttemptPreparation(
+            AttemptInput(source.input_present, source.input, {
+                "kind": "recovery_input",
+                "attempt_id": source.pk,
+                "source_provenance": source.input_provenance,
+            }),
+            map_item=map_item,
+        )
 
     if step_run.status == StepRunStatus.WAITING and step_run.current_attempt_id is not None:
         previous = _model("StepAttempt").objects.get(pk=step_run.current_attempt_id)
@@ -1866,6 +1927,21 @@ def _prepare_attempt_input(
         {"kind": "workflow_input", "run_id": run.pk},
     )
     sources: dict[str, Any] = {}
+    if run.origin == RunOrigin.RECOVERY:
+        for evidence in run.recovery_evidence.select_related(
+            "step", "source_attempt"
+        ).order_by("pk"):
+            source_attempt = evidence.source_attempt
+            sources[evidence.step.key] = SourceValue(
+                JsonPresence(source_attempt.output_present, source_attempt.output),
+                {
+                    "kind": "recovery_evidence",
+                    "evidence_id": evidence.sqid,
+                    "attempt_id": source_attempt.pk,
+                    "step_key": evidence.step.key,
+                    "map_index": evidence.map_index,
+                },
+            )
     for source in source_rows:
         if source.step_id is None or source.pk == step_run.pk or source.map_index != -1:
             continue
@@ -1887,11 +1963,11 @@ def _prepare_attempt_input(
             "attempt_id": attempt.pk if attempt is not None else None,
             "effect_generation": source.effect_generation,
         }
-        sources[source.step.key] = (
+        sources.setdefault(source.step.key, (
             SourceValue(JsonPresence(attempt.output_present, attempt.output), provenance)
             if valid
             else UnavailableSource("source_unavailable", "The referenced retained output is unavailable.", provenance)
-        )
+        ))
     map_item_source: MapItemSource | None = None
     map_binding_source: SourceValue | UnavailableSource
     expansion = step_run.current_map_expansion
