@@ -132,14 +132,22 @@ function angeeSourceSignature(webRoot: string, packages: string[]): string {
 // the next `angee dev` would see "unchanged" and serve the stale source (the very
 // trap this guards). The caller gates this on `command === "serve"`.
 // Exported for unit coverage of the changed-vs-unchanged decision.
-export function angeePrebundleForce(webRoot: string, packages: string[]): boolean {
+function consumeAngeePrebundleSource(
+  webRoot: string,
+  packages: string[],
+): { changed: boolean; signature: string } {
   const marker = join(webRoot, "node_modules", ".vite", "angee-prebundle-source");
   const signature = angeeSourceSignature(webRoot, packages);
   const previous = existsSync(marker) ? readFileSync(marker, "utf8") : "";
-  if (signature === previous) return false;
-  mkdirSync(dirname(marker), { recursive: true });
-  writeFileSync(marker, signature);
-  return true;
+  if (signature !== previous) {
+    mkdirSync(dirname(marker), { recursive: true });
+    writeFileSync(marker, signature);
+  }
+  return { changed: signature !== previous, signature };
+}
+
+export function angeePrebundleForce(webRoot: string, packages: string[]): boolean {
+  return consumeAngeePrebundleSource(webRoot, packages).changed;
 }
 
 // The dev-server gate for the prebundle force. Vite's `config(config, env)` hook
@@ -151,7 +159,19 @@ export function angeePrebundleForcePlugin(webRoot: string, packages: string[]): 
     name: "angee:prebundle-force",
     config(_config, { command }) {
       if (command !== "serve") return undefined;
-      return { optimizeDeps: { force: angeePrebundleForce(webRoot, packages) } };
+      const source = consumeAngeePrebundleSource(webRoot, packages);
+      return {
+        optimizeDeps: {
+          force: source.changed,
+          // `force` is excluded from Vite's optimizer config hash. Vite does
+          // hash the names of native optimizer plugins separately, so this
+          // no-op plugin gives linked source a cache identity without changing
+          // resolution, transforms, or output.
+          rolldownOptions: {
+            plugins: [{ name: `angee:prebundle-source:${source.signature}` }],
+          },
+        },
+      };
     },
   };
 }

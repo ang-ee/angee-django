@@ -153,6 +153,9 @@ def test_publish_uses_public_id_and_changed_values(
         readable_fields=("name",),
     )
 
+    assert len(sent) == 1
+    occurrence_id = sent[0][1].pop("occurrence_id")
+    assert isinstance(occurrence_id, str) and occurrence_id
     assert sent == [
         (
             Group,

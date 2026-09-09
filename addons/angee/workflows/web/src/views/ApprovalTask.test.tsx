@@ -2,8 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider, defaultWidgets } from "@angee/ui";
-import { createRouteHref } from "@angee/ui/runtime";
+import { AppRuntimeProvider, createRouteHref, defaultWidgets } from "@angee/ui";
 
 const mocks = vi.hoisted(() => ({
   decide: vi.fn(async (): Promise<unknown> => ({

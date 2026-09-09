@@ -121,10 +121,10 @@ vi.mock("@angee/ui", async (importOriginal) => {
     useRouteHref: () => (_route: string, parameters: { id: string }) => `/runs/${parameters.id}`,
     useResourceRecordHrefLookup: () => (_model: string, id: string) => mocks.routeAvailable ? `/records/${id}` : undefined,
     useContainerQuery: () => [{ current: null }, mocks.wide],
-    GraphView: ({ nodes, onNodeSelect }: { nodes: Array<{ id: string; detail?: React.ReactNode; selected?: boolean }>; onNodeSelect: (node: { id: string }) => void }) => {
+    GraphView: ({ nodes, onNodeSelect }: { nodes: Array<{ id: string; detail?: React.ReactNode; selected?: boolean }>; onNodeSelect: (node: { id: string } | null) => void }) => {
       const selected = nodes.find((node) => node.selected);
       ReactRuntime.useEffect(() => {
-        if (selected) onNodeSelect(selected);
+        onNodeSelect(selected ?? null);
       }, [onNodeSelect, selected]);
       return <button type="button" onClick={() => onNodeSelect(nodes[0]!)}>graph:{nodes[0]?.detail}</button>;
     },
@@ -272,6 +272,16 @@ test("foreign execution and attempt URL identities never reach a record pane", a
   render(<RouterProvider router={router} />);
   expect(await screen.findByText("Run unavailable")).toBeTruthy();
   expect(mocks.resources).toEqual([]);
+});
+
+test("graph initialization does not clear a valid execution and attempt deep link", async () => {
+  mocks.loading = false;
+  const router = createRouter({ routeTree: createRootRoute({ component: () => <RunTimelinePanel runId="run-1" /> }), history: createMemoryHistory({ initialEntries: ["/?execution=execution-1&attempt=attempt-current"] }) });
+  await router.load();
+  render(<RouterProvider router={router} />);
+  expect(await screen.findByText("record:attempt-current")).toBeTruthy();
+  await act(async () => undefined);
+  expect(router.state.location.search).toMatchObject({ execution: "execution-1", attempt: "attempt-current" });
 });
 
 test("an execution from another selected graph step is unavailable", async () => {

@@ -348,8 +348,9 @@ export function RunTimelinePanel({ runId }: { runId: string }): React.ReactEleme
   const graph = graphQuery.error ? <ErrorBanner description={errorMessage(graphQuery.error)} /> : graphNodes.length === 0 ? (
     <EmptyState fill icon="workflow-canvas" title={t("canvas.emptyTitle")} description={t("runs.emptyTimeline")} />
   ) : <GraphView className="h-full" ariaLabel={t("runs.graph")} fitViewOptions={{ padding: 0.18, maxZoom: 1 }} nodes={graphNodes} edges={graphEdges} nodeStyles={workflowNodeStyles} onNodeSelect={(node) => {
-    if (node?.id === selectedStepId) return;
-    void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { step: node?.id ?? null, execution: null, attempt: null, history: null, payload: null }) });
+    const nodeId = node?.id ?? null;
+    if (nodeId === selectedStepId) return;
+    void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { step: nodeId, execution: null, attempt: null, history: null, payload: null }) });
   }} />;
   const narrowStack = (label: React.ReactNode, backLabel: React.ReactNode, onBack: () => void, content: React.ReactNode) => (
     <section aria-label={String(label)} className="flex h-full min-h-0 flex-col">
@@ -501,7 +502,7 @@ function AttemptArtifactsPanel({ attemptId }: { attemptId: string }): React.Reac
       <Column<StepArtifactRow> field="label" header={t("runs.artifact")} render={(row) =>
         String(row.label || t("runs.artifact"))
       } />
-      <Column<StepArtifactRow> field="target_reference" header={t("runs.artifactTarget")} render={(row) => {
+      <Column<StepArtifactRow> field="target_reference" selectionPaths={["target_reference.model", "target_reference.id"]} header={t("runs.artifactTarget")} render={(row) => {
         const target = row.target_reference;
         const href = target?.model && target.id ? recordHref(target.model, target.id) : undefined;
         return href ? <a className="underline" href={href}>{t("runs.openArtifact")}</a> : t("runs.artifactUnavailable");

@@ -86,8 +86,20 @@ def edge(source: str, target: str, condition: str = "") -> GraphEdge:
     )
 
 
-def graph(nodes: list[GraphNode], edges: list[GraphEdge] | None = None, *, max_steps: int = 100) -> WorkflowGraph:
-    return WorkflowGraph(GraphIdentity(client_key="workflow-1"), max_steps, tuple(nodes), tuple(edges or []))
+def graph(
+    nodes: list[GraphNode],
+    edges: list[GraphEdge] | None = None,
+    *,
+    max_steps: int = 100,
+    subject_declaration: str = "",
+) -> WorkflowGraph:
+    return WorkflowGraph(
+        GraphIdentity(client_key="workflow-1"),
+        max_steps,
+        tuple(nodes),
+        tuple(edges or []),
+        subject_declaration,
+    )
 
 
 def codes(value: WorkflowGraph) -> set[str]:
@@ -155,6 +167,7 @@ def test_representative_note_party_and_internal_agent_graphs_are_ready() -> None
             node("finalize", NotePublishStep),
         ],
         [edge("entry", "approval", "needs_review"), edge("approval", "finalize", "completed")],
+        subject_declaration="notes.note",
     )
     parties = graph(
         [

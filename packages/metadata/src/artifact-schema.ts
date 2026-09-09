@@ -2,7 +2,7 @@ import * as v from "valibot";
 import { DataResourceQuerySchema } from "./query-schema.js";
 
 /** The generated resource wire contract; output types come from these schemas. */
-const FieldKindSchema = v.picklist(["scalar", "enum", "relation", "list"]);
+const FieldKindSchema = v.picklist(["scalar", "enum", "relation", "list", "object"]);
 const OptionalString = v.nullish(v.string());
 const Strings = v.pipe(v.array(v.string()), v.readonly());
 const EnumValueSchema = v.looseObject({

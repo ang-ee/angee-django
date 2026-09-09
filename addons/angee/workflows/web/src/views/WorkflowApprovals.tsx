@@ -77,7 +77,7 @@ export function WorkflowApprovals({ runId, executionId, attemptId }: {
         hideCreate
         pageSize={20}
         baseFilter={{
-          ...(scope.runId ? { step_run__run: { exact: scope.runId } } : {}),
+          ...(scope.runId ? { "step_run.run": { exact: scope.runId } } : {}),
           ...(scope.executionId ? { step_run: { exact: scope.executionId } } : {}),
           ...(scope.attemptId ? { suspension_attempt: { exact: scope.attemptId } } : {}),
           verdict: { exact: "PENDING" },

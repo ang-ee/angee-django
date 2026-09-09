@@ -30,7 +30,7 @@ def test_event_declaration_preserves_condition_and_legacy_model_alias() -> None:
     assert declaration.model == "notes.page"
     assert declaration.condition == {"state__in": ["ready", "held"]}
     assert declaration.model_extra == {"future_extension": {"kept": True}}
-    assert trigger_summary("event", declaration.model_dump()) == "When notes.page changes"
+    assert trigger_summary("event", declaration.model_dump()) == "When notes.page changes, once per subject"
 
 
 @pytest.mark.parametrize("canonical", [None, "", "   "])

@@ -95,27 +95,29 @@ export function RunWorkflowMenu(): React.ReactElement | null {
       <DropdownMenu.Portal>
         <DropdownMenu.Positioner sideOffset={6} align="start">
           <DropdownMenu.Content className="w-56">
-            <DropdownMenu.Label>{t("runWorkflow.menuPurpose")}</DropdownMenu.Label>
-            {workflows.map((workflow) => (
-              <DropdownMenu.Item
-                key={workflow.id}
-                disabled={startState.fetching}
-                onClick={() =>
-                  void settle(async () =>
-                    extractActionOutcome(
-                      await startWorkflow({
-                        workflow: workflow.id,
-                        subject: { subject_declaration: resource, id: recordId },
-                      }),
-                      "start_workflow_run",
-                    ),
-                  )
-                }
-              >
-                <Glyph name="workflow-run" />
-                {workflow.name}
-              </DropdownMenu.Item>
-            ))}
+            <DropdownMenu.Group>
+              <DropdownMenu.Label>{t("runWorkflow.menuPurpose")}</DropdownMenu.Label>
+              {workflows.map((workflow) => (
+                <DropdownMenu.Item
+                  key={workflow.id}
+                  disabled={startState.fetching}
+                  onClick={() =>
+                    void settle(async () =>
+                      extractActionOutcome(
+                        await startWorkflow({
+                          workflow: workflow.id,
+                          subject: { subject_declaration: resource, id: recordId },
+                        }),
+                        "start_workflow_run",
+                      ),
+                    )
+                  }
+                >
+                  <Glyph name="workflow-run" />
+                  {workflow.name}
+                </DropdownMenu.Item>
+              ))}
+            </DropdownMenu.Group>
           </DropdownMenu.Content>
         </DropdownMenu.Positioner>
       </DropdownMenu.Portal>

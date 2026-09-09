@@ -57,6 +57,17 @@ describe("generated subtitle metadata", () => {
 
 
 describe("generated resource wire contract", () => {
+  test("accepts a computed object field with no relation target", () => {
+    const resource = testDataResource("workflows.StepArtifact", {
+      fields: [{
+        name: "target_reference", kind: "object", readable: true,
+        aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
+      }],
+    });
+    expect(defineAngeeSchemaMetadata({ angee: { resources: [resource] } }))
+      .toEqual({ angee: { resources: [resource] } });
+  });
+
   test("preserves extension keys and nullable emitted values", () => {
     const resource = testDataResource("notes.Note", {
       roots: { list: "notes", customRoot: "notes_custom" },

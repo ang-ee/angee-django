@@ -457,7 +457,7 @@ def _graphql_type_is_list(value: object) -> bool:
 
 
 def _graphql_scalar(value: object, *, kind: str, field_name: str, node_name: str) -> str | None:
-    if kind in {"relation", "enum"}:
+    if kind in {"relation", "enum", "object"}:
         return None
     if not isinstance(value, GraphQLScalarType):
         if kind == "list":

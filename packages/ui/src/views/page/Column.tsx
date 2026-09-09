@@ -17,6 +17,8 @@ export interface ColumnProps<
   TRow extends object = Record<string, unknown>,
 > {
   field: string;
+  /** Concrete GraphQL leaf paths selected for a computed object field. */
+  selectionPaths?: readonly string[];
   header?: ReactNode;
   /** Keep an accessible table header while visually hiding its label. */
   headerVisuallyHidden?: boolean;

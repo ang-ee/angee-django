@@ -897,8 +897,12 @@ def test_workflow_identity_migration_is_additive_and_matches_source_fields() -> 
         if (model_name, field_name) == ("workflowrun", "origin"):
             assert tuple(migrated_kwargs.pop("choices")) == module.RUN_ORIGIN_CHOICES
             current_choices = tuple(source_kwargs.pop("choices"))
-            assert set(current_choices) == {*module.RUN_ORIGIN_CHOICES, ("test", "Test")}
-            assert len(current_choices) == len(module.RUN_ORIGIN_CHOICES) + 1
+            assert set(current_choices) == {
+                *module.RUN_ORIGIN_CHOICES,
+                ("test", "Test"),
+                ("recovery", "Recovery"),
+            }
+            assert len(current_choices) == len(module.RUN_ORIGIN_CHOICES) + 2
         assert (migrated_path, migrated_args, migrated_kwargs) == (
             source_path,
             source_args,

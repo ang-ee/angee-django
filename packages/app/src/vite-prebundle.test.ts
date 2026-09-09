@@ -10,11 +10,11 @@ import { angeePrebundleForce, angeePrebundleForcePlugin, angeeUIAllowedHosts } f
 type ConfigHookFn = (config: UserConfig, env: ConfigEnv) => unknown;
 
 /** Invoke a plugin's `config` hook (function or object form) for one command. */
-function runConfigHook(plugin: Plugin, command: "serve" | "build"): unknown {
+function runConfigHook(plugin: Plugin, command: "serve" | "build"): UserConfig | undefined {
   const hook = plugin.config;
   const handler = (typeof hook === "function" ? hook : hook?.handler) as ConfigHookFn | undefined;
   const env: ConfigEnv = { command, mode: command === "serve" ? "development" : "production" };
-  return handler?.({}, env);
+  return handler?.({}, env) as UserConfig | undefined;
 }
 
 describe("angeeUIAllowedHosts", () => {
@@ -110,15 +110,27 @@ describe("angeePrebundleForcePlugin", () => {
     expect(runConfigHook(plugin, "build")).toBeUndefined();
 
     // First serve sees the change (no marker yet) → force, and records it.
-    expect(runConfigHook(plugin, "serve")).toEqual({ optimizeDeps: { force: true } });
+    const first = runConfigHook(plugin, "serve");
+    expect(first).toMatchObject({ optimizeDeps: { force: true } });
     // Unchanged tree → cached.
-    expect(runConfigHook(plugin, "serve")).toEqual({ optimizeDeps: { force: false } });
+    const unchanged = runConfigHook(plugin, "serve");
+    expect(unchanged).toMatchObject({ optimizeDeps: { force: false } });
+    expect(unchanged).toEqual({
+      optimizeDeps: {
+        force: false,
+        rolldownOptions: first?.optimizeDeps?.rolldownOptions,
+      },
+    });
 
     // Edit the source; a build in between must NOT swallow it — the next serve
     // still forces the re-optimize.
     const later = Date.now() / 1000 + 10;
     utimesSync(source, later, later);
     expect(runConfigHook(plugin, "build")).toBeUndefined();
-    expect(runConfigHook(plugin, "serve")).toEqual({ optimizeDeps: { force: true } });
+    const changed = runConfigHook(plugin, "serve");
+    expect(changed).toMatchObject({ optimizeDeps: { force: true } });
+    expect(changed?.optimizeDeps?.rolldownOptions).not.toEqual(
+      first?.optimizeDeps?.rolldownOptions,
+    );
   });
 });

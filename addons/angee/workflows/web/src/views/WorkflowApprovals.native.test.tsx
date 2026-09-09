@@ -44,10 +44,10 @@ const resource = testDataResource("workflows.Decision", {
   modelName: "Decision",
   roots: { aggregate: "workflow_decisions_aggregate" },
   typeNames: { node: "DecisionType", filter: "DecisionBoolExp", order: "DecisionOrderBy" },
-  fields: [field("id", "ID"), field("step_run__run", "ID"), field("action"), field("verdict"), field("priority", "Int"), field("updated_at", "DateTime")],
+  fields: [field("id", "ID"), field("step_run", "ID"), field("action"), field("verdict"), field("priority", "Int"), field("updated_at", "DateTime")],
   query: testResourceQuery({ fields: {
     id: testQueryField("id", { scalar: "ID", filter: null }),
-    step_run__run: testQueryField("step_run__run", { scalar: "ID", filter: { field: "step_run__run", scalar: "ID", values: [], operators: ["exact"] } }),
+    "step_run.run": testQueryField("step_run.run", { kind: "relation", scalar: "ID", filter: { field: "step_run__run", scalar: "ID", values: [], operators: ["exact"] }, relation: { model: "workflows.WorkflowRun", identityPath: "step_run.run.id" }, row: { path: "step_run.run.id", paths: ["step_run.run.id"] } }),
     action: testQueryField("action", { scalar: "String", filter: null }),
     verdict: testQueryField("verdict", { scalar: "String", filter: { field: "verdict", scalar: "String", values: [], operators: ["exact"] } }),
     priority: testQueryField("priority", { scalar: "Int", filter: null, sort: { field: "priority" } }),

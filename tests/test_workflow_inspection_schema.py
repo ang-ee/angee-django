@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from graphql import parse, validate
 from rebac import system_context
 
 from angee.workflows import engine
@@ -16,6 +17,34 @@ from tests.workflows import WorkflowDispatch, advance_once
 
 User = get_user_model()
 pytest_plugins = ("tests.workflows",)
+
+
+def test_artifact_target_reference_is_a_computed_object_not_an_unowned_relation() -> None:
+    """The native artifact list can select the authorized target reference payload."""
+
+    schema = _console_schema()
+    resource = next(
+        item for item in schema.angee_resources
+        if item.model_label == "workflows.StepArtifact"
+    )
+    display = next(field for field in resource.fields if field.name == "target_reference")
+    query = resource.query.fields["target_reference"]
+
+    assert display.kind == "object"
+    assert display.relation_model_label is None
+    assert display.relation_object is False
+    assert query.kind == "object"
+    assert query.relation is None
+    assert validate(
+        schema._schema,
+        parse("""
+          query ArtifactRows($attempt: String!) {
+            workflow_step_artifacts(where: {attempt: {_eq: $attempt}}, limit: 20) {
+              id declaration_index label target_reference { model id } created_at
+            }
+          }
+        """),
+    ) == []
 
 
 @pytest.fixture()

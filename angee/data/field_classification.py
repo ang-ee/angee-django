@@ -10,7 +10,7 @@ from django.db import models
 
 from angee.base.mixins import ARCHIVE_FLAG_FIELD
 
-RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list"})
+RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list", "object"})
 """Supported resource field kind names."""
 
 RESOURCE_FIELD_SCALARS = frozenset(
@@ -56,6 +56,8 @@ def resource_field_kind(
 
     if is_list or (field is not None and is_to_many_relation(field)):
         return "list"
+    if is_object and field is None and not has_relation_axis:
+        return "object"
     if is_object or has_relation_axis:
         return "relation"
     if field is not None and field.is_relation:

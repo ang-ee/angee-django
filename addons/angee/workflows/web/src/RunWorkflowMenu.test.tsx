@@ -34,7 +34,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
     Button: ({ children, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => <button type="button" {...props}>{children}</button>,
     Glyph: ({ name }: { name: string }) => <span aria-hidden>{name}</span>,
     MutationDialog: createMutationDialogTestDouble({ capture: (props) => { mocks.dialogProps = props; }, values: { subject: "note_7" }, submitLabel: "Confirm launch" }),
-    DropdownMenu: { Root: ({ children }: { children: React.ReactNode }) => <>{children}</>, Trigger: ({ render }: { render: React.ReactNode }) => <>{render}</>, Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>, Positioner: ({ children }: { children: React.ReactNode }) => <>{children}</>, Content: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, Label: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, Item: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button type="button" {...props}>{children}</button> },
+    DropdownMenu: { Root: ({ children }: { children: React.ReactNode }) => <>{children}</>, Trigger: ({ render }: { render: React.ReactNode }) => <>{render}</>, Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>, Positioner: ({ children }: { children: React.ReactNode }) => <>{children}</>, Content: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, Group: ({ children }: { children: React.ReactNode }) => <div data-menu-group>{children}</div>, Label: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, Item: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button type="button" {...props}>{children}</button> },
   };
 });
 
@@ -48,7 +48,8 @@ describe("RunWorkflowMenu", () => {
     mocks.workflows = [{ id: "wfl_1", name: "Archive document", subject_declaration: "documents.Document" }];
     render(<RunWorkflowMenu />);
     expect(screen.getByRole("button", { name: /Automations/ })).toBeTruthy();
-    expect(screen.getByText("Apply a published automation to this saved record")).toBeTruthy();
+    const label = screen.getByText("Apply a published automation to this saved record");
+    expect(label.closest("[data-menu-group]")).toBeTruthy();
     expect(mocks.queries[0]).toMatchObject({
       document: "Catalogue",
       variables: { subjectDeclaration: "documents.Document" },

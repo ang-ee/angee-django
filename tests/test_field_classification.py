@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 from django.db import models
 
@@ -14,7 +14,7 @@ def test_uuid_is_a_supported_resource_scalar() -> None:
 
 
 def test_generic_relation_without_one_fixed_model_is_not_a_to_one_axis() -> None:
-    generic = cast(models.Field[Any, Any], type("GenericRelation", (), {
+    generic = cast(models.Field, type("GenericRelation", (), {
         "many_to_one": True,
         "one_to_one": False,
         "related_model": None,
