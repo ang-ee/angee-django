@@ -1,6 +1,10 @@
 import * as React from "react";
 import type { DocumentType } from "@angee/gql/console";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import {
+  useAuthoredMutation,
+  useAuthoredQuery,
+  useSetAuthoredQueryData,
+} from "@angee/refine";
 import {
   Badge,
   Button,
@@ -23,6 +27,7 @@ import {
 
 import {
   RestoreWorkflowDefinitionDocument,
+  WorkflowDefinitionDocument,
   WorkflowDefinitionComparisonDocument,
   WorkflowLaunchDocument,
 } from "../documents.console";
@@ -39,6 +44,7 @@ export function WorkflowVersionReview({ draftId, sourceId, sourceVersion, onRest
   onRestored: (draftId: string) => void;
 }): React.ReactElement {
   const t = useWorkflowsT();
+  const setAuthoredQueryData = useSetAuthoredQueryData();
   const [open, setOpen] = React.useState(false);
   const [selected, setSelected] = React.useState(0);
   const [snapshot, setSnapshot] = React.useState<ComparisonResult | null>(null);
@@ -96,6 +102,11 @@ export function WorkflowVersionReview({ draftId, sourceId, sourceVersion, onRest
       if (!outcome || outcome.status !== "SUCCESS" || !outcome.snapshot) {
         throw new Error(outcome?.status === "STALE" ? t("versions.stale") : t("versions.restoreFailed"));
       }
+      setAuthoredQueryData(
+        WorkflowDefinitionDocument,
+        { workflow: outcome.snapshot.workflow.id },
+        { workflow_definition: outcome.snapshot },
+      );
       setOpen(false);
       onRestored(outcome.snapshot.workflow.id);
     } catch (cause) {

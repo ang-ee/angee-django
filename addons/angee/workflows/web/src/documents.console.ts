@@ -121,7 +121,11 @@ export const RestoreWorkflowDefinitionDocument = graphql(`
     ) {
       status current_revision
       snapshot {
-        workflow { id name description purpose subject_declaration status version draft_revision lineage_id }
+        workflow {
+          id key name description purpose subject_declaration status version
+          draft_revision lineage_id error_workflow { id } max_steps budget
+          current_published_version publication_status
+        }
         revision
         nodes { id key name step_class config config_errors input_binding join_rule is_entry position }
         edges { id source target condition }

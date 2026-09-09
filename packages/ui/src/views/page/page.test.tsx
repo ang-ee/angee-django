@@ -63,6 +63,7 @@ describe("page element markers", () => {
       <>
         <Column<TestRow>
           field="title"
+          selectionPaths={["title.value", "title.label"]}
           header="Title"
           widget="text"
           sortable
@@ -79,6 +80,7 @@ describe("page element markers", () => {
     expect(columns).toHaveLength(2);
     expect(columns[0]).toMatchObject({
       field: "title",
+      selectionPaths: ["title.value", "title.label"],
       header: "Title",
       widget: "text",
       sortable: true,

@@ -86,7 +86,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
   const repair = useAuthoredQuery(
     WorkflowTestRepairContextDocument,
     { sourceAttempt: repairAttempt },
-    { enabled: Boolean(repairAttempt), models: ["workflows.WorkflowRun", "workflows.StepAttempt"] },
+    { enabled: Boolean(repairAttempt), models: [WORKFLOW_MODEL, "workflows.Step", "workflows.WorkflowRun", "workflows.StepAttempt"] },
   );
   const [saveDefinition] = useAuthoredMutation(SaveWorkflowDefinitionDocument, {
     invalidateModels: [WORKFLOW_MODEL, "workflows.Step", "workflows.Edge"],
@@ -153,10 +153,11 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       !context
       || !values
       || context.draft_workflow_id !== id
+      || !context.current_source_step_id
       || appliedRepairAttempt.current === repairAttempt
     ) return;
     appliedRepairAttempt.current = repairAttempt;
-    setTestSelectedNodeKey(context.source_step_key);
+    setTestSelectedNodeKey(context.current_source_step_id);
     setTestDefinitionValues(values);
     setTestDirty(Boolean(formSurface.current?.formIsDirty));
     setTestOpen(true);
@@ -228,6 +229,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
     request: NonNullable<typeof pendingTest.current>,
   ): Promise<ActionOutcome | undefined> => {
     try {
+      if (request.selectedNodeKey && !request.selectedStepId) throw new Error(t("test.failed"));
       const outcome = await launchTest(request);
       if (!outcome || (outcome.ok && !outcome.id)) throw new Error(t("test.failed"));
       if (!outcome.ok && pendingTest.current === request) pendingTest.current = null;
@@ -302,8 +304,10 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
         selectedNodeKey: testSelectedNodeKey,
         repairSourceAttempt: repairAttempt || undefined,
         selectedStepId: testSelectedNodeKey
-          ? testDefinitionValues?.definition.nodes[testSelectedNodeKey]?.id
-            ?? values?.definition.nodes[testSelectedNodeKey]?.id
+          ? repairAttempt
+            ? repair.data?.workflow_test_repair_context?.current_source_step_id ?? undefined
+            : testDefinitionValues?.definition.nodes[testSelectedNodeKey]?.id
+              ?? values?.definition.nodes[testSelectedNodeKey]?.id
           : undefined,
         resolve,
         reject,
@@ -334,7 +338,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
         reject(error);
       });
     });
-  }, [deliverTest, t, testDefinitionValues, testSelectedNodeKey, values]);
+  }, [deliverTest, repair.data?.workflow_test_repair_context?.current_source_step_id, repairAttempt, t, testDefinitionValues, testSelectedNodeKey, values]);
 
   const reviewLatest = React.useCallback(async () => {
     setReloadError(null);

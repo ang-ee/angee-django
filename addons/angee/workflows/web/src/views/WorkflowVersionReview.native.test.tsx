@@ -4,12 +4,16 @@ import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets } from "@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { WorkflowDefinitionDocument } from "../documents.console";
+
 const restore = vi.hoisted(() => vi.fn());
 const refetchComparison = vi.hoisted(() => vi.fn());
 const refetchDraft = vi.hoisted(() => vi.fn());
+const setQueryData = vi.hoisted(() => vi.fn());
 const queryState = vi.hoisted(() => ({ draftRevision: 4 }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/refine")>(),
+  useSetAuthoredQueryData: () => setQueryData,
   useAuthoredQuery: (_document: unknown, variables: Record<string, unknown>) => {
     if ("source" in variables) return {
       data: { workflow_definition_comparison: comparison },
@@ -37,7 +41,7 @@ const comparison = {
   draft_nodes: [{ key: "send", name: "Send", step_class: "handler", is_entry: true }], draft_edges: [],
 };
 
-afterEach(() => { cleanup(); restore.mockReset(); refetchComparison.mockReset(); refetchDraft.mockReset(); queryState.draftRevision = 4; });
+afterEach(() => { cleanup(); restore.mockReset(); refetchComparison.mockReset(); refetchDraft.mockReset(); setQueryData.mockReset(); queryState.draftRevision = 4; });
 
 test("saved comparison names exact revisions, highlights a change, and restores with its captured CAS", async () => {
   restore.mockResolvedValue({ restore_workflow_definition: {
@@ -54,6 +58,11 @@ test("saved comparison names exact revisions, highlights a change, and restores 
   expect(screen.getByLabelText("comparison graph").querySelector("[data-selected='true']")?.textContent).toBe("send");
   fireEvent.click(screen.getByRole("button", { name: "Restore to draft" }));
   await waitFor(() => expect(restore).toHaveBeenCalledWith({ workflow: "draft-1", source: "version-2", expectedRevision: 4 }));
+  expect(setQueryData).toHaveBeenCalledWith(
+    WorkflowDefinitionDocument,
+    { workflow: "draft-1" },
+    { workflow_definition: expect.objectContaining({ revision: 5 }) },
+  );
   expect(restored).toHaveBeenCalledWith("draft-1");
 });
 

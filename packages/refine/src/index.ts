@@ -79,6 +79,7 @@ export {
   useAuthoredLiveInterest,
   useAuthoredQuery,
   useAuthoredQueryBatch,
+  useSetAuthoredQueryData,
   useInvalidateAuthoredModels,
   errorFromAuthoredEnvelope,
   authoredOperationData,

@@ -27,7 +27,7 @@ import type {
 } from "../typed-document";
 import { useActiveDataProviderName } from "./data-provider-context";
 import { authoredOperationData, mutationMeta } from "./wire";
-import { authoredQueryOptions, useAuthoredErrorPolicy } from "./authored-query-options";
+import { authoredQueryKey, authoredQueryOptions, useAuthoredErrorPolicy } from "./authored-query-options";
 export { authoredQueryKey, authoredQueryOptions } from "./authored-query-options";
 export { authoredOperationData } from "./wire";
 
@@ -123,6 +123,22 @@ export function useInvalidateAuthoredModels(): (
   return useCallback((modelLabels: readonly string[]) => {
     void invalidateAuthoredQueries(queryClient, modelLabels);
   }, [queryClient]);
+}
+
+/** Install an authoritative mutation result into one exact authored-read cache. */
+export function useSetAuthoredQueryData(): <TDocument extends AuthoredDocument>(
+  document: TDocument,
+  variables: AuthoredVariables<TDocument> | undefined,
+  data: DocumentData<TDocument>,
+) => void {
+  const queryClient = useQueryClient();
+  const activeProvider = useActiveDataProviderName();
+  return useCallback((document, variables, data) => {
+    queryClient.setQueryData(
+      authoredQueryKey(document, variables, activeProvider ?? "default"),
+      data,
+    );
+  }, [activeProvider, queryClient]);
 }
 
 export type AuthoredMutate<TDocument extends AuthoredDocument> = (
