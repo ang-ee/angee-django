@@ -250,6 +250,15 @@ def _ubl_facts(root: ElementTree.Element) -> list[StructuredFact]:
         "vendor.name": ("AccountingSupplierParty", "Party", "PartyName", "Name"),
         "vendor.tax_id": ("AccountingSupplierParty", "Party", "PartyTaxScheme", "CompanyID"),
         "vendor.email": ("AccountingSupplierParty", "Party", "Contact", "ElectronicMail"),
+        "vendor.address.street": ("AccountingSupplierParty", "Party", "PostalAddress", "StreetName"),
+        "vendor.address.extended": ("AccountingSupplierParty", "Party", "PostalAddress", "AdditionalStreetName"),
+        "vendor.address.po_box": ("AccountingSupplierParty", "Party", "PostalAddress", "Postbox"),
+        "vendor.address.city": ("AccountingSupplierParty", "Party", "PostalAddress", "CityName"),
+        "vendor.address.region": ("AccountingSupplierParty", "Party", "PostalAddress", "CountrySubentity"),
+        "vendor.address.postal_code": ("AccountingSupplierParty", "Party", "PostalAddress", "PostalZone"),
+        "vendor.address.country": (
+            "AccountingSupplierParty", "Party", "PostalAddress", "Country", "IdentificationCode"
+        ),
         "bank.account_number": ("PaymentMeans", "PayeeFinancialAccount", "ID"),
         "bank.holder_name": ("PaymentMeans", "PayeeFinancialAccount", "Name"),
         "bank.bic": ("PaymentMeans", "PayeeFinancialAccount", "FinancialInstitutionBranch", "ID"),
@@ -309,6 +318,30 @@ def _cii_facts(root: ElementTree.Element) -> list[StructuredFact]:
             "SellerTradeParty",
             "URIUniversalCommunication",
             "URIID",
+        ),
+        "vendor.address.street": (
+            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
+            "PostalTradeAddress", "LineOne",
+        ),
+        "vendor.address.extended": (
+            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
+            "PostalTradeAddress", "LineTwo",
+        ),
+        "vendor.address.city": (
+            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
+            "PostalTradeAddress", "CityName",
+        ),
+        "vendor.address.region": (
+            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
+            "PostalTradeAddress", "CountrySubDivisionName",
+        ),
+        "vendor.address.postal_code": (
+            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
+            "PostalTradeAddress", "PostcodeCode",
+        ),
+        "vendor.address.country": (
+            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
+            "PostalTradeAddress", "CountryID",
         ),
         "bank.account_number": (
             "SupplyChainTradeTransaction",
@@ -419,6 +452,19 @@ def _edifact_facts(data: bytes, limits: StructuredLimits):
                 _fact(facts, "vendor.identifier", values[1].split(component)[0], f"{path}/C082/3039")
             if len(values) > 3:
                 _fact(facts, "vendor.name", values[3].split(component)[0], f"{path}/C080/3036")
+            if len(values) > 4:
+                address_lines = values[4].split(component)
+                _fact(facts, "vendor.address.street", address_lines[0], f"{path}/C059/3042[0]")
+                if len(address_lines) > 1:
+                    _fact(facts, "vendor.address.extended", address_lines[1], f"{path}/C059/3042[1]")
+            for field, value_index, source in (
+                ("vendor.address.city", 5, "3164"),
+                ("vendor.address.region", 6, "C819/3229"),
+                ("vendor.address.postal_code", 7, "3251"),
+                ("vendor.address.country", 8, "3207"),
+            ):
+                if len(values) > value_index:
+                    _fact(facts, field, values[value_index].split(component)[0], f"{path}/{source}")
         elif line >= 0 and tag in {"QTY", "PRI", "IMD"} and values:
             parts = values[0].split(component)
             if tag == "QTY" and len(parts) > 1 and parts[0] == "47":

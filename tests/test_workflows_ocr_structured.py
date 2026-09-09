@@ -26,7 +26,13 @@ def test_ubl_copies_raw_header_line_and_bank_facts_without_validation_claims() -
       <cbc:IssueDate>2026-09-01</cbc:IssueDate><cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
       <cac:AccountingSupplierParty><cac:Party><cac:PartyName>
         <cbc:Name>Example GmbH</cbc:Name>
-      </cac:PartyName></cac:Party></cac:AccountingSupplierParty>
+      </cac:PartyName><cac:PostalAddress><cbc:StreetName>Supplierstrasse 4</cbc:StreetName>
+        <cbc:CityName>Berlin</cbc:CityName><cbc:PostalZone>10115</cbc:PostalZone>
+        <cac:Country><cbc:IdentificationCode>DE</cbc:IdentificationCode></cac:Country>
+      </cac:PostalAddress></cac:Party></cac:AccountingSupplierParty>
+      <cac:AccountingCustomerParty><cac:Party><cac:PostalAddress>
+        <cbc:StreetName>Buyer Road 9</cbc:StreetName><cbc:CityName>Paris</cbc:CityName>
+      </cac:PostalAddress></cac:Party></cac:AccountingCustomerParty>
       <cac:PaymentMeans><cac:PayeeFinancialAccount><cbc:ID>DE02120300000000202051</cbc:ID></cac:PayeeFinancialAccount></cac:PaymentMeans>
       <cac:LegalMonetaryTotal><cbc:PayableAmount currencyID="EUR">12.30</cbc:PayableAmount></cac:LegalMonetaryTotal>
       <cac:InvoiceLine><cbc:InvoicedQuantity>2</cbc:InvoicedQuantity><cac:Item><cbc:Name>Hosting</cbc:Name></cac:Item><cac:Price><cbc:PriceAmount>6.15</cbc:PriceAmount></cac:Price></cac:InvoiceLine>
@@ -42,6 +48,10 @@ def test_ubl_copies_raw_header_line_and_bank_facts_without_validation_claims() -
         ("invoice.currency", 0): "EUR",
         ("invoice.document_total", 0): "12.30",
         ("vendor.name", 0): "Example GmbH",
+        ("vendor.address.street", 0): "Supplierstrasse 4",
+        ("vendor.address.city", 0): "Berlin",
+        ("vendor.address.postal_code", 0): "10115",
+        ("vendor.address.country", 0): "DE",
         ("bank.account_number", 0): "DE02120300000000202051",
         ("line.description", 0): "Hosting",
         ("line.quantity", 0): "2",
@@ -54,6 +64,12 @@ def test_cii_maps_repeated_lines_by_occurrence() -> None:
       xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100">
       <rsm:ExchangedDocument><ram:ID>CII-9</ram:ID></rsm:ExchangedDocument>
       <rsm:SupplyChainTradeTransaction>
+        <ram:ApplicableHeaderTradeAgreement><ram:SellerTradeParty><ram:PostalTradeAddress>
+          <ram:LineOne>Seller Lane 8</ram:LineOne><ram:CityName>Hamburg</ram:CityName>
+          <ram:PostcodeCode>20095</ram:PostcodeCode>
+        </ram:PostalTradeAddress></ram:SellerTradeParty><ram:BuyerTradeParty><ram:PostalTradeAddress>
+          <ram:LineOne>Buyer Lane 3</ram:LineOne>
+        </ram:PostalTradeAddress></ram:BuyerTradeParty></ram:ApplicableHeaderTradeAgreement>
         <ram:IncludedSupplyChainTradeLineItem><ram:SpecifiedTradeProduct><ram:Name>One</ram:Name></ram:SpecifiedTradeProduct><ram:SpecifiedLineTradeDelivery><ram:BilledQuantity>3</ram:BilledQuantity></ram:SpecifiedLineTradeDelivery></ram:IncludedSupplyChainTradeLineItem>
         <ram:IncludedSupplyChainTradeLineItem><ram:SpecifiedTradeProduct><ram:Description>Two</ram:Description></ram:SpecifiedTradeProduct></ram:IncludedSupplyChainTradeLineItem>
       </rsm:SupplyChainTradeTransaction>
@@ -63,6 +79,9 @@ def test_cii_maps_repeated_lines_by_occurrence() -> None:
     assert _values(source)["line.description", 0] == "One"
     assert _values(source)["line.description", 1] == "Two"
     assert _values(source)["line.quantity", 0] == "3"
+    assert _values(source)["vendor.address.street", 0] == "Seller Lane 8"
+    assert _values(source)["vendor.address.city", 0] == "Hamburg"
+    assert ("vendor.address.country", 0) not in _values(source)
 
 
 def test_xml_entities_and_resource_excess_are_rejected_before_mapping() -> None:
@@ -86,13 +105,20 @@ def test_edifact_invoic_extracts_unambiguous_raw_facts_and_bounds_segments() -> 
     payload = (
         b"UNB+UNOC:3+SENDER+RECEIVER+260909:1200+1'UNH+1+INVOIC:D:01B:UN'"
         b"BGM+380+EDI-4+9'DTM+137:20260909:102'CUX+2:EUR'MOA+39:42.50'"
-        b"NAD+SU+9988::92++Supplier Ltd'LIN+1'IMD+F++:::Service'QTY+47:2'PRI+AAA:21.25'UNT+9+1'UNZ+1+1'"
+        b"NAD+SU+9988::92++Supplier Ltd+Suite 2:6 Lansing Sq+North York+Ontario+M2J 1T5+'"
+        b"LIN+1'IMD+F++:::Service'QTY+47:2'PRI+AAA:21.25'UNT+9+1'UNZ+1+1'"
     )
     (source,) = extract_structured_sources(payload, filename="invoice.edi")
     assert source.kind == "edifact_invoic"
     assert _values(source)["invoice.reference", 0] == "EDI-4"
     assert _values(source)["invoice.document_total", 0] == "42.50"
     assert _values(source)["vendor.identifier", 0] == "9988"
+    assert _values(source)["vendor.address.street", 0] == "Suite 2"
+    assert _values(source)["vendor.address.extended", 0] == "6 Lansing Sq"
+    assert _values(source)["vendor.address.city", 0] == "North York"
+    assert _values(source)["vendor.address.region", 0] == "Ontario"
+    assert _values(source)["vendor.address.postal_code", 0] == "M2J 1T5"
+    assert ("vendor.address.country", 0) not in _values(source)
     assert _values(source)["line.description", 0] == "Service"
     with pytest.raises(StructuredSourceError, match="segment exceeds"):
         extract_structured_sources(payload, limits=StructuredLimits(max_edi_segment_length=10))
