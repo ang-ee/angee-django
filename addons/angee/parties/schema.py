@@ -20,6 +20,7 @@ from strawberry import auto
 
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
     hasura_model_resource,
     public_pk_decoder,
 )
@@ -34,6 +35,8 @@ from angee.integrate.schema import BridgeSyncStatusMixin, IntegrationLabelMixin
 from angee.parties.mixins import LinkSource
 
 Party = apps.get_model("parties", "Party")
+Bank = apps.get_model("parties", "Bank")
+BankAccount = apps.get_model("parties", "BankAccount")
 Person = apps.get_model("parties", "Person")
 Organization = apps.get_model("parties", "Organization")
 Handle = apps.get_model("parties", "Handle")
@@ -59,6 +62,8 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     introduced_by: "PartyType | None"
     created_at: auto
     updated_at: auto
+    tax_country: auto
+    vat: auto
 
     handles: list["HandleType"]
     party_handles: list["PartyHandleType"]
@@ -85,6 +90,8 @@ class PersonType(AngeeNode):
     folder: "ContactFolderType | None"
     created_at: auto
     updated_at: auto
+    tax_country: auto
+    vat: auto
 
     @strawberry_django.field(only=["id"])
     def circle_names(self) -> list[str]:
@@ -109,6 +116,8 @@ class OrganizationType(AngeeNode):
     domain: auto
     created_at: auto
     updated_at: auto
+    tax_country: auto
+    vat: auto
 
 
 @strawberry_django.type(Handle)
@@ -353,9 +362,7 @@ class PartiesReviewQuery:
 
         bounded_limit = max(1, min(int(limit), 1000))
         filtered_values = (
-            list(filtered.values_list("sqid", flat=True)[: bounded_limit + 1])
-            if filtered is not None
-            else []
+            list(filtered.values_list("sqid", flat=True)[: bounded_limit + 1]) if filtered is not None else []
         )
         return PeopleWorkbenchType(
             circles=cast(
@@ -497,6 +504,73 @@ class PartiesDirectoryMutation:
         return cast(DirectoryType, directory)
 
 
+@strawberry_django.type(Bank)
+class BankType(AngeeNode):
+    """Shared bank directory."""
+
+    name: auto
+    bic: auto
+    country: auto
+    is_archived: auto
+
+
+@strawberry_django.type(BankAccount)
+class BankAccountType(AngeeNode):
+    """A party-owned payment destination."""
+
+    party: PartyType
+    bank: BankType
+    holder_name: auto
+    number_kind: auto
+    account_number: auto
+    is_archived: auto
+
+
+_BANK_RESOURCE = hasura_model_resource(
+    BankType,
+    model=Bank,
+    name="banks",
+    aggregatable=["id"],
+    filterable=["id", "name", "bic", "country", "is_archived"],
+    sortable=["name", "bic"],
+    writable=["name", "bic", "country", "is_archived"],
+    write_backend=AngeeHasuraWriteBackend(Bank),
+)
+_BANK_ACCOUNT_BASE_WRITE_FIELDS = ("party", "bank", "holder_name", "number_kind", "account_number", "is_archived")
+_BANK_ACCOUNT_INSERT_FIELDS = declared_hasura_resource_fields(BankAccount, "hasura_insertable_fields")
+_BANK_ACCOUNT_UPDATE_FIELDS = declared_hasura_resource_fields(BankAccount, "hasura_updatable_fields")
+_BANK_ACCOUNT_PUBLIC_ID_FIELDS = tuple(
+    dict.fromkeys(
+        (
+            "party",
+            "bank",
+            *(
+                name
+                for name in (*_BANK_ACCOUNT_INSERT_FIELDS, *_BANK_ACCOUNT_UPDATE_FIELDS)
+                if BankAccount._meta.get_field(name).is_relation
+            ),
+        )
+    )
+)
+
+_BANK_ACCOUNT_RESOURCE = hasura_model_resource(
+    BankAccountType,
+    model=BankAccount,
+    name="bank_accounts",
+    aggregatable=["id"],
+    filterable=["id", "party", "bank", "account_number", "is_archived"],
+    sortable=["account_number", "holder_name"],
+    groupable=["party", "bank"],
+    insertable=[*_BANK_ACCOUNT_BASE_WRITE_FIELDS, *_BANK_ACCOUNT_INSERT_FIELDS],
+    updatable=[*_BANK_ACCOUNT_BASE_WRITE_FIELDS, *_BANK_ACCOUNT_UPDATE_FIELDS],
+    field_id_decode={
+        name: public_pk_decoder(BankAccount._meta.get_field(name).related_model)
+        for name in _BANK_ACCOUNT_PUBLIC_ID_FIELDS
+    },
+    write_backend=AngeeHasuraWriteBackend(BankAccount, public_id_fields=_BANK_ACCOUNT_PUBLIC_ID_FIELDS),
+)
+
+
 _PARTY_RESOURCE = hasura_model_resource(
     PartyType,
     model=Party,
@@ -506,7 +580,7 @@ _PARTY_RESOURCE = hasura_model_resource(
     aggregatable=["id", "handle_count"],
     groupable=["created_at"],
     insert=False,
-    updatable=["display_name", "notes"],
+    updatable=["display_name", "notes", "tax_country", "vat"],
 )
 _PERSON_RESOURCE = hasura_model_resource(
     PersonType,
@@ -538,6 +612,8 @@ _PERSON_RESOURCE = hasura_model_resource(
         "nickname",
         "birthday",
         "anniversary",
+        "tax_country",
+        "vat",
     ],
     updatable=[
         "display_name",
@@ -550,6 +626,8 @@ _PERSON_RESOURCE = hasura_model_resource(
         "nickname",
         "birthday",
         "anniversary",
+        "tax_country",
+        "vat",
     ],
     delete=False,
     field_id_decode={"folder": public_pk_decoder(Folder)},
@@ -563,8 +641,8 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
     sortable=["display_name", "legal_name", "domain", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["domain", "created_at"],
-    insertable=["display_name", "notes", "legal_name", "domain"],
-    updatable=["display_name", "notes", "legal_name", "domain"],
+    insertable=["display_name", "notes", "legal_name", "domain", "tax_country", "vat"],
+    updatable=["display_name", "notes", "legal_name", "domain", "tax_country", "vat"],
     delete=False,
 )
 _HANDLE_RESOURCE = hasura_model_resource(
@@ -760,6 +838,8 @@ _DIRECTORY_RESOURCE = hasura_model_resource(
 
 
 _RESOURCE_TYPES = [
+    *_BANK_RESOURCE.types,
+    *_BANK_ACCOUNT_RESOURCE.types,
     *_PARTY_RESOURCE.types,
     *_PERSON_RESOURCE.types,
     *_ORGANIZATION_RESOURCE.types,
@@ -779,6 +859,8 @@ _RESOURCE_TYPES = [
 _PARTIES_SCHEMA_BUCKET = {
     "query": [
         PartiesReviewQuery,
+        _BANK_RESOURCE.query,
+        _BANK_ACCOUNT_RESOURCE.query,
         _PARTY_RESOURCE.query,
         _PERSON_RESOURCE.query,
         _ORGANIZATION_RESOURCE.query,
@@ -796,6 +878,8 @@ _PARTIES_SCHEMA_BUCKET = {
     "mutation": [
         PartiesDirectoryMutation,
         PartiesIdentityMutation,
+        _BANK_RESOURCE.mutation,
+        _BANK_ACCOUNT_RESOURCE.mutation,
         _PARTY_RESOURCE.mutation,
         _PERSON_RESOURCE.mutation,
         _ORGANIZATION_RESOURCE.mutation,
@@ -811,6 +895,8 @@ _PARTIES_SCHEMA_BUCKET = {
         _DIRECTORY_RESOURCE.mutation,
     ],
     "types": [
+        BankType,
+        BankAccountType,
         PartyType,
         PersonType,
         OrganizationType,

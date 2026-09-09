@@ -28,6 +28,7 @@ from typing import Any, ClassVar, cast
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models, transaction
 from phonenumbers import (
     NumberParseException,
@@ -39,10 +40,14 @@ from phonenumbers import (
 )
 from rebac import PermissionDenied, system_context
 from rebac.mixins import RebacModelBase
+from stdnum import bic, iban
+from stdnum.eu import vat as eu_vat
+from stdnum.exceptions import ValidationError as IdentifierError
+from stdnum.util import get_cc_module
 
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
+from angee.base.mixins import ArchiveMixin, AuditMixin, HierarchyMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
 from angee.integrate.models import Bridge
 from angee.parties.backends import DirectoryBackend
@@ -69,6 +74,13 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
 
     sqid = SqidField(real_field_name="id", prefix="pty_", min_length=8)
     display_name = models.TextField()
+    tax_country = models.CharField(
+        max_length=2,
+        blank=True,
+        default="",
+        validators=[RegexValidator(r"^[A-Z]{2}$", "Use a two-letter country code.")],
+    )
+    vat = models.CharField(max_length=32, blank=True, default="")
     notes = models.TextField(blank=True, default="")
     avatar = models.ForeignKey(
         "storage.File",
@@ -114,6 +126,8 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         "display_name",
         "notes",
         "first_met_note",
+        "tax_country",
+        "vat",
     )
     _person_merge_scalar_fields: ClassVar[tuple[str, ...]] = (
         "name_prefix",
@@ -150,6 +164,53 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         """Return the party's display name for Django displays."""
 
         return self.display_name
+
+    def clean_fields(self, exclude: Any = None) -> None:
+        """Normalize optional tax inputs before Django runs field validators."""
+        self._normalize_tax_identifiers()
+        super().clean_fields(exclude=exclude)
+
+    def _normalize_tax_identifiers(self) -> None:
+        """Keep optional identifiers non-null and country codes canonical."""
+        self.tax_country = (self.tax_country or "").strip().upper()
+        self.vat = (self.vat or "").strip().upper()
+
+    def clean(self) -> None:
+        """Validate supported VAT schemes; retain other countries' tax identifiers.
+
+        A missing stdnum VAT module means validation is unavailable, not that
+        the country's identifier is invalid. Imports and directory sync follow
+        the same policy as interactive writes.
+        """
+        super().clean()
+        self._normalize_tax_identifiers()
+        self.tax_country = self._meta.get_field("tax_country").clean(self.tax_country, self)
+        if not self.vat:
+            return
+        if not self.tax_country:
+            raise ValidationError({"tax_country": "Select the country that issued the tax identifier."})
+        validator = get_cc_module(self.tax_country.lower(), "vat")
+        if validator is None:
+            return
+        try:
+            number = validator.validate(self.vat)
+        except IdentifierError as error:
+            raise ValidationError({"vat": "Invalid VAT number for the selected country."}) from error
+        prefix = "EL" if self.tax_country == "GR" else self.tax_country
+        self.vat = (
+            prefix + number
+            if self.tax_country.lower() in eu_vat.MEMBER_STATES and not number.startswith(prefix)
+            else number
+        )
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Normalize paired tax fields when either is written, including imports."""
+        fields = kwargs.get("update_fields")
+        if fields is None or {"vat", "tax_country"}.intersection(fields):
+            self.clean()
+            if fields is not None:
+                kwargs["update_fields"] = set(fields) | {"vat", "tax_country"}
+        super().save(*args, **kwargs)
 
     PLACEHOLDER_NAME = "Unknown"
     """The display name imports write when a source carries no name at all."""
@@ -1166,3 +1227,96 @@ class Directory(Bridge):
             folder.sync_token = book.sync_token
             folder.save(update_fields=["ctag", "sync_token", "updated_at"])
         return resolved
+
+
+class Bank(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
+    """A bank's reusable name and locally validated BIC/SWIFT identifier."""
+
+    runtime = True
+    sqid_prefix = "bnk_"
+    name = models.CharField(max_length=200)
+    bic = models.CharField(max_length=11, blank=True, default="")
+    country = models.CharField(max_length=2, blank=True, default="")
+
+    class Meta:
+        abstract = True
+        ordering = ("name", "sqid")
+        rebac_resource_type = "parties/bank"
+        rebac_id_attr = "sqid"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def clean(self) -> None:
+        """Normalize and validate the optional international bank identifier."""
+        super().clean()
+        self.country = (self.country or "").strip().upper()
+        if self.bic:
+            try:
+                self.bic = bic.validate(self.bic)
+            except IdentifierError as error:
+                raise ValidationError({"bic": "Invalid BIC/SWIFT code."}) from error
+            if self.country and self.bic[4:6] != self.country:
+                raise ValidationError({"country": "The country must match the BIC/SWIFT code."})
+            self.country = self.bic[4:6]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        self.clean()
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = set(kwargs["update_fields"]) | {"bic", "country"}
+        super().save(*args, **kwargs)
+
+
+class BankAccount(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
+    """A party's payment destination; access follows its owning party.
+
+    Account numbers are unique per party and bank, including local numbering
+    schemes. Referenced parties and banks are protected from deletion; archive
+    them when retaining the account. Accounting currency is an optional consumer
+    extension and introduces no dependency on the money addon here.
+    """
+
+    runtime = True
+    sqid_prefix = "bac_"
+
+    class NumberKind(models.TextChoices):
+        IBAN = "iban", "IBAN"
+        LOCAL = "local", "Local account number"
+
+    party = models.ForeignKey("parties.Party", on_delete=models.PROTECT, related_name="bank_accounts")
+    bank = models.ForeignKey("parties.Bank", on_delete=models.PROTECT, related_name="accounts")
+    holder_name = models.CharField(max_length=200, blank=True, default="")
+    number_kind = StateField(choices_enum=NumberKind, default=NumberKind.IBAN)
+    account_number = models.CharField(max_length=64)
+
+    class Meta:
+        abstract = True
+        ordering = ("account_number", "sqid")
+        rebac_resource_type = "parties/bank_account"
+        rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(fields=("party", "bank", "account_number"), name="uq_party_bank_account_number"),
+        )
+
+    def __str__(self) -> str:
+        return self.account_number
+
+    def clean(self) -> None:
+        """IBAN uses stdnum; non-IBAN accounts retain their bank-specific format."""
+        super().clean()
+        self.account_number = (self.account_number or "").strip()
+        if self.number_kind == self.NumberKind.IBAN:
+            try:
+                self.account_number = iban.validate(self.account_number)
+            except IdentifierError as error:
+                raise ValidationError({"account_number": "Invalid IBAN."}) from error
+            if self.bank_id and self.bank.country and self.bank.country != self.account_number[:2]:
+                raise ValidationError({"bank": "The bank country must match the IBAN."})
+        elif not self.account_number or any(ord(c) < 32 for c in self.account_number):
+            raise ValidationError({"account_number": "Enter a valid local account number."})
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        self.clean()
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = set(kwargs["update_fields"]) | {"account_number"}
+        super().save(*args, **kwargs)

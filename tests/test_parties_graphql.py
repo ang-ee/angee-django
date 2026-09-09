@@ -155,6 +155,8 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "nickname",
         "birthday",
         "anniversary",
+        "tax_country",
+        "vat",
     ]
     assert person["requiredCreateFields"] == ["display_name"]
     assert person["updateFields"] == [
@@ -168,6 +170,8 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "nickname",
         "birthday",
         "anniversary",
+        "tax_country",
+        "vat",
     ]
     assert person["query"]["fields"]["folder"]["relation"] == {
         "model": "parties.Folder",
@@ -392,3 +396,26 @@ def _platform_admin(username: str) -> Any:
     admin = User.objects.create_superuser(username=username, email=f"{username}@example.com", password="admin")
     grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin
+
+
+def test_tax_identifiers_are_normalized_through_graphql(parties_tables: None) -> None:
+    """Exercise full_clean through the write backend, not clean in isolation."""
+    admin = _platform_admin("party-tax-admin")
+    result = _data(
+        execute_schema(
+            _schema("public"),
+            """
+        mutation {
+          insert_organizations_one(object: {
+            display_name: "Tax Example", tax_country: "de", vat: "DE136695976"
+          }) { display_name tax_country vat }
+        }
+    """,
+            user=admin,
+        )
+    )
+    assert result["insert_organizations_one"] == {
+        "display_name": "Tax Example",
+        "tax_country": "DE",
+        "vat": "DE136695976",
+    }
