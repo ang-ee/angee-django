@@ -74,6 +74,8 @@ interface ActionArgBase extends Pick<
 /** A scalar arg (date, number/money, switch, enum select, text). The default kind. */
 export interface ActionScalarArg extends ActionArgBase {
   argKind?: "scalar";
+  /** Seed from the invoking context when the dialog opens; user edits take precedence. */
+  fromContext?: (context: ActionFormContext) => unknown;
 }
 
 /** A single relation-picker arg naming the target resource its options list. */

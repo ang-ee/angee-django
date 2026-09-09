@@ -217,8 +217,10 @@ export function resourceReadSelectionPaths(
       paths.add(field.name);
       continue;
     }
-    if (field.kind === "scalar" || field.kind === "enum" || field.kind === "list") {
-      paths.add(field.name);
+    // The finalized query owns selectable leaves. Object-valued lists need
+    // an authored nested selection and have no scalar row paths.
+    for (const path of model.resource.query.fields[field.name]?.row?.paths ?? []) {
+      paths.add(path);
     }
   }
   return [...paths];
@@ -236,7 +238,10 @@ export function lineReadSelectionPaths(
   if (lines.positionField) paths.add(lines.positionField);
   for (const field of lines.fields ?? []) {
     if (field.name === lines.positionField) continue;
-    if (field.kind === "relation" && field.relationObject === true) {
+    if (
+      (field.kind === "relation" && field.relationObject === true)
+      || (field.kind === "list" && field.scalar == null && field.relationModelLabel)
+    ) {
       const relation = relationRepresentationSelection(
         field.name,
         field.relationModelLabel ?? undefined,
@@ -248,7 +253,7 @@ export function lineReadSelectionPaths(
     } else if (
       field.kind === "scalar"
       || field.kind === "enum"
-      || field.kind === "list"
+      || (field.kind === "list" && field.scalar != null)
     ) {
       paths.add(field.name);
     }

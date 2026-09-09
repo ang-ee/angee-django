@@ -465,3 +465,28 @@ def test_postgres_similar_uses_native_lookup_with_bound_sql_pattern(monkeypatch)
     )
     assert " SIMILAR TO %s" in sql
     assert params == (pattern,)
+
+
+def test_generic_reference_projection_has_no_fixed_resource_relation() -> None:
+    from django.contrib.contenttypes.fields import GenericForeignKey
+
+    class GenericReference(models.Model):
+        content_type = models.ForeignKey("contenttypes.ContentType", on_delete=models.CASCADE)
+        object_id = models.PositiveBigIntegerField()
+        target = GenericForeignKey("content_type", "object_id")
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    schema = build_schema("""
+        type Target { model_label: String!, record_id: ID! }
+        type Entry { id: ID!, target: Target }
+        type Query { entries: [Entry!]! }
+    """)
+    query = ResourceQueryProjection(
+        schema=schema, model=GenericReference, types=DataResourceTypeNames(node="Entry"), identity="id",
+        fields=(DataResourceFieldMetadata(name="target", kind="relation", relation_object=True),),
+    ).build()
+    assert query.fields["target"].relation is None
+    assert query.fields["target"].row is None

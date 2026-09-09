@@ -364,7 +364,9 @@ class ResourceQueryProjection:
             else ()
         )
         model_label = display.relation_model_label if display else None
-        if model_label is None and relation_field:
+        # GenericForeignKey has no single related model. Its authored object
+        # projection must not acquire a fabricated resource relation.
+        if model_label is None and relation_field and source_field.related_model is not None:
             model_label = source_field.related_model._meta.label
         relation = self.relation(path, named, model_label) if kind == "relation" else None
         row_path, row_paths = self.row_paths(name)

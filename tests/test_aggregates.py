@@ -1623,3 +1623,39 @@ def test_interleaved_json_resources_do_not_replace_upstream_builders(monkeypatch
     assert "metadata__region" not in mailbox.group_key_type.__annotations__
     assert "metadata__region" in region.group_key_type.__annotations__
     assert "metadata__mailbox" not in region.group_key_type.__annotations__
+
+
+@pytest.mark.parametrize("widget", ["demo.cost.allocation", "arp.example.percent_editor"])
+def test_resource_field_accepts_addon_qualified_widget(widget):
+    """Addon-owned widgets use a qualified registry name without widening built-ins."""
+    from angee.graphql.data.resource_fields import require_unique_resource_fields
+
+    fields = (DataResourceFieldMetadata(name="allocation", kind="scalar", scalar="JSON", widget=widget),)
+    assert require_unique_resource_fields("demo.Item", fields) == fields
+
+
+def test_resource_relation_field_accepts_addon_widget_without_changing_relation_facts():
+    from angee.graphql.data.resource_fields import require_unique_resource_fields
+
+    fields = (
+        DataResourceFieldMetadata(
+            name="product", kind="relation", widget="demo.lines.product",
+            relation_model_label="demo.Product", relation_object=True,
+            creatable=True, updatable=True,
+        ),
+    )
+    assert require_unique_resource_fields("demo.Line", fields) == fields
+    with pytest.raises(ImproperlyConfigured, match="for relation fields"):
+        require_unique_resource_fields(
+            "demo.Line", (DataResourceFieldMetadata(name="product", kind="relation", widget="integer"),),
+        )
+
+
+@pytest.mark.parametrize("widget", ["slider", "demo.widget", "demo..widget", "demo.app.bad-widget", "Demo.app.widget"])
+def test_resource_field_rejects_malformed_addon_widget(widget):
+    from angee.graphql.data.resource_fields import require_unique_resource_fields
+
+    with pytest.raises(ImproperlyConfigured, match="unsupported widget"):
+        require_unique_resource_fields(
+            "demo.Item", (DataResourceFieldMetadata(name="x", kind="scalar", widget=widget),)
+        )

@@ -221,6 +221,10 @@ function peopleForm(
         <Field name="anniversary" label={t("person.field.anniversary")} />
         <Field name="folder" label={t("person.folder")} readOnly />
       </Group>
+      <Group label={t("tax.details")} columns={2}>
+        <Field name="tax_country" label={t("tax.country")} />
+        <Field name="vat" label={t("tax.vat")} />
+      </Group>
       <Field name="notes" />
       <Action
         id="merge-into"

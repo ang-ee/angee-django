@@ -59,6 +59,8 @@ function groupsForQuery(current: ResourceViewGroups, query: string, order: strin
 }
 
 export interface ResourceViewContextValue {
+  /** Resource whose collection state this provider owns. */
+  resource?: string;
   state: ResourceViewState;
   paginationByScope: GroupPagination;
   setPaginationByScope: OnChangeFn<GroupPagination>;
@@ -138,6 +140,8 @@ export function withResourceViewScope({
   providerKey,
   children,
 }: ResourceViewScopeMountOptions): ReactElement {
+  // A related collection must not read or overwrite its parent's URL query.
+  isolated ||= Boolean(resource && ambient?.resource && resource !== ambient.resource);
   if (!isolated && scope !== "local" && ambient) return children(ambient);
   return (
     <ResourceViewProvider
@@ -291,6 +295,7 @@ function useResourceViewContextValue({
     resetScope((current) => ({ ...current, group: groupStack[0] ?? null, groupStack }));
   }, [resetScope]);
   return useMemo(() => ({
+    resource,
     state,
     paginationByScope: activeGroups.paginationByScope,
     setPaginationByScope,
@@ -319,7 +324,7 @@ function useResourceViewContextValue({
         return { ...current, queryError: error instanceof Error ? error : new Error("Invalid saved query.") };
       }
     }),
-  }), [state, activeGroups.paginationByScope, activeGroups.expansion, setPaginationByScope, setGroupExpansion, savedFavorites, saveFavorite, setPagination, setSorting, setRowSelection, resetScope, setGroupStack, clearSelectedIds, updateState]);
+  }), [resource, state, activeGroups.paginationByScope, activeGroups.expansion, setPaginationByScope, setGroupExpansion, savedFavorites, saveFavorite, setPagination, setSorting, setRowSelection, resetScope, setGroupStack, clearSelectedIds, updateState]);
 }
 
 export function useResourceView(): ResourceViewContextValue {

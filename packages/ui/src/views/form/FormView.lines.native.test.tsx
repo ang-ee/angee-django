@@ -35,7 +35,7 @@ const initialLines: readonly Row[] = [
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
 
-async function fixture(options: { submit?: FormSubmit; lines?: readonly Row[] } = {}) {
+async function fixture(options: { submit?: FormSubmit; lines?: readonly Row[]; isCreate?: boolean; create?: () => Promise<{ data: Row }> } = {}) {
   const seedLines = options.lines ?? initialLines;
   let record: Row = { id: "doc-1", title: "Original", lines: seedLines };
   const getOne = vi.fn(async () => ({ data: record }));
@@ -43,7 +43,7 @@ async function fixture(options: { submit?: FormSubmit; lines?: readonly Row[] } 
   const provider = {
     getApiUrl: () => "test://lines", getOne,
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
+    create: vi.fn(options.create), update: vi.fn(), deleteOne: vi.fn(),
   } as DataProvider;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   clients.push(client);
@@ -54,9 +54,9 @@ async function fixture(options: { submit?: FormSubmit; lines?: readonly Row[] } 
   let append!: (row: Row) => void;
   function Probe() {
     surface = useFormViewSave({
-      resource: resource.modelLabel, id: "doc-1", isCreate: false,
+      resource: resource.modelLabel, id: options.isCreate ? null : "doc-1", isCreate: options.isCreate ?? false,
       dataResource: resource, modelMetadata: model, formFields, fieldByName, refineFields,
-      submit, t: (key) => key,
+      submit: options.isCreate ? undefined : submit, t: (key) => key,
     });
     const array = useFieldArray({
       control: surface.form.control as unknown as Control<{ lines: Row[] }>, name: "lines", keyName: "rhfKey",
@@ -78,10 +78,12 @@ async function fixture(options: { submit?: FormSubmit; lines?: readonly Row[] } 
   render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
     <RouterContextProvider router={router}><ModalsHost><ToastProvider><Probe /></ToastProvider></ModalsHost></RouterContextProvider>
   </Refine>);
-  await screen.findByLabelText("c.label");
-  await waitFor(() => expect(surface?.form.getValues("lines")).toMatchObject(seedLines));
+  if (!options.isCreate) {
+    await screen.findByLabelText("c.label");
+    await waitFor(() => expect(surface?.form.getValues("lines")).toMatchObject(seedLines));
+  }
   return {
-    surface: () => surface, submit, getOne,
+    surface: () => surface, submit, getOne, provider,
     setRecord: (next: Row) => { record = next; },
     append: (row: Row) => act(() => append(row)),
     remove: (index: number) => act(() => remove(index)),
@@ -95,6 +97,58 @@ async function fixture(options: { submit?: FormSubmit; lines?: readonly Row[] } 
 }
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
+
+test("new documents create their draft lines in one native nested insert", async () => {
+  const saved = { id: "doc-new", title: "Quotation", lines: [{ id: "line-new", label: "Lamp", quantity: 1, position: 0 }] };
+  const f = await fixture({ isCreate: true, create: async () => ({ data: saved }) });
+  expect(f.surface().linesActive).toBe(true);
+  edit("title", "Quotation");
+  f.append({ label: "Lamp", quantity: 1 });
+  await act(async () => f.surface().submitForm());
+  expect(f.provider.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    variables: { title: "Quotation", lines: { data: [{ label: "Lamp", quantity: 1, position: 0 }] } },
+  }));
+  expect(f.provider.update).not.toHaveBeenCalled();
+  expect(f.getOne).not.toHaveBeenCalled();
+  await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
+  expect(f.surface().form.getValues("lines")).toEqual(saved.lines);
+});
+
+test("failed nested creation preserves the header and lines for retry", async () => {
+  const f = await fixture({ isCreate: true, create: async () => { throw new Error("Line rejected"); } });
+  edit("title", "Quotation");
+  f.append({ label: "Lamp", quantity: "1" });
+  await act(async () => f.surface().submitForm());
+  expect(f.provider.create).toHaveBeenCalledTimes(1);
+  expect(f.surface().form.getValues("title")).toBe("Quotation");
+  expect(f.surface().form.getValues("lines")).toMatchObject([{ label: "Lamp", quantity: "1" }]);
+  expect(f.surface().formIsDirty).toBe(true);
+  expect(f.surface().form.formState.errors.root?.server?.message).toBe("Line rejected");
+  expect(f.provider.update).not.toHaveBeenCalled();
+});
+
+test("successful semantic no-op line saves accept the native draft baseline", async () => {
+  const f = await fixture({ submit: async () => ({ id: "doc-1", title: "Original", lines: initialLines }) });
+  act(() => f.surface().form.setValue<string>("lines.0.quantity", "10", { shouldDirty: true }));
+  expect(f.surface().formIsDirty).toBe(true);
+  await act(async () => f.surface().submitForm());
+  expect(f.submit).toHaveBeenCalledWith({}, expect.objectContaining({ lines: expect.objectContaining({ hasChanges: false }) }));
+  await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
+  expect(f.surface().form.getValues("lines")).toEqual(initialLines);
+});
+
+test("semantic no-op line saves preserve a later edit while the request is pending", async () => {
+  let resolve!: (row: Row) => void;
+  const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }) });
+  act(() => f.surface().form.setValue<string>("lines.0.quantity", "10", { shouldDirty: true }));
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.submit).toHaveBeenCalledTimes(1));
+  edit("a.quantity", "11");
+  await act(async () => { resolve({ id: "doc-1", title: "Original", lines: initialLines }); await saving; });
+  expect((f.surface().form.getValues("lines") as Row[])[0]?.quantity).toBe("11");
+  expect(f.surface().formIsDirty).toBe(true);
+});
 
 test("reordered remote lines keep dirty cells attached to their public row IDs", async () => {
   const f = await fixture();

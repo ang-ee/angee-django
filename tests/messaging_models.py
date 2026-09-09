@@ -9,13 +9,18 @@ from angee.messaging.models import Fragment as AbstractFragment
 from angee.messaging.models import Message as AbstractMessage
 from angee.messaging.models import MessageSubtype as AbstractMessageSubtype
 from angee.messaging.models import Thread as AbstractThread
+from angee.parties.models import Bank as AbstractBank
+from angee.parties.models import BankAccount as AbstractBankAccount
 from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
 from angee.posts.models import MessagePublic, ThreadPublic
 from angee.spaces.models import ThreadSpace
-from tests import spaces_models  # noqa: F401 -- register Thread's group relation target
+from tests import (
+    money_models,  # noqa: F401 -- register bank-account currency target
+    spaces_models,  # noqa: F401 -- register Thread's group relation target
+)
 from tests.integrate_models import Integration
 
 
@@ -129,3 +134,19 @@ class Message(MessagePublic, AbstractMessage):
         db_table = "test_messaging_message"
         rebac_resource_type = "messaging/message"
         rebac_id_attr = "sqid"
+
+
+class Bank(AbstractBank):
+    """Concrete A10 bank directory for source-addon tests."""
+    class Meta(AbstractBank.Meta):
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_bank"
+
+
+class BankAccount(AbstractBankAccount):
+    """Concrete party-owned account for source-addon tests."""
+    class Meta(AbstractBankAccount.Meta):
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_bank_account"

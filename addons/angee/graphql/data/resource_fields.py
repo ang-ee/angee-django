@@ -22,10 +22,8 @@ from angee.data.field_classification import (
     RESOURCE_FIELD_SCALARS as _RESOURCE_FIELD_SCALARS,
 )
 from angee.data.field_classification import (
-    RESOURCE_FIELD_WIDGETS as _RESOURCE_FIELD_WIDGETS,
-)
-from angee.data.field_classification import (
     is_archive_field,
+    is_resource_field_widget,
     money_currency_field,
     resource_field_kind,
     resource_field_widget,
@@ -174,8 +172,10 @@ def final_resource_fields(
         is_list = _graphql_type_is_list(graphql_field.type)
         is_enum = isinstance(named, GraphQLEnumType)
         is_object = isinstance(named, GraphQLObjectType)
+        relation_model_label = _relation_model_label(model_field) or _graphql_relation_model_label(named)
         kind = resource_field_kind(
             model_field,
+            has_relation_axis=relation_model_label is not None,
             is_list=is_list,
             is_enum=is_enum,
             is_object=is_object,
@@ -195,7 +195,7 @@ def final_resource_fields(
                 required_on_create=name in required_on_create or python_name in required_on_create,
                 archivable=is_archive_field(model_field),
                 currency_field=money_currency_field(model_field),
-                relation_model_label=(_relation_model_label(model_field) or _graphql_relation_model_label(named)),
+                relation_model_label=relation_model_label,
                 relation_object=kind == "relation" and is_object,
                 model_field_name=python_name if model_field is not None else None,
             )
@@ -532,7 +532,7 @@ def _validate_resource_field(model_label: str, field: data_contract.DataResource
         raise ImproperlyConfigured(
             f"resource metadata for {model_label} field '{field.name}' declares unsupported scalar '{field.scalar}'."
         )
-    if field.widget is not None and field.widget not in _RESOURCE_FIELD_WIDGETS:
+    if field.widget is not None and not is_resource_field_widget(field.widget):
         raise ImproperlyConfigured(
             f"resource metadata for {model_label} field '{field.name}' declares unsupported widget '{field.widget}'."
         )
@@ -541,7 +541,10 @@ def _validate_resource_field(model_label: str, field: data_contract.DataResource
             f"resource metadata for {model_label} field '{field.name}' cannot declare "
             f"scalar '{field.scalar}' for {field.kind} fields."
         )
-    if field.kind == "relation" and field.widget not in {None, "many2one"}:
+    # A namespaced addon widget changes presentation, never the relation's
+    # target, wire selection, filters or public-ID semantics.
+    custom_widget = field.widget is not None and "." in field.widget
+    if field.kind == "relation" and field.widget not in {None, "many2one"} and not custom_widget:
         raise ImproperlyConfigured(
             f"resource metadata for {model_label} field '{field.name}' cannot declare "
             f"widget '{field.widget}' for relation fields."

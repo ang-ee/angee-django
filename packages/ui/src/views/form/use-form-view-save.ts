@@ -114,6 +114,8 @@ export interface UseFormViewSaveProps {
   onSaved?: (row: Row) => void;
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
+  /** Lock editing from persisted state; lifecycle actions remain independent. */
+  readOnlyWhen?: (record: Row) => boolean;
   defaultSlugSource?: string;
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
@@ -169,6 +171,7 @@ export function useFormViewSave({
   onSaved,
   submit,
   createSubmit,
+  readOnlyWhen,
   defaultSlugSource,
   onFieldInteractionStart,
   onFieldInteractionCommit,
@@ -267,10 +270,11 @@ export function useFormViewSave({
   });
   const invalidate = useInvalidate();
   const linesActive =
-    !isCreate &&
     linesConfig !== null &&
     linesField !== null &&
-    (saveOperation.target !== null || Boolean(submit));
+    (isCreate
+      ? Boolean(dataResource?.roots.create || submit || createSubmit)
+      : saveOperation.target !== null || Boolean(submit));
   const seedLineRows = React.useMemo(
     () =>
       linesActive && linesConfig && linesField
@@ -354,7 +358,7 @@ export function useFormViewSave({
     }
     resetDefaultValues(baseline, { keepIsValid: true });
   }, [form, linesActive, linesField, reset, resetDefaultValues, setValue]);
-  const lineDraftDirty = Boolean(linesActive && linesField && dirtyFields[linesField]);
+  const lineDraftDirty = Boolean(!isCreate && linesActive && linesField && dirtyFields[linesField]);
   // Replay a held remote array when the user undoes the last local line edit.
   React.useEffect(() => { syncRecordValues(values); }, [lineDraftDirty, syncRecordValues, values]);
   const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
@@ -373,10 +377,11 @@ export function useFormViewSave({
     () =>
       readOnly ||
       recordUnavailable ||
+      (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
       (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
       (formFields.length > 0 && formFields.every((field) => field.readOnly)),
-    [dataResource, formFields, isCreate, readOnly, recordUnavailable, submitOwner],
+    [dataResource, formFields, isCreate, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
   );
   const formIsDirty = form.formState.isDirty;
   const pending = create.mutation.isPending || update.mutation.isPending || customSubmit.isPending || resourceSave.fetching || form.formState.isSubmitting;
@@ -399,7 +404,7 @@ export function useFormViewSave({
         submitted,
         baseline: (form.formState.defaultValues ?? {}) as FormValues,
       });
-      if (lines && lines.hasChanges && id != null && saveOperation.target !== null) {
+      if (!isCreate && lines && lines.hasChanges && id != null && saveOperation.target !== null) {
         const saved = await resourceSave.save({
           pk: id,
           patch: data,
@@ -409,7 +414,11 @@ export function useFormViewSave({
         return saved;
       }
       const response = isCreate
-        ? await create.mutateAsync({ values: data })
+        ? await create.mutateAsync({
+            values: lines?.hasChanges && linesField
+              ? { ...data, [linesField]: { data: lines.payload } }
+              : data,
+          })
         : await update.mutateAsync({ id: id as BaseKey, values: data });
       return response?.data ?? null;
     },
@@ -420,6 +429,7 @@ export function useFormViewSave({
       id,
       invalidateResource,
       isCreate,
+      linesField,
       resource,
       resourceSave,
       saveOperation.target,
@@ -514,7 +524,7 @@ export function useFormViewSave({
               linesConfig,
             )
           : null;
-      if (linesDiff?.hasChanges && linesConfig && linesField) {
+      if (!isCreate && linesDiff?.hasChanges && linesConfig && linesField) {
         const baseline = baselineLineRows(form.formState.defaultValues ?? {}, linesField, seedLineRows);
         const latest = queryClient.getQueryData<GetOneResponse<RowRecord>>(detailKey)?.data ?? record;
         // Full-list writes implicitly delete omitted IDs. Refuse a stale draft
@@ -543,7 +553,7 @@ export function useFormViewSave({
             submitted: value,
             submittedFields: acknowledgement
               ? []
-              : [...Object.keys(data), ...(linesDiff?.hasChanges && linesField ? [linesField] : [])],
+              : [...Object.keys(data), ...(linesDiff && linesField ? [linesField] : [])],
             ...(acknowledgement ? { acceptedValues: acknowledgement.values } : {}),
             ...(acknowledgement?.reconcile ? { reconcile: acknowledgement.reconcile } : {}),
             createdLines: Boolean(linesDiff?.created.length),
@@ -663,8 +673,8 @@ export function useFormViewSave({
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>
-      readOnly || recordUnavailable || Boolean(field.readOnly),
-    [readOnly, recordUnavailable],
+      formReadOnly || Boolean(field.readOnly),
+    [formReadOnly],
   );
   const discardChanges = React.useCallback(() => {
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
