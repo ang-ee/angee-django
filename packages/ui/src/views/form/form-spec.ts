@@ -11,7 +11,7 @@ import type { RelationCreateConfig } from "../relation/RelationPicker";
 import { parseFormSpec, parseFormSpecPayload, type FormSpecWire, type FormSpecFieldType } from "./form-spec-schema";
 export type { FormSpecFieldType } from "./form-spec-schema";
 
-export type FormSpecRelationCreate = Pick<RelationCreateConfig, "resource">;
+export type FormSpecRelationCreate = Pick<RelationCreateConfig, "resource" | "defaultValues">;
 
 /**
  * Descriptor produced from a backend-emitted JSON form schema.

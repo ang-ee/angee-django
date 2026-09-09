@@ -20,8 +20,10 @@ from angee.iam.permissions import session_user
 Extraction = apps.get_model("workflows_ocr", "Extraction")
 ExtractionSource = apps.get_model("workflows_ocr", "ExtractionSource")
 ExtractionPage = apps.get_model("workflows_ocr", "ExtractionPage")
+ExtractionPart = apps.get_model("workflows_ocr", "ExtractionPart")
 File = apps.get_model("storage", "File")
 InferenceModel = apps.get_model("agents", "InferenceModel")
+MessagePart = apps.get_model("messaging", "Part")
 
 
 def _read_queryset(model: type[models.Model]):
@@ -45,8 +47,14 @@ class ExtractionType(AngeeNode):
     created_at: auto
 
     @strawberry_django.field(only=["model_id"])
-    def model(self) -> strawberry.ID:
-        return require_public_id(InferenceModel, cast(Any, self).model_id)
+    def model(self) -> strawberry.ID | None:
+        model_id = cast(Any, self).model_id
+        return require_public_id(InferenceModel, model_id) if model_id else None
+
+    @strawberry_django.field(only=["recognition_model_id"])
+    def recognition_model(self) -> strawberry.ID | None:
+        model_id = cast(Any, self).recognition_model_id
+        return require_public_id(InferenceModel, model_id) if model_id else None
 
 
 @strawberry_django.type(ExtractionSource)
@@ -57,8 +65,14 @@ class ExtractionSourceType(AngeeNode):
     content_hash: auto
 
     @strawberry_django.field(only=["file_id"])
-    def file(self) -> strawberry.ID:
-        return require_public_id(File, cast(Any, self).file_id)
+    def file(self) -> strawberry.ID | None:
+        file_id = cast(Any, self).file_id
+        return require_public_id(File, file_id) if file_id else None
+
+    @strawberry_django.field(only=["message_part_id"])
+    def message_part(self) -> strawberry.ID | None:
+        part_id = cast(Any, self).message_part_id
+        return require_public_id(MessagePart, part_id) if part_id else None
 
 
 @strawberry_django.type(ExtractionPage)
@@ -83,6 +97,23 @@ class ExtractionPageEvidence:
 
 
 @strawberry.type
+class ExtractionPartEvidence:
+    position: int
+    source_page: int | None
+    mime_type: str
+    kind: str
+    method: str
+    content_hash: str
+    width: int | None
+    height: int | None
+    dpi: int | None
+    value: JSON
+    claims: JSON
+    metadata: JSON
+    duration_ms: int
+
+
+@strawberry.type
 class ExtractionEvidence:
     """Authorized raw evidence detail for one extraction revision."""
 
@@ -92,6 +123,7 @@ class ExtractionEvidence:
     provenance: JSON
     sources: list[ExtractionSourceType]
     pages: list[ExtractionPageEvidence]
+    parts: list[ExtractionPartEvidence]
 
 
 @strawberry.type
@@ -118,6 +150,24 @@ class ExtractionEvidenceQuery:
                 )
                 for page in row.pages.order_by("position")
             ],
+            parts=[
+                ExtractionPartEvidence(
+                    position=part.position,
+                    source_page=part.source_page,
+                    mime_type=part.mime_type,
+                    kind=part.kind,
+                    method=part.method,
+                    content_hash=part.content_hash,
+                    width=part.width,
+                    height=part.height,
+                    dpi=part.dpi,
+                    value=cast(JSON, part.value),
+                    claims=cast(JSON, part.claims),
+                    metadata=cast(JSON, part.metadata),
+                    duration_ms=part.duration_ms,
+                )
+                for part in row.parts.order_by("position")
+            ],
         )
 
 
@@ -125,7 +175,7 @@ _EXTRACTION_RESOURCE = hasura_model_resource(
     ExtractionType,
     model=Extraction,
     name="workflow_ocr_extractions",
-    filterable=["id", "status", "schema_id", "engine", "model", "created_at"],
+    filterable=["id", "status", "schema_id", "engine", "model", "recognition_model", "created_at"],
     sortable=["revision", "status", "schema_id", "created_at"],
     aggregatable=["id", "revision"],
     groupable=["status", "schema_id", "engine", "model"],
@@ -133,21 +183,28 @@ _EXTRACTION_RESOURCE = hasura_model_resource(
     update=False,
     delete=False,
     get_queryset=_read_queryset(Extraction),
-    field_id_decode={"model": public_pk_decoder(InferenceModel)},
+    field_id_decode={
+        "model": public_pk_decoder(InferenceModel),
+        "recognition_model": public_pk_decoder(InferenceModel),
+    },
 )
 _SOURCE_RESOURCE = hasura_model_resource(
     ExtractionSourceType,
     model=ExtractionSource,
     name="workflow_ocr_extraction_sources",
-    filterable=["id", "extraction", "file", "position"],
+    filterable=["id", "extraction", "file", "message_part", "position"],
     sortable=["extraction", "position"],
     aggregatable=["id", "position"],
-    groupable=["extraction", "file"],
+    groupable=["extraction", "file", "message_part"],
     insert=False,
     update=False,
     delete=False,
     get_queryset=_read_queryset(ExtractionSource),
-    field_id_decode={"extraction": public_pk_decoder(Extraction), "file": public_pk_decoder(File)},
+    field_id_decode={
+        "extraction": public_pk_decoder(Extraction),
+        "file": public_pk_decoder(File),
+        "message_part": public_pk_decoder(MessagePart),
+    },
 )
 _PAGE_RESOURCE = hasura_model_resource(
     ExtractionPageType,
@@ -180,6 +237,7 @@ schemas = {
             ExtractionSourceType,
             ExtractionPageType,
             ExtractionPageEvidence,
+            ExtractionPartEvidence,
             ExtractionEvidence,
             *_EXTRACTION_RESOURCE.types,
             *_SOURCE_RESOURCE.types,

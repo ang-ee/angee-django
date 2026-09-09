@@ -32,7 +32,10 @@ const RelationSchema = v.object({
   resource: NonEmptyString,
   labelField: v.optional(NonEmptyString),
   filters: v.optional(v.array(FilterSchema)),
-  create: v.optional(v.object({ resource: NonEmptyString })),
+  create: v.optional(v.object({
+    resource: NonEmptyString,
+    defaultValues: v.optional(v.record(v.string(), JsonSchema)),
+  })),
 });
 const FieldBaseSchema = v.object({
   type: v.optional(FieldTypeSchema),

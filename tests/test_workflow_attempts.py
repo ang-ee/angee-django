@@ -805,6 +805,38 @@ def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents
 
 
 @pytest.mark.django_db(transaction=True)
+def test_cancel_expires_applied_suspension_without_revoking_completed_attempt(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.SUSPEND,
+            decisions=(DecisionSpec(assignees=("auth/user:reviewer",), action="approve"),),
+            waiting_kind="approval",
+        ),
+        recorded_at=timezone.now(),
+    )
+
+    from angee.workflows import engine
+
+    engine.cancel(scheduled_step_run.run)
+
+    with system_context(reason="verify canceled retained suspension"):
+        scheduled_step_run.refresh_from_db()
+        attempt.refresh_from_db()
+        decision = Decision.objects.get(suspension_attempt=attempt)
+    assert scheduled_step_run.status == StepRunStatus.CANCELED
+    assert attempt.applied_at is not None
+    assert attempt.lease_revoked_at is None
+    assert decision.verdict == "expired"
+    assert decision.resolved_by == "workflows/cancel"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_decision_relationship_failure_rolls_back_entire_suspension(
     scheduled_step_run: StepRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:

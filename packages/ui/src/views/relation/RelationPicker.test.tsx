@@ -36,6 +36,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { defaultWidgets } from "../../widgets";
 import { RelationPicker } from "./RelationPicker";
+import type { RegisteredFormProps } from "../form/registered-form";
 
 const sdkMocks = vi.hoisted(() => ({
   record: null as Row | null,
@@ -243,11 +244,13 @@ describe("RelationPicker edit affordance", () => {
   });
 
   test("uses a registered complete form for inline create", async () => {
-    const CompleteForm = () => <div>Complete registered form</div>;
+    const CompleteForm = ({ defaultValues }: RegisteredFormProps) => (
+      <div>Complete registered form {String(defaultValues?.intake_id)} {String(defaultValues?.name)}</div>
+    );
     renderPicker(
       <RelationPicker
         options={[]}
-        create={{ resource: "integrate.OAuthClient" }}
+        create={{ resource: "integrate.OAuthClient", defaultValues: { intake_id: "inb_7" } }}
         aria-label="OAuth Client"
       />,
       {
@@ -264,7 +267,7 @@ describe("RelationPicker edit affordance", () => {
     });
     fireEvent.click(await screen.findByText("Create “Acme”"));
 
-    expect(await screen.findByText("Complete registered form")).toBeTruthy();
+    expect(await screen.findByText("Complete registered form inb_7 Acme")).toBeTruthy();
   });
 });
 

@@ -19,15 +19,25 @@ from rebac import current_actor, system_context
 
 from angee.base.actors import actor_user_id
 from angee.base.refs import canonical_record_target, record_ref_for
-from angee.workflows_ocr.engines import PageImage, PageResult
+from angee.workflows_ocr.engines import (
+    DocumentPart,
+    DocumentPipelineError,
+    DocumentResult,
+    DocumentSource,
+    OcrEngine,
+    PageImage,
+    PageResult,
+)
 
 
 def extract(
     *,
     files: Sequence[Any],
     schema: dict[str, Any],
-    model: Any,
+    model: Any | None,
     authorized_target: Any,
+    message_parts: Sequence[Any] = (),
+    recognition_model: Any | None = None,
     engine: str = "glm",
     config: Mapping[str, Any] | None = None,
 ) -> Any:
@@ -39,24 +49,26 @@ def extract(
     """
 
     ordered_files = tuple(files)
+    ordered_message_parts = tuple(message_parts)
     owner_id = actor_user_id(current_actor())
-    if not ordered_files:
-        raise ValidationError({"files": "At least one source file is required."})
+    if not ordered_files and not ordered_message_parts:
+        raise ValidationError({"files": "At least one file or message part is required."})
     if len({file.pk for file in ordered_files}) != len(ordered_files):
         raise ValidationError({"files": "Each source file may appear only once in an extraction."})
-    _authorize(ordered_files, authorized_target)
-    if not model.has_access("read"):
-        raise PermissionDenied("Read access to the inference model is required.")
+    if len({part.pk for part in ordered_message_parts}) != len(ordered_message_parts):
+        raise ValidationError({"message_parts": "Each message part may appear only once in an extraction."})
+    _authorize(ordered_files, ordered_message_parts, authorized_target)
+    for candidate in (model, recognition_model):
+        if candidate is not None and not candidate.has_access("read"):
+            raise PermissionDenied("Read access to every inference model is required.")
     normalized_schema = _validated_schema(schema)
     normalized_config = _json_object(config or {}, field="config")
     schema_id = str(normalized_schema.get("$id") or normalized_schema.get("x-version") or "")
     if not schema_id:
         raise ValidationError({"schema": "Extraction schemas require a stable $id or x-version."})
 
-    source_facts = [
-        {"position": position, "file": str(file.sqid), "content_hash": str(file.content_hash)}
-        for position, file in enumerate(ordered_files)
-    ]
+    document_sources = _document_sources(ordered_files, ordered_message_parts)
+    source_facts = [_source_fact(source) for source in document_sources]
     target_ref = record_ref_for(authorized_target)
     lineage_key = _digest(
         {
@@ -69,17 +81,15 @@ def extract(
             },
         }
     )
+    engine_class = _engine_class(engine)
     reuse_key = _digest(
         {
             "lineage": lineage_key,
             "schema": normalized_schema,
             "engine": engine,
-            "model": str(model.sqid),
-            "model_name": str(model.name),
-            "provider": str(model.provider_id),
-            "provider_url": str(model.provider.base_url),
-            "provider_config": model.provider.config,
-            "model_config": model.config,
+            "pipeline_version": str(engine_class.pipeline_version),
+            "model": _model_fingerprint(model),
+            "recognition_model": _model_fingerprint(recognition_model),
             "config": normalized_config,
         }
     )
@@ -91,36 +101,70 @@ def extract(
 
     pages: list[PageImage] = []
     page_results: list[PageResult] = []
+    document_result: DocumentResult | None = None
+    document_claims: dict[str, list[dict[str, Any]]] = {}
+    document_metadata: dict[str, Any] = {}
+    used_model_roles: tuple[str, ...] = ()
+    retained_parts = ()
     result: dict[str, Any] = {}
     conflicts: dict[str, list[Any]] = {}
     status = "succeeded"
     error_code = ""
     try:
-        pages = _rasterize(ordered_files)
-        engine_class = _engine_class(engine)
         engine_impl = engine_class()
         timeout = float(normalized_config.get("timeout") or settings.ANGEE_OCR_TIMEOUT_SECONDS)
-        started = time.monotonic()
-        for page in pages:
-            remaining = timeout - (time.monotonic() - started)
-            if remaining <= 0:
-                raise TimeoutError("Document extraction exceeded its configured timeout.")
-            page_results.append(
-                engine_impl.extract_page(
-                    page,
-                    normalized_schema,
-                    model=model,
-                    config=normalized_config,
-                    timeout=remaining,
-                )
+        if type(engine_impl).extract_document is not OcrEngine.extract_document:
+            document_result = engine_impl.extract_document(
+                document_sources,
+                normalized_schema,
+                model=model,
+                recognition_model=recognition_model,
+                config=normalized_config,
+                timeout=timeout,
             )
-        result, conflicts = _merge(page_results)
+            _validate_document_result(
+                document_result,
+                source_count=len(document_sources),
+                has_model=model is not None,
+                has_recognition_model=recognition_model is not None,
+            )
+            result = document_result.value
+            retained_parts = document_result.parts
+            document_claims = document_result.claims
+            document_metadata = document_result.engine_metadata or {}
+            used_model_roles = document_result.used_model_roles
+        else:
+            if model is None:
+                raise ValidationError({"model": "Legacy page extraction requires an inference model."})
+            if ordered_message_parts:
+                raise ValidationError({"message_parts": "The selected legacy page engine accepts files only."})
+            pages = _rasterize(document_sources)
+            started = time.monotonic()
+            for page in pages:
+                remaining = timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise TimeoutError("Document extraction exceeded its configured timeout.")
+                page_results.append(
+                    engine_impl.extract_page(
+                        page,
+                        normalized_schema,
+                        model=model,
+                        config=normalized_config,
+                        timeout=remaining,
+                    )
+                )
+            result, conflicts = _merge(page_results, schema=normalized_schema)
         errors = sorted(
             Draft202012Validator(normalized_schema).iter_errors(result),
             key=lambda error: list(error.path),
         )
         if errors:
             raise ValidationError({"result": "OCR output does not match the declared schema."})
+    except DocumentPipelineError as error:
+        retained_parts = error.parts
+        _validate_parts(retained_parts, source_count=len(source_facts))
+        status = "failed"
+        error_code = type(error).__name__
     except (RuntimeError, TimeoutError, ValidationError) as error:
         # The retained code is actionable without copying document values or a
         # provider response into an exception or workflow journal.
@@ -140,13 +184,26 @@ def extract(
             schema_digest=_digest(normalized_schema),
             engine=engine,
             model=model,
+            recognition_model=recognition_model,
             engine_config=normalized_config,
             result=result,
             provenance={
-                "source_count": len(ordered_files),
-                "page_count": len(pages),
+                "source_count": len(source_facts),
+                "page_count": len(pages) or sum(part.source_page is not None for part in retained_parts),
                 "conflicts": conflicts,
-                "completed_page_count": len(page_results),
+                "completed_page_count": len(page_results)
+                or sum(part.source_page is not None for part in retained_parts),
+                "claims": document_claims,
+                "document": document_metadata,
+                "configured_model_roles": [
+                    role
+                    for role, configured in (
+                        ("mapping", model is not None),
+                        ("recognition", recognition_model is not None),
+                    )
+                    if configured
+                ],
+                "used_model_roles": list(used_model_roles),
                 "target": {"resource_type": target_ref.resource_type, "public_id": target_ref.public_id},
             },
             content_type=target.content_type,
@@ -176,8 +233,14 @@ def extract(
         source_model = apps.get_model("workflows_ocr", "ExtractionSource")
         page_model = apps.get_model("workflows_ocr", "ExtractionPage")
         sources = [
-            source_model(extraction=extraction, file=file, position=position, content_hash=file.content_hash)
-            for position, file in enumerate(ordered_files)
+            source_model(
+                extraction=extraction,
+                file=source.file,
+                message_part=source.message_part,
+                position=source.source_position,
+                content_hash=source.content_hash,
+            )
+            for source in document_sources
         ]
         source_model._base_manager.bulk_create(sources)
         page_model._base_manager.bulk_create(
@@ -197,6 +260,30 @@ def extract(
                 for position, page in enumerate(pages[: len(page_results)])
             ]
         )
+        if retained_parts:
+            part_model = apps.get_model("workflows_ocr", "ExtractionPart")
+            part_model._base_manager.bulk_create(
+                [
+                    part_model(
+                        extraction=extraction,
+                        source=sources[part.source_position],
+                        position=position,
+                        source_page=part.source_page,
+                        mime_type=part.mime_type,
+                        kind=part.kind,
+                        method=part.method,
+                        content_hash=part.content_hash,
+                        width=part.width,
+                        height=part.height,
+                        dpi=part.dpi,
+                        value=part.value,
+                        claims=_claims_for_part(document_claims, position),
+                        metadata=part.metadata or {},
+                        duration_ms=max(part.duration_ms, 0),
+                    )
+                    for position, part in enumerate(retained_parts)
+                ]
+            )
     return extraction
 
 
@@ -207,21 +294,137 @@ def reextract(extraction: Any) -> Any:
         raise ValidationError({"extraction": "Only failed extraction evidence can be retried."})
     config = dict(extraction.engine_config)
     config["retry_of_revision"] = extraction.revision
+    sources = list(
+        extraction.sources.select_related("file", "message_part__fragment", "message_part__message").order_by(
+            "position"
+        )
+    )
     return extract(
-        files=[source.file for source in extraction.sources.select_related("file").order_by("position")],
+        files=[source.file for source in sources if source.file_id is not None],
+        message_parts=[source.message_part for source in sources if source.message_part_id is not None],
         schema=extraction.schema,
         model=extraction.model,
+        recognition_model=extraction.recognition_model,
         authorized_target=extraction.target,
         engine=str(extraction.engine),
         config=config,
     )
 
 
-def _authorize(files: Sequence[Any], target: Any) -> None:
+def _authorize(files: Sequence[Any], message_parts: Sequence[Any], target: Any) -> None:
     if not target.has_access("read"):
         raise PermissionDenied("Read access to the extraction target is required.")
     if any(not file.has_access("read") for file in files):
         raise PermissionDenied("Read access to every extraction source is required.")
+    if any(not part.has_access("read") for part in message_parts):
+        raise PermissionDenied("Read access to every extraction source is required.")
+
+
+def _message_part_hash(part: Any) -> str:
+    if part.fragment_id is None:
+        raise ValidationError({"message_parts": "Text message parts require a retained fragment."})
+    if not str(part.type).startswith("text/"):
+        raise ValidationError({"message_parts": "Only textual message parts can be extraction sources."})
+    if str(part.role) not in {"body", "title", "header"}:
+        raise ValidationError({"message_parts": "Quoted and signature message parts cannot be extraction sources."})
+    if len(part.fragment.text.encode()) > int(settings.ANGEE_OCR_MAX_BYTES):
+        raise ValidationError({"message_parts": "An extraction source exceeds the configured byte limit."})
+    return str(part.fragment.hash)
+
+
+def _document_sources(files: Sequence[Any], message_parts: Sequence[Any]) -> tuple[DocumentSource, ...]:
+    values = []
+    for i, file in enumerate(files):
+        with file.open_stream() as stream:
+            content = stream.read(int(settings.ANGEE_OCR_MAX_BYTES) + 1)
+        if len(content) > int(settings.ANGEE_OCR_MAX_BYTES):
+            raise ValidationError({"files": "An extraction source exceeds the configured byte limit."})
+        content_hash = hashlib.sha256(content).hexdigest()
+        if content_hash != str(file.content_hash).lower() or len(content) != int(file.size_bytes):
+            raise ValidationError({"files": "An extraction source no longer matches its retained identity."})
+        mime_type = str(getattr(getattr(file, "mime_type", None), "mime_type", "") or "")
+        values.append(DocumentSource(i, content_hash, mime_type, content, file=file))
+    for i, part in enumerate(message_parts):
+        text = str(part.fragment.text)
+        content_hash = _message_part_hash(part)
+        if hashlib.sha256(text.encode()).hexdigest() != content_hash:
+            raise ValidationError({"message_parts": "An extraction source no longer matches its retained identity."})
+        values.append(DocumentSource(len(files) + i, content_hash, str(part.type), text, message_part=part))
+    return tuple(values)
+
+
+def _source_fact(source: DocumentSource) -> dict[str, Any]:
+    identity = (
+        {"file": str(source.file.sqid)} if source.file is not None else {"message_part": str(source.message_part.sqid)}
+    )
+    return {"position": source.source_position, **identity, "content_hash": source.content_hash}
+
+
+def _model_fingerprint(model: Any | None) -> dict[str, Any] | None:
+    if model is None:
+        return None
+    return {
+        "id": str(model.sqid),
+        "name": str(model.name),
+        "provider": str(model.provider_id),
+        "provider_url": str(model.provider.base_url),
+        "provider_config": model.provider.config,
+        "model_config": model.config,
+    }
+
+
+def _claims_for_part(claims: Mapping[str, list[dict[str, Any]]], position: int) -> dict[str, Any]:
+    return {
+        pointer: [claim for claim in entries if claim.get("part_position") == position]
+        for pointer, entries in claims.items()
+        if any(claim.get("part_position") == position for claim in entries)
+    }
+
+
+def _validate_document_result(
+    result: DocumentResult, *, source_count: int, has_model: bool, has_recognition_model: bool
+) -> None:
+    if not isinstance(result.value, dict):
+        raise ValidationError({"result": "Document extraction output root must be an object."})
+    _json_object(result.value, field="result")
+    _validate_parts(result.parts, source_count=source_count)
+    if not isinstance(result.claims, dict):
+        raise ValidationError({"result": "Document claims must be an object."})
+    _reject_json_nul(result.claims, field="result")
+    for pointer, claims in result.claims.items():
+        if not isinstance(pointer, str) or not pointer.startswith("/") or not isinstance(claims, list):
+            raise ValidationError({"result": "Document claims must use JSON pointers."})
+        if any(
+            not isinstance(claim, dict)
+            or not isinstance(claim.get("part_position"), int)
+            or claim["part_position"] < 0
+            or claim["part_position"] >= len(result.parts)
+            for claim in claims
+        ):
+            raise ValidationError({"result": "Document claims reference unavailable evidence."})
+    _json_object(result.engine_metadata or {}, field="engine_metadata")
+    roles = set(result.used_model_roles)
+    if not roles <= {"mapping", "recognition"}:
+        raise ValidationError({"result": "Document extraction reported an unsupported model role."})
+    if ("mapping" in roles and not has_model) or ("recognition" in roles and not has_recognition_model):
+        raise ValidationError({"result": "Document extraction used an unconfigured inference model."})
+
+
+def _validate_parts(parts: Sequence[Any], *, source_count: int) -> None:
+    for part in parts:
+        if not isinstance(part, DocumentPart):
+            raise ValidationError({"result": "Document evidence has an unsupported shape."})
+        if part.source_position < 0 or part.source_position >= source_count:
+            raise ValidationError({"result": "Document evidence references an unavailable source."})
+        if part.kind not in {"structured", "native_text", "recognized_text"}:
+            raise ValidationError({"result": "Document evidence has an unsupported kind."})
+        try:
+            json.dumps(part.value, allow_nan=False)
+            json.dumps(part.metadata or {}, allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise ValidationError({"result": "Document evidence must contain JSON values."}) from error
+        _reject_json_nul(part.value, field="result")
+        _reject_json_nul(part.metadata or {}, field="result")
 
 
 def _validated_schema(schema: Any) -> dict[str, Any]:
@@ -238,10 +441,24 @@ def _validated_schema(schema: Any) -> dict[str, Any]:
 def _json_object(value: Any, *, field: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValidationError({field: "Must be a JSON object."})
+    _reject_json_nul(value, field=field)
     try:
         return json.loads(json.dumps(dict(value), sort_keys=True, allow_nan=False))
     except (TypeError, ValueError) as error:
         raise ValidationError({field: "Must contain JSON-compatible values."}) from error
+
+
+def _reject_json_nul(value: Any, *, field: str) -> None:
+    if isinstance(value, str):
+        if "\x00" in value:
+            raise ValidationError({field: "Must not contain null characters."})
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            _reject_json_nul(key, field=field)
+            _reject_json_nul(item, field=field)
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        for item in value:
+            _reject_json_nul(item, field=field)
 
 
 def _digest(value: Any) -> str:
@@ -251,25 +468,20 @@ def _digest(value: Any) -> str:
 
 def _engine_class(key: str) -> type[Any]:
     from angee.base.impl import resolve_impl_class
-
     from angee.workflows_ocr.engines import OcrEngine
 
     return resolve_impl_class("ANGEE_OCR_ENGINE_CLASSES", key, base_class=OcrEngine)
 
 
-def _rasterize(files: Sequence[Any]) -> list[PageImage]:
+def _rasterize(sources: Sequence[DocumentSource]) -> list[PageImage]:
     pages: list[PageImage] = []
-    max_bytes = int(settings.ANGEE_OCR_MAX_BYTES)
     max_pages = int(settings.ANGEE_OCR_MAX_PAGES)
     dpi = int(settings.ANGEE_OCR_DPI)
-    for source_position, file in enumerate(files):
-        if int(file.size_bytes) > max_bytes:
-            raise ValidationError({"files": "An extraction source exceeds the configured byte limit."})
-        with file.open_stream() as stream:
-            content = stream.read(max_bytes + 1)
-        if len(content) > max_bytes:
-            raise ValidationError({"files": "An extraction source exceeds the configured byte limit."})
-        mime = str(getattr(getattr(file, "mime_type", None), "mime_type", ""))
+    for source in sources:
+        if source.file is None or not isinstance(source.content, bytes):
+            raise ValidationError({"files": "Legacy page extraction accepts stored files only."})
+        content = source.content
+        mime = source.mime_type
         images = _pdf_images(content, dpi=dpi) if mime == "application/pdf" else [_load_image(content)]
         for source_page, image in enumerate(images):
             if len(pages) >= max_pages:
@@ -279,7 +491,7 @@ def _rasterize(files: Sequence[Any]) -> list[PageImage]:
             image.convert("RGB").save(output, format="JPEG", quality=90)
             pages.append(
                 PageImage(
-                    source_position,
+                    source.source_position,
                     source_page,
                     "image/jpeg",
                     output.getvalue(),
@@ -311,14 +523,41 @@ def _pdf_images(content: bytes, *, dpi: int) -> list[Image.Image]:
         raise ValidationError({"files": "The PDF could not be rasterized."}) from error
 
 
-def _merge(results: Sequence[PageResult]) -> tuple[dict[str, Any], dict[str, list[Any]]]:
+def _merge(
+    results: Sequence[PageResult],
+    *,
+    schema: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, list[Any]]]:
+    """Merge page objects while retaining required, explicitly nullable facts.
+
+    Empty values normally contribute no evidence.  A required property whose
+    schema accepts JSON null is different: an explicit null is the model's
+    evidence that the field was inspected and absent, and must survive when no
+    page supplies a substantive value.
+    """
+
     merged: dict[str, Any] = {}
     conflicts: dict[str, list[Any]] = {}
+    required = set(schema.get("required", ())) if isinstance(schema, Mapping) else set()
+    properties = schema.get("properties", {}) if isinstance(schema, Mapping) else {}
+    required_nullable = {
+        key
+        for key in required
+        if isinstance(properties, Mapping)
+        and isinstance(properties.get(key), Mapping)
+        and Draft202012Validator(dict(properties[key])).is_valid(None)
+    }
     for page in results:
         for key, value in page.value.items():
-            if value in (None, "", []):
+            if value is None:
+                if key in required_nullable and key not in merged:
+                    merged[key] = None
+                continue
+            if value in ("", []):
                 continue
             if key not in merged:
+                merged[key] = value
+            elif merged[key] is None:
                 merged[key] = value
             elif isinstance(merged[key], list) and isinstance(value, list):
                 merged[key] = [*merged[key], *value]

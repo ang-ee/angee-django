@@ -18,8 +18,10 @@ class OcrExtractInput(BaseModel):
     """Stable public references needed to perform extraction."""
 
     model_config = ConfigDict(extra="forbid")
-    files: list[str] = Field(min_length=1)
-    model: str
+    files: list[str] = Field(default_factory=list)
+    message_parts: list[str] = Field(default_factory=list)
+    model: str | None = None
+    recognition_model: str | None = None
     target_model: str
     target_id: str
 
@@ -74,19 +76,34 @@ class OcrExtractStepImpl(StepImpl):
             raise ValueError("OCR extraction requires the workflow run actor.")
         with actor_context(actor):
             file_model = apps.get_model("storage", "File")
+            part_model = apps.get_model("messaging", "Part")
             model_model = apps.get_model("agents", "InferenceModel")
             requested = list(file_model.objects.filter(sqid__in=input_value.files))
             by_id = {str(item.sqid): item for item in requested}
             if any(file_id not in by_id for file_id in input_value.files):
                 raise ValueError("One or more extraction files are unavailable.")
             files = [by_id[file_id] for file_id in input_value.files]
+            requested_parts = list(
+                part_model.objects.filter(sqid__in=input_value.message_parts).select_related("message", "fragment")
+            )
+            parts_by_id = {str(item.sqid): item for item in requested_parts}
+            if any(part_id not in parts_by_id for part_id in input_value.message_parts):
+                raise ValueError("One or more extraction message parts are unavailable.")
+            message_parts = [parts_by_id[part_id] for part_id in input_value.message_parts]
+            if not files and not message_parts:
+                raise ValueError("At least one extraction source is required.")
             target_model = apps.get_model(input_value.target_model)
             target = target_model.objects.get(sqid=input_value.target_id)
-            inference_model = model_model.objects.get(sqid=input_value.model)
+            inference_model = model_model.objects.get(sqid=input_value.model) if input_value.model else None
+            recognition_model = (
+                model_model.objects.get(sqid=input_value.recognition_model) if input_value.recognition_model else None
+            )
             evidence = extract(
                 files=files,
+                message_parts=message_parts,
                 schema=config.schema,
                 model=inference_model,
+                recognition_model=recognition_model,
                 authorized_target=target,
                 engine=config.engine,
                 config=config.engine_config,
@@ -106,9 +123,7 @@ class OcrExtractStepImpl(StepImpl):
             raise ValueError("OCR recovery requires the workflow run actor.")
         extraction_model = apps.get_model("workflows_ocr", "Extraction")
         with actor_context(actor):
-            evidence = reextract(
-                extraction_model.objects.get(sqid=source_attempt.output["extraction_id"])
-            )
+            evidence = reextract(extraction_model.objects.get(sqid=source_attempt.output["extraction_id"]))
         return StepResult.done(
             output={"extraction_id": str(evidence.sqid), "revision": evidence.revision},
             outcome="extracted" if evidence.status == "succeeded" else "failed",
