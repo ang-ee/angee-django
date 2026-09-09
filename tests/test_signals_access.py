@@ -19,7 +19,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.db import connection, models
 from django.db.models.signals import post_save
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from django.utils import timezone
 from rebac import actor_context, anonymous_actor
 from strawberry import auto
@@ -35,18 +35,6 @@ from angee.graphql.field_types import register_field_type
 from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from tests.conftest import SchemaAddon, _clear_model_tables, _create_missing_tables
-
-
-class AuditStamped(TimestampMixin, AuditMixin, models.Model):
-    """Concrete audit model used to test model-owned stamping."""
-
-    id = models.CharField(max_length=32, primary_key=True)
-    name = models.CharField(max_length=64)
-
-    class Meta:
-        """Django model options for the test model."""
-
-        app_label = "auth"
 
 
 def payload(**overrides: object) -> dict[str, object]:
@@ -70,12 +58,35 @@ def _receiver_count(signal: Any, dispatch_uid: str) -> int:
 
 
 @pytest.mark.django_db(transaction=True)
+@isolate_apps()
 def test_audit_mixin_stamps_from_rebac_actor_inside_save() -> None:
     """Audit fields are stamped by the model save chain, including partial saves."""
 
-    User = get_user_model()
-    creator = User.objects.create_user(username="audit-creator")
-    editor = User.objects.create_user(username="audit-editor")
+    GlobalUser = get_user_model()
+
+    class User(models.Model):
+        """Isolated registry reference to the installed user table."""
+
+        id = models.BigAutoField(primary_key=True)
+
+        class Meta:
+            app_label = "iam"
+            db_table = GlobalUser._meta.db_table
+            managed = False
+
+    class AuditStamped(TimestampMixin, AuditMixin, models.Model):
+        """Concrete audit model used to test model-owned stamping."""
+
+        id = models.CharField(max_length=32, primary_key=True)
+        name = models.CharField(max_length=64)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    creator = GlobalUser.objects.create_user(username="audit-creator")
+    editor = GlobalUser.objects.create_user(username="audit-editor")
 
     created_models = _create_missing_tables((AuditStamped,))
     try:
