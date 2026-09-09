@@ -276,7 +276,10 @@ Rules that follow from the layering:
 - Field classes own data-resource classification declarations. Field authors set
   `angee_widget`, `angee_scalar_hint`, and `angee_currency_field` on the field;
   `angee.data.field_classification` reads those declarations and does
-  not special-case addon-owned field classes.
+  not special-case addon-owned field classes. Custom widget keys use
+  `namespace.addon.widget` (lowercase segments with digits/underscores); the
+  owning web addon registers the identical key. Unknown bare built-in names
+  remain schema errors.
 - Manually ordered rows use `FractionalRankField` (NOT NULL) plus a database
   `UniqueConstraint` over their context fields and rank. Use the field's
   append/between API; `FractionalRankExhausted` means enqueue

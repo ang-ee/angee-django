@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from contextlib import ExitStack
 from typing import Any
@@ -65,9 +66,10 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         """Validate selected addon resource files without saving rows."""
 
         selected_addons = tuple(addons)
-        row_groups, grant_groups = self._groups_for(selected_addons, tiers=tiers)
+        entries, row_groups, grant_groups = self._groups_for(selected_addons, tiers=tiers)
         self._check_xref_collisions(row_groups)
         self._import_groups(
+            entries,
             row_groups,
             grant_groups,
             dry_run=True,
@@ -95,9 +97,10 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             raise ImproperlyConfigured("resources load demo requires DEBUG or --allow-non-dev")
 
         selected_addons = tuple(addons)
-        row_groups, grant_groups = self._groups_for(selected_addons, tiers=active_tiers)
+        entries, row_groups, grant_groups = self._groups_for(selected_addons, tiers=active_tiers)
         self._check_xref_collisions(row_groups)
         return self._import_groups(
+            entries,
             row_groups,
             grant_groups,
             dry_run=dry_run,
@@ -106,6 +109,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
 
     def _import_groups(
         self,
+        entries: tuple[ResourceEntry, ...],
         row_groups: tuple[ResourceGroup, ...],
         grant_groups: tuple[GrantGroup, ...],
         *,
@@ -114,10 +118,10 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
     ) -> LoadResult:
         """Import model rows and materialize grants; optionally roll back.
 
-        Grants resolve their references through the ledger written by the row
-        import above, so they run last within the same transaction. A dry run
-        exercises both paths — resolving grant xrefs against the (uncommitted)
-        rows — before rolling everything back.
+        Independent grants follow model rows as before. Explicit dependencies
+        take precedence, so a row that validates a membership may depend on its
+        grant. Post-load hooks observe both rows and grants. Dry runs execute
+        row validation and grant writes inside the same rollback boundary.
         """
 
         loaded_groups = [
@@ -145,6 +149,10 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             raise ResourceLoadError(
                 "Resource rows, ledger and grants must use the default database to share the resource load transaction."
             )
+        rows_by_entry: dict[EntryKey, list[tuple[ResourceGroup, Any]]] = defaultdict(list)
+        for group, resource in loaded_groups:
+            rows_by_entry[group.entry.key].append((group, resource))
+        grants_by_entry = {group.entry.key: group for group in grant_groups}
         load_result = LoadResult(created=0, updated=0, skipped=0)
         try:
             reason = "resources.validate" if dry_run else "resources.load"
@@ -152,34 +160,39 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                 with ExitStack() as preparations:
                     for plan in self._write_preparations(loaded_groups):
                         preparations.enter_context(plan.owner.prepare_resource_writes(plan.targets))
-                    for group, resource in loaded_groups:
-                        try:
-                            result = resource.import_data(
-                                group.dataset,
-                                dry_run=False,
-                                raise_errors=True,
-                                rollback_on_validation_errors=True,
-                                use_transactions=False,
+                    imported_groups: list[tuple[ResourceGroup, Any]] = []
+                    for entry in entries:
+                        if entry.kind == GRANT_KIND:
+                            created, skipped = materialize_grant_groups(
+                                (grants_by_entry[entry.key],),
+                                ledger_model=self.model,
+                                addon_aliases=addon_aliases,
                             )
-                        except ResourceImportError as error:
-                            if error.number is not None:
-                                error.number = group.source_rows[error.number - 1]
-                            raise ResourceLoadError(f"{group.entry.display}: {error}") from error
-                        except IntegrityError as error:
-                            raise ResourceLoadError(f"{group.entry.display}: {error}") from error
-                        load_result = load_result.with_result(result)
+                            load_result = LoadResult(
+                                created=load_result.created + created,
+                                updated=load_result.updated,
+                                skipped=load_result.skipped + skipped,
+                            )
+                            continue
+                        for group, resource in rows_by_entry[entry.key]:
+                            try:
+                                result = resource.import_data(
+                                    group.dataset,
+                                    dry_run=False,
+                                    raise_errors=True,
+                                    rollback_on_validation_errors=True,
+                                    use_transactions=False,
+                                )
+                            except ResourceImportError as error:
+                                if error.number is not None:
+                                    error.number = group.source_rows[error.number - 1]
+                                raise ResourceLoadError(f"{group.entry.display}: {error}") from error
+                            except IntegrityError as error:
+                                raise ResourceLoadError(f"{group.entry.display}: {error}") from error
+                            load_result = load_result.with_result(result)
+                            imported_groups.append((group, resource))
                     if not dry_run:
-                        self._run_post_load_hooks(loaded_groups)
-                    created, skipped = materialize_grant_groups(
-                        grant_groups,
-                        ledger_model=self.model,
-                        addon_aliases=addon_aliases,
-                    )
-                    load_result = LoadResult(
-                        created=load_result.created + created,
-                        updated=load_result.updated,
-                        skipped=load_result.skipped + skipped,
-                    )
+                        self._run_post_load_hooks(imported_groups)
                     if dry_run:
                         raise DryRunRollback()
         except DryRunRollback:
@@ -263,17 +276,18 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         addons: Iterable[Any],
         *,
         tiers: Iterable[object] | None,
-    ) -> tuple[tuple[ResourceGroup, ...], tuple[GrantGroup, ...]]:
-        """Return selected model-row groups and grant groups in dependency order."""
+    ) -> tuple[tuple[ResourceEntry, ...], tuple[ResourceGroup, ...], tuple[GrantGroup, ...]]:
+        """Return selected entries and their model-row/grant groups, including empty entries."""
 
         groups: list[ResourceGroup] = []
         grant_groups: list[GrantGroup] = []
-        for entry in self._entries_for(addons, tiers=tiers):
+        entries = self._entries_for(addons, tiers=tiers)
+        for entry in entries:
             if entry.kind == GRANT_KIND:
                 grant_groups.append(GrantGroup(entry=entry, rows=entry.read_grant_rows()))
             else:
                 groups.extend(entry.read_groups())
-        return tuple(groups), tuple(grant_groups)
+        return entries, tuple(groups), tuple(grant_groups)
 
     def _entries_for(
         self,
@@ -297,7 +311,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                     )
                     if entry.key not in excluded:
                         entries.append(entry)
-        return EntryGraph.from_entries(entries).ordered()
+        return EntryGraph.from_entries(sorted(entries, key=lambda entry: entry.kind == GRANT_KIND)).ordered()
 
     def _excluded_entry_keys(self) -> frozenset[EntryKey]:
         """Return project-excluded resource entry keys from settings."""
