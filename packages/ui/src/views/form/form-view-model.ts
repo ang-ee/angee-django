@@ -27,6 +27,23 @@ import { isStructuredPresenceField, structuredFieldErrorPaths } from "./field-va
 export type FormValues = Record<string, unknown>;
 const MISSING_DOTTED_VALUE = Symbol("missing-dotted-value");
 
+/** Preserve dirty array values atomically instead of merging server rows by index. */
+export function dirtyArrayValues(
+  values: FormValues,
+  isDirty: (path: string) => boolean,
+  prefix = "",
+): readonly (readonly [string, unknown[]])[] {
+  return Object.entries(values).flatMap(([name, value]) => {
+    const path = prefix ? `${prefix}.${name}` : name;
+    if (Array.isArray(value)) {
+      return isDirty(path) ? [[path, structuredClone(value)] as const] : [];
+    }
+    return value && typeof value === "object"
+      ? dirtyArrayValues(value as FormValues, isDirty, path)
+      : [];
+  });
+}
+
 /** Child lines threaded through a form reset alongside declared field values. */
 export interface LinesSeed {
   field: string;

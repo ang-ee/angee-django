@@ -113,6 +113,7 @@ test("a bound parent value follows native dotted child updates", async () => {
 });
 
 async function fixture(options: {
+  readOnlyWhen?: (record: Row) => boolean;
   id?: string | null;
   submit?: FormSubmit;
   mountedFields?: readonly string[];
@@ -155,7 +156,7 @@ async function fixture(options: {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
       dataResource: resource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
-      submit: options.submit, onSaved, t: (key) => key,
+      submit: options.submit, readOnlyWhen: options.readOnlyWhen, onSaved, t: (key) => key,
       acknowledgedSource: options.acknowledgedSource,
       onFieldInteractionStart: options.onFieldInteractionStart,
       onFieldInteractionCommit: options.onFieldInteractionCommit,
@@ -332,6 +333,30 @@ test("a record panel switches to the field tab before focusing its native contro
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
 
+test("persisted state locks every field, save and patch while lifecycle cache updates remain available", async () => {
+  const f = await fixture({ readOnlyWhen: (record) => record.status === "confirmed" });
+  edit("title", "Local edit");
+  act(() => f.surface().form.setValue("status", "confirmed"));
+  expect(f.surface().formReadOnly).toBe(false);
+  f.setRecord({ id: "note-1", title: "First", body: "Original body", status: "confirmed" });
+  await act(async () => f.surface().reload());
+  await waitFor(() => expect(f.surface().formReadOnly).toBe(true));
+  expect(f.surface().fieldReadOnly(fields[0]!)).toBe(true);
+  await expect(f.surface().submitForm()).rejects.toThrow("disabled");
+  await expect(f.surface().applyPatch({ title: "Forbidden" })).rejects.toThrow("disabled");
+  expect(f.update).not.toHaveBeenCalled();
+  act(() => f.surface().patchRecord({ status: "draft" }));
+  await waitFor(() => expect(f.surface().formReadOnly).toBe(false));
+  expect(f.surface().fieldReadOnly(fields[0]!)).toBe(false);
+});
+
+test("a read-only policy does not lock a new record from draft defaults", async () => {
+  const policy = vi.fn(() => true);
+  const f = await fixture({ id: null, readOnlyWhen: policy });
+  expect(f.surface().formReadOnly).toBe(false);
+  expect(policy).not.toHaveBeenCalled();
+});
+
 test("external acknowledged values share one save and disable the native detail read", async () => {
   const source = {
     record: { id: "note-1", title: "First" },
@@ -437,12 +462,21 @@ test("a full acknowledgement rebases submitted graph values while retaining late
   expect(f.surface().formIsDirty).toBe(true);
 });
 
-test.each(["add", "remove"] as const)("a full acknowledgement preserves an in-flight array %s", async (change) => {
+test.each(["add", "remove", "reorder"] as const)("a full acknowledgement preserves an in-flight array %s", async (change) => {
   let resolve!: (value: ReturnType<typeof acknowledgeFormSubmit>) => void;
   const original = { key: "first", name: "First" };
+  const other = { key: "second", name: "Second" };
+  const initial = change === "reorder" ? [original, other] : [original];
+  const later = change === "add" ? [original, { key: "later", name: "Later" }]
+    : change === "remove" ? [] : [other, original];
+  const accepted = {
+    title: "Submitted",
+    body: "Accepted",
+    definition: { nodes: initial.map((node) => ({ ...node, serverValue: "accepted" })) },
+  };
   const source: FormViewAcknowledgedSource = {
     record: { id: "note-1", title: "First" },
-    values: { title: "First", definition: { nodes: [original] } },
+    values: { title: "First", body: "Initial", definition: { nodes: initial } },
   };
   const f = await fixture({
     acknowledgedSource: source,
@@ -454,22 +488,29 @@ test.each(["add", "remove"] as const)("a full acknowledgement preserves an in-fl
   await waitFor(() => expect(f.surface().pending).toBe(true));
   act(() => f.surface().form.setValue(
     "definition.nodes",
-    (change === "add" ? [original, { key: "later", name: "Later" }] : []) as never,
+    later as never,
     { shouldDirty: true },
   ));
   await act(async () => {
     resolve(acknowledgeFormSubmit(
       { id: "note-1", title: "Submitted" },
-      { title: "Submitted", definition: { nodes: [{ ...original, serverValue: "accepted" }] } },
+      accepted,
     ));
     await saving;
   });
-  expect(f.surface().form.getValues("definition.nodes")).toEqual(
-    change === "add"
-      ? [original, { key: "later", name: "Later" }]
-      : [],
-  );
+  expect(f.surface().form.getValues("definition.nodes")).toEqual(later);
+  expect(f.surface().form.getValues("body")).toBe("Accepted");
+  expect(f.surface().form.formState.defaultValues).toMatchObject(accepted);
   expect(f.surface().formIsDirty).toBe(true);
+  const latest = f.surface().form.getValues();
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.surface().pending).toBe(true));
+  await act(async () => {
+    resolve(acknowledgeFormSubmit({ id: "note-1", title: "Submitted" }, latest));
+    await saving;
+  });
+  expect(f.surface().form.getValues("definition.nodes")).toEqual(later);
+  expect(f.surface().formIsDirty).toBe(false);
 });
 
 test("bound descriptors scope prefill, null, errors and readonly to the declaring record", async () => {

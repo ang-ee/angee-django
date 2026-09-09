@@ -688,6 +688,9 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
         roots: {
           list: "notes",
           detail: "note",
+          // Form tests exercise writable records; the resource owns that contract.
+          create: "insert_notes_one",
+          update: "update_notes_by_pk",
           aggregate: "noteAggregate",
           groups: "noteGroups",
           groupsCount: "noteGroupsCount",
@@ -2481,6 +2484,8 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
               roots: {
                 list: "sales",
                 detail: "sale",
+                create: "insert_sales_one",
+                update: "update_sales_by_pk",
                 aggregate: "saleAggregate",
               },
               typeNames: {

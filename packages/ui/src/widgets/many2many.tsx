@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import { Chip, RemovableChip } from "../ui/chip";
-import { Select } from "../ui/select";
+import { Select, SelectPrimitive, SelectValue, SelectIcon, SelectList, SelectItem, SelectItemText, SelectItemIndicator } from "../ui/select";
 import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
 import {
@@ -49,6 +49,70 @@ export function Many2ManyEdit({
         }}
       />
     </div>
+  );
+}
+
+export function Many2ManyCellEdit({
+  value,
+  onChange,
+  field,
+  readOnly,
+}: WidgetRenderProps<readonly unknown[]>): ReactElement {
+  const selected = normaliseValues(value);
+  const options = field?.options ?? [];
+  // Retain selected ids outside the loaded option window. They remain visible
+  // and removable; opening the picker must never silently drop a stored relation.
+  const choices: readonly WidgetOption[] = [
+    ...options,
+    ...selected.filter((id) => !options.some((option) => option.value === id))
+      .map((id) => ({ value: id, label: id })),
+  ];
+
+  if (readOnly) return <Many2ManyRead value={selected} field={field} />;
+
+  const summary = selected.map((id) => optionTextLabel(optionLabel(options, id), id)).join(", ");
+  return (
+    <SelectPrimitive.Root<string, true>
+      multiple
+      value={selected}
+      items={choices}
+      onValueChange={(next) => onChange?.(next)}
+    >
+      <SelectPrimitive.Trigger
+        {...field?.controlProps}
+        disabled={choices.length === 0}
+        aria-label={widgetLabel(field, "Related records")}
+        title={summary || undefined}
+      >
+        <SelectValue>
+          {() => selected.length ? (
+            <span className="flex min-w-0 items-center gap-1">
+              <Chip tone="info" size="sm" className="min-w-0 shrink">
+                {optionLabel(options, selected[0])}
+              </Chip>
+              {selected.length > 1 ? <span className="shrink-0 text-xs">+{selected.length - 1}</span> : null}
+            </span>
+          ) : widgetLabel(field, "Add record")}
+        </SelectValue>
+        <SelectIcon />
+      </SelectPrimitive.Trigger>
+      <SelectPrimitive.Portal>
+        <SelectPrimitive.Positioner sideOffset={4}>
+          <SelectPrimitive.Content>
+            <SelectList>
+              {choices.map((option) => (
+                <SelectItem key={option.value} value={option.value}
+                  disabled={option.disabled && !selected.includes(option.value)}
+                  label={optionTextLabel(option.label)}>
+                  <SelectItemText>{option.label}</SelectItemText>
+                  <SelectItemIndicator />
+                </SelectItem>
+              ))}
+            </SelectList>
+          </SelectPrimitive.Content>
+        </SelectPrimitive.Positioner>
+      </SelectPrimitive.Portal>
+    </SelectPrimitive.Root>
   );
 }
 

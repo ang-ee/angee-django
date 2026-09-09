@@ -33,6 +33,11 @@ on:
         required: false
         type: string
         default: full
+      framework-repository:
+        description: Repository containing the framework ref under test.
+        required: false
+        type: string
+        default: ang-ee/angee-django
       framework-ref:
         description: Framework ref used when another repository calls the stack lane.
         required: false
@@ -131,7 +136,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: ang-ee/angee-django
+          repository: ${{ inputs.framework-repository }}
           ref: ${{ github.repository == 'ang-ee/angee-django' && github.sha || inputs.framework-ref }}
           path: stack/workspaces/src/angee
       - uses: actions/checkout@v4

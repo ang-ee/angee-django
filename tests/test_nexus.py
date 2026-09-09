@@ -662,3 +662,21 @@ def test_party_network_applies_pair_intersection_to_every_edge(nexus_tables: Non
     )["party_network"]
 
     assert payload == [{"id": shown.sqid}]
+
+
+def test_viewer_relative_party_resolvers_remain_objects() -> None:
+    """Computed object projections must not become default relation reads/pickers."""
+
+    resources = {item.model_label: item for item in _schema().angee_resources}
+    for label, names in {
+        "parties.Party": ["tie", "cadence"],
+    }.items():
+        resource = resources[label]
+        fields = {field.name: field for field in resource.fields}
+        for name in names:
+            assert fields[name].kind == "object"
+            assert fields[name].scalar is None
+            assert not fields[name].relation_object
+            assert resource.query.fields[name].kind == "object"
+            assert resource.query.fields[name].relation is None
+            assert resource.query.fields[name].row is None
