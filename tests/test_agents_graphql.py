@@ -2014,3 +2014,19 @@ def _public_id(sqid: str) -> str:
     """Return the public id for a console node."""
 
     return str(sqid)
+
+
+def test_inference_provider_resolver_remains_an_object() -> None:
+    """Computed object projections must not become default relation reads/pickers."""
+
+    resources = {item.model_label: item for item in _schema().angee_resources}
+    for label, names in {"integrate.Integration": ["inference_provider"]}.items():
+        resource = resources[label]
+        fields = {field.name: field for field in resource.fields}
+        for name in names:
+            assert fields[name].kind == "object"
+            assert fields[name].scalar is None
+            assert not fields[name].relation_object
+            assert resource.query.fields[name].kind == "object"
+            assert resource.query.fields[name].relation is None
+            assert resource.query.fields[name].row is None

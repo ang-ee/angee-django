@@ -526,3 +526,14 @@ def _public_id(instance: Any) -> str:
     """Return the public id for one node instance."""
 
     return str(instance.sqid)
+
+
+def test_markdown_sidecar_preserves_its_native_relation() -> None:
+    """The same-named reverse OneToOne, not the resolver result, owns this relation."""
+
+    resource = next(item for item in _schema("console").angee_resources if item.model_label == "knowledge.Page")
+    field = next(field for field in resource.fields if field.name == "markdown")
+    assert resource.model._meta.get_field("markdown").one_to_one
+    assert field.kind == "relation"
+    assert field.relation_object
+    assert resource.query.fields["markdown"].relation.model == "knowledge.MarkdownPage"
