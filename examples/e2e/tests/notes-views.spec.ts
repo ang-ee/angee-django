@@ -13,6 +13,63 @@ const UPDATED_DAY_URL = "/notes?group=updated_at:day";
 test.describe("notes views — sort, date drill-down, aggregates, control band", () => {
   test.use({ storageState: roleStatePath("alice") });
 
+  test("renders note tags as chips in the list, not raw JSON", async ({ page }) => {
+    const notes = new NotesPage(page);
+    await page.goto("/notes?group=status");
+    await expect(notes.groupHeaders.first()).toBeVisible({ timeout: 25000 });
+    await notes.expandGroup("Active");
+
+    const row = page.locator('tbody tr[role="link"]', {
+      hasText: "Welcome to Angee",
+    });
+    await expect(row).toBeVisible();
+    for (const tag of ["onboarding", "backend"]) {
+      await expect(row.getByText(tag, { exact: true })).toHaveClass(/rounded-full/);
+    }
+    await expect(row).not.toContainText('["onboarding","backend"]');
+  });
+
+  test("renders note tags as chips on board cards", async ({ page }) => {
+    await page.goto("/notes?view=board&group=status");
+    const card = page.locator("article", { hasText: "Welcome to Angee" });
+    await expect(card).toBeVisible({ timeout: 25000 });
+    for (const tag of ["onboarding", "backend"]) {
+      await expect(card.getByText(tag, { exact: true })).toHaveClass(/rounded-full/);
+    }
+    await expect(card).not.toContainText('["onboarding","backend"]');
+  });
+
+  test("does not render an empty tags array as raw JSON", async ({ page, api }) => {
+    const title = `E2E empty tags ${Date.now()}`;
+    const created = await api.query<{
+      insert_notes_one: { id: string } | null;
+    }>(
+      `mutation { insert_notes_one(object: { title: "${title}", tags: [] }) { id } }`,
+    );
+    const noteId = created.data?.insert_notes_one?.id;
+    expect(noteId, created.errors?.map((error) => error.message).join(" | ")).toBeTruthy();
+    if (!noteId) throw new Error("The empty-tags regression fixture could not be created");
+
+    try {
+      const notes = new NotesPage(page);
+      await page.goto("/notes");
+      await expect(notes.groupHeaders.first()).toBeVisible({ timeout: 25000 });
+      await notes.groupHeaders.first().click();
+      const row = page.locator('tbody tr[role="link"]', { hasText: title });
+      await expect(row).toBeVisible({ timeout: 12000 });
+      await expect(row).not.toContainText("[]");
+
+      await page.goto("/notes?view=board&group=status");
+      const card = page.locator("article", { hasText: title });
+      await expect(card).toBeVisible({ timeout: 25000 });
+      await expect(card).not.toContainText("[]");
+    } finally {
+      await api.query(
+        `mutation { delete_notes_by_pk(id: "${noteId}") { id } }`,
+      );
+    }
+  });
+
   test("only orderable columns expose a sort control, and sorting raises no GraphQL error", async ({ page }) => {
     const errors: string[] = [];
     page.on("console", (m) => {

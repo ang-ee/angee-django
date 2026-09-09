@@ -33,7 +33,7 @@ function noteList(agentsHref: string | undefined, t: NotesT): React.ReactElement
       }}
     >
       <Column field="title" />
-      <Column field="tags" sortable={false} />
+      <Column field="tags" widget="tagInput" sortable={false} />
       <Column field="status" widget="statusBadge" />
       <Column field="word_count" align="right" aggregate="sum" />
       <Column field="updated_at" />
