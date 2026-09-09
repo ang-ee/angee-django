@@ -53,8 +53,14 @@ describe("resource query grouping projections", () => {
       ],
     });
   });
-  test("rejects stale aliases and unknown axes at the boundary", () => {
-    expect(() => query.groupsFrom([{ field: "party.display_name" }])).toThrow("unknown group axis");
+  test("accepts an axis's own label or identity path as an alias for the declared axis", () => {
+    expect(query.groupsFrom([{ field: "party.display_name" }]).map((axis) => axis.id)).toEqual(["party"]);
+    expect(query.groupsFrom([{ field: "party.id" }]).map((axis) => axis.spec)).toEqual([{ field: "party" }]);
+    expect(query.canonicalAxisField("party.display_name")).toBe("party");
+    expect(query.canonicalAxisField("party.nope")).toBeUndefined();
+    expect(() => query.groupsFrom([{ field: "party" }, { field: "party.display_name" }])).toThrow(/duplicate/);
+  });
+  test("rejects unknown axes at the boundary", () => {
     expect(() => query.groupsFrom([{ field: "party", aggregateKey: "partyId" }])).toThrow();
     expect(() => query.group({ field: "missing" })).toThrow("unknown group axis");
   });

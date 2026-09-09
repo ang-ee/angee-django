@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type {
   DataResourceFieldMetadata,
   DataResourceMetadata,
@@ -20,6 +20,8 @@ import {
   buildGroupOptions,
   resolveResourceViewGroup,
   validResourceViewGroupStack,
+  resolveResourceViewGroupSoft,
+  validResourceViewGroupStackSoft,
 } from "./resource-view-utils";
 import {
   columnsWithMetadataDefaults,
@@ -657,8 +659,31 @@ describe("canonical relation grouping", () => {
   });
   test("reports stale label groups instead of silently dropping query state", () => {
     expect(() => validResourceViewGroupStack([{ field: "sender__display_name" }], MESSAGE_METADATA)).toThrow(/unknown group axis/);
-    expect(() => validResourceViewGroupStack([{ field: "sender.display_name" }], MESSAGE_METADATA)).toThrow(/unknown group axis/);
+    expect(validResourceViewGroupStack([{ field: "sender.display_name" }], MESSAGE_METADATA)).toEqual([{ field: "sender" }]);
     expect(validResourceViewGroupStack([{ field: "sender" }, { field: "status" }], MESSAGE_METADATA)).toEqual([{ field: "sender" }, { field: "status" }]);
+  });
+  describe("soft resolution for defaults and persisted state", () => {
+    afterEach(() => { vi.restoreAllMocks(); });
+    test("drops an unresolvable group with a warning and keeps the rest", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      expect(resolveResourceViewGroupSoft({ field: "sender__display_name" }, MESSAGE_METADATA)).toBeNull();
+      expect(resolveResourceViewGroupSoft({ field: "sender.display_name" }, MESSAGE_METADATA)).toEqual({ field: "sender" });
+      expect(validResourceViewGroupStackSoft(
+        [{ field: "retired_axis" }, { field: "status" }, { field: "sender.display_name" }],
+        MESSAGE_METADATA,
+      )).toEqual([{ field: "status" }, { field: "sender" }]);
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls[0]?.[0]).toMatch(/Dropping group "sender__display_name"/);
+    });
+    test("passes groups through untouched without metadata", () => {
+      expect(validResourceViewGroupStackSoft([{ field: "anything" }], null)).toEqual([{ field: "anything" }]);
+    });
+    test("toolbar options skip a stale default instead of failing", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const options = buildGroupOptions([{ field: "status" }], MESSAGE_METADATA, [{ field: "gone" }, { field: "sender.display_name" }]);
+      expect(options.map((option) => option.id)).toEqual(["sender", "status"]);
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

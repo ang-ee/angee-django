@@ -7,8 +7,8 @@ import {
   type ResourceViewGroup,
 } from "./resource-view-model";
 import {
-  resolveResourceViewGroup,
-  validResourceViewGroupStack,
+  resolveResourceViewGroupSoft,
+  validResourceViewGroupStackSoft,
 } from "./resource-view-utils";
 
 const EMPTY_GROUP_STACK = [] as const;
@@ -30,17 +30,17 @@ export function useResourceViewGroupState({
   clearRemovedDefault = true,
 }: UseResourceViewGroupStateProps): readonly ResourceViewGroup[] {
   const activeDefaultGroup = React.useMemo(
-    () => defaultGroup ? resolveResourceViewGroup(defaultGroup, modelMetadata) : null,
+    () => defaultGroup ? resolveResourceViewGroupSoft(defaultGroup, modelMetadata) : null,
     [defaultGroup, modelMetadata],
   );
   const validDefaultGroupStack = React.useMemo(
     () => activeDefaultGroup
-      ? validResourceViewGroupStack([activeDefaultGroup], modelMetadata)
+      ? validResourceViewGroupStackSoft([activeDefaultGroup], modelMetadata)
       : EMPTY_GROUP_STACK,
     [activeDefaultGroup, modelMetadata],
   );
   const validCurrentGroupStack = React.useMemo(
-    () => validResourceViewGroupStack(resourceView.state.groupStack, modelMetadata),
+    () => validResourceViewGroupStackSoft(resourceView.state.groupStack, modelMetadata),
     [modelMetadata, resourceView.state.groupStack],
   );
   // The previous applied default is transition memory: reading it here is

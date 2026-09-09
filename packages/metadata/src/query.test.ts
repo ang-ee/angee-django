@@ -63,7 +63,9 @@ describe("ResourceQuery", () => {
     for (const filter of [{ channel: { sqid: "a" } }, { channel: { id: "a" } }, { channel: { _eq: "a" } }, { missing: "x" }, { body: { regex: ".*" } }]) expect(() => query.filterFrom(filter)).toThrow(QueryParseError);
     expect(() => query.groupsFrom([{ field: "channel", aggregateKey: "channel_id" }])).toThrow(QueryParseError);
     expect(() => query.groupsFrom([{ field: "channel" }, { field: "channel" }])).toThrow(/duplicate/);
-    expect(() => query.groupsFrom([{ field: "channel.display_name" }])).toThrow(/unknown group/);
+    expect(query.groupsFrom([{ field: "channel.display_name" }]).map((axis) => axis.id)).toEqual(["channel"]);
+    expect(() => query.groupsFrom([{ field: "channel.nope" }])).toThrow(/unknown group/);
+    expect(() => query.groupsFrom([{ field: "channel__display_name" }])).toThrow(/unknown group/);
   });
   test("preserves empty membership, null predicates and boolean branches", () => {
     const query = ResourceQuery.from(resource());
