@@ -35,7 +35,6 @@ import {
   duplicateLineRow,
   emptyLineRow,
   lineDiffConfig,
-  relationIdList,
   type LineDiffConfig,
 } from "./editable-lines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
@@ -63,6 +62,8 @@ export interface EditableLinesProps {
   name: string;
   /** The resource's editable-lines contract (`modelMetadata.resource.linesResource`). */
   lines: DataResourceLinesMetadata;
+  /** Owning document, passed to domain widgets without interpreting its fields. */
+  parentRow?: Row | null;
   readOnly?: boolean;
   /**
    * Footer content (e.g. document totals) the composing form supplies. Receives the
@@ -102,6 +103,7 @@ export function EditableLines({
   control,
   name,
   lines,
+  parentRow,
   readOnly,
   footer,
   rowErrors,
@@ -115,7 +117,7 @@ export function EditableLines({
   );
   // The array field lives on the parent form; a per-array keyName keeps rhf's row
   // key off the line's own `id` (which stays the public id used by the save diff).
-  const { fields, append, insert, move, remove } = useFieldArray({
+  const { fields, append, insert, move, remove, update } = useFieldArray({
     control: control as unknown as Control<FieldValues>,
     name,
     keyName: "rhfKey",
@@ -124,87 +126,115 @@ export function EditableLines({
     control: control as unknown as Control<FieldValues>,
     name,
   }) as Row[] | undefined) ?? [];
+  // Async widgets retain a callback after reorder/remove/refresh. Resolve its
+  // RHF identity at completion, never write through the captured row index.
+  const latest = React.useRef({ fields, rows, readOnly, update });
+  latest.current = { fields, rows, readOnly, update };
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const patchRow = React.useCallback((key: string, patch: Record<string, unknown>) => {
+    const current = latest.current;
+    if (!mounted.current || current.readOnly) return;
+    const index = current.fields.findIndex((field) => field.rhfKey === key);
+    if (index < 0 || !current.rows[index]) return;
+    current.update(index, { ...current.rows[index], ...patch });
+  }, []);
   const sensors = useDndKitSensors(4);
 
   const onDragEnd = (event: DragEndEvent): void => {
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
+    if (readOnly || !over || active.id === over.id) return;
     const from = fields.findIndex((row) => row.rhfKey === active.id);
     const to = fields.findIndex((row) => row.rhfKey === over.id);
     if (from >= 0 && to >= 0) move(from, to);
   };
 
-  const gridStyle = { gridTemplateColumns: gridTemplate(columns.length) };
+  // Header and rows reserve identical drag/action tracks. Minimum cell widths
+  // belong to the grid; a narrow form scrolls this region rather than overlapping
+  // neighboring controls. M2M chips get enough space for their selection summary.
+  const widths = columns.map((column) => column.relationMulti ? 160 : 128);
+  const gridStyle = {
+    gridTemplateColumns: `32px ${widths.map((width) => `minmax(${width}px, 1fr)`).join(" ")} 68px`,
+  };
+  const minWidth = widths.reduce((total, width) => total + width, 100 + 18 + 8 * (columns.length + 1));
 
   return (
-    <div className="grid gap-2">
-      {fields.length > 0 ? (
-        <div
-          className="grid items-center gap-2 px-2 text-xs font-medium uppercase tracking-wide text-fg-muted"
-          style={gridStyle}
-          aria-hidden
-        >
-          <span />
-          {columns.map((column) => (
-            <span key={column.field.name} className="truncate">
-              {column.header}
-            </span>
-          ))}
-          <span />
-        </div>
-      ) : null}
-
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={onDragEnd}
-      >
-        <SortableContext
-          items={fields.map((row) => row.rhfKey)}
-          strategy={verticalListSortingStrategy}
-        >
-          <div className="grid gap-1">
-            {fields.length === 0 ? (
-              <p className="px-2 py-3 text-13 text-fg-muted">{t("lines.empty")}</p>
-            ) : (
-              fields.map((row, index) => (
-                <LineRow
-                  key={row.rhfKey}
-                  id={row.rhfKey}
-                  index={index}
-                  name={name}
-                  control={control}
-                  columns={columns}
-                  gridStyle={gridStyle}
-                  readOnly={readOnly}
-                  rowError={rowErrors?.[index]}
-                  t={t}
-                  onDuplicate={() =>
-                    insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never)
-                  }
-                  onRemove={() => remove(index)}
-                />
-              ))
-            )}
-          </div>
-        </SortableContext>
-      </DndContext>
-
-      {footer ? <div>{footer(rows)}</div> : null}
-
-      {readOnly ? null : (
-        <div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => append(emptyLineRow(fields.length, config) as never)}
+    <div className="min-w-0 overflow-x-auto">
+      <div className="grid gap-2" style={{ minWidth }}>
+        {fields.length > 0 ? (
+          <div
+            className="grid items-center gap-2 border border-transparent px-2 text-xs font-medium uppercase tracking-wide text-fg-muted"
+            style={gridStyle}
+            aria-hidden
           >
-            <Glyph name="plus" size={16} />
-            {t("lines.add")}
-          </Button>
-        </div>
-      )}
+            <span />
+            {columns.map((column) => (
+              <span key={column.field.name} className="truncate">
+                {column.header}
+              </span>
+            ))}
+            <span />
+          </div>
+        ) : null}
+
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={onDragEnd}
+        >
+          <SortableContext
+            items={fields.map((row) => row.rhfKey)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="grid gap-1">
+              {fields.length === 0 ? (
+                <p className="px-2 py-3 text-13 text-fg-muted">{t("lines.empty")}</p>
+              ) : (
+                fields.map((row, index) => (
+                  <LineRow
+                    key={row.rhfKey}
+                    id={row.rhfKey}
+                    index={index}
+                    name={name}
+                    control={control}
+                    columns={columns}
+                    row={rows[index]}
+                    parentRow={parentRow}
+                    onRowChange={(patch) => patchRow(row.rhfKey, patch)}
+                    gridStyle={gridStyle}
+                    readOnly={readOnly}
+                    rowError={rowErrors?.[index]}
+                    t={t}
+                    onDuplicate={() =>
+                      insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never)
+                    }
+                    onRemove={() => remove(index)}
+                  />
+                ))
+              )}
+            </div>
+          </SortableContext>
+        </DndContext>
+
+        {footer ? <div>{footer(rows)}</div> : null}
+
+        {readOnly ? null : (
+          <div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => append(emptyLineRow(fields.length, config) as never)}
+            >
+              <Glyph name="plus" size={16} />
+              {t("lines.add")}
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -215,6 +245,9 @@ function LineRow({
   name,
   control,
   columns,
+  row,
+  parentRow,
+  onRowChange,
   gridStyle,
   readOnly,
   rowError,
@@ -227,6 +260,9 @@ function LineRow({
   name: string;
   control: Control<Record<string, unknown>>;
   columns: readonly LineColumn[];
+  row?: Row;
+  parentRow?: Row | null;
+  onRowChange: (patch: Record<string, unknown>) => void;
   gridStyle: React.CSSProperties;
   readOnly?: boolean;
   rowError?: ValidationErrors;
@@ -266,7 +302,8 @@ function LineRow({
             render={({ field: controller }) =>
               column.relationMulti ? (
                 <RelationMultiFieldWidget
-                  value={relationIdList(controller.value)}
+                  compact
+                  value={Array.isArray(controller.value) ? controller.value : []}
                   onChange={controller.onChange}
                   readOnly={readOnly}
                   relation={column.relationMulti}
@@ -287,9 +324,12 @@ function LineRow({
               ) : (
                 <FieldDescriptorControl
                   field={column.descriptor}
+                  row={row}
+                  parentRow={parentRow}
                   value={controller.value}
                   readOnly={readOnly}
                   onChange={controller.onChange}
+                  onRowChange={onRowChange}
                 />
               )
             }
@@ -338,6 +378,7 @@ function lineColumns(
     .filter((field) => field.name !== config.positionField)
     .map((field) => {
       const widget = defaultWidgetForModelField(field);
+      const customWidget = Boolean(field.widget && !["many2one", "many2many"].includes(field.widget));
       const options = enumOptions(field);
       const descriptor: FieldDescriptor = {
         name: field.name,
@@ -348,8 +389,8 @@ function lineColumns(
       return {
         field,
         descriptor,
-        relation: relationFieldInfoForField(field, schemaMetadata),
-        relationMulti: relationListFieldInfoForField(field, schemaMetadata),
+        relation: customWidget ? null : relationFieldInfoForField(field, schemaMetadata),
+        relationMulti: customWidget ? null : relationListFieldInfoForField(field, schemaMetadata),
         header: titleCase(field.name),
       };
     });
@@ -360,10 +401,6 @@ function rowMessages(
   fieldName: string,
 ): readonly string[] {
   return rowError?.fieldErrors[fieldName] ?? [];
-}
-
-function gridTemplate(columnCount: number): string {
-  return `auto repeat(${columnCount}, minmax(0, 1fr)) auto`;
 }
 
 function sortableTransformStyle(

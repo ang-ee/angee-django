@@ -820,7 +820,7 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 
-  test("does not offer save without a stock update root or custom submit", async () => {
+  test("renders fields read-only and does not offer save without an update root or custom submit", async () => {
     sdkMocks.record = { id: "provider-1", name: "Anthropic" };
     const resource = {
       ...defaultResource("InferenceProviderType", "agents.InferenceProvider"),
@@ -851,11 +851,8 @@ describe("FormView", () => {
       metadata,
     );
 
-    await waitFor(() =>
-      expect(
-        (screen.getByLabelText("Name") as HTMLInputElement).value,
-      ).toBe("Anthropic"),
-    );
+    expect(await screen.findByRole("heading", { name: "Anthropic" })).toBeTruthy();
+    expect(screen.queryByLabelText("Name")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
@@ -2188,6 +2185,45 @@ describe("FormView", () => {
     }
   });
 
+  test("honors a custom relation widget in the overview and saves its selected id", async () => {
+    sdkMocks.record = {
+      id: "client-1", displayName: "Acme",
+      vendor: { id: "vendor-1", displayName: "Vendor One" },
+    };
+    const custom = {
+      read: () => <span>Custom vendor display</span>,
+      edit: ({ value, onChange }: { value?: unknown; onChange?: (value: unknown) => void }) => (
+        <input aria-label="Custom vendor" value={String(value ?? "")} onChange={(event) => onChange?.(event.target.value)} />
+      ),
+    };
+    renderWithProviders(
+      <FormView resource="OAuthClient" id="client-1" fields={[
+        { name: "displayName", label: "Name", title: true },
+        { name: "vendor", label: "Vendor", widget: "test.vendor" },
+      ]} />,
+      { types: {
+        OAuthClientType: {
+          ...defaultModel("OAuthClientType", "OAuthClient"),
+          fields: {
+            displayName: { name: "displayName", kind: "scalar", scalar: "String" },
+            vendor: { name: "vendor", kind: "relation", relationModelLabel: "Widget", relationObject: true },
+          },
+        },
+        WidgetType: {
+          ...defaultModel("WidgetType", "Widget"),
+          fields: { displayName: { name: "displayName", kind: "scalar", scalar: "String" } },
+          resource: { ...defaultResource("WidgetType", "Widget"), recordRepresentation: "displayName" },
+        },
+      } }, undefined,
+      { widgets: { ...defaultWidgets, "test.vendor": custom } },
+    );
+    const input = await screen.findByRole("textbox", { name: "Custom vendor" });
+    expect(screen.queryByRole("button", { name: "Vendor" })).toBeNull();
+    fireEvent.change(input, { target: { value: "vendor-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { id: "client-1", vendor: "vendor-2" } }));
+  });
+
   test("reads many2one record ids and writes the flat relation field", async () => {
     sdkMocks.record = {
       id: "client-1",
@@ -3047,6 +3083,20 @@ describe("FormView", () => {
   // Editable document lines (F6): the resource metadata carries a `linesResource`
   // and a `save` root, so FormView renders the lines composer and routes a dirty
   // save through `<resource>_save(pk, patch, lines)`.
+  test("new document renders Add line and submits lines with its first create", async () => {
+    sdkMocks.record = null;
+    sdkMocks.mutate.mockResolvedValue({ id: "doc-new", title: "Quotation", lines: [{ id: "line-new", label: "Lamp", position: 0 }] });
+    renderSaleDoc(null);
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Quotation" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+    fireEvent.change(screen.getByLabelText("Text", { exact: true }), { target: { value: "Lamp" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "Quotation", lines: { data: [{ label: "Lamp", position: 0 }] } },
+    }));
+    expect(sdkMocks.save).not.toHaveBeenCalled();
+  });
+
   test("seeds document lines without a reseed loop", async () => {
     sdkMocks.record = saleDocRecord();
     renderSaleDoc();
@@ -3200,11 +3250,11 @@ function saleDocRecord(): Row {
   };
 }
 
-function renderSaleDoc(): void {
+function renderSaleDoc(id: string | null = "doc-1"): void {
   renderWithProviders(
     <FormView
       resource="demo.SaleDoc"
-      id="doc-1"
+      id={id}
       fields={[{ name: "title", label: "Title", title: true }]}
     />,
     SALES_METADATA,
@@ -3249,12 +3299,13 @@ const SALES_METADATA: TestSchemaMetadata = {
         recordRepresentation: "title",
         roots: {
           list: "sale_docs",
+          create: "insert_sale_docs_one",
           detail: "sale_docs_by_pk",
           update: "update_sale_docs_by_pk",
           save: "sale_docs_save",
         },
-        typeNames: { node: "SaleDocType", updateInput: "sale_docs_set_input" },
-        capabilities: ["list", "detail", "update", "save"],
+        typeNames: { node: "SaleDocType", createInput: "sale_docs_insert_input", updateInput: "sale_docs_set_input" },
+        capabilities: ["list", "detail", "create", "update", "save"],
         fields: [saleLineField("title", "String", { requiredOnCreate: true })],
 
 

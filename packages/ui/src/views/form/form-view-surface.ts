@@ -125,6 +125,8 @@ export interface UseFormViewSurfaceProps {
   onSaved?: (row: Row) => void;
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
+  /** Read-only policy evaluated on the saved record, never on the local draft. */
+  readOnlyWhen?: (record: Row) => boolean;
   /** Called before a native field owner applies the first value in an interaction. */
   onFieldInteractionStart?: (path: string) => void;
   /** Called when that native field interaction is complete. */
@@ -182,6 +184,7 @@ export function useFormViewSurface({
   onSaved,
   submit,
   createSubmit,
+  readOnlyWhen,
   onFieldInteractionStart,
   onFieldInteractionCommit,
   onDiscarded,
@@ -391,7 +394,7 @@ export function useFormViewSurface({
         modelMetadata?.fields[field.name],
       );
     }
-    const lines = isCreate ? null : modelMetadata?.resource?.linesResource;
+    const lines = modelMetadata?.resource?.linesResource;
     if (lines?.field) {
       for (const path of lineReadSelectionPaths(lines, schemaMetadata)) {
         paths.add(`${lines.field}.${path}`);
@@ -407,7 +410,7 @@ export function useFormViewSurface({
       if (path) paths.add(path);
     }
     return [...paths];
-  }, [formFields, isCreate, modelMetadata, relationByField, returning, schemaMetadata]);
+  }, [formFields, modelMetadata, relationByField, returning, schemaMetadata]);
   const refineFields = React.useMemo(
     () => refineFieldsFromPaths(selection),
     [selection],
@@ -427,6 +430,7 @@ export function useFormViewSurface({
     onSaved,
     submit,
     createSubmit,
+    readOnlyWhen,
     onFieldInteractionStart,
     onFieldInteractionCommit,
     onDiscarded,

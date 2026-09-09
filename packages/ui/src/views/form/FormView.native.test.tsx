@@ -113,6 +113,7 @@ test("a bound parent value follows native dotted child updates", async () => {
 });
 
 async function fixture(options: {
+  readOnlyWhen?: (record: Row) => boolean;
   id?: string | null;
   submit?: FormSubmit;
   mountedFields?: readonly string[];
@@ -155,7 +156,7 @@ async function fixture(options: {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
       dataResource: resource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
-      submit: options.submit, onSaved, t: (key) => key,
+      submit: options.submit, readOnlyWhen: options.readOnlyWhen, onSaved, t: (key) => key,
       acknowledgedSource: options.acknowledgedSource,
       onFieldInteractionStart: options.onFieldInteractionStart,
       onFieldInteractionCommit: options.onFieldInteractionCommit,
@@ -331,6 +332,30 @@ test("a record panel switches to the field tab before focusing its native contro
 });
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
+
+test("persisted state locks every field, save and patch while lifecycle cache updates remain available", async () => {
+  const f = await fixture({ readOnlyWhen: (record) => record.status === "confirmed" });
+  edit("title", "Local edit");
+  act(() => f.surface().form.setValue("status", "confirmed"));
+  expect(f.surface().formReadOnly).toBe(false);
+  f.setRecord({ id: "note-1", title: "First", body: "Original body", status: "confirmed" });
+  await act(async () => f.surface().reload());
+  await waitFor(() => expect(f.surface().formReadOnly).toBe(true));
+  expect(f.surface().fieldReadOnly(fields[0]!)).toBe(true);
+  await expect(f.surface().submitForm()).rejects.toThrow("disabled");
+  await expect(f.surface().applyPatch({ title: "Forbidden" })).rejects.toThrow("disabled");
+  expect(f.update).not.toHaveBeenCalled();
+  act(() => f.surface().patchRecord({ status: "draft" }));
+  await waitFor(() => expect(f.surface().formReadOnly).toBe(false));
+  expect(f.surface().fieldReadOnly(fields[0]!)).toBe(false);
+});
+
+test("a read-only policy does not lock a new record from draft defaults", async () => {
+  const policy = vi.fn(() => true);
+  const f = await fixture({ id: null, readOnlyWhen: policy });
+  expect(f.surface().formReadOnly).toBe(false);
+  expect(policy).not.toHaveBeenCalled();
+});
 
 test("external acknowledged values share one save and disable the native detail read", async () => {
   const source = {

@@ -151,7 +151,7 @@ function registerPaymentAction(
 }
 
 const context: ActionFormContext = {
-  record: { id: "inv-1" },
+  record: { id: "inv-1", amount_total: "1234.56" },
   selectedIds: ["inv-1", "inv-2"],
 };
 
@@ -200,6 +200,26 @@ function renderDialog(action: ActionDescriptor): void {
 }
 
 describe("ActionFormDialog", () => {
+  test("prefills scalar args from the invoking record and submits user edits", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    renderDialog({
+      id: "collect", label: "Collect", submit,
+      args: [
+        { name: "amount", widget: "text", label: "Amount", fromContext: ({ record }) => record?.amount_total },
+        { name: "zero", widget: "text", label: "Zero", defaultValue: "99", fromContext: () => 0 },
+        { name: "fallback", widget: "text", label: "Fallback", defaultValue: "Default", fromContext: () => undefined },
+      ],
+    });
+    expect((screen.getByLabelText("Amount") as HTMLInputElement).value).toBe("1234.56");
+    expect((screen.getByLabelText("Zero") as HTMLInputElement).value).toBe("0");
+    expect((screen.getByLabelText("Fallback") as HTMLInputElement).value).toBe("Default");
+    fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "500.00" } });
+    fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith(
+      { amount: "500.00", zero: 0, fallback: "Default" }, context,
+    ));
+  });
+
   test("serializes datetime args with the picked local UTC offset", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Snoozed." });
     renderDialog({
@@ -238,6 +258,8 @@ describe("ActionFormDialog", () => {
     // The relation list is seeded from the invoking selection (labels from options).
     expect(await screen.findByText("INV-1")).toBeTruthy();
     expect(screen.getByText("INV-2")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove INV-1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove INV-2" })).toBeTruthy();
     // The single relation composes the relation picker.
     expect(screen.getByRole("button", { name: "Journal" })).toBeTruthy();
     // The scalars render editable inputs.
@@ -330,10 +352,8 @@ describe("ActionFormDialog", () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Done." });
     renderDialog(registerPaymentAction(submit));
 
-    // Remove one prefilled invoice chip before submitting.
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Remove INV-1" }),
-    );
+    // Full forms keep explicit per-chip removal.
+    fireEvent.click(await screen.findByRole("button", { name: "Remove INV-1" }));
     await pickJournal("Cash Journal");
     fireEvent.change(screen.getByRole("textbox", { name: "Date" }), {
       target: { value: "2026-07-05" },

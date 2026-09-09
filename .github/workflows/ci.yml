@@ -17,3 +17,5 @@ jobs:
       # against generated GraphQL documents in the composed-stack lane.
       pnpm-enabled: true
       stack-enabled: true
+      framework-repository: ${{ github.repository }}
+      framework-ref: ${{ github.sha }}

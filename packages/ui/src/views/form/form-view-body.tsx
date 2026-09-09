@@ -21,7 +21,7 @@ import { cn } from "../../lib/cn";
 import { optionLabel, relationValueId } from "../../widgets/types";
 import { statusTone } from "../../widgets/status-tones";
 import type { RelationOption } from "../../widgets/RelationField";
-import { EditableLines } from "./EditableLines";
+import { EditableLines, type EditableLinesProps } from "./EditableLines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import type { FieldDescriptor } from "../page";
@@ -327,10 +327,11 @@ export function FormViewOverview({
           >
             {t("lines.section")}
           </SectionEyebrow>
-          <EditableLines
+          <FormEditableLines
             control={form.control}
             name={linesField}
             lines={linesResource}
+            parentRow={surface.displayRecord}
             readOnly={formReadOnly}
             rowErrors={lineRowErrors}
           />
@@ -620,7 +621,7 @@ function BoundFieldRow({
         )}
       >
       <DescriptorPresenceControl field={field} value={value} readOnly={effectiveReadOnly} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
-        {relation ? (
+        {relation && (!field.widget || field.widget === "many2one") ? (
           <RelationFieldWidget
             controlRef={controlRef}
             value={relationValueId(value) || null}
@@ -705,4 +706,11 @@ function FieldFooter({
       ) : null}
     </>
   );
+}
+
+
+/** Watch the draft only inside the lines boundary, leaving overview fields unsubscribed. */
+function FormEditableLines({ control, parentRow, ...props }: EditableLinesProps): React.ReactElement {
+  const draft = useWatch({ control });
+  return <EditableLines {...props} control={control} parentRow={{ ...parentRow, ...draft }} />;
 }
