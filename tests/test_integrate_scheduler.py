@@ -254,6 +254,30 @@ def test_integration_error_reaches_sync_telemetry_verbatim(scheduler_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
+def test_a_recovered_sync_drops_the_previous_runs_error_marker(scheduler_tables: None) -> None:
+    """A failed run's ``error`` never rides into the next run's completed marker."""
+
+    del scheduler_tables
+    first = timezone.now()
+    with system_context(reason="test integrate scheduler setup"):
+        bridge = make_integration("recovered", model=SchedulerBridge, config={"mode": "refused"}, next_sync_at=first)
+    assert _enqueue_and_run_due(now=first) == {"ran": 1, "errors": 1}
+    bridge.refresh_from_db()
+    assert bridge.sync_progress["error"]
+
+    second = first + timedelta(seconds=bridge.poll_interval)
+    with system_context(reason="test integrate scheduler recover"):
+        bridge.config = {"items": 2}
+        bridge.save(update_fields=["config"])
+    assert _enqueue_and_run_due(now=second) == {"ran": 1, "errors": 0}
+    bridge.refresh_from_db()
+    assert bridge.sync_stage == Bridge.SyncStage.COMPLETED
+    assert bridge.sync_error == ""
+    assert "error" not in bridge.sync_progress
+    assert bridge.sync_progress["items"] == 2
+
+
+@pytest.mark.django_db(transaction=True)
 def test_enqueued_due_bridge_records_errors_on_integration_runtime_status(scheduler_tables: None) -> None:
     """Failing syncs record bridge errors, reschedule, and push integration runtime status."""
 

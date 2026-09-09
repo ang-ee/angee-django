@@ -47,6 +47,17 @@ export const isConnectedOrPaused = ({
   ["connected", "paused"].includes(integrationLifecycle(record));
 
 /**
+ * Whether an integration row holds a credential, read from either projection:
+ * the parent `IntegrationType` selects the `credential` relation, every subtype
+ * (channel, directory, mount, feed) carries the shared `credential_status`
+ * scalar instead — so a subtype form declares one cheap field and this gate
+ * never has to select the relation itself.
+ */
+export function integrationHasCredential(record: Row): boolean {
+  return record.credential != null || Boolean(record.credential_status);
+}
+
+/**
  * Rows Resume reaches. `Integration.connect` declares
  * `source=[DISCONNECTED, PAUSED]`, so a *disconnected* row that still holds its
  * credential can honestly reconnect. Gating on `paused` alone left it stranded:
@@ -56,15 +67,15 @@ export const isConnectedOrPaused = ({
  * credential still attached.
  *
  * A row with no credential has nothing to reconnect *with* — its vendor's Connect
- * authors one, so Resume stays hidden. A form that does not select `credential`
- * reads as having none: Resume stays paused-only there rather than offering a
- * reconnect it cannot substantiate.
+ * authors one, so Resume stays hidden. A form that selects neither `credential`
+ * nor `credential_status` reads as having none: Resume stays paused-only there
+ * rather than offering a reconnect it cannot substantiate.
  */
 const canResume = (context: ConditionalMutationButtonContext): boolean => {
   const lifecycle = integrationLifecycle(context.record);
   return (
     lifecycle === "paused" ||
-    (lifecycle === "disconnected" && context.record.credential != null)
+    (lifecycle === "disconnected" && integrationHasCredential(context.record))
   );
 };
 

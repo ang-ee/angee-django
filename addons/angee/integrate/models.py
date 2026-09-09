@@ -1609,6 +1609,18 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         impl_class = fields[0].resolve_for(self)
         return impl_class(self)
 
+    @property
+    def credential_status(self) -> str:
+        """Return the attached credential's status, or ``""`` when none is attached.
+
+        The one fact a console verb needs to know whether a disconnected row can
+        reconnect with what it already holds — projected on every subtype so a
+        form never has to select the credential relation itself.
+        """
+
+        credential = getattr(self, "credential", None)
+        return "" if credential is None else str(getattr(credential, "status", "") or "")
+
     def concrete_capability(self) -> Integration:
         """Return the installed concrete child row for this integration, or itself.
 
@@ -2227,20 +2239,26 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                     details={"session": {"state": "interrupted", "exitcode": exitcode}},
                 )
 
+    _SYNC_OUTCOME_KEYS = ("error", "items", "completed_at")
+    """Marker keys that describe one run's outcome; a new marker starts without them."""
+
     def _sync_marker(self, **values: Any) -> dict[str, Any]:
         """Return ``sync_progress`` with this run's marker keys set, others kept.
 
         ``sync_progress`` has disjoint owners: the scheduler writes the lifecycle
-        marker (``stage``/``queued_at``/``started_at``), while a progress reporter
-        writes ``details`` — a live session's pairing report lives there, and it is
-        the QR the operator is currently looking at. Replacing the whole dict drops
-        it, so a marker merges the way
-        :class:`~angee.integrate.sync.BridgeProgressReporter` already does and sets
-        only the keys it owns.
+        marker (``stage``/``queued_at``/``started_at`` and the run's outcome),
+        while a progress reporter writes ``details`` — a live session's pairing
+        report lives there, and it is the QR the operator is currently looking
+        at. Replacing the whole dict drops it, so a marker merges the way
+        :class:`~angee.integrate.sync.BridgeProgressReporter` already does and
+        sets only the keys it owns. A previous run's outcome is the marker's own
+        to drop: a failed run's ``error`` must not ride into the next run's
+        ``completed`` marker.
         """
 
         existing = self.sync_progress if isinstance(self.sync_progress, Mapping) else {}
-        return {**existing, **values}
+        kept = {key: value for key, value in existing.items() if key not in self._SYNC_OUTCOME_KEYS}
+        return {**kept, **values}
 
     def mark_sync_started(self, *, now: datetime) -> None:
         """Persist the start timestamp for one scheduler sync attempt."""
@@ -2337,15 +2355,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.last_sync_items = result
         self.sync_stage = self.SyncStage.COMPLETED
         self.sync_error = ""
-        progress = dict(self.sync_progress) if isinstance(self.sync_progress, Mapping) else {}
-        progress.update(
-            {
-                "stage": self.SyncStage.COMPLETED,
-                "items": result,
-                "completed_at": now.isoformat(),
-            }
+        self.sync_progress = self._sync_marker(
+            stage=self.SyncStage.COMPLETED,
+            items=result,
+            completed_at=now.isoformat(),
         )
-        self.sync_progress = progress
         self.last_sync_summary = {
             "status": "ok",
             "items": result,
@@ -2377,9 +2391,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.last_sync_status = "error"
         self.sync_stage = self.SyncStage.FAILED
         self.sync_error = error_message
-        progress = dict(self.sync_progress) if isinstance(self.sync_progress, Mapping) else {}
-        progress.update({"stage": self.SyncStage.FAILED, "error": error_message})
-        self.sync_progress = progress
+        self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=error_message)
         self.next_sync_at = self._next_sync_at(now=now)
         with transaction.atomic():
             cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)

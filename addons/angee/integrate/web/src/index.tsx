@@ -172,6 +172,7 @@ export {
   INTEGRATION_PAUSE_ACTION_ID,
   INTEGRATION_RESUME_ACTION_ID,
   INTEGRATION_TEST_CONNECTION_ACTION_ID,
+  integrationHasCredential,
   integrationLifecycle,
   integrationLifecycleIs,
   type IntegrationLifecycleToken,

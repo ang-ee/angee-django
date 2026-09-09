@@ -38,6 +38,8 @@ function ChannelForm({ resource: _resource, ...props }: RegisteredFormProps): Re
         {/* The one channel fact a human owns; the rest of this form is runtime truth. */}
         <Field name="display_name" title />
         <Field name="lifecycle" readOnly />
+        {/* Selected so the shared Resume verb can see a disconnected row still holds its login. */}
+        <Field name="credential_status" readOnly />
         <Field name="runtime_status" readOnly />
         <Field name="backend_class" readOnly />
         <Field name="config" readOnly />

@@ -53,6 +53,7 @@ def test_connect_imap_channel_creates_basic_auth_channel(messaging_graphql_table
         "display_name": "Ada Mail",
         "backend_class": "IMAP",
         "lifecycle": "CONNECTED",
+        "credential_status": "active",
         "runtime_status": "OK",
         "config": {
             "host": "imap.example.com",
@@ -304,6 +305,7 @@ mutation ConnectImap(
     display_name
     backend_class
     lifecycle
+    credential_status
     runtime_status
     config
   }

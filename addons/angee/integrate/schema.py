@@ -1194,6 +1194,12 @@ class IntegrationLabelMixin:
 
         return cast(Any, self).display_label
 
+    @strawberry_django.field(only=["credential__status"])
+    def credential_status(self) -> str:
+        """Return the attached credential's status, or ``""`` when none is attached."""
+
+        return str(cast(Any, self).credential_status)
+
 
 @strawberry.type
 class BridgeSyncStatusMixin:

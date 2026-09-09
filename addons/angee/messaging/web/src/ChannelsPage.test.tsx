@@ -88,6 +88,7 @@ describe("ChannelsPage", () => {
     );
     expect(pageMocks.fieldNames).toEqual(
       expect.arrayContaining([
+        "credential_status",
         "slug",
         "is_published",
         "form_schema_version",
