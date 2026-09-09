@@ -37,6 +37,7 @@ import {
   PeopleWorkbench,
 } from "./documents";
 import { IdentityTab } from "./IdentityTab";
+import { PartyAddresses } from "./PartyAddresses";
 import { usePartiesT } from "./i18n";
 
 import { PERSON_FORM_FIELDS_SLOT } from "./slots";
@@ -57,14 +58,6 @@ function handleColumns(t: ReturnType<typeof usePartiesT>): readonly ListColumn<R
     },
   ];
 }
-
-const addressColumns: readonly ListColumn<RelatedRow>[] = [
-  { field: "label" },
-  { field: "street", render: (row) => <span className="font-medium text-fg">{String(row.street ?? "")}</span> },
-  { field: "city" },
-  { field: "region" },
-  { field: "country" },
-];
 
 /**
  * One related collection on the Person detail — the person's handles or addresses — a local-scoped ListView filtered to this party, the same
@@ -192,15 +185,7 @@ function personRecordTabs(
     {
       id: "addresses",
       label: t("person.tabs.addresses"),
-      render: (context) => (
-        <PartyRelatedTab
-          {...context}
-          resource="parties.Address"
-          fields={["id", "label", "street", "city", "region", "postal_code", "country"]}
-          columns={addressColumns}
-          emptyContent={t("person.empty.addresses")}
-        />
-      ),
+      render: (context) => <PartyAddresses {...context} />,
     },
   ];
 }

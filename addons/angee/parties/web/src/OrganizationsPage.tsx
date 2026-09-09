@@ -1,10 +1,19 @@
 import * as React from "react";
-import { Column, ResourceList, Field, Form, Group, List, slotContents, useSlot } from "@angee/ui";
+import { Column, ResourceList, Field, Form, Group, List, slotContents, useSlot, type RecordTabDescriptor } from "@angee/ui";
 import { usePartiesT } from "./i18n";
+import { PartyAddresses } from "./PartyAddresses";
 
 import { ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 
 const MODEL = "parties.Organization";
+
+function organizationTabs(t: ReturnType<typeof usePartiesT>): readonly RecordTabDescriptor[] {
+  return [{
+    id: "addresses",
+    label: t("organization.tabs.addresses"),
+    render: (context) => <PartyAddresses {...context} />,
+  }];
+}
 
 const organizationsList = (
   <List resource={MODEL}>
@@ -18,8 +27,9 @@ const organizationsList = (
 export function OrganizationsPage(): React.ReactElement {
   const t = usePartiesT();
   const extraFields = useSlot(ORGANIZATION_FORM_FIELDS_SLOT);
+  const tabs = organizationTabs(t);
   return (
-    <ResourceList resource={MODEL} placement="inline" routed>
+    <ResourceList resource={MODEL} placement="inline" routed recordTabs={tabs}>
       {organizationsList}
       <Form resource={MODEL}>
         <Field name="display_name" title />

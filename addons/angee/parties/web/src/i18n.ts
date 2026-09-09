@@ -28,6 +28,7 @@ export const enPartiesMessages: Record<string, string> = {
   "organization.group.details": "Details",
   "organization.field.legalName": "Legal name",
   "organization.field.domain": "Domain",
+  "organization.tabs.addresses": "Addresses",
   "handle.contact": "Party",
   "handle.confidence": "Confidence",
   "handle.preferred": "Preferred",

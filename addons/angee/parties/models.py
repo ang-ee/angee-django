@@ -37,7 +37,7 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, system_context
+from rebac import PermissionDenied, actor_context, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields import SqidField, StateField
@@ -640,6 +640,46 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
         type(self).objects.resolve(self.handle)
 
 
+class AddressManager(AngeeManager):
+    """Own normalized, conflict-safe attachment of canonical party addresses."""
+
+    components = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
+
+    def attach_exact(
+        self, *, party: models.Model, values: Mapping[str, Any], actor: Any,
+        label: str = "Billing", is_primary: bool = True, conflict: str = "raise",
+    ) -> tuple[str, models.Model | None]:
+        if conflict not in {"raise", "retain"}:
+            raise ValueError("Address conflict policy must be 'raise' or 'retain'.")
+        normalized = {field: " ".join(str(values.get(field) or "").split()).strip()
+                      for field in self.components}
+        if not any(normalized.values()):
+            return "missing", None
+        key = tuple(normalized[field].casefold() for field in self.components)
+        with transaction.atomic(), actor_context(actor):
+            party.__class__._base_manager.select_for_update().get(pk=party.pk)
+            existing = list(self.model._base_manager.select_for_update().filter(party=party).order_by("pk"))
+            for row in existing:
+                row_key = tuple(" ".join(str(getattr(row, field) or "").split()).casefold()
+                                for field in self.components)
+                if row_key == key:
+                    if not row.with_actor(actor).has_access("read"):
+                        raise PermissionDenied("Denied: cannot read the matching party address.")
+                    return "matched", row.with_actor(actor)
+            if existing:
+                if conflict == "retain":
+                    return "conflict", None
+                raise ValidationError({"address": "A different address already exists for this party."})
+            verified_actor = self.check_create({"party": (party,)})
+            row = self.model(
+                party=party, label=" ".join(label.split()).strip()[:64], is_primary=is_primary,
+                created_by_id=getattr(actor, "pk", None), **normalized,
+            )
+            row.sudo(reason="parties.address.attach_exact")
+            row.save()
+            return "created", row.with_actor(verified_actor)
+
+
 class Address(SqidMixin, AuditMixin, AngeeModel):
     """A physical or postal address of a party (the vCard ``ADR`` property).
 
@@ -667,6 +707,7 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
     is_primary = models.BooleanField(default=False)
+    objects = AddressManager()
 
     class Meta:
         """Django model options for the address source model."""
@@ -675,6 +716,31 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
         ordering = ("party", "label", "sqid")
         rebac_resource_type = "parties/address"
         rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("party",),
+                condition=models.Q(is_primary=True),
+                name="parties_address_one_primary_per_party",
+            ),
+        )
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Make the selected primary address authoritative for this party."""
+        if not self.is_primary:
+            super().save(*args, **kwargs)
+            return
+        with transaction.atomic():
+            party_model = self._meta.get_field("party").remote_field.model
+            party_model._base_manager.select_for_update().get(pk=self.party_id)
+            previous = list(type(self)._base_manager.select_for_update().filter(
+                party_id=self.party_id,
+                is_primary=True,
+            ).exclude(pk=self.pk))
+            for address in previous:
+                if not address.has_access("write"):
+                    raise PermissionDenied("Changing the primary address requires write access to the current primary address.")
+            type(self)._base_manager.filter(pk__in=(address.pk for address in previous)).update(is_primary=False)
+            super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         """Return a one-line address for Django displays."""
