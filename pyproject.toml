@@ -118,7 +118,6 @@ addons = [
     "pyjwt[crypto]>=2.12",
     "python-dateutil>=2.9",
     "python-magic>=0.4.27",
-    "python-stdnum>=2.2,<3",
     "pyyaml>=6",
     "qrcode[pil]>=8.2",
     "ruamel.yaml>=0.18",
