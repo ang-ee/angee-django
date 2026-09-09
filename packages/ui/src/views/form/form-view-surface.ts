@@ -386,7 +386,10 @@ export function useFormViewSurface({
   const selection = React.useMemo(() => {
     const paths = new Set<string>(["id"]);
     for (const field of formFields) {
-      if (modelMetadata && !modelMetadata.fields[field.name]) continue;
+      // Write-only inputs (secrets such as OAuth client_secret) are projected
+      // into the artifact with readable=false; render them, never select them.
+      const fieldMetadata = modelMetadata?.fields[field.name];
+      if (modelMetadata && (!fieldMetadata || fieldMetadata.readable === false)) continue;
       addFieldSelection(
         paths,
         field,
