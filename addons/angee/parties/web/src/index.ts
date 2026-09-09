@@ -98,6 +98,6 @@ const parties = defineBaseAddon({
 
 export { PARTIES_OVERVIEW_SLOT, PARTIES_REVIEW_TOOLBAR_SLOT, PERSON_FORM_FIELDS_SLOT, ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 export { senderDisplayName, type SenderIdentity } from "./identity";
-export { AddressFields, PartyAddresses } from "./PartyAddresses";
+export { addressFields, PartyAddresses } from "./PartyAddresses";
 
 export default parties;

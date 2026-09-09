@@ -9,20 +9,20 @@ import {
 
 const ADDRESS = "parties.Address";
 
-/** One field inventory for canonical address forms and domain-owned create commands. */
-export function AddressFields({ includeParty = true, prefix = "" }: { includeParty?: boolean; prefix?: string }): React.ReactElement {
-  return <>
-    {includeParty ? <Field name="party" readOnly /> : null}
-    <Field name={`${prefix}label`} kind="string" label="Address label" title />
-    <Field name={`${prefix}street`} kind="string" label="Street" widget="textarea" />
-    <Field name={`${prefix}extended`} kind="string" label="Extended address" widget="textarea" />
-    <Field name={`${prefix}po_box`} kind="string" label="PO box" />
-    <Field name={`${prefix}city`} kind="string" label="City" />
-    <Field name={`${prefix}region`} kind="string" label="Region" />
-    <Field name={`${prefix}postal_code`} kind="string" label="Postal code" />
-    <Field name={`${prefix}country`} kind="string" label="Country" />
-    <Field name={`${prefix}is_primary`} kind="boolean" label="Primary address" widget="switch" />
-  </>;
+/** One evaluated field inventory for canonical forms and domain-owned commands. */
+export function addressFields({ includeParty = true, prefix = "" }: { includeParty?: boolean; prefix?: string } = {}): React.ReactNode {
+  return [
+    includeParty ? <Field key="party" name="party" readOnly /> : null,
+    <Field key="label" name={`${prefix}label`} kind="string" label="Address label" title />,
+    <Field key="street" name={`${prefix}street`} kind="string" label="Street" widget="textarea" />,
+    <Field key="extended" name={`${prefix}extended`} kind="string" label="Extended address" widget="textarea" />,
+    <Field key="po_box" name={`${prefix}po_box`} kind="string" label="PO box" />,
+    <Field key="city" name={`${prefix}city`} kind="string" label="City" />,
+    <Field key="region" name={`${prefix}region`} kind="string" label="Region" />,
+    <Field key="postal_code" name={`${prefix}postal_code`} kind="string" label="Postal code" />,
+    <Field key="country" name={`${prefix}country`} kind="string" label="Country" />,
+    <Field key="is_primary" name={`${prefix}is_primary`} kind="boolean" label="Primary address" widget="switch" />,
+  ];
 }
 
 /** Canonical create/edit address collection shared by every Party subtype. */
@@ -45,7 +45,7 @@ export function PartyAddresses({ recordId }: { recordId: string }): React.ReactE
         <Column field="is_primary" />
       </List>
       <Form resource={ADDRESS}>
-        <AddressFields />
+        {addressFields()}
       </Form>
     </DrawerResourceList>
   );

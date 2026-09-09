@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { parsePageFields } from "@angee/ui";
+import { pageChildren, pageElementProps, parsePageFields, type FormProps } from "@angee/ui";
 
 import type { ReactNode } from "react";
-import { AddressFields, PartyAddresses } from "./PartyAddresses";
+import { PartyAddresses } from "./PartyAddresses";
 
 describe("PartyAddresses", () => {
   test("owns a scoped create/edit form with the complete postal address", () => {
@@ -13,8 +13,10 @@ describe("PartyAddresses", () => {
       baseFilter: { party: { exact: "party_7" } },
       createDefaults: { party: "party_7" },
     });
-    const addressFields = AddressFields({}).props as { children?: ReactNode };
-    expect(parsePageFields(addressFields.children)).toMatchObject([
+    const form = pageChildren(props.children)
+      .map((child) => pageElementProps<FormProps>(child, "form"))
+      .find((candidate): candidate is FormProps => Boolean(candidate));
+    expect(parsePageFields(form?.children)).toMatchObject([
       { name: "party", readOnly: true },
       { name: "label" },
       { name: "street" },
