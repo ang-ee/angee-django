@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, models
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -994,10 +994,51 @@ def test_public_decide_checks_act_permission_before_resolution_shape(
     denied = _execute(_schema("public"), mutation, variables, user=stranger)
 
     assert denied.errors is not None
-    assert denied.errors[0].extensions["code"] == "PERMISSION_DENIED"
+    assert denied.errors[0].extensions["code"] == "VALIDATION"
     decision.refresh_from_db()
     assert decision.verdict == workflow_models.Verdict.PENDING
     assert decision.attempts == 0
+
+
+@pytest.mark.parametrize("surface", ("public", "console"))
+def test_decide_hides_unreachable_and_missing_decisions_alike(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    surface: str,
+) -> None:
+    """An actor outside a decision's read scope cannot learn whether it exists."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-gql-hidden-assignee")
+    stranger = User.objects.create_user(username="wdc-gql-hidden-stranger")
+    workflow = workflow_with_steps(
+        name="Hidden gate",
+        steps=(({"key": "gate", "step_class": "gate", "config": _gate_config([assignee], None, [])}),),
+        edges=(),
+    )
+    decision = _decision_for(_open_gate_run(workflow), "gate")
+    mutation = """
+        mutation Decide($decision: ID!) {
+          decide(decision: $decision, verdict: COMPLETE, payload: {}) {
+            decision { verdict }
+          }
+        }
+    """
+
+    decision_id = str(decision.sqid)
+    existing = _execute(_schema(surface), mutation, {"decision": decision_id}, user=stranger)
+    decision.refresh_from_db()
+    assert decision.verdict == workflow_models.Verdict.PENDING
+    assert decision.attempts == 0
+    with system_context(reason="remove decision for public existence-oracle regression"):
+        models.QuerySet.delete(Decision.objects.filter(pk=decision.pk))
+    missing = _execute(_schema(surface), mutation, {"decision": decision_id}, user=stranger)
+
+    assert existing.errors is not None
+    assert missing.errors is not None
+    assert existing.data is None
+    assert missing.data is None
+    assert [error.formatted for error in existing.errors] == [error.formatted for error in missing.errors]
 
 
 def test_public_decide_accepts_escalate_end_to_end(

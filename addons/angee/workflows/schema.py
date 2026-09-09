@@ -13,7 +13,6 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 from rebac import actor_context
-from rebac.errors import PermissionDenied
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -2280,10 +2279,8 @@ class PublicDecisionMutation:
         """Resolve one pending decision as the signed-in session actor."""
 
         actor = session_user(info)
-        target = resolve_action_target(Decision, decision, reason="workflows.graphql.public_decide")
         with actor_context(actor):
-            if not target.has_access("act"):
-                raise PermissionDenied("You are not allowed to resolve this decision.")
+            target = authorized_action_target(info, Decision, decision, "act")
         result = engine.decide(target, verdict.value, payload=payload, actor=actor)
         return PublicDecisionResolutionPayload.from_result(result)
 
@@ -2303,7 +2300,8 @@ class ConsoleDecisionMutation:
         """Resolve one pending decision as the signed-in session actor."""
 
         actor = session_user(info)
-        target = resolve_action_target(Decision, decision, reason="workflows.graphql.decide")
+        with actor_context(actor):
+            target = authorized_action_target(info, Decision, decision, "act")
         result = engine.decide(target, verdict.value, payload=payload, actor=actor)
         return ConsoleDecisionResolutionPayload.from_result(result)
 

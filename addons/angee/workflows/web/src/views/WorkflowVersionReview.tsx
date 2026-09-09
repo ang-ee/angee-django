@@ -18,6 +18,7 @@ import {
   DialogRoot,
   DialogTitle,
   EmptyState,
+  errorMessage,
   ErrorBanner,
   GraphView,
   LoadingPanel,
@@ -89,7 +90,7 @@ export function WorkflowVersionReview({ draftId, sourceId, sourceVersion, onRest
       setSnapshot(next);
       setSelected(0);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("versions.unavailable"));
+      setError(errorMessage(cause, t("versions.unavailable")));
     }
   }
 
@@ -110,7 +111,7 @@ export function WorkflowVersionReview({ draftId, sourceId, sourceVersion, onRest
       setOpen(false);
       onRestored(outcome.snapshot.workflow.id);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("versions.restoreFailed"));
+      setError(errorMessage(cause, t("versions.restoreFailed")));
     }
   }
 

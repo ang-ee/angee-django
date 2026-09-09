@@ -394,14 +394,27 @@ def _platform_admin(username: str) -> Any:
     return admin
 
 
-def test_contact_resources_accept_declared_consumer_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A model donor can expose its fields without teaching parties their vocabulary."""
+def test_contact_resources_accept_declared_consumer_fields(
+    parties_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model donor keeps read/query capabilities separate and relation writes scoped."""
     party = messaging_models.Party
     try:
         with monkeypatch.context() as patch:
             patch.setattr(party, "hasura_insertable_fields", ("first_met_note",), raising=False)
-            patch.setattr(party, "hasura_updatable_fields", ("first_met_note",), raising=False)
-            patch.setattr(party, "hasura_readable_fields", ("first_met_note", "notes"), raising=False)
+            patch.setattr(
+                party,
+                "hasura_updatable_fields",
+                ("first_met_note", "introduced_by"),
+                raising=False,
+            )
+            patch.setattr(
+                party,
+                "hasura_readable_fields",
+                ("first_met_note", "notes", "addresses"),
+                raising=False,
+            )
             patch.setattr(party, "hasura_filterable_fields", ("notes",), raising=False)
             patch.setattr(party, "hasura_sortable_fields", ("notes",), raising=False)
             patch.setattr(party, "hasura_groupable_fields", ("notes",), raising=False)
@@ -410,12 +423,40 @@ def test_contact_resources_accept_declared_consumer_fields(monkeypatch: pytest.M
             resources = {item.model_label: item for item in schema.angee_resources}
             for label in ("parties.Party", "parties.Person", "parties.Organization"):
                 resource = resources[label]
-                assert "first_met_note" in resource.update_fields
-                for field in ("first_met_note", "notes"):
-                    assert field in schema._schema.get_type(resource.type_names.filter).fields
-                    assert field in resource.query.axes
+                assert {"first_met_note", "introduced_by"} <= set(resource.update_fields)
+                filter_fields = schema._schema.get_type(resource.type_names.filter).fields
+                assert "notes" in filter_fields
+                assert "first_met_note" not in filter_fields
+                assert "addresses" not in filter_fields
+                assert "notes" in resource.query.axes
+                assert "first_met_note" not in resource.query.axes
+                assert "addresses" not in resource.query.axes
                 assert "notes" in schema._schema.get_type(resource.type_names.order).fields
                 if label != "parties.Party":
                     assert "first_met_note" in resources[label].create_fields
+
+            admin = _platform_admin("party-extension-admin")
+            with system_context(reason="test.parties.extension_relation.seed"):
+                introducer = party.objects.create(display_name="Introducer", created_by_id=admin.pk)
+                contact = party.objects.create(display_name="Contact", created_by_id=admin.pk)
+            updated = _data(
+                execute_schema(
+                    schema,
+                    """
+                    mutation SetIntroducer($id: String!, $introducedBy: ID!) {
+                      update_parties_by_pk(
+                        pk_columns: {id: $id}
+                        _set: {introduced_by: $introducedBy}
+                      ) { id introduced_by { id } }
+                    }
+                    """,
+                    {"id": contact.sqid, "introducedBy": introducer.sqid},
+                    user=admin,
+                )
+            )["update_parties_by_pk"]
+            assert updated == {
+                "id": contact.sqid,
+                "introduced_by": {"id": introducer.sqid},
+            }
     finally:
         importlib.reload(parties_schema)
