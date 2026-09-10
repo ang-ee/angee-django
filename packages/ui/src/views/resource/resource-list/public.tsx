@@ -65,7 +65,7 @@ export interface RecordSmartButtonDescriptor {
 export interface ResourceListProps<TRow extends Row = Row> {
   /** Refine/Angee resource id, e.g. `"notes.Note"`, shared by list and form. */
   resource: string;
-  /** Use local collection state even when rendered inside another resource view. */
+  /** Share an ambient resource view: unset for the same resource or an unbound owner, `"inherit"` for any, `"local"` never. */
   scope?: "inherit" | "local";
   /** Columns for the list. Omit when declaring a `List` child. */
   columns?: readonly ListColumn<TRow>[];
@@ -209,7 +209,7 @@ export function ResourceList<TRow extends Row = Row>({
   defaultGroup,
   defaultGroups,
   children,
-  scope = "inherit",
+  scope,
   ...props
 }: ResourceListProps<TRow>): React.ReactElement {
   if (props.form && props.form.resource !== props.resource) {
