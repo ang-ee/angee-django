@@ -185,7 +185,7 @@ function personRecordTabs(
     {
       id: "addresses",
       label: t("person.tabs.addresses"),
-      render: (context) => <PartyAddresses {...context} />,
+      render: (context) => <PartyAddresses {...context} emptyContent={t("person.empty.addresses")} />,
     },
   ];
 }

@@ -1,6 +1,14 @@
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
-import { Field, pageChildren, pageElementProps, parsePageFields, type FormProps } from "@angee/ui";
+import {
+  Field,
+  pageChildren,
+  pageElementProps,
+  parsePageFields,
+  type FormProps,
+  type RecordPanelContext,
+  type RecordTabDescriptor,
+} from "@angee/ui";
 
 vi.mock("./i18n", () => ({ usePartiesT: () => (key: string) => key }));
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -9,6 +17,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
 });
 import { useSlot } from "@angee/ui";
 import { OrganizationsPage } from "./OrganizationsPage";
+import { PartyAddresses } from "./PartyAddresses";
 import { ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 
 function formFields() {
@@ -32,5 +41,16 @@ describe("organization form extensions", () => {
     ]);
     expect(formFields()).toEqual(["display_name", "legal_name", "domain", "external_reference", "notes"]);
     expect(useSlot).toHaveBeenCalledWith(ORGANIZATION_FORM_FIELDS_SLOT);
+  });
+});
+
+describe("organization record tabs", () => {
+  test("gives the shared address tab organization copy", () => {
+    vi.mocked(useSlot).mockReturnValue([]);
+    const page = OrganizationsPage();
+    const [addresses] = (page.props as { recordTabs: readonly RecordTabDescriptor[] }).recordTabs;
+    const panel = addresses!.render({ recordId: "org_1" } as RecordPanelContext) as ReactElement<{ emptyContent?: string }>;
+    expect(panel.type).toBe(PartyAddresses);
+    expect(panel.props.emptyContent).toBe("organization.empty.addresses");
   });
 });

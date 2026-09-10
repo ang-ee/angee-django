@@ -11,7 +11,7 @@ function organizationTabs(t: ReturnType<typeof usePartiesT>): readonly RecordTab
   return [{
     id: "addresses",
     label: t("organization.tabs.addresses"),
-    render: (context) => <PartyAddresses {...context} />,
+    render: (context) => <PartyAddresses {...context} emptyContent={t("organization.empty.addresses")} />,
   }];
 }
 

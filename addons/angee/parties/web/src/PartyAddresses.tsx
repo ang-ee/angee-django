@@ -25,8 +25,8 @@ export function addressFields({ includeParty = true, prefix = "" }: { includePar
   ];
 }
 
-/** Canonical create/edit address collection shared by every Party subtype. */
-export function PartyAddresses({ recordId }: { recordId: string }): React.ReactElement {
+/** Canonical create/edit address collection shared by every Party subtype; its tab supplies the empty copy. */
+export function PartyAddresses({ recordId, emptyContent }: { recordId: string; emptyContent: string }): React.ReactElement {
   return (
     <DrawerResourceList
       resource={ADDRESS}
@@ -34,7 +34,7 @@ export function PartyAddresses({ recordId }: { recordId: string }): React.ReactE
       baseFilter={{ party: { exact: recordId } }}
       createDefaults={{ party: recordId }}
     >
-      <List resource={ADDRESS} order={{ is_primary: "DESC" }}>
+      <List resource={ADDRESS} order={{ is_primary: "DESC" }} emptyContent={emptyContent}>
         <Column field="label" />
         <Column field="street" />
         <Column field="extended" />
