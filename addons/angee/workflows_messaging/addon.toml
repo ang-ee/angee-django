@@ -1,0 +1,6 @@
+[addon]
+name = "angee.workflows_messaging"
+description = "Workflow event delivery for durably ingested channel messages"
+keywords = ["workflows", "messaging", "channels"]
+category = "Workflows"
+depends_on = ["angee.workflows", "angee.messaging"]

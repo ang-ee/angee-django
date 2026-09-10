@@ -3,6 +3,12 @@ import { graphql, type DocumentType } from "@angee/gql/console";
 /** The model every messaging-owned channel surface binds to. */
 export const CHANNEL_MODEL = "messaging.Channel";
 
+export const CreateDocumentChannel = graphql(`
+  mutation CreateDocumentChannel($displayName: String!) {
+    create_document_channel(display_name: $displayName) { ok message id validation_errors }
+  }
+`);
+
 // The models a record thread reads: the live-refresh keys for the thread/activity
 // queries and the invalidation set every chatter mutation republishes. One owner,
 // shared by both chatter panes.

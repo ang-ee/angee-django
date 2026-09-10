@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from typing import Any, Self, cast
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
@@ -106,6 +107,7 @@ from angee.workflows.testing import (
     WorkflowScope,
 )
 from angee.workflows.trigger_declarations import (
+    EventSource,
     EventTriggerConfig,
     ScheduleTriggerConfig,
     TriggerConfig,
@@ -1001,9 +1003,13 @@ class Trigger(AuditMixin, AngeeDataModel):
     """
 
     runtime = True
+    trigger_protected_fields = ("execution_actor", "execution_actor_id")
 
     sqid_prefix = "wft_"
     workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")
+    execution_actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
     kind = StateField(choices_enum=TriggerKind, default=TriggerKind.MANUAL)
     enabled = models.BooleanField(default=False)
     config = models.JSONField(default=dict, blank=True)
@@ -1064,10 +1070,10 @@ class Trigger(AuditMixin, AngeeDataModel):
         if update_fields is not None and set(update_fields) <= operational_fields:
             raise RuntimeError("Trigger operational fields are written only by the owning manager.")
         old_workflow_id = None
-        discovered_state: tuple[Any, Any, Any, Any] | None = None
+        discovered_state: tuple[Any, Any, Any, Any, Any] | None = None
         if not adding:
             discovered = system_queryset(type(self), using=alias, lock=None).filter(pk=self.pk).values(
-                "workflow_id", "kind", "config", "enabled"
+                "workflow_id", "kind", "config", "enabled", "execution_actor_id"
             ).first()
             if discovered is None:
                 raise type(self).DoesNotExist
@@ -1077,6 +1083,7 @@ class Trigger(AuditMixin, AngeeDataModel):
                 discovered["kind"],
                 discovered["config"],
                 discovered["enabled"],
+                discovered["execution_actor_id"],
             )
         workflow_ids = sorted({value for value in (old_workflow_id, self.workflow_id) if value is not None})
         with DefinitionQuerySet.caller_context(self), transaction.atomic(using=alias):
@@ -1091,13 +1098,15 @@ class Trigger(AuditMixin, AngeeDataModel):
                 locked = system_queryset(type(self), using=alias, lock=("self",)).get(pk=self.pk)
                 if locked.workflow_id != old_workflow_id:
                     raise ValidationError({"workflow": "The trigger lineage changed during this edit."})
-                locked_state = (locked.workflow_id, locked.kind, locked.config, locked.enabled)
+                locked_state = (
+                    locked.workflow_id, locked.kind, locked.config, locked.enabled, locked.execution_actor_id
+                )
                 if locked_state != discovered_state:
                     raise ValidationError("The trigger changed during this edit; reload and try again.")
                 fields = None if update_fields is None else set(update_fields)
                 if fields is not None:
-                    for field_name in ("workflow_id", "kind", "config", "enabled"):
-                        public_name = "workflow" if field_name == "workflow_id" else field_name
+                    for field_name in ("workflow_id", "kind", "config", "enabled", "execution_actor_id"):
+                        public_name = field_name.removesuffix("_id")
                         if public_name not in fields and field_name not in fields:
                             setattr(self, field_name, getattr(locked, field_name))
                 if self.enabled != locked.enabled:
@@ -1213,6 +1222,10 @@ class Trigger(AuditMixin, AngeeDataModel):
         except (ValueError, TypeError) as error:
             raise ValidationError({"config": str(error)}) from error
         if require_publisher and isinstance(declaration, EventTriggerConfig):
+            if declaration.source == EventSource.MESSAGE_INGESTED and not hasattr(self, "message_channel_id"):
+                raise ValidationError(
+                    {"config": "The message-ingested event publisher addon is not installed."}
+                )
             if declaration.model not in _change_publisher_model_labels():
                 raise ValidationError(
                     {
@@ -1266,6 +1279,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     """One execution of a pinned published workflow version."""
 
     runtime = True
+    rebac_grantable = {"reader": "write", "operator": "write"}
 
     record_ref_field_prefix = "subject"
 
@@ -1285,6 +1299,9 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         null=True,
         blank=True,
         related_name="child_runs",
+    )
+    reprocessed_from = models.ForeignKey(
+        "self", on_delete=models.PROTECT, null=True, blank=True, related_name="reprocessed_runs", editable=False
     )
     status = StateField(choices_enum=RunStatus, default=RunStatus.PENDING)
     subject_content_type = models.ForeignKey(
@@ -1552,11 +1569,12 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         ):
             loaded = (
                 system_queryset(type(self), using=self._state.db, lock=None)
-                .values("input", "input_present")
+                .values("input", "input_present", "reprocessed_from_id")
                 .get(pk=self.pk)
             )
             self._loaded_input = copy.deepcopy(loaded["input"])
             self._loaded_input_present = loaded["input_present"]
+            self._loaded_reprocessed_from_id = loaded["reprocessed_from_id"]
         if (
             not self._state.adding
             and (
@@ -1565,8 +1583,15 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             )
         ):
             raise ValidationError("Workflow run input is immutable.")
+        if (
+            not self._state.adding
+            and getattr(self, "_loaded_reprocessed_from_id", self.reprocessed_from_id)
+            != self.reprocessed_from_id
+        ):
+            raise ValidationError("Workflow reprocessing provenance is immutable.")
         super().save(*args, **kwargs)
         self._loaded_input_present = self.input_present
+        self._loaded_reprocessed_from_id = self.reprocessed_from_id
         self._loaded_input = copy.deepcopy(self.input)
         self._loaded_test_identity = self._test_identity()
 
@@ -1638,6 +1663,8 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             instance._loaded_input_present = values[field_names.index("input_present")]
         if "input" in field_names:
             instance._loaded_input = copy.deepcopy(values[field_names.index("input")])
+        if "reprocessed_from_id" in field_names:
+            instance._loaded_reprocessed_from_id = values[field_names.index("reprocessed_from_id")]
         identity_fields = (
             "workflow_id",
             "origin",

@@ -1,7 +1,7 @@
 import { useAuthoredMutation } from "@angee/refine";
 import { refineResourceName, useModelMetadata } from "@angee/metadata";
 import { useInvalidate } from "@refinedev/core";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { errorMessage } from "@angee/ui";
 
@@ -53,6 +53,7 @@ let taskSeq = 0;
 export interface StorageUpload {
   tasks: readonly UploadTask[];
   upload: (files: readonly File[], target?: UploadTarget) => void;
+  retry: (taskId: string) => void;
   clearFinished: () => void;
 }
 
@@ -77,6 +78,7 @@ export function useStorageUpload(
   const fileResource = useModelMetadata(FILE_MODEL)?.resource ?? null;
   const invalidate = useInvalidate();
   const [tasks, setTasks] = useState<readonly UploadTask[]>([]);
+  const sources = useRef(new Map<string, { file: File; target: UploadTarget }>());
 
   const patch = useCallback((id: string, next: Partial<UploadTask>) => {
     setTasks((current) =>
@@ -165,6 +167,7 @@ export function useStorageUpload(
           status: "hashing" as UploadStatus,
         },
       }));
+      started.forEach((entry) => sources.current.set(entry.task.id, { file: entry.file, target }));
       setTasks((current) => [...current, ...started.map((entry) => entry.task)]);
       void Promise.allSettled(
         started.map((entry) => runOne(entry.task.id, entry.file, target)),
@@ -185,11 +188,31 @@ export function useStorageUpload(
     [fileResource, invalidate, onUploaded, runOne],
   );
 
+  const retry = useCallback((taskId: string): void => {
+    const source = sources.current.get(taskId);
+    if (!source) return;
+    patch(taskId, { status: "hashing", error: undefined, fileId: undefined });
+    void runOne(taskId, source.file, source.target).then(async (uploaded) => {
+      if (!uploaded) return;
+      if (fileResource) {
+        await invalidate({
+          resource: refineResourceName(fileResource),
+          dataProviderName: fileResource.schemaName,
+          invalidates: ["list", "many", "detail"],
+        });
+      }
+      onUploaded?.([uploaded]);
+    });
+  }, [fileResource, invalidate, onUploaded, patch, runOne]);
+
   const clearFinished = useCallback(() => {
-    setTasks((current) => current.filter((task) => !FINISHED.has(task.status)));
+    setTasks((current) => {
+      current.filter((task) => FINISHED.has(task.status)).forEach((task) => sources.current.delete(task.id));
+      return current.filter((task) => !FINISHED.has(task.status));
+    });
   }, []);
 
-  return { tasks, upload, clearFinished };
+  return { tasks, upload, retry, clearFinished };
 }
 
 function uploadedFile(

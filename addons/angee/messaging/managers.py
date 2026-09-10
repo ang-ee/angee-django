@@ -143,6 +143,19 @@ class ChannelManager(IntegrationManager):
             **extra,
         )
 
+    def create_document_channel(self, user: Any, *, display_name: str) -> Any:
+        """Create a local manual Channel that accepts uploaded document Messages."""
+
+        display_name = strip_null_bytes(display_name or "").strip()
+        if not display_name:
+            raise ValueError("Document channel name is required.")
+        self.check_create()
+        return self.create_disconnected(
+            user,
+            name=display_name,
+            backend_class="manual",
+        )
+
     def inventory(self, channel: Any) -> dict[type[models.Model], int]:
         """Return ``{model: count}`` for every row a purge of ``channel`` would delete.
 
@@ -2102,6 +2115,89 @@ class MessageQuerySet(AngeeQuerySet[Any]):
 
 class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: ignore[misc]
     """Owns the message ingest write path (idempotent, null-safe, F()-counted)."""
+
+    def submit_documents(
+        self,
+        channel: Any,
+        items: tuple[tuple[str, Any], ...],
+        *,
+        actor: Any,
+        request_key: str,
+    ) -> tuple[Any, ...]:
+        """Land READY uploaded files as immutable local document Messages.
+
+        File identity is the durable item identity: submitting the same file to the
+        same channel converges on its existing Message, while ``request_key`` and
+        item keys validate transport retries and preserve caller ordering.
+        """
+
+        request_key = strip_null_bytes(request_key or "").strip()
+        if not request_key:
+            raise ValueError("Document submission request key is required.")
+        if actor is None:
+            raise ValueError("Document submission requires an actor.")
+        channel.with_actor(actor)._require_record_access("write")
+        if not items:
+            raise ValueError("At least one document is required.")
+        keys = [strip_null_bytes(key or "").strip() for key, _file in items]
+        if any(not key for key in keys) or len(set(keys)) != len(keys):
+            raise ValueError("Document item keys must be non-empty and unique.")
+        part_model = apps.get_model("messaging", "Part")
+        owner_id = actor.pk
+        landed: list[Any] = []
+        with transaction.atomic():
+            channel = type(channel)._base_manager.select_for_update().get(pk=channel.pk)
+            for item_key, file in items:
+                file.with_actor(actor)._require_record_access("read")
+                if str(file.upload_state) != "ready":
+                    raise ValueError("Only READY files can be submitted as documents.")
+                external_id = f"document:file:{file.pk}"
+                request_message = self.model._base_manager.filter(
+                    channel=channel,
+                    metadata__source="document_upload",
+                    metadata__request_key=request_key,
+                    metadata__item_key=item_key,
+                ).first()
+                if request_message is not None and request_message.external_id != external_id:
+                    raise ValueError("Document submission request item changed between retries.")
+                message = _external_id_annotated(self.model._base_manager).filter(
+                    _external_id_q(external_id), channel=channel
+                ).first()
+                if message is not None:
+                    message.with_actor(actor)._require_record_access("read")
+                    existing_file_id = part_model._base_manager.filter(message=message).values_list(
+                        "file_id", flat=True
+                    ).get()
+                    if existing_file_id != file.pk:
+                        raise ValueError("Existing document Message has conflicting evidence.")
+                    landed.append(message)
+                    continue
+                message = self.model._base_manager.create(
+                    channel=channel,
+                    platform=channel.backend.message_platform,
+                    direction=self.model.Direction.INTERNAL,
+                    status=self.model.MessageStatus.SYNCED,
+                    message_type=self.model.MessageKind.DOCUMENT,
+                    external_id=external_id,
+                    preview=file.filename or "Document",
+                    sent_at=timezone.now(),
+                    received_at=timezone.now(),
+                    metadata={"source": "document_upload", "request_key": request_key, "item_key": item_key},
+                    created_by_id=owner_id,
+                )
+                part_model._base_manager.create(
+                    message=message,
+                    position=0,
+                    type=_file_mime_type(file),
+                    disposition=part_model.Disposition.ATTACHMENT,
+                    role=part_model.PartRole.BODY,
+                    name=file.filename or "document",
+                    file=file,
+                    created_by_id=owner_id,
+                )
+                message_ingested.send(sender=self.model, instance=message)
+                landed.append(message)
+        return tuple(landed)
 
     def for_record(
         self,

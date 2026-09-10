@@ -1842,6 +1842,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         CHAT = "chat", "Chat"
         NOTIFICATION = "notification", "Notification"
         AUTO_COMMENT = "auto_comment", "Auto comment"
+        DOCUMENT = "document", "Document"
 
     sqid = SqidField(real_field_name="id", prefix="msg_", min_length=8)
     thread = models.ForeignKey(

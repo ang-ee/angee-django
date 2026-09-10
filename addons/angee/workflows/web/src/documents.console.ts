@@ -443,6 +443,14 @@ export const CancelWorkflowRunDocument = graphql(`
   }
 `);
 
+export const ReprocessWorkflowRunDocument = graphql(`
+  mutation ReprocessWorkflowRun($run: ID!, $requestKey: String!) {
+    reprocess_workflow_run(run: $run, request_key: $requestKey) {
+      ok message id validation_errors
+    }
+  }
+`);
+
 export const WorkflowRunDetailDocument = graphql(`
   query WorkflowRunDetail($run: String!) {
     workflow_runs_by_pk(id: $run) {

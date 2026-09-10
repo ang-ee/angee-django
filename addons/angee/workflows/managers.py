@@ -97,6 +97,7 @@ from angee.workflows.manager_authority import (
 from angee.workflows.states import (
     CURRENT_PUBLICATION_STATUSES,
     RunOrigin,
+    RunStatus,
     StepRunStatus,
     TriggerKind,
     Verdict,
@@ -118,6 +119,7 @@ from angee.workflows.testing import (
 )
 from angee.workflows.trigger_declarations import (
     EventAdmissionPolicy,
+    EventSource,
     EventTriggerConfig,
 )
 
@@ -440,6 +442,7 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
         if {
             "input", "input_present", "occurrence_id",
             "test_repair_source_attempt", "test_repair_source_attempt_id",
+            "reprocessed_from", "reprocessed_from_id",
         } & kwargs.keys():
             raise TypeError("Workflow run creation facts are immutable.")
         identity_fields = {
@@ -481,6 +484,7 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
         if {
             "input", "input_present", "occurrence_id",
             "test_repair_source_attempt", "test_repair_source_attempt_id",
+            "reprocessed_from", "reprocessed_from_id",
         } & set(field_names):
             raise TypeError("Workflow run creation facts are immutable.")
         rows = list(objs)
@@ -575,6 +579,48 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 using=alias,
             )
 
+    def reprocess(self, source_run: Any, *, actor: Any, request_key: str) -> Any:
+        """Start an idempotent new current-publication run for the same subject.
+
+        This is whole-run business reprocessing. Failed-attempt evidence recovery
+        remains the separate ``start_recovery`` contract.
+        """
+
+        source_run.with_actor(actor)._require_record_access("write")
+        request_key = request_key.strip() if isinstance(request_key, str) else ""
+        if not request_key:
+            raise ValidationError({"request_key": "Reprocessing requires a non-empty request key."})
+        alias = self.db
+        workflow_model = self.model._meta.get_field("workflow").remote_field.model
+        source = system_queryset(self.model, using=alias, lock=None).select_related("workflow").get(pk=source_run.pk)
+        head_id = source.workflow.published_from_id or source.workflow_id
+        dedup_key = f"reprocess:{source.pk}:{request_key}"
+        if len(dedup_key) > self.model._meta.get_field("dedup_key").max_length:
+            raise ValidationError({"request_key": "Reprocessing request key is too long."})
+        with system_context(reason="workflows.runs.reprocess"), transaction.atomic(using=alias):
+            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=head_id)
+            existing = system_queryset(self.model, using=alias, lock=None).filter(dedup_key=dedup_key).first()
+            if existing is not None:
+                if existing.reprocessed_from_id != source.pk:
+                    raise ValidationError("Reprocessing request identity conflicts with an existing run.")
+                return existing
+            lineage_versions = system_queryset(workflow_model, using=alias, lock=None).filter(
+                models.Q(pk=head.pk) | models.Q(published_from_id=head.pk)
+            ).values("pk")
+            active = system_queryset(self.model, using=alias, lock=("self",)).filter(
+                workflow_id__in=models.Subquery(lineage_versions),
+                subject_content_type_id=source.subject_content_type_id,
+                subject_object_id=source.subject_object_id,
+                status__in=(RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING),
+            ).exists()
+            if active:
+                raise ValidationError({"source_run": "This workflow subject already has an active run."})
+            return self._start_locked(
+                head, source.subject, actor, dedup_key=dedup_key, origin=RunOrigin.MANUAL,
+                input=JsonPresence(source.input_present, copy.deepcopy(source.input)),
+                reprocessed_from=source, available_at=timezone.now(), using=alias,
+            )
+
     def _start_locked(
         self,
         head: Any,
@@ -589,6 +635,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         input: JsonPresence = JsonPresence(),
         available_at: datetime,
         using: str,
+        reprocessed_from: Any = None,
     ) -> Any:
         """Create initial rows after callers lock the exact lineage and trigger."""
 
@@ -613,6 +660,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             input=input,
             available_at=available_at,
             using=using,
+            reprocessed_from=reprocessed_from,
         )
 
     def start_test(
@@ -1396,6 +1444,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         recovery_map_index: int = -1,
         available_at: datetime,
         using: str,
+        reprocessed_from: Any = None,
     ) -> Any:
         """Create a Run and its first durable work for one explicit immutable definition."""
 
@@ -1414,6 +1463,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             "trigger": trigger,
             "occurrence_id": occurrence_id,
             "parent_step_run": parent_step_run,
+            "reprocessed_from": reprocessed_from,
             "subject_content_type": content_type,
             "subject_object_id": object_id,
             "input_present": input.present,
@@ -1623,6 +1673,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
     @staticmethod
     def _owner_id(actor: Any, trigger: Any, workflow: Any) -> Any | None:
+        if trigger is not None and trigger.execution_actor_id is not None:
+            return trigger.execution_actor_id
         if actor is not None:
             try:
                 user_id = actor_user_id(to_subject_ref(actor))
@@ -1666,12 +1718,15 @@ class TriggerQuerySet(AngeeQuerySet[Any]):
             "kind",
             "enabled",
             "config",
+            "execution_actor",
+            "execution_actor_id",
             "event_model_label",
             "next_fire_at",
             "last_fire_at",
             "hourly_window_started_at",
             "hourly_fire_count",
         }
+        protected.update(_trigger_extension_protected_fields(self.model))
         if protected & kwargs.keys():
             raise TypeError("Trigger rules do not support QuerySet.update(); save instances instead.")
         return super().update(**kwargs)
@@ -1691,15 +1746,28 @@ class TriggerQuerySet(AngeeQuerySet[Any]):
             "kind",
             "enabled",
             "config",
+            "execution_actor",
+            "execution_actor_id",
             "event_model_label",
             "next_fire_at",
             "last_fire_at",
             "hourly_window_started_at",
             "hourly_fire_count",
         }
+        protected.update(_trigger_extension_protected_fields(self.model))
         if protected & field_names:
             raise TypeError("Trigger rules do not support bulk_update(); save instances instead.")
         return super().bulk_update(objs, field_names, *args, **kwargs)
+
+
+def _trigger_extension_protected_fields(model: type[Any]) -> set[str]:
+    """Collect same-row Trigger rule fields declared by composed donor classes."""
+
+    return {
+        field
+        for owner in model.__mro__
+        for field in owner.__dict__.get("trigger_protected_fields", ())
+    }
 
 
 class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: ignore[misc]
@@ -1798,6 +1866,9 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         subject: models.Model,
         occurrence_id: str | None,
         timestamp: datetime,
+        actor: Any = None,
+        source: EventSource = EventSource.CHANGE_PUBLISHED,
+        message_channel_id: int | None = None,
     ) -> Any | None:
         """Atomically admit one matching event occurrence and its pinned run."""
 
@@ -1826,6 +1897,10 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             declaration = trigger.validated_config(require_publisher=True)
             if not isinstance(declaration, EventTriggerConfig):
                 return None
+            if declaration.source != source:
+                return None
+            if source == EventSource.MESSAGE_INGESTED and getattr(trigger, "message_channel_id", None) != message_channel_id:
+                return None
             if subject._meta.label_lower != declaration.model:
                 return None
             if not trigger.condition_matches(type(subject), subject):
@@ -1851,12 +1926,24 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             ).first()
             if existing is not None:
                 return existing
+            if source == EventSource.MESSAGE_INGESTED:
+                lineage_versions = system_queryset(workflow_model, using=alias, lock=None).filter(
+                    models.Q(pk=head.pk) | models.Q(published_from_id=head.pk)
+                ).values("pk")
+                active = system_queryset(run_model, using=alias, lock=("self",)).filter(
+                    workflow_id__in=models.Subquery(lineage_versions),
+                    subject_content_type_id=content_type.pk,
+                    subject_object_id=subject.pk,
+                    status__in=(RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING),
+                ).order_by("pk").first()
+                if active is not None:
+                    return active
             if not trigger.rate_limit_allows(timestamp=timestamp):
                 return None
             run = run_model.objects._start_locked(
                 head,
                 subject,
-                None,
+                actor,
                 trigger=trigger,
                 dedup_key=dedup_key,
                 occurrence_id=retained_occurrence,

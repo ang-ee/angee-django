@@ -1,10 +1,11 @@
 import * as React from "react";
-import { Action, Column, ResourceList, Field, Form, Group, List, SlotOutlet, registerForm, useRecordActionMutation, useSlot, type RegisteredFormProps } from "@angee/ui";
+import { Action, ActionFormDialog, Button, Column, ResourceList, Field, Form, Group, List, SlotOutlet, registerForm, useRecordActionMutation, useSlot, type ActionDescriptor, type RegisteredFormProps } from "@angee/ui";
+import { extractActionOutcome, useAuthoredMutation } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
-import { CHANNEL_MODEL } from "./documents";
+import { CHANNEL_MODEL, CreateDocumentChannel } from "./documents";
 import { useMessagingT } from "./i18n";
-import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
+import { MESSAGING_CHANNEL_FORM_FIELDS_SLOT, MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 
 /**
  * Connected message channels. Channels are created through bespoke connect flows
@@ -14,8 +15,24 @@ import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 export function ChannelsPage(): React.ReactElement {
   const t = useMessagingT();
   const toolbarEntries = useSlot(MESSAGING_CHANNEL_TOOLBAR_SLOT);
-  return (
-    <ResourceList resource={CHANNEL_MODEL} form={channelForm} placement="inline" routed hideCreate toolbarActions={<SlotOutlet entries={toolbarEntries} />}>
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [createDocumentChannel] = useAuthoredMutation(CreateDocumentChannel, {
+    invalidateModels: [CHANNEL_MODEL],
+    shouldInvalidate: (data) => Boolean(data?.create_document_channel.ok),
+  });
+  const createAction = React.useMemo<ActionDescriptor>(() => ({
+    id: "create-document-channel",
+    label: t("channel.createDocument"),
+    args: [{ name: "displayName", label: t("channel.documentName") }],
+    submit: async (values) => extractActionOutcome(await createDocumentChannel({
+      displayName: String(values.displayName ?? ""),
+    }), "create_document_channel") ?? { ok: false, message: t("channel.createDocumentMissing") },
+  }), [createDocumentChannel, t]);
+  return (<>
+    <ResourceList resource={CHANNEL_MODEL} form={channelForm} placement="inline" routed hideCreate toolbarActions={<>
+      <Button onClick={() => setCreateOpen(true)}>{t("channel.createDocument")}</Button>
+      <SlotOutlet entries={toolbarEntries} />
+    </>}>
       <List resource={CHANNEL_MODEL}>
         <Column field="display_name" header={t("channel.name")} />
         <Column field="lifecycle" widget="statusBadge" />
@@ -27,11 +44,14 @@ export function ChannelsPage(): React.ReactElement {
         <Column field="last_sync_completed_at" />
       </List>
     </ResourceList>
+    {createOpen ? <ActionFormDialog action={createAction} context={{ record: null, selectedIds: [] }} open onOpenChange={setCreateOpen} /> : null}
+    </>
   );
 }
 
 function ChannelForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useMessagingT();
+  const extensionFields = useSlot(MESSAGING_CHANNEL_FORM_FIELDS_SLOT);
   const [sync] = useRecordActionMutation<ActionFieldName>("sync_integration");
   return (
       <Form {...props} resource={CHANNEL_MODEL}>
@@ -43,6 +63,7 @@ function ChannelForm({ resource: _resource, ...props }: RegisteredFormProps): Re
         <Field name="runtime_status" readOnly />
         <Field name="backend_class" readOnly />
         <Field name="config" readOnly />
+        <SlotOutlet entries={extensionFields} />
         <Group label={t("channel.group.webform")} columns={2}>
           <Field name="slug" widget="slug" showWhen={isWebformChannel} />
           <Field name="is_published" showWhen={isWebformChannel} />

@@ -34,6 +34,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 
 import {
   CancelWorkflowRunDocument,
+  ReprocessWorkflowRunDocument,
   WorkflowGraphDocument,
   WorkflowAttemptPayloadDocument,
   WorkflowInspectionSelectionDocument,
@@ -89,6 +90,8 @@ interface StepArtifactRow extends StringIdRow {
 
 export function RunsPage(): React.ReactElement {
   const t = useWorkflowsT();
+  const navigate = useNavigate();
+  const recordHref = useResourceRecordHrefLookup();
   const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
   const collection = search.tab === "sessions" ? "sessions" : "automations";
   const waitOptions = React.useMemo(
@@ -106,6 +109,12 @@ export function RunsPage(): React.ReactElement {
     errorFrom: (data) =>
       data?.cancel_workflow_run.ok === false ? data.cancel_workflow_run.message : null,
   });
+  const [reprocessRun] = useAuthoredMutation(ReprocessWorkflowRunDocument, {
+    invalidateModels: [RUN_MODEL, STEP_RUN_MODEL, DECISION_MODEL],
+    errorFrom: (data) => data?.reprocess_workflow_run.ok === false
+      ? data.reprocess_workflow_run.message : null,
+  });
+  const reprocessKeys = React.useRef(new Map<string, string>());
   const cancel = React.useCallback(
     async (context: ActionContext) => {
       const id = rowPublicId(context.record);
@@ -116,6 +125,23 @@ export function RunsPage(): React.ReactElement {
     },
     [cancelRun],
   );
+  const reprocess = React.useCallback(async (context: ActionContext) => {
+    const id = rowPublicId(context.record);
+    if (!id) return;
+    let requestKey = reprocessKeys.current.get(id);
+    if (!requestKey) {
+      requestKey = crypto.randomUUID();
+      reprocessKeys.current.set(id, requestKey);
+    }
+    const data = await reprocessRun({ run: id, requestKey });
+    const outcome = data?.reprocess_workflow_run;
+    if (outcome?.ok && outcome.id) {
+      const href = recordHref(RUN_MODEL, outcome.id);
+      if (href) void navigate({ to: href });
+    }
+    context.refresh();
+    return outcome?.message;
+  }, [navigate, recordHref, reprocessRun]);
   const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
     () => [
       {
@@ -169,6 +195,7 @@ export function RunsPage(): React.ReactElement {
         <Column field="workflow.name" header={t("col.workflow")} />
         <Column<WorkflowRunRow> field="origin" header={t("runs.origin")} render={(row) => runOriginLabel(row.origin, t)} />
         <Column field="status" widget="statusBadge" />
+        <Column field="reprocessed_from" />
         <Column<WorkflowRunRow>
           field="waiting_kind"
           header={t("runs.waitingFor")}
@@ -187,10 +214,18 @@ export function RunsPage(): React.ReactElement {
           <Field name="waiting_kind" readOnly options={waitOptions} />
           <Field name="next_wake_at" readOnly />
           <Field name="steps_taken" readOnly />
+          <Field name="reprocessed_from" readOnly />
           <Field name="updated_at" readOnly />
         </Group>
         <Field name="budget_spent" widget="json" readOnly />
         <Field name="error" readOnly />
+        <Action
+          id="reprocess"
+          label={t("runs.reprocess")}
+          icon="refresh"
+          run={reprocess}
+          visibleWhen={(record) => TERMINAL_RUN_STATUSES.has(String(record.status))}
+        />
         <Action
           id="cancel"
           label={t("form.cancel")}

@@ -230,6 +230,43 @@ class MessagingPairingMutation:
 class MessagingChannelMutation:
     """Owner/admin console mutation for deleting a connected channel."""
 
+    @strawberry.mutation(name="create_document_channel")
+    def create_document_channel(self, info: strawberry.Info, display_name: str) -> ActionResult:
+        """Create an upload-only manual channel without external credentials."""
+
+        actor = _request_user(info)
+        if actor is None:
+            raise PermissionDenied("Authentication is required.")
+        channel = Channel.objects.create_document_channel(actor, display_name=display_name)
+        return ActionResult(ok=True, message="Document channel created.", id=channel.sqid)
+
+    @strawberry.mutation(name="submit_channel_documents")
+    def submit_channel_documents(
+        self,
+        info: strawberry.Info,
+        channel: PublicID,
+        file_ids: list[PublicID],
+        item_keys: list[str],
+        request_key: str,
+    ) -> list[MessageType]:
+        """Submit READY files as channel Messages through canonical ingest delivery."""
+
+        if len(file_ids) != len(item_keys):
+            raise ValueError("Each submitted file requires one item key.")
+        actor = _request_user(info)
+        if actor is None:
+            raise PermissionDenied("Authentication is required.")
+        target = require_instance_for_id(Channel, str(channel), queryset=write_queryset(Channel))
+        files = _storage_files(cast(list[strawberry.ID], file_ids))
+        return list(
+            Message.objects.submit_documents(
+                target,
+                tuple(zip(item_keys, files, strict=True)),
+                actor=actor,
+                request_key=request_key,
+            )
+        )
+
     @strawberry.mutation(name="delete_channel")
     def delete_channel(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Preview, then optionally purge, one channel and everything it ingested.
