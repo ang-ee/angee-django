@@ -1,18 +1,7 @@
 import { useAuth } from "@angee/app";
-import {
-  authoredQueryKey,
-  requestAuthoredData,
-  sharedAuthoredMeta,
-  useActiveDataProviderName,
-  useAuthoredErrorPolicy,
-  useAuthoredLiveInterest,
-  type DocumentData,
-} from "@angee/refine";
-import { useDataProvider } from "@refinedev/core";
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-
+import { useAuthoredKeysetFeed } from "@angee/refine";
 import { ThreadTranscriptDocument, ThreadTranscriptRevalidateDocument } from "./documents";
-import { messageFeedOptions } from "./message-feed";
+import { messageFeedWindow, messageFeedRevalidation } from "./message-feed";
 
 // Message/Reaction writes change content; the other owners supply root access,
 // sender identity and attachment metadata. Immutable fragments and readonly
@@ -24,31 +13,20 @@ const MESSAGE_MODELS = [
 
 /** The thread owns its scope and full transcript projection; Query owns state. */
 export function useThreadMessageFeed(threadId: string) {
-  const client = useQueryClient();
-  const dataProvider = useDataProvider();
-  const provider = useActiveDataProviderName() ?? "default";
-  const actor = useAuth().user?.id;
-  const enabled = Boolean(actor && threadId);
-  const queryKey = ["angee", "authored", "message-feed", actor,
-    authoredQueryKey(ThreadTranscriptDocument, { threadId, limit: 50 }, provider)] as const;
-  const configured = messageFeedOptions(client, {
-    queryKey,
+  return useAuthoredKeysetFeed({
+    actor: useAuth().user?.id,
+    enabled: Boolean(threadId),
+    models: MESSAGE_MODELS,
     pageSize: 50,
-    async window(beforeCursor, throughCursor, limit, context) {
-      const data = await requestAuthoredData<DocumentData<typeof ThreadTranscriptDocument>>(
-        dataProvider, provider, ThreadTranscriptDocument,
-        { threadId, beforeCursor, throughCursor, limit }, context,
-      );
-      return data.thread_message_feed;
+    window: {
+      document: ThreadTranscriptDocument,
+      variables: (beforeCursor, throughCursor, limit) => ({ threadId, beforeCursor, throughCursor, limit }),
+      select: (data) => messageFeedWindow(data.thread_message_feed),
     },
-    async revalidate(ids, context) {
-      const data = await requestAuthoredData<DocumentData<typeof ThreadTranscriptRevalidateDocument>>(
-        dataProvider, provider, ThreadTranscriptRevalidateDocument, { threadId, ids }, context,
-      );
-      return data.thread_message_feed_revalidate;
+    revalidate: {
+      document: ThreadTranscriptRevalidateDocument,
+      variables: (ids) => ({ threadId, ids }),
+      select: (data) => messageFeedRevalidation(data.thread_message_feed_revalidate),
     },
   });
-  useAuthoredLiveInterest(enabled, MESSAGE_MODELS);
-  useAuthoredErrorPolicy([queryKey]);
-  return useInfiniteQuery({ ...configured, enabled, meta: sharedAuthoredMeta(client, queryKey, MESSAGE_MODELS) });
 }

@@ -5,9 +5,9 @@ import {
   Page,
   PageBody,
   PageHeader,
+  useRouteParam,
   useRouteHref,
 } from "@angee/ui";
-import { useParams } from "@tanstack/react-router";
 import * as React from "react";
 
 import { useQueueContext } from "../context";
@@ -17,7 +17,7 @@ import { CYCLE_MODEL } from "../resources";
 
 /** Incomplete cycle windows: current first, then upcoming, with close/rollover. */
 export function CyclesPage(): React.ReactElement {
-  const { queueId = "" } = useParams({ strict: false }) as { queueId?: string };
+  const queueId = useRouteParam("queueId") ?? "";
   const t = useWorkT();
   const routeHref = useRouteHref();
   const queue = useQueueContext(queueId);

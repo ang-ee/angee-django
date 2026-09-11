@@ -609,9 +609,10 @@ Hard-won traps — the wise learn from others' mistakes
   both the package tree and the explicit addon/example roots. Record the intended
   edge or public-export allowance; do not bypass it with an undeclared import or
   a second local implementation.
-- **`ResourceList` still needs a form declaration, even for read-only records.** Give
-  discovered/read-only resources a `<Form>` child or `formFields` with read-only fields;
-  an all-read-only form never assembles an update mutation. Delete affordances are
+- **`ResourceList` owns the record surface.** Use a `<Form>` child or `formFields`
+  for generated forms, including read-only records; use `renderRecord` for a
+  domain-owned transcript or detail surface. An all-read-only form never assembles
+  an update mutation. Delete affordances are
   schema-capability gated: if the resource has no `delete` root, `ResourceList`/`ListView`
   omit record and bulk delete instead of requiring a delete-only `crud(...)`.
 - **An addon contributes one menu root.** The app rail is the one navigation
@@ -697,6 +698,35 @@ Hard-won traps — the wise learn from others' mistakes
   `Symbol.for("@angee/ui.<name>-slot")` (see `layouts/slots.ts`); the legacy
   rendered-binding prefix is retired.
 
+- **Message projections have one owner.** A peer addon that lists messages spreads
+  the fragments messaging exports (sender, parts + file + mime, reaction groups,
+  feed window) instead of re-authoring the selection; three copies of the same
+  sub-selection already existed across messaging, nexus and posts.
+- **One keyset feed hook.** Compose `useAuthoredKeysetFeed` from `@angee/refine`;
+  domain adapters supply documents, scopes, live interests and presentation order.
+  Native Query pages own loaded history; do not introduce a second row cache.
+- **Enum casing is decided once.** `useEnumOptions` owns read/write casing; a
+  caller that re-uppercases option values is working around the owner. Select its
+  casing option for authored enum actions and retain lowercase CRUD inputs.
+- **No `useParams(...) as {...}` casts.** Read generated typed routes directly or
+  use `useRouteParam` at UI’s existing router integration for a named string param.
+- **No `navigate({ search: ... as never })`.** Compose `updateRouteSearch` with
+  relative router navigation; preserve unrelated flat search keys. Addons retain
+  their own scope vocabulary and validation.
+- **Master-detail is `ResourceList`.** A list beside its detail composes routed or
+  controlled `ResourceList`, never `ListView` plus a `useState` selection and a
+  snapshot lift.
+- **Graph + inspector pages use the shell panes.** Navigator to the primary pane,
+  inspector to the secondary pane, as `iam` schema page does; an in-content
+  `SplitPanes` with a hand-rolled `<aside>` is the copy. `PageAside`/`RailPanel`
+  own asides.
+- **A connect action is one ceremony.** Pass the button as `MutationDialog.trigger`
+  so the dialog owns open state, reset and native focus pairing. Addons retain
+  vendor pairing and source selection.
+- **`ActionResult` selections are a fragment**, or derived via `useActionMutation`;
+  never hand-write `…Result`/`…Variables` interfaces and cast to
+  `TypedDocumentNode`.
+
 ## Checks
 
 Run package-scoped commands while editing, then the broad checks before handoff:
@@ -723,7 +753,7 @@ Run the architecture guardrail when changing package layering, public shared
 owners, or addon manifests:
 
 ```sh
-pnpm --config.verify-deps-before-run=false --filter @angee/app run test -- architecture-guardrails
+pnpm --config.verify-deps-before-run=false --filter @angee/app exec vitest run src/architecture-guardrails.test.ts
 ```
 
 A hit is not automatically wrong, but it must either compose the shared primitive

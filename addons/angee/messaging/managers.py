@@ -33,7 +33,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
-from django.core import signing
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
@@ -42,6 +41,7 @@ from rebac import PermissionDenied, current_actor, system_context
 
 from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.pagination import InvalidKeysetCursor, KeysetOrder
 from angee.base.refs import canonical_record_target
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
@@ -308,25 +308,7 @@ def _message_search_query(term: str) -> models.Q:
 _MESSAGE_ORDER_ANNOTATION = Coalesce("sent_at", "created_at")
 
 
-def _message_before(anchor: tuple[Any, Any]) -> models.Q:
-    """Return rows strictly before the ``(order_at, pk)`` cursor."""
-
-    at, pk = anchor
-    return models.Q(_order_at__lt=at) | models.Q(_order_at=at, pk__lt=pk)
-
-
-def _message_at_or_before(anchor: tuple[Any, Any]) -> models.Q:
-    """Return rows at or before the ``(order_at, pk)`` cursor (anchor inclusive)."""
-
-    at, pk = anchor
-    return models.Q(_order_at__lt=at) | models.Q(_order_at=at, pk__lte=pk)
-
-
-def _message_after(anchor: tuple[Any, Any]) -> models.Q:
-    """Return rows strictly after the ``(order_at, pk)`` cursor."""
-
-    at, pk = anchor
-    return models.Q(_order_at__gt=at) | models.Q(_order_at=at, pk__gt=pk)
+_MESSAGE_ORDER = KeysetOrder("_order_at")
 
 
 def _preview(body: ParsedPart | None, *, limit: int = 280) -> str:
@@ -939,7 +921,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         message_model = apps.get_model("messaging", "Message")
         queryset = message_model._base_manager.filter(thread=thread).annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
         if history_before is not None:
-            queryset = queryset.filter(_message_before(history_before.chronological_key))
+            queryset = queryset.filter(_MESSAGE_ORDER.before(history_before.chronological_key))
         latest = queryset.order_by("-_order_at", "-pk").first()
         if latest is None:
             return
@@ -1034,7 +1016,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         if follower.last_read_message is None:
             return queryset
         anchor = follower.last_read_message.chronological_key
-        return queryset.filter(_message_after(anchor))
+        return queryset.filter(_MESSAGE_ORDER.after(anchor))
 
     def unread_count_for_record(
         self,
@@ -1874,31 +1856,28 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         handle_model = apps.get_model("parties", "Handle")
         actor = self.actor() or current_actor()
         handles = handle_model.objects.with_actor(actor) if actor is not None else handle_model.objects.all()
-        sender_name = handles.with_sender_name().filter(pk=models.OuterRef("sender_id")).values("_sender_name")[:1]
-        return Coalesce(models.Subquery(sender_name), models.Value(""), output_field=models.TextField())
-
-    def with_sender_name(self) -> MessageQuerySet:
-        """Prepare the actor-visible sender alias for explicit inbox ordering."""
-
-        return self.alias(_sender_name=self.sender_name_expression())
+        return (
+            handles.with_sender_name()
+            .filter(pk=models.OuterRef("sender_id"))
+            .readable_scalar_subquery(
+                "_sender_name",
+                actor=actor,
+                default="",
+                output_field=models.TextField(),
+            )
+        )
 
     def thread_title_expression(self) -> models.Expression:
         """Correlate the title from the actor-readable thread queryset."""
 
         thread_model = apps.get_model("messaging", "Thread")
         actor = self.actor() or current_actor()
-        threads = thread_model.objects.with_actor(actor).scoped() if actor is not None else thread_model.objects.none()
-        title = threads.filter(pk=models.OuterRef("thread_id")).values("title__text")[:1]
-        return Coalesce(
-            models.Subquery(title),
-            models.Value(""),
+        return thread_model.objects.filter(pk=models.OuterRef("thread_id")).readable_scalar_subquery(
+            "title__text",
+            actor=actor,
+            default="",
             output_field=models.TextField(),
         )
-
-    def with_thread_title(self) -> MessageQuerySet:
-        """Prepare the actor-visible thread title for explicit inbox ordering."""
-
-        return self.alias(_thread_title=self.thread_title_expression())
 
     def channel_vendor_name_expression(self) -> models.Expression:
         """Correlate the vendor label through readable Integration and Vendor sets.
@@ -1910,25 +1889,10 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         integration_model = apps.get_model("integrate", "Integration")
         vendor_model = apps.get_model("integrate", "Vendor")
         actor = self.actor() or current_actor()
-        integrations = (
-            integration_model.objects.with_actor(actor).scoped()
-            if actor is not None
-            else integration_model.objects.none()
-        )
         vendors = vendor_model.objects.with_actor(actor).scoped() if actor is not None else vendor_model.objects.none()
-        vendor_name = integrations.filter(
+        return integration_model.objects.filter(
             pk=models.OuterRef("channel_id"), vendor_id__in=vendors.values("pk")
-        ).values("vendor__display_name")[:1]
-        return Coalesce(
-            models.Subquery(vendor_name),
-            models.Value(""),
-            output_field=models.TextField(),
-        )
-
-    def with_channel_vendor_name(self) -> MessageQuerySet:
-        """Prepare the actor-visible channel vendor for explicit inbox ordering."""
-
-        return self.alias(_channel_vendor_name=self.channel_vendor_name_expression())
+        ).readable_scalar_subquery("vendor__display_name", actor=actor, default="", output_field=models.TextField())
 
     def with_external_ids(self, external_ids: tuple[str, ...] | list[str]) -> MessageQuerySet:
         """Filter to exact external ids through the ``MD5(external_id)`` identity index.
@@ -2015,55 +1979,20 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         and history below the fixed lower cut are separate facts, even if empty.
         """
 
-        if after_cursor is not None and (before_cursor is not None or through_cursor is not None):
-            raise ValueError("after_cursor cannot combine with before_cursor or through_cursor.")
-        limit = max(1, min(int(limit), 200))
         search = self._feed_search(search)
-        actor = self.actor() or current_actor()
-        namespace = json.dumps([self.db, self.model._meta.label_lower, scope, search, str(actor)])
-        fingerprint = hashlib.sha256(namespace.encode()).hexdigest()
-        signer = signing.Signer(salt=f"angee.messaging.feed.v1.{fingerprint}")
-        cursor = before_cursor if before_cursor is not None else after_cursor
-        anchor = self._feed_cursor_position(cursor, signer) if cursor is not None else None
-        lower = self._feed_cursor_position(through_cursor, signer) if through_cursor is not None else None
-        queryset = self.for_feed(search)
-        count = queryset.count()
-        window = queryset
-        if anchor is not None:
-            window = window.filter(_message_before(anchor) if before_cursor is not None else _message_after(anchor))
-        if lower is not None:
-            window = window.exclude(_message_before(lower))
-        ascending = after_cursor is not None
-        order = ("_order_at", "pk") if ascending else ("-_order_at", "-pk")
-        selected = list(window.order_by(*order)[: limit + 1])
-        has_more = len(selected) > limit
-        messages = selected[:limit]
-        if ascending:
-            messages.reverse()
-        below = queryset.filter(_message_before(lower)).exists() if lower is not None else False
-        if not messages:
-            return {
-                "messages": [],
-                "count": count,
-                "older_cursor": None,
-                "newer_cursor": None,
-                "has_older": False,
-                "has_newer": False,
-                "has_more_in_window": False,
-                "has_older_than_through": below,
-            }
-        newest = messages[0].chronological_key
-        oldest = messages[-1].chronological_key
-        return {
-            "messages": queryset.filter(pk__in=[message.pk for message in messages]),
-            "count": count,
-            "older_cursor": signer.sign_object([oldest[0].isoformat(), str(oldest[1])]),
-            "newer_cursor": signer.sign_object([newest[0].isoformat(), str(newest[1])]),
-            "has_older": queryset.filter(_message_before(oldest)).exists(),
-            "has_newer": queryset.filter(_message_after(newest)).exists(),
-            "has_more_in_window": has_more,
-            "has_older_than_through": below,
-        }
+        try:
+            page = self.for_feed(search).keyset_page(
+                order=_MESSAGE_ORDER,
+                cursor_scope=(scope, search),
+                cursor_salt="angee.messaging.feed.v1",
+                before_cursor=before_cursor,
+                after_cursor=after_cursor,
+                through_cursor=through_cursor,
+                limit=limit,
+            )
+        except InvalidKeysetCursor as error:
+            raise ValueError("Invalid message feed cursor for this scope.") from error
+        return {"messages": page.pop("rows"), **page}
 
     def feed_revalidate(self, ids: list[str], *, search: str = "") -> dict[str, Any]:
         """Partition at most 200 submitted IDs into current survivors and absences.
@@ -2082,22 +2011,6 @@ class MessageQuerySet(AngeeQuerySet[Any]):
             "messages": self.for_feed(search).filter(sqid__in=survivors),
             "absent_ids": [value for value in unique if value not in survivors],
         }
-
-    def _feed_cursor_position(self, cursor: str, signer: signing.Signer) -> tuple[datetime, Any]:
-        """Verify the native signed tuple without consulting its original row."""
-
-        try:
-            value = signer.unsign_object(cursor)
-            match value:
-                case [str(at), str(pk)]:
-                    timestamp = datetime.fromisoformat(at)
-                    if timezone.is_naive(timestamp):
-                        raise ValueError("Cursor timestamp must be timezone-aware.")
-                    return timestamp, self.model._meta.pk.to_python(pk)
-                case _:
-                    raise ValueError("Cursor must carry a timestamp and primary key.")
-        except (signing.BadSignature, ValueError, TypeError) as error:
-            raise ValueError("Invalid message feed cursor for this scope.") from error
 
 
 class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: ignore[misc]
@@ -2145,19 +2058,19 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             before_limit = max(1, limit // 2)
             after_limit = max(0, limit - before_limit)
             page = [
-                *queryset.filter(_message_at_or_before(anchor)).order_by(*descending)[:before_limit],
-                *queryset.filter(_message_after(anchor)).order_by(*ascending)[:after_limit],
+                *queryset.filter(_MESSAGE_ORDER.before(anchor, inclusive=True)).order_by(*descending)[:before_limit],
+                *queryset.filter(_MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:after_limit],
             ]
         elif before not in (None, ""):
             anchor = self._record_message_anchor(queryset, before)
             if anchor is None:
                 return [], count
-            page = list(queryset.filter(_message_before(anchor)).order_by(*descending)[:limit])
+            page = list(queryset.filter(_MESSAGE_ORDER.before(anchor)).order_by(*descending)[:limit])
         elif after not in (None, ""):
             anchor = self._record_message_anchor(queryset, after)
             if anchor is None:
                 return [], count
-            page = list(queryset.filter(_message_after(anchor)).order_by(*ascending)[:limit])
+            page = list(queryset.filter(_MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:limit])
         else:
             page = list(queryset.order_by(*descending)[:limit])
         return sorted(page, key=lambda message: message.chronological_key), count

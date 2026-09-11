@@ -19,6 +19,8 @@ export interface DialogFormProps {
   onSubmit?: FormEventHandler<HTMLFormElement>;
   size?: DialogSize;
   placement?: DialogPlacement;
+  /** Native trigger paired with this dialog for focus restoration. */
+  trigger?: React.ReactElement;
 }
 
 export function DialogForm({
@@ -31,9 +33,11 @@ export function DialogForm({
   onSubmit,
   size = "sm",
   placement = "prompt",
+  trigger,
 }: DialogFormProps): React.ReactElement {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      {trigger ? <Dialog.Trigger render={trigger} /> : null}
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Content placement={placement} size={size}>

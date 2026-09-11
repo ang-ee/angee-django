@@ -6,7 +6,24 @@ import { describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
-import { useImplCategory, useImplConfigFields, useImplPrefill } from "./enum-options";
+import { useEnumOptions, useImplCategory, useImplConfigFields, useImplPrefill } from "./enum-options";
+
+vi.mock("@angee/metadata", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@angee/metadata")>(),
+  useModelMetadata: () => ({
+    fields: { health: { values: [{ value: "ON_TRACK", description: "On track" }] } },
+  }),
+}));
+
+test("enum options preserve CRUD casing and opt into GraphQL action casing", () => {
+  const { result, rerender } = renderHook(
+    ({ casing }: { casing?: "lower" | "upper" }) => useEnumOptions("portfolio.Update", "health", { casing }),
+    { initialProps: { casing: undefined } as { casing?: "lower" | "upper" } },
+  );
+  expect(result.current).toEqual([{ value: "on_track", label: "On track" }]);
+  rerender({ casing: "upper" });
+  expect(result.current).toEqual([{ value: "ON_TRACK", label: "On track" }]);
+});
 
 const useAuthoredQueryMock = vi.hoisted(() => vi.fn(() => ({
   data: {

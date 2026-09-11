@@ -57,6 +57,22 @@ export function recordNavigationSearch(
   return next;
 }
 
+/** Merge flat route-search keys while preserving every key the caller does not own. */
+export function updateRouteSearch(
+  patch: Readonly<Record<string, unknown>>,
+): (search: Record<string, unknown>) => Record<string, unknown> {
+  return (search) => ({ ...search, ...patch });
+}
+
+/** Read one string from the app's flat route-search object. */
+export function routeSearchParam(
+  search: Readonly<Record<string, unknown>>,
+  key: string,
+): string | undefined {
+  const value = search[key];
+  return typeof value === "string" ? value : undefined;
+}
+
 /** Use the app's flat route-search codec for copied and modified-click links. */
 export function recordNavigationHref(
   href: string,

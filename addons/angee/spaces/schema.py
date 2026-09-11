@@ -15,6 +15,7 @@ from angee.graphql.data import (
     hasura_model_resource,
     public_pk_decoder,
 )
+from angee.graphql.ids import require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
@@ -87,9 +88,12 @@ class SpacesMembershipMutation:
         """Add or confirm one party in a writable group at the selected role."""
 
         group = authorized_action_target(info, Group, group_id, "write")
-        party = Party.objects.all().scoped().from_public_id(str(party_id))
-        if party is None:
-            raise ValueError("party not found")
+        party = require_instance_for_id(
+            Party,
+            party_id,
+            queryset=Party.objects.all().scoped(),
+            not_found="party not found",
+        )
         membership = Membership.objects.add_confirmed(
             group=group,
             party=party,
@@ -106,9 +110,12 @@ class SpacesMembershipMutation:
         """Confirm a roster row and reconcile its role relationship."""
 
         del info
-        membership = Membership.objects.all().from_public_id(str(id))
-        if membership is None:
-            raise ValueError("membership not found")
+        membership = require_instance_for_id(
+            Membership,
+            id,
+            queryset=Membership.objects.all(),
+            not_found="membership not found",
+        )
         membership.confirm()
         return cast(SpaceMembershipType, membership)
 
@@ -121,9 +128,12 @@ class SpacesMembershipMutation:
         """Dismiss a roster row and revoke its role relationship."""
 
         del info
-        membership = Membership.objects.all().from_public_id(str(id))
-        if membership is None:
-            raise ValueError("membership not found")
+        membership = require_instance_for_id(
+            Membership,
+            id,
+            queryset=Membership.objects.all(),
+            not_found="membership not found",
+        )
         membership.dismiss()
         return cast(SpaceMembershipType, membership)
 

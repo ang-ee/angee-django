@@ -12,6 +12,7 @@ type MockThreadRow = {
 
 const pageMocks = vi.hoisted(() => ({
   resourceProps: null as Record<string, unknown> | null,
+  resourceLists: [] as Record<string, unknown>[],
   listViews: [] as Record<string, unknown>[],
   columnFields: [] as string[],
   transcriptThreadIds: [] as string[],
@@ -48,35 +49,34 @@ vi.mock("@angee/ui", async (importOriginal) => {
   List: ({ children }: { children?: React.ReactNode }) => <section>{children}</section>,
   ListView: (props: Record<string, unknown>) => {
     pageMocks.listViews.push(props);
-    React.useEffect(() => {
-      if (props.resource !== "spaces.GroupThread") return;
-      const onListStateChange = props.onListStateChange as
-        | ((state: {
-          rows: readonly MockThreadRow[];
-          total: number;
-          page: number;
-          pageSize: number;
-          pageCount: number;
-          hasNext: boolean;
-          hasPrev: boolean;
-          fetching: boolean;
-        }) => void)
-        | undefined;
-      onListStateChange?.({
-        rows: pageMocks.threadRows,
-        total: pageMocks.threadRows.length,
-        page: 1,
-        pageSize: 10,
-        pageCount: 1,
-        hasNext: false,
-        hasPrev: false,
-        fetching: false,
-      });
-    }, [props.resource]);
     return null;
   },
   ResourceList: (props: Record<string, unknown>) => {
-    pageMocks.resourceProps = props;
+    pageMocks.resourceLists.push(props);
+    if (props.resource === "spaces.Group") pageMocks.resourceProps = props;
+    const recordId = typeof props.recordId === "string" ? props.recordId : null;
+    const onSelect = props.onSelect as ((id: string | null) => void) | undefined;
+    React.useEffect(() => {
+      if (props.resource !== "spaces.GroupThread" || !props.selectFirstRecord) return;
+      if (!recordId || !pageMocks.threadRows.some((row) => row.id === recordId)) {
+        onSelect?.(pageMocks.threadRows[0]?.id ?? null);
+      }
+    }, [onSelect, props.baseFilter, props.resource, props.selectFirstRecord, recordId]);
+    if (props.resource === "spaces.GroupThread") {
+      const renderRecord = props.renderRecord as
+        | ((context: { recordId: string | null }) => React.ReactNode)
+        | undefined;
+      return (
+        <div data-testid="thread-resource-list">
+          {pageMocks.threadRows.map((row) => (
+            <button key={row.id} type="button" onClick={() => onSelect?.(row.id)}>
+              {row.title?.text ?? row.id}
+            </button>
+          ))}
+          {renderRecord?.({ recordId })}
+        </div>
+      );
+    }
     return <div>{props.children as React.ReactNode}</div>;
   },
   SplitPanes: ({ children }: { children?: React.ReactNode }) => <section>{children}</section>,
@@ -149,16 +149,21 @@ import { SpacesPage } from "./SpacesPage";
 describe("SpacesPage", () => {
   beforeEach(() => {
     pageMocks.resourceProps = null;
+    pageMocks.resourceLists = [];
     pageMocks.listViews = [];
     pageMocks.columnFields = [];
     pageMocks.transcriptThreadIds = [];
     pageMocks.mutationDialogs = [];
     pageMocks.mutationHookCalls = 0;
     pageMocks.dialogRoleValue = undefined;
+    pageMocks.threadRows = [
+      { id: "thr_1", title: { text: "Primary" }, groups: [{ id: "grp_1", name: "Community" }] },
+      { id: "thr_2", title: { text: "Side thread" }, groups: [{ id: "grp_1", name: "Community" }, { id: "grp_2", name: "Moderators" }] },
+    ];
     for (const mutation of pageMocks.mutations) mutation.mockReset();
   });
 
-  test("composes the group resource and scoped roster/thread primitives", () => {
+  test("composes the group resource and scoped roster/thread primitives", async () => {
     render(<SpacesPage />);
 
     expect(pageMocks.resourceProps).toMatchObject({
@@ -174,9 +179,9 @@ describe("SpacesPage", () => {
       id: string;
       render: (context: { recordId: string }) => React.ReactNode;
     }>;
-    for (const tab of tabs) {
-      render(<>{tab.render({ recordId: "grp_1" })}</>);
-    }
+    render(<>{tabs.find((tab) => tab.id === "roster")?.render({ recordId: "grp_1" })}</>);
+    const threads = tabs.find((tab) => tab.id === "threads");
+    const threadView = render(<>{threads?.render({ recordId: "grp_1" })}</>);
 
     expect(pageMocks.listViews[0]).toMatchObject({
       resource: "spaces.Membership",
@@ -199,22 +204,30 @@ describe("SpacesPage", () => {
       kind: "authored",
       pendingPolicy: "disable-actions",
     });
-    expect(pageMocks.listViews[1]).toMatchObject({
-      resource: "spaces.GroupThread",
-      scope: "local",
-      baseFilter: { groups: { exact: "grp_1" } },
-    });
-    const threadList = pageMocks.listViews.find(
+    const threadList = pageMocks.resourceLists.find(
       (props) => props.resource === "spaces.GroupThread",
     );
+    expect(threadList).toMatchObject({
+      resource: "spaces.GroupThread",
+      scope: "local",
+      placement: "split",
+      hideCreate: true,
+      selectFirstRecord: true,
+      baseFilter: { groups: { exact: "grp_1" } },
+    });
     expect(threadList?.rowHref).toBeUndefined();
-    expect(pageMocks.transcriptThreadIds.at(-1)).toBe("thr_1");
+    expect((await screen.findByTestId("thread-transcript")).textContent).toBe("thr_1");
 
-    const onRowClick = threadList?.onRowClick as
-      | ((row: MockThreadRow) => void)
-      | undefined;
-    act(() => onRowClick?.(pageMocks.threadRows[1]!));
+    fireEvent.click(screen.getByRole("button", { name: "Side thread" }));
     expect(pageMocks.transcriptThreadIds.at(-1)).toBe("thr_2");
+
+    pageMocks.threadRows = [{ id: "thr_3", title: { text: "Other group" }, groups: [{ id: "grp_2", name: "Moderators" }] }];
+    threadView.rerender(<>{threads?.render({ recordId: "grp_2" })}</>);
+    await waitFor(() => expect(pageMocks.transcriptThreadIds.at(-1)).toBe("thr_3"));
+
+    pageMocks.threadRows = [];
+    threadView.rerender(<>{threads?.render({ recordId: "grp_2" })}</>);
+    expect(await screen.findByText("group.threads.empty")).toBeTruthy();
   });
 
   test("changes a roster role through the dialog using MEMBER default and lowercase wire casing", async () => {

@@ -47,7 +47,6 @@ export function ConnectMountAction({
   invalidateModel,
 }: ConnectMountActionProps): React.ReactElement {
   const t = useStorageIntegrateT();
-  const [open, setOpen] = React.useState(false);
   const [connect] = useAuthoredMutation(mutationDocument, {
     invalidateModels: [invalidateModel],
   });
@@ -88,14 +87,11 @@ export function ConnectMountAction({
   const errorFallback = optionalTranslation(t, `${i18nPrefix}.error`);
 
   return (
-    <>
-      <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
+    <MutationDialog
+      trigger={<Button variant="primary" size="sm">
         <Glyph decorative name="plus" />
         {t(`${i18nPrefix}.button`)}
-      </Button>
-      <MutationDialog
-        open={open}
-        onOpenChange={setOpen}
+      </Button>}
         title={t(`${i18nPrefix}.title`)}
         description={t(`${i18nPrefix}.description`)}
         fields={fields}
@@ -106,8 +102,7 @@ export function ConnectMountAction({
         parseValues={parseMountConnectValues}
         onSubmit={connect}
         size="lg"
-      />
-    </>
+    />
   );
 }
 

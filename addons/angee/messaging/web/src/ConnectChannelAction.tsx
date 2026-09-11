@@ -168,7 +168,6 @@ function ConnectChannelDialog<
   onSubmit,
 }: ConnectChannelDialogProps<TDocument, TValues>): React.ReactElement {
   const t = useMessagingT();
-  const [open, setOpen] = React.useState(false);
   const dialogFields = React.useMemo(() => fields(t), [fields, t]);
   const typedParseValues = React.useCallback<MutationDialogParseValues<TValues>>(
     (values) => parseValues(values, t),
@@ -177,14 +176,11 @@ function ConnectChannelDialog<
   const errorFallback = optionalTranslation(t, `${i18nPrefix}.error`);
 
   return (
-    <>
-      <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
+    <MutationDialog
+      trigger={<Button variant="primary" size="sm">
         <Glyph decorative name="plus" />
         {t(`${i18nPrefix}.button`)}
-      </Button>
-      <MutationDialog
-        open={open}
-        onOpenChange={setOpen}
+      </Button>}
         title={t(`${i18nPrefix}.title`)}
         description={t(`${i18nPrefix}.description`)}
         fields={dialogFields}
@@ -194,8 +190,7 @@ function ConnectChannelDialog<
         errorFallback={errorFallback}
         parseValues={typedParseValues}
         onSubmit={onSubmit}
-      />
-    </>
+    />
   );
 }
 

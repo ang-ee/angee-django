@@ -17,7 +17,7 @@ import { TimelinePane } from "./TimelinePane";
 beforeEach(() => {
   mocks.error = null; mocks.fetching = false; mocks.older.mockReset();
   mocks.useTimelineMessageFeed.mockImplementation(() => ({
-    data: { pages: [{ count: 2, messages: [{
+    data: { pages: [{ count: 2, rows: [{
       id: "message", feed_order_key: "v1:1", preview: "Retained message", sender: null,
     }] }], pageParams: [null] },
     isFetching: mocks.fetching, error: mocks.error, hasNextPage: true, fetchNextPage: mocks.older,

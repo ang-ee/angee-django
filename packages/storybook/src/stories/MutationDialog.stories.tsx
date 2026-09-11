@@ -52,7 +52,6 @@ export default meta;
 type Story = StoryObj;
 
 function MutationDialogDemo(): React.ReactElement {
-  const [open, setOpen] = React.useState(true);
   const [submitted, setSubmitted] = React.useState<Record<string, unknown> | null>(
     null,
   );
@@ -60,9 +59,6 @@ function MutationDialogDemo(): React.ReactElement {
   return (
     <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets }}>
       <div className="grid gap-4">
-        <Button variant="primary" onClick={() => setOpen(true)}>
-          Open dialog
-        </Button>
         {submitted ? (
           <pre className="max-w-md rounded-6 bg-inset p-3 text-xs">
             {JSON.stringify(submitted, null, 2)}
@@ -70,8 +66,7 @@ function MutationDialogDemo(): React.ReactElement {
         ) : null}
       </div>
       <MutationDialog
-        open={open}
-        onOpenChange={setOpen}
+        trigger={<Button variant="primary">Open dialog</Button>}
         title="Connect directory"
         description="Store the account settings and create a synced directory."
         fields={fields}

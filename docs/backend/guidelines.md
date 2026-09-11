@@ -976,6 +976,27 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   until reprovision. The verifier logs each decline with its reason; FastMCP's 401 text
   about "expired" tokens is boilerplate.
 
+- **Scoped feed roots share payload construction.** Pass an authorized domain
+  queryset to Messaging's feed payload factories; root membership and search
+  predicates remain with their querysets.
+- **Payload envelopes share a base.** Repeated `error`/`error_code`, counters and
+  thread-state fields across mutation payloads want one base type and one
+  projector. Reuse `angee.graphql.actions.ActionResult` and `action_guard` when
+  their error contract fits; changing an existing error envelope is a separate
+  API migration, not a mechanical refactor.
+- **Resolvers never inspect `info.selected_fields` to choose annotations.** A sort
+  alias that needs an annotation is declared on `hasura_model_resource`. Lazy
+  preparation belongs in `strawberry-django-hasura` at its resolved `order_by`
+  boundary; extend that owner rather than re-walking selections in Angee.
+- **Public-id lookups preserve their authorization boundary.** Use
+  `require_instance_for_id` for required reads with the original queryset.
+  `resolve_action_target` and IAM's `user_from_public_id` elevate lookup and are
+  not interchangeable with readable queries.
+- **Actor-scoped scalar subqueries and keyset cursors belong to `angee/base`.**
+  The `Coalesce(Subquery(related.with_actor().scoped().filter(pk=OuterRef).values(v)[:1]), "")`
+  shape and the signed `(order_at, pk)` cursor pager are framework primitives;
+  do not copy them into another addon's queryset.
+
 ## Framework Contracts
 
 Framework contracts should be self-explaining in code. Add docstrings to public

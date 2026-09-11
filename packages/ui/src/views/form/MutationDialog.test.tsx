@@ -24,6 +24,65 @@ const parseRawValues = (values: Readonly<Record<string, unknown>>) => values;
 describe("MutationDialog", () => {
   afterEach(cleanup);
 
+  test("an owned trigger opens the dialog and receives focus after dismissal", async () => {
+    const submit = vi.fn().mockRejectedValueOnce(new Error("Try again"));
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog
+        trigger={<button type="button">Connect channel</button>}
+        title="Connect"
+        fields={[{ name: "name", label: "Name", required: true }]}
+        initialValues={{ name: "Initial" }}
+        submitLabel="Connect"
+        parseValues={parseRawValues}
+        onSubmit={submit}
+      />
+    </AppRuntimeProvider>);
+
+    const trigger = screen.getByRole("button", { name: "Connect channel" });
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    const input = screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Changed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(await screen.findByText("Try again")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    fireEvent.click(trigger);
+    expect((await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Initial");
+    expect(screen.queryByText("Try again")).toBeNull();
+  });
+
+  test("a dismissed trigger session ignores its pending submission", async () => {
+    let resolve!: (value: string) => void;
+    const onSubmitted = vi.fn();
+    const submit = vi.fn(() => new Promise<string>((done) => { resolve = done; }));
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog
+        trigger={<button type="button">Open request</button>}
+        title="Request"
+        fields={[]}
+        submitLabel="Send"
+        parseValues={parseRawValues}
+        onSubmit={submit}
+        onSubmitted={onSubmitted}
+      />
+    </AppRuntimeProvider>);
+
+    const trigger = screen.getByRole("button", { name: "Open request" });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    resolve("old result");
+    await Promise.resolve();
+    expect(onSubmitted).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
   test("allows an optional-only dialog to submit its initial omitted value", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true });
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>

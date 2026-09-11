@@ -4,6 +4,8 @@ import {
   useNavigate,
   useRouter,
   useRouterState,
+  useParams,
+  useSearch,
   type AnyRoute,
   type AnyRouteMatch,
 } from "@tanstack/react-router";
@@ -119,6 +121,18 @@ export function useRouteRecordId(): string | undefined {
     [activeParamName],
   );
   return useMatches({ select: selectRecordId });
+}
+
+/** Read one named string parameter from the active route without asserting its route tree. */
+export function useRouteParam(name: string): string | undefined {
+  const params: Record<string, unknown> = useParams({ strict: false });
+  const value = params[name];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Read the app's flat search object through its router-owned runtime shape. */
+export function useRouteSearch(): Readonly<Record<string, unknown>> {
+  return useSearch({ strict: false });
 }
 
 function leafFullPath(matches: readonly AnyRouteMatch[]): string {

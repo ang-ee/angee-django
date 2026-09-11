@@ -5,15 +5,16 @@ from __future__ import annotations
 from typing import Any, TypeVar
 
 import strawberry
+from django.core.exceptions import ImproperlyConfigured
+from django.db import models
+from strawberry.types import get_object_definition
+from strawberry_django.utils.typing import get_django_definition
+
 from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
     public_id_for,
 )
-from django.core.exceptions import ImproperlyConfigured
-from django.db import models
-from strawberry.types import get_object_definition
-from strawberry_django.utils.typing import get_django_definition
 
 PublicID = strawberry.ID
 """GraphQL ID scalar carrying an Angee public id, usually a model sqid."""
@@ -69,12 +70,17 @@ def require_instance_for_id(
     value: Any,
     *,
     queryset: models.QuerySet[_ModelT] | None = None,
+    not_found: str | None = None,
 ) -> _ModelT:
-    """Return the row for ``value`` or raise a stable not-found error."""
+    """Resolve within the supplied queryset or raise, without changing its policy.
+
+    ``not_found`` preserves a domain surface's established error wording. This
+    helper never elevates; action-specific authorization belongs to the action.
+    """
 
     instance = instance_for_id(model, value, queryset=queryset)
     if instance is None:
-        raise ValueError(f"{model._meta.object_name} {public_id_value(value)!r} was not found")
+        raise ValueError(not_found or f"{model._meta.object_name} {public_id_value(value)!r} was not found")
     return instance
 
 

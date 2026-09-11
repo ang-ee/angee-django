@@ -24,6 +24,8 @@ export type RecordActionRunner = (
 ) => ActionResult | Promise<ActionResult>;
 
 export interface UseRecordActionOptions {
+  /** Extra generated action arguments derived from the current record id. */
+  actionArguments?: (id: string) => ActionArguments;
   /** Message returned when the action itself returns no message. */
   defaultMessage?: string;
   /** Extra Angee model labels whose refine caches this action mutates. */
@@ -112,16 +114,26 @@ export function useRecordActionMutation<TField extends string = string>(
   // contract. Id-returning bridge actions delegate toast/link settling to the
   // shared ActionResult owner so consumer hooks stay declarative.
   const run = React.useCallback<RecordActionRunner>(
-    async (id) => {
+    async (id, context) => {
+      const arguments_ = options?.actionArguments?.(id);
+      const mutateRecord = () => arguments_ === undefined
+        ? mutate(id)
+        : mutate(id, arguments_);
       if (settleOptions) {
-        await settleActionResult(() => mutate(id));
+        const outcome = await settleActionResult(mutateRecord);
+        if (outcome?.ok) {
+          if (options?.refresh !== false) context.refresh();
+          await options?.afterSuccess?.(context, outcome.message);
+        }
         return undefined;
       }
-      return runActionResult(await mutate(id));
+      return runActionResult(await mutateRecord());
     },
-    [mutate, settleActionResult, settleOptions],
+    [mutate, options?.actionArguments, options?.afterSuccess, options?.refresh, settleActionResult, settleOptions],
   );
-  return [useRecordAction(run, options), state];
+  return [useRecordAction(run, settleOptions
+    ? { ...options, afterSuccess: undefined, refresh: false }
+    : options), state];
 }
 
 export interface UseActionResultMutationOptions {

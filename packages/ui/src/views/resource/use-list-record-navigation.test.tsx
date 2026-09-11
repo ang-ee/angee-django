@@ -144,6 +144,39 @@ test("local row models retain native table snapshots without invoking a server q
   expect(f.getList).not.toHaveBeenCalled();
 });
 
+test("first-row selection follows collection changes and clears an empty collection", () => {
+  const f = fixture({ initialScope: null });
+  const onSelect = vi.fn();
+  const onClearSelection = vi.fn();
+  const local = renderHook(
+    ({ id, key }: { id: string | null; key: string }) =>
+      useListRecordNavigation<{ id: string }>({
+        resource: "notes.Note",
+        recordId: id,
+        onSelect,
+        onClearSelection,
+        selectFirstRecord: true,
+        firstSelectionKey: key,
+      }),
+    { wrapper: f.wrapper, initialProps: { id: null as string | null, key: "group-a" } },
+  );
+  const snapshot: ResourceListSnapshot<{ id: string }> = { rows: [{ id: "a" }, { id: "b" }], page: 1, pageSize: 20, total: 2, pageCount: 1, hasNext: false, hasPrev: false, fetching: false };
+
+  act(() => local.result.current.onListStateChange(snapshot));
+  expect(onSelect).toHaveBeenLastCalledWith("a", undefined);
+  local.rerender({ id: "a", key: "group-a" });
+  act(() => local.result.current.onListStateChange({ ...snapshot, rows: [{ id: "b" }] }));
+  expect(onSelect).toHaveBeenLastCalledWith("b", undefined);
+  local.rerender({ id: "b", key: "group-b" });
+  act(() => local.result.current.onListStateChange({ ...snapshot, fetching: true }));
+  expect(onSelect).toHaveBeenCalledTimes(2);
+  act(() => local.result.current.onListStateChange({ ...snapshot, rows: [{ id: "c" }] }));
+  expect(onSelect).toHaveBeenLastCalledWith("c", undefined);
+  local.rerender({ id: "c", key: "group-b" });
+  act(() => local.result.current.onListStateChange({ ...snapshot, rows: [] }));
+  expect(onClearSelection).toHaveBeenCalledOnce();
+});
+
 test("a delayed page result cannot reopen a closed record or replace a different selection", async () => {
   let release!: (rows: { id: string }[]) => void;
   const delayed = new Promise<{ id: string }[]>((resolve) => { release = resolve; });

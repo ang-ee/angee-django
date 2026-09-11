@@ -19,43 +19,13 @@ export const FeedMessagesDocument = graphql(`
       sent_at
       created_at
       sender {
-        id
-        display_name
-        value
-        party_link_confirmed
-        party {
-          display_name
-        }
+        ...MessageSenderFields
       }
       parts {
-        id
-        role
-        disposition
-        cid
-        fragment {
-          text
-        }
-        file {
-          id
-          filename
-          title
-          size_bytes
-          url
-          mime_type {
-            mime_type
-            label
-          }
-        }
+        ...MessagePartFields
       }
       reaction_groups {
-        reaction
-        count
-        self_reacted
-        handles {
-          id
-          display_name
-          value
-        }
+        ...ReactionGroupFields
       }
     }
   }

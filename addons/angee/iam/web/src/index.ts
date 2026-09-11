@@ -14,6 +14,7 @@ export {
   IAM_LOGIN_BACKGROUND_IMAGE_URLS,
   type IamLoginPageProps,
 } from "./IamLoginPage";
+export { userDisplayName, type UserDisplayNameInput } from "./identity-labels";
 
 // IAM contributes its grouped Settings tree, including the inbound OIDC sign-in
 // provider admin; a route-less parent inherits its first child's target.

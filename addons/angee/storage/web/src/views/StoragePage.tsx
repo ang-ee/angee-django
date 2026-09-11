@@ -4,7 +4,7 @@ import {
   useInvalidateAuthoredModels,
 } from "@angee/refine";
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
-import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 
 import { useModelMetadata, type DataResourceMetadata } from "@angee/metadata";
 
@@ -35,6 +35,7 @@ import {
   useListRecordNavigation,
   useRouteHref,
   useRouteRecordId,
+  useRouteSearch,
   type ChatterTab,
   type FieldDescriptor,
   type ListViewNavigationScope,
@@ -140,7 +141,7 @@ export function StoragePage(): ReactElement {
   const filesHref = routeHref("storage.files");
   // The navigator scope (All files / Trash / a folder) lives in the URL beside
   // the `group` view param, so it is deep-linkable and back/forward works.
-  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const search = useRouteSearch();
   const fileResource = useModelMetadata(FILE_MODEL)?.resource;
   const navigationScope = useMemo(
     () => parseRecordNavigationScope(search, fileResource),

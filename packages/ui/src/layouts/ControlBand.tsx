@@ -1,5 +1,6 @@
 import type * as React from "react";
 
+import { cn } from "../lib/cn";
 import { barVariants } from "./bar";
 import { createLayoutBand } from "./layout-band";
 
@@ -38,6 +39,8 @@ export const ControlBandProvider: (
 export interface ControlBandProps {
   children: React.ReactNode;
   className?: string;
+  /** Allow controls to wrap when the containing pane is narrow. */
+  wrap?: boolean;
 }
 
 /**
@@ -45,6 +48,6 @@ export interface ControlBandProps {
  * `area-control` row. Under a `ConsoleLayout` it portals into that row; with no
  * layout above (standalone/test) it renders the band inline.
  */
-export const ControlBand: (
-  props: ControlBandProps,
-) => React.ReactElement | React.ReactPortal | null = band.Band;
+export function ControlBand({ wrap = false, className, ...props }: ControlBandProps): React.ReactElement | React.ReactPortal | null {
+  return <band.Band className={cn(wrap && "h-auto min-h-control-h flex-wrap py-2", className)} {...props} />;
+}

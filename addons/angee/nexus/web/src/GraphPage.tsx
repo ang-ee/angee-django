@@ -8,22 +8,23 @@ import {
   GraphView,
   LoadingPanel,
   Page,
+  PageAside,
   PageBody,
   PageHeader,
   RailPanel,
   RelationPicker,
   SegmentedControl,
-  SplitPane,
-  SplitPaneHandle,
-  SplitPanes,
   Tag,
+  Workbench,
   useChatter,
   useResourceRecordHrefLookup,
   useRouteHref,
+  useRouteSearch,
+  updateRouteSearch,
   type ResourceRecordHrefLookup,
   type RouteHref,
 } from "@angee/ui";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 
 import { NexusGraphParties, NexusPartyGraph } from "./documents";
 import {
@@ -46,7 +47,7 @@ type GraphLens = "ego" | "circle" | "identity";
 /** Bounded, actor-scoped relationship explorer over the shared GraphView owner. */
 export function GraphPage(): React.ReactElement {
   const t = useNexusT();
-  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const search = useRouteSearch();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const recordHref = useResourceRecordHrefLookup();
@@ -113,8 +114,7 @@ export function GraphPage(): React.ReactElement {
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const setSearch = React.useCallback(
     (patch: Record<string, unknown>) => {
-      // Untyped navigation: the router glue's `as never` idiom (refine router canon).
-      void navigate({ search: ((current: Record<string, unknown>) => ({ ...current, ...patch })) as never });
+      void navigate({ to: ".", search: updateRouteSearch(patch) });
     },
     [navigate],
   );
@@ -160,12 +160,29 @@ export function GraphPage(): React.ReactElement {
         ) : graph.error ? (
           <div className="p-5"><ErrorBanner description={graph.error.message} /></div>
         ) : (
-          <SplitPanes
+          <Workbench
             autoSave="nexus.graph"
-            panelIds={["graph", "inspector"]}
+            secondarySize={32}
+            contentMinSize={42}
+            secondaryMinSize={22}
+            stackBelow={760}
             className="h-full min-h-[34rem] bg-canvas"
+            secondary={
+              <Inspector
+                nodes={selectedNodes}
+                edge={selectedEdge}
+                routeHref={routeHref}
+                recordHref={recordHref}
+                openTimeline={(node) => {
+                  setActiveTab(isCircleNode(node) ? "feed" : "timeline");
+                  setCollapsed(false);
+                  const path = nodePath(recordHref, node);
+                  if (path) void navigate({ to: path });
+                }}
+              />
+            }
           >
-            <SplitPane id="graph" defaultSize={68} minSize={42} className="relative">
+            <div className="relative h-full min-h-0">
               {nodes.length === 0 ? (
                 <EmptyState fill icon="radar" title={t("graph.noResults")} />
               ) : (
@@ -189,23 +206,8 @@ export function GraphPage(): React.ReactElement {
               {graph.data?.party_graph?.truncated ? (
                 <Badge className="absolute left-3 top-3" tone="warning">{t("graph.truncated")}</Badge>
               ) : null}
-            </SplitPane>
-            <SplitPaneHandle />
-            <SplitPane id="inspector" defaultSize={32} minSize={22} collapsible>
-              <Inspector
-                nodes={selectedNodes}
-                edge={selectedEdge}
-                routeHref={routeHref}
-                recordHref={recordHref}
-                openTimeline={(node) => {
-                  setActiveTab(isCircleNode(node) ? "feed" : "timeline");
-                  setCollapsed(false);
-                  const path = nodePath(recordHref, node);
-                  if (path) void navigate({ to: path });
-                }}
-              />
-            </SplitPane>
-          </SplitPanes>
+            </div>
+          </Workbench>
         )}
       </PageBody>
     </Page>
@@ -234,7 +236,7 @@ function Inspector({
       })
     : undefined;
   return (
-    <aside className="min-h-0 overflow-auto bg-sheet-1 p-3">
+    <PageAside collapse="never" gutter="compact" className="h-full w-full bg-sheet-1">
       <RailPanel title={t("graph.inspector")} count={nodes.length || (edge ? 1 : undefined)} empty={t("graph.inspector.empty")}>
         {edge ? <EdgeDetails edge={edge} recordHref={recordHref} /> : null}
         {!edge && nodes.length > 0 ? (
@@ -271,7 +273,7 @@ function Inspector({
           </div>
         ) : null}
       </RailPanel>
-    </aside>
+    </PageAside>
   );
 }
 

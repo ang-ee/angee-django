@@ -18,19 +18,18 @@ import {
   List,
   LoadingPanel,
   ResourceList,
-  SplitPane,
-  SplitPaneHandle,
-  SplitPanes,
   TextLink,
   TopMenuTabs,
+  Workbench,
   useContainerQuery,
   useResourceRecordHrefLookup,
   useRouteHref,
+  useRouteSearch,
   type ActionContext,
   type RecordTabDescriptor,
   type StringIdRow,
 } from "@angee/ui";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 
 import {
   CancelWorkflowRunDocument,
@@ -89,7 +88,7 @@ interface StepArtifactRow extends StringIdRow {
 
 export function RunsPage(): React.ReactElement {
   const t = useWorkflowsT();
-  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const search = useRouteSearch();
   const collection = search.tab === "sessions" ? "sessions" : "automations";
   const waitOptions = React.useMemo(
     () => [
@@ -208,7 +207,7 @@ export function RunTimelinePanel({ runId }: { runId: string }): React.ReactEleme
   const t = useWorkflowsT();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
-  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const search = useRouteSearch();
   const executionId = typeof search.execution === "string" ? search.execution : null;
   const attemptId = typeof search.attempt === "string" ? search.attempt : null;
   const showingAttemptHistory = search.history === "attempts";
@@ -385,15 +384,18 @@ export function RunTimelinePanel({ runId }: { runId: string }): React.ReactEleme
         {t("runs.recoversAttempt")} <TextLink href={`${routeHref("workflows.run", { id: recoverySource.step_run.run.id })}?execution=${encodeURIComponent(recoverySource.step_run.id)}&attempt=${encodeURIComponent(recoverySource.id)}`} onNavigate={(href) => { void navigate({ to: href }); }}>{t("runs.openSourceAttempt")}</TextLink>
       </div> : null}
       {runWaitingLabel ? <div className="flex-none border-b border-border-subtle bg-sheet px-4 py-2 text-13 text-fg-muted">{runWaitingLabel}</div> : null}
-      {!wide ? <div className="min-h-0 flex-1">{narrowPane}</div> : <SplitPanes autoSave="workflows.run-inspection.wide" panelIds={["graph", "executions"]} direction="horizontal" className="h-full min-h-0 bg-canvas">
-        <SplitPane id="graph" defaultSize={wide ? 45 : 40} minSize={25}>
+      {!wide ? <div className="min-h-0 flex-1">{narrowPane}</div> : (
+        <Workbench
+          autoSave="workflows.run-inspection.wide"
+          contentMinSize={25}
+          secondaryMinSize={35}
+          secondarySize={55}
+          secondary={executionId ? <div className="flex h-full min-h-0 flex-col"><div className="flex flex-none items-center gap-3 border-b border-border-subtle px-2 py-1"><Button type="button" variant="ghost" onClick={() => setExecution(null)}>{t("runs.backToExecutions")}</Button><span className="truncate text-13 font-medium">{executionSummary}</span></div><div className="min-h-0 flex-1">{attemptList}</div></div> : executionList}
+          className="h-full min-h-0 bg-canvas"
+        >
           {graph}
-        </SplitPane>
-        <SplitPaneHandle />
-        <SplitPane id="executions" defaultSize={wide ? 55 : 60} minSize={35}>
-          {executionId ? <div className="flex h-full min-h-0 flex-col"><div className="flex flex-none items-center gap-3 border-b border-border-subtle px-2 py-1"><Button type="button" variant="ghost" onClick={() => setExecution(null)}>{t("runs.backToExecutions")}</Button><span className="truncate text-13 font-medium">{executionSummary}</span></div><div className="min-h-0 flex-1">{attemptList}</div></div> : executionList}
-        </SplitPane>
-      </SplitPanes>}
+        </Workbench>
+      )}
     </div>
   );
 }

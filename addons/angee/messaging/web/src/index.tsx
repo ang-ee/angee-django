@@ -1,4 +1,4 @@
-export { messageFeedOptions, messageFeedRows } from "./message-feed";
+export { messageFeedRows, messageFeedWindow, messageFeedRevalidation } from "./message-feed";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { PARTIES_OVERVIEW_SLOT } from "@angee/parties";
 import { useAuthoredQuery } from "@angee/refine";

@@ -20,7 +20,7 @@ export {
   type UseListRecordNavigationOptions,
   type UseListRecordNavigationResult,
 } from "./resource/use-list-record-navigation";
-export { parseRecordNavigationScope, recordNavigationSearch, recordNavigationHref } from "./resource/record-navigation-context";
+export { parseRecordNavigationScope, recordNavigationSearch, recordNavigationHref, routeSearchParam, updateRouteSearch } from "./resource/record-navigation-context";
 export { RowsListView, type RowsListViewProps } from "./resource/RowsListView";
 export {
   defineRowAction,
@@ -95,6 +95,7 @@ export {
 } from "./relation/enum-options";
 export {
   GraphView,
+  graphNodeStyle,
   type GraphViewActivation,
   type GraphViewEdge,
   type GraphViewEdgeStyle,
@@ -201,13 +202,15 @@ export {
   DrawerResourceList,
   REFINE_CREATE_ID,
   type ResourceListProps,
+  type ResourceRecordRenderContext,
+  type ResourceListSplitLayout,
   type ResourceListCalendarSpec,
   type ResourceFormActionProps,
   type DrawerResourceListProps,
   type ResourceRecordPlacement,
   type RecordSmartButtonDescriptor,
 } from "./resource/ResourceList";
-export { useRouteRecordId } from "./resource/resource-routing";
+export { useRouteParam, useRouteRecordId, useRouteSearch } from "./resource/resource-routing";
 export {
   AggregatePanel,
   type AggregatePanelProps,

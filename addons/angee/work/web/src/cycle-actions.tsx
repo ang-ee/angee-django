@@ -1,24 +1,18 @@
-import {
-  extractActionOutcome,
-  type DocumentVariables,
-} from "@angee/refine";
+import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   ActionFormDialog,
   Button,
   Glyph,
   defineRowAction,
-  useAuthoredResourceMutation,
+  useActionOutcomeMutation,
   type ActionDescriptor,
   type RowActionDeclaration,
   type StringIdRow,
 } from "@angee/ui";
 import * as React from "react";
 
-import { CloseWorkCycleDocument } from "./documents";
 import { useWorkT } from "./i18n";
 import { CYCLE_MODEL } from "./resources";
-
-type CloseCycleVariables = DocumentVariables<typeof CloseWorkCycleDocument>;
 
 export interface WorkCycleRow extends StringIdRow {
   starts_on?: unknown;
@@ -28,9 +22,8 @@ export interface WorkCycleRow extends StringIdRow {
 /** Authored cycle close/rollover descriptor; in-band next_cycle errors stay open. */
 export function useCloseCycleAction(): ActionDescriptor {
   const t = useWorkT();
-  const [close] = useAuthoredResourceMutation(CloseWorkCycleDocument, {
+  const [close] = useActionOutcomeMutation<ActionFieldName>("close_work_cycle", {
     invalidateModels: [CYCLE_MODEL, "projects.Task"],
-    shouldInvalidate: (data) => data?.close_work_cycle.ok === true,
   });
   return React.useMemo(
     () => ({
@@ -43,13 +36,10 @@ export function useCloseCycleAction(): ActionDescriptor {
         if (typeof cycle !== "string" || !cycle) {
           return { ok: false, message: t("cycle.action.failed") };
         }
-        const data = await close({ cycle } satisfies CloseCycleVariables);
-        return (
-          extractActionOutcome(data, "close_work_cycle") ?? {
-            ok: false,
-            message: t("cycle.action.failed"),
-          }
-        );
+        return (await close(cycle, { cycle })) ?? {
+          ok: false,
+          message: t("cycle.action.failed"),
+        };
       },
     }),
     [close, t],

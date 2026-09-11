@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { testDataResource, testResourceQuery } from "@angee/metadata/testing";
-import { parseRecordNavigationScope, recordNavigationHref, recordNavigationSearch } from "./record-navigation-context";
+import { parseRecordNavigationScope, recordNavigationHref, recordNavigationSearch, routeSearchParam, updateRouteSearch } from "./record-navigation-context";
 const resource = testDataResource("notes.Note", {
   roots: { aggregate: "notes_aggregate" },
   typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy" },
@@ -55,4 +55,14 @@ test("client row models cannot be made server-pageable by a portable descriptor"
   const serverContext = recordNavigationSearch({}, resource, scope);
   expect(parseRecordNavigationScope(serverContext, clientResource)).toBeNull();
   expect(recordNavigationSearch({}, clientResource, scope)).toEqual({});
+});
+
+test("flat route search updates preserve foreign keys and expose strings only", () => {
+  const updated = updateRouteSearch({ peopleScope: "CIRCLE", peopleCircle: undefined })({
+    group: "status",
+    peopleCircle: "old",
+  });
+  expect(updated).toEqual({ group: "status", peopleScope: "CIRCLE", peopleCircle: undefined });
+  expect(routeSearchParam(updated, "peopleScope")).toBe("CIRCLE");
+  expect(routeSearchParam({ page: 2 }, "page")).toBeUndefined();
 });

@@ -237,6 +237,8 @@ export type UseCollapsiblePaneOptions = {
   collapsedSize?: number;
   /** Collapsed state assumed before the first resize fires. Defaults to false. */
   defaultCollapsed?: boolean;
+  /** Percentage restored when explicitly expanding a collapsed pane. */
+  expandedSize?: number;
 };
 
 export type CollapsiblePane = {
@@ -267,7 +269,7 @@ export type CollapsiblePane = {
 export function useCollapsiblePane(
   opts?: UseCollapsiblePaneOptions,
 ): CollapsiblePane {
-  const { collapsedSize = 0, defaultCollapsed = false } = opts ?? {};
+  const { collapsedSize = 0, defaultCollapsed = false, expandedSize } = opts ?? {};
   const [handle, panelRef] = usePanelCallbackRef();
   const [collapsed, setCollapsed] = React.useState(defaultCollapsed);
   const handleRef = React.useRef<PanelImperativeHandle | null>(handle);
@@ -292,13 +294,21 @@ export function useCollapsiblePane(
   );
 
   const collapse = React.useCallback(() => handleRef.current?.collapse(), []);
-  const expand = React.useCallback(() => handleRef.current?.expand(), []);
+  const expand = React.useCallback(() => {
+    const current = handleRef.current;
+    if (!current) return;
+    if (current.isCollapsed() && expandedSize !== undefined) {
+      current.resize(`${expandedSize}`);
+      return;
+    }
+    current.expand();
+  }, [expandedSize]);
   const toggle = React.useCallback(() => {
     const current = handleRef.current;
     if (!current) return;
-    if (current.isCollapsed()) current.expand();
+    if (current.isCollapsed()) expand();
     else current.collapse();
-  }, []);
+  }, [expand]);
 
   // Stable object identity (changes only when `collapsed` flips) so a consumer
   // that publishes the controller through an effect does not re-fire every render.

@@ -7,9 +7,10 @@ import {
   PageBody,
   PageHeader,
   ResourceList,
+  useRouteParam,
   useRouteHref,
 } from "@angee/ui";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import { useCycleContext, useQueueContext } from "../context";
@@ -22,10 +23,8 @@ const TASK_MODEL = "projects.Task";
 
 /** One cycle's queue-stage board; work still ranks by task.sort_order. */
 export function CycleBoardPage(): React.ReactElement {
-  const { queueId = "", id = "" } = useParams({ strict: false }) as {
-    queueId?: string;
-    id?: string;
-  };
+  const queueId = useRouteParam("queueId") ?? "";
+  const id = useRouteParam("id") ?? "";
   const t = useWorkT();
   const queue = useQueueContext(queueId);
   const cycle = useCycleContext(id);

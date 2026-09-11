@@ -14,10 +14,10 @@ import {
   type ListColumn,
   type RecordPanelContext,
   type RecordTabDescriptor,
-  type StringIdRow,
 } from "@angee/ui";
 
 import { useMessagingT } from "./i18n";
+import type { PartListRow } from "./documents";
 
 const MODEL = "messaging.Message";
 const PART_MODEL = "messaging.Part";
@@ -34,7 +34,7 @@ const DEFAULT_GROUPS = { list: { field: "channel" } } as const;
 // grouping chooser turns the same view into the dedup/interconnection lens.
 const PART_GROUPS = { list: { field: "role" } } as const;
 
-type PartRow = StringIdRow;
+type PartRow = PartListRow;
 // The nested selection the part columns render from: the part's structural
 // facts plus its fragment's identity (kind, hash) and connectivity counts —
 // how many parts and messages share that exact text.
@@ -58,28 +58,6 @@ const PART_FIELDS = [
   "file.title",
 ] as const;
 
-type PartFragment = {
-  kind?: string | null;
-  hash?: string | null;
-  text?: string | null;
-  part_count?: number | null;
-  message_count?: number | null;
-} | null;
-
-type PartFile = {
-  id?: string | null;
-  filename?: string | null;
-  title?: string | null;
-} | null;
-
-function fragmentOf(row: PartRow): NonNullable<PartFragment> | null {
-  return (row as { fragment?: PartFragment }).fragment ?? null;
-}
-
-function fileOf(row: PartRow): NonNullable<PartFile> | null {
-  return (row as { file?: PartFile }).file ?? null;
-}
-
 function partColumns(
   t: ReturnType<typeof useMessagingT>,
   recordHref: ReturnType<typeof useResourceRecordHrefLookup>,
@@ -93,7 +71,7 @@ function partColumns(
       field: "fragment.hash",
       header: t("parts.fragment"),
       render: (row) => {
-        const fragment = fragmentOf(row);
+        const fragment = row.fragment;
         if (!fragment?.hash) return null;
         return <code className="text-2xs text-fg-subtle">{fragment.hash.slice(0, 10)}</code>;
       },
@@ -102,7 +80,7 @@ function partColumns(
       field: "fragment.part_count",
       header: t("parts.shared"),
       render: (row) => {
-        const fragment = fragmentOf(row);
+        const fragment = row.fragment;
         if (!fragment?.hash) return null;
         const parts = fragment.part_count ?? 1;
         const messages = fragment.message_count ?? 1;
@@ -118,7 +96,7 @@ function partColumns(
       field: "fragment.text",
       header: t("parts.text"),
       render: (row) => {
-        const fragment = fragmentOf(row);
+        const fragment = row.fragment;
         if (fragment?.text) {
           return <span className="block max-w-96 truncate text-fg">{fragment.text}</span>;
         }
@@ -126,7 +104,7 @@ function partColumns(
         // included) so the filename opens the file in-app instead of being dead
         // text — the same follow pattern the activity agenda uses. Degrades to
         // plain text where storage.File has no routed page.
-        const file = fileOf(row);
+        const file = row.file;
         const label = file?.title || file?.filename;
         if (!label) return null;
         const href = file?.id ? recordHref(FILE_MODEL, file.id) : undefined;

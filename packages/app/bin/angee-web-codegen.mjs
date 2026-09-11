@@ -20,6 +20,7 @@ import {
   GraphQLObjectType,
   buildSchema,
   getNamedType,
+  isNonNullType,
   parse,
   validate,
 } from "graphql";
@@ -333,7 +334,7 @@ function buildOperationDocuments(name, runtimeDir) {
     `// Generated from runtime/schemas/${name}.graphql - do not edit by hand.`,
     "// Run `pnpm codegen` to regenerate.",
     "//",
-    "// Mutation fields shaped `<field>(id: ID!, ...required scalars): ActionResult` plus authored",
+    "// Mutation fields with required arguments returning ActionResult, plus authored",
     "// aggregate, group, delete-preview, and revision operation documents.",
     "",
     "import type { TypedDocumentNode } from \"@graphql-typed-document-node/core\";",
@@ -345,9 +346,7 @@ function buildOperationDocuments(name, runtimeDir) {
     "  validation_errors: Record<string, string[]> | null;",
     "}",
     "",
-    "export interface ActionVariables extends Record<string, unknown> {",
-    "  id: string;",
-    "}",
+    "export type ActionVariables = Record<string, unknown>;",
     "",
     `export type ActionFieldName = ${union};`,
     "",
@@ -510,7 +509,6 @@ function actionFields(schema) {
   const mutation = schema.getMutationType();
   if (!mutation) return [];
   const fields = mutation.getFields();
-  const scalarTypes = new Set(["Boolean!", "Float!", "ID!", "Int!", "String!"]);
   return Object.keys(fields)
     .flatMap((name) => {
       const field = fields[name];
@@ -518,12 +516,10 @@ function actionFields(schema) {
       if (!(returned instanceof GraphQLObjectType) || returned.name !== "ActionResult") {
         return [];
       }
-      if (!field.args.some((arg) => arg.name === "id" && String(arg.type) === "ID!")) {
-        return [];
-      }
+      if (field.args.length === 0) return [];
       if (
         field.args.some(
-          (arg) => arg.defaultValue !== undefined || !scalarTypes.has(String(arg.type)),
+          (arg) => arg.defaultValue !== undefined || !isNonNullType(arg.type),
         )
       ) {
         return [];

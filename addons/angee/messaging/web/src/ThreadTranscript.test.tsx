@@ -79,7 +79,7 @@ beforeEach(() => {
   mocks.useThreadMessageFeed.mockImplementation((threadId: string) => {
     mocks.queryCalls.push({ threadId });
     return {
-      data: { pages: [{ messages: mocks.transcriptRows, count: mocks.total }], pageParams: [null] },
+      data: { pages: [{ rows: mocks.transcriptRows, count: mocks.total }], pageParams: [null] },
       isFetching: mocks.fetching,
       isFetchingNextPage: false,
       error: mocks.error,

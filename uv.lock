@@ -624,6 +624,15 @@ wheels = [
 ]
 
 [[package]]
+name = "defusedxml"
+version = "0.7.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/d5/c66da9b79e5bdb124974bfe172b4daf3c984ebd9c2a06e2b8a4dc7331c72/defusedxml-0.7.1.tar.gz", hash = "sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69", size = 75520, upload-time = "2021-03-08T10:59:26.269Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61", size = 25604, upload-time = "2021-03-08T10:59:24.45Z" },
+]
+
+[[package]]
 name = "diff-match-patch"
 version = "20241021"
 source = { registry = "https://pypi.org/simple" }
@@ -687,6 +696,7 @@ addons = [
     { name = "channels" },
     { name = "channels-redis" },
     { name = "croniter" },
+    { name = "defusedxml" },
     { name = "django-anymail" },
     { name = "django-axes" },
     { name = "django-import-export" },
@@ -756,6 +766,7 @@ addons = [
     { name = "channels", specifier = ">=4.0" },
     { name = "channels-redis", specifier = ">=4.2" },
     { name = "croniter", specifier = ">=6.0" },
+    { name = "defusedxml", specifier = ">=0.7,<1" },
     { name = "django-anymail", specifier = ">=15.1" },
     { name = "django-axes", specifier = ">=8.0" },
     { name = "django-import-export", specifier = ">=4.4" },
@@ -785,7 +796,7 @@ addons = [
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
     { name = "strawberry-django-aggregates", specifier = ">=0.12.0" },
-    { name = "strawberry-django-hasura", specifier = ">=0.10.0" },
+    { name = "strawberry-django-hasura", specifier = ">=0.11.0" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=e4fa3198f704d81b3ca96b6dcac75420c5fee516" },
     { name = "strawberry-graphql-django", specifier = ">=0.86.7" },
     { name = "tablib", specifier = ">=3" },
@@ -2494,7 +2505,7 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-hasura"
-version = "0.10.0"
+version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
@@ -2502,9 +2513,9 @@ dependencies = [
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/67/2d/e43d05a8c6d36e9047793780560b847d185ac025cbc8588d7654b1209362/strawberry_django_hasura-0.10.0.tar.gz", hash = "sha256:9bd0f6a3d403074133273bc01856bf42265922ad7020d104ee51588afa9bce45", size = 138147, upload-time = "2026-09-05T23:15:06.002Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d2/43/a7a24d3019e138e803f00e0db0894ba0660395d584519921dca332ccc4f6/strawberry_django_hasura-0.11.0.tar.gz", hash = "sha256:cffc90f492d8f26b43e975b6cadd986327e58e56baa24f891b11df97f963dbdc", size = 140835, upload-time = "2026-09-11T14:14:46.975Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/da/ca65361d1b3252a3215f15b6fd14084cb009f6ab78b289048874dd3714a1/strawberry_django_hasura-0.10.0-py3-none-any.whl", hash = "sha256:10e37f83b37cea47a22d862ca6954d3089488c2118f03749c818f3abb61f666a", size = 62841, upload-time = "2026-09-05T23:15:04.925Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/a1/1ff0e3e3498de8f81cc96935f964c94ee2daffddd4b228b266e36f850b8f/strawberry_django_hasura-0.11.0-py3-none-any.whl", hash = "sha256:1721373c20519326329752279bebd643a856d4e5b037c487540aeca4bb764ae9", size = 64341, upload-time = "2026-09-11T14:14:45.562Z" },
 ]
 
 [[package]]

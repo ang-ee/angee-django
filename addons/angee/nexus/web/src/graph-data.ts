@@ -2,7 +2,7 @@ import {
   type GraphViewEdge,
   type GraphViewEdgeStyle,
   type GraphViewNode,
-  type GraphViewNodeStyle,
+  graphNodeStyle,
 } from "@angee/ui";
 
 export type NodeKind = "root" | "party" | "circle" | "identity" | "relationship_target";
@@ -34,12 +34,12 @@ export type NexusNode = GraphViewNode<NodeKind, NodeMeta>;
 export type NexusEdge = GraphViewEdge<EdgeKind, EdgeMeta>;
 
 export const nodeStyles = {
-  root: nodeStyle("var(--brand)", "var(--brand-soft)", "brand"),
-  party: nodeStyle("var(--border-subtle)", undefined, "neutral"),
-  circle: nodeStyle("var(--purple)", "var(--purple-soft)", "brand"),
-  identity: nodeStyle("var(--info)", "var(--info-soft)", "info"),
-  relationship_target: nodeStyle("var(--border-strong)", undefined, "neutral"),
-} satisfies Record<NodeKind, GraphViewNodeStyle>;
+  root: graphNodeStyle("var(--brand)", "brand", { background: "var(--brand-soft)", width: 190, height: 78 }),
+  party: graphNodeStyle("var(--border-subtle)", "neutral", { width: 190, height: 78 }),
+  circle: graphNodeStyle("var(--purple)", "brand", { background: "var(--purple-soft)", width: 190, height: 78 }),
+  identity: graphNodeStyle("var(--info)", "info", { background: "var(--info-soft)", width: 190, height: 78 }),
+  relationship_target: graphNodeStyle("var(--border-strong)", "neutral", { width: 190, height: 78 }),
+};
 
 export const edgeStyles = {
   tie_weak: { stroke: "var(--border-strong)", strokeWidth: 1 },
@@ -97,14 +97,6 @@ function edgeKind(kind: string, meta: EdgeMeta | undefined): EdgeKind {
   }
   if (kind === "relationship" || kind === "membership" || kind === "identity") return kind;
   return "relationship";
-}
-
-function nodeStyle(
-  borderColor: string,
-  background: string | undefined,
-  badgeTone: GraphViewNodeStyle["badgeTone"],
-): GraphViewNodeStyle {
-  return { width: 190, height: 78, borderColor, background, badgeTone };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

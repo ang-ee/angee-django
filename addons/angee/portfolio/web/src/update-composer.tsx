@@ -4,44 +4,44 @@ import {
   Glyph,
   MutationDialog,
   RelativeTime,
+  canonicalOptionValue,
   mutationDialogValueCodecs,
-  useAuthoredResourceMutation,
+  useActionOutcomeMutation,
   useEnumOptions,
   useRecordChromeContext,
   type MutationDialogField,
   type MutationDialogValues,
+  type WidgetOption,
 } from "@angee/ui";
+import type { ActionFieldName } from "@angee/gql/console/actions";
 import * as React from "react";
 
-import {
-  ReportInitiativeUpdateDocument,
-  ReportProjectUpdateDocument,
-  type PortfolioUpdateActionResult,
-} from "./documents";
 import { usePortfolioT } from "./i18n";
 import { UPDATE_MODEL } from "./resources";
 
 const HEALTH_VALUES = ["ON_TRACK", "AT_RISK", "OFF_TRACK"] as const;
-type PortfolioHealth = (typeof HEALTH_VALUES)[number];
+type KnownPortfolioHealth = (typeof HEALTH_VALUES)[number];
 type UpdateActionName = "report_project_update" | "report_initiative_update";
 
 export interface PortfolioUpdateValues extends Record<string, unknown> {
-  health: PortfolioHealth;
+  health: string;
   body: string;
 }
 
 /** Convert dialog values into the action's required-health wire contract. */
 export function parsePortfolioUpdateValues(
   values: MutationDialogValues,
+  healthOptions: readonly WidgetOption[],
 ): PortfolioUpdateValues {
   const health = mutationDialogValueCodecs
     .requiredString(values.health, "health")
     .toUpperCase();
-  if (!HEALTH_VALUES.includes(health as PortfolioHealth)) {
+  const canonical = canonicalOptionValue(healthOptions, health);
+  if (canonical === undefined) {
     throw new TypeError("A portfolio update health assertion is required.");
   }
   return {
-    health: health as PortfolioHealth,
+    health: canonical,
     body: mutationDialogValueCodecs.string(values.body) ?? "",
   };
 }
@@ -129,39 +129,22 @@ export function PortfolioUpdateComposer({
 }: PortfolioUpdateComposerProps): React.ReactElement {
   const t = usePortfolioT();
   const [open, setOpen] = React.useState(false);
-  const declaredOptions = useEnumOptions(UPDATE_MODEL, "health");
-  const healthOptions = React.useMemo(
-    () =>
-      declaredOptions.map((option) => ({
-        ...option,
-        value: String(option.value).toUpperCase(),
-      })),
-    [declaredOptions],
-  );
-  const [reportProject] = useAuthoredResourceMutation(
-    ReportProjectUpdateDocument,
-    {
+  const healthOptions = useEnumOptions(UPDATE_MODEL, "health", { casing: "upper" });
+  const [reportProject] = useActionOutcomeMutation<ActionFieldName>(
+    "report_project_update", {
       invalidateModels: [UPDATE_MODEL, targetModel],
-      shouldInvalidate: (data) => data?.report_project_update.ok === true,
     },
   );
-  const [reportInitiative] = useAuthoredResourceMutation(
-    ReportInitiativeUpdateDocument,
-    {
+  const [reportInitiative] = useActionOutcomeMutation<ActionFieldName>(
+    "report_initiative_update", {
       invalidateModels: [UPDATE_MODEL, targetModel],
-      shouldInvalidate: (data) => data?.report_initiative_update.ok === true,
     },
   );
   const submit = React.useCallback(
     async (values: PortfolioUpdateValues) => {
-      let outcome: PortfolioUpdateActionResult | undefined;
-      if (action === "report_project_update") {
-        const data = await reportProject({ id: targetId, ...values });
-        outcome = data?.report_project_update;
-      } else {
-        const data = await reportInitiative({ id: targetId, ...values });
-        outcome = data?.report_initiative_update;
-      }
+      const outcome = action === "report_project_update"
+        ? await reportProject(targetId, values)
+        : await reportInitiative(targetId, values);
       if (!outcome?.ok) {
         throw new Error(outcome?.message || t("update.error"));
       }
@@ -202,16 +185,16 @@ export function PortfolioUpdateComposer({
         submitLabel={t("update.submit")}
         submittingLabel={t("update.submitting")}
         errorFallback={t("update.error")}
-        parseValues={parsePortfolioUpdateValues}
+        parseValues={(values) => parsePortfolioUpdateValues(values, healthOptions)}
         onSubmit={submit}
       />
     </>
   );
 }
 
-function normalizeHealth(value: unknown): PortfolioHealth | null {
+function normalizeHealth(value: unknown): KnownPortfolioHealth | null {
   const normalized = String(value ?? "").trim().toUpperCase();
-  return HEALTH_VALUES.includes(normalized as PortfolioHealth)
-    ? (normalized as PortfolioHealth)
+  return HEALTH_VALUES.includes(normalized as KnownPortfolioHealth)
+    ? (normalized as KnownPortfolioHealth)
     : null;
 }

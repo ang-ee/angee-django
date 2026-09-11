@@ -7,9 +7,9 @@ import {
   PublicLayout,
   formSpecInitialValues,
   useFormSpecFields,
+  useRouteParam,
   type FormSpecFieldDescriptor,
 } from "@angee/ui";
-import { useParams } from "@tanstack/react-router";
 import * as React from "react";
 
 import { useMessagingT } from "./i18n";
@@ -27,7 +27,7 @@ interface PublicWebformError {
 }
 
 export function PublicWebformPage(): React.ReactElement {
-  const { slug = "" } = useParams({ strict: false }) as { slug?: string };
+  const slug = useRouteParam("slug") ?? "";
   const t = useMessagingT();
   const [description, setDescription] = React.useState<PublicWebformDescription | null>(null);
   const [error, setError] = React.useState<string | null>(null);

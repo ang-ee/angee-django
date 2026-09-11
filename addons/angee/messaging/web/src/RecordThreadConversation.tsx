@@ -7,6 +7,7 @@ import {
   type UploadTask,
 } from "@angee/storage";
 import { useDebounce } from "use-debounce";
+import { userDisplayName } from "@angee/iam";
 
 import { useMessagingT, type MessagingT } from "./i18n";
 import { messagingReactionCopy } from "./reaction-copy";
@@ -110,37 +111,30 @@ export function RecordThreadConversation({
     recipientVariables,
     { enabled, models: RECIPIENT_MODELS },
   );
-  // Correct as-is: RecordThreadDocument is an authored query keyed by READ_MODELS.
   const [postMessage, postState] = useAuthoredMutation(PostRecordMessageDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.post_record_message,
   });
-  // Correct as-is: RecordThreadDocument is an authored query keyed by READ_MODELS.
   const [markReadMutation, markReadState] = useAuthoredMutation(MarkRecordThreadReadDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.mark_record_thread_read,
   });
-  // Correct as-is: RecordThreadDocument is an authored query keyed by READ_MODELS.
   const [markMessageDone] = useAuthoredMutation(MarkRecordMessageDoneDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.mark_record_message_done,
   });
-  // Correct as-is: RecordThreadDocument is an authored query keyed by READ_MODELS.
   const [updateMessage] = useAuthoredMutation(UpdateRecordMessageDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.update_record_message,
   });
-  // Correct as-is: RecordThreadDocument is an authored query keyed by READ_MODELS.
   const [deleteMessage] = useAuthoredMutation(DeleteRecordMessageDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.delete_record_message,
   });
-  // Correct as-is: RecordThreadDocument is an authored query keyed by READ_MODELS.
   const [setReaction] = useAuthoredMutation(SetRecordMessageReactionDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.set_record_message_reaction,
   });
-  // Correct as-is: RecordThreadDocument is an authored query keyed by READ_MODELS.
   const [setStarred] = useAuthoredMutation(SetRecordMessageStarredDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.set_record_message_starred,
@@ -1061,7 +1055,7 @@ function recipientOptionsFrom(
     if (user.is_active === false) continue;
     byId.set(user.id, {
       id: user.id,
-      label: user.display_name || user.username || user.email || userFallback,
+      label: userDisplayName(user, userFallback),
       detail: user.email || user.username || "",
       follower: false,
       suggested: false,
@@ -1074,7 +1068,7 @@ function recipientOptionsFrom(
     const previous = byId.get(user.id);
     byId.set(user.id, {
       id: user.id,
-      label: user.display_name || user.username || user.email || userFallback,
+      label: userDisplayName(user, userFallback),
       detail: previous?.detail || user.email || user.username || "",
       follower: previous?.follower ?? false,
       suggested: true,
@@ -1086,7 +1080,7 @@ function recipientOptionsFrom(
     const previous = byId.get(user.id);
     byId.set(user.id, {
       id: user.id,
-      label: user.display_name || user.username || userFallback,
+      label: userDisplayName(user, userFallback),
       detail: previous?.detail || user.username || "",
       follower: true,
       suggested: previous?.suggested ?? false,

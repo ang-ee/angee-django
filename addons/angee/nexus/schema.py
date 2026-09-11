@@ -12,6 +12,7 @@ from strawberry import auto
 
 from angee.base.actors import actor_user_id, is_user_actor
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.ids import require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.messaging.schema import MessageFeedPage, MessageFeedRevalidation
@@ -118,9 +119,12 @@ class NexusQuery:
     def party_network(self, party_id: strawberry.ID) -> list[TieType]:
         """Return actor-visible derived edges touching one readable party."""
 
-        party = Party.objects.all().scoped().from_public_id(str(party_id))
-        if party is None:
-            raise ValueError("party not found")
+        party = require_instance_for_id(
+            Party,
+            party_id,
+            queryset=Party.objects.all().scoped(),
+            not_found="party not found",
+        )
         edges = Tie.objects.around_party(party).scoped()
         return cast("list[TieType]", list(edges))
 
@@ -200,20 +204,20 @@ class NexusQuery:
     ) -> MessageFeedPage:
         """Page a readable party's currently authorized inbox messages."""
 
-        party = Party.objects.all().scoped().from_public_id(str(party_id))
-        if party is None:
-            raise ValueError("party not found")
-        return MessageFeedPage(
-            **Message.objects.inbox()
-            .involving_parties((party,))
-            .feed_page(
-                scope=("party", str(party.sqid)),
-                search=search,
-                before_cursor=before_cursor,
-                after_cursor=after_cursor,
-                through_cursor=through_cursor,
-                limit=limit,
-            )
+        party = require_instance_for_id(
+            Party,
+            party_id,
+            queryset=Party.objects.all().scoped(),
+            not_found="party not found",
+        )
+        return MessageFeedPage.from_scope(
+            Message.objects.inbox().involving_parties((party,)),
+            scope=("party", str(party.sqid)),
+            search=search,
+            before_cursor=before_cursor,
+            after_cursor=after_cursor,
+            through_cursor=through_cursor,
+            limit=limit,
         )
 
     @strawberry.field
@@ -228,21 +232,21 @@ class NexusQuery:
     ) -> MessageFeedPage:
         """Page readable circle members' currently authorized inbox messages."""
 
-        circle = Circle.objects.all().scoped().from_public_id(str(circle_id))
-        if circle is None:
-            raise ValueError("circle not found")
+        circle = require_instance_for_id(
+            Circle,
+            circle_id,
+            queryset=Circle.objects.all().scoped(),
+            not_found="circle not found",
+        )
         parties = Party.objects.all().scoped().in_circle(circle)
-        return MessageFeedPage(
-            **Message.objects.inbox()
-            .involving_parties(parties)
-            .feed_page(
-                scope=("circle", str(circle.sqid)),
-                search=search,
-                before_cursor=before_cursor,
-                after_cursor=after_cursor,
-                through_cursor=through_cursor,
-                limit=limit,
-            )
+        return MessageFeedPage.from_scope(
+            Message.objects.inbox().involving_parties(parties),
+            scope=("circle", str(circle.sqid)),
+            search=search,
+            before_cursor=before_cursor,
+            after_cursor=after_cursor,
+            through_cursor=through_cursor,
+            limit=limit,
         )
 
     @strawberry.field
@@ -254,13 +258,16 @@ class NexusQuery:
     ) -> MessageFeedRevalidation:
         """Revalidate loaded messages against this party's current visible edges."""
 
-        party = Party.objects.all().scoped().from_public_id(str(party_id))
-        if party is None:
-            raise ValueError("party not found")
-        return MessageFeedRevalidation(
-            **Message.objects.inbox()
-            .involving_parties((party,))
-            .feed_revalidate([str(value) for value in ids], search=search)
+        party = require_instance_for_id(
+            Party,
+            party_id,
+            queryset=Party.objects.all().scoped(),
+            not_found="party not found",
+        )
+        return MessageFeedRevalidation.from_scope(
+            Message.objects.inbox().involving_parties((party,)),
+            ids,
+            search=search,
         )
 
     @strawberry.field
@@ -272,14 +279,17 @@ class NexusQuery:
     ) -> MessageFeedRevalidation:
         """Revalidate loaded messages against currently visible circle members."""
 
-        circle = Circle.objects.all().scoped().from_public_id(str(circle_id))
-        if circle is None:
-            raise ValueError("circle not found")
+        circle = require_instance_for_id(
+            Circle,
+            circle_id,
+            queryset=Circle.objects.all().scoped(),
+            not_found="circle not found",
+        )
         parties = Party.objects.all().scoped().in_circle(circle)
-        return MessageFeedRevalidation(
-            **Message.objects.inbox()
-            .involving_parties(parties)
-            .feed_revalidate([str(value) for value in ids], search=search)
+        return MessageFeedRevalidation.from_scope(
+            Message.objects.inbox().involving_parties(parties),
+            ids,
+            search=search,
         )
 
 

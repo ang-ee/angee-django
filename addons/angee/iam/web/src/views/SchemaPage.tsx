@@ -1,6 +1,7 @@
 import { useAuthoredQuery, type MessageVars } from "@angee/refine";
-import { Alert, Badge, Button, Code, GraphView, InlineEmpty, PrimaryPanePublisher, SearchInput, Spinner, barVariants, cn, textRoleVariants, useChatterContent, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
-import { type KeyboardEvent, type MutableRefObject, type ReactElement, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState, } from "react";
+import { Alert, Badge, Code, GraphView, InlineEmpty, PageAside, PrimaryPanePublisher, RailPanel, SearchInput, Spinner, TreeView, barVariants, cn, routeSearchParam, textRoleVariants, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+import { useNavigate } from "@tanstack/react-router";
+import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useState, } from "react";
 
 import {
   IamRebacSchema,
@@ -66,6 +67,8 @@ type Translate = (key: string, vars?: MessageVars) => string;
 export function SchemaPage(): ReactElement {
   const t = useIamT();
   const query = useAuthoredQuery(IamRebacSchema);
+  const routeSearch = useRouteSearch();
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const resources = useMemo(
     () => normalizeResources(query.data?.rebac_schema ?? []),
@@ -75,9 +78,17 @@ export function SchemaPage(): ReactElement {
     () => resources.filter((resource) => resourceMatches(resource, search)),
     [resources, search],
   );
-  const [selectedResourceType, setSelectedResourceType] = useState<string>("");
-  const resourceListboxId = useId();
-  const optionRefs = useRef(new Map<string, HTMLElement>());
+  const selectedResourceType = routeSearchParam(routeSearch, "resource") ?? "";
+  const selectResource = useCallback(
+    (resourceType: string, replace = false) => {
+      void navigate({
+        to: ".",
+        search: updateRouteSearch({ resource: resourceType }),
+        replace,
+      });
+    },
+    [navigate],
+  );
 
   useEffect(() => {
     if (visibleResources.length === 0) return;
@@ -86,9 +97,9 @@ export function SchemaPage(): ReactElement {
         (resource) => resource.resource_type === selectedResourceType,
       )
     ) {
-      setSelectedResourceType(visibleResources[0]?.resource_type ?? "");
+      selectResource(visibleResources[0]?.resource_type ?? "", true);
     }
-  }, [selectedResourceType, visibleResources]);
+  }, [selectResource, selectedResourceType, visibleResources]);
 
   const selectedResource =
     visibleResources.find(
@@ -96,50 +107,6 @@ export function SchemaPage(): ReactElement {
     )
     ?? visibleResources[0]
     ?? null;
-  const selectedIndex = selectedResource
-    ? visibleResources.findIndex(
-        (resource) => resource.resource_type === selectedResource.resource_type,
-      )
-    : -1;
-  const handleResourceListboxKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      if (visibleResources.length === 0) return;
-      const selectVisibleResource = (index: number, focus = false) => {
-        const resource = visibleResources[index];
-        if (!resource) return;
-        setSelectedResourceType(resource.resource_type);
-        if (focus) optionRefs.current.get(resource.resource_type)?.focus();
-      };
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        selectVisibleResource(
-          selectedIndex < 0
-            ? 0
-            : Math.min(visibleResources.length - 1, selectedIndex + 1),
-          true,
-        );
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        selectVisibleResource(
-          selectedIndex < 0 ? 0 : Math.max(0, selectedIndex - 1),
-          true,
-        );
-        return;
-      }
-      if (event.key === "Home") {
-        event.preventDefault();
-        selectVisibleResource(0, true);
-        return;
-      }
-      if (event.key === "End") {
-        event.preventDefault();
-        selectVisibleResource(visibleResources.length - 1, true);
-      }
-    },
-    [visibleResources, selectedIndex],
-  );
 
   // The query has no data yet (error or first load): the page renders only its
   // own state surface and publishes nothing, so the shell falls back to its own
@@ -152,24 +119,19 @@ export function SchemaPage(): ReactElement {
     () =>
       ready ? (
         <ResourceTypeList
-          listboxId={resourceListboxId}
-          optionRefs={optionRefs}
           resources={visibleResources}
           search={search}
           selectedResource={selectedResource}
-          onKeyDown={handleResourceListboxKeyDown}
           onSearchChange={setSearch}
-          onSelect={setSelectedResourceType}
+          onSelect={selectResource}
         />
       ) : null,
     [
       ready,
-      resourceListboxId,
-      optionRefs,
       visibleResources,
       search,
       selectedResource,
-      handleResourceListboxKeyDown,
+      selectResource,
     ],
   );
   // Secondary (Chatter) pane: an additive "inspector" tab alongside the shell
@@ -180,7 +142,13 @@ export function SchemaPage(): ReactElement {
         id: "inspector",
         label: t("schema.inspector"),
         icon: "info",
-        children: <SchemaInspector resource={selectedResource} />,
+        children: (
+          <PageAside collapse="never" gutter="compact" className="h-full w-full border-l-0 bg-sheet-1">
+            <RailPanel title={t("schema.inspector")} empty={t("schema.noMatches")}>
+              {selectedResource ? <SchemaInspector resource={selectedResource} /> : null}
+            </RailPanel>
+          </PageAside>
+        ),
       },
     ],
     [t, selectedResource],
@@ -220,28 +188,22 @@ export function SchemaPage(): ReactElement {
       <SchemaGraphCanvas
         resources={visibleResources}
         selectedResource={selectedResource}
-        onSelect={setSelectedResourceType}
+        onSelect={selectResource}
       />
     </>
   );
 }
 
 function ResourceTypeList({
-  listboxId,
-  optionRefs,
   resources,
   search,
   selectedResource,
-  onKeyDown,
   onSearchChange,
   onSelect,
 }: {
-  listboxId: string;
-  optionRefs: MutableRefObject<Map<string, HTMLElement>>;
   resources: readonly IAMResourceSchema[];
   search: string;
   selectedResource: IAMResourceSchema | null;
-  onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   onSearchChange: (value: string) => void;
   onSelect: (resource_type: string) => void;
 }): ReactElement {
@@ -260,60 +222,26 @@ function ResourceTypeList({
           onClear={() => onSearchChange("")}
         />
       </div>
-      <div
-        id={listboxId}
+      <TreeView<IAMResourceSchema>
+        rows={resources}
+        rowKey="resource_type"
+        label="resource_type"
+        selectedId={selectedResource?.resource_type}
+        onSelect={(resource) => onSelect(resource.resource_type)}
+        emptyContent={t("schema.noMatches")}
         className="min-h-0 flex-1 overflow-auto p-2"
-        role="listbox"
-        aria-label={t("schema.resourceTypesLabel")}
-        onKeyDown={onKeyDown}
-      >
-        {resources.length > 0 ? (
-          resources.map((resource) => (
-            <Button
-              key={resource.resource_type}
-              ref={(node) => {
-                if (node) optionRefs.current.set(resource.resource_type, node);
-                else optionRefs.current.delete(resource.resource_type);
-              }}
-              type="button"
-              id={resourceOptionId(listboxId, resource.resource_type)}
-              role="option"
-              aria-selected={
-                resource.resource_type === selectedResource?.resource_type
-              }
-              tabIndex={
-                resource.resource_type === selectedResource?.resource_type
-                  ? 0
-                  : -1
-              }
-              variant="ghost"
-              className="h-auto w-full min-w-0 justify-between gap-3 whitespace-normal px-3 py-2 text-left data-[selected]:bg-brand-soft data-[selected]:text-brand-soft-text"
-              data-selected={
-                resource.resource_type === selectedResource?.resource_type
-                  ? ""
-                  : undefined
-              }
-              onClick={() => onSelect(resource.resource_type)}
-            >
-              <span className="min-w-0">
-                <span className="block truncate text-13 font-medium">
-                  {resourceLabel(resource.resource_type)}
-                </span>
-                <Code truncate tone="muted">
-                  {resource.resource_type}
-                </Code>
+        renderRow={(resource) => (
+          <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+            <span className="min-w-0">
+              <span className="block truncate text-13 font-medium">
+                {resourceLabel(resource.resource_type)}
               </span>
-              <Badge>
-                {resource.relations.length + resource.permissions.length}
-              </Badge>
-            </Button>
-          ))
-        ) : (
-          <p className={cn(textRoleVariants({ role: "meta" }), "m-0 px-3 py-6 text-center")}>
-            {t("schema.noMatches")}
-          </p>
+              <Code truncate tone="muted">{resource.resource_type}</Code>
+            </span>
+            <Badge>{resource.relations.length + resource.permissions.length}</Badge>
+          </span>
         )}
-      </div>
+      />
     </section>
   );
 }
@@ -733,8 +661,4 @@ function relationNodeId(resource_type: string, relation: string): string {
 
 function permissionNodeId(resource_type: string, permission: string): string {
   return `permission:${resource_type}:${permission}`;
-}
-
-function resourceOptionId(listboxId: string, resource_type: string): string {
-  return `${listboxId}-${resource_type.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
 }
