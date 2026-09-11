@@ -703,6 +703,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
   Lifecycle side effects that must survive those paths belong on Django signals; Agent's
   service-user deactivation is a `post_delete` receiver for this reason.
+- **Business rules belong to Django owners, not database trigger functions.**
+  Cover instance, queryset, bulk, cascade and relation writes in the owning
+  models/managers/querysets, with explicit Django signals where relation writes
+  bypass those owners. Keep declarative constraints and portable row locks.
+  Raw SQL is not a supported business-write path. Retire existing triggers with
+  append-only migrations rather than rewriting materialized history.
 - **Regenerating the example's runtime migrations orphans existing dev
   databases.** The example's `runtime/` (migrations included) is deliberately
   untracked and greenfield: a branch that regenerates its migrations produces a
