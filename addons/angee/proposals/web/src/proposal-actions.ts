@@ -12,26 +12,25 @@ import { PROPOSAL_MODEL, ROUND_MODEL } from "./resources";
 /** Proposal lifecycle and private-track actions for the responder record form. */
 export function useProposalCeremonyActions(): readonly ActionDescriptor[] {
   const t = useProposalsT();
-  const proposalArgument = React.useCallback((proposal: string) => ({ proposal }), []);
   const [submitRun] = useRecordActionMutation<ActionFieldName>("submit_proposal", {
     invalidateModels: [PROPOSAL_MODEL, ROUND_MODEL],
-    actionArguments: proposalArgument,
+    idArgument: "proposal",
     settle: { noResultTitle: t("proposal.action.failed") },
   });
   const [withdrawRun] = useRecordActionMutation<ActionFieldName>("withdraw_proposal", {
     invalidateModels: [PROPOSAL_MODEL, ROUND_MODEL],
-    actionArguments: proposalArgument,
+    idArgument: "proposal",
     settle: { noResultTitle: t("proposal.action.failed") },
   });
   const [createTrackRun] = useRecordActionMutation<ActionFieldName>("create_proposal_track", {
     invalidateModels: [PROPOSAL_MODEL, PROJECT_MODEL],
-    actionArguments: proposalArgument,
+    idArgument: "proposal",
     linkTo: PROJECT_MODEL,
     settle: { noResultTitle: t("proposal.action.failed") },
   });
   const [publishTrackRun] = useRecordActionMutation<ActionFieldName>("publish_proposal_track", {
     invalidateModels: [PROPOSAL_MODEL, PROJECT_MODEL],
-    actionArguments: proposalArgument,
+    idArgument: "proposal",
     linkTo: PROJECT_MODEL,
     settle: { noResultTitle: t("proposal.action.failed") },
   });

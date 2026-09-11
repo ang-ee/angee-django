@@ -23,6 +23,7 @@ export interface WorkCycleRow extends StringIdRow {
 export function useCloseCycleAction(): ActionDescriptor {
   const t = useWorkT();
   const [close] = useActionOutcomeMutation<ActionFieldName>("close_work_cycle", {
+    idArgument: "cycle",
     invalidateModels: [CYCLE_MODEL, "projects.Task"],
   });
   return React.useMemo(
@@ -36,7 +37,7 @@ export function useCloseCycleAction(): ActionDescriptor {
         if (typeof cycle !== "string" || !cycle) {
           return { ok: false, message: t("cycle.action.failed") };
         }
-        return (await close(cycle, { cycle })) ?? {
+        return (await close(cycle)) ?? {
           ok: false,
           message: t("cycle.action.failed"),
         };

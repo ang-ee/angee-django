@@ -27,10 +27,9 @@ class EventAdmissionPolicy(StrEnum):
 
 
 class EventSource(StrEnum):
-    """Declared owner of an event delivery."""
+    """Event publishers shipped by workflows; donors own additional source keys."""
 
     CHANGE_PUBLISHED = "change_published"
-    MESSAGE_INGESTED = "message_ingested"
 
 
 class TriggerConfig(BaseModel):
@@ -62,10 +61,10 @@ class ManualTriggerConfig(TriggerConfig):
 
 
 class EventTriggerConfig(TriggerConfig):
-    """A change-feed model and its native Django lookup condition."""
+    """An event publisher, its subject model, and a native Django lookup condition."""
 
     model: str = Field(min_length=1, title="Model")
-    source: EventSource = EventSource.CHANGE_PUBLISHED
+    source: str = Field(default=EventSource.CHANGE_PUBLISHED, min_length=1)
     condition: dict[str, Any] | None = Field(default_factory=dict, json_schema_extra={"widget": "json"})
     admission_policy: EventAdmissionPolicy = Field(
         default=EventAdmissionPolicy.ONCE_PER_SUBJECT,

@@ -35,7 +35,7 @@ from rebac.types import RelationshipFilter
 
 from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
-from angee.base.pagination import KeysetOrder
+from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -153,7 +153,7 @@ class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
         through_cursor: str | None = None,
         around: models.Model | None = None,
         limit: int = 50,
-    ) -> dict[str, Any]:
+    ) -> KeysetPage[_ModelT]:
         """Page this authorized queryset using signed, stable timestamp/PK cuts.
 
         The caller supplies a prepared, scoped queryset and canonical effective
@@ -201,30 +201,30 @@ class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
             rows.reverse()
         below = self.filter(order.before(lower)).exists() if lower is not None else False
         if not rows:
-            return {
-                "rows": [],
-                "count": count,
-                "older_cursor": None,
-                "newer_cursor": None,
-                "has_older": False,
-                "has_newer": False,
-                "has_more_in_window": False,
-                "has_older_than_through": below,
-                "has_newer_than_before": self.filter(order.after(anchor)).exists() if anchor is not None else False,
-            }
+            return KeysetPage(
+                rows=[],
+                count=count,
+                older_cursor=None,
+                newer_cursor=None,
+                has_older=False,
+                has_newer=False,
+                has_more_in_window=False,
+                has_older_than_through=below,
+                has_newer_than_before=self.filter(order.after(anchor)).exists() if anchor is not None else False,
+            )
         # Re-fetch the bounded identities through the original queryset so callers
         # retain a composable queryset instead of inheriting this method's probe list.
-        return {
-            "rows": self.filter(pk__in=[row.pk for row in rows]).order_by(f"-{order.field}", "-pk"),
-            "count": count,
-            "older_cursor": order.sign(rows[-1], signer),
-            "newer_cursor": order.sign(rows[0], signer),
-            "has_older": self.filter(order.before(order.position(rows[-1]))).exists(),
-            "has_newer": self.filter(order.after(order.position(rows[0]))).exists(),
-            "has_more_in_window": has_more,
-            "has_older_than_through": below,
-            "has_newer_than_before": self.filter(order.after(anchor)).exists() if anchor is not None else False,
-        }
+        return KeysetPage(
+            rows=self.filter(pk__in=[row.pk for row in rows]).order_by(f"-{order.field}", "-pk"),
+            count=count,
+            older_cursor=order.sign(rows[-1], signer),
+            newer_cursor=order.sign(rows[0], signer),
+            has_older=self.filter(order.before(order.position(rows[-1]))).exists(),
+            has_newer=self.filter(order.after(order.position(rows[0]))).exists(),
+            has_more_in_window=has_more,
+            has_older_than_through=below,
+            has_newer_than_before=self.filter(order.after(anchor)).exists() if anchor is not None else False,
+        )
 
     def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:
         """Apply a self-scoped row lock only on database backends that support it."""

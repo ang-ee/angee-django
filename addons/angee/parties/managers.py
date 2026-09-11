@@ -649,14 +649,6 @@ class DuplicatePartyCandidate:
     normalized_value: str
 
 
-@dataclass(frozen=True, slots=True)
-class IdentityCandidate:
-    """One actor-visible Party matched by an exact name or normalized handle."""
-
-    party: Any
-    reasons: tuple[str, ...]
-
-
 class MergeVetoManager(AngeeManager):
     """Own canonical keep-separate pair lookup and creation."""
 
@@ -953,44 +945,6 @@ class PartyQuerySet(AngeeQuerySet):
             if party_a_id in parties and party_b_id in parties
         ]
 
-    def identity_candidates(
-        self,
-        *,
-        name: str = "",
-        handles: Iterable[tuple[str, str]] = (),
-        limit: int = 10,
-    ) -> list[IdentityCandidate]:
-        """Return bounded exact identity candidates without creating speculative links."""
-
-        bounded = max(0, min(int(limit), 50))
-        normalized_name = " ".join(name.split()).strip()
-        handle_model = apps.get_model("parties", "Handle")
-        normalized_handles = {
-            (str(platform), handle_model.normalize_value(platform, value))
-            for platform, value in handles
-            if str(value).strip()
-        }
-        if bounded == 0 or (not normalized_name and not normalized_handles):
-            return []
-        visible = self.canonical().scoped_for_aggregate()
-        matched: dict[Any, set[str]] = defaultdict(set)
-        if normalized_name:
-            for party_id in visible.filter(display_name__iexact=normalized_name).values_list("pk", flat=True)[:bounded]:
-                matched[party_id].add("exact_name")
-        if normalized_handles:
-            handle_filter = Q()
-            for platform, normalized_value in sorted(normalized_handles):
-                handle_filter |= Q(platform=platform, normalized_value=normalized_value)
-            for party_id in (
-                handle_model.objects.all()
-                .scoped_for_aggregate()
-                .filter(handle_filter, party_id__in=Subquery(visible.values("pk")))
-                .values_list("party_id", flat=True)
-                .distinct()[:bounded]
-            ):
-                matched[party_id].add("exact_handle")
-        parties = {party.pk: party for party in visible.filter(pk__in=matched).order_by("pk")[:bounded]}
-        return [IdentityCandidate(parties[pk], tuple(sorted(matched[pk]))) for pk in sorted(parties)]
 
 
 class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[misc]

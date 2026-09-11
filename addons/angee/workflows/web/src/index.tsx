@@ -18,6 +18,9 @@ import { enWorkflowsMessages } from "./i18n";
 import { RunWorkflowMenu } from "./RunWorkflowMenu";
 export { WORKFLOW_TRIGGER_FORM_FIELDS_SLOT } from "./slots";
 
+import { DECISION_SEARCH_KEY } from "./decision-navigation";
+export { DECISION_SEARCH_KEY, decisionHref, decisionSearch } from "./decision-navigation";
+
 const WORKFLOWS_ID = "workflows";
 
 const workflowsRoutes: readonly BaseAddonRoute[] = [
@@ -73,6 +76,7 @@ const workflowsMenu: readonly BaseMenuItem[] = [
 
 const workflows = defineBaseAddon({
   id: WORKFLOWS_ID,
+  recordSearchKeys: [DECISION_SEARCH_KEY],
   routes: workflowsRoutes,
   menus: workflowsMenu,
   i18n: { workflows: enWorkflowsMessages },

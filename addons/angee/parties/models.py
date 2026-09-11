@@ -28,7 +28,7 @@ from typing import Any, ClassVar, cast
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from phonenumbers import (
     NumberParseException,
     PhoneNumberFormat,
@@ -645,6 +645,34 @@ class AddressManager(AngeeManager):
 
     components = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
 
+    def lock_party(self, party_id: Any) -> None:
+        """Serialize address writes for one party, including its first address."""
+
+        party_model = self.model._meta.get_field("party").remote_field.model
+        party_model.objects.db_manager(self.db).sudo(
+            reason="parties.address.lock_party",
+        ).locked_get(pk=party_id)
+
+    def demote_primaries(self, address: Address) -> None:
+        """Authorize and demote other primaries inside the selecting save's transaction."""
+
+        self.lock_party(address.party_id)
+        previous = list(
+            self.sudo(reason="parties.address.primary_integrity")
+            .lock_if_supported()
+            .filter(party_id=address.party_id, is_primary=True)
+            .exclude(pk=address.pk)
+        )
+        actor, unscoped = address.effective_actor(strict=True)
+        for row in previous:
+            if not unscoped and not row.with_actor(actor).has_access("write"):
+                raise PermissionDenied(
+                    "Changing the primary address requires write access to the current primary address."
+                )
+        self.sudo(reason="parties.address.demote_primaries").filter(
+            pk__in=[row.pk for row in previous],
+        ).update(is_primary=False)
+
     def attach_exact(
         self, *, party: models.Model, values: Mapping[str, Any], actor: Any,
         label: str = "Billing", is_primary: bool = True, conflict: str = "raise",
@@ -656,9 +684,14 @@ class AddressManager(AngeeManager):
         if not any(normalized.values()):
             return "missing", None
         key = tuple(normalized[field].casefold() for field in self.components)
-        with transaction.atomic(), actor_context(actor):
-            party.__class__._base_manager.select_for_update().get(pk=party.pk)
-            existing = list(self.model._base_manager.select_for_update().filter(party=party).order_by("pk"))
+        with transaction.atomic(using=self.db), actor_context(actor):
+            self.lock_party(party.pk)
+            existing = list(
+                self.sudo(reason="parties.address.attach_exact")
+                .lock_if_supported()
+                .filter(party=party)
+                .order_by("pk")
+            )
             for row in existing:
                 row_key = tuple(" ".join(str(getattr(row, field) or "").split()).casefold()
                                 for field in self.components)
@@ -678,7 +711,7 @@ class AddressManager(AngeeManager):
                 created_by_id=getattr(actor, "pk", None), **normalized,
             )
             row.sudo(reason="parties.address.attach_exact")
-            row.save()
+            row.save(using=self.db)
             return "created", row.with_actor(verified_actor)
 
     def replace_primary_exact(
@@ -691,9 +724,9 @@ class AddressManager(AngeeManager):
                       for field in self.components}
         if not any(normalized.values()):
             raise ValidationError({"address": "A replacement address must not be empty."})
-        with transaction.atomic(), actor_context(actor):
-            party.__class__._base_manager.select_for_update().get(pk=party.pk)
-            current = self.model._base_manager.select_for_update().filter(
+        with transaction.atomic(using=self.db), actor_context(actor):
+            self.lock_party(party.pk)
+            current = self.sudo(reason="parties.address.replace_primary_exact").lock_if_supported().filter(
                 party=party, is_primary=True,
             ).first()
             if (current.pk if current else None) != expected_id:
@@ -716,7 +749,7 @@ class AddressManager(AngeeManager):
                 if field != "label":
                     setattr(current, field, normalized[field])
             if changed:
-                current.save(update_fields=[*changed, "updated_at"])
+                current.save(using=self.db, update_fields=[*changed, "updated_at"])
                 return "replaced", current.with_actor(actor)
             return "matched", current.with_actor(actor)
 
@@ -767,20 +800,14 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Make the selected primary address authoritative for this party."""
-        if not self.is_primary:
+
+        update_fields = kwargs.get("update_fields")
+        if not self.is_primary or (update_fields is not None and "is_primary" not in update_fields):
             super().save(*args, **kwargs)
             return
-        with transaction.atomic():
-            party_model = self._meta.get_field("party").remote_field.model
-            party_model._base_manager.select_for_update().get(pk=self.party_id)
-            previous = list(type(self)._base_manager.select_for_update().filter(
-                party_id=self.party_id,
-                is_primary=True,
-            ).exclude(pk=self.pk))
-            for address in previous:
-                if not address.has_access("write"):
-                    raise PermissionDenied("Changing the primary address requires write access to the current primary address.")
-            type(self)._base_manager.filter(pk__in=(address.pk for address in previous)).update(is_primary=False)
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=using):
+            type(self).objects.db_manager(using).demote_primaries(self)
             super().save(*args, **kwargs)
 
     def __str__(self) -> str:

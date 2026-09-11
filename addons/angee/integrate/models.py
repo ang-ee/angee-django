@@ -1630,8 +1630,9 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         installed child claims stays the neutral parent.
         """
 
+        actor, unscoped = self.effective_actor(strict=True)
         for child_model in type(self).concrete_child_models():
-            child = child_model._default_manager.filter(pk=self.pk).first()
+            child = self._concrete_child(child_model, actor=actor, authorized=not unscoped)
             if child is not None:
                 return cast(Integration, child)
         return self

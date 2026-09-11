@@ -20,10 +20,10 @@ class WorkflowsConfig(AppConfig):
         """Run workflows ready-time hooks after app population."""
 
         super().ready()
-        from angee.workflows.models import check_event_trigger_change_publishers
+        from angee.workflows.models import check_event_trigger_publishers
         from angee.workflows.triggers import connect_event_trigger_receiver
 
-        _register_checks(check_event_trigger_change_publishers)
+        _register_checks(check_event_trigger_publishers)
         connect_event_trigger_receiver()
 
 

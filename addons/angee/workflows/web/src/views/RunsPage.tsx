@@ -132,6 +132,7 @@ export function RunsPage(): React.ReactElement {
     }
     const data = await reprocessRun({ run: id, requestKey });
     const outcome = data?.reprocess_workflow_run;
+    if (outcome?.ok) reprocessKeys.current.delete(id);
     if (outcome?.ok && outcome.id) {
       const href = recordHref(RUN_MODEL, outcome.id);
       if (href) void navigate({ to: href });

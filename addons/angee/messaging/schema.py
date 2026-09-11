@@ -1128,7 +1128,15 @@ class MessageFeedPage:
     def from_scope(cls, queryset: MessageQuerySet, **options: Any) -> Self:
         """Project a domain-scoped message window without re-deciding its scope."""
 
-        return cls(**queryset.feed_page(**options))
+        page = queryset.feed_page(**options)
+        return cls(
+            messages=cast(list[MessageType], page.rows), count=page.count,
+            older_cursor=page.older_cursor, newer_cursor=page.newer_cursor,
+            has_older=page.has_older, has_newer=page.has_newer,
+            has_more_in_window=page.has_more_in_window,
+            has_older_than_through=page.has_older_than_through,
+            has_newer_than_before=page.has_newer_than_before,
+        )
 
 
 @strawberry.type

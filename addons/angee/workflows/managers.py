@@ -126,7 +126,6 @@ from angee.workflows.trigger_declarations import (
 )
 
 _CURRENCY_STATUSES = CURRENT_PUBLICATION_STATUSES
-_CHANGE_FEED_FIX = "declare changes() for the model to join the change feed"
 logger = logging.getLogger(__name__)
 
 def _combined_delete_results(*results: tuple[int, dict[str, int]]) -> tuple[int, dict[str, int]]:
@@ -1921,8 +1920,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         occurrence_id: str | None,
         timestamp: datetime,
         actor: Any = None,
-        source: EventSource = EventSource.CHANGE_PUBLISHED,
-        message_channel_id: int | None = None,
+        source: str = EventSource.CHANGE_PUBLISHED,
     ) -> Any | None:
         """Atomically admit one matching event occurrence and its pinned run."""
 
@@ -1953,16 +1951,13 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 return None
             if declaration.source != source:
                 return None
-            if (
-                source == EventSource.MESSAGE_INGESTED
-                and getattr(trigger, "message_channel_id", None) != message_channel_id
-            ):
-                return None
             if subject._meta.label_lower != declaration.model:
+                return None
+            if not trigger.event_subject_matches(subject, source=source):
                 return None
             if not trigger.condition_matches(type(subject), subject):
                 return None
-            content_type = ContentType.objects.get_for_model(subject, for_concrete_model=False)
+            content_type = ContentType.objects.db_manager(alias).get_for_model(subject, for_concrete_model=False)
             occurrence_max_length = cast(int, run_model._meta.get_field("occurrence_id").max_length)
             retained_occurrence = (
                 occurrence_id
@@ -1995,18 +1990,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 ):
                     raise ValidationError({"occurrence_id": "Event occurrence identity conflicts with retained work."})
                 return existing
-            if source == EventSource.MESSAGE_INGESTED:
-                lineage_versions = system_queryset(workflow_model, using=alias, lock=None).filter(
-                    models.Q(pk=head.pk) | models.Q(published_from_id=head.pk)
-                ).values("pk")
-                active = system_queryset(run_model, using=alias, lock=("self",)).filter(
-                    workflow_id__in=models.Subquery(lineage_versions),
-                    subject_content_type_id=content_type.pk,
-                    subject_object_id=subject.pk,
-                    status__in=(RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING),
-                ).exclude(dedup_key=dedup_key).exists()
-                if active:
-                    raise ValidationError({"subject": "This workflow lineage is already processing the Message."})
+            trigger.validate_event_admission(subject, source=source, dedup_key=dedup_key)
             if not trigger.rate_limit_allows(timestamp=timestamp):
                 return None
             input_snapshot = validate_json_presence(
@@ -2127,20 +2111,6 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 self._save_next_fire_locked(trigger)
                 primed += 1
         return primed
-
-
-def _change_publisher_models() -> tuple[type[models.Model], ...]:
-    """Return model classes declared into GraphQL's change feed."""
-
-    from angee.graphql.schema import GraphQLSchemas
-
-    return GraphQLSchemas.from_discovery().change_publisher_models()
-
-
-def _change_publisher_model_labels() -> frozenset[str]:
-    """Return model labels declared into GraphQL's change feed."""
-
-    return frozenset(model._meta.label_lower for model in _change_publisher_models())
 
 
 class WorkflowTestFixtureQuerySet(AngeeQuerySet[Any]):

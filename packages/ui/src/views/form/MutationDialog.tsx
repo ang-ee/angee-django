@@ -281,8 +281,10 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   });
   const session = React.useRef(0);
   const submittingRef = React.useRef(false);
+  const previousOpen = React.useRef(open);
   React.useEffect(() => {
-    if (!open) {
+    if (previousOpen.current !== open) {
+      previousOpen.current = open;
       session.current += 1;
       submittingRef.current = false;
       form.reset(initialDialogValues(fields, initialValues));

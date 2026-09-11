@@ -39,7 +39,7 @@ class OcrExtractConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     schema_: dict[str, Any] = Field(alias="schema", json_schema_extra={"widget": "json"})
-    engine: str = "glm"
+    engine: str
     engine_config: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
 
 

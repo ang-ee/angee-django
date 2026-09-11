@@ -8,6 +8,7 @@ import type {
   DataProviders,
   LiveEvent,
   LiveProvider,
+  MetaQuery,
 } from "@refinedev/core";
 import type { QueryClient } from "@tanstack/react-query";
 import {
@@ -100,21 +101,16 @@ export function createAngeeHasuraDataProvider(
   );
   return {
     ...provider,
-    getList: (params) => provider.getList({
-      ...params,
-      // Refine may issue inventory/picker reads without a caller-owned
-      // projection. The stock Hasura provider otherwise prints `root { }`,
-      // which is invalid GraphQL. Every Angee resource has a public `id`.
-      meta: params.meta?.gqlQuery
-        ? params.meta
-        : {
-            ...params.meta,
-            fields: hasFieldSelection(params.meta?.fields)
-              ? params.meta?.fields
-              : ["id"],
-          },
-    }),
+    getList: (params) => provider.getList({ ...params, meta: readSelection(params.meta) }),
+    getOne: (params) => provider.getOne({ ...params, meta: readSelection(params.meta) }),
+    getMany: (params) => provider.getMany({ ...params, meta: readSelection(params.meta) }),
   };
+}
+
+/** Native inventory and picker reads need a valid identity selection when none is declared. */
+function readSelection(meta: MetaQuery | undefined): MetaQuery {
+  if (meta?.gqlQuery || meta?.gqlMutation) return meta;
+  return { ...meta, fields: hasFieldSelection(meta?.fields) ? meta?.fields : ["id"] };
 }
 
 function hasFieldSelection(fields: unknown): boolean {

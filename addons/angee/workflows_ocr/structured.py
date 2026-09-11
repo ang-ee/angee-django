@@ -11,8 +11,10 @@ import hashlib
 from dataclasses import dataclass
 from typing import Literal
 
+import pypdfium2 as pdfium
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
+from pypdfium2 import raw as pdfium_c
 
 StructuredKind = Literal[
     "ubl_invoice", "cii_cross_industry_invoice", "edifact_invoic", "x12_810", "unsupported_structured"
@@ -113,9 +115,6 @@ def extract_structured_sources(
 
 def _pdf_attachments(data: bytes, *, source_position: int, limits: StructuredLimits) -> tuple[StructuredSource, ...]:
     try:
-        import pypdfium2 as pdfium
-        from pypdfium2 import raw as pdfium_c
-
         sources: list[StructuredSource] = []
         with pdfium.PdfDocument(data) as document:
             count = document.count_attachments()
@@ -257,7 +256,11 @@ def _ubl_facts(root: ElementTree.Element) -> list[StructuredFact]:
         "vendor.address.region": ("AccountingSupplierParty", "Party", "PostalAddress", "CountrySubentity"),
         "vendor.address.postal_code": ("AccountingSupplierParty", "Party", "PostalAddress", "PostalZone"),
         "vendor.address.country": (
-            "AccountingSupplierParty", "Party", "PostalAddress", "Country", "IdentificationCode"
+            "AccountingSupplierParty",
+            "Party",
+            "PostalAddress",
+            "Country",
+            "IdentificationCode",
         ),
         "bank.account_number": ("PaymentMeans", "PayeeFinancialAccount", "ID"),
         "bank.holder_name": ("PaymentMeans", "PayeeFinancialAccount", "Name"),
@@ -320,28 +323,46 @@ def _cii_facts(root: ElementTree.Element) -> list[StructuredFact]:
             "URIID",
         ),
         "vendor.address.street": (
-            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
-            "PostalTradeAddress", "LineOne",
+            "SupplyChainTradeTransaction",
+            "ApplicableHeaderTradeAgreement",
+            "SellerTradeParty",
+            "PostalTradeAddress",
+            "LineOne",
         ),
         "vendor.address.extended": (
-            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
-            "PostalTradeAddress", "LineTwo",
+            "SupplyChainTradeTransaction",
+            "ApplicableHeaderTradeAgreement",
+            "SellerTradeParty",
+            "PostalTradeAddress",
+            "LineTwo",
         ),
         "vendor.address.city": (
-            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
-            "PostalTradeAddress", "CityName",
+            "SupplyChainTradeTransaction",
+            "ApplicableHeaderTradeAgreement",
+            "SellerTradeParty",
+            "PostalTradeAddress",
+            "CityName",
         ),
         "vendor.address.region": (
-            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
-            "PostalTradeAddress", "CountrySubDivisionName",
+            "SupplyChainTradeTransaction",
+            "ApplicableHeaderTradeAgreement",
+            "SellerTradeParty",
+            "PostalTradeAddress",
+            "CountrySubDivisionName",
         ),
         "vendor.address.postal_code": (
-            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
-            "PostalTradeAddress", "PostcodeCode",
+            "SupplyChainTradeTransaction",
+            "ApplicableHeaderTradeAgreement",
+            "SellerTradeParty",
+            "PostalTradeAddress",
+            "PostcodeCode",
         ),
         "vendor.address.country": (
-            "SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement", "SellerTradeParty",
-            "PostalTradeAddress", "CountryID",
+            "SupplyChainTradeTransaction",
+            "ApplicableHeaderTradeAgreement",
+            "SellerTradeParty",
+            "PostalTradeAddress",
+            "CountryID",
         ),
         "bank.account_number": (
             "SupplyChainTradeTransaction",

@@ -30,7 +30,7 @@ import type {
   SlotContribution,
   WidgetMap,
 } from "@angee/ui/runtime";
-import { isModelScopedSlot } from "@angee/ui/runtime";
+import { RECORD_SEARCH_KEYS, isModelScopedSlot } from "@angee/ui/runtime";
 
 export type {
   ChatterContribution,
@@ -78,6 +78,8 @@ export interface AddonManifest {
   chatter?: readonly ChatterContribution[];
   slots?: readonly SlotContribution[];
   previews?: readonly PreviewContribution[];
+  /** Addon-owned search keys that expire when the active record changes. */
+  recordSearchKeys?: readonly string[];
   /**
    * Non-modal overlay drawers the addon contributes to the console shell's edge
    * stripe-tabs (right + bottom). Merged by `(edge, id)` — fail-fast on a second
@@ -106,6 +108,7 @@ export interface ComposedAddons {
   chatter: readonly ChatterContribution[];
   slots: readonly SlotContribution[];
   previews: readonly PreviewContribution[];
+  recordSearchKeys: readonly string[];
   drawers: readonly DrawerContribution[];
   dataProviders: Readonly<Record<string, unknown>>;
 }
@@ -220,8 +223,16 @@ export function composeAddons(
   const routeNames: Record<string, true> = {};
   const menuIds: Record<string, true> = {};
   const previewIds: Record<string, true> = {};
+  const recordSearchKeys: Record<string, true> = {};
 
   for (const addon of addons) {
+    for (const key of addon.recordSearchKeys ?? []) {
+      if (!key || RECORD_SEARCH_KEYS.includes(key)) {
+        throw new Error(`Addon "${addon.id}" declares reserved or empty record search key "${key}".`);
+      }
+      assertUnclaimed(recordSearchKeys, key, addon.id, "record search key");
+      recordSearchKeys[key] = true;
+    }
     if (addon.routes) {
       for (const route of addon.routes) {
         assertUnclaimed(routeNames, route.name, addon.id, "route name");
@@ -312,6 +323,7 @@ export function composeAddons(
     ),
     drawers: mergeDrawerContributions(...addons.map((a) => a.drawers ?? [])),
     previews,
+    recordSearchKeys: Object.keys(recordSearchKeys).sort(),
   };
 }
 

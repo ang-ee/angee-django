@@ -22,7 +22,6 @@ export {
 } from "./resource/use-list-record-navigation";
 export {
   RECORD_TAB_SEARCH_KEY,
-  RECORD_TASK_SEARCH_KEY,
   parseRecordNavigationScope,
   recordNavigationSearch,
   recordNavigationHref,

@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from angee.base.transitions import TransitionNotAllowed
 from django.contrib.auth.models import AnonymousUser, Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
@@ -24,6 +23,7 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
+from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -113,7 +113,7 @@ def test_action_result_carries_in_band_validation_errors() -> None:
 
 
 def test_action_result_from_error_maps_field_validation_errors() -> None:
-    """A per-field ``ValidationError`` becomes the in-band camel-cased field map."""
+    """A per-field ``ValidationError`` becomes the in-band argument-name field map."""
 
     error = ValidationError({"unit_price": ["Must be positive."], "quantity": ["Required."]})
     result = ActionResult.from_error(error, "Fix the line.")

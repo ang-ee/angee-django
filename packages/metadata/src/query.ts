@@ -126,19 +126,12 @@ export class ResourceQuery {
     return new GroupAxis(this, declaration, { field: canonical, ...(granularity ? { granularity } : {}) });
   }
 
-  /**
-   * Resolve a group field to its declared axis id. A declared axis id wins;
-   * otherwise an axis's own label or identity path (`provider.name`,
-   * `provider.id`) is accepted as an alias for that axis, so pre-contract
-   * spellings persisted in view state or page defaults keep resolving to the
-   * canonical relation axis instead of failing the view.
-   */
+  /** Resolve a declared axis or its unique identity path; labels never identify axes. */
   canonicalAxisField(field: string): string | undefined {
     if (this.contract.axes[field]) return field;
-    for (const [name, axis] of Object.entries(this.contract.axes)) {
-      if (axis.labelPath === field || axis.identityPath === field) return name;
-    }
-    return undefined;
+    const matches = Object.entries(this.contract.axes).filter(([, axis]) => axis.identityPath === field);
+    if (matches.length > 1) throw new QueryParseError(`groups.${field}`, "ambiguous group identity path");
+    return matches[0]?.[0];
   }
 
   group(spec: GroupSpec): GroupAxis { return this.axis(spec.field, spec.granularity); }

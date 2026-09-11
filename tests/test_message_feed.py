@@ -318,10 +318,10 @@ def test_queryset_feed_clamps_native_page_size() -> None:
         scope = ("thread", str(thread.sqid))
         small = query.feed_page(scope=scope, limit=0)
         large = query.feed_page(scope=scope, limit=1000)
-    assert len(small["messages"]) == 1
-    assert len(large["messages"]) == 200
-    assert large["count"] == len(rows)
-    assert large["has_older"]
+    assert len(list(small.rows)) == 1
+    assert len(list(large.rows)) == 200
+    assert large.count == len(rows)
+    assert large.has_older
 
 
 def _revalidate(

@@ -46,6 +46,8 @@ definition workflows/trigger {
 definition workflows/run {
     relation owner: auth/user // rebac:field=created_by
     relation workflow: workflows/workflow // rebac:field=workflow
+    // Run readers are delegated by workflow editors (grant requires write).
+    // Unlike shareable file/evidence viewers, readers cannot propagate access.
     relation reader: auth/user | auth/group#member
     relation operator: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin

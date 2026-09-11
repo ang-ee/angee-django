@@ -423,6 +423,9 @@ def test_contact_resources_accept_declared_consumer_fields(
             resources = {item.model_label: item for item in schema.angee_resources}
             for label in ("parties.Party", "parties.Person", "parties.Organization"):
                 resource = resources[label]
+                assert {"first_met_note", "notes", "addresses"} <= {
+                    field.name for field in resource.fields if field.readable
+                }
                 assert {"first_met_note", "introduced_by"} <= set(resource.update_fields)
                 filter_fields = schema._schema.get_type(resource.type_names.filter).fields
                 assert "notes" in filter_fields

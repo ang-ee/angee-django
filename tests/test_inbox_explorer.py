@@ -361,12 +361,12 @@ def test_transcript_anchor_is_bounded_and_can_continue_both_directions():
         queryset = Message.objects.inbox().for_thread(thread)
         options = {"scope": ("thread", str(thread.sqid)), "limit": 10}
         page = queryset.feed_page(anchor=f"message:{rows[40].sqid}", **options)
-        assert [row.pk for row in page["messages"]] == [row.pk for row in rows[36:46][::-1]]
-        assert page["count"] == 100 and page["has_older"] and page["has_newer"]
-        newer = queryset.feed_page(after_cursor=page["newer_cursor"], **options)
-        older = queryset.feed_page(before_cursor=page["older_cursor"], **options)
-        assert [row.pk for row in newer["messages"]] == [row.pk for row in rows[46:56][::-1]]
-        assert [row.pk for row in older["messages"]] == [row.pk for row in rows[26:36][::-1]]
+        assert [row.pk for row in page.rows] == [row.pk for row in rows[36:46][::-1]]
+        assert page.count == 100 and page.has_older and page.has_newer
+        newer = queryset.feed_page(after_cursor=page.newer_cursor, **options)
+        older = queryset.feed_page(before_cursor=page.older_cursor, **options)
+        assert [row.pk for row in newer.rows] == [row.pk for row in rows[46:56][::-1]]
+        assert [row.pk for row in older.rows] == [row.pk for row in rows[26:36][::-1]]
         with pytest.raises(ValueError, match="unavailable"):
             queryset.feed_page(anchor="message:msg_invalid", **options)
 

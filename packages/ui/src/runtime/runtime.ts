@@ -57,6 +57,8 @@ export interface AppRuntime {
   chatter: readonly ChatterContribution[];
   chatterRoutes: readonly ChatterRoute[];
   slots: readonly SlotContribution[];
+  /** Addon-owned detail search keys cleared by routed record navigation. */
+  recordSearchKeys: readonly string[];
   previews: readonly PreviewContribution[];
   drawers: readonly DrawerContribution[];
   /** Composed collection/record route names per resource id. */
@@ -137,6 +139,7 @@ const EMPTY_RUNTIME: AppRuntime = {
   chatter: [],
   chatterRoutes: [],
   slots: [],
+  recordSearchKeys: [],
   previews: [],
   drawers: [],
   routesByResource: {},
