@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import logging
 import uuid
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -533,10 +533,19 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         origin: RunOrigin | None = None,
         input: JsonPresence = JsonPresence(),
         available_at: datetime | None = None,
+        validate_new: Callable[[], None] | None = None,
     ) -> Any:
-        """Create a pinned run, entry journal row and first ADVANCE atomically."""
+        """Create or exactly retain a pinned run and its first ADVANCE.
+
+        ``validate_new`` is a side-effect-free domain consistency check. It runs
+        inside the start transaction only when no retained identity exists;
+        callers must perform authorization before entering this system-owned
+        persistence boundary.
+        """
 
         input = validate_json_presence(input, label="workflow run input")
+        if dedup_key is not None and len(dedup_key) > self.model._meta.get_field("dedup_key").max_length:
+            raise ValidationError({"dedup_key": "Workflow run dedup key is too long."})
         alias = self.db
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
         head_id = workflow.pk if workflow.published_from_id is None else workflow.published_from_id
@@ -577,6 +586,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 input=input,
                 available_at=available_at or timezone.now(),
                 using=alias,
+                validate_new=validate_new,
             )
 
     def reprocess(self, source_run: Any, *, actor: Any, request_key: str) -> Any:
@@ -636,6 +646,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         available_at: datetime,
         using: str,
         reprocessed_from: Any = None,
+        validate_new: Callable[[], None] | None = None,
     ) -> Any:
         """Create initial rows after callers lock the exact lineage and trigger."""
 
@@ -661,6 +672,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             available_at=available_at,
             using=using,
             reprocessed_from=reprocessed_from,
+            validate_new=validate_new,
         )
 
     def start_test(
@@ -1445,6 +1457,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         available_at: datetime,
         using: str,
         reprocessed_from: Any = None,
+        validate_new: Callable[[], None] | None = None,
     ) -> Any:
         """Create a Run and its first durable work for one explicit immutable definition."""
 
@@ -1481,6 +1494,41 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             "created_by_id": owner_id,
             "updated_by_id": owner_id,
         }
+
+        def retain_exact(existing: Any) -> Any:
+            existing_head_id = existing.workflow.published_from_id or existing.workflow_id
+            requested_head_id = version.published_from_id or version.pk
+            matches = (
+                existing_head_id == requested_head_id
+                and existing.subject_content_type_id == (None if content_type is None else content_type.pk)
+                and existing.subject_object_id == object_id
+                and existing.created_by_id == owner_id
+                and existing.origin == resolved_origin
+                and existing.trigger_id == (None if trigger is None else trigger.pk)
+                and existing.parent_step_run_id == (None if parent_step_run is None else parent_step_run.pk)
+                and existing.dedup_key == (run_dedup_key or "")
+                and existing.occurrence_id == occurrence_id
+                and existing.input_present is input.present
+                and json_values_equal(existing.input, input.value if input.present else None)
+            )
+            if not matches:
+                field = "parent_step_run" if parent_step_run is not None else "dedup_key"
+                raise ValidationError({field: "Workflow start identity was reused with different immutable facts."})
+            return existing
+
+        retained = None
+        if parent_step_run is not None:
+            retained = system_queryset(self.model, using=using, lock=("self",)).filter(
+                parent_step_run=parent_step_run,
+            ).first()
+        elif run_dedup_key:
+            retained = system_queryset(self.model, using=using, lock=("self",)).filter(
+                dedup_key=run_dedup_key,
+            ).first()
+        if retained is not None:
+            return retain_exact(retained)
+        if validate_new is not None:
+            validate_new()
         if parent_step_run is not None:
             run, created = self.get_or_create(parent_step_run=parent_step_run, defaults=attrs)
         elif run_dedup_key:
@@ -1488,25 +1536,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         else:
             run, created = self.create(**attrs), True
         if not created:
-            existing_head_id = run.workflow.published_from_id or run.workflow_id
-            requested_head_id = version.published_from_id or version.pk
-            matches = (
-                existing_head_id == requested_head_id
-                and run.subject_content_type_id == (None if content_type is None else content_type.pk)
-                and run.subject_object_id == object_id
-                and run.created_by_id == owner_id
-                and run.origin == resolved_origin
-                and run.trigger_id == (None if trigger is None else trigger.pk)
-                and run.parent_step_run_id == (None if parent_step_run is None else parent_step_run.pk)
-                and run.dedup_key == (run_dedup_key or "")
-                and run.occurrence_id == occurrence_id
-                and run.input_present is input.present
-                and json_values_equal(run.input, input.value if input.present else None)
-            )
-            if not matches:
-                field = "parent_step_run" if parent_step_run is not None else "dedup_key"
-                raise ValidationError({field: "Workflow start identity was reused with different immutable facts."})
-            return run
+            return retain_exact(run)
         fixtures: tuple[Any, ...] = ()
         if run.origin == RunOrigin.TEST:
             fixture_model = self.model._meta.apps.get_model("workflows", "WorkflowTestFixture")
