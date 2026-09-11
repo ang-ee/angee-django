@@ -20,6 +20,7 @@ from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import (
     PublicID,
     instance_for_id,
+    require_instance_for_id,
     require_public_id,
     to_public_id,
 )
@@ -372,9 +373,7 @@ class StorageMutation:
     def restore_file(self, id: PublicID) -> FileType | None:
         """Pull one file out of the Trash smart folder."""
 
-        row = instance_for_id(File, id, queryset=File.objects.all())
-        if row is None:
-            raise ValueError("file not found")
+        row = require_instance_for_id(File, id, queryset=File.objects.all(), not_found="file not found")
         row.restore()
         return cast(FileType, row)
 
@@ -427,9 +426,12 @@ class StorageConsoleMutation:
         """Permanently delete one file row and its backend object."""
 
         with system_context(reason="storage.graphql.purge_file"):
-            row = instance_for_id(File, id, queryset=File._default_manager.all())
-            if row is None:
-                raise ValueError("file not found")
+            row = require_instance_for_id(
+                File,
+                id,
+                queryset=File._default_manager.all(),
+                not_found="file not found",
+            )
             row.purge()
         return True
 

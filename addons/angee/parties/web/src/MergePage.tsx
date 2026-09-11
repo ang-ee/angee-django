@@ -18,8 +18,9 @@ import {
   Tag,
   avatarInitials,
   useRouteHref,
+  useRouteParam,
 } from "@angee/ui";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 
 import {
   MergeParties,
@@ -178,9 +179,8 @@ export function MergePage(): React.ReactElement {
   const t = usePartiesT();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
-  const params = useParams({ strict: false }) as { left?: string; right?: string };
-  const leftId = params.left ?? "";
-  const rightId = params.right ?? "";
+  const leftId = useRouteParam("left") ?? "";
+  const rightId = useRouteParam("right") ?? "";
   const variables = React.useMemo(
     () => ({ left: leftId, right: rightId }),
     [leftId, rightId],

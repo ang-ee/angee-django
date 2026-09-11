@@ -24,14 +24,14 @@ from angee.graphql.data import (
     hasura_model_resource,
     public_pk_decoder,
 )
-from angee.graphql.ids import optional_public_id
+from angee.graphql.ids import optional_public_id, require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
-from angee.integrate.schema import BridgeSyncStatusMixin, IntegrationLabelMixin
+from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.mixins import LinkSource
 
 Party = apps.get_model("parties", "Party")
@@ -217,22 +217,10 @@ class ContactFolderType(AngeeNode):
 
 
 @strawberry_django.type(Directory)
-class DirectoryType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
+class DirectoryType(BridgeTypeMixin, AngeeNode):
     """GraphQL projection of a connected contacts directory (e.g. a CardDAV source)."""
 
-    backend_class: auto
-    lifecycle: auto
-    runtime_status: auto
-    config: strawberry.scalars.JSON
     poll_interval: auto
-    last_sync_status: auto
-    last_sync_completed_at: auto
-    last_sync_items: auto
-    last_sync_summary: strawberry.scalars.JSON
-    sync_error: auto
-    sync_progress: strawberry.scalars.JSON
-    created_at: auto
-    updated_at: auto
 
 
 @strawberry_django.type(Circle)
@@ -370,9 +358,12 @@ class PartiesReviewQuery:
         elif scope is PeopleWorkbenchScope.TO_REVIEW:
             filtered = people.to_review()
         elif scope is PeopleWorkbenchScope.CIRCLE:
-            selected = Circle.objects.all().from_public_id(str(circle or ""))
-            if selected is None:
-                raise ValueError("circle not found")
+            selected = require_instance_for_id(
+                Circle,
+                circle or "",
+                queryset=Circle.objects.all(),
+                not_found="circle not found",
+            )
             filtered = people.in_circle(selected)
 
         bounded_limit = max(1, min(int(limit), 1000))
@@ -404,9 +395,12 @@ class PartiesIdentityMutation:
     def confirm_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
         """Confirm a party↔handle link (the review queue's accept)."""
 
-        link = PartyHandle.objects.all().from_public_id(str(id))
-        if link is None:
-            raise ValueError("party handle link not found")
+        link = require_instance_for_id(
+            PartyHandle,
+            id,
+            queryset=PartyHandle.objects.all(),
+            not_found="party handle link not found",
+        )
         link.confirm()
         return cast(PartyHandleType, link)
 
@@ -414,9 +408,12 @@ class PartiesIdentityMutation:
     def dismiss_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
         """Dismiss a party↔handle link — the durable anti-link (the review queue's reject)."""
 
-        link = PartyHandle.objects.all().from_public_id(str(id))
-        if link is None:
-            raise ValueError("party handle link not found")
+        link = require_instance_for_id(
+            PartyHandle,
+            id,
+            queryset=PartyHandle.objects.all(),
+            not_found="party handle link not found",
+        )
         link.dismiss()
         return cast(PartyHandleType, link)
 

@@ -1,56 +1,52 @@
-import {
-  extractActionOutcome,
-  type DocumentVariables,
-} from "@angee/refine";
+import type { ActionFieldName } from "@angee/gql/console/actions";
+import { extractActionOutcome, type DocumentVariables } from "@angee/refine";
 import {
   ActionFormDialog,
   Button,
   Glyph,
+  canonicalOptionValue,
   defineRowAction,
   relationValueId,
+  useActionOutcomeMutation,
   useAuthoredResourceMutation,
   useRecordChromeContext,
   type ActionDescriptor,
   type RowActionDeclaration,
+  type WidgetOption,
 } from "@angee/ui";
 import * as React from "react";
 
-import {
-  AcceptTaskDocument,
-  DeclineTaskDocument,
-  MarkTaskDuplicateDocument,
-  SnoozeTaskDocument,
-} from "./documents";
+import { AcceptTaskDocument } from "./documents";
 import { useWorkT } from "./i18n";
 import { STAGE_MODEL } from "./resources";
 import { queueStageFilters } from "./stage-filters";
 import { isTaskInTriage, type WorkTaskRow } from "./task-work";
 
 const TASK_MODEL = "projects.Task";
-
-type AcceptVariables = DocumentVariables<typeof AcceptTaskDocument>;
-type DeclineVariables = DocumentVariables<typeof DeclineTaskDocument>;
-type SnoozeVariables = DocumentVariables<typeof SnoozeTaskDocument>;
-type DuplicateVariables = DocumentVariables<typeof MarkTaskDuplicateDocument>;
+type AcceptTaskVariables = DocumentVariables<typeof AcceptTaskDocument>;
 
 /** The four authored triage verbs, with queue-safe relation pickers. */
 export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
   const t = useWorkT();
+  const declineReasonOptions = React.useMemo<readonly WidgetOption[]>(
+    () => [
+      { value: "DECLINED", label: t("triage.reason.declined") },
+      { value: "OBSOLETE", label: t("triage.reason.obsolete") },
+    ],
+    [t],
+  );
   const [accept] = useAuthoredResourceMutation(AcceptTaskDocument, {
     invalidateModels: [TASK_MODEL],
     shouldInvalidate: (data) => data?.accept_task.ok === true,
   });
-  const [decline] = useAuthoredResourceMutation(DeclineTaskDocument, {
+  const [decline] = useActionOutcomeMutation<ActionFieldName>("decline_task", {
     invalidateModels: [TASK_MODEL],
-    shouldInvalidate: (data) => data?.decline_task.ok === true,
   });
-  const [snooze] = useAuthoredResourceMutation(SnoozeTaskDocument, {
+  const [snooze] = useActionOutcomeMutation<ActionFieldName>("snooze_task", {
     invalidateModels: [TASK_MODEL],
-    shouldInvalidate: (data) => data?.snooze_task.ok === true,
   });
-  const [duplicate] = useAuthoredResourceMutation(MarkTaskDuplicateDocument, {
+  const [duplicate] = useActionOutcomeMutation<ActionFieldName>("mark_task_duplicate", {
     invalidateModels: [TASK_MODEL],
-    shouldInvalidate: (data) => data?.mark_task_duplicate.ok === true,
   });
 
   return React.useMemo(
@@ -69,16 +65,15 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
           },
         ],
         submit: async (values, context) => {
+          const task = recordId(context.record, t("triage.action.failed"));
           const data = await accept({
-            task: recordId(context.record, t("triage.action.failed")),
+            task,
             stage: requiredString(values.stage, "stage"),
-          } satisfies AcceptVariables);
-          return (
-            extractActionOutcome(data, "accept_task") ?? {
-              ok: false,
-              message: t("triage.action.failed"),
-            }
-          );
+          } satisfies AcceptTaskVariables);
+          return extractActionOutcome(data, "accept_task") ?? {
+            ok: false,
+            message: t("triage.action.failed"),
+          };
         },
       },
       {
@@ -91,23 +86,15 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
             name: "reason",
             label: t("triage.action.reason"),
             widget: "select" as const,
-            options: [
-              { value: "DECLINED", label: t("triage.reason.declined") },
-              { value: "OBSOLETE", label: t("triage.reason.obsolete") },
-            ],
+            options: declineReasonOptions,
           },
         ],
         submit: async (values, context) => {
-          const data = await decline({
-            task: recordId(context.record, t("triage.action.failed")),
-            reason: declineReason(values.reason),
-          } satisfies DeclineVariables);
-          return (
-            extractActionOutcome(data, "decline_task") ?? {
-              ok: false,
-              message: t("triage.action.failed"),
-            }
-          );
+          const task = recordId(context.record, t("triage.action.failed"));
+          return (await decline(task, {
+            task,
+            reason: declineReason(declineReasonOptions, values.reason),
+          })) ?? { ok: false, message: t("triage.action.failed") };
         },
       },
       {
@@ -122,16 +109,11 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
           },
         ],
         submit: async (values, context) => {
-          const data = await snooze({
-            task: recordId(context.record, t("triage.action.failed")),
+          const task = recordId(context.record, t("triage.action.failed"));
+          return (await snooze(task, {
+            task,
             until: requiredString(values.until, "until"),
-          } satisfies SnoozeVariables);
-          return (
-            extractActionOutcome(data, "snooze_task") ?? {
-              ok: false,
-              message: t("triage.action.failed"),
-            }
-          );
+          })) ?? { ok: false, message: t("triage.action.failed") };
         },
       },
       {
@@ -149,20 +131,15 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
           },
         ],
         submit: async (values, context) => {
-          const data = await duplicate({
-            task: recordId(context.record, t("triage.action.failed")),
+          const task = recordId(context.record, t("triage.action.failed"));
+          return (await duplicate(task, {
+            task,
             canonical: requiredString(values.canonical, "canonical"),
-          } satisfies DuplicateVariables);
-          return (
-            extractActionOutcome(data, "mark_task_duplicate") ?? {
-              ok: false,
-              message: t("triage.action.failed"),
-            }
-          );
+          })) ?? { ok: false, message: t("triage.action.failed") };
         },
       },
     ],
-    [accept, decline, duplicate, queueId, snooze, t],
+    [accept, decline, declineReasonOptions, duplicate, queueId, snooze, t],
   );
 }
 
@@ -266,7 +243,8 @@ function requiredString(value: unknown, name: string): string {
   throw new TypeError(`${name} is required.`);
 }
 
-function declineReason(value: unknown): DeclineVariables["reason"] {
-  if (value === "DECLINED" || value === "OBSOLETE") return value;
+export function declineReason(options: readonly WidgetOption[], value: unknown): string {
+  const reason = canonicalOptionValue(options, value);
+  if (reason !== undefined) return reason;
   throw new TypeError("A decline reason is required.");
 }

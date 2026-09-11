@@ -124,8 +124,8 @@ test("resolved actor and thread changes never expose another native entry's rows
   await waitFor(() => expect(result.current.data).toBeDefined());
   rerender({ thread: "thread-b" }); expect(result.current.data).toBeUndefined();
   await waitFor(() => expect(feed.custom).toHaveBeenCalledTimes(3));
-  expect(feed.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "message-feed", "actor-a"] })).toHaveLength(1);
-  expect(feed.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "message-feed", "actor-b"] })).toHaveLength(2);
+  expect(feed.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "keyset-feed", "actor-a"] })).toHaveLength(1);
+  expect(feed.client.getQueryCache().findAll({ queryKey: ["angee", "authored", "keyset-feed", "actor-b"] })).toHaveLength(2);
 });
 
 test("native retained-data errors invoke Refine auth and notification policy once", async () => {

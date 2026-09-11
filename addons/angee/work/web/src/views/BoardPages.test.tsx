@@ -25,6 +25,7 @@ vi.mock("@angee/ui", () => ({
   PageHeader: () => null,
   ResourceList: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   useRouteHref: () => () => "/projects/tasks/task",
+  useRouteParam: (name: string) => mocks.params[name],
 }));
 
 vi.mock("@tanstack/react-router", () => ({

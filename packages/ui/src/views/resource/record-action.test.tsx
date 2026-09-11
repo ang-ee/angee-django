@@ -63,8 +63,7 @@ describe("record action helpers", () => {
     dataMocks.mutate.mockClear();
     dataMocks.settle.mockReset();
     dataMocks.settle.mockImplementation(async (fire: () => Promise<unknown>) => {
-      await fire();
-      return undefined;
+      return fire();
     });
     dataMocks.useActionResultRun.mockReset();
     dataMocks.useActionResultRun.mockReturnValue(dataMocks.settle);
@@ -211,6 +210,37 @@ describe("record action helpers", () => {
     expect(dataMocks.mutate).toHaveBeenCalledWith("lead_1");
     expect(refresh).toHaveBeenCalledOnce();
     expect(message).toBeUndefined();
+  });
+
+  test("derives generated action arguments from the current record id", async () => {
+    const { result } = renderHook(() =>
+      useRecordActionMutation("submit_proposal", {
+        actionArguments: (proposal) => ({ proposal }),
+        settle: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current[0](actionContext("proposal_1"));
+    });
+
+    expect(dataMocks.mutate).toHaveBeenCalledWith("proposal_1", {
+      proposal: "proposal_1",
+    });
+  });
+
+  test("does not refresh a settled record action refused by the server", async () => {
+    const refresh = vi.fn();
+    dataMocks.mutate.mockResolvedValueOnce({ ok: false, message: "Refused" });
+    const { result } = renderHook(() =>
+      useRecordActionMutation("submit_proposal", { settle: true }),
+    );
+
+    await act(async () => {
+      await result.current[0](actionContext("proposal_1", { refresh }));
+    });
+
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   test("projects the in-band outcome to the rendered action contract", async () => {

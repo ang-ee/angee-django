@@ -183,6 +183,9 @@ def test_cursor_rejects_different_scope_or_invalid_input(change: str) -> None:
     result = _query("thread", owner, thread, **options)
     assert result.errors
     assert result.data is None
+    # The schema's existing unexpected-error boundary masks resolver ValueErrors.
+    assert result.errors[0].message == "An unexpected error occurred."
+    assert result.errors[0].extensions == {"code": "INTERNAL"}
 
 
 def test_search_cursor_uses_the_same_normalized_predicate() -> None:

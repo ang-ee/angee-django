@@ -1466,6 +1466,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         object_id = None if subject is None else subject.pk
         run_dedup_key = dedup_key or self._trigger_dedup_key(trigger, content_type, object_id)
         owner_id = self._owner_id(actor, trigger, version)
+        if owner_id is not None:
+            owner_id = self.model._meta.get_field("created_by").target_field.get_prep_value(owner_id)
         resolved_origin = origin or (
             RunOrigin.TRIGGER
             if trigger is not None

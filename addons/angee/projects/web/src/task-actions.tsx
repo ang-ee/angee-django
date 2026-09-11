@@ -1,33 +1,28 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
-  extractActionOutcome,
-  type DocumentVariables,
-} from "@angee/refine";
-import {
   Action,
+  canonicalOptionValue,
   Field,
   Form,
   Group,
   defineRowAction,
   useActionResultMutation,
-  useAuthoredResourceMutation,
+  useActionOutcomeMutation,
   useEnumOptions,
   useRecordActionMutation,
   type ActionDescriptor,
   type RowActionDeclaration,
   type StringIdRow,
+  type WidgetOption,
 } from "@angee/ui";
 import * as React from "react";
 
-import { DropTaskDocument } from "./documents";
 import { useProjectsT } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 
 export interface TaskActionRow extends StringIdRow {
   status?: unknown;
 }
-
-type DropTaskVariables = DocumentVariables<typeof DropTaskDocument>;
 
 /** Task lifecycle verbs shared by every task collection surface. */
 export function useTaskRowActions<
@@ -73,9 +68,7 @@ export function useTaskFormDeclaration(): React.ReactElement {
   const t = useProjectsT();
   const statusOptions = useEnumOptions(TASK_MODEL, "status");
   const priorityOptions = useEnumOptions(TASK_MODEL, "priority");
-  const dropReasonOptions = useEnumOptions(TASK_MODEL, "dropped_reason").map(
-    (option) => ({ ...option, value: String(option.value).toUpperCase() }),
-  );
+  const dropReasonOptions = useEnumOptions(TASK_MODEL, "dropped_reason", { casing: "upper" });
   const [complete] = useRecordActionMutation<ActionFieldName>("complete_task", {
     invalidateModels: [TASK_MODEL],
     settle: true,
@@ -92,9 +85,8 @@ export function useTaskFormDeclaration(): React.ReactElement {
       settle: true,
     },
   );
-  const [dropTask] = useAuthoredResourceMutation(DropTaskDocument, {
+  const [dropTask] = useActionOutcomeMutation<ActionFieldName>("drop_task", {
     invalidateModels: [TASK_MODEL],
-    shouldInvalidate: (data) => data?.drop_task.ok === true,
   });
   const dropSubmit = React.useCallback<
     NonNullable<ActionDescriptor["submit"]>
@@ -104,18 +96,11 @@ export function useTaskFormDeclaration(): React.ReactElement {
       if (typeof id !== "string" || id === "") {
         return { ok: false, message: t("task.action.failed") };
       }
-      const data = await dropTask({
-        id,
-        reason: dropReason(values.reason),
-      });
-      return (
-        extractActionOutcome(data, "drop_task") ?? {
-          ok: false,
-          message: t("task.action.failed"),
-        }
-      );
+      return (await dropTask(id, {
+        reason: dropReason(dropReasonOptions, values.reason),
+      })) ?? { ok: false, message: t("task.action.failed") };
     },
-    [dropTask, t],
+    [dropReasonOptions, dropTask, t],
   );
 
   return (
@@ -195,9 +180,8 @@ function taskStatus(record: { status?: unknown }): string {
   return String(record.status ?? "").trim().toLowerCase();
 }
 
-function dropReason(value: unknown): DropTaskVariables["reason"] {
-  if (value === "DUPLICATE" || value === "DECLINED" || value === "OBSOLETE") {
-    return value;
-  }
+export function dropReason(options: readonly WidgetOption[], value: unknown): string {
+  const reason = canonicalOptionValue(options, value);
+  if (reason !== undefined) return reason;
   throw new TypeError("Task drop reason declaration produced an invalid enum value.");
 }

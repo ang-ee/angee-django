@@ -25,6 +25,7 @@ from strawberry_django_aggregates.granularity import NumberGranularity, TimeGran
 from strawberry_django_hasura import (
     HasuraResource,
     NestedInsert,
+    SortAlias,
     WriteBackend,
     input_to_dict,
 )
@@ -710,7 +711,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     name: str | None = None,
     filterable: Sequence[str],
     sortable: Sequence[str],
-    sortable_aliases: Mapping[str, str] | None = None,
+    sortable_aliases: Mapping[str, str | SortAlias] | None = None,
     aggregatable: Sequence[str],
     groupable: Sequence[str] = (),
     json_paths: Mapping[str, str] | None = None,

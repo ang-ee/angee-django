@@ -102,12 +102,16 @@ const storybookRoutes = [
 ] as const;
 
 const withAngeeProviders: Decorator = (Story, context) => {
+  // Shell studies supply their own menu/route fixture without nesting a second
+  // Refine or router root. Other stories keep the standard workshop context.
+  const resources: ResourceProps[] = context.parameters.angeeResources ?? previewResources;
+  const extraRoutes: string[] = context.parameters.angeeRoutes ?? [];
   const rootRoute = createRootRoute({
     component: () => (
       <AppRuntimeProvider runtime={previewRuntime}>
         <Refine
           dataProvider={previewDataProviders}
-          resources={previewResources}
+          resources={resources}
           routerProvider={tanStackRouterProvider}
           options={{ syncWithLocation: false }}
         >
@@ -124,7 +128,7 @@ const withAngeeProviders: Decorator = (Story, context) => {
       </AppRuntimeProvider>
     ),
   });
-  const routes = storybookRoutes.map((path) =>
+  const routes = [...new Set<string>([...storybookRoutes, ...extraRoutes])].map((path) =>
     createRoute({
       getParentRoute: () => rootRoute,
       path,

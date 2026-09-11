@@ -68,6 +68,40 @@ def test_sender_order_uses_current_resolved_arguments() -> None:
     assert len(result["default"]) == 2
 
 
+def test_unreadable_sender_sorts_as_empty_instead_of_its_hidden_name() -> None:
+    """A denied sender label cannot influence the visible message order."""
+
+    owner = get_user_model().objects.create_user(username="hidden-sender-sort-owner")
+    other = get_user_model().objects.create_user(username="hidden-sender-sort-other")
+    with system_context(reason="test.messaging.hidden_sender_sort.seed"):
+        visible_handle = Handle.objects.create(
+            created_by=owner,
+            platform="email",
+            value="visible@example.com",
+            display_name="Alpha visible",
+        )
+        hidden_handle = Handle.objects.create(
+            created_by=other,
+            platform="email",
+            value="hidden@example.com",
+            display_name="Zulu secret",
+        )
+        visible = Message.objects.create(created_by=owner, sender=visible_handle)
+        hidden = Message.objects.create(created_by=owner, sender=hidden_handle)
+
+    rows = result_data(
+        execute_schema(
+            _schema(),
+            "{ messages(order_by: [{sender_name: asc}]) { id sender_name } }",
+            user=owner,
+        )
+    )["messages"]
+    assert rows == [
+        {"id": str(hidden.sqid), "sender_name": ""},
+        {"id": str(visible.sqid), "sender_name": "Alpha visible"},
+    ]
+
+
 def test_sender_projection_matches_visible_identity_and_regates_elevated_parents() -> None:
     """Unreadable handles/parties cannot change a shown or sorted sender label."""
 

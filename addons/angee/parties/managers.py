@@ -98,14 +98,16 @@ class HandleQuerySet(AngeeQuerySet):
 
         actor = self.actor() or current_actor()
         party_model = apps.get_model("parties", "Party")
-        parties = party_model.objects.with_actor(actor).scoped() if actor is not None else party_model.objects.none()
         handles = self.with_actor(actor).scoped() if actor is not None else self.none()
-        party_name = parties.filter(pk=OuterRef("party_id")).values("display_name")[:1]
+        party_name = party_model.objects.filter(pk=OuterRef("party_id")).readable_scalar_subquery(
+            "display_name",
+            actor=actor,
+        )
         return handles.annotate(
             _sender_name=Coalesce(
                 NullIf(
                     Case(
-                        When(party_link_confirmed=True, then=Subquery(party_name)),
+                        When(party_link_confirmed=True, then=party_name),
                         default=Value(None),
                         output_field=TextField(),
                     ),

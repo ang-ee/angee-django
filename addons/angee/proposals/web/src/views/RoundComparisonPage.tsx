@@ -14,9 +14,9 @@ import {
   TableRow,
   TextLink,
   useRouteHref,
+  useRouteParam,
   type FieldDescriptor,
 } from "@angee/ui";
-import { useParams } from "@tanstack/react-router";
 import * as React from "react";
 
 import {
@@ -47,7 +47,7 @@ const FACT_DESCRIPTORS: Readonly<Record<ComparisonFactField, FieldDescriptor>> =
 
 /** Headline proposal tabulation route; visibility is exactly the server result. */
 export function RoundComparisonPage(): React.ReactElement {
-  const { id = "" } = useParams({ strict: false }) as { id?: string };
+  const id = useRouteParam("id") ?? "";
   const t = useProposalsT();
   const routeHref = useRouteHref();
   const data = useRoundComparisonData(id);

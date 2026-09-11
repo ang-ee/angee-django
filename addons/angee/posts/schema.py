@@ -10,7 +10,6 @@ for it.
 
 from __future__ import annotations
 
-import strawberry
 import strawberry_django
 from django.apps import apps
 from strawberry import auto
@@ -18,7 +17,7 @@ from strawberry import auto
 from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.integrate.schema import BridgeSyncStatusMixin, IntegrationLabelMixin
+from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.schema import HandleType
 
 Handle = apps.get_model("parties", "Handle")
@@ -27,23 +26,11 @@ FeedFollow = apps.get_model("posts", "FeedFollow")
 
 
 @strawberry_django.type(Feed)
-class FeedType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
+class FeedType(BridgeTypeMixin, AngeeNode):
     """GraphQL projection of a connected public-content feed."""
 
-    backend_class: auto
     external_id: auto
-    lifecycle: auto
-    runtime_status: auto
-    config: strawberry.scalars.JSON
-    last_sync_status: auto
-    last_sync_completed_at: auto
-    last_sync_items: auto
-    last_sync_summary: strawberry.scalars.JSON
-    sync_error: auto
-    sync_progress: strawberry.scalars.JSON
     handle: HandleType | None
-    created_at: auto
-    updated_at: auto
 
 
 @strawberry_django.type(FeedFollow)

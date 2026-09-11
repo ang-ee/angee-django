@@ -3,6 +3,7 @@ import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
   Badge, Button, Collapsible, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
   Glyph, LabeledDescriptorField, LazyBoundary, Textarea, TextLink, formSpecInitialValues,
+  PageAside,
   errorMessage, useDottedPathFieldErrors, useFormSpecFields, useRouteHref, validationErrorMap,
   type DottedPathFieldErrorMap,
 } from "@angee/ui";
@@ -32,7 +33,7 @@ export function ApprovalTask({ approval, available = true, onBack, onResolved, r
     return () => onDirtyChange?.(false);
   }, [approval.id, editable, onDirtyChange]);
   return (
-    <aside className="h-full min-h-0 overflow-auto bg-sheet-1 p-4">
+    <PageAside collapse="never" gutter="compact" className="h-full w-full bg-sheet-1">
       <div className="space-y-4">
         {onBack ? (
           <Button type="button" variant="ghost" onClick={onBack}>
@@ -69,7 +70,7 @@ export function ApprovalTask({ approval, available = true, onBack, onResolved, r
         </Collapsible>
         <DecisionSourceLinks approval={approval} />
       </div>
-    </aside>
+    </PageAside>
   );
 }
 

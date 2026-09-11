@@ -14,7 +14,6 @@ export const enPartiesMessages: Record<string, string> = {
   "person.tabs.handles": "Handles",
   "person.tabs.addresses": "Addresses",
   "person.empty.handles": "No handles for this person yet.",
-  "person.empty.addresses": "No addresses for this person yet.",
   "person.group.name": "Name",
   "person.group.details": "Details",
   "person.field.givenName": "Given name",

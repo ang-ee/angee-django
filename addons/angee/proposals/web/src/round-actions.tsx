@@ -1,36 +1,25 @@
 import type { Row } from "@angee/metadata";
-import {
-  extractActionOutcome,
-  type ActionOutcome,
-  type DocumentVariables,
-} from "@angee/refine";
+import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   ActionFormDialog,
   Button,
   Glyph,
-  useActionResultRun,
-  useAuthoredResourceMutation,
-  useRecordAction,
+  canonicalOptionValue,
+  useActionOutcomeMutation,
+  useRecordActionMutation,
   type ActionDescriptor,
-  type RecordAction,
+  type WidgetOption,
 } from "@angee/ui";
 import * as React from "react";
 
-import {
-  CancelProposalRoundDocument,
-  CloseProposalRoundDocument,
-  OpenProposalRoundDocument,
-  TransferProposalRoundDocument,
-} from "./documents";
 import { useProposalsT } from "./i18n";
 import { PROPOSAL_MODEL, ROUND_MODEL, USER_MODEL } from "./resources";
 
-type CancelVariables = DocumentVariables<typeof CancelProposalRoundDocument>;
-type CloseVariables = DocumentVariables<typeof CloseProposalRoundDocument>;
-type OpenVariables = DocumentVariables<typeof OpenProposalRoundDocument>;
-type TransferVariables = DocumentVariables<typeof TransferProposalRoundDocument>;
-
-export type CloseOutcome = CloseVariables["outcome"];
+const CLOSE_OUTCOMES = [
+  { value: "AWARDED", labelKey: "round.outcome.awarded" },
+  { value: "NO_AWARD", labelKey: "round.outcome.noAward" },
+] as const;
+export type CloseOutcome = (typeof CLOSE_OUTCOMES)[number]["value"];
 
 export interface RoundActionRow extends Row {
   id: string;
@@ -51,88 +40,61 @@ export function useRoundCeremonyActions(
   defaultOutcome?: CloseOutcome,
 ): RoundCeremonyActions {
   const t = useProposalsT();
-  const settle = useActionResultRun();
-  const [openRound] = useAuthoredResourceMutation(OpenProposalRoundDocument, {
+  const closeOutcomeOptions = React.useMemo<readonly WidgetOption[]>(
+    () => CLOSE_OUTCOMES.map(({ value, labelKey }) => ({
+      value,
+      label: t(labelKey),
+    })),
+    [t],
+  );
+  const roundArgument = React.useCallback((round: string) => ({ round }), []);
+  const [open] = useRecordActionMutation<ActionFieldName>("open_proposal_round", {
     invalidateModels: [ROUND_MODEL, PROPOSAL_MODEL],
-    shouldInvalidate: (data) => data?.open_proposal_round.ok === true,
+    actionArguments: roundArgument,
+    settle: true,
   });
-  const [closeRound] = useAuthoredResourceMutation(CloseProposalRoundDocument, {
+  const [closeRound] = useActionOutcomeMutation<ActionFieldName>("close_proposal_round", {
     invalidateModels: [ROUND_MODEL, PROPOSAL_MODEL],
-    shouldInvalidate: (data) => data?.close_proposal_round.ok === true,
   });
-  const [cancelRound] = useAuthoredResourceMutation(CancelProposalRoundDocument, {
+  const [cancel] = useRecordActionMutation<ActionFieldName>("cancel_proposal_round", {
     invalidateModels: [ROUND_MODEL, PROPOSAL_MODEL],
-    shouldInvalidate: (data) => data?.cancel_proposal_round.ok === true,
+    actionArguments: roundArgument,
+    settle: true,
   });
-  const [transferRound] = useAuthoredResourceMutation(
-    TransferProposalRoundDocument,
+  const [transferRound] = useActionOutcomeMutation<ActionFieldName>(
+    "transfer_proposal_round_facilitation",
     {
       invalidateModels: [ROUND_MODEL, PROPOSAL_MODEL],
-      shouldInvalidate: (data) =>
-        data?.transfer_proposal_round_facilitation.ok === true,
     },
   );
-
-  const fireOpen = React.useCallback(
-    async (id: string): Promise<ActionOutcome | undefined> =>
-      extractActionOutcome(
-        await openRound({ round: id } satisfies OpenVariables),
-        "open_proposal_round",
-      ) ?? undefined,
-    [openRound],
-  );
-  const open = useSettledRecordAction(fireOpen, settle);
-
-  const fireCancel = React.useCallback(
-    async (id: string): Promise<ActionOutcome | undefined> =>
-      extractActionOutcome(
-        await cancelRound({ round: id } satisfies CancelVariables),
-        "cancel_proposal_round",
-      ) ?? undefined,
-    [cancelRound],
-  );
-  const cancel = useSettledRecordAction(fireCancel, settle);
 
   const closeSubmit = React.useCallback<
     NonNullable<ActionDescriptor["submit"]>
   >(
     async (values, context) => {
       const id = actionRecordId(context.record, t("round.action.failed"));
-      const variables = {
+      return (await closeRound(id, {
         round: id,
-        outcome: closeOutcome(values.outcome, t("round.action.invalidOutcome")),
+        outcome: closeOutcome(closeOutcomeOptions, values.outcome, t("round.action.invalidOutcome")),
         accepted: idList(values.accepted),
         partial: idList(values.partial),
-      } satisfies CloseVariables;
-      const data = await closeRound(variables);
-      return (
-        extractActionOutcome(data, "close_proposal_round") ?? {
-          ok: false,
-          message: t("round.action.failed"),
-        }
-      );
+      })) ?? { ok: false, message: t("round.action.failed") };
     },
-    [closeRound, t],
+    [closeOutcomeOptions, closeRound, t],
   );
 
   const transferSubmit = React.useCallback<
     NonNullable<ActionDescriptor["submit"]>
   >(
     async (values, context) => {
-      const variables = {
-        round: actionRecordId(context.record, t("round.action.failed")),
+      const round = actionRecordId(context.record, t("round.action.failed"));
+      return (await transferRound(round, {
+        round,
         facilitator: requiredId(
           values.facilitator,
           t("round.action.invalidFacilitator"),
         ),
-      } satisfies TransferVariables;
-      const data = await transferRound(variables);
-      return (
-        extractActionOutcome(
-          data,
-          "transfer_proposal_round_facilitation",
-        ) ?? { ok: false, message: t("round.action.failed") }
-      );
+      })) ?? { ok: false, message: t("round.action.failed") };
     },
     [t, transferRound],
   );
@@ -160,10 +122,7 @@ export function useRoundCeremonyActions(
             name: "outcome",
             label: t("round.action.outcome"),
             widget: "select",
-            options: [
-              { value: "AWARDED", label: t("round.outcome.awarded") },
-              { value: "NO_AWARD", label: t("round.outcome.noAward") },
-            ],
+            options: closeOutcomeOptions,
             ...(defaultOutcome ? { defaultValue: defaultOutcome } : {}),
           },
           {
@@ -217,7 +176,7 @@ export function useRoundCeremonyActions(
         visibleWhen: isNonTerminalRound,
       },
     }),
-    [cancel, closeSubmit, defaultOutcome, open, roundId, t, transferSubmit],
+    [cancel, closeOutcomeOptions, closeSubmit, defaultOutcome, open, roundId, t, transferSubmit],
   );
 }
 
@@ -262,22 +221,6 @@ export function RoundCloseControls({
   );
 }
 
-function useSettledRecordAction(
-  fire: (id: string) => Promise<ActionOutcome | undefined>,
-  settle: ReturnType<typeof useActionResultRun>,
-): RecordAction {
-  return useRecordAction(
-    React.useCallback(
-      async (id, context) => {
-        const outcome = await settle(() => fire(id));
-        if (outcome?.ok) context.refresh();
-      },
-      [fire, settle],
-    ),
-    { refresh: false },
-  );
-}
-
 export function openingPolicyMessageKey(value: unknown): string {
   switch (String(value ?? "").trim().toLowerCase()) {
     case "facilitator_only":
@@ -315,8 +258,11 @@ function idList(value: unknown): string[] {
     : [];
 }
 
-function closeOutcome(value: unknown, message: string): CloseOutcome {
-  if (value === "AWARDED" || value === "NO_AWARD") return value;
+export function closeOutcome(
+  options: readonly WidgetOption[], value: unknown, message: string,
+): string {
+  const outcome = canonicalOptionValue(options, value);
+  if (outcome !== undefined) return outcome;
   throw new TypeError(message);
 }
 

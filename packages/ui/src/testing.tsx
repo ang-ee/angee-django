@@ -37,13 +37,23 @@ export function createMutationDialogTestDouble({
   return function MutationDialogTestDouble(
     props: MutationDialogTestDoubleProps,
   ): React.ReactElement | null {
+    const [open, setOpen] = React.useState(false);
     capture?.(props);
-    if (!props.open) return null;
+    const visible = props.open ?? open;
+    const trigger = props.trigger
+      ? React.cloneElement(
+          props.trigger as React.ReactElement<{
+            onClick?: React.MouseEventHandler<HTMLElement>;
+          }>,
+          { onClick: () => setOpen(true) },
+        )
+      : null;
+    if (!visible) return trigger;
 
     const buttonLabel =
       typeof submitLabel === "function" ? submitLabel(props) : submitLabel;
 
-    return (
+    return <>{trigger}
       <form
         aria-label={String(props.title)}
         onSubmit={(event) => {
@@ -61,6 +71,6 @@ export function createMutationDialogTestDouble({
       >
         <button type="submit">{buttonLabel}</button>
       </form>
-    );
+    </>;
   };
 }

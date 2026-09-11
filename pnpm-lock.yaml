@@ -331,6 +331,9 @@ importers:
       '@angee/integrate':
         specifier: workspace:*
         version: link:../../integrate/web
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
       '@angee/parties':
         specifier: workspace:*
         version: link:../../parties/web

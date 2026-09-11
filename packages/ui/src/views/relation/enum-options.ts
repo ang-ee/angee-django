@@ -14,24 +14,29 @@ import { enumValueLabel } from "../resource/resource-view-list-body";
 const EMPTY_IMPL_PREFILL_RESET: Readonly<Record<string, unknown>> = {};
 
 /**
- * SDL-derived `<select>` options for an enum field, with lower-cased values.
+ * SDL-derived `<select>` options for an enum field.
  *
  * An enum reads as the UPPERCASE member name but its create/patch input is a
  * lowercase `String` value, so a bare metadata-driven select submits the member
- * name and the input rejects it. Pair these options with a `createOnly` field so
+ * name and the input rejects it. Lowercase is the default; authored actions that
+ * accept a GraphQL enum select `casing: "upper"`. Pair CRUD options with a `createOnly` field so
  * the read casing never round-trips through the select (see the enum read/write
  * pitfall in docs/guidelines.md). The label is the SDL description where
  * authored, otherwise the humanized member name (`enumValueLabel`).
  */
-export function useEnumOptions(resource: string, field: string): readonly WidgetOption[] {
+export function useEnumOptions(
+  resource: string,
+  field: string,
+  { casing = "lower" }: { casing?: "lower" | "upper" } = {},
+): readonly WidgetOption[] {
   const metadata = useModelMetadata(resource);
   return React.useMemo<readonly WidgetOption[]>(
     () =>
       (metadata?.fields[field]?.values ?? []).map((value) => ({
-        value: value.value.toLowerCase(),
+        value: casing === "upper" ? value.value.toUpperCase() : value.value.toLowerCase(),
         label: enumValueLabel(value),
       })),
-    [metadata, field],
+    [metadata, field, casing],
   );
 }
 

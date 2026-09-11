@@ -7,9 +7,10 @@ import {
   PageBody,
   PageHeader,
   ResourceList,
+  useRouteParam,
   useRouteHref,
 } from "@angee/ui";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import { useQueueContext } from "../context";
@@ -21,7 +22,7 @@ const TASK_MODEL = "projects.Task";
 
 /** Queue projection: stage lanes, sort_order rank, lane quick-create, task deep-links. */
 export function QueueBoardPage(): React.ReactElement {
-  const { queueId = "" } = useParams({ strict: false }) as { queueId?: string };
+  const queueId = useRouteParam("queueId") ?? "";
   const t = useWorkT();
   const queue = useQueueContext(queueId);
   const navigate = useNavigate();

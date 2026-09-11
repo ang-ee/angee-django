@@ -23,6 +23,12 @@ export interface UseListRecordNavigationOptions {
   navigationScope?: ListViewNavigationScope | null;
   /** Local row models retain their native table pagination owner. */
   onSetPage?: (page: number) => void;
+  /** Select the first loaded row for this collection identity when none is active. */
+  selectFirstRecord?: boolean;
+  /** Identity of the collection whose first row should be selected. */
+  firstSelectionKey?: string;
+  /** Clear an active record when its collection becomes empty. */
+  onClearSelection?: () => void;
 }
 export interface UseListRecordNavigationResult<TRow extends Row> {
   navigationScope: ListViewNavigationScope | null;
@@ -41,6 +47,8 @@ export interface UseListRecordNavigationResult<TRow extends Row> {
  */
 export function useListRecordNavigation<TRow extends Row>({
   resource, recordId, onSelect, navigationScope: controlledScope, onSetPage,
+  selectFirstRecord = false, firstSelectionKey = "",
+  onClearSelection,
 }: UseListRecordNavigationOptions): UseListRecordNavigationResult<TRow> {
   const model = useModelMetadata(resource);
   const view = useResourceViewMaybe();
@@ -54,6 +62,7 @@ export function useListRecordNavigation<TRow extends Row>({
   const [local, setLocal] = React.useState<{ binding: string; snapshot: ResourceListSnapshot<TRow> } | null>(null);
   const [localEdge, setLocalEdge] = React.useState<{ recordId: string; binding: string; sourceScope: string; page: number; edge: "first" | "last" } | null>(null);
   const [pending, setPending] = React.useState<PendingRecordNavigation | null>(null);
+  const firstSelectionRef = React.useRef<string | null>(null);
   const navigationScope = isClientRowModel(model?.resource) ? null : controlledScope === undefined ? captured?.binding === binding ? captured.scope : null : controlledScope;
   const localSnapshot = local?.binding === binding && (controlledScope === undefined || isClientRowModel(model?.resource)) ? local.snapshot : null;
   const scopeIdentity = stableSerialize(navigationScope);
@@ -77,7 +86,19 @@ export function useListRecordNavigation<TRow extends Row>({
         return previous?.binding === binding && stableSerialize(previous.snapshot) === stableSerialize(snapshot) ? previous : { binding, snapshot };
       });
     }
-  }, [binding, recordId, readId]);
+    if (selectFirstRecord && !state.fetching) {
+      const selectedStillExists = recordId
+        ? state.rows.some((row) => readId(row) === recordId)
+        : false;
+      const nextId = selectedStillExists ? recordId : readId(state.rows[0]);
+      const selectionIdentity = `${binding}:${firstSelectionKey}:${recordId ?? ""}:${nextId ?? ""}`;
+      if (nextId !== recordId && firstSelectionRef.current !== selectionIdentity) {
+        firstSelectionRef.current = selectionIdentity;
+        if (nextId) onSelect?.(nextId, state.navigationScope ?? undefined);
+        else onClearSelection?.();
+      }
+    }
+  }, [binding, firstSelectionKey, onClearSelection, onSelect, recordId, readId, selectFirstRecord]);
   const selectRecord = React.useCallback((id: string, scope?: ListViewNavigationScope) => {
     const next = scope ?? (scopeRef.current?.binding === binding ? scopeRef.current.scope : null) ?? navigationScope;
     setCaptured({ binding, scope: next });

@@ -27,6 +27,22 @@ export const RECORD_UNREAD_COUNT_MODELS = [
 
 export const ACTIVITY_AGENDA_MODELS = ["messaging.ThreadActivity"] as const;
 
+/** Typed projection rendered by the Message record's structural parts list. */
+export const MessagingPartListRow = graphql(`
+  fragment MessagingPartListRow on PartType {
+    id
+    position
+    role
+    type
+    disposition
+    name
+    cid
+    parent { id }
+    fragment { id kind hash text part_count message_count }
+    file { id filename title }
+  }
+`);
+
 /** Messaging-owned cross-record agenda used by personal work projections. */
 export const ActivityAgendaDocument = graphql(`
   query MessagingActivityAgenda($windowStart: Date!, $windowEnd: Date!) {
@@ -79,6 +95,91 @@ export const MessagingChannelHealth = graphql(`
   }
 `);
 
+/** Shared projections keep domain reads small and preserve their authorization surface. */
+export const MessageSenderFields = graphql(`
+  fragment MessageSenderFields on HandleType {
+    id
+    display_name
+    value
+    party_link_confirmed
+    party { display_name }
+  }
+`);
+
+export const MessagePartFields = graphql(`
+  fragment MessagePartFields on PartType {
+    id
+    role
+    disposition
+    cid
+    fragment { text }
+    file {
+      id
+      filename
+      title
+      size_bytes
+      url
+      mime_type { mime_type label }
+    }
+  }
+`);
+
+export const ReactionGroupFields = graphql(`
+  fragment ReactionGroupFields on MessageReactionGroupType {
+    reaction
+    count
+    self_reacted
+    handles { id display_name value }
+  }
+`);
+
+export const RecordReactionGroupFields = graphql(`
+  fragment RecordReactionGroupFields on RecordMessageReactionGroupType {
+    reaction
+    count
+    self_reacted
+    handles { id display_name value }
+  }
+`);
+
+export const MessageFeedWindowFields = graphql(`
+  fragment MessageFeedWindowFields on MessageFeedPage {
+    count
+    older_cursor
+    has_older
+    has_more_in_window
+    has_older_than_through
+  }
+`);
+
+export const RecordThreadSummaryFields = graphql(`
+  fragment RecordThreadSummaryFields on RecordThreadType {
+    id
+    title { text }
+    message_count
+    last_message_at
+  }
+`);
+
+export const RecordUserFields = graphql(`
+  fragment RecordUserFields on UserType { id username display_name }
+`);
+
+export const RecordActivityFields = graphql(`
+  fragment RecordActivityFields on RecordThreadActivityType {
+    id
+    activity_type
+    summary
+    note
+    due_date
+    completed_at
+    feedback
+    status
+    state
+    user { ...RecordUserFields }
+  }
+`);
+
 // One owner for the record-feed message selection: the four operations that
 // return a full chatter message (the thread read + post/update/delete payloads)
 // spread this fragment instead of repeating the field set. `can_edit`/`can_delete`
@@ -118,14 +219,7 @@ export const RecordMessageFields = graphql(`
     sent_at
     created_at
     reaction_groups {
-      reaction
-      count
-      self_reacted
-      handles {
-        id
-        display_name
-        value
-      }
+      ...RecordReactionGroupFields
     }
     tracking_values {
       id
@@ -136,24 +230,7 @@ export const RecordMessageFields = graphql(`
       new_display
     }
     parts {
-      id
-      role
-      disposition
-      cid
-      fragment {
-        text
-      }
-      file {
-        id
-        filename
-        title
-        size_bytes
-        url
-        mime_type {
-          mime_type
-          label
-        }
-      }
+      ...MessagePartFields
     }
   }
 `);
@@ -170,43 +247,13 @@ export const TranscriptMessageFields = graphql(`
     sent_at
     created_at
     sender {
-      id
-      display_name
-      value
-      party_link_confirmed
-      party {
-        display_name
-      }
+      ...MessageSenderFields
     }
     parts {
-      id
-      role
-      disposition
-      cid
-      fragment {
-        text
-      }
-      file {
-        id
-        filename
-        title
-        size_bytes
-        url
-        mime_type {
-          mime_type
-          label
-        }
-      }
+      ...MessagePartFields
     }
     reaction_groups {
-      reaction
-      count
-      self_reacted
-      handles {
-        id
-        display_name
-        value
-      }
+      ...ReactionGroupFields
     }
   }
 `);
@@ -224,11 +271,7 @@ export const ThreadTranscriptDocument = graphql(`
       through_cursor: $throughCursor
       limit: $limit
     ) {
-      count
-      older_cursor
-      has_older
-      has_more_in_window
-      has_older_than_through
+      ...MessageFeedWindowFields
       messages {
         ...TranscriptMessageFields
       }
@@ -286,12 +329,7 @@ export const RecordThreadDocument = graphql(`
       error
       error_code
       thread {
-        id
-        title {
-          text
-        }
-        message_count
-        last_message_at
+        ...RecordThreadSummaryFields
       }
       message_result_count
       messages {
@@ -304,9 +342,7 @@ export const RecordThreadDocument = graphql(`
         notification_policy
         subtype_keys
         user {
-          id
-          username
-          display_name
+          ...RecordUserFields
         }
       }
       suggested_recipients {
@@ -346,27 +382,12 @@ export const RecordThreadDocument = graphql(`
         notification_policy
         subtype_keys
         user {
-          id
-          username
-          display_name
+          ...RecordUserFields
         }
       }
       activity_count
       activities {
-        id
-        activity_type
-        summary
-        note
-        due_date
-        completed_at
-        feedback
-        status
-        state
-        user {
-          id
-          username
-          display_name
-        }
+        ...RecordActivityFields
       }
     }
   }
@@ -433,12 +454,7 @@ export const PostRecordMessageDocument = graphql(`
         ...RecordMessageFields
       }
       thread {
-        id
-        title {
-          text
-        }
-        message_count
-        last_message_at
+        ...RecordThreadSummaryFields
       }
     }
   }
@@ -473,12 +489,7 @@ export const UpdateRecordMessageDocument = graphql(`
         ...RecordMessageFields
       }
       thread {
-        id
-        title {
-          text
-        }
-        message_count
-        last_message_at
+        ...RecordThreadSummaryFields
       }
     }
   }
@@ -510,12 +521,7 @@ export const DeleteRecordMessageDocument = graphql(`
       activity_count
       attachment_count
       thread {
-        id
-        title {
-          text
-        }
-        message_count
-        last_message_at
+        ...RecordThreadSummaryFields
       }
       messages {
         ...RecordMessageFields
@@ -544,26 +550,12 @@ export const SetRecordMessageReactionDocument = graphql(`
       error
       error_code
       reaction_groups {
-        reaction
-        count
-        self_reacted
-        handles {
-          id
-          display_name
-          value
-        }
+        ...RecordReactionGroupFields
       }
       message {
         id
         reaction_groups {
-          reaction
-          count
-          self_reacted
-          handles {
-            id
-            display_name
-            value
-          }
+          ...RecordReactionGroupFields
         }
       }
     }
@@ -634,12 +626,7 @@ export const MarkRecordMessageDoneDocument = graphql(`
         needaction
       }
       thread {
-        id
-        title {
-          text
-        }
-        message_count
-        last_message_at
+        ...RecordThreadSummaryFields
       }
     }
   }
@@ -698,20 +685,7 @@ export const ScheduleRecordActivityDocument = graphql(`
       error_code
       activity_count
       activity {
-        id
-        activity_type
-        summary
-        note
-        due_date
-        completed_at
-        feedback
-        status
-        state
-        user {
-          id
-          username
-          display_name
-        }
+        ...RecordActivityFields
       }
     }
   }
@@ -770,20 +744,7 @@ export const RecordActivityThreadDocument = graphql(`
       error_code
       activity_count
       activities {
-        id
-        activity_type
-        summary
-        note
-        due_date
-        completed_at
-        feedback
-        status
-        state
-        user {
-          id
-          username
-          display_name
-        }
+        ...RecordActivityFields
       }
     }
   }
@@ -791,6 +752,7 @@ export const RecordActivityThreadDocument = graphql(`
 
 export type ThreadTranscriptRow =
   DocumentType<typeof ThreadTranscriptDocument>["thread_message_feed"]["messages"][number];
+export type PartListRow = DocumentType<typeof MessagingPartListRow>;
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
 export type RecordActivityThreadPayload =

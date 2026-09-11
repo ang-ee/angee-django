@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+from django.core.exceptions import FieldError
 from django.db import connection, models, transaction
+from django.db.models import OuterRef
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import RebacMixin
@@ -82,6 +84,34 @@ def test_system_querysets_ignore_the_user_sudo_toggle(system_query_tables: None)
 
     assert SystemQueryThing.system_queryset().count() == 0
     assert system_queryset(ThirdPartySystemQueryThing).count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_readable_scalar_subquery_infers_fallback_type(system_query_tables: None) -> None:
+    """A fallback keeps the selected field type even when its Python value differs."""
+
+    expression = SystemQueryThing.objects.filter(pk=OuterRef("pk")).readable_scalar_subquery("pk", default=0)
+
+    assert expression.output_field is SystemQueryThing._meta.pk
+    try:
+        expression.resolve_expression(SystemQueryThing.objects.all().query)
+    except FieldError as error:  # pragma: no cover - assertion gives the useful failure
+        pytest.fail(f"fallback produced incompatible Django expression types: {error}")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_readable_scalar_subquery_keeps_denied_empty_string(system_query_tables: None) -> None:
+    """With no actor, an explicitly requested text fallback remains observable."""
+
+    row = SystemQueryThing._base_manager.create(name="private")
+    projected = SystemQueryThing._base_manager.annotate(
+        readable_name=SystemQueryThing.objects.filter(pk=OuterRef("pk")).readable_scalar_subquery(
+            "name",
+            default="",
+        )
+    ).get(pk=row.pk)
+
+    assert projected.readable_name == ""
 
 
 @SQLITE_ONLY

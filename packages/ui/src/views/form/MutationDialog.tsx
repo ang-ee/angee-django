@@ -187,8 +187,11 @@ export interface MutationDialogProps<
   TValues extends Record<string, unknown>,
   TResult = unknown,
 > {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  /** Controlled visibility. Omit with `trigger` to let the dialog own it. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Native trigger; when supplied, the dialog owns open state and focus pairing. */
+  trigger?: React.ReactElement;
   title: React.ReactNode;
   description?: React.ReactNode;
   fields: readonly MutationDialogField[];
@@ -219,7 +222,15 @@ export function MutationDialog<
   TValues extends Record<string, unknown>,
   TResult = unknown,
 >(props: MutationDialogProps<TValues, TResult>): React.ReactElement | null {
-  return props.open ? <MutationDialogInstance {...props} /> : null;
+  const [open, setOpen] = React.useState(false);
+  const controlled = props.open !== undefined;
+  const visible = props.open ?? open;
+  const onOpenChange = React.useCallback((next: boolean) => {
+    if (!controlled) setOpen(next);
+    props.onOpenChange?.(next);
+  }, [controlled, props.onOpenChange]);
+  if (!props.trigger && !visible) return null;
+  return <MutationDialogInstance {...props} open={visible} onOpenChange={onOpenChange} />;
 }
 
 function MutationDialogInstance<TValues extends Record<string, unknown>, TResult>({
@@ -240,7 +251,11 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   canSubmit,
   size = "md",
   placement = "prompt",
-}: MutationDialogProps<TValues, TResult>): React.ReactElement {
+  trigger,
+}: Omit<MutationDialogProps<TValues, TResult>, "open" | "onOpenChange"> & {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}): React.ReactElement {
   const t = useUiT();
   const form = useForm<Record<string, unknown>>({
     defaultValues: initialDialogValues(fields, initialValues),
@@ -264,13 +279,22 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       } : { values: formValues, errors: {} };
     },
   });
+  const session = React.useRef(0);
+  const submittingRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!open) {
+      session.current += 1;
+      submittingRef.current = false;
+      form.reset(initialDialogValues(fields, initialValues));
+      form.clearErrors();
+    }
+  }, [fields, form, initialValues, open]);
   const values = useWatch({ control: form.control });
   const submitting = form.formState.isSubmitting;
   const error = form.formState.errors.root?.server?.message ?? null;
   const fieldsReady = form.formState.isValid || (!form.formState.isDirty
     && fields.every((field) => !field.required && !field.presenceRequired));
   const ready = fieldsReady && (canSubmit?.(values) ?? true);
-  const submittingRef = React.useRef(false);
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const footer = (
@@ -300,15 +324,16 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   const submitReady = form.handleSubmit(async (collected) => {
     if (submittingRef.current) return;
     submittingRef.current = true;
+    const submittedSession = session.current;
     form.clearErrors();
     try {
       const submittedValues = parseValues(collected);
       const result = await onSubmit(submittedValues);
-      if (!mounted.current) return;
+      if (!mounted.current || session.current !== submittedSession) return;
       onSubmitted?.(result, submittedValues);
       if (closeOnSubmit) onOpenChange(false);
     } catch (cause) {
-      if (mounted.current) {
+      if (mounted.current && session.current === submittedSession) {
         form.setError("root.server", {
           type: "server",
           message: errorMessage(cause, errorFallback ?? t("error.generic")),
@@ -318,7 +343,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
         await form.trigger(fields.map((field) => field.name));
       }
     } finally {
-      submittingRef.current = false;
+      if (session.current === submittedSession) submittingRef.current = false;
     }
   });
   const submit = (event: React.FormEvent<HTMLFormElement>): void => {
@@ -339,6 +364,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       onSubmit={submit}
       size={size}
       placement={placement}
+      trigger={trigger}
     >
       {fields.map((declaredField) => {
         const field = {

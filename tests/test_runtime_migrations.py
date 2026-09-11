@@ -918,6 +918,7 @@ def test_agent_session_identity_migration_waits_for_complete_identity_state() ->
     bridge = importlib.import_module(
         "angee.workflows_agents.runtime_migrations.agent_session_identity"
     )
+    assert ("resources", "0001_initial") in bridge.Migration.dependencies
     legacy = ProjectState()
     for name in ("Workflow", "WorkflowRun", "StepRun"):
         legacy.add_model(ModelState("workflows", name, [("id", models.AutoField(primary_key=True))]))

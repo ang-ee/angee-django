@@ -29,6 +29,22 @@ describe("group operation codegen", () => {
     expect(generated).toContain('"value": "String"');
   });
 
+  test("derives domain target, enum, and list action arguments from the schema", () => {
+    const generated = generateActions(METADATA);
+
+    expect(generated).toContain('"close_round"');
+    expect(generated).toContain('"value": "round"');
+    expect(generated).toContain('"value": "RoundOutcome"');
+    expect(generated).toContain('"value": "accepted"');
+  });
+
+  test("leaves optional and defaulted ActionResult mutations authored", () => {
+    const generated = generateActions(METADATA);
+
+    expect(generated).not.toContain('"optional_action"');
+    expect(generated).not.toContain('"defaulted_action"');
+  });
+
   test("selects the exact count root with matching having", () => {
     const generated = generateActions(METADATA);
     expect(generated).toContain("having?: Record<string, unknown>;");
@@ -133,8 +149,12 @@ const SDL = `
   schema { query: Query mutation: Mutation }
   type Mutation {
     submit_channel_password(id: ID!, password: String!): ActionResult!
+    close_round(round: ID!, outcome: RoundOutcome!, accepted: [ID!]!): ActionResult!
+    optional_action(id: ID!, note: String): ActionResult!
+    defaulted_action(id: ID!, note: String! = ""): ActionResult!
     order_save(pk: ID!, lines: [OrderLineInput!]): OrderType!
   }
+  enum RoundOutcome { AWARDED NO_AWARD }
   type ActionResult {
     ok: Boolean!
     message: String!

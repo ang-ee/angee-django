@@ -33,15 +33,7 @@ export function CaptureNeedAction({
 }: CaptureNeedActionProps): React.ReactElement {
   const t = useIntakeT();
   const [open, setOpen] = React.useState(false);
-  const declaredImportanceOptions = useEnumOptions(NEED_MODEL, "importance");
-  const importanceOptions = React.useMemo(
-    () =>
-      declaredImportanceOptions.map((option) => ({
-        ...option,
-        value: String(option.value).toUpperCase(),
-      })),
-    [declaredImportanceOptions],
-  );
+  const importanceOptions = useEnumOptions(NEED_MODEL, "importance", { casing: "upper" });
   const [capture] = useAuthoredResourceMutation(CaptureNeedDocument, {
     invalidateModels: [NEED_MODEL],
     errorFrom: (data) => {

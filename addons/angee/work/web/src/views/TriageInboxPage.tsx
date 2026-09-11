@@ -6,9 +6,9 @@ import {
   Page,
   PageBody,
   PageHeader,
+  useRouteParam,
   useRouteHref,
 } from "@angee/ui";
-import { useParams } from "@tanstack/react-router";
 import * as React from "react";
 
 import { useQueueContext } from "../context";
@@ -20,7 +20,7 @@ const TASK_MODEL = "projects.Task";
 
 /** Queue triage inbox, driven by lifecycle facts and the provisioned triage stage. */
 export function TriageInboxPage(): React.ReactElement {
-  const { queueId = "" } = useParams({ strict: false }) as { queueId?: string };
+  const queueId = useRouteParam("queueId") ?? "";
   const t = useWorkT();
   const routeHref = useRouteHref();
   const queue = useQueueContext(queueId);

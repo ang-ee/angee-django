@@ -194,3 +194,14 @@ export {
   type MessageResources,
   type MessageVars,
 } from "./i18n";
+
+export {
+  keysetFeedOptions,
+  keysetFeedRows,
+  useAuthoredKeysetFeed,
+  type AuthoredKeysetFeedOptions,
+  type KeysetRow,
+  type KeysetFeedPage,
+  type KeysetFeedWindow,
+  type KeysetFeedRevalidation,
+} from "./dialect/keyset-feed";

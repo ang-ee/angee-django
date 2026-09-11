@@ -95,10 +95,18 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("expectValidBaseAddon", "@angee/app", "src/testing.tsx"),
   frameworkCriticalExport("MutationDialog", "@angee/ui", "src/views/form/MutationDialog.tsx"),
   frameworkCriticalExport("GraphViewGeometry", "@angee/ui", "src/views/GraphView.tsx"),
+  frameworkCriticalExport("graphNodeStyle", "@angee/ui", "src/views/GraphView.tsx"),
   frameworkCriticalExport("ScopedExplorerPane", "@angee/ui", "src/views/tree/ScopedExplorerPane.tsx"),
   frameworkCriticalExport("PrimaryPanePublisher", "@angee/ui", "src/layouts/primary-pane-context.tsx"),
   frameworkCriticalExport("useLatestRef", "@angee/ui", "src/lib/use-latest-ref.ts"),
+  frameworkCriticalExport("useRouteParam", "@angee/ui", "src/views/resource/resource-routing.ts"),
+  frameworkCriticalExport("useRouteSearch", "@angee/ui", "src/views/resource/resource-routing.ts"),
+  frameworkCriticalExport("routeSearchParam", "@angee/ui", "src/views/resource/record-navigation-context.ts"),
+  frameworkCriticalExport("updateRouteSearch", "@angee/ui", "src/views/resource/record-navigation-context.ts"),
   frameworkCriticalExport("useAngeeDeletePreview", "@angee/refine", "src/dialect/hooks.tsx"),
+  frameworkCriticalExport("useAuthoredKeysetFeed", "@angee/refine", "src/dialect/keyset-feed.ts"),
+  frameworkCriticalExport("keysetFeedOptions", "@angee/refine", "src/dialect/keyset-feed.ts"),
+  frameworkCriticalExport("keysetFeedRows", "@angee/refine", "src/dialect/keyset-feed.ts"),
 ];
 
 const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [

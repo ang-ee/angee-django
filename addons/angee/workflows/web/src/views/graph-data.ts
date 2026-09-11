@@ -1,8 +1,8 @@
-import type {
-  GraphViewEdge,
-  GraphViewNode,
-  GraphViewNodeStyle,
-  GraphViewPosition,
+import {
+  graphNodeStyle,
+  type GraphViewEdge,
+  type GraphViewNode,
+  type GraphViewPosition,
 } from "@angee/ui";
 
 import type {
@@ -28,19 +28,19 @@ export type WorkflowGraphNodeKind =
 export type WorkflowGraphEdgeKind = "default" | "condition";
 
 export const workflowNodeStyles = {
-  AGENT: nodeStyle("var(--brand)", "brand"),
-  GATE: nodeStyle("var(--warning)", "warning", "var(--warning-soft)"),
-  HANDLER: nodeStyle("var(--border-strong)", "neutral"),
-  MAP: nodeStyle("var(--info)", "info", "var(--info-soft)"),
-  WAIT: nodeStyle("var(--border-strong)", "neutral", "var(--surface-sheet)"),
-  SCHEDULED: nodeStyle("var(--border-strong)", "neutral"),
-  STARTED: nodeStyle("var(--info)", "info", "var(--info-soft)"),
-  WAITING: nodeStyle("var(--warning)", "warning", "var(--warning-soft)"),
-  SUCCEEDED: nodeStyle("var(--success)", "success", "var(--success-soft)"),
-  FAILED: nodeStyle("var(--danger)", "danger", "var(--danger-soft)"),
-  CANCELED: nodeStyle("var(--border-strong)", "neutral"),
-  SKIPPED: nodeStyle("var(--border-subtle)", "neutral"),
-} satisfies Record<WorkflowGraphNodeKind, GraphViewNodeStyle>;
+  AGENT: graphNodeStyle("var(--brand)", "brand"),
+  GATE: graphNodeStyle("var(--warning)", "warning", { background: "var(--warning-soft)" }),
+  HANDLER: graphNodeStyle("var(--border-strong)", "neutral"),
+  MAP: graphNodeStyle("var(--info)", "info", { background: "var(--info-soft)" }),
+  WAIT: graphNodeStyle("var(--border-strong)", "neutral", { background: "var(--surface-sheet)" }),
+  SCHEDULED: graphNodeStyle("var(--border-strong)", "neutral"),
+  STARTED: graphNodeStyle("var(--info)", "info", { background: "var(--info-soft)" }),
+  WAITING: graphNodeStyle("var(--warning)", "warning", { background: "var(--warning-soft)" }),
+  SUCCEEDED: graphNodeStyle("var(--success)", "success", { background: "var(--success-soft)" }),
+  FAILED: graphNodeStyle("var(--danger)", "danger", { background: "var(--danger-soft)" }),
+  CANCELED: graphNodeStyle("var(--border-strong)", "neutral"),
+  SKIPPED: graphNodeStyle("var(--border-subtle)", "neutral"),
+};
 
 export function workflowGraphNodes(
   steps: readonly WorkflowGraphStep[],
@@ -102,21 +102,6 @@ export function latestStepRunByStep(
     latest.set(stepRun.step.id, stepRun);
   }
   return latest;
-}
-
-function nodeStyle(
-  borderColor: string,
-  badgeTone: GraphViewNodeStyle["badgeTone"],
-  background?: string,
-): GraphViewNodeStyle {
-  return {
-    width: 188,
-    height: 76,
-    borderColor,
-    background,
-    highlightedBorderColor: "var(--brand)",
-    badgeTone,
-  };
 }
 
 function positionFromJson(value: unknown): GraphViewPosition | undefined {

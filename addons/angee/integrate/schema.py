@@ -1223,6 +1223,24 @@ class BridgeSyncStatusMixin:
         return str(cast(Any, self).effective_sync_stage)
 
 
+@strawberry.type
+class BridgeTypeMixin(IntegrationLabelMixin, BridgeSyncStatusMixin):
+    """Project the persisted fields shared by every ``Bridge`` child type."""
+
+    backend_class: auto
+    lifecycle: auto
+    runtime_status: auto
+    config: strawberry.scalars.JSON
+    last_sync_status: auto
+    last_sync_completed_at: auto
+    last_sync_items: auto
+    last_sync_summary: strawberry.scalars.JSON
+    sync_error: auto
+    sync_progress: strawberry.scalars.JSON
+    created_at: auto
+    updated_at: auto
+
+
 @strawberry_django.type(Integration)
 class IntegrationType(IntegrationLabelMixin, AngeeNode):
     """Admin projection of an integration.

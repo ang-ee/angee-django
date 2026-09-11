@@ -14,13 +14,7 @@ export const NexusTimelineMessageFields = graphql(`
     sent_at
     created_at
     sender {
-      id
-      display_name
-      value
-      party_link_confirmed
-      party {
-        display_name
-      }
+      ...MessageSenderFields
     }
     thread {
       id
@@ -48,11 +42,7 @@ export const NexusTimeline = graphql(`
       limit: $limit
       search: $search
     ) @skip(if: $circle) {
-      count
-      older_cursor
-      has_older
-      has_more_in_window
-      has_older_than_through
+      ...MessageFeedWindowFields
       messages {
         ...NexusTimelineMessageFields
       }
@@ -64,11 +54,7 @@ export const NexusTimeline = graphql(`
       limit: $limit
       search: $search
     ) @include(if: $circle) {
-      count
-      older_cursor
-      has_older
-      has_more_in_window
-      has_older_than_through
+      ...MessageFeedWindowFields
       messages {
         ...NexusTimelineMessageFields
       }

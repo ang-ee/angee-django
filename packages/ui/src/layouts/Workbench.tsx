@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { cn } from "../lib/cn";
+import { useContainerQuery } from "../lib/use-container-query";
 import {
   SplitPane,
   SplitPaneHandle,
@@ -39,6 +40,12 @@ export interface WorkbenchProps {
   primarySize?: number;
   /** Secondary pane default width, percent. */
   secondarySize?: number;
+  /** Minimum content pane size, percent. */
+  contentMinSize?: number;
+  /** Minimum secondary pane size, percent. */
+  secondaryMinSize?: number;
+  /** Stack the secondary pane below content when this container is narrower. */
+  stackBelow?: number;
   /** Start the secondary pane collapsed when no persisted layout exists. */
   secondaryDefaultCollapsed?: boolean;
   /** Receives the primary pane's collapse controller (or null on unmount). */
@@ -71,6 +78,9 @@ export function Workbench({
   autoSave,
   primarySize = 18,
   secondarySize = 26,
+  contentMinSize,
+  secondaryMinSize = 16,
+  stackBelow,
   secondaryDefaultCollapsed = false,
   onPrimaryController,
   onSecondaryController,
@@ -84,8 +94,11 @@ export function Workbench({
   // Controllers stay inert when their pane is not rendered (their imperative
   // handles simply never mount).
   const primaryController = useCollapsiblePane();
+  const [containerRef, sideBySide] = useContainerQuery(stackBelow ?? 0);
+  const stacked = stackBelow !== undefined && !sideBySide;
   const secondaryController = useCollapsiblePane({
     defaultCollapsed: secondaryDefaultCollapsed,
+    expandedSize: secondarySize,
   });
   usePublishedController(primaryController, onPrimaryController, hasPrimary);
   usePublishedController(secondaryController, onSecondaryController, hasSecondary);
@@ -117,8 +130,9 @@ export function Workbench({
 
   return (
     <SplitPanes
-      direction="horizontal"
-      autoSave={autoSave}
+      ref={containerRef}
+      direction={stacked ? "vertical" : "horizontal"}
+      autoSave={stackBelow === undefined || autoSave === undefined ? autoSave : `${autoSave}.${stacked ? "stacked" : "side-by-side"}`}
       panelIds={panelIds}
       className={cn(
         "h-full min-h-0",
@@ -135,7 +149,7 @@ export function Workbench({
             collapsible
             panelRef={primaryController.panelRef}
             onResize={primaryController.onResize}
-            className="min-h-0 min-w-0 border-r border-border-subtle bg-sheet-2"
+            className={cn("min-h-0 min-w-0 bg-sheet-2", stacked ? "border-b border-border-subtle" : "border-r border-border-subtle")}
           >
             {primary}
           </SplitPane>
@@ -144,6 +158,7 @@ export function Workbench({
       ) : null}
       <SplitPane
         id="content"
+        minSize={contentMinSize}
         className={cn(
           "min-h-0 min-w-0 bg-canvas",
           browserScroll && "overflow-visible",
@@ -157,12 +172,12 @@ export function Workbench({
           <SplitPane
             id="secondary"
             defaultSize={secondaryDefaultCollapsed ? 0 : secondarySize}
-            minSize={16}
+            minSize={secondaryMinSize}
             collapsible
             collapsedSize={0}
             panelRef={secondaryController.panelRef}
             onResize={secondaryController.onResize}
-            className="min-h-0 min-w-0 border-l border-border-subtle bg-sheet-2"
+            className={cn("min-h-0 min-w-0 bg-sheet-2", stacked ? "border-t border-border-subtle" : "border-l border-border-subtle")}
           >
             {secondary}
           </SplitPane>

@@ -4,7 +4,7 @@ import { cleanup, render } from "@testing-library/react";
 import { createRef, type ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { GraphView } from "./GraphView";
+import { GraphView, graphNodeStyle } from "./GraphView";
 
 const reactFlowMock = vi.hoisted(() => ({
   lastProps: undefined as Record<string, unknown> | undefined,
@@ -112,6 +112,17 @@ function currentProps(): Record<string, unknown> {
 }
 
 describe("GraphView", () => {
+  test("projects graph theme variables with shared dimensions and overrides", () => {
+    expect(graphNodeStyle("var(--info)", "info", { background: "var(--info-soft)" })).toEqual({
+      width: 188,
+      height: 76,
+      borderColor: "var(--info)",
+      highlightedBorderColor: "var(--brand)",
+      badgeTone: "info",
+      background: "var(--info-soft)",
+    });
+    expect(graphNodeStyle("red", "danger", { width: 190, height: 78 }).width).toBe(190);
+  });
   test("updates presentation without laying out until semantic geometry changes", () => {
     const rendered = render(<GraphView nodes={nodes} edges={edges} nodeStyles={nodeStyles} />);
     const initialLayouts = dagreMock.layouts;

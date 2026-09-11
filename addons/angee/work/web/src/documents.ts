@@ -32,53 +32,11 @@ export const WorkCycleContextDocument = graphql(`
   }
 `);
 
+// `stage` has a schema default, so this mutation intentionally stays authored:
+// generated action hooks only cover verbs whose arguments are all required.
 export const AcceptTaskDocument = graphql(`
   mutation WorkAcceptTask($task: ID!, $stage: ID!) {
     accept_task(task: $task, stage: $stage) {
-      ok
-      message
-      id
-      validation_errors
-    }
-  }
-`);
-
-export const DeclineTaskDocument = graphql(`
-  mutation WorkDeclineTask($task: ID!, $reason: TaskDroppedReason!) {
-    decline_task(task: $task, reason: $reason) {
-      ok
-      message
-      id
-      validation_errors
-    }
-  }
-`);
-
-export const SnoozeTaskDocument = graphql(`
-  mutation WorkSnoozeTask($task: ID!, $until: DateTime!) {
-    snooze_task(task: $task, until: $until) {
-      ok
-      message
-      id
-      validation_errors
-    }
-  }
-`);
-
-export const MarkTaskDuplicateDocument = graphql(`
-  mutation WorkMarkTaskDuplicate($task: ID!, $canonical: ID!) {
-    mark_task_duplicate(task: $task, canonical: $canonical) {
-      ok
-      message
-      id
-      validation_errors
-    }
-  }
-`);
-
-export const CloseWorkCycleDocument = graphql(`
-  mutation WorkCloseCycle($cycle: ID!) {
-    close_work_cycle(cycle: $cycle) {
       ok
       message
       id

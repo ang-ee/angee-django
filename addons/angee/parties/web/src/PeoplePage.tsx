@@ -21,7 +21,9 @@ import {
   useAuthoredResourceMutation,
   useLatestRef,
   useRouteHref,
+  useRouteSearch,
   useToast,
+  updateRouteSearch,
   type ActionDescriptor,
   type DndPayload,
   type ListColumn,
@@ -29,7 +31,7 @@ import {
   type RecordTabDescriptor,
   type StringIdRow,
 } from "@angee/ui";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { PersonCirclesList } from "./CircleMembershipList";
 import {
   AddCircleMember,
@@ -244,7 +246,7 @@ export function PeoplePage(): React.ReactElement {
   const t = usePartiesT();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
-  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const search = useRouteSearch();
   const toast = useToast();
   const scope = React.useMemo(
     () => peopleScopeFromSearch(search),
@@ -316,13 +318,12 @@ export function PeoplePage(): React.ReactElement {
   );
   const selectSmartView = React.useCallback(
     (row: SmartViewRow) => {
-      // Untyped navigation: the router glue's `as never` idiom (refine router canon).
       void navigate({
-        search: ((current: Record<string, unknown>) => ({
-          ...current,
+        to: ".",
+        search: updateRouteSearch({
           peopleScope: row.id === "ALL" ? undefined : row.id,
           peopleCircle: undefined,
-        })) as never,
+        }),
       });
     },
     [navigate],
@@ -330,11 +331,11 @@ export function PeoplePage(): React.ReactElement {
   const selectCircle = React.useCallback(
     (row: CircleTreeRow) => {
       void navigate({
-        search: ((current: Record<string, unknown>) => ({
-          ...current,
+        to: ".",
+        search: updateRouteSearch({
           peopleScope: "CIRCLE",
           peopleCircle: row.id,
-        })) as never,
+        }),
       });
     },
     [navigate],

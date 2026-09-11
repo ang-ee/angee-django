@@ -9,7 +9,6 @@ import strawberry_django
 from django.apps import apps
 from django.utils import timezone
 from strawberry import auto
-from strawberry.scalars import JSON
 
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import hasura_model_resource
@@ -18,7 +17,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
 from angee.integrate.queue import queue_bridge_sync
-from angee.integrate.schema import BridgeSyncStatusMixin, IntegrationLabelMixin
+from angee.integrate.schema import BridgeTypeMixin
 from angee.storage_integrate.connect import create_local_folder_mount
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import (
@@ -55,22 +54,10 @@ class MountBrowseResultType:
 
 
 @strawberry_django.type(Mount)
-class MountType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
+class MountType(BridgeTypeMixin, AngeeNode):
     """Admin projection of an external storage Mount."""
 
     mode: auto
-    backend_class: auto
-    lifecycle: auto
-    runtime_status: auto
-    config: JSON
-    last_sync_completed_at: auto
-    last_sync_status: auto
-    last_sync_items: auto
-    last_sync_summary: JSON
-    sync_error: auto
-    sync_progress: JSON
-    created_at: auto
-    updated_at: auto
 
     @strawberry_django.field(only=["drive_id"])
     def drive(self) -> strawberry.ID:

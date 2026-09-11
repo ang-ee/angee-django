@@ -1,6 +1,8 @@
 import * as React from "react";
 import { rowPublicId, type Row } from "@angee/metadata";
+import { stableSerialize } from "@angee/refine";
 import { ControlBandProvider } from "../../../layouts/ControlBand";
+import { Workbench } from "../../../layouts/Workbench";
 import { cn } from "../../../lib/cn";
 import { Dialog, DialogBackdrop, DialogPortal, DialogRoot } from "../../../ui/dialog";
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
@@ -32,6 +34,9 @@ export function ResourceListBody<TRow extends Row = Row>({
   declarations,
   recordController,
   placement = "inline",
+  renderRecord,
+  selectFirstRecord = false,
+  splitLayout,
   baseFilter,
   filterOptions,
   facets,
@@ -57,6 +62,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   overviewTab,
   toolbarActions,
   cardActions,
+  emptyContent,
   draggableRow,
   className,
 }: ResourceListBodyProps<TRow>): React.ReactElement {
@@ -68,6 +74,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   const resolvedRowHref = recordController.rowHref;
   const resolvedColumns = declarations.list?.columns ?? requiredColumns(columns);
   const hasRecordSurface =
+    renderRecord !== undefined ||
     form !== undefined ||
     declarations.form !== undefined ||
     formFields !== undefined ||
@@ -98,6 +105,7 @@ export function ResourceListBody<TRow extends Row = Row>({
     toolbarActions,
     cardActions,
     draggableRow,
+    emptyContent,
     laneSource: resolvedLaneSource,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
@@ -134,6 +142,9 @@ export function ResourceListBody<TRow extends Row = Row>({
       open && !resolvedCreating ? resolvedRecordId : null,
     ...(handleSelectRecord ? { onSelect: handleSelectRecord } : {}),
     onSetPage: resourceView.setPage,
+    selectFirstRecord,
+    firstSelectionKey: stableSerialize(baseFilter ?? null),
+    onClearSelection: () => handleSelectRecord?.(null),
   });
   React.useEffect(() => {
     if (open) return;
@@ -277,6 +288,26 @@ export function ResourceListBody<TRow extends Row = Row>({
       deleteAction={recordDeleteAction}
     />
   ) : null;
+  const recordContent = renderRecord && !resolvedCreating
+    ? renderRecord({ recordId: editId })
+    : recordForm;
+
+  if (placement === "split") {
+    return (
+      <div className={cn("h-full min-h-0 min-w-0", className)}>
+        <Workbench
+          primary={<ControlBandProvider host={undefined}>{list}</ControlBandProvider>}
+          primarySize={splitLayout?.primarySize}
+          contentMinSize={splitLayout?.contentMinSize}
+          stackBelow={splitLayout?.stackBelow}
+          autoSave={splitLayout?.autoSave}
+        >
+          {recordContent}
+        </Workbench>
+        {recordDeleteDialog}
+      </div>
+    );
+  }
 
   if (placement === "drawer") {
     return (
@@ -291,7 +322,7 @@ export function ResourceListBody<TRow extends Row = Row>({
           <DialogPortal>
             <DialogBackdrop />
             <Dialog.Content size="md" className="p-5">
-              {recordForm}
+              {recordContent}
             </Dialog.Content>
           </DialogPortal>
         </DialogRoot>
@@ -317,7 +348,7 @@ export function ResourceListBody<TRow extends Row = Row>({
       {open ? (
         <>
           <div className="h-full min-h-0 overflow-hidden rounded-6 border border-border bg-sheet">
-            {recordForm}
+            {recordContent}
           </div>
           {recordDeleteDialog}
         </>

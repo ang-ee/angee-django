@@ -31,6 +31,9 @@ describe("storage addon manifest", () => {
     const record = (storage.routes ?? []).find(
       (route) => route.name === "storage.file",
     );
+    expect((storage.routes ?? []).find((route) => route.name === "storage.files")?.resource).toBe(
+      "storage.File",
+    );
     expect(record?.path).toBe("/storage/$id");
     expect(record?.parent).toBe("storage.files");
     expect(record?.component).toBeUndefined();

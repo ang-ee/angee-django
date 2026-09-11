@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, Self, TypeVar, cast
 
-from django.core import checks
+from django.core import checks, signing
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models
+from django.db.models.functions import Coalesce
 from django.db.models.signals import class_prepared, post_delete
 from rebac import (
     RebacMixin,
@@ -32,6 +35,7 @@ from rebac.types import RelationshipFilter
 
 from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
+from angee.base.pagination import KeysetOrder
 from angee.base.permissions import effective_rebac_definition
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -110,6 +114,106 @@ class _PublicIdQuerySetMixin(Generic[_ModelT]):
 
 class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
     """QuerySet API shared by Angee source and runtime models."""
+
+    def readable_scalar_subquery(
+        self,
+        field: str,
+        *,
+        actor: Any = None,
+        default: Any = None,
+        output_field: models.Field | None = None,
+    ) -> models.Expression:
+        """Project one correlated readable value, including under an elevated parent.
+
+        Add correlation predicates before calling. No actor yields no value;
+        callers own domain fallbacks and may explicitly coalesce an absent value.
+        """
+
+        actor = actor or self.actor() or current_actor()
+        readable = self.with_actor(actor).scoped() if actor is not None else self.none()
+        # The selected field owns the scalar type; only the outer fallback needs
+        # a common output type (overriding Subquery changes empty-set compilation).
+        scalar = models.Subquery(readable.values(field)[:1])
+        if default is None:
+            return scalar
+        return Coalesce(
+            scalar,
+            models.Value(default),
+            output_field=output_field or scalar.output_field,
+        )
+
+    def keyset_page(
+        self,
+        *,
+        order: KeysetOrder,
+        cursor_scope: tuple[Any, ...],
+        cursor_salt: str = "angee.keyset.v1",
+        before_cursor: str | None = None,
+        after_cursor: str | None = None,
+        through_cursor: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Page this authorized queryset using signed, stable timestamp/PK cuts.
+
+        The caller supplies a prepared, scoped queryset and canonical effective
+        query identity in ``cursor_scope`` (root, filters and any variable order).
+        Database, model and actor are always included. The salt versions the
+        ordering contract. Cuts authorize nothing: each call reevaluates the
+        readable queryset, including rows whose anchor was deleted or moved.
+
+        ``before`` is exclusive; ``through`` is an inclusive fixed lower cut.
+        ``after`` discovers the nearest newer page and cannot combine with either.
+        Return rows newest-first and distinguish an exhausted fixed window from
+        history below that window, even when the window is now empty.
+        """
+
+        if after_cursor is not None and (before_cursor is not None or through_cursor is not None):
+            raise ValueError("after_cursor cannot combine with before_cursor or through_cursor.")
+        limit = max(1, min(int(limit), 200))
+        actor = self.actor() or current_actor()
+        namespace = json.dumps([self.db, self.model._meta.label_lower, *cursor_scope, str(actor)])
+        fingerprint = hashlib.sha256(namespace.encode()).hexdigest()
+        signer = signing.Signer(salt=f"{cursor_salt}.{fingerprint}")
+        cursor = before_cursor if before_cursor is not None else after_cursor
+        anchor = order.unsign(cursor, signer, self.model._meta.pk) if cursor is not None else None
+        lower = order.unsign(through_cursor, signer, self.model._meta.pk) if through_cursor is not None else None
+        count = self.count()
+        window = self
+        if anchor is not None:
+            window = window.filter(order.before(anchor) if before_cursor is not None else order.after(anchor))
+        if lower is not None:
+            window = window.exclude(order.before(lower))
+        ascending = after_cursor is not None
+        ordering = (order.field, "pk") if ascending else (f"-{order.field}", "-pk")
+        selected = list(window.order_by(*ordering)[: limit + 1])
+        has_more = len(selected) > limit
+        rows = selected[:limit]
+        if ascending:
+            rows.reverse()
+        below = self.filter(order.before(lower)).exists() if lower is not None else False
+        if not rows:
+            return {
+                "rows": [],
+                "count": count,
+                "older_cursor": None,
+                "newer_cursor": None,
+                "has_older": False,
+                "has_newer": False,
+                "has_more_in_window": False,
+                "has_older_than_through": below,
+            }
+        # Re-fetch the bounded identities through the original queryset so callers
+        # retain a composable queryset instead of inheriting this method's probe list.
+        return {
+            "rows": self.filter(pk__in=[row.pk for row in rows]).order_by(f"-{order.field}", "-pk"),
+            "count": count,
+            "older_cursor": order.sign(rows[-1], signer),
+            "newer_cursor": order.sign(rows[0], signer),
+            "has_older": self.filter(order.before(order.position(rows[-1]))).exists(),
+            "has_newer": self.filter(order.after(order.position(rows[0]))).exists(),
+            "has_more_in_window": has_more,
+            "has_older_than_through": below,
+        }
 
     def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:
         """Apply a self-scoped row lock only on database backends that support it."""

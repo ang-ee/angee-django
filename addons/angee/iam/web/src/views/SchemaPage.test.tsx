@@ -49,6 +49,12 @@ vi.mock("@angee/refine", async (importOriginal) => {
   };
 });
 
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => vi.fn(),
+  useSearch: () => ({}),
+}));
+
 describe("IAM schema page", () => {
   beforeAll(() => {
     Object.defineProperty(Element.prototype, "getAnimations", {
@@ -80,11 +86,9 @@ describe("IAM schema page", () => {
     // The navigator is published into the shell primary pane, not the page's
     // own DOM. The graph canvas (the page's content) stays on the page.
     const primary = screen.getByTestId("shell-primary");
-    const listbox = within(primary).getByRole("listbox", {
-      name: "Resource types",
-    });
-    expect(within(listbox).getByRole("option", { name: /Note/ })).toBeTruthy();
-    expect(within(listbox).getByRole("option", { name: /User/ })).toBeTruthy();
+    const tree = within(primary).getByRole("tree");
+    expect(within(tree).getByRole("treeitem", { name: /Note/ })).toBeTruthy();
+    expect(within(tree).getByRole("treeitem", { name: /User/ })).toBeTruthy();
     // The graph canvas (content) renders on the page itself.
     expect(screen.getByText("Permission Graph")).toBeTruthy();
   });
@@ -96,7 +100,7 @@ describe("IAM schema page", () => {
     // The inspector is an additive secondary tab; the page publishes only it,
     // leaving the shell's default agent/comments/activity tabs in place.
     const inspector = screen.getByTestId("tab-inspector");
-    expect(within(inspector).getByText("Inspector")).toBeTruthy();
+    expect(within(inspector).getAllByText("Inspector")).toHaveLength(2);
     // The default selection (`iam/user`, first after the alpha sort) drives the
     // inspector body.
     expect(within(inspector).getByText("User")).toBeTruthy();
@@ -122,6 +126,6 @@ function renderPage(): ReturnType<typeof render> {
       <SchemaPage />
       <PrimaryPaneTestHost />
       <ChatterTabsTestHost />
-    </ShellPageTestProviders>,
+    </ShellPageTestProviders>
   );
 }

@@ -18,7 +18,18 @@ import { type ActionDescriptor, type FacetDescriptor, type GroupDescriptor } fro
 import { ResourceListBody } from "./body";
 import { parseResourceListDeclarations, validateResourceListDeclarations } from "./declarations";
 /** Where the open record's form renders relative to the list. */
-export type ResourceRecordPlacement = "inline" | "drawer";
+export type ResourceRecordPlacement = "inline" | "drawer" | "split";
+
+export interface ResourceRecordRenderContext {
+  recordId: string | null;
+}
+
+export interface ResourceListSplitLayout {
+  autoSave?: string;
+  primarySize?: number;
+  contentMinSize?: number;
+  stackBelow?: number;
+}
 
 /**
  * The calendar declaration a resource page hands `ResourceList`: the occurrence
@@ -95,6 +106,12 @@ export interface ResourceListProps<TRow extends Row = Row> {
   routed?: boolean;
   /** Where the form shows: beside/below the list (`"inline"`) or in a modal. */
   placement?: ResourceRecordPlacement;
+  /** Render a saved record with domain-owned content instead of the resource form. */
+  renderRecord?: (context: ResourceRecordRenderContext) => React.ReactNode;
+  /** Select the first loaded row when this collection has no active record. */
+  selectFirstRecord?: boolean;
+  /** Workbench geometry for split master-detail placement. */
+  splitLayout?: ResourceListSplitLayout;
   /** List options forwarded to `ListView`. */
   baseFilter?: ListViewProps<TRow>["baseFilter"];
   filterOptions?: ListViewProps<TRow>["filterOptions"];
@@ -146,6 +163,7 @@ export interface ResourceListProps<TRow extends Row = Row> {
    * forwarded to the list. The owning-level alternative to a `ControlBand` sibling. */
   toolbarActions?: ListViewProps<TRow>["toolbarActions"];
   cardActions?: ListViewProps<TRow>["cardActions"];
+  emptyContent?: ListViewProps<TRow>["emptyContent"];
   className?: string;
 }
 

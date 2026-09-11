@@ -1,7 +1,10 @@
 import { InfiniteQueryObserver, QueryClient } from "@tanstack/react-query";
 import { describe, expect, test, vi } from "vitest";
 
-import { messageFeedOptions, messageFeedRows } from "./message-feed";
+import { keysetFeedOptions, keysetFeedRows } from "./keyset-feed";
+
+const orderedRows = <TRow extends { id: string; feed_order_key: string }>(data: Parameters<typeof keysetFeedRows<TRow>>[0]) =>
+  keysetFeedRows(data, (left, right) => left.feed_order_key < right.feed_order_key ? 1 : left.feed_order_key > right.feed_order_key ? -1 : 0);
 
 const message = (position: number, values: { id?: string; body?: string; visible?: boolean } = {}) => ({
   id: `message-${position}`,
@@ -28,7 +31,7 @@ function fixture(gcTime = Infinity) {
   // Decoding is exclusively in this server double. Production never parses cuts.
   const cut = (value: string | null) => value === null ? null : Number(value.slice("opaque:".length));
   const queryKey = ["angee", "authored", "message-feed", "actor-a", "thread-a"];
-  const options = messageFeedOptions(client, {
+  const options = keysetFeedOptions(client, {
     queryKey,
     pageSize: 2,
     async window(before, through, limit, context) {
@@ -43,7 +46,7 @@ function fixture(gcTime = Infinity) {
       const messages = matching.slice(0, limit).map((row) => ({ ...row }));
       const oldest = messages.at(-1)?.position;
       return {
-        messages, count: all.length, older_cursor: cursor(oldest),
+        rows: messages, count: all.length, older_cursor: cursor(oldest),
         has_older: oldest !== undefined && all.some((row) => row.position < oldest),
         has_more_in_window: matching.length > limit,
         has_older_than_through: lower !== null && all.some((row) => row.position < lower),
@@ -58,7 +61,7 @@ function fixture(gcTime = Infinity) {
       if (invalidPartition === "incomplete") absent_ids.pop();
       if (invalidPartition === "duplicate") messages.push(messages[0]!);
       if (invalidPartition === "extra") absent_ids.push("not-requested");
-      return { messages, absent_ids };
+      return { rows: messages, absent_ids };
     },
   });
   const observer = new InfiniteQueryObserver(client, { ...options, gcTime });
@@ -66,7 +69,7 @@ function fixture(gcTime = Infinity) {
   const read = () => observer.getCurrentResult().data;
   return {
     client, options, observer, calls, read,
-    ids: () => messageFeedRows(read()).map((row) => row.id),
+    ids: () => orderedRows(read()).map((row) => row.id),
     set: (next: typeof rows) => { rows = next; },
     deny: () => { deny = true; },
     invalidPartition: (value: typeof invalidPartition) => { invalidPartition = value; },
@@ -106,11 +109,11 @@ describe("native message history retention", () => {
       ]);
       await feed.invalidate();
       expect(feed.ids()).toEqual(["message-5", "message-8"]);
-      expect(messageFeedRows(feed.read()).at(-1)?.body).toBe("edited below loaded history");
-      expect(feed.read()!.pages.flatMap((page) => page.messages.map((row) => row.id))).toEqual(["message-8", "message-5"]);
+      expect(orderedRows(feed.read()).at(-1)?.body).toBe("edited below loaded history");
+      expect(feed.read()!.pages.flatMap((page) => page.rows.map((row) => row.id))).toEqual(["message-8", "message-5"]);
       while (feed.observer.getCurrentResult().hasNextPage) await feed.observer.fetchNextPage({ cancelRefetch: false });
       expect(feed.ids()).toEqual(["message-5", "message-4", "message-3", "message-2", "message-1", "message-8"]);
-      expect(feed.read()!.pages.flatMap((page) => page.messages)).toHaveLength(6);
+      expect(feed.read()!.pages.flatMap((page) => page.rows)).toHaveLength(6);
     } finally { feed.close(); }
   });
 
@@ -126,11 +129,11 @@ describe("native message history retention", () => {
         }
       });
       await feed.invalidate();
-      expect(feed.read()!.pages.flatMap((page) => page.messages).filter((row) => row.id === "message-9")).toHaveLength(2);
+      expect(feed.read()!.pages.flatMap((page) => page.rows).filter((row) => row.id === "message-9")).toHaveLength(2);
       expect(feed.ids()).toEqual(["message-8", "message-7", "message-9", "message-6", "message-5"]);
-      expect(messageFeedRows(feed.read()).find((row) => row.id === "message-9")?.body).toBe("later observation");
+      expect(orderedRows(feed.read()).find((row) => row.id === "message-9")?.body).toBe("later observation");
       await feed.invalidate();
-      expect(feed.read()!.pages.flatMap((page) => page.messages).filter((row) => row.id === "message-9")).toHaveLength(1);
+      expect(feed.read()!.pages.flatMap((page) => page.rows).filter((row) => row.id === "message-9")).toHaveLength(1);
       expect(feed.ids()).toEqual(["message-8", "message-7", "message-9", "message-6", "message-5"]);
     } finally { feed.close(); }
   });
@@ -142,7 +145,7 @@ describe("native message history retention", () => {
       feed.set([message(20), message(4), message(3), message(2), message(1)]);
       await feed.invalidate();
       expect(feed.read()!.pages).toHaveLength(3);
-      expect(feed.read()!.pages[1]!.messages).toEqual([]);
+      expect(feed.read()!.pages[1]!.rows).toEqual([]);
       expect(feed.ids()).toEqual(["message-20", "message-4", "message-3"]);
       await feed.observer.fetchNextPage({ cancelRefetch: false });
       expect(feed.ids()).toEqual(["message-20", "message-4", "message-3", "message-2", "message-1"]);

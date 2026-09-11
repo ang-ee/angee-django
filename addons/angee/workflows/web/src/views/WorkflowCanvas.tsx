@@ -17,6 +17,7 @@ import {
   GraphView,
   Glyph,
   MutationDialog,
+  PageAside,
   SplitPane,
   SplitPaneHandle,
   SplitPanes,
@@ -71,8 +72,8 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
   const selectedEdge = selection.edgeId;
   const showingInspector = selection.narrowView === "inspector";
   const [containerRef, wide] = useContainerQuery(760);
-  const graphPane = useCollapsiblePane();
-  const inspectorPane = useCollapsiblePane({ defaultCollapsed: true });
+  const graphPane = useCollapsiblePane({ expandedSize: 68 });
+  const inspectorPane = useCollapsiblePane({ defaultCollapsed: true, expandedSize: 32 });
   const hasSelection = selectedStep !== null || selectedEdge !== null;
   const readOnly = context.form.formReadOnly;
   const operationsQuery = useAuthoredQuery(WorkflowStepOperationsDocument);
@@ -359,8 +360,10 @@ export function WorkflowCanvas({ context }: { context: RecordPanelContext; }): R
         </SplitPane>
         <SplitPaneHandle className={!wide ? "hidden" : undefined} />
         <SplitPane id="inspector" defaultSize={32} minSize={22} collapsible panelRef={inspectorPane.panelRef} onResize={inspectorPane.onResize} className={!wide && !showingInspector ? "hidden" : undefined}>
-          {!wide && hasSelection ? <Button type="button" variant="ghost" size="sm" onClick={() => { dispatchSelection({ type: "show-canvas" }); requestCanvasFocus(); }}><Glyph name="chevron-left" />{t("canvas.back")}</Button> : null}
-        <CanvasInspector context={context} nodeKey={selectedStep} edgeKey={selectedEdge} node={selectedStep ? nodes[selectedStep] : undefined} edge={selectedEdge ? edges[selectedEdge] : undefined} nodes={nodes} operations={operations} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={declaredFields} onIssueFocused={() => setPendingIssue(null)} onSelectStep={(id) => { suppressDefaultInspectorFocus.current = false; dispatchSelection({ type: "select-step", id }); }} onAddAfter={(identity) => setPalette({ kind: "after", identity })} onAddMapBody={(identity) => setPalette({ kind: "map-body", identity })} onInsert={(identity) => setPalette({ kind: "insert", identity })} onDuplicate={duplicateNode} onDelete={deleteNode} onDeleteEdge={deleteEdge} onMakeEntry={makeEntry} />
+          <PageAside collapse="never" gutter="none" className="h-full w-full border-l-0">
+            {!wide && hasSelection ? <Button type="button" variant="ghost" size="sm" onClick={() => { dispatchSelection({ type: "show-canvas" }); requestCanvasFocus(); }}><Glyph name="chevron-left" />{t("canvas.back")}</Button> : null}
+            <CanvasInspector context={context} nodeKey={selectedStep} edgeKey={selectedEdge} node={selectedStep ? nodes[selectedStep] : undefined} edge={selectedEdge ? edges[selectedEdge] : undefined} nodes={nodes} operations={operations} diagnostics={diagnostics} pendingIssue={pendingIssue} fields={declaredFields} onIssueFocused={() => setPendingIssue(null)} onSelectStep={(id) => { suppressDefaultInspectorFocus.current = false; dispatchSelection({ type: "select-step", id }); }} onAddAfter={(identity) => setPalette({ kind: "after", identity })} onAddMapBody={(identity) => setPalette({ kind: "map-body", identity })} onInsert={(identity) => setPalette({ kind: "insert", identity })} onDuplicate={duplicateNode} onDelete={deleteNode} onDeleteEdge={deleteEdge} onMakeEntry={makeEntry} />
+          </PageAside>
         </SplitPane>
         <WorkflowOperationPicker operations={(palette?.kind === "map-body"
           ? operations.map((operation) => operation.map_body_operation ? { ...operation, selectable: false } : operation)

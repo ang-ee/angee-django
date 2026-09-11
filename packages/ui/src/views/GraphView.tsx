@@ -69,6 +69,21 @@ export interface GraphViewNodeStyle {
   type?: "default" | "input" | "output";
 }
 
+/** Project theme colors and node chrome into the GraphView style contract. */
+export function graphNodeStyle(
+  borderColor: string,
+  badgeTone: GraphViewNodeStyle["badgeTone"],
+  options: Partial<Omit<GraphViewNodeStyle, "borderColor" | "badgeTone">> = {},
+): GraphViewNodeStyle {
+  const {
+    width = 188,
+    height = 76,
+    highlightedBorderColor = "var(--brand)",
+    ...style
+  } = options;
+  return { width, height, borderColor, highlightedBorderColor, badgeTone, ...style };
+}
+
 export interface GraphViewEdgeStyle {
   stroke?: string;
   /** Rendered line width; graph consumers can encode edge strength without custom edges. */

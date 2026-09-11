@@ -84,6 +84,8 @@ export interface ResourceToolbarProps {
   pagerSubject?: string;
   pagerTotalUnit?: string;
   className?: string;
+  /** Allow controls to wrap when the containing pane is narrow. */
+  wrap?: boolean;
 }
 
 export interface ResourceToolbarFilterOption {
@@ -210,6 +212,7 @@ export function ResourceToolbar({
   pagerSubject,
   pagerTotalUnit,
   className,
+  wrap = false,
 }: ResourceToolbarProps): ReactElement {
   const t = useUiT();
   const resolvedCreateLabel = createLabel ?? t("resourceToolbar.create");
@@ -233,6 +236,7 @@ export function ResourceToolbar({
       aria-label={t("resourceToolbar.controls")}
       className={cn(
         "flex min-h-11 items-center gap-2 border-b border-border-subtle bg-sheet px-3 py-2",
+        wrap && "flex-wrap",
         className,
       )}
     >

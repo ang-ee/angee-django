@@ -2,6 +2,7 @@ import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
 import { Button, DatePopover, EmptyState, FieldRoot, Glyph, LoadingPanel, Textarea, cn, dateFromValue, errorMessage, formatDate, formatDateStorage, textRoleVariants, useActionForm } from "@angee/ui";
 import type { ChatterViewContext } from "@angee/ui/runtime";
+import { userDisplayName } from "@angee/iam";
 
 import { useMessagingT } from "./i18n";
 import {
@@ -40,17 +41,14 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
     enabled,
     models: READ_MODELS,
   });
-  // Correct as-is: RecordActivityThreadDocument is an authored query keyed by READ_MODELS.
   const [scheduleActivity] = useAuthoredMutation(ScheduleRecordActivityDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.schedule_record_activity,
   });
-  // Correct as-is: RecordActivityThreadDocument is an authored query keyed by READ_MODELS.
   const [completeActivity, completeState] = useAuthoredMutation(CompleteRecordActivityDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.complete_record_activity,
   });
-  // Correct as-is: RecordActivityThreadDocument is an authored query keyed by READ_MODELS.
   const [cancelActivity, cancelState] = useAuthoredMutation(CancelRecordActivityDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.cancel_record_activity,
@@ -275,7 +273,7 @@ function ActivityItem({
             <h3 className="truncate text-13 font-medium text-fg">{activity.summary}</h3>
           </div>
           <p className={cn(textRoleVariants({ role: "caption" }), "pl-6")}>
-            {activity.user.display_name || activity.user.username}
+            {userDisplayName(activity.user, "")}
             {activity.due_date ? ` · ${formatDate(activity.due_date)}` : ""}
             {" · "}
             {activityStateLabel(activity, t)}

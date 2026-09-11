@@ -1,4 +1,4 @@
-import type { DndPayload } from "@angee/ui";
+import { routeSearchParam, type DndPayload } from "@angee/ui";
 
 import type { StorageFile, StorageFolder } from "./documents";
 
@@ -36,7 +36,7 @@ const TRASH_SCOPE_PARAM = "trash";
 export function folderScopeFromSearch(
   search: Readonly<Record<string, unknown>>,
 ): string {
-  const raw = search[FOLDER_SCOPE_PARAM];
+  const raw = routeSearchParam(search, FOLDER_SCOPE_PARAM);
   if (raw === TRASH_SCOPE_PARAM) return TRASH_SCOPE;
   if (typeof raw === "string" && raw !== "") return raw;
   return ALL_SCOPE;
