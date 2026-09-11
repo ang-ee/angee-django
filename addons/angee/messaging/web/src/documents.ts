@@ -3,12 +3,6 @@ import { graphql, type DocumentType } from "@angee/gql/console";
 /** The model every messaging-owned channel surface binds to. */
 export const CHANNEL_MODEL = "messaging.Channel";
 
-export const CreateDocumentChannel = graphql(`
-  mutation CreateDocumentChannel($displayName: String!) {
-    create_document_channel(display_name: $displayName) { ok message id validation_errors }
-  }
-`);
-
 // The models a record thread reads: the live-refresh keys for the thread/activity
 // queries and the invalidation set every chatter mutation republishes. One owner,
 // shared by both chatter panes.
@@ -376,6 +370,24 @@ export const RecordThreadDocument = graphql(`
     }
   }
 `);
+
+export const RecordSourceThreadsDocument = graphql(`
+  query MessagingRecordSourceThreads($modelLabel: String!, $recordId: ID!) {
+    record_source_threads(input: { model_label: $modelLabel, record_id: $recordId }) {
+      id
+      label
+      created_at
+      thread {
+        id
+        title { text }
+        message_count
+        last_message_at
+      }
+    }
+  }
+`);
+
+export type RecordSourceThreadRow = DocumentType<typeof RecordSourceThreadsDocument>["record_source_threads"][number];
 
 export const RecordThreadUnreadCountDocument = graphql(`
   query MessagingRecordThreadUnreadCount($modelLabel: String!, $recordId: ID!) {

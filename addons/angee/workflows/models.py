@@ -1041,6 +1041,16 @@ class Trigger(AuditMixin, AngeeDataModel):
 
         return f"{self.workflow_id}:{self.kind}"
 
+    def event_input_snapshot(self, subject: models.Model, actor: Any, source: Any) -> JsonPresence:
+        """Return immutable input captured when one new event occurrence is admitted.
+
+        Same-row donors may validate their own scope and cooperatively extend the
+        returned JSON object. The base trigger contributes no event input.
+        """
+
+        del subject, actor, source
+        return JsonPresence()
+
     def clean(self) -> None:
         """Validate lineage ownership and trigger declaration shape."""
 

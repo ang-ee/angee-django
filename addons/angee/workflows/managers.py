@@ -1453,14 +1453,16 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         object_id = None if subject is None else subject.pk
         run_dedup_key = dedup_key or self._trigger_dedup_key(trigger, content_type, object_id)
         owner_id = self._owner_id(actor, trigger, version)
+        resolved_origin = origin or (
+            RunOrigin.TRIGGER
+            if trigger is not None
+            else RunOrigin.ERROR_WORKFLOW if parent_step_run is not None else RunOrigin.MANUAL
+        )
         attrs = {
             "workflow": version,
-            "origin": origin or (
-                RunOrigin.TRIGGER
-                if trigger is not None
-                else RunOrigin.ERROR_WORKFLOW if parent_step_run is not None else RunOrigin.MANUAL
-            ),
+            "origin": resolved_origin,
             "trigger": trigger,
+            "dedup_key": run_dedup_key,
             "occurrence_id": occurrence_id,
             "parent_step_run": parent_step_run,
             "reprocessed_from": reprocessed_from,
@@ -1486,6 +1488,24 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         else:
             run, created = self.create(**attrs), True
         if not created:
+            existing_head_id = run.workflow.published_from_id or run.workflow_id
+            requested_head_id = version.published_from_id or version.pk
+            matches = (
+                existing_head_id == requested_head_id
+                and run.subject_content_type_id == (None if content_type is None else content_type.pk)
+                and run.subject_object_id == object_id
+                and run.created_by_id == owner_id
+                and run.origin == resolved_origin
+                and run.trigger_id == (None if trigger is None else trigger.pk)
+                and run.parent_step_run_id == (None if parent_step_run is None else parent_step_run.pk)
+                and run.dedup_key == (run_dedup_key or "")
+                and run.occurrence_id == occurrence_id
+                and run.input_present is input.present
+                and json_values_equal(run.input, input.value if input.present else None)
+            )
+            if not matches:
+                field = "parent_step_run" if parent_step_run is not None else "dedup_key"
+                raise ValidationError({field: "Workflow start identity was reused with different immutable facts."})
             return run
         fixtures: tuple[Any, ...] = ()
         if run.origin == RunOrigin.TEST:
@@ -1920,11 +1940,23 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 if len(dedup_key) > cast(int, run_model._meta.get_field("dedup_key").max_length):
                     return None
             else:
+                retained_occurrence = None
                 dedup_key = f"trigger:{trigger.pk}:subject:{content_type.pk}:{subject.pk}"
             existing = system_queryset(run_model, using=alias, lock=None).filter(
                 dedup_key=dedup_key
             ).first()
             if existing is not None:
+                existing_head_id = existing.workflow.published_from_id or existing.workflow_id
+                if (
+                    existing_head_id != head.pk
+                    or existing.trigger_id != trigger.pk
+                    or existing.origin != RunOrigin.TRIGGER
+                    or existing.subject_content_type_id != content_type.pk
+                    or existing.subject_object_id != subject.pk
+                    or existing.occurrence_id != retained_occurrence
+                    or existing.dedup_key != dedup_key
+                ):
+                    raise ValidationError({"occurrence_id": "Event occurrence identity conflicts with retained work."})
                 return existing
             if source == EventSource.MESSAGE_INGESTED:
                 lineage_versions = system_queryset(workflow_model, using=alias, lock=None).filter(
@@ -1935,11 +1967,15 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                     subject_content_type_id=content_type.pk,
                     subject_object_id=subject.pk,
                     status__in=(RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING),
-                ).order_by("pk").first()
-                if active is not None:
-                    return active
+                ).exclude(dedup_key=dedup_key).exists()
+                if active:
+                    raise ValidationError({"subject": "This workflow lineage is already processing the Message."})
             if not trigger.rate_limit_allows(timestamp=timestamp):
                 return None
+            input_snapshot = validate_json_presence(
+                trigger.event_input_snapshot(subject, actor, source),
+                label="trigger event input snapshot",
+            )
             run = run_model.objects._start_locked(
                 head,
                 subject,
@@ -1947,7 +1983,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 trigger=trigger,
                 dedup_key=dedup_key,
                 occurrence_id=retained_occurrence,
-                input=JsonPresence(),
+                input=input_snapshot,
                 available_at=timestamp,
                 using=alias,
             )

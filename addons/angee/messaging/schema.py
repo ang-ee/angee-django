@@ -230,43 +230,6 @@ class MessagingPairingMutation:
 class MessagingChannelMutation:
     """Owner/admin console mutation for deleting a connected channel."""
 
-    @strawberry.mutation(name="create_document_channel")
-    def create_document_channel(self, info: strawberry.Info, display_name: str) -> ActionResult:
-        """Create an upload-only manual channel without external credentials."""
-
-        actor = _request_user(info)
-        if actor is None:
-            raise PermissionDenied("Authentication is required.")
-        channel = Channel.objects.create_document_channel(actor, display_name=display_name)
-        return ActionResult(ok=True, message="Document channel created.", id=channel.sqid)
-
-    @strawberry.mutation(name="submit_channel_documents")
-    def submit_channel_documents(
-        self,
-        info: strawberry.Info,
-        channel: PublicID,
-        file_ids: list[PublicID],
-        item_keys: list[str],
-        request_key: str,
-    ) -> list[MessageType]:
-        """Submit READY files as channel Messages through canonical ingest delivery."""
-
-        if len(file_ids) != len(item_keys):
-            raise ValueError("Each submitted file requires one item key.")
-        actor = _request_user(info)
-        if actor is None:
-            raise PermissionDenied("Authentication is required.")
-        target = require_instance_for_id(Channel, str(channel), queryset=write_queryset(Channel))
-        files = _storage_files(cast(list[strawberry.ID], file_ids))
-        return list(
-            Message.objects.submit_documents(
-                target,
-                tuple(zip(item_keys, files, strict=True)),
-                actor=actor,
-                request_key=request_key,
-            )
-        )
-
     @strawberry.mutation(name="delete_channel")
     def delete_channel(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Preview, then optionally purge, one channel and everything it ingested.
@@ -1278,6 +1241,15 @@ class MessagingQuery:
             around=input.around,
         )
 
+    @strawberry.field(name="record_source_threads")
+    def record_source_threads(self, input: RecordReferenceInput) -> list[ThreadAttachmentType]:
+        """Return readable source conversations linked to one readable record."""
+
+        record = _referenced_record(input)
+        if record is None:
+            return []
+        return list(ThreadAttachment.objects.source_threads_for_record(record).order_by("-created_at", "pk"))
+
     @strawberry.field(name="record_thread_unread_count")
     def record_thread_unread_count(
         self,
@@ -2085,6 +2057,20 @@ def _threaded_record(input: RecordReferenceInput) -> Any | None:
         return instance_from_public_id(model, str(input.record_id))
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
+
+
+def _referenced_record(input: RecordReferenceInput) -> Any | None:
+    """Return any readable model record addressed by a source-link request."""
+
+    try:
+        model = apps.get_model(input.model_label)
+    except (LookupError, ValueError) as error:
+        raise ValueError(f"Unknown model {input.model_label!r}.") from error
+    try:
+        record = instance_from_public_id(model, str(input.record_id))
+    except ImproperlyConfigured as error:
+        raise ValueError(str(error)) from error
+    return None if record is None else _readable_record(record)
 
 
 def _record_message_post_kind(kind: str) -> str:

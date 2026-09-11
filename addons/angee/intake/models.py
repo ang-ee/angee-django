@@ -11,8 +11,8 @@ belong to projects.
 ``ChannelIntake`` folds capture configuration and trigger evaluation into the
 existing ``messaging.Channel`` row. ``TaskIntake`` participates in the composed
 task save chain and is the sole writer that re-denormalizes existing needs when
-a task changes project. ``ThreadAttachmentIntake`` contributes the idempotent
-binding verb for messaging's generic ``source`` attachment role.
+a task changes project. Captured tasks bind their source conversation through
+Messaging's canonical attachment manager.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from rebac import current_actor, system_context
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager
-from angee.base.refs import canonical_record_target
 from angee.base.scoping import bind_actor
 
 
@@ -171,11 +170,7 @@ class NeedManager(AngeeManager):
             need.full_clean(validate_unique=False, validate_constraints=False)
             need.sudo(reason="intake.need.capture_message.create").save()
             attachment_model = apps.get_model("messaging", "ThreadAttachment")
-            attachment_model.bind_source_thread(
-                task=task,
-                thread=locked_message.thread,
-                created_by_id=locked_message.created_by_id,
-            )
+            attachment_model.objects.bind_source_thread(task, locked_message.thread)
             return need
 
     def _create_triage_task(
@@ -527,44 +522,3 @@ class TaskIntake(models.Model):
                 need_model._base_manager.filter(task_id=self.pk).exclude(project_id=self.project_id).update(
                     project_id=self.project_id, updated_at=timezone.now()
                 )
-
-
-class ThreadAttachmentIntake(models.Model):
-    """Same-row source-thread binding contribution for messaging attachments."""
-
-    extends = "messaging.ThreadAttachment"
-    runtime = False
-    SOURCE_ROLE = "source"
-
-    class Meta:
-        """Abstract donor options folded into the concrete attachment table."""
-
-        abstract = True
-
-    @classmethod
-    def bind_source_thread(
-        cls,
-        *,
-        task: models.Model,
-        thread: models.Model | None,
-        created_by_id: Any = None,
-    ) -> models.Model:
-        """Bind ``thread`` as ``task``'s source evidence, idempotently."""
-
-        if task.pk is None or thread is None or thread.pk is None:
-            raise ValidationError("A saved task and source thread are required.")
-        content_type, object_id = canonical_record_target(task)
-        attachment, created = cls._base_manager.get_or_create(
-            content_type=content_type,
-            object_id=object_id,
-            role=cls.SOURCE_ROLE,
-            defaults={
-                "thread": thread,
-                "label": str(task),
-                "created_by_id": created_by_id,
-                "updated_by_id": created_by_id,
-            },
-        )
-        if not created and attachment.thread_id != thread.pk:
-            raise ValidationError("Task already has a different source thread.")
-        return attachment

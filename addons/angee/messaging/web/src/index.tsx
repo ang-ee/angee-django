@@ -13,6 +13,7 @@ import { channelForm } from "./ChannelsPage";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import { RecordActivityPane } from "./RecordActivityPane";
 import { RecordChatterPane } from "./RecordChatterPane";
+import { RecordSourceThreadsPane } from "./RecordSourceThreadsPane";
 import {
   RECORD_UNREAD_COUNT_MODELS,
   RecordThreadUnreadCountDocument,
@@ -111,6 +112,13 @@ const messaging = defineBaseAddon({
       label: "Activity",
       icon: "activity",
       render: (context) => <RecordActivityPane context={context} />,
+    },
+    {
+      id: "sources",
+      sequence: 30,
+      label: "Sources",
+      icon: "inbox",
+      render: (context) => <RecordSourceThreadsPane context={context} />,
     },
   ],
   slots: [

@@ -6,9 +6,12 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enMessagingMessages: Record<string, string> = {
-  "channel.createDocument": "Create document inbox",
-  "channel.documentName": "Inbox name",
-  "channel.createDocumentMissing": "The document inbox action returned no result.",
+  "sources.empty": "No source conversations",
+  "sources.emptyHint": "Source messages linked to this record will appear here.",
+  "sources.loading": "Loading source conversations",
+  "sources.unavailable": "Source conversations unavailable",
+  "sources.unavailableHint": "You may not have access to the linked conversation.",
+  "sources.conversation": "Conversation",
   // RecordChatterPane — the Comments chatter tab.
   "chatter.noRecord": "No record selected",
   "chatter.noRecordHint": "Open a record to discuss it.",

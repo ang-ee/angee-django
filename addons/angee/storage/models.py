@@ -1606,6 +1606,12 @@ class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         ordering = ("-created_at", "sqid")
         rebac_resource_type = "storage/file_attachment"
         rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("file", "content_type", "object_id"),
+                name="uq_storage_file_attachment_edge",
+            ),
+        )
         indexes = (models.Index(fields=("content_type", "object_id")),)
 
     def __str__(self) -> str:
