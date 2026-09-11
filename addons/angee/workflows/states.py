@@ -33,6 +33,7 @@ class RunOrigin(models.TextChoices):
     TEST = "test", "Test"
     TRIGGER = "trigger", "Trigger"
     SESSION = "session", "Session"
+    WORKFLOW = "workflow", "Workflow"
     ERROR_WORKFLOW = "error_workflow", "Error workflow"
     RECOVERY = "recovery", "Recovery"
 

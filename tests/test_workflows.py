@@ -17,6 +17,7 @@ from rebac import app_settings, system_context
 from rebac.roles import grant
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.workflows.attempts import JsonPresence
 from angee.workflows.models import (
     TriggerKind,
     WorkflowPurpose,
@@ -157,6 +158,61 @@ def _published_workflow(
         )
         create_entry(draft)
         return draft, draft.publish()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_run_start_validates_only_new_exact_admission(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Exact retries bypass mutable checks while changed identities remain rejected."""
+
+    del workflow_engine_tables, no_workflow_queue
+    owner = User.objects.create_user(username="workflow-admission-owner")
+    other = User.objects.create_user(username="workflow-admission-other")
+    subject, published = _published_workflow(
+        name="Admission identity",
+        subject_declaration=Workflow._meta.label,
+        owner=owner,
+    )
+    validations: list[str] = []
+
+    def validate_new() -> None:
+        validations.append("called")
+
+    def reject_new() -> None:
+        raise ValidationError("configuration changed")
+
+    run = WorkflowRun.objects.start(
+        published, subject, owner, dedup_key="admission:exact",
+        input=JsonPresence(True, {"scope": "frozen"}), validate_new=validate_new,
+    )
+    retained = WorkflowRun.objects.start(
+        published, subject, owner, dedup_key="admission:exact",
+        input=JsonPresence(True, {"scope": "frozen"}),
+        validate_new=lambda: pytest.fail("retained admission was revalidated"),
+    )
+
+    assert retained.pk == run.pk
+    assert validations == ["called"]
+    with pytest.raises(ValidationError, match="different immutable facts"):
+        WorkflowRun.objects.start(
+            published, subject, owner, dedup_key="admission:exact",
+            input=JsonPresence(True, {"scope": "changed"}),
+        )
+    with pytest.raises(ValidationError, match="different immutable facts"):
+        WorkflowRun.objects.start(
+            published, subject, other, dedup_key="admission:exact",
+            input=JsonPresence(True, {"scope": "frozen"}),
+        )
+    with pytest.raises(ValidationError, match="configuration changed"):
+        WorkflowRun.objects.start(
+            published, subject, owner, dedup_key="admission:rejected",
+            input=JsonPresence(True, {"scope": "new"}),
+            validate_new=reject_new,
+        )
+    with system_context(reason="test rejected workflow admission"):
+        assert not WorkflowRun.objects.filter(dedup_key="admission:rejected").exists()
 
 
 @pytest.mark.django_db(transaction=True)

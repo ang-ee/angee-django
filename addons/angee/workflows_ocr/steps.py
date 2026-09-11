@@ -38,7 +38,7 @@ class OcrExtractConfig(BaseModel):
     """Schema and engine policy stored on the workflow definition."""
 
     model_config = ConfigDict(extra="forbid")
-    schema: dict[str, Any] = Field(json_schema_extra={"widget": "json"})
+    schema_: dict[str, Any] = Field(alias="schema", json_schema_extra={"widget": "json"})
     engine: str = "glm"
     engine_config: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
 
@@ -101,7 +101,7 @@ class OcrExtractStepImpl(StepImpl):
             evidence = extract(
                 files=files,
                 message_parts=message_parts,
-                schema=config.schema,
+                schema=config.schema_,
                 model=inference_model,
                 recognition_model=recognition_model,
                 authorized_target=target,

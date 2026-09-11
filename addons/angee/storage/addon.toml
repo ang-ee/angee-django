@@ -10,6 +10,11 @@ dependencies = [
   "python-magic>=0.4.27",
 ]
 
+[[migrations]]
+name = "file_attachment_unique_edge"
+app_label = "storage"
+module = "runtime_migrations.file_attachment_unique_edge"
+
 [resources]
 master = [
   { path = "resources/master/010_storage.mimetype.yaml", adopt = "mime_type" },

@@ -20,7 +20,7 @@ from django.contrib.auth.models import Group as DjangoGroup
 from django.db import transaction
 from django.db.models import QuerySet
 from django.http import HttpRequest
-from rebac import system_context
+from rebac import ObjectRef, SubjectRef, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.roles import (
     grant as rebac_grant,
@@ -100,6 +100,12 @@ class UserType(AngeeNode):
     is_staff: auto
     is_active: auto
 
+    @strawberry_django.field
+    def assignment_subject(self) -> str:
+        """Canonical REBAC subject used by workflow and approval assignments."""
+
+        return str(to_subject_ref(cast(Any, self)))
+
     @strawberry_django.field(only=["first_name", "last_name", "username"])
     def display_name(self) -> str:
         """Return the user's human label, overriding the username Node default."""
@@ -160,6 +166,12 @@ class GroupType:
     """GraphQL projection of Django auth groups with Angee public ids."""
 
     name: auto
+
+    @strawberry.field
+    def assignment_subject(self) -> str:
+        """Canonical member subject for assigning work to this group."""
+
+        return str(SubjectRef(ObjectRef("auth/group", str(cast(Any, self).pk)), "member"))
 
     @strawberry.field(description="The public ID of this object.")
     def id(self) -> PublicID:

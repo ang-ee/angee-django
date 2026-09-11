@@ -9,6 +9,8 @@ from typing import Annotated, Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
@@ -17,6 +19,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.identity import public_data_id_field
+from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset
 from angee.graphql.actions import (
     ActionResult,
@@ -26,6 +29,7 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data import declared_hasura_resource_fields
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.ids import PublicID, instance_for_id, to_public_id
 from angee.graphql.impl import ImplChoice as GraphQLImplChoice
@@ -62,10 +66,23 @@ from angee.workflows.trigger_declarations import (
     trigger_kind_names,
 )
 
+User = get_user_model()
+
 Workflow = apps.get_model("workflows", "Workflow")
 Step = apps.get_model("workflows", "Step")
 Edge = apps.get_model("workflows", "Edge")
 Trigger = apps.get_model("workflows", "Trigger")
+_TRIGGER_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(Trigger, "hasura_filterable_fields")
+_TRIGGER_EXTENSION_ORDER_FIELDS = declared_hasura_resource_fields(Trigger, "hasura_sortable_fields")
+_TRIGGER_EXTENSION_GROUP_FIELDS = declared_hasura_resource_fields(Trigger, "hasura_groupable_fields")
+_TRIGGER_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Trigger, "hasura_insertable_fields")
+_TRIGGER_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Trigger, "hasura_updatable_fields")
+_TRIGGER_EXTENSION_WRITE_FIELDS = tuple(
+    dict.fromkeys((*_TRIGGER_EXTENSION_INSERT_FIELDS, *_TRIGGER_EXTENSION_UPDATE_FIELDS))
+)
+_TRIGGER_EXTENSION_PUBLIC_ID_FIELDS = tuple(
+    name for name in _TRIGGER_EXTENSION_WRITE_FIELDS if Trigger._meta.get_field(name).is_relation
+)
 WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
@@ -368,6 +385,7 @@ class TriggerType(AngeeNode):
     """Admin projection of a workflow trigger definition."""
 
     workflow: WorkflowType
+    execution_actor: auto
     kind: auto
     enabled: auto
     config: JSON
@@ -868,6 +886,7 @@ class WorkflowRunType(AngeeNode):
     trigger: TriggerType | None
     parent_step_run: "StepRunType | None"
     recovery_source_attempt: "StepAttemptType | None"
+    reprocessed_from: "WorkflowRunType | None"
     recovery_mode: auto
     test_repair_source_attempt: "StepAttemptType | None"
     status: auto
@@ -1490,15 +1509,25 @@ _TRIGGER_RESOURCE = hasura_model_resource(
     TriggerType,
     model=Trigger,
     name="workflow_triggers",
-    filterable=["id", "workflow", "kind", "enabled", "next_fire_at", "updated_at"],
-    sortable=["workflow", "kind", "enabled", "next_fire_at", "created_at", "updated_at"],
+    filterable=["id", "workflow", "execution_actor", "kind", "enabled", "next_fire_at", "updated_at", *_TRIGGER_EXTENSION_FILTER_FIELDS],
+    sortable=["workflow", "kind", "enabled", "next_fire_at", "created_at", "updated_at", *_TRIGGER_EXTENSION_ORDER_FIELDS],
     aggregatable=["id"],
-    groupable=["workflow", "workflow__name", "kind", "enabled", "updated_at"],
-    insertable=["workflow", "kind", "config"],
-    updatable=["kind", "config"],
-    field_id_decode={"workflow": public_pk_decoder(Workflow)},
+    groupable=["workflow", "workflow__name", "kind", "enabled", "updated_at", *_TRIGGER_EXTENSION_GROUP_FIELDS],
+    insertable=["workflow", "execution_actor", "kind", "config", *_TRIGGER_EXTENSION_INSERT_FIELDS],
+    updatable=["execution_actor", "kind", "config", *_TRIGGER_EXTENSION_UPDATE_FIELDS],
+    field_id_decode={
+        "workflow": public_pk_decoder(Workflow),
+        "execution_actor": public_pk_decoder(User),
+        **{
+            name: public_pk_decoder(Trigger._meta.get_field(name).related_model)
+            for name in _TRIGGER_EXTENSION_PUBLIC_ID_FIELDS
+        },
+    },
     get_queryset=_trigger_queryset,
-    write_backend=AngeeHasuraWriteBackend(Trigger, public_id_fields=("workflow",)),
+    write_backend=AngeeHasuraWriteBackend(
+        Trigger,
+        public_id_fields=("workflow", "execution_actor", *_TRIGGER_EXTENSION_PUBLIC_ID_FIELDS),
+    ),
 )
 _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
     WorkflowRunType,
@@ -1510,6 +1539,7 @@ _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
         "workflow__purpose",
         "workflow__published_from",
         "trigger",
+        "reprocessed_from",
         "parent_step_run",
         "status",
         "origin",
@@ -1527,6 +1557,7 @@ _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
         "workflow": public_pk_decoder(Workflow),
         "workflow__published_from": public_pk_decoder(Workflow),
         "trigger": public_pk_decoder(Trigger),
+        "reprocessed_from": public_pk_decoder(WorkflowRun),
         "parent_step_run": public_pk_decoder(StepRun),
     },
 )
@@ -1703,6 +1734,36 @@ class WorkflowSubjectDeclarationQuery:
             return []
         workflows = cast(Any, scoped).for_subject_declaration(subject_declaration).with_lineage_projection()
         return cast(list[WorkflowType], workflows)
+
+    @strawberry.field
+    def workflow_runs_for_subject(
+        self, info: strawberry.Info, subject: WorkflowObjectRefInput,
+    ) -> list[WorkflowRunType]:
+        """Return actor-readable native run history for one readable record."""
+
+        actor = session_user(info)
+        try:
+            model = cast(type[models.Model], apps.get_model(subject.subject_declaration))
+        except (LookupError, ValueError):
+            return []
+        target_scope = read_scoped_queryset(model, actor)
+        if target_scope is None:
+            return []
+        target = instance_for_id(model, subject.id, queryset=target_scope)
+        if target is None:
+            return []
+        content_type = ContentType.objects.get_for_model(target, for_concrete_model=False)
+        runs = read_scoped_queryset(cast(type[models.Model], WorkflowRun), actor)
+        if runs is None:
+            return []
+        artifact_content_type, artifact_object_id = canonical_record_target(target)
+        artifact_runs = apps.get_model("workflows", "StepArtifact")._base_manager.filter(
+            target_content_type=artifact_content_type, target_object_id=artifact_object_id,
+        ).values("attempt__step_run__run_id")
+        return cast(list[WorkflowRunType], runs.filter(
+            models.Q(subject_content_type=content_type, subject_object_id=target.pk)
+            | models.Q(pk__in=models.Subquery(artifact_runs)),
+        ).select_related("workflow").distinct().order_by("-created_at", "-pk"))
 
 
 @strawberry.type
@@ -2328,6 +2389,18 @@ class WorkflowRunActionMutation:
             actor=actor,
         )
         return ActionResult(ok=True, message=f"Started workflow run {run.sqid}.", id=run.sqid)
+
+    @strawberry.mutation
+    @action_guard("Reprocess workflow run failed.")
+    def reprocess_workflow_run(
+        self, info: strawberry.Info, run: PublicID, request_key: str
+    ) -> ActionResult:
+        """Start one idempotent new run against the current published lineage."""
+
+        actor = session_user(info)
+        source = authorized_action_target(info, WorkflowRun, run, "write")
+        result = WorkflowRun.objects.reprocess(source, actor=actor, request_key=request_key)
+        return ActionResult(ok=True, message=f"Started workflow run {result.sqid}.", id=result.sqid)
 
     @strawberry.mutation
     @action_guard("Test workflow failed.")

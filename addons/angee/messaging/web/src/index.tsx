@@ -13,12 +13,13 @@ import { channelForm } from "./ChannelsPage";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import { RecordActivityPane } from "./RecordActivityPane";
 import { RecordChatterPane } from "./RecordChatterPane";
+import { RecordSourceThreadsPane } from "./RecordSourceThreadsPane";
 import {
   RECORD_UNREAD_COUNT_MODELS,
   RecordThreadUnreadCountDocument,
 } from "./documents";
 
-export { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
+export { MESSAGING_CHANNEL_FORM_FIELDS_SLOT, MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 export { CHANNEL_MODEL } from "./documents";
 export {
   ActivityAgendaList,
@@ -111,6 +112,13 @@ const messaging = defineBaseAddon({
       label: "Activity",
       icon: "activity",
       render: (context) => <RecordActivityPane context={context} />,
+    },
+    {
+      id: "sources",
+      sequence: 30,
+      label: "Sources",
+      icon: "inbox",
+      render: (context) => <RecordSourceThreadsPane context={context} />,
     },
   ],
   slots: [

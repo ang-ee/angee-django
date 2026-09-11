@@ -1406,14 +1406,18 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
     def is_record_attached(self) -> bool:
         """Whether this thread is bound to a model row through a ``ThreadAttachment``.
 
-        The one owner of the record-attachment fact, used by both the thread's and the
-        message's ``broadcasts_changes`` gates: a record-attached thread is chatter,
+        The one owner of the chatter-attachment fact, used by both the thread's and the
+        message's ``broadcasts_changes`` gates: a chatter-attached thread is private,
         reachable only through the record-scoped ``record_thread`` payload (gated on the
         parent record's read) — the emission mirror of ``ThreadQuerySet.inbox()``.
+        Source evidence edges deliberately do not change conversation broadcasting.
         """
 
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        return attachment_model._base_manager.filter(thread_id=self.pk).exists()
+        return attachment_model._base_manager.filter(
+            thread_id=self.pk,
+            role=attachment_model.AttachmentRole.CHATTER,
+        ).exists()
 
     def broadcasts_changes(self) -> bool:
         """Whether this thread's changes reach the generic ``changes`` subscription.
@@ -1482,8 +1486,14 @@ class ThreadAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
-                fields=("content_type", "object_id", "role"),
-                name="uq_thread_attachment_target_role",
+                fields=("content_type", "object_id"),
+                condition=models.Q(role="chatter"),
+                name="uq_thread_attachment_target_chatter",
+            ),
+            models.UniqueConstraint(
+                fields=("thread", "content_type", "object_id", "role"),
+                condition=models.Q(role="source"),
+                name="uq_thread_attachment_source_edge",
             ),
         )
         indexes = (models.Index(fields=("content_type", "object_id", "role")),)
@@ -1492,6 +1502,21 @@ class ThreadAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         """Return a readable attachment label."""
 
         return self.label or f"{self.content_type}:{self.object_id}"
+
+
+class FileSourceThreads(models.Model):
+    """Messaging-owned reverse edges from a Storage File to source conversations."""
+
+    extends = "storage.File"
+    runtime = False
+    source_thread_attachments = GenericRelation(
+        "messaging.ThreadAttachment",
+        content_type_field="content_type",
+        object_id_field="object_id",
+    )
+
+    class Meta:
+        abstract = True
 
 
 class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
@@ -1807,6 +1832,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    rebac_grantable = {"reader": "write"}
 
     class Direction(models.TextChoices):
         """Whether a message came in, went out, or is internal."""
@@ -2051,9 +2077,9 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
 
         if self.thread_id is None:
             return None
-        attachment = (
-            apps.get_model("messaging", "ThreadAttachment")._base_manager.filter(thread_id=self.thread_id).first()
-        )
+        attachment = apps.get_model("messaging", "ThreadAttachment")._base_manager.filter(
+            thread_id=self.thread_id, role="chatter",
+        ).first()
         if attachment is None:
             return None
         target = attachment.target

@@ -348,6 +348,7 @@ export const enWorkflowsMessages: Record<string, string> = {
   "runs.retestsAttempt": "Retest of retained source evidence.",
   "runs.recoversAttempt": "Recovery of retained source evidence.",
   "runs.openSourceAttempt": "Open source attempt",
+  "runs.reprocess": "Reprocess run",
   "inbox.loading": "Loading approvals",
   "inbox.title": "Approvals",
   "inbox.emptyDescription": "Pending workflow approvals assigned to you appear here.",
