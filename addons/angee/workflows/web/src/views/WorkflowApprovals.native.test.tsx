@@ -9,12 +9,15 @@ import { RouterContextProvider, createMemoryHistory, createRootRoute, createRout
 import { afterEach, expect, test, vi } from "vitest";
 
 const exactVariables = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+const authoredMode = vi.hoisted(() => ({ current: "success" as "success" | "error" | "empty" }));
 vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
     useAuthoredQuery: (_document: unknown, variables: Record<string, unknown>) => {
       exactVariables.push(variables);
+      if (authoredMode.current === "error") return { data: undefined, isFetching: false, error: new Error("Decision query failed"), refetch: vi.fn() };
+      if (authoredMode.current === "empty") return { data: { workflow_decisions: [] }, isFetching: false, error: null, refetch: vi.fn() };
       return {
         data: { workflow_decisions: [{
           id: "decision-1", action: "review", priority: 1, payload: {}, verdict: "PENDING",
@@ -40,7 +43,7 @@ const field = (name: string, scalar = "String") => ({
   filter: { field: name, scalar, values: [], operators: ["exact"] },
 });
 const resource = testDataResource("workflows.Decision", {
-  schemaName: "console",
+  schemaName: "public",
   modelName: "Decision",
   roots: { aggregate: "workflow_decisions_aggregate" },
   typeNames: { node: "DecisionType", filter: "DecisionBoolExp", order: "DecisionOrderBy" },
@@ -55,7 +58,7 @@ const resource = testDataResource("workflows.Decision", {
   } }),
 });
 
-afterEach(() => { cleanup(); exactVariables.length = 0; });
+afterEach(() => { cleanup(); exactVariables.length = 0; authoredMode.current = "success"; });
 
 test("the native scoped collection opens only the selected Run decision task", async () => {
   const row = { id: "decision-1", action: "review", verdict: "PENDING", priority: 1, updated_at: "2026-09-09T00:00:00Z" };
@@ -67,7 +70,7 @@ test("the native scoped collection opens only the selected Run decision task", a
   } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
       <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
           <WorkflowApprovals runId="run-1" />
@@ -76,7 +79,12 @@ test("the native scoped collection opens only the selected Run decision task", a
     </Refine>,
   );
 
-  await waitFor(() => expect(provider.getList).toHaveBeenCalledWith(expect.objectContaining({ pagination: expect.objectContaining({ pageSize: 20 }) })));
+  await waitFor(() => expect(provider.getList).toHaveBeenCalledWith(expect.objectContaining({
+    pagination: expect.objectContaining({ pageSize: 20 }),
+    meta: expect.objectContaining({ gqlVariables: expect.objectContaining({
+      where: { step_run__run: { _eq: "run-1" }, verdict: { _eq: "PENDING" } },
+    }) }),
+  })));
   fireEvent.click(await screen.findByText("review"));
   expect(await screen.findByText("Approve tool")).toBeTruthy();
   expect(exactVariables.at(-1)).toEqual({ id: "decision-1", run: "run-1" });
@@ -92,7 +100,7 @@ test("the global inbox uses native paging and an exact historical decision read"
   } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
       <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
           <WorkflowApprovals />
@@ -105,6 +113,55 @@ test("the global inbox uses native paging and an exact historical decision read"
   fireEvent.click(await screen.findByText("review"));
   expect(await screen.findByText("Approve tool")).toBeTruthy();
   expect(exactVariables.at(-1)).toEqual({ id: "decision-1" });
+});
+
+test("a record overlay renders one exact target task without mounting a nested Decision collection", async () => {
+  const provider = {
+    getApiUrl: () => "test://workflows",
+    getList: vi.fn(), getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
+  } as unknown as DataProvider;
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(
+    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
+      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <WorkflowApprovals target={{ model: "parties.Party", id: "party-7", tab: "accounting" }} decisionId="decision-1" selectedTaskOnly />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
+      </ModelMetadataProvider></RouterContextProvider>
+    </Refine>,
+  );
+
+  expect(await screen.findByText("Approve tool")).toBeTruthy();
+  expect(provider.getList).not.toHaveBeenCalled();
+  expect(exactVariables.at(-1)).toEqual({ id: "decision-1", targetModel: "parties.Party", targetId: "party-7", targetTab: "accounting" });
+});
+
+test("a selected target distinguishes query failure from a permission-masked unavailable result", async () => {
+  const provider = {
+    getApiUrl: () => "test://workflows",
+    getList: vi.fn(), getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
+  } as unknown as DataProvider;
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const view = (mode: "success" | "error" | "empty", decisionId = "decision-1") => {
+    authoredMode.current = mode;
+    return <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
+      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <WorkflowApprovals target={{ model: "parties.Party", id: "party-7", tab: "accounting" }} decisionId={decisionId} selectedTaskOnly />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
+      </ModelMetadataProvider></RouterContextProvider>
+    </Refine>;
+  };
+
+  const rendered = render(view("success"));
+  expect(await screen.findByText("Approve tool")).toBeTruthy();
+  rendered.rerender(view("error", "decision-2"));
+  expect(await screen.findByText("Decision query failed")).toBeTruthy();
+  expect(screen.queryByText("Approve tool")).toBeNull();
+  rendered.unmount();
+  render(view("empty"));
+  expect(await screen.findByText("This approval is unavailable or you no longer have access.")).toBeTruthy();
+  expect(screen.queryByText(/does not exist/i)).toBeNull();
 });
 
 test("dirty approval values use the shared leave guard before changing selection", async () => {
@@ -120,7 +177,7 @@ test("dirty approval values use the shared leave guard before changing selection
   } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
       <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowApprovals /></AppRuntimeProvider></ToastProvider></ModalsHost>
       </ModelMetadataProvider></RouterContextProvider>

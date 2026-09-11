@@ -28,8 +28,12 @@ from angee.graphql.actions import (
     authorized_action_target,
     resolve_action_target,
 )
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.data import declared_hasura_resource_fields
+from angee.graphql.data import (
+    AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+)
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.ids import PublicID, instance_for_id, to_public_id
 from angee.graphql.impl import ImplChoice as GraphQLImplChoice
@@ -995,6 +999,25 @@ class StepAttemptType(AngeeNode):
 class WorkflowArtifactTarget:
     model: str
     id: PublicID
+    tab: str | None = None
+
+
+def _decision_target_reference(root: Any, info: strawberry.Info) -> WorkflowArtifactTarget | None:
+    """Project a Decision target only when the viewer independently reads it."""
+
+    model_label, target_id = str(root.target_model), str(root.target_id)
+    if not model_label or not target_id:
+        return None
+    try:
+        model = cast(type[models.Model], apps.get_model(model_label))
+    except (LookupError, ValueError):
+        return None
+    scoped = read_scoped_queryset(model, session_user(info), action="read")
+    if scoped is None or instance_for_id(model, target_id, queryset=scoped) is None:
+        return None
+    return WorkflowArtifactTarget(
+        model=model_label, id=cast(PublicID, target_id), tab=str(root.target_tab) or None,
+    )
 
 
 @strawberry_django.type(StepArtifact)
@@ -1039,6 +1062,25 @@ class DecisionType(AngeeNode):
 
     decision_schema: JSON | None = _decision_schema_field()
 
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_reference(self, info: strawberry.Info) -> WorkflowArtifactTarget | None:
+        return _decision_target_reference(self, info)
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_model(self, info: strawberry.Info) -> str | None:
+        reference = _decision_target_reference(self, info)
+        return reference.model if reference else None
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_id(self, info: strawberry.Info) -> PublicID | None:
+        reference = _decision_target_reference(self, info)
+        return reference.id if reference else None
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_tab(self, info: strawberry.Info) -> str | None:
+        reference = _decision_target_reference(self, info)
+        return reference.tab if reference else None
+
     @strawberry_django.field(only=["step_run_id"])
     def step_run(self, info: strawberry.Info) -> StepRunType | None:
         """Return the journal row only when it is independently readable."""
@@ -1068,6 +1110,25 @@ class PublicDecisionType(AngeeNode):
     updated_at: auto
 
     decision_schema: JSON | None = _decision_schema_field()
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_reference(self, info: strawberry.Info) -> WorkflowArtifactTarget | None:
+        return _decision_target_reference(self, info)
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_model(self, info: strawberry.Info) -> str | None:
+        reference = _decision_target_reference(self, info)
+        return reference.model if reference else None
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_id(self, info: strawberry.Info) -> PublicID | None:
+        reference = _decision_target_reference(self, info)
+        return reference.id if reference else None
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_tab(self, info: strawberry.Info) -> str | None:
+        reference = _decision_target_reference(self, info)
+        return reference.tab if reference else None
 
     @strawberry_django.field(only=["step_run__run_id"])
     def source_run_id(self, info: strawberry.Info) -> PublicID | None:
@@ -1650,6 +1711,9 @@ _DECISION_RESOURCE = hasura_model_resource(
         "suspension_attempt",
         "priority",
         "action",
+        "target_model",
+        "target_id",
+        "target_tab",
         "verdict",
         "expires_at",
         "escalate_at",
@@ -1688,6 +1752,9 @@ _PUBLIC_DECISION_RESOURCE = hasura_model_resource(
         "suspension_attempt",
         "priority",
         "action",
+        "target_model",
+        "target_id",
+        "target_tab",
         "verdict",
         "expires_at",
         "escalate_at",

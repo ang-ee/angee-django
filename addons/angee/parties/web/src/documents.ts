@@ -6,6 +6,12 @@
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+export const PartyRecordRedirectDocument = graphql(`
+  query PartyRecordRedirect($id: String!) {
+    parties_by_pk(id: $id) { id concrete_kind }
+  }
+`);
+
 // Identity decisions: the two verbs of the review flow. Confirming sets full
 // confidence + manual source and re-resolves the handle; dismissing writes the
 // durable anti-link. Their write blast radius lives here with the verbs;

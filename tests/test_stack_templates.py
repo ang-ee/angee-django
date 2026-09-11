@@ -691,6 +691,15 @@ def test_project_template_can_render_operator_addon_installer_settings() -> None
     assert settings["ANGEE_ADDON_INSTALLER_BACKEND"] == "operator"
 
 
+def test_project_template_names_browser_cookies_per_project() -> None:
+    """Concurrent localhost projects must not share Django's cookie namespace."""
+
+    settings = _render_project_settings()
+
+    assert settings["SESSION_COOKIE_NAME"] == "angee-local_sessionid"
+    assert settings["CSRF_COOKIE_NAME"] == "angee-local_csrftoken"
+
+
 def test_project_template_defaults_to_local_addon_installer() -> None:
     """Plain generated projects keep the dev/local writer unless a stack opts in."""
 

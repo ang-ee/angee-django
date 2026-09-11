@@ -15,6 +15,8 @@ describe("parties addon manifest", () => {
       "parties.overview",
       "parties.people",
       "parties.people.record",
+      "parties.records",
+      "parties.records.record",
       "parties.organizations",
       "parties.organizations.record",
       "parties.circles",
@@ -56,6 +58,9 @@ describe("parties addon manifest", () => {
     expect(routeHref("parties.people")).toBe("/parties/people");
     expect(routeHref("parties.people.record", { id: "person 1" })).toBe(
       "/parties/people/person%201",
+    );
+    expect(routeHref("parties.records.record", { id: "party 1" })).toBe(
+      "/parties/records/party%201",
     );
     expect(routeHref("parties.merge", { left: "left/1", right: "right 2" }))
       .toBe("/parties/merge/left%2F1/right%202");

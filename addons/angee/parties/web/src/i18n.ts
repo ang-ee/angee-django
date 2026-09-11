@@ -27,6 +27,7 @@ export const enPartiesMessages: Record<string, string> = {
   "organization.group.details": "Details",
   "organization.field.legalName": "Legal name",
   "organization.field.domain": "Domain",
+  "organization.tabs.identity": "Identity",
   "organization.tabs.addresses": "Addresses",
   "address.label": "Address label",
   "address.street": "Street",

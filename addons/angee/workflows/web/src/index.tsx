@@ -103,4 +103,5 @@ export default workflows;
 export { ApprovalTask } from "./views/ApprovalTask";
 export type { ApprovalTaskProps } from "./views/ApprovalTask";
 export { WorkflowApprovals } from "./views/WorkflowApprovals";
+export type { WorkflowApprovalsProps } from "./views/WorkflowApprovals";
 export { useWorkflowsT } from "./i18n";

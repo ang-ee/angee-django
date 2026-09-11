@@ -4,7 +4,7 @@ import {
   Badge, Button, Collapsible, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
   Glyph, LabeledDescriptorField, LazyBoundary, Textarea, TextLink, formSpecInitialValues,
   PageAside,
-  errorMessage, useDottedPathFieldErrors, useFormSpecFields, useRouteHref, validationErrorMap,
+  errorMessage, recordTargetHref, useDottedPathFieldErrors, useFormSpecFields, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
   type DottedPathFieldErrorMap,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
@@ -51,7 +51,7 @@ export function ApprovalTask({ approval, available = true, onBack, onResolved, r
           </div>
         </div>
         {!available ? <ErrorBanner description={t("inbox.decisionUnavailable")} />
-          : !active ? <ErrorBanner description={t("inbox.decisionNoLongerPending")} /> : null}
+          : !active ? <p className="text-sm text-fg-muted">{t("inbox.decisionNoLongerPending")}</p> : null}
         {approval.decision_schema == null ? (
           <JsonApprovalResolution key={approval.id} approval={approval} active={active} editable={editable} onResolved={onResolved} reconcile={reconcile} onDirtyChange={onDirtyChange} />
         ) : (
@@ -69,9 +69,20 @@ export function ApprovalTask({ approval, available = true, onBack, onResolved, r
           </Collapsible.Panel>
         </Collapsible>
         <DecisionSourceLinks approval={approval} />
+        <DecisionTargetLink approval={approval} />
       </div>
     </PageAside>
   );
+}
+
+function DecisionTargetLink({ approval }: { approval: PendingWorkflowDecision }): React.ReactElement | null {
+  const t = useWorkflowsT();
+  const recordHref = useResourceRecordHrefLookup();
+  const target = approval.target_reference;
+  const base = target ? recordHref(target.model, target.id) : undefined;
+  if (!base || !target) return null;
+  const href = recordTargetHref(base, { tab: target.tab ?? undefined, task: approval.id });
+  return <TextLink href={href}>{t("inbox.openTarget")}</TextLink>;
 }
 
 function DecisionSourceLinks({ approval }: { approval: PendingWorkflowDecision }): React.ReactElement {

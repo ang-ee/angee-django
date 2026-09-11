@@ -13,7 +13,7 @@ import { rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
 import { useBreadcrumbCollectionLink } from "../../chrome/Breadcrumb";
 import { routeParameterName } from "../../runtime";
 
-import { parseRecordNavigationScope, recordNavigationHref, recordNavigationSearch } from "./record-navigation-context";
+import { RECORD_TAB_SEARCH_KEY, parseRecordNavigationScope, recordNavigationHref, recordNavigationSearch, recordTargetHref, recordTargetSearch, routeSearchParam } from "./record-navigation-context";
 import type { ListViewNavigationScope } from "./resource-view-surface";
 
 import type { ResourceRecordController } from "./ResourceList";
@@ -31,6 +31,7 @@ export function RoutedRecordController<TRow extends Row = Row>({
 }: RoutedRecordControllerProps<TRow>): React.ReactElement {
   const dataResource = useModelMetadata(resource)?.resource;
   const search = useRouterState({ select: (state) => state.location.search as Record<string, unknown> });
+  const recordTab = routeSearchParam(search, RECORD_TAB_SEARCH_KEY);
   const navigationScope = React.useMemo(() => parseRecordNavigationScope(search, dataResource), [dataResource, search]);
   const fullPath = useMatches({ select: leafFullPath });
   const routeId = useMatches({ select: leafRouteId });
@@ -68,14 +69,18 @@ export function RoutedRecordController<TRow extends Row = Row>({
   useBreadcrumbCollectionLink(
     basePath,
     recordId === undefined ? null
-      : recordNavigationHref(appendSearch(basePath, searchSuffix), dataResource, null),
+      : recordNavigationHref(recordTargetHref(appendSearch(basePath, searchSuffix), { tab: null, task: null }), dataResource, null),
   );
   const onSelect = React.useCallback(
     (id: string | null, scope?: ListViewNavigationScope) => {
       React.startTransition(() => {
         void navigate({
           to: recordPath(basePath, id === null ? newRecordId : id),
-          search: (prev: Record<string, unknown>) => recordNavigationSearch(prev, dataResource, id === null ? null : scope ?? navigationScope),
+          search: (prev: Record<string, unknown>) => recordNavigationSearch(
+            recordTargetSearch(prev, { tab: null, task: null }),
+            dataResource,
+            id === null ? null : scope ?? navigationScope,
+          ),
         });
       });
     },
@@ -85,14 +90,21 @@ export function RoutedRecordController<TRow extends Row = Row>({
     React.startTransition(() => {
       void navigate({
         to: basePath,
-        search: (prev: Record<string, unknown>) => recordNavigationSearch(prev, dataResource, null),
+        search: (prev: Record<string, unknown>) => recordNavigationSearch(recordTargetSearch(prev, { tab: null, task: null }), dataResource, null),
       });
     });
   }, [basePath, dataResource, navigate]);
+  const onRecordTabChange = React.useCallback((tab: string) => {
+    void navigate({
+      to: ".",
+      replace: true,
+      search: (prev: Record<string, unknown>) => recordTargetSearch(prev, { tab }),
+    });
+  }, [navigate]);
   const rowHref = React.useCallback(
     (row: TRow, scope?: ListViewNavigationScope) => {
       const id = rowPublicId(row);
-      return recordNavigationHref(appendSearch(id ? recordPath(basePath, id) : basePath, searchSuffix), dataResource, scope ?? navigationScope);
+      return recordNavigationHref(recordTargetHref(appendSearch(id ? recordPath(basePath, id) : basePath, searchSuffix), { tab: null, task: null }), dataResource, scope ?? navigationScope);
     },
     [basePath, dataResource, navigationScope, searchSuffix],
   );
@@ -109,6 +121,8 @@ export function RoutedRecordController<TRow extends Row = Row>({
     onSelect,
     onClose,
     rowHref,
+    recordTab,
+    onRecordTabChange,
   });
 }
 

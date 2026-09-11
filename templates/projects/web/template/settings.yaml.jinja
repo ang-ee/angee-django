@@ -5,6 +5,12 @@
 # docs/backend/guidelines.md). The `:jsonenv` key is a marker, not a setting.
 SECRET_KEY: {{ project_name }}-dev-key
 
+# Browser cookies are scoped by host/path rather than port. Give every project
+# its own names so two localhost development stacks cannot replace each other's
+# session and CSRF cookies.
+SESSION_COOKIE_NAME: {{ project_name }}_sessionid
+CSRF_COOKIE_NAME: {{ project_name }}_csrftoken
+
 DEBUG: true
 DEBUG:jsonenv: true
 

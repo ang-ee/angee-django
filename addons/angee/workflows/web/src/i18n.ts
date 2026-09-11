@@ -375,6 +375,7 @@ export const enWorkflowsMessages: Record<string, string> = {
   "inbox.decisionNoLongerPending": "This approval is no longer pending.",
   "inbox.decisionUnavailable": "This approval is unavailable or you no longer have access.",
   "inbox.openSourceRun": "Open source run",
+  "inbox.openTarget": "Open related record",
   "inbox.sourceUnavailable": "Source run unavailable",
   "inbox.sourceExecution": "Execution {id}",
   "inbox.sourceAttempt": "Attempt {id}",

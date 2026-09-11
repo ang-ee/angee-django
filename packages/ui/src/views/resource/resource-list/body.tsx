@@ -279,6 +279,8 @@ export function ResourceListBody<TRow extends Row = Row>({
       }
       recordExtras={resolvedCreating ? undefined : recordExtras}
       recordTabs={resolvedCreating ? undefined : recordTabs}
+      recordTab={resolvedCreating ? undefined : recordController.recordTab}
+      onRecordTabChange={resolvedCreating ? undefined : recordController.onRecordTabChange}
       recordPresentation={recordPresentation}
       defaultRecordTab={defaultRecordTab}
       overviewTab={overviewTab}

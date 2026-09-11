@@ -24,3 +24,6 @@ module = "runtime_migrations.agent_session_resources"
 name = "agent_session_identity"
 app_label = "workflows"
 module = "runtime_migrations.agent_session_identity"
+# This exact owner-rendered source added only the resources/0001 dependency
+# before the original source was restored; its immutable body remains valid.
+compatible_source_sha256 = ["01451c436ccbdad2acdded85ddf6f236520f717f3ae829cab96f7f35501803b7"]

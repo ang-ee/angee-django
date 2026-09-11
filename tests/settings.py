@@ -171,6 +171,8 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "archive_gate": "angee.workflows_integrate.steps.ArchiveGateStepImpl",
     "archive_execute": "angee.workflows_integrate.steps.ArchiveExecuteStepImpl",
     "parties_dedupe_scan": "angee.workflows_parties.steps.DedupeScanStepImpl",
+    "parties_identity_review": "angee.workflows_parties.steps.IdentityReviewStepImpl",
+    "parties_identity_apply": "angee.workflows_parties.steps.IdentityApplyStepImpl",
     "parties_dedupe_gate": "angee.workflows_parties.steps.DedupeGateStepImpl",
     "parties_dedupe_execute": "angee.workflows_parties.steps.DedupeExecuteStepImpl",
     "ocr_extract": "angee.workflows_ocr.steps.OcrExtractStepImpl",

@@ -3,34 +3,49 @@ import { useAuthoredQuery } from "@angee/refine";
 import {
   Column,
   EmptyState,
+  ErrorBanner,
   Field,
   Form,
   List,
   LoadingPanel,
   ResourceList,
+  errorMessage,
   useUnsavedChangesNavigationGuard,
   type RecordPanelContext,
 } from "@angee/ui";
 
-import { ScopedWorkflowDecisionDocument, WorkflowDecisionDocument, type PendingWorkflowDecision } from "../documents.public";
+import { ScopedWorkflowDecisionDocument, TargetedTabWorkflowDecisionDocument, TargetedWorkflowDecisionDocument, WorkflowDecisionDocument, type PendingWorkflowDecision } from "../documents.public";
 import { useWorkflowsT } from "../i18n";
 import { ApprovalTask } from "./ApprovalTask";
 
 const DECISION_MODEL = "workflows.Decision";
 
-/** One bounded native Decision collection scoped to an authoritative workflow Run. */
-export function WorkflowApprovals({ runId, executionId, attemptId }: {
+export interface WorkflowApprovalsProps {
   runId?: string;
   executionId?: string;
   attemptId?: string;
-}): React.ReactElement {
+  target?: { model: string; id: string; tab?: string };
+  includeResolved?: boolean;
+  decisionId?: string | null;
+  onDecisionChange?: (id: string | null) => void;
+  selectedTaskOnly?: boolean;
+}
+
+/** One bounded native Decision collection scoped to a Run or exact related record. */
+export function WorkflowApprovals({ runId, executionId, attemptId, target, includeResolved = false, decisionId, onDecisionChange, selectedTaskOnly = false }: WorkflowApprovalsProps): React.ReactElement {
   const t = useWorkflowsT();
   const requestedScope = React.useMemo(
-    () => ({ runId, executionId, attemptId }),
-    [attemptId, executionId, runId],
+    () => ({
+      runId,
+      executionId,
+      attemptId,
+      target: target ? { model: target.model, id: target.id, tab: target.tab } : undefined,
+    }),
+    [attemptId, executionId, runId, target?.id, target?.model, target?.tab],
   );
   const [scope, setScope] = React.useState(requestedScope);
-  const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const [localSelectedId, setLocalSelectedId] = React.useState<string | null>(null);
+  const selectedId = decisionId !== undefined ? decisionId : localSelectedId;
   const [taskDirty, setTaskDirty] = React.useState(false);
   const dirtyRef = React.useRef(false);
   dirtyRef.current = taskDirty;
@@ -39,7 +54,7 @@ export function WorkflowApprovals({ runId, executionId, attemptId }: {
     isDirtyNow: React.useCallback(() => dirtyRef.current, []),
     readOnly: false,
   });
-  const scopeKey = `${runId ?? ""}:${executionId ?? ""}:${attemptId ?? ""}`;
+  const scopeKey = `${runId ?? ""}:${executionId ?? ""}:${attemptId ?? ""}:${target?.model ?? ""}:${target?.id ?? ""}:${target?.tab ?? ""}`;
   const previousScope = React.useRef(scopeKey);
   React.useEffect(() => {
     if (previousScope.current === scopeKey) return;
@@ -47,24 +62,36 @@ export function WorkflowApprovals({ runId, executionId, attemptId }: {
       if (leave) {
         previousScope.current = scopeKey;
         setTaskDirty(false);
-        setSelectedId(null);
+        if (decisionId === undefined) setLocalSelectedId(null);
+        onDecisionChange?.(null);
         setScope(requestedScope);
       }
     });
-  }, [requestLeave, requestedScope, scopeKey]);
+  }, [decisionId, onDecisionChange, requestLeave, requestedScope, scopeKey]);
   const selectDecision = React.useCallback((id: string | null) => {
     if (id === selectedId) return;
     void requestLeave().then((leave) => {
-      if (leave) { setTaskDirty(false); setSelectedId(id); }
+      if (leave) {
+        setTaskDirty(false);
+        if (decisionId === undefined) setLocalSelectedId(id);
+        onDecisionChange?.(id);
+      }
     });
-  }, [requestLeave, selectedId]);
+  }, [decisionId, onDecisionChange, requestLeave, selectedId]);
   const tabs = React.useMemo(() => [{
     id: "decision",
     label: t("inbox.yourDecision"),
-    render: (context: RecordPanelContext) => scope.runId
-      ? <ScopedDecisionTask key={context.recordId} {...context} runId={scope.runId} onDirtyChange={setTaskDirty} />
-      : <GlobalDecisionTask key={context.recordId} {...context} onDirtyChange={setTaskDirty} />,
-  }], [scope.runId, t]);
+    render: (context: RecordPanelContext) => scope.target
+      ? <TargetedDecisionTask key={context.recordId} {...context} target={scope.target} onDirtyChange={setTaskDirty} />
+      : scope.runId
+        ? <ScopedDecisionTask key={context.recordId} {...context} runId={scope.runId} onDirtyChange={setTaskDirty} />
+        : <GlobalDecisionTask key={context.recordId} {...context} onDirtyChange={setTaskDirty} />,
+  }], [scope.runId, scope.target?.id, scope.target?.model, scope.target?.tab, t]);
+  if (selectedTaskOnly && selectedId && scope.target) {
+    return <section aria-label={t("inbox.title")} className="h-full min-h-0">
+      <TargetedDecisionTask key={`${scope.target.model}:${scope.target.id}:${scope.target.tab ?? ""}:${selectedId}`} recordId={selectedId} reload={() => undefined} target={scope.target} onDirtyChange={setTaskDirty} />
+    </section>;
+  }
   return (
     <section aria-label={t("inbox.title")} className="h-full min-h-0">
       <ResourceList
@@ -80,7 +107,9 @@ export function WorkflowApprovals({ runId, executionId, attemptId }: {
           ...(scope.runId ? { "step_run.run": { exact: scope.runId } } : {}),
           ...(scope.executionId ? { step_run: { exact: scope.executionId } } : {}),
           ...(scope.attemptId ? { suspension_attempt: { exact: scope.attemptId } } : {}),
-          verdict: { exact: "PENDING" },
+          ...(scope.target ? { target_model: { exact: scope.target.model }, target_id: { exact: scope.target.id } } : {}),
+          ...(scope.target?.tab ? { target_tab: { exact: scope.target.tab } } : {}),
+          ...(!includeResolved ? { verdict: { exact: "PENDING" } } : {}),
         }}
         recordTabs={tabs}
         defaultRecordTab="decision"
@@ -101,6 +130,41 @@ export function WorkflowApprovals({ runId, executionId, attemptId }: {
       </ResourceList>
     </section>
   );
+}
+
+function TargetedDecisionTask({ recordId, reload, target, onDirtyChange }: {
+  recordId: string;
+  reload: () => void;
+  target: { model: string; id: string; tab?: string };
+  onDirtyChange: (dirty: boolean) => void;
+}): React.ReactElement {
+  return target.tab
+    ? <TargetedTabDecisionTask recordId={recordId} reload={reload} target={{ ...target, tab: target.tab }} onDirtyChange={onDirtyChange} />
+    : <TargetedRecordDecisionTask recordId={recordId} reload={reload} target={target} onDirtyChange={onDirtyChange} />;
+}
+
+function TargetedRecordDecisionTask({ recordId, reload, target, onDirtyChange }: {
+  recordId: string; reload: () => void; target: { model: string; id: string }; onDirtyChange: (dirty: boolean) => void;
+}): React.ReactElement {
+  const decision = useAuthoredQuery(
+    TargetedWorkflowDecisionDocument,
+    { id: recordId, targetModel: target.model, targetId: target.id },
+    { dataProviderName: "public", models: [DECISION_MODEL] },
+  );
+  return <DecisionTaskResult context={{ recordId, reload }} approval={decision.data?.workflow_decisions[0]} onDirtyChange={onDirtyChange}
+    fetching={decision.isFetching} error={decision.error} refetch={async () => (await decision.refetch()).data?.workflow_decisions[0] ?? null} />;
+}
+
+function TargetedTabDecisionTask({ recordId, reload, target, onDirtyChange }: {
+  recordId: string; reload: () => void; target: { model: string; id: string; tab: string }; onDirtyChange: (dirty: boolean) => void;
+}): React.ReactElement {
+  const decision = useAuthoredQuery(
+    TargetedTabWorkflowDecisionDocument,
+    { id: recordId, targetModel: target.model, targetId: target.id, targetTab: target.tab },
+    { dataProviderName: "public", models: [DECISION_MODEL] },
+  );
+  return <DecisionTaskResult context={{ recordId, reload }} approval={decision.data?.workflow_decisions[0]} onDirtyChange={onDirtyChange}
+    fetching={decision.isFetching} error={decision.error} refetch={async () => (await decision.refetch()).data?.workflow_decisions[0] ?? null} />;
 }
 
 function GlobalDecisionTask(context: RecordPanelContext & { onDirtyChange: (dirty: boolean) => void }): React.ReactElement {
@@ -137,6 +201,7 @@ function DecisionTaskResult({ context, approval, fetching, error, refetch, onDir
     if (approval) setRetained(approval);
   }, [approval]);
   if (fetching && !retained) return <LoadingPanel message={t("inbox.loading")} />;
+  if (error && !retained) return <ErrorBanner description={errorMessage(error, t("inbox.decisionUnavailable"))} />;
   if (!retained) {
     return <EmptyState icon="workflow-inbox" title={t("inbox.decisionUnavailable")} />;
   }

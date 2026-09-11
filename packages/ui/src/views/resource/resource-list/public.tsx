@@ -198,6 +198,8 @@ export interface ResourceRecordController<TRow extends Row = Row> {
   onSelect?: (id: string | null, scope?: ListViewNavigationScope) => void;
   onClose?: () => void;
   rowHref?: (row: TRow, scope?: ListViewNavigationScope) => string;
+  recordTab?: string;
+  onRecordTabChange?: (tab: string) => void;
 }
 
 /** The refine list action surface, with optional inline/drawer record UX. */

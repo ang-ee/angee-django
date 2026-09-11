@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import logging
 import sys
@@ -635,6 +636,51 @@ def test_changed_released_source_fails_instead_of_rewriting(runtime_migration_pr
         materializer.materialize()
 
 
+def test_declared_compatible_released_source_remains_immutable(runtime_migration_probe) -> None:
+    """An exact historical source digest may coexist with its current declaration."""
+
+    materializer, addon, source_path, _, _ = runtime_migration_probe
+    (output,) = materializer.materialize()
+    released_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    source_path.write_text(source_path.read_text(encoding="utf-8") + "# current source\n", encoding="utf-8")
+    write_addon_manifest(
+        addon,
+        migrations=(dict(
+            name="rename_legacy",
+            app_label="resources",
+            module="runtime_migrations.rename_legacy",
+            compatible_source_sha256=[released_digest],
+        ),),
+    )
+
+    assert materializer.materialize() == ()
+    output.write_text(
+        output.read_text(encoding="utf-8").replace("def forwards", "def edited_forwards", 1),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="materialized body digest changed"):
+        materializer.materialize()
+
+
+@pytest.mark.parametrize("digest", ["not-a-digest", "A" * 64, 7])
+def test_compatible_source_digest_requires_exact_lowercase_sha256(
+    runtime_migration_probe, digest: object,
+) -> None:
+    materializer, addon, _, _, _ = runtime_migration_probe
+    write_addon_manifest(
+        addon,
+        migrations=(dict(
+            name="rename_legacy",
+            app_label="resources",
+            module="runtime_migrations.rename_legacy",
+            compatible_source_sha256=[digest],
+        ),),
+    )
+
+    with pytest.raises(RuntimeError, match="compatible_source_sha256"):
+        materializer.materialize()
+
+
 def test_changed_materialized_body_fails_instead_of_becoming_history(runtime_migration_probe) -> None:
     materializer, _, _, runtime_dir, _ = runtime_migration_probe
     (output,) = materializer.materialize()
@@ -939,6 +985,25 @@ def test_agent_session_identity_migration_waits_for_complete_identity_state() ->
     )
     assert bridge.applies(migrated) is True
     assert resources.applies(migrated) is True
+
+
+def test_decision_target_migration_requires_and_adds_the_complete_pair() -> None:
+    module = importlib.import_module("angee.workflows.runtime_migrations.decision_target")
+    state = ProjectState()
+    state.add_model(ModelState("workflows", "Decision", [("id", models.AutoField(primary_key=True))]))
+
+    assert module.applies(state) is True
+    migrated = module.Migration("probe", "workflows").mutate_state(state)
+    assert {"target_model", "target_id", "target_tab"}.issubset(migrated.models["workflows", "decision"].fields)
+    assert module.applies(migrated) is False
+
+    partial = ProjectState()
+    partial.add_model(ModelState("workflows", "Decision", [
+        ("id", models.AutoField(primary_key=True)),
+        ("target_model", models.CharField(default="", max_length=255)),
+    ]))
+    with pytest.raises(ImproperlyConfigured, match="partial Decision target pair"):
+        module.applies(partial)
 
 
 def _integration_lifecycle_state(

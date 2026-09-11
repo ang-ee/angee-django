@@ -6,6 +6,8 @@ import { isResourceViewFilter } from "./model/filter";
 import type { ListViewNavigationScope } from "./resource-view-surface";
 
 const SEARCH_KEY = "recordNav";
+export const RECORD_TAB_SEARCH_KEY = "recordTab";
+export const RECORD_TASK_SEARCH_KEY = "decision";
 const MAX_CONTEXT_LENGTH = 8192;
 const positiveInteger = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(Number.MAX_SAFE_INTEGER));
 const contextSchema = v.strictObject({
@@ -71,6 +73,31 @@ export function routeSearchParam(
 ): string | undefined {
   const value = search[key];
   return typeof value === "string" ? value : undefined;
+}
+
+export interface RecordTargetSearch {
+  tab?: string | null;
+  task?: string | null;
+}
+
+/** Set or clear the portable detail context shared by canonical record links. */
+export function recordTargetSearch(
+  search: Readonly<Record<string, unknown>>,
+  target: RecordTargetSearch,
+): Record<string, unknown> {
+  const next = { ...search };
+  if (target.tab === null) delete next[RECORD_TAB_SEARCH_KEY];
+  else if (target.tab !== undefined) next[RECORD_TAB_SEARCH_KEY] = target.tab;
+  if (target.task === null) delete next[RECORD_TASK_SEARCH_KEY];
+  else if (target.task !== undefined) next[RECORD_TASK_SEARCH_KEY] = target.task;
+  return next;
+}
+
+/** Add an exact tab/task target to a composed canonical record href. */
+export function recordTargetHref(href: string, target: RecordTargetSearch): string {
+  const url = new URL(href, "https://angee.invalid");
+  const query = routeSearchString(recordTargetSearch(Object.fromEntries(url.searchParams), target));
+  return `${url.pathname}${query ? `?${query}` : ""}${url.hash}`;
 }
 
 /** Use the app's flat route-search codec for copied and modified-click links. */

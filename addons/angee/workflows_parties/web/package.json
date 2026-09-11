@@ -17,7 +17,8 @@
     "@angee/app": "workspace:*",
     "@angee/parties": "workspace:*",
     "@angee/refine": "workspace:*",
-    "@angee/ui": "workspace:*"
+    "@angee/ui": "workspace:*",
+    "@angee/workflows": "workspace:*"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

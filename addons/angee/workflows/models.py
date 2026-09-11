@@ -2442,6 +2442,9 @@ class Decision(AuditMixin, AngeeDataModel):
     priority = models.IntegerField(default=0)
     action = models.SlugField(max_length=100)
     payload = models.JSONField(default=dict, blank=True)
+    target_model = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    target_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    target_tab = models.CharField(max_length=100, blank=True, default="")
     verdict = StateField(choices_enum=Verdict, default=Verdict.PENDING)
     resolution = models.JSONField(default=dict, blank=True)
     resolved_by = models.CharField(max_length=255, blank=True, default="")
@@ -2471,7 +2474,10 @@ class Decision(AuditMixin, AngeeDataModel):
         ordering = ("step_run", "priority", "declaration_index", "created_at", "sqid")
         rebac_resource_type = "workflows/decision"
         rebac_id_attr = "sqid"
-        indexes = (models.Index(fields=("step_run", "verdict", "priority"), name="idx_wdc_step_verdict"),)
+        indexes = (
+            models.Index(fields=("step_run", "verdict", "priority"), name="idx_wdc_step_verdict"),
+            models.Index(fields=("target_model", "target_id"), name="idx_wdc_target"),
+        )
         constraints = (
             models.UniqueConstraint(
                 fields=("suspension_attempt", "declaration_index"), name="uniq_wdc_attempt_declaration"
@@ -2482,6 +2488,11 @@ class Decision(AuditMixin, AngeeDataModel):
                     | models.Q(suspension_attempt__isnull=False, declaration_index__isnull=False)
                 ),
                 name="chk_wdc_declaration_source_pair",
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(target_model="", target_id="", target_tab="")
+                           | (~models.Q(target_model="") & ~models.Q(target_id=""))),
+                name="chk_wdc_target_pair",
             ),
         )
 
@@ -2504,7 +2515,7 @@ class Decision(AuditMixin, AngeeDataModel):
         else:
             retained = system_queryset(type(self), using=alias, lock=None).filter(pk=self.pk).values(
                 "suspension_attempt_id", "declaration_index", "priority", "action", "payload",
-                "max_attempts", "expires_at", "escalate_at",
+                "target_model", "target_id", "target_tab", "max_attempts", "expires_at", "escalate_at",
             ).get()
             if retained["suspension_attempt_id"] != self.suspension_attempt_id or retained[
                 "declaration_index"
@@ -2513,7 +2524,8 @@ class Decision(AuditMixin, AngeeDataModel):
             immutable = {
                 name
                 for name in (
-                    "priority", "action", "payload", "max_attempts", "expires_at", "escalate_at"
+                    "priority", "action", "payload", "target_model", "target_id", "target_tab",
+                    "max_attempts", "expires_at", "escalate_at"
                 )
                 if retained[name] != getattr(self, name)
             }

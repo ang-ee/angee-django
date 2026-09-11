@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Self
 
 from pydantic import (
     AwareDatetime,
@@ -20,6 +20,7 @@ from pydantic import (
     StrictStr,
     TypeAdapter,
     field_validator,
+    model_validator,
 )
 
 
@@ -214,6 +215,22 @@ class DecisionSpec(BaseModel):
     expires_at: AwareDatetime | None = None
     escalate_at: AwareDatetime | None = None
     decision_schema: dict[StrictStr, JsonValue] = Field(default_factory=dict)
+    target_model: StrictStr = ""
+    target_id: StrictStr = ""
+    target_tab: StrictStr = Field(default="", max_length=100)
+    target_authority_decision_id: StrictStr = ""
+
+    @model_validator(mode="after")
+    def complete_target(self) -> Self:
+        """Require the optional related-record identity as one complete pair."""
+
+        if bool(self.target_model) != bool(self.target_id):
+            raise ValueError("Decision target_model and target_id must be supplied together.")
+        if self.target_tab and not self.target_model:
+            raise ValueError("Decision target_tab requires a related-record target.")
+        if self.target_authority_decision_id and not self.target_model:
+            raise ValueError("Decision target authority requires a related-record target.")
+        return self
 
     @field_validator("payload", "decision_schema")
     @classmethod

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
-import { Field, pageChildren, pageElementProps, parsePageFields, type FormProps } from "@angee/ui";
+import { Field, pageChildren, pageElementProps, parsePageFields, type FormProps, type ResourceListProps } from "@angee/ui";
 
 vi.mock("./i18n", () => ({ usePartiesT: () => (key: string) => key }));
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -21,7 +21,15 @@ function formFields() {
   return parsePageFields(form.children).map((field) => field.name);
 }
 
+function recordTabIds() {
+  const page = OrganizationsPage();
+  return ((page.props as ResourceListProps).recordTabs ?? []).map((tab) => tab.id);
+}
+
 describe("organization form extensions", () => {
+  test("shares canonical identity and address tabs with person records", () => {
+    expect(recordTabIds()).toEqual(["identity", "addresses"]);
+  });
   test("keeps the base contact fields independent of consumers", () => {
     vi.mocked(useSlot).mockReturnValue([]);
     expect(formFields()).toEqual(["display_name", "legal_name", "domain", "notes"]);

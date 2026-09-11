@@ -8,15 +8,19 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from rebac import system_context
+from django.core.exceptions import ValidationError
+from django.db import models
+from django.utils import timezone
+from rebac import system_context, to_subject_ref
 
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
-from angee.workflows.attempts import RecoveryMode
+from angee.workflows.attempts import JsonPresence, RecoveryMode
 from angee.workflows_parties.autoconfig import SETTINGS as WORKFLOWS_PARTIES_SETTINGS
-from angee.workflows_parties.steps import DedupeExecuteStepImpl
+from angee.workflows_parties.steps import DedupeExecuteStepImpl, IdentityApplyStepImpl, IdentityReviewStepImpl
 from tests.test_messaging import (
     MESSAGING_TEST_MODELS,
+    Address,
     Handle,
     MergeVeto,
     Party,
@@ -75,6 +79,132 @@ def _dedupe_workflow() -> Any:
             ("prepare", "map", "prepared"),
         ),
     )
+
+
+def _identity_workflow() -> Any:
+    return workflow_with_steps(
+        name="Review identity",
+        steps=(
+            {
+                "key": "review", "step_class": "parties_identity_review", "config": {},
+                "input_binding": {"kind": "workflow_input", "path": []},
+            },
+            {"key": "apply", "step_class": "parties_identity_apply", "config": {}},
+        ),
+        edges=(("review", "apply", "completed"), ("review", "apply", "unchanged")),
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identity_review_freezes_context_and_applies_name_and_address(
+    workflows_parties_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    del workflows_parties_tables, no_workflow_queue
+    operator = User.objects.create_user(username="identity-reviewer")
+    with system_context(reason="test identity fixture"):
+        party = Party._base_manager.create(display_name="Old Supplier", created_by=operator)
+    proposal = {
+        "party_id": str(party.sqid),
+        "proposed": {
+            "name": "Example Supplier",
+            "address": {"street": "10 Example Road", "city": "Exampleton", "country": "GB"},
+            "handle": {},
+        },
+        "evidence": [{"label": "Printed supplier", "source_model": "storage.File", "source_id": "fil_example"}],
+        "context": {"invoice_id": "inv_example", "draft_revision": 2},
+    }
+    run = engine.start(_identity_workflow(), party, operator, input=JsonPresence(True, proposal))
+    advance_once(run)
+    execute_started(run)
+    with system_context(reason="test identity decision"):
+        assert step_run_for(run, "review").error == ""
+        decision = Decision._base_manager.get(step_run__run=run)
+    assert (decision.target_model, decision.target_id) == ("parties.Party", str(party.sqid))
+    delegated = {**proposal, "selection_decision_id": str(decision.sqid)}
+    with pytest.raises(ValidationError, match="not completed in this run"):
+        IdentityReviewStepImpl().run(
+            SimpleNamespace(input=delegated, run=run, step=SimpleNamespace(config={})), now=timezone.now(),
+        )
+    resolution = {**decision.payload, "name_action": "replace", "address_action": "add", "handle_action": "keep"}
+    assert engine.decide(decision, "complete", payload=resolution, actor=operator).validation_error is None
+    with system_context(reason="fixture completed supplier selection"):
+        decision.refresh_from_db()
+        models.QuerySet.update(
+            Decision._base_manager.filter(pk=decision.pk),
+            resolution={**decision.resolution, "party_id": str(party.sqid)},
+        )
+        decision.refresh_from_db()
+    delegated_review = IdentityReviewStepImpl().run(
+        SimpleNamespace(input=delegated, run=run, step=SimpleNamespace(config={})), now=timezone.now(),
+    )
+    assert delegated_review.decisions[0].target_authority_decision_id == str(decision.sqid)
+    with system_context(reason="test mismatched selection party"):
+        other_party = Party._base_manager.create(display_name="Other Supplier", created_by=operator)
+    with pytest.raises(ValidationError, match="chose a different Party"):
+        IdentityReviewStepImpl().run(
+            SimpleNamespace(
+                input={**delegated, "party_id": str(other_party.sqid)},
+                run=run,
+                step=SimpleNamespace(config={}),
+            ),
+            now=timezone.now(),
+        )
+    stranger = User.objects.create_user(username="identity-selection-revoked")
+    with system_context(reason="fixture selection resolver without current Party access"):
+        models.QuerySet.update(
+            Decision._base_manager.filter(pk=decision.pk), resolved_by=str(to_subject_ref(stranger)),
+        )
+    with pytest.raises(ValidationError, match="Party was not found"):
+        IdentityReviewStepImpl().run(
+            SimpleNamespace(input=delegated, run=run, step=SimpleNamespace(config={})), now=timezone.now(),
+        )
+    with system_context(reason="restore completed supplier selection resolver"):
+        models.QuerySet.update(
+            Decision._base_manager.filter(pk=decision.pk), resolved_by=str(to_subject_ref(operator)),
+        )
+    foreign_run = engine.start(_identity_workflow(), party, operator, input=JsonPresence(True, proposal))
+    with pytest.raises(ValidationError, match="not completed in this run"):
+        IdentityReviewStepImpl().run(
+            SimpleNamespace(input=delegated, run=foreign_run, step=SimpleNamespace(config={})),
+            now=timezone.now(),
+        )
+    with pytest.raises(ValidationError, match="not completed"):
+        IdentityApplyStepImpl().run(
+            SimpleNamespace(input={"decisions": [str(decision.sqid)]}, run=foreign_run),
+            now=timezone.now(),
+        )
+    run_to_terminal(run)
+    with system_context(reason="test identity result"):
+        assert step_run_for(run, "apply").error == "", step_run_for(run, "apply").input
+        party.refresh_from_db()
+        address = Address._base_manager.get(party=party)
+    assert party.display_name == "Example Supplier"
+    assert (address.street, address.city, address.country) == ("10 Example Road", "Exampleton", "GB")
+    assert step_run_for(run, "apply").output["context"] == proposal["context"]
+
+    replay = IdentityApplyStepImpl().run(
+        SimpleNamespace(input={"decisions": [str(decision.sqid)]}, run=run), now=timezone.now(),
+    )
+    assert replay.outcome == "applied"
+    assert replay.output["address_result"] == "already_applied"
+    with system_context(reason="test identity replay remains singular"):
+        assert Address._base_manager.filter(party=party).count() == 1
+
+    unchanged_proposal = {**proposal, "proposed": {"name": "Example Supplier", "address": {
+        "street": "10 Example Road", "city": "Exampleton", "country": "GB",
+    }, "handle": {}}}
+    unchanged_review = IdentityReviewStepImpl().run(
+        SimpleNamespace(input=unchanged_proposal, run=run, step=SimpleNamespace(config={})), now=timezone.now(),
+    )
+    unchanged_apply = IdentityApplyStepImpl().run(
+        SimpleNamespace(input={"review": unchanged_review.output}, run=run), now=timezone.now(),
+    )
+    assert unchanged_review.outcome == "unchanged"
+    assert unchanged_apply.output == {
+        "party_id": str(party.sqid), "context": proposal["context"],
+        "name_result": "kept", "address_result": "kept", "handle_result": "kept",
+    }
 
 
 def _duplicate_pair(owner: Any, *, named: str, digits: str, spaced: str) -> tuple[Any, Any]:
@@ -138,6 +268,7 @@ def test_dedupe_scan_gate_map_apply_end_to_end(
         assert winner in ("Sofia Khomutova", "Ed MacLaughlin")
 
     with system_context(reason="test dedupe decision"):
+        assert step_run_for(run, "gate").error == ""
         decision = Decision.objects.select_related("step_run").get(step_run__run=run)
     assert decision.form_schema["properties"]["pairs"]["widget"] == "rows"
     assert decision.payload == {"pairs": pairs}
@@ -250,11 +381,17 @@ def test_apply_unit_is_idempotent_on_retry(workflows_parties_tables: None) -> No
     assert prepare.available is False
 
 
-def test_autoconfig_registers_the_three_step_keys() -> None:
-    """The autoconfig contributes exactly the dedupe step registry keys."""
+def test_autoconfig_registers_the_party_governance_step_keys() -> None:
+    """The autoconfig contributes exactly the dedupe and identity step keys."""
 
     assert WORKFLOWS_PARTIES_SETTINGS == {
         "ANGEE_WORKFLOW_STEP_CLASSES.parties_dedupe_scan": ("angee.workflows_parties.steps.DedupeScanStepImpl"),
         "ANGEE_WORKFLOW_STEP_CLASSES.parties_dedupe_gate": ("angee.workflows_parties.steps.DedupeGateStepImpl"),
         "ANGEE_WORKFLOW_STEP_CLASSES.parties_dedupe_execute": ("angee.workflows_parties.steps.DedupeExecuteStepImpl"),
+        "ANGEE_WORKFLOW_STEP_CLASSES.parties_identity_review": (
+            "angee.workflows_parties.steps.IdentityReviewStepImpl"
+        ),
+        "ANGEE_WORKFLOW_STEP_CLASSES.parties_identity_apply": (
+            "angee.workflows_parties.steps.IdentityApplyStepImpl"
+        ),
     }
