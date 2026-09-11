@@ -626,7 +626,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             if active:
                 raise ValidationError({"source_run": "This workflow subject already has an active run."})
             return self._start_locked(
-                head, source.subject, actor, dedup_key=dedup_key, origin=RunOrigin.MANUAL,
+                head, source.subject, actor, dedup_key=dedup_key, origin=cast(RunOrigin, RunOrigin.MANUAL),
                 input=JsonPresence(source.input_present, copy.deepcopy(source.input)),
                 reprocessed_from=source, available_at=timezone.now(), using=alias,
             )
@@ -1508,7 +1508,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 and existing.origin == resolved_origin
                 and existing.trigger_id == (None if trigger is None else trigger.pk)
                 and existing.parent_step_run_id == (None if parent_step_run is None else parent_step_run.pk)
-                and existing.dedup_key == (run_dedup_key or "")
+                and existing.dedup_key == run_dedup_key
                 and existing.occurrence_id == occurrence_id
                 and existing.input_present is input.present
                 and json_values_equal(existing.input, input.value if input.present else None)
@@ -1717,9 +1717,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         return tuple(rows)
 
     @staticmethod
-    def _trigger_dedup_key(trigger: Any, content_type: Any, object_id: Any) -> str:
+    def _trigger_dedup_key(trigger: Any, content_type: Any, object_id: Any) -> str | None:
         if trigger is None:
-            return ""
+            return None
         subject = "none" if content_type is None or object_id is None else f"{content_type.pk}:{object_id}"
         return f"trigger:{trigger.pk}:subject:{subject}"
 
@@ -1951,7 +1951,10 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 return None
             if declaration.source != source:
                 return None
-            if source == EventSource.MESSAGE_INGESTED and getattr(trigger, "message_channel_id", None) != message_channel_id:
+            if (
+                source == EventSource.MESSAGE_INGESTED
+                and getattr(trigger, "message_channel_id", None) != message_channel_id
+            ):
                 return None
             if subject._meta.label_lower != declaration.model:
                 return None

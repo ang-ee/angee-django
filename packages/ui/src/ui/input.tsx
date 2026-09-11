@@ -3,6 +3,7 @@ import * as React from "react";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { useDebouncedText } from "../lib/use-debounced-text";
 import { tv, type VariantProps } from "../lib/variants";
 import {
   WIDGET_CONTROL_DATA_READONLY_CLASS,
@@ -129,6 +130,21 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
 });
 
 Input.displayName = "Input";
+
+export interface DebouncedSearchInputProps extends Omit<SearchInputProps, "value" | "onChange" | "onClear"> {
+  value: string;
+  onValueChange: (value: string) => void;
+}
+
+/** SearchInput with the same commit/blur/Enter behavior as ResourceToolbar. */
+export function DebouncedSearchInput({ value, onValueChange, onBlur, onKeyDown, ...props }: DebouncedSearchInputProps) {
+  const { draft, setDraft, commit } = useDebouncedText(value, onValueChange);
+  return <SearchInput {...props} value={draft}
+    onChange={event => { setDraft(event.target.value); commit(event.target.value); }}
+    onClear={() => { setDraft(""); commit(""); commit.flush(); }}
+    onBlur={event => { commit(event.currentTarget.value); commit.flush(); onBlur?.(event); }}
+    onKeyDown={event => { if (event.key === "Enter") { commit(event.currentTarget.value); commit.flush(); } onKeyDown?.(event); }} />;
+}
 
 export type TextInputProps = InputProps;
 

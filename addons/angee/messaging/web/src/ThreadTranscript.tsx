@@ -1,6 +1,6 @@
 import { senderDisplayName } from "@angee/parties";
 import * as React from "react";
-import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessagePartsView, ReactionBar, RelativeTime, SectionEyebrow, cn, reactionsFromGroups, textRoleVariants, type ChatBubbleRole } from "@angee/ui";
+import { Button, ChatBubble, EmptyState, Glyph, Input, LoadingPanel, MessageDaySeparator, MessagePartsView, ReactionBar, RelativeTime, SectionEyebrow, cn, reactionsFromGroups, textRoleVariants, type ChatBubbleRole } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
@@ -28,6 +28,10 @@ export interface ThreadTranscriptProps {
    *  extension point a widget/placement descriptor sets — `ThreadsPage` composes it
    *  directly, so no descriptor-contract field is needed to reach it. */
   order?: TranscriptOrder;
+  /** Server resolves a bounded window around message:ID or date:YYYY-MM-DD. */
+  anchor?: string;
+  onAnchorChange?: (anchor: string) => void;
+  renderMessageActions?: (message: ThreadTranscriptRow) => React.ReactNode;
 }
 
 /**
@@ -42,17 +46,23 @@ export interface ThreadTranscriptProps {
 export function ThreadTranscript({
   threadId,
   order = "conversation",
+  anchor = "",
+  onAnchorChange,
+  renderMessageActions,
 }: ThreadTranscriptProps): React.ReactElement {
   // Remount per thread so scroll anchors and virtualizer measurements reset.
-  return <TranscriptBody key={threadId} threadId={threadId} order={order} />;
+  return <TranscriptBody key={`${threadId}:${anchor}`} threadId={threadId} order={order} anchor={anchor} onAnchorChange={onAnchorChange} renderMessageActions={renderMessageActions} />;
 }
 
 function TranscriptBody({
   threadId,
   order = "conversation",
+  anchor = "",
+  onAnchorChange,
+  renderMessageActions,
 }: ThreadTranscriptProps): React.ReactElement {
   const t = useMessagingT();
-  const transcript = useThreadMessageFeed(threadId);
+  const transcript = useThreadMessageFeed(threadId, anchor);
   // Render oldest-to-newest so the latest turn sits at the bottom.
   const messages = React.useMemo(
     () => messageFeedRows(transcript.data).reverse(),
@@ -104,10 +114,12 @@ function TranscriptBody({
       return;
     }
     if (scrolledThreadRef.current !== threadId) {
-      scroll.scrollTop = scroll.scrollHeight;
+      const anchorIndex = anchor.startsWith("message:") ? messages.findIndex(message => message.id === anchor.slice(8)) : -1;
+      if (anchorIndex >= 0) virtualizer.scrollToIndex(anchorIndex, { align: "center" });
+      else if (!anchor) scroll.scrollTop = scroll.scrollHeight;
       scrolledThreadRef.current = threadId;
     }
-  }, [conversation, threadId, messages.length, totalSize]);
+  }, [conversation, threadId, messages, totalSize, anchor, virtualizer]);
 
   function loadOlder(): void {
     if (!transcript.hasNextPage || transcript.isFetching) return;
@@ -152,6 +164,7 @@ function TranscriptBody({
   const virtualItems = virtualizer.getVirtualItems();
   return (
     <div className="rounded-6 border border-border-subtle bg-sheet">
+      {onAnchorChange ? <div className="flex items-center gap-2 border-b border-border-subtle p-2"><label className="flex items-center gap-2 text-13">{t("transcript.jumpDate")}<Input type="date" size="sm" value={anchor.startsWith("date:") ? anchor.slice(5) : ""} onChange={event => onAnchorChange(event.target.value ? `date:${event.target.value}` : "")} /></label><Button size="sm" variant="ghost" onClick={() => onAnchorChange("")}>{t("transcript.latest")}</Button></div> : null}
       {/* The "Load older" control sits OUTSIDE the scroll element so its height never
           offsets the virtualized list's coordinate space (the scrollMargin bug). */}
       {hasOlder ? (
@@ -177,12 +190,15 @@ function TranscriptBody({
                 className="absolute left-0 top-0 w-full px-3 pb-4"
                 style={{ transform: `translateY(${item.start - scrollMargin}px)` }}
               >
+                {item.index === 0 || (messages[item.index - 1]?.sent_at ?? messages[item.index - 1]?.created_at)?.slice(0, 10) !== (message.sent_at ?? message.created_at)?.slice(0, 10) ? <MessageDaySeparator as="div">{new Date(message.sent_at ?? message.created_at).toLocaleDateString()}</MessageDaySeparator> : null}
                 <TranscriptMessage message={message} t={t} />
+                {renderMessageActions ? <div className="mt-2 flex justify-end">{renderMessageActions(message)}</div> : null}
               </li>
             );
           })}
         </ul>
       </div>
+      {transcript.hasPreviousPage ? <div className="flex justify-center border-t border-border-subtle p-2"><Button size="sm" variant="secondary" disabled={transcript.isFetching} onClick={() => void transcript.fetchPreviousPage({ cancelRefetch: false })}>{t("transcript.loadNewer")}<Glyph name="chevron-down" /></Button></div> : null}
     </div>
   );
 }

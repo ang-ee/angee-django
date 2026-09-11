@@ -151,6 +151,7 @@ class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
         before_cursor: str | None = None,
         after_cursor: str | None = None,
         through_cursor: str | None = None,
+        around: models.Model | None = None,
         limit: int = 50,
     ) -> dict[str, Any]:
         """Page this authorized queryset using signed, stable timestamp/PK cuts.
@@ -183,6 +184,14 @@ class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
             window = window.filter(order.before(anchor) if before_cursor is not None else order.after(anchor))
         if lower is not None:
             window = window.exclude(order.before(lower))
+        if around is not None and before_cursor is None and after_cursor is None:
+            # Bound the first window around an already authorized record. The
+            # domain resolves a message/date; this owner only handles tuple order.
+            newer = list(
+                self.filter(order.after(order.position(around))).order_by(order.field, "pk")[: limit // 2]
+            )
+            upper = order.position(newer[-1] if newer else around)
+            window = window.exclude(order.after(upper))
         ascending = after_cursor is not None
         ordering = (order.field, "pk") if ascending else (f"-{order.field}", "-pk")
         selected = list(window.order_by(*ordering)[: limit + 1])
@@ -201,6 +210,7 @@ class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
                 "has_newer": False,
                 "has_more_in_window": False,
                 "has_older_than_through": below,
+                "has_newer_than_before": self.filter(order.after(anchor)).exists() if anchor is not None else False,
             }
         # Re-fetch the bounded identities through the original queryset so callers
         # retain a composable queryset instead of inheriting this method's probe list.
@@ -213,6 +223,7 @@ class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
             "has_newer": self.filter(order.after(order.position(rows[0]))).exists(),
             "has_more_in_window": has_more,
             "has_older_than_through": below,
+            "has_newer_than_before": self.filter(order.after(anchor)).exists() if anchor is not None else False,
         }
 
     def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:

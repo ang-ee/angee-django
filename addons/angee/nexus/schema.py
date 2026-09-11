@@ -16,6 +16,7 @@ from angee.graphql.ids import require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.messaging.schema import MessageFeedPage, MessageFeedRevalidation
+from angee.nexus.inbox_schema import NexusInboxQuery
 from angee.parties.schema import PartyType
 
 Tie = apps.get_model("nexus", "Tie")
@@ -328,7 +329,7 @@ _CADENCE_RESOURCE = hasura_model_resource(
     write_backend=AngeeHasuraWriteBackend(Cadence, public_id_fields=("party",)),
 )
 
-_NEXUS_SCHEMA_BUCKET = {
+_NEXUS_SCHEMA_BUCKET: dict[str, list[type]] = {
     "query": [NexusQuery, _TIE_RESOURCE.query, _CADENCE_RESOURCE.query],
     "mutation": [_TIE_RESOURCE.mutation, _CADENCE_RESOURCE.mutation],
     "types": [
@@ -346,6 +347,7 @@ schemas = {
     "public": {**_NEXUS_SCHEMA_BUCKET},
     "console": {
         **_NEXUS_SCHEMA_BUCKET,
+        "query": [*_NEXUS_SCHEMA_BUCKET["query"], NexusInboxQuery],
         "subscription": [
             changes(Tie, field="tieChanged"),
             changes(Cadence, field="cadenceChanged"),

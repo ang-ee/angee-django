@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import {
   RouterProvider,
   createMemoryHistory,
@@ -60,8 +60,10 @@ describe("Breadcrumb", () => {
     renderBreadcrumb({ collection: { to: "/storage", href: "/storage?folder=project&group=extension&pageSize=50" } });
     const breadcrumb = await screen.findByRole("navigation", { name: "Breadcrumb" });
     expect(within(breadcrumb).getByRole("link", { name: "Home" }).getAttribute("href")).toBe("/");
-    expect(within(breadcrumb).getByRole("link", { name: "Files" }).getAttribute("href"))
-      .toBe("/storage?folder=project&group=extension&pageSize=50");
+    await waitFor(() => {
+      expect(within(breadcrumb).getByRole("link", { name: "Files" }).getAttribute("href"))
+        .toBe("/storage?folder=project&group=extension&pageSize=50");
+    });
   });
 
   test("uses the route-provided leaf label for the current crumb", async () => {
@@ -77,7 +79,7 @@ describe("Breadcrumb", () => {
     });
     expect(within(breadcrumb).getByText("Files").closest("a")?.getAttribute("href"))
       .toBe("/storage");
-    expect(within(breadcrumb).getByText("alexis-profile.jpg").getAttribute("aria-current"))
+    expect((await within(breadcrumb).findByText("alexis-profile.jpg")).getAttribute("aria-current"))
       .toBe("page");
     expect(within(breadcrumb).queryByText("Show")).toBeNull();
   });
@@ -96,7 +98,7 @@ describe("Breadcrumb", () => {
     expect(within(breadcrumb).getAllByText("Integrations")).toHaveLength(1);
     expect(within(breadcrumb).getByRole("link", { name: "Integrations" }).getAttribute("href"))
       .toBe("/integrate");
-    expect(within(breadcrumb).getByText("Local checkout").getAttribute("aria-current"))
+    expect((await within(breadcrumb).findByText("Local checkout")).getAttribute("aria-current"))
       .toBe("page");
   });
 

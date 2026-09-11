@@ -9,8 +9,11 @@ const pageMocks = vi.hoisted(() => ({
   columnFields: [] as string[],
   fieldNames: [] as string[],
   recordAction: vi.fn(),
-  requestedSlot: "",
-  slotEntries: [{ slot: "messaging.channel.toolbar", id: "demo", content: "Connect bridge" }],
+  requestedSlots: [] as string[],
+  slotEntries: [
+    { slot: "messaging.channel.toolbar", id: "demo-connect", content: "Connect bridge" },
+    { slot: "messaging.channel.form-fields", id: "demo-fields", content: "Bridge form fields" },
+  ],
 }));
 
 vi.mock("@angee/ui", () => ({
@@ -51,8 +54,8 @@ vi.mock("@angee/ui", () => ({
   },
   useRecordActionMutation: () => [pageMocks.recordAction],
   useSlot: (slot: string) => {
-    pageMocks.requestedSlot = slot;
-    return pageMocks.slotEntries;
+    pageMocks.requestedSlots.push(slot);
+    return pageMocks.slotEntries.filter((entry) => entry.slot === slot);
   },
 }));
 
@@ -61,7 +64,7 @@ vi.mock("./i18n", () => ({
 }));
 
 import { ChannelsPage } from "./ChannelsPage";
-import { MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
+import { MESSAGING_CHANNEL_FORM_FIELDS_SLOT, MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 
 describe("ChannelsPage", () => {
   beforeEach(() => {
@@ -69,7 +72,7 @@ describe("ChannelsPage", () => {
     pageMocks.columnFields = [];
     pageMocks.fieldNames = [];
     pageMocks.recordAction.mockClear();
-    pageMocks.requestedSlot = "";
+    pageMocks.requestedSlots = [];
   });
 
   test("renders a model-driven channels page with addon toolbar actions", () => {
@@ -81,8 +84,12 @@ describe("ChannelsPage", () => {
       routed: true,
       hideCreate: true,
     });
-    expect(pageMocks.requestedSlot).toBe(MESSAGING_CHANNEL_TOOLBAR_SLOT);
+    expect(pageMocks.requestedSlots).toEqual([
+      MESSAGING_CHANNEL_TOOLBAR_SLOT,
+      MESSAGING_CHANNEL_FORM_FIELDS_SLOT,
+    ]);
     expect(screen.getByText("Connect bridge")).toBeTruthy();
+    expect(screen.getByText("Bridge form fields")).toBeTruthy();
     expect(pageMocks.columnFields).toEqual(
       expect.arrayContaining(["sync_stage", "last_sync_status", "last_sync_items", "last_sync_completed_at"]),
     );

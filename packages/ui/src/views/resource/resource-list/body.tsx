@@ -341,7 +341,7 @@ export function ResourceListBody<TRow extends Row = Row>({
       }
     >
       <ControlBandProvider inherit={!open} host={undefined}>
-        <div hidden={open} aria-hidden={open || undefined}>
+        <div hidden={open} aria-hidden={open || undefined} className="h-full min-h-0">
           {!open || retainLocalList ? list : null}
         </div>
       </ControlBandProvider>

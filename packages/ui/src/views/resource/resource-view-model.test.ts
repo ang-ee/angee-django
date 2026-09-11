@@ -17,11 +17,22 @@ import {
   resourceViewFavoritesFromJson,
   resourceViewKindCapabilities,
   resourceViewSearchToState,
+  mergeResourceViewSearch,
   resourceViewStateToSearch,
   todayCalendarAnchor,
 } from "./resource-view-model";
 
 describe("resource-view model", () => {
+  test("isolates several route collections while retaining message and pinned selection", () => {
+    const initial = { pageSize: 25 };
+    const current = { "s.page": 3, "r.page": 2, message: "msg-1", related: "file-1", "c.filter": '{"text":{"iContains":"old"}}' };
+    const next = mergeResourceViewSearch(current, resourceViewStateToSearch(createResourceViewState({ ...initial, filter: { text: { iContains: "invoice" } } }), initial), "c");
+    expect(next).toEqual({ ...current, "c.filter": '{"text":{"iContains":"invoice"}}' });
+    expect(resourceViewSearchToState(next, initial, "s").pagination.pageIndex).toBe(2);
+    expect(resourceViewSearchToState(next, initial, "r").pagination.pageIndex).toBe(1);
+    expect(resourceViewSearchToState(next, initial, "c").filter).toEqual({ text: { iContains: "invoice" } });
+    expect(resourceViewSearchToState(current, initial, "c").filter).toEqual({ text: { iContains: "old" } });
+  });
   test("round-trips flat URL search state", () => {
     const state = createResourceViewState({
       page: 3,

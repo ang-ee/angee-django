@@ -63,7 +63,9 @@ export function resourceViewStateToSearch(
 export function resourceViewSearchToState(
   search: ResourceViewSearch | Record<string, unknown>,
   initial: ResourceViewInitialState = {},
+  namespace?: string,
 ): ResourceViewState {
+  if (namespace) search = Object.fromEntries(RESOURCE_VIEW_SEARCH_KEYS.map(key => [key, search[`${namespace}.${key}` as keyof typeof search]]));
   const base = createResourceViewState(initial);
   try {
     const sort = parseSearchSort(search.sort);
@@ -105,13 +107,15 @@ export function normaliseGroupStack(groups: unknown): readonly ResourceViewGroup
 export function mergeResourceViewSearch(
   current: Record<string, unknown>,
   next: Partial<Record<ResourceViewSearchKey, unknown>>,
+  namespace?: string,
 ): Record<string, unknown> {
   const merged = { ...current };
   for (const key of RESOURCE_VIEW_SEARCH_KEYS) {
+    const target = namespace ? `${namespace}.${key}` : key;
     if (Object.prototype.hasOwnProperty.call(next, key)) {
-      merged[key] = next[key];
+      merged[target] = next[key];
     } else {
-      delete merged[key];
+      delete merged[target];
     }
   }
   return merged;

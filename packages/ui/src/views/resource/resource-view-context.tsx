@@ -90,6 +90,8 @@ export interface ResourceViewProviderProps {
   initialState?: ResourceViewInitialState;
   resource?: string;
   scope?: ResourceViewProviderScope;
+  /** Isolate this collection's URL keys when a page contains several collections. */
+  namespace?: string;
 }
 
 export type ResourceViewProviderScope = "route" | "local";
@@ -115,6 +117,7 @@ export function ResourceViewProvider({
   initialState,
   resource,
   scope = "route",
+  namespace,
 }: ResourceViewProviderProps): ReactNode {
   if (scope === "local") {
     return (
@@ -124,7 +127,7 @@ export function ResourceViewProvider({
     );
   }
   return (
-    <RouteResourceViewProvider initialState={initialState} resource={resource}>
+    <RouteResourceViewProvider initialState={initialState} resource={resource} namespace={namespace}>
       {children}
     </RouteResourceViewProvider>
   );
@@ -165,6 +168,7 @@ function RouteResourceViewProvider({
   children,
   initialState,
   resource,
+  namespace,
 }: Omit<ResourceViewProviderProps, "scope">): ReactNode {
   const search = useSearch({ strict: false });
   // Narrow Router navigation to functional search updates; no from is supplied
@@ -174,8 +178,8 @@ function RouteResourceViewProvider({
     () => createResourceViewState(initialState).rowSelection,
   );
   const queryState = useMemo(
-    () => resourceViewSearchToState(search, initialState),
-    [search, initialState],
+    () => resourceViewSearchToState(search, initialState, namespace),
+    [search, initialState, namespace],
   );
   const [failedTransition, setFailedTransition] = useState<{ search: unknown; error: Error } | null>(null);
   const transitionError = failedTransition && failedTransition.search === search ? failedTransition.error : null;
@@ -189,12 +193,12 @@ function RouteResourceViewProvider({
     setFailedTransition(null);
     void navigate({
       search: (current) => {
-        const updated = functionalUpdate(updater, resourceViewSearchToState(current, initialState));
-        return updated.queryError ? current : mergeResourceViewSearch(current, resourceViewStateToSearch(updated, initialState));
+        const updated = functionalUpdate(updater, resourceViewSearchToState(current, initialState, namespace));
+        return updated.queryError ? current : mergeResourceViewSearch(current, resourceViewStateToSearch(updated, initialState), namespace);
       },
       replace: true,
     });
-  }, [initialState, navigate, queryState, rowSelection, search]);
+  }, [initialState, navigate, namespace, queryState, rowSelection, search]);
   const value = useResourceViewContextValue({ updateState, setRowSelection, resource, state });
 
   return (

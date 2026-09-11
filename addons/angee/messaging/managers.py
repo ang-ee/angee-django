@@ -27,7 +27,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
@@ -46,6 +46,7 @@ from angee.base.refs import canonical_record_target
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.events import message_ingested
+from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
 from angee.parties.mixins import LinkSource
 
@@ -401,6 +402,11 @@ def _parsed_sync_hash(
 
 class FragmentManager(AngeeManager):
     """Content-addressed text store: one row per distinct (null-stripped) text."""
+
+    def search_query(self, term: str, *, search_type: str = "plain") -> SearchQuery:
+        """Build a query with the same configuration as this store's vectors."""
+
+        return SearchQuery(strip_null_bytes(term or "").strip(), search_type=search_type, config=_SEARCH_CONFIG)
 
     def upsert(self, *, text: str, kind: str = "paragraph", owner_id: Any = None) -> Any:
         """Get-or-create a fragment by the SHA-256 of its cleaned (null-stripped, trimmed) text.
@@ -1880,6 +1886,11 @@ class ReactionManager(AngeeManager):
 class MessageQuerySet(AngeeQuerySet[Any]):
     """Chainable read scopes for chatter/ingest messages."""
 
+    def explorer(self) -> MessageInbox:
+        """Compose personal-inbox reads from this collection's current scope."""
+
+        return MessageInbox(self)
+
     def for_thread(self, thread: Any) -> MessageQuerySet:
         """Return messages belonging to one thread."""
 
@@ -2003,7 +2014,7 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         substring predicates of :meth:`searching` would scan.
         """
 
-        query = SearchQuery(strip_null_bytes(term or "").strip(), config=_SEARCH_CONFIG)
+        query = apps.get_model("messaging", "Fragment").objects.search_query(term)
         return cast(MessageQuerySet, self.filter(parts__fragment__search=query))
 
     def involving_parties(self, parties: Any) -> MessageQuerySet:
@@ -2053,6 +2064,7 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         before_cursor: str | None = None,
         after_cursor: str | None = None,
         through_cursor: str | None = None,
+        anchor: str = "",
         limit: int = 50,
     ) -> dict[str, Any]:
         """Read a currently authorized, newest-first fixed or discovery window.
@@ -2066,14 +2078,28 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         """
 
         search = self._feed_search(search)
+        queryset = self.for_feed(search)
+        around = None
+        if anchor and before_cursor is None and after_cursor is None:
+            kind, _, value = anchor.partition(":")
+            if kind == "message":
+                around = queryset.from_public_id(value)
+            elif kind == "date":
+                instant = timezone.make_aware(datetime.combine(datetime.strptime(value, "%Y-%m-%d").date(), time.min))
+                around = queryset.filter(_order_at__gte=instant).order_by("_order_at", "pk").first() or queryset.first()
+            else:
+                raise ValueError("Unknown transcript anchor.")
+            if around is None and kind == "message":
+                raise ValueError("Message unavailable in this conversation.")
         try:
-            page = self.for_feed(search).keyset_page(
+            page = queryset.keyset_page(
                 order=_MESSAGE_ORDER,
                 cursor_scope=(scope, search),
                 cursor_salt="angee.messaging.feed.v1",
                 before_cursor=before_cursor,
                 after_cursor=after_cursor,
                 through_cursor=through_cursor,
+                around=around,
                 limit=limit,
             )
         except InvalidKeysetCursor as error:

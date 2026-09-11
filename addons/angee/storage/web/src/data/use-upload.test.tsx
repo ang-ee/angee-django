@@ -118,7 +118,7 @@ describe("useStorageUpload", () => {
     });
     expect(onUploaded).toHaveBeenCalledWith([
       { id: "fil_ready", filename: "note.txt" },
-    ]);
+    ], undefined);
     expect(uploadMocks.invalidate).toHaveBeenCalledWith({
       resource: "files",
       dataProviderName: "console",
@@ -128,12 +128,14 @@ describe("useStorageUpload", () => {
 
   test("passes explicit drive and folder targets through the begin request", async () => {
     const onUploaded = vi.fn();
+    const completionContext = { recordId: "party_7" };
     const { result } = renderHook(() => useStorageUpload({ onUploaded }));
 
     await act(async () => {
       result.current.upload(
         [new File(["body"], "brief.txt", { type: "" })],
         { driveId: "drv_assets", folderId: "fld_cases" },
+        completionContext,
       );
     });
 
@@ -147,6 +149,9 @@ describe("useStorageUpload", () => {
         folder: "fld_cases",
       }),
     });
+    expect(onUploaded).toHaveBeenCalledWith([
+      { id: "fil_ready", filename: "note.txt" },
+    ], completionContext);
   });
 
   test("reports deduped files without proxy transfer or finalize", async () => {
@@ -170,6 +175,6 @@ describe("useStorageUpload", () => {
     expect(uploadMocks.finalize).not.toHaveBeenCalled();
     expect(onUploaded).toHaveBeenCalledWith([
       { id: "fil_existing", filename: "same.txt" },
-    ]);
+    ], undefined);
   });
 });

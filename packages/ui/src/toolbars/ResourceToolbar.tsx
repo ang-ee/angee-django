@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { FilterValue } from "@angee/metadata";
-import { useDebouncedCallback } from "use-debounce";
+import { useDebouncedText } from "../lib/use-debounced-text";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -42,7 +42,6 @@ import {
   labelText,
 } from "../views/resource/resource-view-utils";
 
-const FILTER_TEXT_COMMIT_DELAY_MS = 300;
 
 export interface ResourceToolbarProps {
   pager: PagerState;
@@ -409,18 +408,7 @@ function FilterPicker({
   const [favoriteLabel, setFavoriteLabel] =
     React.useState(defaultFavoriteLabel);
   const favoritesEnabled = onFavoriteSave !== undefined;
-  const [draftFilterText, setDraftFilterText] = React.useState(filterText);
-  const commitFilterText = useDebouncedCallback((value: string) => {
-    if (value !== filterText) onFilterTextChange?.(value);
-  }, FILTER_TEXT_COMMIT_DELAY_MS);
-
-  React.useEffect(() => {
-    setDraftFilterText(filterText);
-  }, [filterText]);
-
-  React.useEffect(() => {
-    return () => commitFilterText.cancel();
-  }, [commitFilterText]);
+  const { draft: draftFilterText, setDraft: setDraftFilterText, commit: commitFilterText } = useDebouncedText(filterText, onFilterTextChange);
 
   function addCustomFilter() {
     if (!selectedCustomField || !onCustomFilterAdd) return;

@@ -1122,6 +1122,7 @@ class MessageFeedPage:
     has_newer: bool
     has_more_in_window: bool
     has_older_than_through: bool
+    has_newer_than_before: bool
 
     @classmethod
     def from_scope(cls, queryset: MessageQuerySet, **options: Any) -> Self:
@@ -1156,6 +1157,7 @@ class MessagingQuery:
         before_cursor: str | None = None,
         after_cursor: str | None = None,
         through_cursor: str | None = None,
+        anchor: str = "",
         limit: int = 50,
     ) -> MessageFeedPage:
         """Page an inbox thread through the current actor's message scope."""
@@ -1173,6 +1175,7 @@ class MessagingQuery:
             before_cursor=before_cursor,
             after_cursor=after_cursor,
             through_cursor=through_cursor,
+            anchor=anchor,
             limit=limit,
         )
 
@@ -1296,6 +1299,17 @@ class MessagingQuery:
 @strawberry.type
 class MessagingMutation:
     """Record-backed chatter mutations."""
+
+    @strawberry.mutation
+    def set_inbox_message_starred(self, info: strawberry.Info, id: strawberry.ID, starred: bool) -> MessageType:
+        """Set the viewer's star after authorizing the personal-message read."""
+
+        user = _request_user(info)
+        if user is None:
+            raise PermissionDenied("authentication required")
+        message = Message.objects.all().explorer().message(str(id))
+        apps.get_model("messaging", "MessageStar").objects.set_starred(message, user=user, starred=starred)
+        return cast(MessageType, message)
 
     @strawberry.mutation(name="post_record_message")
     def post_record_message(self, info: strawberry.Info, input: RecordMessagePostInput) -> RecordMessagePostPayload:
