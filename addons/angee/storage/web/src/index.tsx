@@ -12,7 +12,7 @@ import { storagePreviews } from "./previews";
 const STORAGE_ID = "storage";
 
 const storageRoutes: readonly BaseAddonRoute[] = [
-  ...resourcePageRoutes("storage.files", "/storage", lazyRouteComponent(() => import("./views/StoragePage"), "StoragePage"), undefined, { detailName: "storage.file", menu: STORAGE_ID }),
+  ...resourcePageRoutes("storage.files", "/storage", lazyRouteComponent(() => import("./views/StoragePage"), "StoragePage"), "storage.File", { detailName: "storage.file", menu: STORAGE_ID }),
   {
     // The drives/backends admin. A static `/storage/settings` outranks the
     // `/storage/$id` file route, so it is a sibling, not a file id. Its chrome

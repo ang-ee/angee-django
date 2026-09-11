@@ -9,6 +9,8 @@ import {
   List,
   ListView,
   ResourceList,
+  TextLink,
+  useResourceRecordHrefLookup,
   type ListColumn,
   type RecordPanelContext,
   type RecordTabDescriptor,
@@ -19,6 +21,9 @@ import { useMessagingT } from "./i18n";
 
 const MODEL = "messaging.Message";
 const PART_MODEL = "messaging.Part";
+// A part's attachment is a storage.File; its routed record page (breadcrumbs
+// included) is the follow target for the attachment cell.
+const FILE_MODEL = "storage.File";
 
 // Default the inbox to a by-channel grouping. Hoisted to a stable reference so
 // the list does not re-seed its grouping on every render.
@@ -50,6 +55,7 @@ const PART_FIELDS = [
   "fragment.message_count",
   "file.id",
   "file.filename",
+  "file.title",
 ] as const;
 
 type PartFragment = {
@@ -60,11 +66,24 @@ type PartFragment = {
   message_count?: number | null;
 } | null;
 
+type PartFile = {
+  id?: string | null;
+  filename?: string | null;
+  title?: string | null;
+} | null;
+
 function fragmentOf(row: PartRow): NonNullable<PartFragment> | null {
   return (row as { fragment?: PartFragment }).fragment ?? null;
 }
 
-function partColumns(t: ReturnType<typeof useMessagingT>): readonly ListColumn<PartRow>[] {
+function fileOf(row: PartRow): NonNullable<PartFile> | null {
+  return (row as { file?: PartFile }).file ?? null;
+}
+
+function partColumns(
+  t: ReturnType<typeof useMessagingT>,
+  recordHref: ReturnType<typeof useResourceRecordHrefLookup>,
+): readonly ListColumn<PartRow>[] {
   return [
     { field: "position" },
     { field: "role" },
@@ -100,11 +119,22 @@ function partColumns(t: ReturnType<typeof useMessagingT>): readonly ListColumn<P
       header: t("parts.text"),
       render: (row) => {
         const fragment = fragmentOf(row);
-        const file = (row as { file?: { filename?: string | null } | null }).file;
         if (fragment?.text) {
           return <span className="block max-w-96 truncate text-fg">{fragment.text}</span>;
         }
-        return file?.filename ? <span className="text-fg-subtle">{file.filename}</span> : null;
+        // An attachment part links to its storage.File record page (breadcrumbs
+        // included) so the filename opens the file in-app instead of being dead
+        // text — the same follow pattern the activity agenda uses. Degrades to
+        // plain text where storage.File has no routed page.
+        const file = fileOf(row);
+        const label = file?.title || file?.filename;
+        if (!label) return null;
+        const href = file?.id ? recordHref(FILE_MODEL, file.id) : undefined;
+        return href ? (
+          <TextLink href={href}>{label}</TextLink>
+        ) : (
+          <span className="text-fg-subtle">{label}</span>
+        );
       },
     },
   ];
@@ -115,7 +145,8 @@ function partColumns(t: ReturnType<typeof useMessagingT>): readonly ListColumn<P
  *  by role by default, regroupable by shared fragment for the dedup lens. */
 function MessagePartsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useMessagingT();
-  const columns = React.useMemo(() => partColumns(t), [t]);
+  const recordHref = useResourceRecordHrefLookup();
+  const columns = React.useMemo(() => partColumns(t, recordHref), [t, recordHref]);
   return (
     <ListView<PartRow>
       resource={PART_MODEL}
