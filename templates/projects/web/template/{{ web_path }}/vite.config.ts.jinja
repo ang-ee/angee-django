@@ -5,8 +5,9 @@ import { defineAngeeWebViteConfig } from "@angee/app/vite";
 // the project-derived optimizeDeps set (see `@angee/app/vite`). Reaching it by
 // package name means this config resolves the framework whether it is an editable
 // checkout or an installed wheel — no sibling path. This config supplies only the
-// two project facts: a downstream project consumes the `@angee/*` packages as
-// installed (built) packages, so Vite pre-bundles them; and its
+// two project facts: a downstream project opts into prebundling any `@angee/*`
+// packages that expose built JavaScript (linked TypeScript stays in Vite's
+// transform/HMR pipeline); and its
 // `@angee/gql/<schema>` alias points at its OWN `runtime/gql/`.
 export default defineAngeeWebViteConfig({
   prebundleAngeePackages: true,
