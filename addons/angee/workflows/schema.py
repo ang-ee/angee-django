@@ -19,6 +19,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.identity import public_data_id_field
+from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset
 from angee.graphql.actions import (
     ActionResult,
@@ -1755,8 +1756,9 @@ class WorkflowSubjectDeclarationQuery:
         runs = read_scoped_queryset(cast(type[models.Model], WorkflowRun), actor)
         if runs is None:
             return []
+        artifact_content_type, artifact_object_id = canonical_record_target(target)
         artifact_runs = apps.get_model("workflows", "StepArtifact")._base_manager.filter(
-            target_content_type=content_type, target_object_id=target.pk,
+            target_content_type=artifact_content_type, target_object_id=artifact_object_id,
         ).values("attempt__step_run__run_id")
         return cast(list[WorkflowRunType], runs.filter(
             models.Q(subject_content_type=content_type, subject_object_id=target.pk)

@@ -24,8 +24,8 @@ export interface StorageUploadPanelProps {
   canUpload?: boolean;
   multiple?: boolean;
   target?: UploadTarget;
-  onUploaded?: (files: readonly UploadedFile[]) => void;
-  onUploadStart?: (files: readonly File[], target: UploadTarget | undefined) => void;
+  onUploaded?: (files: readonly UploadedFile[], completionContext?: unknown) => void;
+  onUploadStart?: (files: readonly File[], target: UploadTarget | undefined) => unknown;
   onBusyChange?: (busy: boolean) => void;
   heading?: React.ReactNode;
   description?: React.ReactNode;
@@ -58,8 +58,8 @@ export function StorageUploadPanel({
   const startUpload = React.useCallback((files: FileList | readonly File[] | null) => {
     if (!canUpload || !files?.length) return;
     const selected = Array.from(files);
-    onUploadStart?.(selected, target);
-    uploads.upload(selected, target);
+    const completionContext = onUploadStart?.(selected, target);
+    uploads.upload(selected, target, completionContext);
   }, [canUpload, onUploadStart, target, uploads]);
 
   return (

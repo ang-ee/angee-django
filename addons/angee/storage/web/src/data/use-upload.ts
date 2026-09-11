@@ -52,7 +52,7 @@ let taskSeq = 0;
 
 export interface StorageUpload {
   tasks: readonly UploadTask[];
-  upload: (files: readonly File[], target?: UploadTarget) => void;
+  upload: (files: readonly File[], target?: UploadTarget, completionContext?: unknown) => void;
   retry: (taskId: string) => void;
   clearFinished: () => void;
 }
@@ -69,7 +69,7 @@ export interface UploadedFile {
  * once the batch settles, then `onUploaded` fires.
  */
 export function useStorageUpload(
-  options: { onUploaded?: (files: readonly UploadedFile[]) => void } = {},
+  options: { onUploaded?: (files: readonly UploadedFile[], completionContext?: unknown) => void } = {},
 ): StorageUpload {
   const { onUploaded } = options;
   const t = useStorageT();
@@ -78,7 +78,7 @@ export function useStorageUpload(
   const fileResource = useModelMetadata(FILE_MODEL)?.resource ?? null;
   const invalidate = useInvalidate();
   const [tasks, setTasks] = useState<readonly UploadTask[]>([]);
-  const sources = useRef(new Map<string, { file: File; target: UploadTarget }>());
+  const sources = useRef(new Map<string, { file: File; target: UploadTarget; completionContext?: unknown }>());
 
   const patch = useCallback((id: string, next: Partial<UploadTask>) => {
     setTasks((current) =>
@@ -158,7 +158,7 @@ export function useStorageUpload(
   );
 
   const upload = useCallback(
-    (files: readonly File[], target: UploadTarget = {}): void => {
+    (files: readonly File[], target: UploadTarget = {}, completionContext?: unknown): void => {
       const started = files.map((file) => ({
         file,
         task: {
@@ -167,7 +167,7 @@ export function useStorageUpload(
           status: "hashing" as UploadStatus,
         },
       }));
-      started.forEach((entry) => sources.current.set(entry.task.id, { file: entry.file, target }));
+      started.forEach((entry) => sources.current.set(entry.task.id, { file: entry.file, target, completionContext }));
       setTasks((current) => [...current, ...started.map((entry) => entry.task)]);
       void Promise.allSettled(
         started.map((entry) => runOne(entry.task.id, entry.file, target)),
@@ -182,7 +182,7 @@ export function useStorageUpload(
             invalidates: ["list", "many", "detail"],
           });
         }
-        onUploaded?.(uploaded);
+        onUploaded?.(uploaded, completionContext);
       });
     },
     [fileResource, invalidate, onUploaded, runOne],
@@ -201,7 +201,7 @@ export function useStorageUpload(
           invalidates: ["list", "many", "detail"],
         });
       }
-      onUploaded?.([uploaded]);
+      onUploaded?.([uploaded], source.completionContext);
     });
   }, [fileResource, invalidate, onUploaded, patch, runOne]);
 
