@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   legacy: false,
   missingCurrent: false,
   executionStatus: "FAILED",
+  runStatus: "RUNNING",
   payloadVariables: [] as unknown[],
   resources: [] as Array<Record<string, unknown>>,
   mutation: vi.fn(),
@@ -98,7 +99,12 @@ vi.mock("@angee/refine", async (importOriginal) => {
       };
       return {
         data: mocks.loading ? undefined : {
-          workflow_runs_by_pk: { id: "run-1", origin: "TEST", occurrence_id: "occurrence-1", status: "RUNNING", waiting_kind: null, next_wake_at: null, workflow: { id: "workflow-1", name: "Flow", status: "TEST", version: 0, draft_revision: 4 } },
+          workflow_runs_by_pk: { id: "run-1", origin: "TEST", occurrence_id: "occurrence-1", status: mocks.runStatus, waiting_kind: null, next_wake_at: null, error: mocks.runStatus === "FAILED" ? "run fallback" : null, workflow: { id: "workflow-1", name: "Flow", status: "TEST", version: 0, draft_revision: 4 } },
+          failed_step_runs: mocks.runStatus === "FAILED" ? [{
+            id: "execution-failed", system_kind: "", map_index: -1, error: "execution fallback",
+            step: { id: "step-1", key: "resolve", name: "Resolve source" },
+            current_attempt: { id: "attempt-failed", error: "Missing workflow actor" },
+          }] : [],
           workflow_step_runs_groups: [
             { key: { step_id: "step-1", status: "FAILED" }, aggregate: { count: 2 } },
             { key: { step_id: "step-1", status: "SUCCEEDED" }, aggregate: { count: 1 } },
@@ -152,11 +158,34 @@ beforeEach(() => {
   mocks.legacy = false;
   mocks.missingCurrent = false;
   mocks.executionStatus = "FAILED";
+  mocks.runStatus = "RUNNING";
   mocks.payloadVariables.length = 0;
   mocks.resources.length = 0;
   mocks.mutation.mockReset();
   mocks.routeAvailable = true;
   mocks.listeners.clear();
+});
+
+test("a failed run leads with the failed step, retained error, inspection, and native recovery", async () => {
+  mocks.loading = false;
+  mocks.runStatus = "FAILED";
+  const reprocess = vi.fn().mockResolvedValue("Reprocess started");
+  const router = createRouter({ routeTree: createRootRoute({ component: () => <RunTimelinePanel runId="run-1" onReprocess={reprocess} /> }), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  await router.load();
+  render(<RouterProvider router={router} />);
+
+  expect(await screen.findByRole("heading", { name: "Run failed in Resolve source" })).toBeTruthy();
+  expect(screen.getByText("Missing workflow actor")).toBeTruthy();
+  expect(screen.getByText("Recovery options")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Reprocess run" }));
+  await waitFor(() => expect(reprocess).toHaveBeenCalledOnce());
+  fireEvent.click(screen.getByRole("button", { name: "Inspect failed execution" }));
+  await waitFor(() => expect(router.state.location.search).toMatchObject({
+    step: "step-1", execution: "execution-failed", attempt: "attempt-failed",
+  }));
+  await waitFor(() => expect(mocks.resources.some((props) =>
+    props.resource === "workflows.StepAttempt" && props.defaultRecordTab === "failure",
+  )).toBe(true));
 });
 
 test("loading can resolve into the bounded graph and current attempt flow without changing hooks", async () => {

@@ -511,7 +511,7 @@ export const WorkflowRunDetailDocument = graphql(`
 export const WorkflowRunInspectionDocument = graphql(`
   query WorkflowRunInspection($run: String!) {
     workflow_runs_by_pk(id: $run) {
-      id origin occurrence_id status waiting_kind next_wake_at
+      id origin occurrence_id status waiting_kind next_wake_at error
       test_repair_source_attempt { id step_run { id run { id } } }
       recovery_source_attempt { id step_run { id run { id } } }
       workflow { id name status version draft_revision }
@@ -525,6 +525,15 @@ export const WorkflowRunInspectionDocument = graphql(`
     }
     workflow_step_runs_aggregate(where: {run: {_eq: $run}}) {
       aggregate { count }
+    }
+    failed_step_runs: workflow_step_runs(
+      where: {run: {_eq: $run}, status: {_eq: "FAILED"}}
+      order_by: [{updated_at: desc}]
+      limit: 1
+    ) {
+      id system_kind map_index error
+      step { id key name }
+      current_attempt { id error }
     }
   }
 `);

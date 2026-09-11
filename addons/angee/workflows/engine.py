@@ -1556,11 +1556,15 @@ def _map_output(children: list[Any]) -> dict[str, Any]:
 
 def _route_success(run: Any, step_run: Any) -> None:
     outgoing = list(step_run.step.outgoing_edges.select_related("target").order_by("pk"))
+    by_target: dict[int, tuple[Any, list[Any]]] = {}
     for edge in outgoing:
-        if edge.condition and edge.condition != step_run.outcome:
-            _ensure_skipped(run, edge.target, previous=[step_run])
+        target, edges = by_target.setdefault(edge.target_id, (edge.target, []))
+        edges.append(edge)
+    for target, edges in by_target.values():
+        if any(not edge.condition or edge.condition == step_run.outcome for edge in edges):
+            _maybe_schedule_target(run, target)
         else:
-            _maybe_schedule_target(run, edge.target)
+            _ensure_skipped(run, target, previous=[step_run])
 
 
 def _route_skip(run: Any, step_run: Any) -> None:
