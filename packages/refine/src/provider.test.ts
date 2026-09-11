@@ -54,6 +54,20 @@ describe("Angee Hasura provider defaults", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  test.each([undefined, { fields: [] }])("gives native detail and multi-record reads an identity selection: %j", async (meta) => {
+    const queries: string[] = [];
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body)) as { query: string };
+      queries.push(query);
+      expect(() => parse(query)).not.toThrow();
+      return jsonResponse({ channels: [{ id: "chn_1" }], channels_by_pk: { id: "chn_1" } });
+    });
+    const provider = createAngeeHasuraDataProvider({ url: "https://example.invalid/graphql", auth: (request) => request, fetch });
+    expect((await provider.getOne({ resource: "channels", id: "chn_1", meta })).data).toEqual({ id: "chn_1" });
+    expect((await provider.getMany({ resource: "channels", ids: ["chn_1"], meta })).data).toEqual([{ id: "chn_1" }]);
+    for (const query of queries) expect(query).toMatch(/channels(?:_by_pk)?[^{}]*\{\s*id\s*\}/);
+  });
+
   test("repairs an explicitly empty list projection", async () => {
     const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { query: string };

@@ -7,24 +7,50 @@ import io
 import tempfile
 from types import SimpleNamespace
 from typing import Any
+from unittest import TestCase
+from unittest.mock import patch
 
+import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.db import IntegrityError, connection, models
+from django.test import SimpleTestCase, override_settings
+from django.utils import timezone
 from PIL import Image, ImageDraw
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.workflows.attempts import RecoveryMode
 from angee.workflows_ocr.engines import DocumentPart, DocumentPipelineError, PageImage, PageResult
 from angee.workflows_ocr.routing import (
     _decode_declared_text,
     _html_text,
     derive_text_claims,
-    map_text_parts,
     recognize_pages,
 )
-from angee.workflows_ocr.service import _document_sources, _merge, extract
+from angee.workflows_ocr.service import _document_sources, _merge, extract, reextract
+from angee.workflows_ocr.steps import OcrExtractStepImpl
+from angee.workflows_ocr_glm.engine import GlmOllamaEngine
+from tests.conftest import _clear_model_tables, _create_missing_tables
+from tests.ocr_engines import FakeOcrEngine
+from tests.ocr_models import OCR_MODELS, Extraction, ExtractionPage, ExtractionSource
+from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
+from tests.test_integrate_vcs import VCS_TEST_MODELS
+from tests.test_messaging import MESSAGING_TEST_MODELS
+
+
+@pytest.fixture()
+def ocr_tables(transactional_db):
+    """Use the same concrete model graph as messaging, agents, and stored files."""
+
+    models = tuple(dict.fromkeys((*MESSAGING_TEST_MODELS, *VCS_TEST_MODELS, *AGENTS_GRAPHQL_MODELS, *OCR_MODELS)))
+    _create_missing_tables(models)
+    try:
+        yield
+    finally:
+        _clear_model_tables(models)
+
 
 SCHEMA = {
     "$id": "test.synthetic.document.v1",
@@ -81,7 +107,7 @@ class PageAggregationTests(SimpleTestCase):
     def test_missing_models_retain_acquired_evidence(self) -> None:
         part = DocumentPart(0, 0, "text/plain", "native_text", "Invoice 22121", "test", "a" * 64)
         with self.assertRaises(DocumentPipelineError) as mapping_error:
-            map_text_parts((part,), SCHEMA, model=None, config={}, timeout=1)
+            GlmOllamaEngine().map_text_parts((part,), SCHEMA, model=None, config={}, timeout=1)
         self.assertEqual(mapping_error.exception.parts, (part,))
 
         page = PageImage(0, 1, "image/jpeg", b"bytes", 10, 10, 200)
@@ -138,6 +164,7 @@ def _png(text: str) -> bytes:
     return output.getvalue()
 
 
+@pytest.mark.usefixtures("ocr_tables")
 class ExtractionServiceTests(TestCase):
     """Exercise the service against the concrete composed runtime models."""
 
@@ -323,3 +350,69 @@ class ExtractionServiceTests(TestCase):
             self.assertEqual(failed.result, {})
             self.assertEqual(failed.sources.count(), 1)
             self.assertEqual(failed.parts.count(), 0)
+
+    def test_engine_io_finishes_before_atomic_persistence_and_exact_reuse_skips_engine(self) -> None:
+        def page(engine, image, schema, **kwargs):
+            self.assertFalse(connection.in_atomic_block)
+            return PageResult({"number": "IO-1", "rows": ["row"]})
+
+        with patch.object(FakeOcrEngine, "extract_page", autospec=True, side_effect=page) as recognize:
+            first = self._extract(config={})
+            reused = self._extract(config={})
+        self.assertEqual(first.pk, reused.pk)
+        self.assertEqual(recognize.call_count, len(self.files))
+
+    def test_revision_retry_rolls_back_partial_children_before_recreating_whole_evidence(self) -> None:
+        original = models.QuerySet.bulk_create
+        failures = 0
+
+        def collide(queryset, objects, *args, **kwargs):
+            nonlocal failures
+            rows = original(queryset, objects, *args, **kwargs)
+            if queryset.model is ExtractionPage and failures == 0:
+                failures += 1
+                raise IntegrityError("simulated competing revision")
+            return rows
+
+        with patch.object(models.QuerySet, "bulk_create", collide):
+            evidence = self._extract(config={"result": {"number": "RETRY-1", "rows": []}})
+        self.assertEqual(evidence.revision, 1)
+        self.assertEqual(Extraction._base_manager.count(), 1)
+        self.assertEqual(ExtractionSource._base_manager.count(), 2)
+        self.assertEqual(ExtractionPage._base_manager.count(), 2)
+
+    def test_unrecoverable_database_failure_leaves_no_partial_evidence(self) -> None:
+        original = models.QuerySet.bulk_create
+
+        def refuse(queryset, objects, *args, **kwargs):
+            if queryset.model is ExtractionPage:
+                raise IntegrityError("persistent constraint failure")
+            return original(queryset, objects, *args, **kwargs)
+
+        with patch.object(models.QuerySet, "bulk_create", refuse), self.assertRaises(IntegrityError):
+            self._extract(config={"result": {"number": "FAIL-1", "rows": []}})
+        self.assertEqual(Extraction._base_manager.count(), 0)
+        self.assertEqual(ExtractionSource._base_manager.count(), 0)
+        self.assertEqual(ExtractionPage._base_manager.count(), 0)
+
+    def test_recovery_retains_failed_revision_and_journals_only_the_new_reference(self) -> None:
+        failed = self._extract(config={"result": {"private": "unvalidated"}})
+        run = SimpleNamespace(run=SimpleNamespace(created_by=self.owner))
+        source_attempt = SimpleNamespace(output={"extraction_id": str(failed.sqid), "revision": 1})
+        with patch.object(FakeOcrEngine, "extract_page", return_value=PageResult({"number": "RECOVERED", "rows": []})):
+            outcome = OcrExtractStepImpl().run_recovery(
+                run,
+                now=timezone.now(),
+                source_attempt=source_attempt,
+                mode=RecoveryMode.FRESH,
+            )
+            with actor_context(self.owner):
+                repeated = reextract(failed)
+        self.assertEqual(outcome.outcome, "extracted")
+        self.assertEqual(outcome.output, {"extraction_id": str(repeated.sqid), "revision": 2})
+        self.assertEqual(Extraction._base_manager.count(), 2)
+        failed.refresh_from_db()
+        self.assertEqual(failed.result, {"private": "unvalidated"})
+        self.assertEqual(failed.status, "failed")
+        with self.assertRaises(ValidationError), actor_context(self.owner):
+            reextract(repeated)

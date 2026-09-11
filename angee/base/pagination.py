@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -14,6 +15,21 @@ from django.utils import timezone
 
 class InvalidKeysetCursor(ValueError):
     """A cursor cannot be decoded in the current query's signing scope."""
+
+
+@dataclass(frozen=True, slots=True)
+class KeysetPage[Row]:
+    """Authorized rows and stable cuts, independent of a domain or transport."""
+
+    rows: Iterable[Row]
+    count: int
+    older_cursor: str | None
+    newer_cursor: str | None
+    has_older: bool
+    has_newer: bool
+    has_more_in_window: bool
+    has_older_than_through: bool
+    has_newer_than_before: bool
 
 
 @dataclass(frozen=True, slots=True)

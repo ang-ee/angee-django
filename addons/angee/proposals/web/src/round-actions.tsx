@@ -47,23 +47,24 @@ export function useRoundCeremonyActions(
     })),
     [t],
   );
-  const roundArgument = React.useCallback((round: string) => ({ round }), []);
   const [open] = useRecordActionMutation<ActionFieldName>("open_proposal_round", {
     invalidateModels: [ROUND_MODEL, PROPOSAL_MODEL],
-    actionArguments: roundArgument,
+    idArgument: "round",
     settle: true,
   });
   const [closeRound] = useActionOutcomeMutation<ActionFieldName>("close_proposal_round", {
+    idArgument: "round",
     invalidateModels: [ROUND_MODEL, PROPOSAL_MODEL],
   });
   const [cancel] = useRecordActionMutation<ActionFieldName>("cancel_proposal_round", {
     invalidateModels: [ROUND_MODEL, PROPOSAL_MODEL],
-    actionArguments: roundArgument,
+    idArgument: "round",
     settle: true,
   });
   const [transferRound] = useActionOutcomeMutation<ActionFieldName>(
     "transfer_proposal_round_facilitation",
     {
+      idArgument: "round",
       invalidateModels: [ROUND_MODEL, PROPOSAL_MODEL],
     },
   );
@@ -74,7 +75,6 @@ export function useRoundCeremonyActions(
     async (values, context) => {
       const id = actionRecordId(context.record, t("round.action.failed"));
       return (await closeRound(id, {
-        round: id,
         outcome: closeOutcome(closeOutcomeOptions, values.outcome, t("round.action.invalidOutcome")),
         accepted: idList(values.accepted),
         partial: idList(values.partial),
@@ -89,7 +89,6 @@ export function useRoundCeremonyActions(
     async (values, context) => {
       const round = actionRecordId(context.record, t("round.action.failed"));
       return (await transferRound(round, {
-        round,
         facilitator: requiredId(
           values.facilitator,
           t("round.action.invalidFacilitator"),

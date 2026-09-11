@@ -18,7 +18,7 @@ import { fileDragPayload, type StorageFileRow } from "../data/file-rows";
 import type { StorageUpload, UploadTarget } from "../data/use-upload";
 import { fileGalleryCard } from "./file-columns";
 import { fileStage, formatDate } from "../lib/file-display";
-import { StorageUploadTasks } from "./StorageUploadPanel";
+import { StorageUploadTasks } from "./StorageUploadTasks";
 
 export interface FileBrowserContentProps {
   baseFilter: ResourceFilter<"storage.File">;

@@ -29,7 +29,6 @@ import {
   type ActionOutcome,
   type AggregateBucket,
   type AggregateRequestOptions,
-  type ByIdVariables,
   type CustomGraphQLOperationTarget,
   type DeletePreview,
   type DeletePreviewVariables,
@@ -148,7 +147,7 @@ export interface UseAngeeResourceSaveResult {
 }
 
 /**
- * Fire an id-targeted action, optionally with extra required scalar arguments,
+ * Fire a derived action with its declared record-id binding and required arguments,
  * and resolve its in-band `ActionOutcome` (`undefined` when the transport
  * returned no payload). A domain failure resolves as
  * `ok=false` rather than throwing — project through `runActionResult` where the
@@ -163,6 +162,8 @@ export type ActionMutate = (
 
 export interface UseActionMutationOptions {
   dataProviderName?: string;
+  /** Declared record argument. Defaults to `id`; null sends only explicit arguments. */
+  idArgument?: string | null;
   /**
    * Exact canonical Angee model labels whose authored reads this action moves.
    * This metadata-free package exact-matches them and does not resolve aliases.
@@ -581,7 +582,7 @@ export function useAngeeRevisions(
 }
 
 /**
- * Run an id-targeted backend action mutation through refine's custom mutation
+ * Run a derived backend action mutation through refine's custom mutation
  * owner. The generated per-schema `ActionFieldName` union still pins callers to
  * real action fields, while refine owns execution state.
  * The mutate resolves the in-band `ActionOutcome` (`ok`, `message`, and the
@@ -607,10 +608,11 @@ export function useActionMutation<TField extends string = string>(
   const invalidateModels = useStableArray(options.invalidateModels ?? []);
   const invalidates = options.invalidates ?? EMPTY_INVALIDATIONS;
   const queryClient = useQueryClient();
-  const run = useCustomMutation<BaseRecord, HttpError, ByIdVariables>();
+  const run = useCustomMutation<BaseRecord, HttpError, Record<string, unknown>>();
   const mutate = useCallback<ActionMutate>(
     async (id, arguments_ = {}) => {
-      const variables = { ...arguments_, id };
+      const idArgument = options.idArgument === undefined ? "id" : options.idArgument;
+      const variables = idArgument === null ? { ...arguments_ } : { ...arguments_, [idArgument]: id };
       const request = actionRequest(field, variables, {
         dataProviderName,
         document: operationDocument(
@@ -649,6 +651,7 @@ export function useActionMutation<TField extends string = string>(
       invalidateModels,
       invalidates,
       operationDocuments,
+      options.idArgument,
       queryClient,
       run.mutateAsync,
     ],

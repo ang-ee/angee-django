@@ -41,7 +41,7 @@ from rebac import PermissionDenied, current_actor, system_context
 
 from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.pagination import InvalidKeysetCursor, KeysetOrder
+from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import canonical_record_target
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
@@ -1918,7 +1918,7 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         in the inbox.
         """
 
-        return cast(MessageQuerySet, self.exclude(thread__attachments__role="chatter").distinct())
+        return cast(MessageQuerySet, self.exclude(thread__attachments__role="chatter"))
 
     def searching(self, term: str) -> MessageQuerySet:
         """Return messages matching one Odoo-style chatter search token."""
@@ -2066,7 +2066,7 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         through_cursor: str | None = None,
         anchor: str = "",
         limit: int = 50,
-    ) -> dict[str, Any]:
+    ) -> KeysetPage[Any]:
         """Read a currently authorized, newest-first fixed or discovery window.
 
         ``before_cursor`` is an exclusive upper cut; ``through_cursor`` is an
@@ -2104,7 +2104,7 @@ class MessageQuerySet(AngeeQuerySet[Any]):
             )
         except InvalidKeysetCursor as error:
             raise ValueError("Invalid message feed cursor for this scope.") from error
-        return {"messages": page.pop("rows"), **page}
+        return page
 
     def feed_revalidate(self, ids: list[str], *, search: str = "") -> dict[str, Any]:
         """Partition at most 200 submitted IDs into current survivors and absences.
@@ -2929,7 +2929,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
         return cast(
             PartQuerySet,
-            self.exclude(message__thread__attachments__role="chatter").distinct(),
+            self.exclude(message__thread__attachments__role="chatter"),
         )
 
     def attachments(self) -> PartQuerySet:

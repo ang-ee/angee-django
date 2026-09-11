@@ -61,7 +61,6 @@ const storage = defineBaseAddon({
 
 export { useStorageUpload } from "./data/use-upload";
 export type { StorageUpload, UploadedFile, UploadTarget, UploadTask } from "./data/use-upload";
-export { StorageUploadPanel, StorageUploadTasks } from "./views/StorageUploadPanel";
-export type { StorageUploadPanelProps } from "./views/StorageUploadPanel";
+export { StorageUploadTasks } from "./views/StorageUploadTasks";
 
 export default storage;

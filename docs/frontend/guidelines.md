@@ -143,8 +143,9 @@ history uses native Query pages with domain-owned
   valibot schema (`safeParse`), never asserted into an application shape; a
   recursive shape a declarative schema cannot express may wrap its type guard
   in `v.custom`, keeping the parse boundary in the schema.
-- **Record-targeted action mutations are derived, not authored.** For a
-  `<field>(id: ID!, ...required scalar arguments): ActionResult` mutation, call
+- **ActionResult mutations with required arguments are derived, not authored.**
+  Codegen owns eligibility in `packages/app/bin/angee-web-codegen.mjs`: every
+  argument must be non-null without a default. Call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
   rendered-view code, or
   `useRecordActionMutation<ActionFieldName>("field")` for a rendered
@@ -153,7 +154,9 @@ history uses native Query pages with domain-owned
   variables are authored. The shared hook owns deriving the Hasura custom
   mutation and running it through refine `useCustomMutation`; the rendered record
   adapter owns binding it to `ActionContext` (record id, refresh,
-  missing-record handling, success hooks).
+  missing-record handling, success hooks). Set `idArgument` to the schema
+  argument that receives the record id when it is named differently (for example,
+  `"round"`); `null` on an outcome mutation sends only its explicit arguments.
   Don't hand-author these as `graphql()` documents or page-local
   `ctx.record.id → mutate → refresh` callbacks.
 - **A contributed record verb that needs input declares `args`.** A

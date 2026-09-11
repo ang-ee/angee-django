@@ -27,17 +27,15 @@ export interface AddressFieldLabels {
 export function addressFields({
   includeParty = true,
   prefix = "",
-  labelIsTitle = true,
   labels,
 }: {
   includeParty?: boolean;
   prefix?: string;
-  labelIsTitle?: boolean;
   labels: AddressFieldLabels;
 }): React.ReactNode {
   return [
     includeParty ? <Field key="party" name="party" readOnly /> : null,
-    <Field key="label" name={`${prefix}label`} kind="string" label={labels.label} title={labelIsTitle} />,
+    <Field key="label" name={`${prefix}label`} kind="string" label={labels.label} title />,
     <Field key="street" name={`${prefix}street`} kind="string" label={labels.street} widget="textarea" />,
     <Field key="extended" name={`${prefix}extended`} kind="string" label={labels.extended} widget="textarea" />,
     <Field key="po_box" name={`${prefix}po_box`} kind="string" label={labels.poBox} />,

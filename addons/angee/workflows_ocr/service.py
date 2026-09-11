@@ -9,15 +9,16 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import pypdfium2 as pdfium
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import IntegrityError, transaction
 from jsonschema import Draft202012Validator
 from PIL import Image
 from rebac import current_actor, system_context
 
 from angee.base.actors import actor_user_id
+from angee.base.impl import resolve_impl_class
 from angee.base.refs import canonical_record_target, record_ref_for
 from angee.workflows_ocr.engines import (
     DocumentPart,
@@ -38,7 +39,7 @@ def extract(
     authorized_target: Any,
     message_parts: Sequence[Any] = (),
     recognition_model: Any | None = None,
-    engine: str = "glm",
+    engine: str,
     config: Mapping[str, Any] | None = None,
 ) -> Any:
     """Extract ordered files into immutable evidence scoped to ``authorized_target``.
@@ -113,7 +114,7 @@ def extract(
     try:
         engine_impl = engine_class()
         timeout = float(normalized_config.get("timeout") or settings.ANGEE_OCR_TIMEOUT_SECONDS)
-        if type(engine_impl).extract_document is not OcrEngine.extract_document:
+        if engine_impl.document_engine:
             document_result = engine_impl.extract_document(
                 document_sources,
                 normalized_schema,
@@ -172,119 +173,45 @@ def extract(
         error_code = type(error).__name__
 
     target = canonical_record_target(authorized_target)
-    with transaction.atomic(), system_context(reason="workflows_ocr.extract.persist"):
-        extraction = extraction_model(
-            revision=1,
-            lineage_key=lineage_key,
-            reuse_key=reuse_key,
-            status=status,
-            error_code=error_code,
-            schema_id=schema_id,
-            schema=normalized_schema,
-            schema_digest=_digest(normalized_schema),
-            engine=engine,
-            model=model,
-            recognition_model=recognition_model,
-            engine_config=normalized_config,
-            result=result,
-            provenance={
-                "source_count": len(source_facts),
-                "page_count": len(pages) or sum(part.source_page is not None for part in retained_parts),
-                "conflicts": conflicts,
-                "completed_page_count": len(page_results)
-                or sum(part.source_page is not None for part in retained_parts),
-                "claims": document_claims,
-                "document": document_metadata,
-                "configured_model_roles": [
-                    role
-                    for role, configured in (
-                        ("mapping", model is not None),
-                        ("recognition", recognition_model is not None),
-                    )
-                    if configured
-                ],
-                "used_model_roles": list(used_model_roles),
-                "target": {"resource_type": target_ref.resource_type, "public_id": target_ref.public_id},
-            },
-            content_type=target.content_type,
-            object_id=target.object_id,
-            created_by_id=owner_id,
-        )
-        extraction.sudo(reason="workflows_ocr.extract.persist")
-        for _attempt in range(3):
-            previous = (
-                extraction_model._base_manager.select_for_update()
-                .filter(lineage_key=lineage_key)
-                .order_by("-revision")
-                .first()
-            )
-            extraction.revision = (previous.revision + 1) if previous else 1
-            try:
-                with transaction.atomic():
-                    extraction.save()
-                break
-            except IntegrityError:
-                duplicate = extraction_model._base_manager.filter(reuse_key=reuse_key).first()
-                if duplicate is not None:
-                    return duplicate
-                extraction.pk = None
-        else:
-            raise IntegrityError("Could not allocate an extraction revision after concurrent writes.")
-        source_model = apps.get_model("workflows_ocr", "ExtractionSource")
-        page_model = apps.get_model("workflows_ocr", "ExtractionPage")
-        sources = [
-            source_model(
-                extraction=extraction,
-                file=source.file,
-                message_part=source.message_part,
-                position=source.source_position,
-                content_hash=source.content_hash,
-            )
-            for source in document_sources
-        ]
-        source_model._base_manager.bulk_create(sources)
-        page_model._base_manager.bulk_create(
-            [
-                page_model(
-                    extraction=extraction,
-                    source=sources[page.source_position],
-                    position=position,
-                    source_page=page.page_position,
-                    width=page.width,
-                    height=page.height,
-                    dpi=page.dpi,
-                    duration_ms=max(page_results[position].duration_ms, 0),
-                    result=page_results[position].value,
-                    engine_metadata=page_results[position].engine_metadata or {},
+    return extraction_model.objects.create_revision(
+        sources=document_sources,
+        pages=pages,
+        page_results=page_results,
+        parts=retained_parts,
+        lineage_key=lineage_key,
+        reuse_key=reuse_key,
+        status=status,
+        error_code=error_code,
+        schema_id=schema_id,
+        schema=normalized_schema,
+        schema_digest=_digest(normalized_schema),
+        engine=engine,
+        model=model,
+        recognition_model=recognition_model,
+        engine_config=normalized_config,
+        result=result,
+        provenance={
+            "source_count": len(source_facts),
+            "page_count": len(pages) or sum(part.source_page is not None for part in retained_parts),
+            "conflicts": conflicts,
+            "completed_page_count": len(page_results) or sum(part.source_page is not None for part in retained_parts),
+            "claims": document_claims,
+            "document": document_metadata,
+            "configured_model_roles": [
+                role
+                for role, configured in (
+                    ("mapping", model is not None),
+                    ("recognition", recognition_model is not None),
                 )
-                for position, page in enumerate(pages[: len(page_results)])
-            ]
-        )
-        if retained_parts:
-            part_model = apps.get_model("workflows_ocr", "ExtractionPart")
-            part_model._base_manager.bulk_create(
-                [
-                    part_model(
-                        extraction=extraction,
-                        source=sources[part.source_position],
-                        position=position,
-                        source_page=part.source_page,
-                        mime_type=part.mime_type,
-                        kind=part.kind,
-                        method=part.method,
-                        content_hash=part.content_hash,
-                        width=part.width,
-                        height=part.height,
-                        dpi=part.dpi,
-                        value=part.value,
-                        claims=_claims_for_part(document_claims, position),
-                        metadata=part.metadata or {},
-                        duration_ms=max(part.duration_ms, 0),
-                    )
-                    for position, part in enumerate(retained_parts)
-                ]
-            )
-    return extraction
+                if configured
+            ],
+            "used_model_roles": list(used_model_roles),
+            "target": {"resource_type": target_ref.resource_type, "public_id": target_ref.public_id},
+        },
+        content_type=target.content_type,
+        object_id=target.object_id,
+        created_by_id=owner_id,
+    )
 
 
 def reextract(extraction: Any) -> Any:
@@ -370,14 +297,6 @@ def _model_fingerprint(model: Any | None) -> dict[str, Any] | None:
         "provider_url": str(model.provider.base_url),
         "provider_config": model.provider.config,
         "model_config": model.config,
-    }
-
-
-def _claims_for_part(claims: Mapping[str, list[dict[str, Any]]], position: int) -> dict[str, Any]:
-    return {
-        pointer: [claim for claim in entries if claim.get("part_position") == position]
-        for pointer, entries in claims.items()
-        if any(claim.get("part_position") == position for claim in entries)
     }
 
 
@@ -467,9 +386,6 @@ def _digest(value: Any) -> str:
 
 
 def _engine_class(key: str) -> type[Any]:
-    from angee.base.impl import resolve_impl_class
-    from angee.workflows_ocr.engines import OcrEngine
-
     return resolve_impl_class("ANGEE_OCR_ENGINE_CLASSES", key, base_class=OcrEngine)
 
 
@@ -514,8 +430,6 @@ def _load_image(content: bytes) -> Image.Image:
 
 def _pdf_images(content: bytes, *, dpi: int) -> list[Image.Image]:
     try:
-        import pypdfium2 as pdfium
-
         document = pdfium.PdfDocument(content)
         scale = dpi / 72
         return [page.render(scale=scale).to_pil() for page in document]
@@ -528,36 +442,30 @@ def _merge(
     *,
     schema: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
-    """Merge page objects while retaining required, explicitly nullable facts.
+    """Merge page evidence, preserving schema-valid required empty values.
 
-    Empty values normally contribute no evidence.  A required property whose
-    schema accepts JSON null is different: an explicit null is the model's
-    evidence that the field was inspected and absent, and must survive when no
-    page supplies a substantive value.
+    An explicitly empty required collection or nullable field is still a claim.
+    Later substantive evidence replaces it; absent optional values add no claim.
     """
 
     merged: dict[str, Any] = {}
     conflicts: dict[str, list[Any]] = {}
     required = set(schema.get("required", ())) if isinstance(schema, Mapping) else set()
     properties = schema.get("properties", {}) if isinstance(schema, Mapping) else {}
-    required_nullable = {
-        key
-        for key in required
-        if isinstance(properties, Mapping)
-        and isinstance(properties.get(key), Mapping)
-        and Draft202012Validator(dict(properties[key])).is_valid(None)
-    }
+    validator = Draft202012Validator(schema or {})
     for page in results:
         for key, value in page.value.items():
-            if value is None:
-                if key in required_nullable and key not in merged:
-                    merged[key] = None
-                continue
-            if value in ("", []):
+            if value in (None, "", []):
+                if (
+                    key in required
+                    and key not in merged
+                    and validator.evolve(schema=properties.get(key, {})).is_valid(value)
+                ):
+                    merged[key] = value
                 continue
             if key not in merged:
                 merged[key] = value
-            elif merged[key] is None:
+            elif merged[key] in (None, ""):
                 merged[key] = value
             elif isinstance(merged[key], list) and isinstance(value, list):
                 merged[key] = [*merged[key], *value]

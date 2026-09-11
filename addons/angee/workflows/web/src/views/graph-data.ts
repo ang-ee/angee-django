@@ -2,6 +2,7 @@ import {
   graphNodeStyle,
   type GraphViewEdge,
   type GraphViewNode,
+  type GraphViewNodeStyle,
   type GraphViewPosition,
 } from "@angee/ui";
 
@@ -40,7 +41,7 @@ export const workflowNodeStyles = {
   FAILED: graphNodeStyle("var(--danger)", "danger", { background: "var(--danger-soft)" }),
   CANCELED: graphNodeStyle("var(--border-strong)", "neutral"),
   SKIPPED: graphNodeStyle("var(--border-subtle)", "neutral"),
-};
+} satisfies Record<WorkflowGraphNodeKind, GraphViewNodeStyle>;
 
 export function workflowGraphNodes(
   steps: readonly WorkflowGraphStep[],

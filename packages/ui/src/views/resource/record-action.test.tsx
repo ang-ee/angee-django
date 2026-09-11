@@ -146,6 +146,11 @@ describe("record action helpers", () => {
     );
   });
 
+  test("forwards the schema's record argument binding", () => {
+    renderHook(() => useRecordActionMutation("open_round", { idArgument: "round" }));
+    expect(dataMocks.useActionMutation).toHaveBeenCalledWith("open_round", expect.objectContaining({ idArgument: "round" }));
+  });
+
   test("passes invalidation targets to the data action owner", async () => {
     const refresh = vi.fn();
     const { result } = renderHook(() =>

@@ -179,7 +179,9 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
 }
 ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
 ANGEE_OCR_ENGINE_CLASSES = {
-    "fake": "angee.workflows_ocr.engines.FakeOcrEngine",
+    "none": "angee.workflows_ocr.engines.NoOcrEngine",
+    "fake": "tests.ocr_engines.FakeOcrEngine",
+    "fake_document": "tests.ocr_engines.FakeDocumentEngine",
     "glm": "angee.workflows_ocr_glm.engine.GlmOllamaEngine",
 }
 ANGEE_OCR_MAX_BYTES = 25 * 1024 * 1024

@@ -71,8 +71,8 @@ class ImapError(IntegrationError):
     """Raised when the channel's IMAP configuration, transport, or login is unusable.
 
     An ``IntegrationError``: its message is composed here from facts the
-    operator already owns (host, login name, the server's refusal line) and
-    never from a raw payload, so sync telemetry and the connection test may
+    operator already owns (host and login name), never a vendor exception
+    payload, so sync telemetry and the connection test may
     show it verbatim.
     """
 
@@ -469,7 +469,10 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             if security == "starttls":
                 client.starttls(context)
         except _TRANSIENT_ERRORS as error:
-            raise ImapError(f"IMAP connection to {host} failed: {error}") from error
+            logger.exception("IMAP connection to %s failed.", host)
+            raise ImapError(
+                f"IMAP connection to {host} failed. Check the host, port, and security settings."
+            ) from error
         return client
 
     @staticmethod
@@ -539,7 +542,10 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         try:
             login()
         except LoginError as error:
-            raise ImapError(f"IMAP login failed for {username!r} at {self._host()}: {error}") from error
+            logger.exception("IMAP login failed for %r at %s.", username, self._host())
+            raise ImapError(
+                f"IMAP login failed for {username!r} at {self._host()}. Check the account credentials."
+            ) from error
 
     def _configured_username(self) -> str:
         """Return the operator-configured login username, or ``""``."""

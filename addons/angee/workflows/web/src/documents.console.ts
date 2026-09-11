@@ -331,18 +331,6 @@ export const WorkflowSchedulePreviewDocument = graphql(`
   }
 `);
 
-export const EnableWorkflowTriggerDocument = graphql(`
-  mutation EnableWorkflowTrigger($trigger: ID!) {
-    enable_workflow_trigger(trigger: $trigger) { ok message validation_errors id }
-  }
-`);
-
-export const DisableWorkflowTriggerDocument = graphql(`
-  mutation DisableWorkflowTrigger($trigger: ID!) {
-    disable_workflow_trigger(trigger: $trigger) { ok message validation_errors id }
-  }
-`);
-
 export const UpdateWorkflowStepPositionDocument = graphql(`
   mutation UpdateWorkflowStepPosition($id: String!, $position: JSON!) {
     update_workflow_steps_by_pk(

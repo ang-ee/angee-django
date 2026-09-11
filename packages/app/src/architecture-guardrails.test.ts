@@ -185,6 +185,15 @@ describe("React architecture guardrails", () => {
     );
   });
 
+  test("record routing consumes addon declarations without workflow vocabulary", () => {
+    for (const name of ["resource-routing.ts", "record-navigation-context.ts"]) {
+      const source = readFileSync(join(PACKAGES_ROOT, "ui/src/views/resource", name), "utf8");
+      expect(source).not.toMatch(/RECORD_TASK_SEARCH_KEY|["']decision["']/);
+    }
+    const routing = readFileSync(join(PACKAGES_ROOT, "ui/src/views/resource/resource-routing.ts"), "utf8");
+    expect(routing).toContain("recordSearchKeys");
+  });
+
   test("framework-owned dynamic i18n families contain only UI vocabulary", () => {
     expect([...new Set(UI_DYNAMIC_I18N_KEY_FAMILIES.map((family) => family.namespace))])
       .toEqual(["ui"]);

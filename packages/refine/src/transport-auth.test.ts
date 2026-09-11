@@ -71,3 +71,17 @@ describe("sessionAuth CSRF rotation", () => {
     expect(fetchToken).toHaveBeenCalledTimes(2);
   });
 });
+
+
+test("unreadable CSRF cookies require a fresh token after a session rotates", async () => {
+  vi.stubGlobal("document", { cookie: "" });
+  const fetchToken = vi.fn()
+    .mockResolvedValueOnce(Response.json({ token: "before-login", cookieName: null }))
+    .mockResolvedValueOnce(Response.json({ token: "after-login", cookieName: null }));
+  try {
+    const provider = createCsrfTokenProvider({ fetch: fetchToken });
+    expect(await provider.token()).toBe("before-login");
+    expect(await provider.token()).toBe("after-login");
+    expect(fetchToken).toHaveBeenCalledTimes(2);
+  } finally { vi.unstubAllGlobals(); }
+});

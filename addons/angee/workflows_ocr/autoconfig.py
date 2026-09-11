@@ -2,8 +2,7 @@
 
 SETTINGS = {
     "ANGEE_OCR_ENGINE_CLASSES": {
-        "fake": "angee.workflows_ocr.engines.FakeOcrEngine",
-        "fake_document": "angee.workflows_ocr.engines.FakeDocumentEngine",
+        "none": "angee.workflows_ocr.engines.NoOcrEngine",
     },
     "ANGEE_WORKFLOW_STEP_CLASSES.ocr_extract": "angee.workflows_ocr.steps.OcrExtractStepImpl",
     "ANGEE_OCR_MAX_BYTES": 25 * 1024 * 1024,

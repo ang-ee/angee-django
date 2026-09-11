@@ -20,7 +20,7 @@ export {
   type UseListRecordNavigationOptions,
   type UseListRecordNavigationResult,
 } from "./resource/use-list-record-navigation";
-export { RECORD_TAB_SEARCH_KEY, RECORD_TASK_SEARCH_KEY, parseRecordNavigationScope, recordNavigationSearch, recordNavigationHref, recordTargetHref, recordTargetSearch, routeSearchParam, updateRouteSearch } from "./resource/record-navigation-context";
+export { RECORD_TAB_SEARCH_KEY, parseRecordNavigationScope, recordNavigationSearch, recordNavigationHref, recordTargetHref, recordTargetSearch, routeSearchParam, updateRouteSearch } from "./resource/record-navigation-context";
 export type { RecordTargetSearch } from "./resource/record-navigation-context";
 export { RowsListView, type RowsListViewProps } from "./resource/RowsListView";
 export {

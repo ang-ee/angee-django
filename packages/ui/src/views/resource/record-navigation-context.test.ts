@@ -13,14 +13,14 @@ const resource = testDataResource("notes.Note", {
   } }),
 });
 
-test("record targets preserve unrelated search and encode an exact tab and task", () => {
-  expect(recordTargetSearch({ filter: "active", decision: "old" }, { tab: "addresses", task: "decision-2" })).toEqual({
+test("record targets preserve unrelated search and encode an exact tab and addon detail state", () => {
+  expect(recordTargetSearch({ filter: "active", detail: "old" }, { tab: "addresses", search: { detail: "detail-2" } })).toEqual({
     filter: "active",
     recordTab: "addresses",
-    decision: "decision-2",
+    detail: "detail-2",
   });
-  expect(recordTargetHref("/parties/people/party%201?filter=active#details", { tab: "identity", task: "decision/1" }))
-    .toBe("/parties/people/party%201?filter=active&recordTab=identity&decision=decision%2F1#details");
+  expect(recordTargetHref("/parties/people/party%201?filter=active#details", { tab: "identity", search: { detail: "detail/1" } }))
+    .toBe("/parties/people/party%201?filter=active&recordTab=identity&detail=detail%2F1#details");
 });
 import type { ListViewNavigationScope } from "./resource-view-surface";
 const scope: ListViewNavigationScope = { filter: { AND: [{ title: { iContains: "draft" } }, { updated_at: { gte: "2026-09-01", lt: "2026-10-01" } }] }, order: { updated_at: "DESC" }, page: 2, pageSize: 20 };
@@ -75,4 +75,10 @@ test("flat route search updates preserve foreign keys and expose strings only", 
   expect(updated).toEqual({ group: "status", peopleScope: "CIRCLE", peopleCircle: undefined });
   expect(routeSearchParam(updated, "peopleScope")).toBe("CIRCLE");
   expect(routeSearchParam({ page: 2 }, "page")).toBeUndefined();
+});
+
+
+test("clearing declared record detail state preserves unrelated collection search", () => {
+  expect(recordTargetSearch({ recordTab: "details", detail: "old", filter: "active", page: "2" },
+    { tab: null, search: { detail: null } })).toEqual({ filter: "active", page: "2" });
 });

@@ -1,13 +1,11 @@
 import { ResourceQuery, isClientRowModel, type DataResourceMetadata } from "@angee/metadata";
 import { MAX_PAGE_SIZE } from "@angee/refine";
-import { routeSearchString } from "../../runtime/route-href";
+import { RECORD_NAVIGATION_SEARCH_KEY as SEARCH_KEY, RECORD_TAB_SEARCH_KEY, routeSearchString } from "../../runtime/route-href";
 import * as v from "valibot";
 import { isResourceViewFilter } from "./model/filter";
 import type { ListViewNavigationScope } from "./resource-view-surface";
 
-const SEARCH_KEY = "recordNav";
-export const RECORD_TAB_SEARCH_KEY = "recordTab";
-export const RECORD_TASK_SEARCH_KEY = "decision";
+export { RECORD_TAB_SEARCH_KEY } from "../../runtime/route-href";
 const MAX_CONTEXT_LENGTH = 8192;
 const positiveInteger = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(Number.MAX_SAFE_INTEGER));
 const contextSchema = v.strictObject({
@@ -77,7 +75,8 @@ export function routeSearchParam(
 
 export interface RecordTargetSearch {
   tab?: string | null;
-  task?: string | null;
+  /** Additional detail keys declared by their owning addon. Null removes a key. */
+  search?: Readonly<Record<string, string | null>>;
 }
 
 /** Set or clear the portable detail context shared by canonical record links. */
@@ -88,12 +87,14 @@ export function recordTargetSearch(
   const next = { ...search };
   if (target.tab === null) delete next[RECORD_TAB_SEARCH_KEY];
   else if (target.tab !== undefined) next[RECORD_TAB_SEARCH_KEY] = target.tab;
-  if (target.task === null) delete next[RECORD_TASK_SEARCH_KEY];
-  else if (target.task !== undefined) next[RECORD_TASK_SEARCH_KEY] = target.task;
+  for (const [key, value] of Object.entries(target.search ?? {})) {
+    if (value === null) delete next[key];
+    else next[key] = value;
+  }
   return next;
 }
 
-/** Add an exact tab/task target to a composed canonical record href. */
+/** Add an exact tab and declared detail state to a composed canonical record href. */
 export function recordTargetHref(href: string, target: RecordTargetSearch): string {
   const url = new URL(href, "https://angee.invalid");
   const query = routeSearchString(recordTargetSearch(Object.fromEntries(url.searchParams), target));

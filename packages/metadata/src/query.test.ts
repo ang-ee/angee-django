@@ -63,10 +63,25 @@ describe("ResourceQuery", () => {
     for (const filter of [{ channel: { sqid: "a" } }, { channel: { id: "a" } }, { channel: { _eq: "a" } }, { missing: "x" }, { body: { regex: ".*" } }]) expect(() => query.filterFrom(filter)).toThrow(QueryParseError);
     expect(() => query.groupsFrom([{ field: "channel", aggregateKey: "channel_id" }])).toThrow(QueryParseError);
     expect(() => query.groupsFrom([{ field: "channel" }, { field: "channel" }])).toThrow(/duplicate/);
-    expect(query.groupsFrom([{ field: "channel.display_name" }]).map((axis) => axis.id)).toEqual(["channel"]);
+    expect(() => query.groupsFrom([{ field: "channel.display_name" }])).toThrow(/unknown group/);
+    expect(query.groupsFrom([{ field: "channel.id" }]).map((axis) => axis.id)).toEqual(["channel"]);
     expect(() => query.groupsFrom([{ field: "channel.nope" }])).toThrow(/unknown group/);
     expect(() => query.groupsFrom([{ field: "channel__display_name" }])).toThrow(/unknown group/);
   });
+  test("rejects ambiguous identity aliases independently of declaration order", () => {
+    const fields = {
+      owner: { kind: "relation" as const, identityPath: "person.id", labelPath: "person.name" },
+      reviewer: { kind: "relation" as const, identityPath: "person.id", labelPath: "person.name" },
+    };
+    for (const entries of [Object.entries(fields), Object.entries(fields).reverse()]) {
+      const query = ResourceQuery.forRows({ fields: Object.fromEntries(entries) });
+      expect(() => query.axis("person.id")).toThrow(/ambiguous group identity path/);
+      expect(() => query.axis("person.name")).toThrow(/unknown group axis/);
+      expect(query.axis("owner").id).toBe("owner");
+      expect(query.axis("reviewer").id).toBe("reviewer");
+    }
+  });
+
   test("preserves empty membership, null predicates and boolean branches", () => {
     const query = ResourceQuery.from(resource());
     expect(query.toWhere()).toEqual({});

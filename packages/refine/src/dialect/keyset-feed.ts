@@ -96,11 +96,13 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
       const index = previous?.pageParams.findIndex(param => JSON.stringify(param ?? { start: true }) === JSON.stringify(context.pageParam ?? { start: true })) ?? -1;
       const oldPage = index < 0 ? undefined : previous?.pages[index];
       const owned = new Set(previous?.pages.flatMap((page) => page.rows.map((row) => row.id)));
-      const newer = context.pageParam !== null && typeof context.pageParam === "object" && "after" in context.pageParam;
+      const newer = context.pageParam !== null && typeof context.pageParam === "object" && "after" in context.pageParam
+        ? context.pageParam : null;
       const older = typeof context.pageParam === "string" ? context.pageParam : null;
       if (!oldPage || oldPage.through === null) {
-        const page = newer
-          ? await reads.newer!((context.pageParam as { after: string }).after, reads.pageSize, context)
+        if (newer && !reads.newer) throw new Error("Keyset feed does not support newer-page reads.");
+        const page = newer && reads.newer
+          ? await reads.newer(newer.after, reads.pageSize, context)
           : await reads.window(older, null, reads.pageSize, context);
         context.signal.throwIfAborted();
         return {
@@ -115,7 +117,8 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
       }
 
       // These indexes contain IDs, live only for this request, and retain no rows.
-      const earlierIds = new Set(previous!.pages.slice(0, index).flatMap((page) => page.rows.map((row) => row.id)));
+      if (!previous) throw new Error("Keyset feed lost its retained page context.");
+      const earlierIds = new Set(previous.pages.slice(0, index).flatMap((page) => page.rows.map((row) => row.id)));
       const mine = [...new Set(oldPage.rows.map((row) => row.id).filter((id) => !earlierIds.has(id)))];
       const fresh: TRow[] = [];
       const freshIds = new Set<string>();
@@ -168,7 +171,9 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
       // Null is the original anchored page after newer pages were prepended;
       // TanStack reserves null for exhaustion, so keep that saved boundary as
       // an explicit first-window cursor during sequential refetch.
-      return savedNext === null ? { start: true } : savedNext !== undefined ? savedNext : lastPage.hasOlder ? lastPage.through ?? undefined : undefined;
+      if (savedNext === null) return { start: true };
+      if (savedNext !== undefined) return savedNext;
+      return lastPage.hasOlder ? lastPage.through ?? undefined : undefined;
     },
     getPreviousPageParam(firstPage) {
       return reads.newer && firstPage.hasNewer && firstPage.newer ? { after: firstPage.newer } : undefined;

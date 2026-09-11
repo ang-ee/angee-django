@@ -17,6 +17,19 @@ describe("defineAddon", () => {
 });
 
 describe("composeAddons", () => {
+  test("composes addon record detail keys in deterministic order", () => {
+    const a = defineAddon({ id: "a", recordSearchKeys: ["detailA"] });
+    const b = defineAddon({ id: "b", recordSearchKeys: ["detailB"] });
+    expect(composeAddons([b, a], IDENTITY_CANONICALIZER).recordSearchKeys).toEqual(["detailA", "detailB"]);
+    expect(() => composeAddons([a, { id: "collision", recordSearchKeys: ["detailA"] }], IDENTITY_CANONICALIZER))
+      .toThrow(/record search key/);
+  });
+
+  test.each(["", "recordTab", "recordNav"])("rejects empty and framework-owned record keys: %s", (key) => {
+    expect(() => composeAddons([{ id: "bad", recordSearchKeys: [key] }], IDENTITY_CANONICALIZER))
+      .toThrow(/reserved or empty record search key/);
+  });
+
   test("concatenates routes in addon order", () => {
     const a = defineAddon({ id: "a", routes: [{ name: "a.home", path: "/a", layout: "console" }] });
     const b = defineAddon({ id: "b", routes: [{ name: "b.home", path: "/b", layout: "console" }] });
