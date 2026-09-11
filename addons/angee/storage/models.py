@@ -1127,6 +1127,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    rebac_grantable = {"viewer": "write"}
 
     sqid_prefix = "fil_"
     drive = models.ForeignKey(

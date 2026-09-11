@@ -24,6 +24,7 @@ ExtractionPart = apps.get_model("workflows_ocr", "ExtractionPart")
 File = apps.get_model("storage", "File")
 InferenceModel = apps.get_model("agents", "InferenceModel")
 MessagePart = apps.get_model("messaging", "Part")
+Message = apps.get_model("messaging", "Message")
 
 
 def _read_queryset(model: type[models.Model]):
@@ -73,6 +74,11 @@ class ExtractionSourceType(AngeeNode):
     def message_part(self) -> strawberry.ID | None:
         part_id = cast(Any, self).message_part_id
         return require_public_id(MessagePart, part_id) if part_id else None
+
+    @strawberry_django.field(only=["message_part__message_id"])
+    def source_message(self) -> strawberry.ID | None:
+        part = cast(Any, self).message_part
+        return require_public_id(Message, part.message_id) if part is not None else None
 
 
 @strawberry_django.type(ExtractionPage)

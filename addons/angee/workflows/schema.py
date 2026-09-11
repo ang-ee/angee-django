@@ -10,6 +10,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
@@ -1732,6 +1733,35 @@ class WorkflowSubjectDeclarationQuery:
             return []
         workflows = cast(Any, scoped).for_subject_declaration(subject_declaration).with_lineage_projection()
         return cast(list[WorkflowType], workflows)
+
+    @strawberry.field
+    def workflow_runs_for_subject(
+        self, info: strawberry.Info, subject: WorkflowObjectRefInput,
+    ) -> list[WorkflowRunType]:
+        """Return actor-readable native run history for one readable record."""
+
+        actor = session_user(info)
+        try:
+            model = cast(type[models.Model], apps.get_model(subject.subject_declaration))
+        except (LookupError, ValueError):
+            return []
+        target_scope = read_scoped_queryset(model, actor)
+        if target_scope is None:
+            return []
+        target = instance_for_id(model, subject.id, queryset=target_scope)
+        if target is None:
+            return []
+        content_type = ContentType.objects.get_for_model(target, for_concrete_model=False)
+        runs = read_scoped_queryset(cast(type[models.Model], WorkflowRun), actor)
+        if runs is None:
+            return []
+        artifact_runs = apps.get_model("workflows", "StepArtifact")._base_manager.filter(
+            target_content_type=content_type, target_object_id=target.pk,
+        ).values("attempt__step_run__run_id")
+        return cast(list[WorkflowRunType], runs.filter(
+            models.Q(subject_content_type=content_type, subject_object_id=target.pk)
+            | models.Q(pk__in=models.Subquery(artifact_runs)),
+        ).select_related("workflow").distinct().order_by("-created_at", "-pk"))
 
 
 @strawberry.type

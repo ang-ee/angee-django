@@ -25,6 +25,7 @@ export interface StorageUploadPanelProps {
   multiple?: boolean;
   target?: UploadTarget;
   onUploaded?: (files: readonly UploadedFile[]) => void;
+  onUploadStart?: (files: readonly File[], target: UploadTarget | undefined) => void;
   onBusyChange?: (busy: boolean) => void;
   heading?: React.ReactNode;
   description?: React.ReactNode;
@@ -42,6 +43,7 @@ export function StorageUploadPanel({
   multiple = true,
   target,
   onUploaded,
+  onUploadStart,
   onBusyChange,
   heading,
   description,
@@ -55,8 +57,10 @@ export function StorageUploadPanel({
 
   const startUpload = React.useCallback((files: FileList | readonly File[] | null) => {
     if (!canUpload || !files?.length) return;
-    uploads.upload(Array.from(files), target);
-  }, [canUpload, target, uploads]);
+    const selected = Array.from(files);
+    onUploadStart?.(selected, target);
+    uploads.upload(selected, target);
+  }, [canUpload, onUploadStart, target, uploads]);
 
   return (
     <UploadDropTarget

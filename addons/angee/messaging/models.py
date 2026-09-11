@@ -1832,6 +1832,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    rebac_grantable = {"reader": "write"}
 
     class Direction(models.TextChoices):
         """Whether a message came in, went out, or is internal."""
