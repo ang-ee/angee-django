@@ -1,4 +1,4 @@
-"""Run native addon query budgets against real generated models in CI."""
+"""Run native addon tests against real generated models in CI."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ import sys
 from pathlib import Path
 
 
-def test_composed_addon_query_budgets(tmp_path: Path) -> None:
-    """Keep actual HTTP/model query regressions in the normal pytest gate."""
+def test_composed_native_tests(tmp_path: Path) -> None:
+    """Keep query-budget and MCP tool-contract regressions in the normal pytest gate."""
 
     root = Path(__file__).resolve().parents[1]
-    report = tmp_path / "query-budgets.json"
+    report = tmp_path / "native-tests.json"
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
     result = subprocess.run(
@@ -28,6 +28,10 @@ def test_composed_addon_query_budgets(tmp_path: Path) -> None:
             "example.notes.tests.test_query_budgets",
             "--test-label",
             "angee.projects.tests.test_query_budgets",
+            "--test-label",
+            "angee.projects.tests.test_mcp_tools",
+            "--test-label",
+            "angee.work.tests.test_mcp_tools",
             "--output",
             str(report),
         ],
@@ -38,5 +42,5 @@ def test_composed_addon_query_budgets(tmp_path: Path) -> None:
         timeout=180,
         check=False,
     )
-    assert result.returncode == 0, f"composed query budgets failed:\n{result.stdout}\n{result.stderr}"
+    assert result.returncode == 0, f"composed native addon tests failed:\n{result.stdout}\n{result.stderr}"
     assert json.loads(report.read_text()) == {"failures": 0}
