@@ -62,6 +62,7 @@ export interface RelationPickerProps {
   placeholder?: string;
   searchPlaceholder?: string;
   "aria-label"?: string;
+  "aria-labelledby"?: string;
   "aria-describedby"?: string;
   "aria-required"?: boolean;
   readOnly?: boolean;
@@ -118,6 +119,7 @@ export function RelationPicker({
   placeholder,
   searchPlaceholder,
   "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
   "aria-required": ariaRequired,
   readOnly,
@@ -148,6 +150,7 @@ export function RelationPicker({
             placeholder={placeholder}
             searchPlaceholder={searchPlaceholder}
             aria-label={ariaLabel}
+            aria-labelledby={ariaLabelledBy}
             aria-describedby={ariaDescribedBy}
             aria-required={ariaRequired}
             readOnly={readOnly}

@@ -392,6 +392,24 @@ export const RecordThreadDocument = graphql(`
   }
 `);
 
+export const RecordSourceThreadsDocument = graphql(`
+  query MessagingRecordSourceThreads($modelLabel: String!, $recordId: ID!) {
+    record_source_threads(input: { model_label: $modelLabel, record_id: $recordId }) {
+      id
+      label
+      created_at
+      thread {
+        id
+        title { text }
+        message_count
+        last_message_at
+      }
+    }
+  }
+`);
+
+export type RecordSourceThreadRow = DocumentType<typeof RecordSourceThreadsDocument>["record_source_threads"][number];
+
 export const RecordThreadUnreadCountDocument = graphql(`
   query MessagingRecordThreadUnreadCount($modelLabel: String!, $recordId: ID!) {
     record_thread_unread_count(model_label: $modelLabel, record_id: $recordId)

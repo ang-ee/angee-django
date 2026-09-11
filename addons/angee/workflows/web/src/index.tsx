@@ -16,6 +16,7 @@ import {
 
 import { enWorkflowsMessages } from "./i18n";
 import { RunWorkflowMenu } from "./RunWorkflowMenu";
+export { WORKFLOW_TRIGGER_FORM_FIELDS_SLOT } from "./slots";
 
 const WORKFLOWS_ID = "workflows";
 

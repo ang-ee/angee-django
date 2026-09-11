@@ -194,6 +194,9 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     label = "Channel"
     icon = "inbox"
 
+    message_platform = "email"
+    """Platform stamped on locally submitted document Messages for this channel."""
+
     quote_edges: ClassVar[bool] = True
     """Whether ingest should build the email shared-fragment quotation graph."""
 

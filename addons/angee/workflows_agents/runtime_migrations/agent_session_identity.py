@@ -89,5 +89,7 @@ def backfill_agent_session_identity(apps, schema_editor) -> None:
 class Migration(migrations.Migration):
     """Backfill bridge-owned workflow, run, and wait classification."""
 
-    dependencies: list[tuple[str, str]] = []
+    # The backfill resolves the resources-owned install ledger through the
+    # historical app registry, so Django must materialize that model first.
+    dependencies = [("resources", "0001_initial")]
     operations = [migrations.RunPython(backfill_agent_session_identity, migrations.RunPython.noop)]

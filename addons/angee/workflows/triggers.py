@@ -18,6 +18,7 @@ from angee.base.identity import instance_from_public_id
 from angee.graphql.events import ChangePayload
 from angee.graphql.publishing import change_published
 from angee.workflows.models import TriggerKind
+from angee.workflows.trigger_declarations import EventSource
 
 _EVENT_TRIGGER_DISPATCH_UID = "angee-workflows-event-triggers"
 _TRIGGER_CACHE_DISPATCH_UID = "angee-workflows-trigger-cache"
@@ -130,11 +131,14 @@ def _on_change_published(
         return
     for trigger in triggers:
         try:
+            if trigger.validated_config().source != EventSource.CHANGE_PUBLISHED:
+                continue
             trigger_model.objects.start_event(
                 trigger.pk,
                 subject=instance,
                 occurrence_id=payload.occurrence_id,
                 timestamp=timezone.now(),
+                source=EventSource.CHANGE_PUBLISHED,
             )
         except Exception:
             logger.exception("Workflow event trigger %s failed admission.", trigger.pk)

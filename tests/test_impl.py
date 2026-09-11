@@ -11,7 +11,7 @@ import pytest
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.test import override_settings
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from angee.base.impl import ImplBase, ImplChoice, ImplClassField
 from tests.conftest import Integration, OAuthClient, VcsBridge
@@ -446,8 +446,8 @@ def test_typed_config_rejects_unsupported_shapes_with_exact_path(annotation: obj
         UnsupportedImpl.config_form_spec()
 
 
-def test_typed_config_rejects_recursive_models_and_nested_aliases() -> None:
-    """References must be finite and field names must have one wire identity."""
+def test_typed_config_rejects_recursive_models_and_preserves_string_aliases() -> None:
+    """References stay finite and one string alias remains the config wire identity."""
 
     class RecursiveNode(BaseModel):
         child: "RecursiveNode | None" = None
@@ -467,8 +467,31 @@ def test_typed_config_rejects_recursive_models_and_nested_aliases() -> None:
     class AliasedImpl(ImplBase):
         config_model = AliasedConfig
 
-    with pytest.raises(ImproperlyConfigured, match=r"AliasedImpl.*config\.child\.value.*aliases"):
-        AliasedImpl.config_form_spec()
+    spec = AliasedImpl.config_form_spec()
+    assert spec is not None
+    assert "wireValue" in spec["properties"]["child"]["properties"]
+    assert AliasedImpl.normalize_config({"child": {"wireValue": "kept"}}) == {
+        "child": {"wireValue": "kept"},
+    }
+
+    class AmbiguousConfig(BaseModel):
+        value: str = Field(validation_alias=AliasChoices("value", "wireValue"))
+
+    class AmbiguousImpl(ImplBase):
+        config_model = AmbiguousConfig
+
+    with pytest.raises(ImproperlyConfigured, match=r"AmbiguousImpl.*config\.value.*one string alias"):
+        AmbiguousImpl.config_form_spec()
+
+    class CollidingConfig(BaseModel):
+        value: str = Field(alias="wireValue")
+        wire_value: str = Field(alias="wireValue")
+
+    class CollidingImpl(ImplBase):
+        config_model = CollidingConfig
+
+    with pytest.raises(ImproperlyConfigured, match=r"CollidingImpl.*colliding wire names.*wireValue"):
+        CollidingImpl.config_form_spec()
 
 
 def test_materialize_seeds_only_unprovided_fields() -> None:

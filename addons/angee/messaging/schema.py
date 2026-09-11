@@ -1214,6 +1214,15 @@ class MessagingQuery:
             around=input.around,
         )
 
+    @strawberry.field(name="record_source_threads")
+    def record_source_threads(self, input: RecordReferenceInput) -> list[ThreadAttachmentType]:
+        """Return readable source conversations linked to one readable record."""
+
+        record = _referenced_record(input)
+        if record is None:
+            return []
+        return list(ThreadAttachment.objects.source_threads_for_record(record).order_by("-created_at", "pk"))
+
     @strawberry.field(name="record_thread_unread_count")
     def record_thread_unread_count(
         self,
@@ -1964,6 +1973,20 @@ def _threaded_record(input: RecordReferenceInput) -> Any | None:
         return instance_from_public_id(model, str(input.record_id))
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
+
+
+def _referenced_record(input: RecordReferenceInput) -> Any | None:
+    """Return any readable model record addressed by a source-link request."""
+
+    try:
+        model = apps.get_model(input.model_label)
+    except (LookupError, ValueError) as error:
+        raise ValueError(f"Unknown model {input.model_label!r}.") from error
+    try:
+        record = instance_from_public_id(model, str(input.record_id))
+    except ImproperlyConfigured as error:
+        raise ValueError(str(error)) from error
+    return None if record is None else _readable_record(record)
 
 
 def _record_message_post_kind(kind: str) -> str:

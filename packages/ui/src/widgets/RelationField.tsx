@@ -32,6 +32,7 @@ export interface RelationFieldProps {
   readOnly?: boolean;
   /** Accessible name for the trigger; the selected value is appended to it. */
   "aria-label"?: string;
+  "aria-labelledby"?: string;
   id?: string;
   "aria-describedby"?: string;
   "aria-required"?: boolean;
@@ -69,6 +70,7 @@ export function RelationField({
   searchPlaceholder,
   readOnly,
   "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
   "aria-required": ariaRequired,
   id,
@@ -102,7 +104,8 @@ export function RelationField({
         id={id}
         className={TRIGGER_CLASS}
         disabled={readOnly}
-        aria-label={triggerLabel}
+        aria-label={ariaLabelledBy ? undefined : triggerLabel}
+        aria-labelledby={ariaLabelledBy}
         aria-describedby={ariaDescribedBy}
         aria-required={ariaRequired}
       >
