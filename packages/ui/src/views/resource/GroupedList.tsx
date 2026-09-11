@@ -55,12 +55,16 @@ import {
   type GroupMeasure,
   type VisibleFieldOption,
 } from "./resource-view-list-body";
-import type { ListEmptyContent } from "./resource-view-types";
+import type {
+  GroupLabelContext,
+  ListEmptyContent,
+} from "./resource-view-types";
 
 import { GroupedScopePager } from "./GroupedScopePager";
 import { snapshotFromNav } from "./grouped-navigation";
 
 export interface GroupedListBodyProps<TRow extends Row> {
+  renderGroupLabel?: (group: GroupLabelContext) => React.ReactNode;
   table: TableModel<TRow>;
   tableColumns: readonly ColumnDef<TRow>[];
   visibleColumnCount: number;
@@ -89,6 +93,7 @@ export interface GroupedListBodyProps<TRow extends Row> {
 }
 
 export function GroupedListBody<TRow extends Row>({
+  renderGroupLabel,
   table,
   visibleColumnCount,
   visibleFields = [],
@@ -115,10 +120,7 @@ export function GroupedListBody<TRow extends Row>({
   const t = useUiT();
   // Grouped mode keeps a sticky chevron column in place of the select-all box.
   const hasRowActions = renderRowActions !== undefined;
-  const colSpan = Math.max(
-    1,
-    visibleColumnCount + 1 + (hasRowActions ? 1 : 0),
-  );
+  const colSpan = Math.max(1, visibleColumnCount + 1 + (hasRowActions ? 1 : 0));
   const measuresByColumn = React.useMemo(
     () => new Map(measures.map((measure) => [measure.columnId, measure])),
     [measures],
@@ -136,7 +138,11 @@ export function GroupedListBody<TRow extends Row>({
 
   return (
     <>
-      <div ref={tableScrollRef} className="overflow-auto" style={TABLE_SCROLL_STYLE}>
+      <div
+        ref={tableScrollRef}
+        className="overflow-auto"
+        style={TABLE_SCROLL_STYLE}
+      >
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((group) => (
@@ -172,7 +178,10 @@ export function GroupedListBody<TRow extends Row>({
               </TableRow>
             ) : listItems.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={colSpan} className="py-8 text-center text-fg-muted">
+                <TableCell
+                  colSpan={colSpan}
+                  className="py-8 text-center text-fg-muted"
+                >
                   <ListEmpty>{emptyContent}</ListEmpty>
                 </TableCell>
               </TableRow>
@@ -185,6 +194,7 @@ export function GroupedListBody<TRow extends Row>({
                   const item = listItems[index];
                   return item ? (
                     <GroupedItemRow
+                      renderGroupLabel={renderGroupLabel}
                       key={groupedItemKey(item)}
                       item={item}
                       colSpan={colSpan}
@@ -242,6 +252,7 @@ function groupedItemKey<TRow extends Row>(item: GroupedListItem<TRow>): string {
 }
 
 interface GroupedItemRowProps<TRow extends Row> {
+  renderGroupLabel?: (group: GroupLabelContext) => React.ReactNode;
   item: GroupedListItem<TRow>;
   colSpan: number;
   table: TableModel<TRow>;
@@ -262,6 +273,7 @@ interface GroupedItemRowProps<TRow extends Row> {
 }
 
 function GroupedItemRow<TRow extends Row>({
+  renderGroupLabel,
   item,
   colSpan,
   table,
@@ -284,6 +296,7 @@ function GroupedItemRow<TRow extends Row>({
     case "groupHeader":
       return (
         <GroupedHeaderRow
+          renderGroupLabel={renderGroupLabel}
           item={item}
           visibleColumns={visibleColumns}
           measuresByColumn={measuresByColumn}
@@ -324,6 +337,7 @@ function GroupedItemRow<TRow extends Row>({
 }
 
 interface GroupedHeaderRowProps<TRow extends Row> {
+  renderGroupLabel?: (group: GroupLabelContext) => React.ReactNode;
   item: Extract<GroupedListItem<TRow>, { kind: "groupHeader" }>;
   visibleColumns: readonly TableColumn<TRow, unknown>[];
   measuresByColumn: ReadonlyMap<string, GroupMeasure>;
@@ -336,6 +350,7 @@ interface GroupedHeaderRowProps<TRow extends Row> {
 }
 
 function GroupedHeaderRow<TRow extends Row>({
+  renderGroupLabel,
   item,
   visibleColumns,
   measuresByColumn,
@@ -349,12 +364,16 @@ function GroupedHeaderRow<TRow extends Row>({
   const { bucket, bucketKey, depth, label, count, expandable, expanded } = item;
   // Keep aggregate cells numeric; chrome belongs in the last ordinary column
   // (or the existing action column), not in a measure's accessible value.
-  const ordinaryColumns = visibleColumns.filter((column) => !measuresByColumn.has(column.id));
+  const ordinaryColumns = visibleColumns.filter(
+    (column) => !measuresByColumn.has(column.id),
+  );
   const labelColumn = ordinaryColumns[0]?.id;
   const pagerColumn = ordinaryColumns.at(-1)?.id;
   const labelContent = (
     <span className="inline-flex min-w-0 max-w-full items-center gap-2">
-      <span className="min-w-0 truncate">{label}</span>
+      <span className="min-w-0 truncate">
+        {renderGroupLabel ? renderGroupLabel({ bucket, label, depth }) : label}
+      </span>
       <CountBadge value={count} />
       {!expandable ? (
         <span className={cn(textRoleVariants({ role: "meta" }), "font-normal")}>
@@ -364,21 +383,28 @@ function GroupedHeaderRow<TRow extends Row>({
     </span>
   );
   const pager = item.pager ? (
-    <GroupedScopePager pager={item.pager} label={label} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} t={t} />
+    <GroupedScopePager
+      pager={item.pager}
+      label={label}
+      onPageChange={onPageChange}
+      onPageSizeChange={onPageSizeChange}
+      t={t}
+    />
   ) : null;
   const toggle = (): void => {
     if (expandable) onToggle(bucketKey);
   };
   return (
     <TableRow
-      className={expandable ? "cursor-pointer" : undefined}
-      tabIndex={expandable ? 0 : undefined}
+      className={expandable && !renderGroupLabel ? "cursor-pointer" : undefined}
+      tabIndex={expandable && !renderGroupLabel ? 0 : undefined}
       aria-expanded={expandable ? expanded : false}
-      onClick={toggle}
+      onClick={renderGroupLabel ? undefined : toggle}
       onKeyDown={(event) => {
         if (
-          event.target === event.currentTarget
-          && (event.key === "Enter" || event.key === " ")
+          !renderGroupLabel &&
+          event.target === event.currentTarget &&
+          (event.key === "Enter" || event.key === " ")
         ) {
           event.preventDefault();
           toggle();
@@ -416,7 +442,8 @@ function GroupedHeaderRow<TRow extends Row>({
       {visibleColumns.map((column) => {
         const measure = measuresByColumn.get(column.id);
         const value = measure ? measureValue(bucket, measure) : undefined;
-        const formatted = measure && value != null ? formatMeasure(value, measure) : "";
+        const formatted =
+          measure && value != null ? formatMeasure(value, measure) : "";
         return (
           <TableCell
             key={column.id}
@@ -425,7 +452,9 @@ function GroupedHeaderRow<TRow extends Row>({
               ALIGN_CLASS[alignOf(column.columnDef)],
               column.id === labelColumn ? "font-semibold" : "",
             )}
-            style={column.id === labelColumn ? depthIndentStyle(depth) : undefined}
+            style={
+              column.id === labelColumn ? depthIndentStyle(depth) : undefined
+            }
             aria-label={
               measure
                 ? `${label} ${measure.label}${formatted ? `: ${formatted}` : ""}`
@@ -434,7 +463,11 @@ function GroupedHeaderRow<TRow extends Row>({
           >
             <div className="flex min-w-0 items-center gap-3">
               <div className="min-w-0 flex-1">
-                {measure ? formatted : column.id === labelColumn ? labelContent : null}
+                {measure
+                  ? formatted
+                  : column.id === labelColumn
+                    ? labelContent
+                    : null}
               </div>
               {!trailingColumn && column.id === pagerColumn ? pager : null}
             </div>
@@ -442,9 +475,7 @@ function GroupedHeaderRow<TRow extends Row>({
         );
       })}
       {trailingColumn ? (
-        <TableCell className="h-9 bg-sheet-2">
-          {pager}
-        </TableCell>
+        <TableCell className="h-9 bg-sheet-2">{pager}</TableCell>
       ) : null}
     </TableRow>
   );

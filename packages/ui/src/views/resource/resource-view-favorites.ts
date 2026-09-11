@@ -66,17 +66,21 @@ export interface ResourceViewFavoritesState {
 export function useResourceViewFavorites(
   modelSpelling: string | undefined,
   state: ResourceViewState,
+  collectionKey?: string,
 ): ResourceViewFavoritesState {
   const metadata = useSchemaFieldMetadata();
   const canonicalModel = useMemo(
-    () => modelSpelling
-      ? canonicalModelLabelOrNull(
-          metadata.resources ?? [],
-          modelSpelling,
-          "resource-view favorites",
-        )
-      : null,
-    [metadata, modelSpelling],
+    () =>
+      collectionKey
+        ? `collection:${collectionKey}`
+        : modelSpelling
+          ? canonicalModelLabelOrNull(
+              metadata.resources ?? [],
+              modelSpelling,
+              "resource-view favorites",
+            )
+          : null,
+    [metadata, modelSpelling, collectionKey],
   );
   const {
     available,
@@ -90,22 +94,19 @@ export function useResourceViewFavorites(
   const savedFavorites = canonicalModel
     ? favoritesSlice.document.models[canonicalModel] ?? EMPTY_FAVORITES
     : EMPTY_FAVORITES;
-  const writable = available && favoritesSlice.writable && canonicalModel !== null;
+  const writable =
+    available && favoritesSlice.writable && canonicalModel !== null;
 
   const saveFavorite = useCallback(
     (label: string) => {
       const trimmed = label.trim();
       if (!writable || !canonicalModel || !trimmed) return;
       const favorite = favoriteFromResourceView(state, trimmed, savedFavorites);
-      void updateFavorites((current) => appendResourceViewFavorite(current, canonicalModel, favorite)).catch(() => undefined);
+      void updateFavorites((current) =>
+        appendResourceViewFavorite(current, canonicalModel, favorite),
+      ).catch(() => undefined);
     },
-    [
-      canonicalModel,
-      savedFavorites,
-      state,
-      updateFavorites,
-      writable,
-    ],
+    [canonicalModel, savedFavorites, state, updateFavorites, writable],
   );
 
   if (!writable) return { savedFavorites: EMPTY_FAVORITES };

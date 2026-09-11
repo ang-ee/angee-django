@@ -43,7 +43,7 @@ type PageHeaderRecipeProps = VariantProps<typeof pageHeaderVariants>;
 type PageHeaderHeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 type PageHeaderHeadingTag = `h${PageHeaderHeadingLevel}`;
 
-export type PageHeaderProps = React.HTMLAttributes<HTMLElement> &
+export type PageHeaderProps = Omit<React.HTMLAttributes<HTMLElement>, "title"> &
   PageHeaderRecipeProps & {
     actions?: React.ReactNode;
     children?: React.ReactNode;

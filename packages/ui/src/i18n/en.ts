@@ -121,18 +121,22 @@ export const enUiMessages: Record<string, string> = {
   "board.moveFailedDescription": "The card move failed.",
   "board.dragCard": "Move card",
   "board.addCard": "Add card",
-  "calendar.loadError": "The calendar failed to load. Reload the page to try again.",
+  "calendar.loadError":
+    "The calendar failed to load. Reload the page to try again.",
   "calendar.loadFailed": "The calendar data failed to load.",
   "calendar.weekOf": "Week of {date}",
   "calendar.mode.month": "Month",
   "calendar.mode.week": "Week",
   "calendar.mode.day": "Day",
+  "collection.retry": "Retry",
+  "relation.loading": "Searching…",
   "calendar.retry": "Retry",
   "auth.username": "Username",
   "auth.password": "Password",
   "auth.signIn": "Sign in",
   "auth.sessionCheckFailed": "Unable to check your session",
-  "auth.sessionCheckFailedDescription": "The server could not confirm your session. Your page has been kept open.",
+  "auth.sessionCheckFailedDescription":
+    "The server could not confirm your session. Your page has been kept open.",
   "auth.retrySessionCheck": "Try again",
   "auth.signingIn": "Signing in…",
   "auth.invalidCredentials": "Incorrect username or password.",
@@ -141,13 +145,18 @@ export const enUiMessages: Record<string, string> = {
   "auth.orUsePassword": "or use password",
   "auth.hero.intent.eyebrow": "From intent to interface",
   "auth.hero.intent.headline": "Build what you can imagine.",
-  "auth.hero.intent.body": "Shape the idea. Watch it become a living product surface.",
-  "auth.hero.agentNative.eyebrow": "Agent-Native Generative Execution Environment",
-  "auth.hero.agentNative.headline": "Define your vision. Agents build the reality.",
-  "auth.hero.agentNative.body": "The self-building SaaS platform where autonomous AI agents scaffold, wire, and extend production-ready software.",
+  "auth.hero.intent.body":
+    "Shape the idea. Watch it become a living product surface.",
+  "auth.hero.agentNative.eyebrow":
+    "Agent-Native Generative Execution Environment",
+  "auth.hero.agentNative.headline":
+    "Define your vision. Agents build the reality.",
+  "auth.hero.agentNative.body":
+    "The self-building SaaS platform where autonomous AI agents scaffold, wire, and extend production-ready software.",
   "auth.hero.composable.eyebrow": "Composable by design",
   "auth.hero.composable.headline": "One surface for real product work.",
-  "auth.hero.composable.body": "Compose Django, React, permissions, data views, and agent workflows into a deterministic product surface that stays clear as it grows.",
+  "auth.hero.composable.body":
+    "Compose Django, React, permissions, data views, and agent workflows into a deterministic product surface that stays clear as it grows.",
   "revisions.noRecordTitle": "No record selected",
   "revisions.noRecordDescription": "Open a record to view revisions.",
   "revisions.unavailable": "Revisions unavailable",
@@ -191,7 +200,8 @@ export const enUiMessages: Record<string, string> = {
   "chrome.collapseItem": "Collapse {label}",
   "chrome.itemWithCount": "{label}, {count} items",
   "chrome.futureItem": "{label}, future",
-  "chrome.railItemHint": "{label} — drag to reorder; long press to set as default",
+  "chrome.railItemHint":
+    "{label} — drag to reorder; long press to set as default",
   "chrome.defaultRailItemHint": "{label} — default app; drag to reorder",
   "chrome.future": "Future",
   "chrome.noApps": "No apps match.",
@@ -221,7 +231,8 @@ export const enUiMessages: Record<string, string> = {
   "form.created": "created {value}",
   "form.discard": "Discard",
   "form.fixHighlightedFields": "Please fix the highlighted fields.",
-  "form.fixHighlightedFieldsNamed": "Please fix the highlighted fields: {fields}.",
+  "form.fixHighlightedFieldsNamed":
+    "Please fix the highlighted fields: {fields}.",
   "form.genericSaveError": "Could not save record.",
   "form.leave": "Leave",
   "form.loading": "Loading…",
@@ -238,7 +249,8 @@ export const enUiMessages: Record<string, string> = {
   "form.list.removeNamed": "Remove item {number}",
   "form.list.moveUpNamed": "Move item {number} up",
   "form.list.moveDownNamed": "Move item {number} down",
-  "form.linesChanged": "These lines changed on the server. Discard local changes to load the saved lines before saving again.",
+  "form.linesChanged":
+    "These lines changed on the server. Discard local changes to load the saved lines before saving again.",
   "form.record": "Record",
   "form.required": "This field is required.",
   "form.saveFailed": "Save failed",
@@ -268,8 +280,10 @@ export const enUiMessages: Record<string, string> = {
   "combobox.searchOptions": "Search options",
   "combobox.noOptions": "No options",
   "deletePreview.title": "Delete {count} records?",
-  "deletePreview.description": "Review the cascade tree before deleting the selected records.",
-  "deletePreview.blockedCount": "{count} selected records have deletion blockers.",
+  "deletePreview.description":
+    "Review the cascade tree before deleting the selected records.",
+  "deletePreview.blockedCount":
+    "{count} selected records have deletion blockers.",
   "deletePreview.blockedGeneric": "Some related records block deletion.",
   "deletePreview.cancel": "Cancel",
   "deletePreview.delete": "Delete",
@@ -281,7 +295,8 @@ export const enUiMessages: Record<string, string> = {
   "deletePreview.updated": "Updated",
   "deletePreview.blocked": "Blocked",
   "deletePreview.failedTitle": "Delete preview failed",
-  "deletePreview.emptyPreview": "No preview was returned for the selected records.",
+  "deletePreview.emptyPreview":
+    "No preview was returned for the selected records.",
   "deletePreview.loadError": "The delete preview could not be loaded.",
   "deletePreview.noRecordsDeleted": "No records deleted",
   "deletePreview.recordsDeleted": "Deleted {count} records",

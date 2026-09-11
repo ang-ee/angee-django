@@ -57,6 +57,11 @@ export class ResourceQuery {
   private static readonly cache = new WeakMap<DataResourceMetadata, ResourceQuery>();
   private constructor(readonly contract: DataResourceQuery) {}
 
+  /** Authored server projections declare the same language as generated resources. */
+  static fromContract(contract: DataResourceQuery): ResourceQuery {
+    return new ResourceQuery(parse(DataResourceQuerySchema, contract, "query"));
+  }
+
   static from(resource: DataResourceMetadata | ModelMetadata): ResourceQuery {
     const data = "resource" in resource ? resource.resource as DataResourceMetadata : resource;
     const cached = ResourceQuery.cache.get(data);

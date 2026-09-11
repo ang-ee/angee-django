@@ -48,6 +48,7 @@ vi.mock("../../feedback", async (importOriginal) => ({
 
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredQueryBatch: () => new Map(),
   useAngeeFacets: () => ({ facets: {} }),
   useOperationDocuments: () => ({}),
 }));
@@ -58,7 +59,8 @@ vi.mock("@refinedev/core", async (importOriginal) => {
     ...actual,
     useList: (options?: { resource?: string }) => {
       harness.useListOptions.push(options);
-      const rows = options?.resource === "crmLeads" ? harness.tableRows : harness.laneRows;
+      const rows =
+        options?.resource === "crmLeads" ? harness.tableRows : harness.laneRows;
       return {
         result: {
           data: rows,
@@ -77,8 +79,6 @@ vi.mock("@refinedev/core", async (importOriginal) => {
     },
   };
 });
-
-
 
 vi.mock("./BoardView", () => ({
   BoardView: (props: BoardViewProps<LeadRow>) => {

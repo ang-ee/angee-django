@@ -59,10 +59,19 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
   return {
     ...actual,
-    useList: ({ resource, meta, pagination }: { resource?: string; meta?: { gqlVariables?: { where?: unknown } }; pagination?: { pageSize?: number } }) => {
+    useList: ({
+      resource,
+      meta,
+      pagination,
+    }: {
+      resource?: string;
+      meta?: { gqlVariables?: { where?: unknown } };
+      pagination?: { pageSize?: number };
+    }) => {
       if (resource === "notes") {
         tableMocks.activeFilters.push(meta?.gqlVariables?.where ?? {});
-        if (pagination?.pageSize !== undefined) tableMocks.pageSizes.push(pagination.pageSize);
+        if (pagination?.pageSize !== undefined)
+          tableMocks.pageSizes.push(pagination.pageSize);
       }
       return {
         result: { data: tableMocks.rows, total: tableMocks.rows.length },
@@ -98,8 +107,6 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
   };
 });
 
-
-
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: () => ({
     getTotalSize: () => 0,
@@ -113,24 +120,34 @@ vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
-    useAngeeGroupByBatch: (...args: Parameters<typeof actual.useAngeeGroupByBatch>) => {
-      if (tableMocks.subgroupTotal === null) return actual.useAngeeGroupByBatch(...args);
-      return new Map(args[1].map((scope: GroupByBatchScope, index) => {
-        const page = scope.query.page ?? 1;
-        if (index > 0) tableMocks.subgroupPages.push(page);
-        return [scope.key, {
-          buckets: index === 0
-            ? [{ key: { status: "active" }, count: 5 }]
-            : page <= Math.ceil(tableMocks.subgroupTotal! / 2)
-              ? [{ key: { title: "subgroup" }, count: 1 }]
-              : [],
-          count: 5,
-          totalCount: index === 0 ? 1 : tableMocks.subgroupTotal!,
-          fetching: false,
-          error: null,
-          refetch: vi.fn(),
-        }];
-      }));
+    useAuthoredQueryBatch: () => new Map(),
+    useAngeeGroupByBatch: (
+      ...args: Parameters<typeof actual.useAngeeGroupByBatch>
+    ) => {
+      if (tableMocks.subgroupTotal === null)
+        return actual.useAngeeGroupByBatch(...args);
+      return new Map(
+        args[1].map((scope: GroupByBatchScope, index) => {
+          const page = scope.query.page ?? 1;
+          if (index > 0) tableMocks.subgroupPages.push(page);
+          return [
+            scope.key,
+            {
+              buckets:
+                index === 0
+                  ? [{ key: { status: "active" }, count: 5 }]
+                  : page <= Math.ceil(tableMocks.subgroupTotal! / 2)
+                    ? [{ key: { title: "subgroup" }, count: 1 }]
+                    : [],
+              count: 5,
+              totalCount: index === 0 ? 1 : tableMocks.subgroupTotal!,
+              fetching: false,
+              error: null,
+              refetch: vi.fn(),
+            },
+          ];
+        }),
+      );
     },
     useAngeeAggregate: () => ({
       aggregate: null,
@@ -167,7 +184,9 @@ describe("useClientResourceViewSurface", () => {
       </ToastProvider>,
     );
 
-    expect(screen.getByTestId("client-page-size").textContent).toBe("200:200:200");
+    expect(screen.getByTestId("client-page-size").textContent).toBe(
+      "200:200:200",
+    );
   });
 });
 
@@ -200,7 +219,9 @@ describe("useResourceViewSurface", () => {
       </ToastProvider>,
     );
 
-    expect(tableMocks.activeFilters.at(-1)).toEqual({ status: { _eq: "active" } });
+    expect(tableMocks.activeFilters.at(-1)).toEqual({
+      status: { _eq: "active" },
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "clear filter" }));
 
@@ -219,13 +240,19 @@ describe("useResourceViewSurface", () => {
       </ToastProvider>,
     );
 
-    await waitFor(() => expect(screen.getByTestId("flat-page-size").textContent).toBe("100:100"));
+    await waitFor(() =>
+      expect(screen.getByTestId("flat-page-size").textContent).toBe("100:100"),
+    );
     expect(tableMocks.pageSizes.at(-1)).toBe(100);
-    expect((onListStateChange.mock.calls.at(-1)?.[0] as ResourceListSnapshot<Row>)
-      .navigationScope?.pageSize).toBe(100);
+    expect(
+      (onListStateChange.mock.calls.at(-1)?.[0] as ResourceListSnapshot<Row>)
+        .navigationScope?.pageSize,
+    ).toBe(100);
 
     fireEvent.click(screen.getByRole("button", { name: "oversize page" }));
-    await waitFor(() => expect(screen.getByTestId("flat-page-size").textContent).toBe("100:100"));
+    await waitFor(() =>
+      expect(screen.getByTestId("flat-page-size").textContent).toBe("100:100"),
+    );
     expect(tableMocks.pageSizes.at(-1)).toBe(100);
   });
 });

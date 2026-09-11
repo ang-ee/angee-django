@@ -11,6 +11,7 @@ import { type GroupedListItem, type GroupMeasure, type RowGroup, type VisibleFie
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import type { BoardCardPlacement } from "../resource-view-types";
+import type { CollectionSource } from "../collection-source";
 export type RowRecord = BaseRecord & Row;
 export type ResourceFilterInput = Record<string, unknown>;
 
@@ -38,6 +39,7 @@ export interface ListViewNavigationScope {
 
 export interface UseResourceViewSurfaceProps<TRow extends Row = Row> {
   resource: string;
+  source?: CollectionSource<TRow>;
   columns: readonly ColumnDescriptor<TRow>[];
   fields?: readonly string[];
   filter?: ResourceFilterInput;
@@ -66,6 +68,7 @@ export interface UseRowsResourceViewSurfaceProps<
 }
 
 export interface ResourceListResult {
+  summary?: string;
   rows: readonly Row[];
   total: number | undefined;
   pageCount: number | undefined;

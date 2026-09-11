@@ -23,6 +23,12 @@ export interface RelationOption {
   label: string;
 }
 
+export interface RelationSearchState {
+  pending?: boolean;
+  error?: string;
+  retry?: () => void;
+}
+
 export interface RelationFieldProps {
   value?: string | null;
   onChange?: (value: string) => void;
@@ -47,6 +53,9 @@ export interface RelationFieldProps {
    * the internal open state is unaffected when this is omitted.
    */
   onOpenChange?: (open: boolean) => void;
+  /** A remote collection owns search when supplied. */
+  onSearchChange?: (query: string) => void;
+  searchState?: RelationSearchState;
   triggerRef?: Ref<HTMLButtonElement>;
 }
 
@@ -76,6 +85,8 @@ export function RelationField({
   id,
   onCreate,
   onOpenChange,
+  onSearchChange,
+  searchState,
   triggerRef,
 }: RelationFieldProps): ReactElement {
   const t = useUiT();
@@ -109,10 +120,19 @@ export function RelationField({
         aria-describedby={ariaDescribedBy}
         aria-required={ariaRequired}
       >
-        <span className={cn("min-w-0 flex-1 truncate", !selected && "text-fg-muted")}>
-          {selected ? selected.label : (placeholder ?? t("relation.placeholder"))}
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate",
+            !selected && "text-fg-muted",
+          )}
+        >
+          {selected ? selected.label : placeholder ?? t("relation.placeholder")}
         </span>
-        <Glyph decorative name="chevron-down" className="shrink-0 text-fg-muted" />
+        <Glyph
+          decorative
+          name="chevron-down"
+          className="shrink-0 text-fg-muted"
+        />
       </PopoverTrigger>
       <PopoverPortal>
         <PopoverPositioner sideOffset={4} align="start">
@@ -125,6 +145,8 @@ export function RelationField({
                 aria-label={ariaLabel}
                 onSelect={(next) => onChange?.(next)}
                 onCreate={onCreate}
+                onSearchChange={onSearchChange}
+                searchState={searchState}
                 onDismiss={() => setOpen(false)}
               />
             </LazyBoundary>

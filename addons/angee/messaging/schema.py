@@ -2,8 +2,8 @@
 
 Messages arrive through channel sync and the manager-owned ingest path; the
 console browses and moderates them through Hasura resources. Parts,
-participants, edges, and reactions remain nested read projections reached
-through their message/thread owners.
+participants and edges expose read-only collections; ingest and relation
+producers retain their writes. Reactions remain nested message projections.
 """
 
 from __future__ import annotations
@@ -1888,11 +1888,48 @@ _PART_RESOURCE = hasura_model_resource(
     get_queryset=_part_inbox_queryset,
 )
 
+# Read-only collections expose canonical model metadata and live interests for
+# authored explorer reads; ingest and relation producers remain the write owners.
+_PARTICIPANT_RESOURCE = hasura_model_resource(
+    ParticipantType,
+    model=Participant,
+    name="participants",
+    filterable=["id", "message", "thread", "handle", "role"],
+    sortable=["created_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={
+        "message": public_pk_decoder(Message),
+        "thread": public_pk_decoder(Thread),
+        "handle": public_pk_decoder(Handle),
+    },
+)
+_MESSAGE_EDGE_RESOURCE = hasura_model_resource(
+    MessageEdgeType,
+    model=MessageEdge,
+    name="message_edges",
+    filterable=["id", "src", "dst", "kind", "fragment"],
+    sortable=["created_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={
+        "src": public_pk_decoder(Message),
+        "dst": public_pk_decoder(Message),
+        "fragment": public_pk_decoder(Fragment),
+    },
+)
+
 _RESOURCE_TYPES = [
     *_CHANNEL_RESOURCE.types,
     *_MESSAGE_RESOURCE.types,
     *_THREAD_RESOURCE.types,
     *_PART_RESOURCE.types,
+    *_PARTICIPANT_RESOURCE.types,
+    *_MESSAGE_EDGE_RESOURCE.types,
 ]
 
 
@@ -1904,6 +1941,8 @@ _MESSAGING_SCHEMA_BUCKET = {
         _MESSAGE_RESOURCE.query,
         _THREAD_RESOURCE.query,
         _PART_RESOURCE.query,
+        _PARTICIPANT_RESOURCE.query,
+        _MESSAGE_EDGE_RESOURCE.query,
     ],
     "mutation": [
         MessagingPairingMutation,
@@ -1969,6 +2008,9 @@ schemas = {
             changes(ThreadActivity, field="threadActivityChanged"),
             changes(ThreadNotification, field="threadNotificationChanged"),
             changes(MessageStar, field="messageStarChanged"),
+            changes(Part, field="partChanged"),
+            changes(Participant, field="participantChanged"),
+            changes(MessageEdge, field="messageEdgeChanged"),
         ],
     },
 }

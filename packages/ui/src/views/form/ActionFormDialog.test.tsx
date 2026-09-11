@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
 
-import type { DataResourceMetadata, Row, SchemaFieldMetadata } from "@angee/metadata";
+import type {
+  DataResourceMetadata,
+  Row,
+  SchemaFieldMetadata,
+} from "@angee/metadata";
 import {
   ModelMetadataProvider,
   schemaFieldMetadataFromDataResources,
@@ -66,6 +70,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   return {
     ...actual,
     useInvalidate: () => vi.fn(async () => undefined),
+    useOne: () => ({
+      result: undefined,
+      query: { isFetching: false, error: null },
+    }),
     useList: (options?: {
       resource?: string;
       filters?: readonly unknown[];

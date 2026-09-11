@@ -1941,7 +1941,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         )
         indexes = (
             # The exact keyset the feed orders and cursors by
-            # (``_MESSAGE_ORDER_ANNOTATION`` + pk tiebreak): one expression index
+            # (``MessageQuerySet.chronological_time()`` + pk tiebreak): one expression index
             # serves the hot page query verbatim, trailing id for cursor scans.
             models.Index(
                 models.F("thread"),

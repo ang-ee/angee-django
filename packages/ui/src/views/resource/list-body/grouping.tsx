@@ -112,14 +112,19 @@ export function bucketValueLabels(
   emptyValueLabel: string,
   t: UiTranslate,
   emptyRelationLabel?: (field: string) => string,
+  suppliedQuery?: ResourceQuery,
 ): string[] {
-  if (!metadata) throw new Error("Resource metadata is required for grouped buckets.");
-  const query = ResourceQuery.from(metadata);
+  const query =
+    suppliedQuery ?? (metadata ? ResourceQuery.from(metadata) : null);
+  if (!query)
+    throw new Error("A resource query is required for grouped buckets.");
   return groupStack.map((group) => {
     const axis = query.group(group);
     const label = axis.bucketLabel(bucket);
     if (axis.declaration.kind === "relation") {
-      return label == null || label === "" ? emptyRelationLabel?.(group.field) ?? emptyValueLabel : String(label);
+      return label == null || label === ""
+        ? emptyRelationLabel?.(group.field) ?? emptyValueLabel
+        : String(label);
     }
     return groupLabel(label, group, metadata, emptyValueLabel, t);
   });

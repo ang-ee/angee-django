@@ -1,8 +1,4 @@
-import type {
-  Row,
-  ResourceFilter,
-  ResourceOrder,
-} from "@angee/metadata";
+import type { Row, ResourceFilter, ResourceOrder } from "@angee/metadata";
 import type {
   ReactNode } from "react";
 import type {
@@ -30,6 +26,14 @@ import type { AnyCalendarWindowSource } from "../calendar/use-calendar-window";
 import type { DndPayload } from "../../lib/dnd";
 import type { RowActionDeclaration } from "./RowActions";
 import type { CrudFilter, CrudSort } from "@refinedev/core";
+import type { CollectionSource } from "./collection-source";
+import type { AggregateBucket } from "@angee/refine";
+
+export interface GroupLabelContext {
+  bucket: AggregateBucket;
+  label: string;
+  depth: number;
+}
 
 /**
  * The calendar kind's data declaration. The windowed-collection surface fetches
@@ -98,6 +102,16 @@ export type ListEmptyContent = ReactNode | ListEmptyState;
 export interface ListViewProps<TRow extends Row = Row> {
   /** Model label rendered by this list, e.g. `"notes.Note"`. */
   resource: string;
+  /** Authored server projection using the same native collection surface. */
+  source?: CollectionSource<TRow>;
+  /** Allowed render kinds; defaults to the resource's available kinds. */
+  availableViews?: readonly ResourceViewKind[];
+  /** Semantic search field; null omits the search control. */
+  textFilterField?: string | null;
+  /** Limit nested grouping where the source supports a single axis. */
+  maxGroupDepth?: number;
+  /** A navigable group title; the native chevron independently expands its rows. */
+  renderGroupLabel?: (group: GroupLabelContext) => ReactNode;
   /** Columns rendered by the list. */
   columns: readonly ColumnDescriptor<TRow>[];
   /** Extra resource fields selected in addition to the declared columns. */

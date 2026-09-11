@@ -13,9 +13,7 @@ export type ColumnAggregate =
   | "max"
   | (string & {});
 
-export interface ColumnProps<
-  TRow extends object = Record<string, unknown>,
-> {
+export interface ColumnProps<TRow extends object = Record<string, unknown>> {
   field: string;
   /** Concrete GraphQL leaf paths selected for a computed object field. */
   selectionPaths?: readonly string[];
@@ -28,6 +26,8 @@ export interface ColumnProps<
   sortable?: boolean;
   aggregate?: ColumnAggregate;
   align?: PageColumnAlign;
+  /** The cell owns interactive controls; the row supplies keyboard activation without wrapping them. */
+  interactive?: boolean;
   render?: (row: TRow) => ReactNode;
   tone?: Record<string, Tone>;
 }
@@ -47,6 +47,8 @@ export interface ColumnDescriptor<
   sortable?: boolean;
   aggregate?: ColumnAggregate;
   align?: PageColumnAlign;
+  /** The cell owns interactive controls; the row supplies keyboard activation without wrapping them. */
+  interactive?: boolean;
   render?: (row: TRow) => ReactNode;
   tone?: Record<string, Tone>;
   /** Money widget: path to the FK owning the row's currency (see `WidgetField.currencyField`). */

@@ -10,10 +10,8 @@ export function activeFilterIdsFor(
   const value = Filter.from(filter);
   return options.flatMap((option) => {
     const facet = Filter.facetFromFilter(option.filter);
-    if (!facet) return [];
-    return value.facetValues(facet).includes(facet.value)
-      ? [option.id]
-      : [];
+    if (!facet) return value.hasPreset(option.filter) ? [option.id] : [];
+    return value.facetValues(facet).includes(facet.value) ? [option.id] : [];
   });
 }
 
@@ -24,7 +22,8 @@ export function nextFacetFilter(
 ): ResourceViewFilter {
   const option = options.find((candidate) => candidate.id === id);
   const facet = option ? Filter.facetFromFilter(option.filter) : null;
-  if (!facet) return filter;
+  if (!option) return filter;
+  if (!facet) return Filter.from(filter).togglePreset(option.filter);
   return Filter.from(filter).toggleFacet(facet);
 }
 

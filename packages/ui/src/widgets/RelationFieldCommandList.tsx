@@ -3,7 +3,8 @@ import { useMemo, useState, type ReactElement } from "react";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { Command } from "../ui/command";
-import type { RelationOption } from "./RelationField";
+import { Button } from "../ui/button";
+import type { RelationSearchState, RelationOption } from "./RelationField";
 
 export interface RelationFieldCommandListProps {
   options: readonly RelationOption[];
@@ -16,6 +17,8 @@ export interface RelationFieldCommandListProps {
   onCreate?: (query: string) => void;
   /** Close the popover after a selection or create. */
   onDismiss: () => void;
+  onSearchChange?: (query: string) => void;
+  searchState?: RelationSearchState;
 }
 
 /**
@@ -32,20 +35,27 @@ export default function RelationFieldCommandList({
   onSelect,
   onCreate,
   onDismiss,
+  onSearchChange,
+  searchState,
 }: RelationFieldCommandListProps): ReactElement {
   const t = useUiT();
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLowerCase();
   const filtered = useMemo(() => {
-    if (!normalized) return options;
+    if (onSearchChange || !normalized) return options;
     return options.filter((option) =>
       `${option.label} ${option.value}`.toLowerCase().includes(normalized),
     );
-  }, [options, normalized]);
+  }, [options, normalized, onSearchChange]);
   const exactMatch = options.some(
     (option) => option.label.trim().toLowerCase() === normalized,
   );
-  const showCreate = Boolean(onCreate) && normalized.length > 0 && !exactMatch;
+  const showCreate =
+    Boolean(onCreate) &&
+    normalized.length > 0 &&
+    !exactMatch &&
+    !searchState?.pending &&
+    !searchState?.error;
 
   return (
     <Command shouldFilter={false} label={ariaLabel}>
@@ -53,24 +63,46 @@ export default function RelationFieldCommandList({
         <Command.Input
           autoFocus
           value={query}
-          onValueChange={setQuery}
+          onValueChange={(value) => {
+            setQuery(value);
+            onSearchChange?.(value);
+          }}
           placeholder={searchPlaceholder ?? t("relation.searchPlaceholder")}
         />
       </Command.Search>
       <Command.List>
-        {filtered.map((option) => (
-          <Command.Item
-            key={option.value}
-            value={option.value}
-            onSelect={() => {
-              onSelect(option.value);
-              onDismiss();
-            }}
-          >
-            <span className="min-w-0 flex-1 truncate">{option.label}</span>
-            {option.value === value ? <Glyph decorative name="check" /> : null}
-          </Command.Item>
-        ))}
+        {searchState?.pending ? (
+          <div role="status" className="p-3 text-13 text-fg-muted">
+            {t("relation.loading")}
+          </div>
+        ) : null}
+        {searchState?.error ? (
+          <div role="alert" className="p-3 text-13 text-danger-text">
+            {searchState.error}
+            {searchState.retry ? (
+              <Button size="sm" variant="ghost" onClick={searchState.retry}>
+                {t("collection.retry")}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        {!searchState?.pending &&
+          !searchState?.error &&
+          filtered.map((option) => (
+            <Command.Item
+              key={option.value}
+              value={option.value}
+              onSelect={() => {
+                onSelect(option.value);
+                onDismiss();
+              }}
+            >
+              <span className="min-w-0 flex-1 truncate">{option.label}</span>
+              {option.value === value ? (
+                <Glyph decorative name="check" />
+              ) : null}
+            </Command.Item>
+          ))}
         {showCreate ? (
           <Command.Item
             value="__create__"
@@ -86,7 +118,10 @@ export default function RelationFieldCommandList({
             </span>
           </Command.Item>
         ) : null}
-        {filtered.length === 0 && !showCreate ? (
+        {filtered.length === 0 &&
+        !showCreate &&
+        !searchState?.pending &&
+        !searchState?.error ? (
           <Command.Empty>{t("relation.noMatches")}</Command.Empty>
         ) : null}
       </Command.List>

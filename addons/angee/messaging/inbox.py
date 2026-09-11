@@ -10,14 +10,16 @@ from __future__ import annotations
 import shlex
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime, time, timedelta
+from typing import Any, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.apps import apps
 from django.db import connections, models
-from django.db.models import Case, Count, Exists, F, Max, Min, OuterRef, Q, Subquery, Value, When, Window
-from django.db.models.functions import Coalesce, RowNumber
-from pydantic import BaseModel, ConfigDict, Field
+from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, When, Window
+from django.db.models.functions import RowNumber
+from django.utils import timezone
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
 from angee.base.actors import actor_user_id, is_user_actor
@@ -32,6 +34,41 @@ class InboxCoverage(BaseModel):
     kinds: list[str] = Field(default_factory=list)
     after: datetime | None = None
     before: datetime | None = None
+    start: date | None = None
+    end: date | None = None
+    period: str = ""
+    timezone: str = "UTC"
+
+    @model_validator(mode="after")
+    def validate_dates(self) -> Self:
+        """Reject invalid local bounds rather than silently widening coverage."""
+
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as error:
+            raise ValueError("Choose a valid IANA timezone.") from error
+        if self.period not in ("", "today", "7days", "30days"):
+            raise ValueError("Unknown coverage period.")
+        if self.period and (self.start is not None or self.end is not None):
+            raise ValueError("Choose a relative period or custom dates.")
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError("The end date must follow the start date.")
+        if any(value is not None and timezone.is_naive(value) for value in (self.after, self.before)):
+            raise ValueError("Timestamp coverage requires an explicit timezone.")
+        return self
+
+    def bounds(self, now: datetime | None = None) -> tuple[datetime | None, datetime | None]:
+        """Inclusive start, exclusive end, converted from local calendar days with DST."""
+
+        zone = ZoneInfo(self.timezone)
+        start, end = self.start, self.end
+        if self.period:
+            end = (now or timezone.now()).astimezone(zone).date()
+            start = end - timedelta(days={"today": 0, "7days": 6, "30days": 29}[self.period])
+        return (
+            datetime.combine(start, time.min, zone) if start is not None else None,
+            datetime.combine(end + timedelta(days=1), time.min, zone) if end is not None else None,
+        )
 
 
 class InboxSearch(BaseModel):
@@ -44,6 +81,7 @@ class InboxSearch(BaseModel):
     direction: str = ""
     starred: bool = False
     handle: str = ""
+    relations: list[str] = Field(default_factory=list)
 
     def terms(self) -> list[str]:
         """Keep quoted phrases together and require every search term."""
@@ -62,6 +100,14 @@ class InboxPage:
     count: int
     message_count: int = 0
 
+    @staticmethod
+    def window(page: int, size: int) -> slice:
+        """Validate the bounded offset page shared by records and group headers."""
+
+        if page < 1 or size < 1 or size > 100:
+            raise ValueError("Page must be positive and page size must be between 1 and 100.")
+        return slice((page - 1) * size, page * size)
+
 
 @dataclass(frozen=True)
 class InboxConversation:
@@ -76,25 +122,23 @@ class InboxConversation:
 
 
 @dataclass(frozen=True)
-class InboxSender:
-    """A confirmed party or a separate readable handle's covered activity."""
-
-    id: str
-    handle: Any
-    party: Any | None
-    count: int
-    latest: datetime
-    first: datetime
-    preview: str
-
-
-@dataclass(frozen=True)
 class InboxPartUse:
     """One readable selected-message target and its distinct personal-message uses."""
 
     part_id: str
     target: str
     count: int
+
+
+@dataclass(frozen=True)
+class InboxSelection:
+    """A readable navigator selection, independent of its current finder page."""
+
+    id: str
+    label: str
+    party: Any | None = None
+    handle: Any | None = None
+    circle: Any | None = None
 
 
 class MessageInbox:
@@ -112,9 +156,7 @@ class MessageInbox:
         self.handles = self.collection("parties", "Handle").with_sender_name()
         self.parties = self.collection("parties", "Party")
         self.threads = self.collection("messaging", "Thread").inbox()
-        self.parts = self.collection("messaging", "Part").filter(
-            message_id__in=Subquery(self.messages.order_by().values("pk"))
-        )
+        self.parts = self.parts_for(self.messages)
         self.participants = self.collection("messaging", "Participant")
 
     def collection(self, app: str, model: str) -> Any:
@@ -123,11 +165,12 @@ class MessageInbox:
         rows = apps.get_model(app, model).objects.all()
         return rows.with_actor(self.actor).scoped_for_aggregate() if self.actor is not None else rows.none()
 
-    @staticmethod
-    def _window(page: int, size: int) -> slice:
-        if page < 1 or size < 1 or size > 100:
-            raise ValueError("Page must be positive and page size must be between 1 and 100.")
-        return slice((page - 1) * size, page * size)
+    def parts_for(self, messages: Any) -> Any:
+        """Readable parts of an already authorized eligible message population."""
+
+        return self.collection("messaging", "Part").filter(
+            message_id__in=Subquery(messages.order_by().values("pk"))
+        )
 
     def coverage(self, coverage: InboxCoverage) -> Any:
         """Apply source/date coverage without silently relaxing contradictions."""
@@ -150,46 +193,64 @@ class MessageInbox:
             rows = rows.filter(_order_at__gte=coverage.after)
         if coverage.before is not None:
             rows = rows.filter(_order_at__lt=coverage.before)
+        start, end = coverage.bounds()
+        if start is not None:
+            rows = rows.filter(_order_at__gte=start)
+        if end is not None:
+            rows = rows.filter(_order_at__lt=end)
         return rows
 
     def involving_handles(self, rows: Any, handles: Any) -> Any:
         """Authorship or explicit message recipients; thread membership is insufficient."""
 
         ids = handles.order_by().values("pk")
-        recipients = self.participants.filter(
-            handle_id__in=Subquery(ids), role__in=("to", "cc", "bcc"), message_id=OuterRef("pk")
-        )
-        return rows.filter(Q(sender_id__in=Subquery(ids)) | Exists(recipients))
+        recipients = self.participants.filter(handle_id__in=Subquery(ids), role__in=("to", "cc", "bcc"))
+        # Keep the two indexed access paths separate. A correlated recipient
+        # EXISTS inside an OR makes PostgreSQL estimate almost every message as
+        # a match, then evaluate shared-content predicates across the corpus.
+        authored = rows.filter(sender_id__in=Subquery(ids)).order_by().values("pk")
+        addressed = rows.filter(pk__in=Subquery(recipients.order_by().values("message_id"))).order_by().values("pk")
+        return rows.filter(pk__in=Subquery(authored.union(addressed)))
 
-    def scoped(self, rows: Any, *, sender: str = "", circle: str = "") -> Any:
-        """Resolve public selection IDs through their current readable owner."""
+    def selection(self, *, sender: str = "", circle: str = "") -> InboxSelection | None:
+        """Resolve selection labels and commands through the authorized record owner."""
 
         if sender and circle:
             raise ValueError("Choose one sender or one circle.")
-        if sender:
-            kind, _, public_id = sender.partition(":")
-            if kind == "party":
-                party = self.parties.from_public_id(public_id)
-                if party is None:
-                    raise ValueError("Sender unavailable.")
-                handles = self.handles.filter(party=party, party_link_confirmed=True)
-            elif kind == "handle":
-                handle = self.handles.from_public_id(public_id)
-                if handle is None:
-                    raise ValueError("Sender unavailable.")
-                handles = self.handles.filter(pk=handle.pk)
-            else:
-                raise ValueError("Unknown sender selection.")
-            return self.involving_handles(rows, handles)
         if circle:
             selected = self.collection("parties", "Circle").from_public_id(circle)
             if selected is None:
                 raise ValueError("Circle unavailable.")
-            members = self.parties.in_circle(selected)
-            return self.involving_handles(
-                rows, self.handles.filter(party_id__in=Subquery(members.values("pk")), party_link_confirmed=True)
-            )
-        return rows
+            return InboxSelection(id=f"circle:{selected.public_id}", label=selected.name, circle=selected)
+        if not sender:
+            return None
+        kind, _, public_id = sender.partition(":")
+        if kind == "party":
+            party = self.parties.from_public_id(public_id)
+            if party is not None:
+                return InboxSelection(id=sender, label=party.display_name, party=party)
+        elif kind == "handle":
+            handle = self.handles.from_public_id(public_id)
+            if handle is not None:
+                return InboxSelection(id=sender, label=handle._sender_name, handle=handle)
+        else:
+            raise ValueError("Unknown sender selection.")
+        raise ValueError("Sender unavailable.")
+
+    def scoped(self, rows: Any, *, sender: str = "", circle: str = "") -> Any:
+        """Restrict messages to an independently readable navigator selection."""
+
+        selected = self.selection(sender=sender, circle=circle)
+        if selected is None:
+            return rows
+        if selected.party is not None:
+            handles = self.handles.filter(party=selected.party, party_link_confirmed=True)
+        elif selected.handle is not None:
+            handles = self.handles.filter(pk=selected.handle.pk)
+        else:
+            members = self.parties.in_circle(selected.circle, confirmed_only=True)
+            handles = self.handles.filter(party_id__in=Subquery(members.values("pk")), party_link_confirmed=True)
+        return self.involving_handles(rows, handles)
 
     def matching(self, rows: Any, search: InboxSearch) -> Any:
         """Search readable part uses with native Postgres full text and filename matching."""
@@ -208,7 +269,7 @@ class MessageInbox:
             rows = rows.filter(pk__in=Subquery(stars.values("message_id")))
         parts = self.parts.filter(message_id=OuterRef("pk"))
         if search.attachment:
-            attachments = parts.filter(disposition="attachment", file__isnull=False)
+            attachments = parts.filter(disposition="attachment")
             if search.attachment in ("image", "video", "audio"):
                 attachments = attachments.filter(type__startswith=f"{search.attachment}/")
             elif search.attachment == "document":
@@ -231,7 +292,32 @@ class MessageInbox:
             )
             matches = parts.filter((Q(role__in=roles) & text) | Q(name__icontains=term, disposition="attachment"))
             rows = rows.filter(Exists(matches))
+        if search.relations:
+            if set(search.relations) - {*apps.get_model("messaging", "MessageEdge").EdgeKind.values, "reply"}:
+                raise ValueError("Unknown message relation kind.")
+            edges = self.edges().filter(kind__in=search.relations)
+            predicate = Q(pk__in=Subquery(edges.values("src_id"))) | Q(pk__in=Subquery(edges.values("dst_id")))
+            if "reply" in search.relations:
+                readable = Subquery(self.messages.order_by().values("pk"))
+                predicate |= Q(parent_id__in=readable) | Q(
+                    pk__in=Subquery(self.messages.order_by().values("parent_id"))
+                )
+            rows = rows.filter(predicate)
         return rows
+
+    def edges(self) -> Any:
+        """Only readable produced relations whose two endpoints are in the personal corpus."""
+
+        readable = Subquery(self.messages.order_by().values("pk"))
+        return self.collection("messaging", "MessageEdge").filter(src_id__in=readable, dst_id__in=readable)
+
+    def relation_kinds(self) -> list[str]:
+        """Expose the kinds of available readable connections, including reply pointers."""
+
+        kinds = set(self.edges().order_by().values_list("kind", flat=True).distinct())
+        if self.messages.filter(parent_id__in=Subquery(self.messages.order_by().values("pk"))).exists():
+            kinds.add("reply")
+        return sorted(kinds)
 
     def results(self, coverage: InboxCoverage, search: InboxSearch, *, sender: str = "", circle: str = "") -> Any:
         """The one intersection used by conversation rows, counts and selection status."""
@@ -255,7 +341,9 @@ class MessageInbox:
         matches = self._conversation_rows(rows).scoped_for_aggregate().order_by()
         groups = matches.values("_conversation").annotate(latest=Max("_order_at"), total=Count("pk", distinct=True))
         count = groups.count()
-        selected = list(groups.order_by("latest" if oldest else "-latest", "_conversation")[self._window(page, size)])
+        selected = list(
+            groups.order_by("latest" if oldest else "-latest", "_conversation")[InboxPage.window(page, size)]
+        )
         keys = [row["_conversation"] for row in selected]
         ranked = (
             matches.filter(_conversation__in=keys)
@@ -297,145 +385,6 @@ class MessageInbox:
             for key in [row["_conversation"]]
         ]
         return InboxPage(result, count, matches.count())
-
-    def senders(
-        self,
-        coverage: InboxCoverage,
-        *,
-        text: str = "",
-        include_sent: bool = False,
-        sort: str = "recent",
-        link: str = "",
-        page: int = 1,
-        size: int = 25,
-    ) -> InboxPage:
-        """Aggregate covered activity once, then fetch bounded sender identities.
-
-        Explicit outbound recipients join only when requested. COUNT DISTINCT
-        protects parties with several addressed handles and inbound envelope joins.
-        """
-
-        handles = self.handles.exclude(owner_id=self.user_id) if self.user_id is not None else self.handles
-        if self.user_id is not None:
-            identity = apps.get_model("parties", "Party").objects.identity_for_user_id(self.user_id)
-            if identity is not None:
-                handles = handles.exclude(party=identity, party_link_confirmed=True)
-        party_ids = Subquery(self.parties.order_by().values("pk"))
-        activity = self.coverage(coverage)
-        if include_sent:
-            activity = activity.filter(
-                Q(direction="inbound")
-                | Q(
-                    direction="outbound",
-                    participants__role__in=("to", "cc", "bcc"),
-                    participants__id__in=Subquery(self.participants.order_by().values("pk")),
-                )
-            ).annotate(
-                _candidate=Case(When(direction="inbound", then=F("sender_id")), default=F("participants__handle_id")),
-                _party=Case(
-                    When(
-                        direction="inbound",
-                        sender__party_link_confirmed=True,
-                        sender__party_id__in=party_ids,
-                        then=F("sender__party_id"),
-                    ),
-                    When(
-                        direction="outbound",
-                        participants__handle__party_link_confirmed=True,
-                        participants__handle__party_id__in=party_ids,
-                        then=F("participants__handle__party_id"),
-                    ),
-                    default=Value(None),
-                    output_field=models.BigIntegerField(),
-                ),
-            )
-        else:
-            activity = activity.filter(direction="inbound").annotate(
-                _candidate=F("sender_id"),
-                _party=Case(
-                    When(sender__party_link_confirmed=True, sender__party_id__in=party_ids, then=F("sender__party_id")),
-                    default=Value(None),
-                    output_field=models.BigIntegerField(),
-                ),
-            )
-        activity = activity.filter(_candidate__in=Subquery(handles.order_by().values("pk"))).annotate(
-            _identity=Coalesce("_party", -F("_candidate")),
-        )
-        if text.strip():
-            found = handles.filter(
-                Q(_sender_name__icontains=text.strip())
-                | Q(value__icontains=text.strip())
-                | Q(normalized_value__icontains=text.strip())
-            )
-            activity = activity.filter(
-                Q(_candidate__in=Subquery(found.order_by().values("pk")))
-                | Q(_party__in=Subquery(found.filter(party_link_confirmed=True).order_by().values("party_id")))
-            )
-        if link == "confirmed":
-            activity = activity.filter(_party__isnull=False)
-        elif link in ("suggested", "unlinked"):
-            candidates = (
-                handles.filter(party_id__in=party_ids) if link == "suggested" else handles.filter(party_id__isnull=True)
-            )
-            activity = activity.filter(_party__isnull=True, _candidate__in=Subquery(candidates.order_by().values("pk")))
-        elif link:
-            raise ValueError("Unknown identity link state.")
-        groups = (
-            activity.scoped_for_aggregate()
-            .order_by()
-            .values("_identity")
-            .annotate(
-                total=Count("pk", distinct=True),
-                latest=Max("_order_at"),
-                first=Min("_order_at"),
-                handle_pk=Min("_candidate"),
-            )
-        )
-        order = {"recent": "-latest", "name": "_name", "count": "-total", "first": "first"}.get(sort)
-        if order is None:
-            raise ValueError("Unknown sender order.")
-        if sort == "name":
-            groups = groups.annotate(
-                _name=Min(Subquery(handles.filter(pk=OuterRef("_candidate")).values("_sender_name")[:1]))
-            )
-        count = groups.count()
-        selected = list(groups.order_by(order, "_identity")[self._window(page, size)])
-        keys = [row["_identity"] for row in selected]
-        previews = (
-            activity.filter(_identity__in=keys)
-            .annotate(
-                _rank=Window(
-                    RowNumber(),
-                    partition_by=[F("_identity")],
-                    order_by=[F("_order_at").desc(), F("pk").desc()],
-                )
-            )
-            .filter(_rank=1)
-            .values_list("_identity", "preview")
-        )
-        preview_by_identity = dict(previews)
-        parties = {party.pk: party for party in self.parties.filter(pk__in=[key for key in keys if key > 0])}
-        selected_handles = {
-            handle.pk: handle for handle in handles.filter(pk__in=[row["handle_pk"] for row in selected])
-        }
-        return InboxPage(
-            [
-                InboxSender(
-                    id=f"party:{parties[key].sqid}"
-                    if key in parties
-                    else f"handle:{selected_handles[row['handle_pk']].sqid}",
-                    handle=selected_handles[row["handle_pk"]],
-                    party=parties.get(key),
-                    count=row["total"],
-                    latest=row["latest"],
-                    first=row["first"],
-                    preview=preview_by_identity.get(key, ""),
-                )
-                for row in selected
-                for key in [row["_identity"]]
-            ],
-            count,
-        )
 
     def message(self, public_id: str) -> Any:
         """Read a message independently of the current result filters."""
@@ -504,7 +453,7 @@ class MessageInbox:
         all_uses = self.messages.filter(pk__in=Subquery(parts.order_by().values("message_id")))
         rows = self.matching(all_uses, InboxSearch(text=text, quoted=True))
         return InboxPage(
-            list(rows.order_by("_order_at" if oldest else "-_order_at", "pk")[self._window(page, size)]),
+            list(rows.order_by("_order_at" if oldest else "-_order_at", "pk")[InboxPage.window(page, size)]),
             rows.count(),
             all_uses.count(),
         )

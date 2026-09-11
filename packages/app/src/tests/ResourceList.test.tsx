@@ -1769,7 +1769,7 @@ describe("ResourceList", () => {
       </TestUrlState>,
     );
 
-    await screen.findByText("Updated · Month");
+    await screen.findByText("Updated At · Month");
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
@@ -1787,7 +1787,7 @@ describe("ResourceList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "List view" }));
 
-    await screen.findByText("Updated · Month");
+    await screen.findByText("Updated At · Month");
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
@@ -1856,7 +1856,7 @@ describe("ResourceList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "List view" }));
 
-    await screen.findByText("Updated · Month");
+    await screen.findByText("Updated At · Month");
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("view")).toBe("list");
@@ -1877,13 +1877,13 @@ describe("ResourceList", () => {
     );
 
     const removeGroup = await screen.findByRole("button", {
-      name: "Remove Updated \u00b7 Day",
+      name: "Remove Updated At \u00b7 Day",
     });
     fireEvent.click(removeGroup);
 
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: "Remove Updated \u00b7 Day" }),
+        screen.queryByRole("button", { name: "Remove Updated At \u00b7 Day" }),
       ).toBeNull(),
     );
   });
@@ -2241,7 +2241,7 @@ describe("ResourceList", () => {
     );
 
     await screen.findByRole("button", { name: "Groups 1-2 / 4 groups" });
-    await screen.findByRole("button", { name: "Remove Updated \u00b7 Day" });
+    await screen.findByRole("button", { name: "Remove Updated At \u00b7 Day" });
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("pageSize")).toBeNull();
@@ -2275,7 +2275,7 @@ describe("ResourceList", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Month" }));
 
     await waitFor(() =>
-      expect(screen.getByText("Updated · Month")).toBeTruthy(),
+      expect(screen.getByText("Updated At · Month")).toBeTruthy(),
     );
     await waitFor(() =>
       expect(
@@ -2357,7 +2357,7 @@ describe("ResourceList", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Month" }));
 
     await waitFor(() =>
-      expect(screen.getByText("Updated · Month")).toBeTruthy(),
+      expect(screen.getByText("Updated At · Month")).toBeTruthy(),
     );
   });
 });

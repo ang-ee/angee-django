@@ -10,6 +10,7 @@ import { Dialog } from "../../ui/dialog";
 import { TextLink } from "../../ui/text-link";
 import {
   RelationField,
+  type RelationSearchState,
   type RelationOption,
 } from "../../widgets/RelationField";
 import { FormView, type FormSubmit } from "../form/FormView";
@@ -89,6 +90,8 @@ export interface RelationPickerProps {
    * fetch until first open.
    */
   onOpenChange?: (open: boolean) => void;
+  onSearchChange?: (query: string) => void;
+  searchState?: RelationSearchState;
   /**
    * In-app path to the selected record's detail page. When set, a "follow" arrow
    * beside the picker navigates there — so a chosen relation is a link to its
@@ -128,9 +131,13 @@ export function RelationPicker({
   edit,
   onEdited,
   onOpenChange,
+  onSearchChange,
+  searchState,
   followHref,
 }: RelationPickerProps): ReactElement {
-  const registeredForm = useRegisteredForm(create?.resource ?? edit?.resource ?? "");
+  const registeredForm = useRegisteredForm(
+    create?.resource ?? edit?.resource ?? "",
+  );
   const t = useUiT();
   // The open inline-form dialog; `null` means closed.
   const [dialog, setDialog] = useState<DialogState | null>(null);
@@ -145,7 +152,10 @@ export function RelationPicker({
             triggerRef={controlRef}
             id={id}
             value={value}
-            onChange={(next) => { onChange?.(next); onCommit?.(); }}
+            onChange={(next) => {
+              onChange?.(next);
+              onCommit?.();
+            }}
             options={options}
             placeholder={placeholder}
             searchPlaceholder={searchPlaceholder}
@@ -154,8 +164,14 @@ export function RelationPicker({
             aria-describedby={ariaDescribedBy}
             aria-required={ariaRequired}
             readOnly={readOnly}
-            onCreate={create ? (query) => setDialog({ mode: "create", query }) : undefined}
+            onCreate={
+              create
+                ? (query) => setDialog({ mode: "create", query })
+                : undefined
+            }
             onOpenChange={onOpenChange}
+            onSearchChange={onSearchChange}
+            searchState={searchState}
           />
         </div>
         {canEdit && value ? (
@@ -184,7 +200,9 @@ export function RelationPicker({
             <Dialog.Header>
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
-                  <Dialog.Title>{dialogTitle(dialog, create, edit, t)}</Dialog.Title>
+                  <Dialog.Title>
+                    {dialogTitle(dialog, create, edit, t)}
+                  </Dialog.Title>
                 </div>
                 <Dialog.Close />
               </div>
@@ -194,40 +212,48 @@ export function RelationPicker({
                   instead of portaling to the layout's top band. */}
               {dialog?.mode === "create" && create ? (
                 <ControlBandProvider host={undefined}>
-                  {createElement(registeredForm ? RegisteredFormView : FormView, {
-                    resource: create.resource,
-                    id: null,
-                    ...(registeredForm ? {} : {
-                      fields: create.fields,
-                      ...(create.submit ? { submit: create.submit } : {}),
-                    }),
-                    defaultValues: {
-                      ...create.defaultValues,
-                      [prefillField]: dialog.query,
+                  {createElement(
+                    registeredForm ? RegisteredFormView : FormView,
+                    {
+                      resource: create.resource,
+                      id: null,
+                      ...(registeredForm
+                        ? {}
+                        : {
+                            fields: create.fields,
+                            ...(create.submit ? { submit: create.submit } : {}),
+                          }),
+                      defaultValues: {
+                        ...create.defaultValues,
+                        [prefillField]: dialog.query,
+                      },
+                      onSaved: (row: Row) => {
+                        const id = rowPublicId(row);
+                        if (id) {
+                          onChange?.(id);
+                          onCommit?.();
+                          onCreated?.(id);
+                        }
+                        setDialog(null);
+                      },
                     },
-                    onSaved: (row: Row) => {
-                      const id = rowPublicId(row);
-                      if (id) {
-                        onChange?.(id);
-                        onCommit?.();
-                        onCreated?.(id);
-                      }
-                      setDialog(null);
-                    },
-                  })}
+                  )}
                 </ControlBandProvider>
               ) : null}
               {dialog?.mode === "edit" && edit ? (
                 <ControlBandProvider host={undefined}>
-                  {createElement(registeredForm ? RegisteredFormView : FormView, {
-                    resource: edit.resource,
-                    id: dialog.id,
-                    ...(registeredForm ? {} : { fields: edit.fields }),
-                    onSaved: (row: Row) => {
-                      onEdited?.(rowPublicId(row) || dialog.id);
-                      setDialog(null);
+                  {createElement(
+                    registeredForm ? RegisteredFormView : FormView,
+                    {
+                      resource: edit.resource,
+                      id: dialog.id,
+                      ...(registeredForm ? {} : { fields: edit.fields }),
+                      onSaved: (row: Row) => {
+                        onEdited?.(rowPublicId(row) || dialog.id);
+                        setDialog(null);
+                      },
                     },
-                  })}
+                  )}
                 </ControlBandProvider>
               ) : null}
             </Dialog.Body>

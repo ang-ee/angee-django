@@ -8,7 +8,13 @@ import { Checkbox } from "../../../ui/checkbox";
 import { TableCell, TableRow } from "../../../ui/table";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewGroup } from "../resource-view-model";
-import { alignOf, isInteractiveTarget, renderCell, rowActionLabelForTableColumn } from "./cell-utils";
+import {
+  columnHasInteractiveContent,
+  alignOf,
+  isInteractiveTarget,
+  renderCell,
+  rowActionLabelForTableColumn,
+} from "./cell-utils";
 import { GroupHeader } from "./grouping";
 import { ALIGN_CLASS } from "./types";
 function RecordRowInner<TRow extends Row>({
@@ -98,6 +104,9 @@ function LinkedRecordRow<TRow extends Row>({
 }): React.ReactElement {
   const t = useUiT();
   const id = row.id;
+  const firstCell = row.getVisibleCells()[0];
+  const ownsControls =
+    firstCell && columnHasInteractiveContent(firstCell.column.columnDef);
   const navigate = useNavigate();
   const openRow = React.useCallback(
     (event: React.MouseEvent<HTMLTableRowElement>) => {
@@ -115,12 +124,12 @@ function LinkedRecordRow<TRow extends Row>({
   const openLink = React.useCallback(
     (event: React.MouseEvent<HTMLAnchorElement>) => {
       if (
-        event.defaultPrevented
-        || event.button !== 0
-        || event.metaKey
-        || event.ctrlKey
-        || event.shiftKey
-        || event.altKey
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
       ) {
         return;
       }
@@ -137,6 +146,18 @@ function LinkedRecordRow<TRow extends Row>({
       aria-current={active ? "true" : undefined}
       data-selected={selected ? "" : undefined}
       onClick={openRow}
+      tabIndex={ownsControls ? 0 : undefined}
+      onKeyDown={
+        ownsControls
+          ? (event) => {
+              if (event.target !== event.currentTarget || event.key !== "Enter")
+                return;
+              event.preventDefault();
+              onRecordOpen?.(row.original);
+              void navigate({ to: href });
+            }
+          : undefined
+      }
     >
       {selectable ? (
         <TableCell className="w-8">
@@ -145,9 +166,7 @@ function LinkedRecordRow<TRow extends Row>({
             aria-label={t("list.selectRow")}
             checked={selected}
             onClick={(event) => event.stopPropagation()}
-            onCheckedChange={(checked) =>
-              onToggleSelected(id, checked)
-            }
+            onCheckedChange={(checked) => onToggleSelected(id, checked)}
           />
         </TableCell>
       ) : null}
@@ -156,12 +175,17 @@ function LinkedRecordRow<TRow extends Row>({
           key={cell.id}
           className={ALIGN_CLASS[alignOf(cell.column.columnDef)]}
         >
-          {index === 0 ? (
+          {index === 0 &&
+          !columnHasInteractiveContent(cell.column.columnDef) ? (
             <a
               href={href}
               className="block min-w-0 rounded-4 text-inherit outline-none focus-visible:focus-ring"
               aria-label={t("list.openRecord", {
-                label: rowActionLabelForTableColumn(cell.column, row.original, t),
+                label: rowActionLabelForTableColumn(
+                  cell.column,
+                  row.original,
+                  t,
+                ),
               })}
               onClick={openLink}
             >
@@ -204,16 +228,39 @@ function PlainRecordRow<TRow extends Row>({
 }): React.ReactElement {
   const t = useUiT();
   const id = row.id;
+  const firstCell = row.getVisibleCells()[0];
+  const ownsControls =
+    firstCell && columnHasInteractiveContent(firstCell.column.columnDef);
   return (
     <TableRow
       {...dragProps}
       interactive={interactive}
       aria-current={active ? "true" : undefined}
       data-selected={selected ? "" : undefined}
-      onClick={onRowClick ? () => {
-        onRecordOpen?.(row.original);
-        onRowClick(row.original);
-      } : undefined}
+      tabIndex={interactive && ownsControls && onRowClick ? 0 : undefined}
+      onKeyDown={
+        interactive && ownsControls && onRowClick
+          ? (event) => {
+              if (
+                event.target !== event.currentTarget ||
+                !["Enter", " "].includes(event.key)
+              )
+                return;
+              event.preventDefault();
+              onRecordOpen?.(row.original);
+              onRowClick(row.original);
+            }
+          : undefined
+      }
+      onClick={
+        onRowClick
+          ? (event) => {
+              if (isInteractiveTarget(event.target)) return;
+              onRecordOpen?.(row.original);
+              onRowClick(row.original);
+            }
+          : undefined
+      }
     >
       {selectable ? (
         <TableCell className="w-8">
@@ -222,9 +269,7 @@ function PlainRecordRow<TRow extends Row>({
             aria-label={t("list.selectRow")}
             checked={selected}
             onClick={(event) => event.stopPropagation()}
-            onCheckedChange={(checked) =>
-              onToggleSelected(id, checked)
-            }
+            onCheckedChange={(checked) => onToggleSelected(id, checked)}
           />
         </TableCell>
       ) : null}
@@ -233,12 +278,19 @@ function PlainRecordRow<TRow extends Row>({
           key={cell.id}
           className={ALIGN_CLASS[alignOf(cell.column.columnDef)]}
         >
-          {interactive && index === 0 && onRowClick ? (
+          {interactive &&
+          index === 0 &&
+          onRowClick &&
+          !columnHasInteractiveContent(cell.column.columnDef) ? (
             <button
               type="button"
               className="block w-full min-w-0 rounded-4 text-left text-inherit outline-none focus-visible:focus-ring"
               aria-label={t("list.openRecord", {
-                label: rowActionLabelForTableColumn(cell.column, row.original, t),
+                label: rowActionLabelForTableColumn(
+                  cell.column,
+                  row.original,
+                  t,
+                ),
               })}
               onClick={(event) => {
                 event.stopPropagation();

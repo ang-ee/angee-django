@@ -31,6 +31,8 @@ import {
 
 export interface UseResourceViewToolbarInputsProps<TRow extends Row> {
   query?: ResourceQuery;
+  /** Server projections declare complete choices, never infer facets from a page. */
+  inferOptions?: boolean;
   columns: readonly ColumnDescriptor<TRow>[];
   rows: readonly TRow[];
   modelMetadata: ModelMetadata | null;
@@ -76,6 +78,7 @@ export function useResourceViewToolbarInputs<TRow extends Row>({
   defaultGroup,
   defaultGroups,
   query,
+  inferOptions = true,
   groupOptions,
   contributedGroupOptions = [],
   explicitGroupOptionsReplaceInferred = false,
@@ -86,76 +89,103 @@ export function useResourceViewToolbarInputs<TRow extends Row>({
   textFilterField,
   groupStack = resourceView.state.groupStack,
 }: UseResourceViewToolbarInputsProps<TRow>): ResourceViewToolbarInputState {
-  const pager = React.useMemo<PagerState>(() => ({
-    total: list.total,
-    page: list.page,
-    pageSize: list.pageSize,
-    hasPrev: list.hasPrev,
-    hasNext: list.hasNext,
-  }), [list.hasNext, list.hasPrev, list.page, list.pageSize, list.total]);
+  const pager = React.useMemo<PagerState>(
+    () => ({
+      total: list.total,
+      page: list.page,
+      pageSize: list.pageSize,
+      hasPrev: list.hasPrev,
+      hasNext: list.hasNext,
+    }),
+    [list.hasNext, list.hasPrev, list.page, list.pageSize, list.total],
+  );
   const toolbarDefaultGroups = React.useMemo(
     () => defaultGroupsForToolbar(defaultGroup, defaultGroups),
     [defaultGroup, defaultGroups],
   );
   const resourceQuery = React.useMemo(
-    () => query ?? queryForColumns(columns, modelMetadata, toolbarDefaultGroups),
+    () =>
+      query ?? queryForColumns(columns, modelMetadata, toolbarDefaultGroups),
     [query, columns, modelMetadata, toolbarDefaultGroups],
   );
   const inferredGroups = React.useMemo(
-    () => buildGroupOptions(columns, modelMetadata, toolbarDefaultGroups, resourceQuery),
-    [columns, modelMetadata, toolbarDefaultGroups, resourceQuery],
+    () =>
+      inferOptions
+        ? buildGroupOptions(
+            columns,
+            modelMetadata,
+            toolbarDefaultGroups,
+            resourceQuery,
+          )
+        : [],
+    [inferOptions, columns, modelMetadata, toolbarDefaultGroups, resourceQuery],
   );
   const mergedContributedGroups = React.useMemo(
     () => mergeGroupOptions(groupOptions, contributedGroupOptions),
     [contributedGroupOptions, groupOptions],
   );
-  const serverGrouping = Boolean(modelMetadata && !isClientRowModel(modelMetadata.resource) && (resourceView.state.view === "list" || resourceView.state.view === "board"));
-  const resolvedGroupOptions = React.useMemo(
-    () => {
-      const options = explicitGroupOptionsReplaceInferred && groupOptions !== undefined
-        ? groupOptions : mergeGroupOptions(mergedContributedGroups, inferredGroups);
-      return options.filter(({ group }) => {
-        const axis = resourceQuery.axes[group.field];
-        return serverGrouping ? Boolean(axis?.server) : Boolean(axis?.identityPath);
-      });
-    },
-    [
-      explicitGroupOptionsReplaceInferred,
-      groupOptions,
-      inferredGroups,
-      mergedContributedGroups,
-      resourceQuery,
-      serverGrouping,
-    ],
+  const serverGrouping = Boolean(
+    modelMetadata &&
+      !isClientRowModel(modelMetadata.resource) &&
+      (resourceView.state.view === "list" ||
+        resourceView.state.view === "board"),
   );
+  const resolvedGroupOptions = React.useMemo(() => {
+    const options =
+      explicitGroupOptionsReplaceInferred && groupOptions !== undefined
+        ? groupOptions
+        : mergeGroupOptions(mergedContributedGroups, inferredGroups);
+    return options.filter(({ group }) => {
+      const axis = resourceQuery.axes[group.field];
+      return serverGrouping
+        ? Boolean(axis?.server)
+        : Boolean(axis?.identityPath);
+    });
+  }, [
+    explicitGroupOptionsReplaceInferred,
+    groupOptions,
+    inferredGroups,
+    mergedContributedGroups,
+    resourceQuery,
+    serverGrouping,
+  ]);
   const inferredCustomFilterFields = React.useMemo(
-    () => buildFilterFields(columns, rows, modelMetadata, resourceQuery),
-    [columns, modelMetadata, rows, resourceQuery],
+    () =>
+      inferOptions
+        ? buildFilterFields(columns, rows, modelMetadata, resourceQuery)
+        : [],
+    [inferOptions, columns, modelMetadata, rows, resourceQuery],
   );
   const inferredFilterOptions = React.useMemo(
-    () => buildFilterOptions(columns, rows, inferredCustomFilterFields),
-    [columns, inferredCustomFilterFields, rows],
+    () =>
+      inferOptions
+        ? buildFilterOptions(columns, rows, inferredCustomFilterFields)
+        : [],
+    [inferOptions, columns, inferredCustomFilterFields, rows],
   );
   const explicitAndContributedFilters = React.useMemo(
     () => mergeFilterOptions(explicitFilterOptions, contributedFilterOptions),
     [contributedFilterOptions, explicitFilterOptions],
   );
   const resolvedFilterOptions = React.useMemo(
-    () => mergeFilterOptions(explicitAndContributedFilters, inferredFilterOptions),
+    () =>
+      mergeFilterOptions(explicitAndContributedFilters, inferredFilterOptions),
     [explicitAndContributedFilters, inferredFilterOptions],
   );
   const explicitAndContributedFields = React.useMemo(
-    () => mergeFilterFields(
-      explicitCustomFilterFields,
-      contributedCustomFilterFields,
-    ),
+    () =>
+      mergeFilterFields(
+        explicitCustomFilterFields,
+        contributedCustomFilterFields,
+      ),
     [contributedCustomFilterFields, explicitCustomFilterFields],
   );
   const resolvedCustomFilterFields = React.useMemo(
-    () => mergeFilterFields(
-      explicitAndContributedFields,
-      inferredCustomFilterFields,
-    ),
+    () =>
+      mergeFilterFields(
+        explicitAndContributedFields,
+        inferredCustomFilterFields,
+      ),
     [explicitAndContributedFields, inferredCustomFilterFields],
   );
   const activeFilterIds = React.useMemo(
@@ -163,12 +193,13 @@ export function useResourceViewToolbarInputs<TRow extends Row>({
     [resourceView.state.filter, resolvedFilterOptions],
   );
   const customFilterChips = React.useMemo(
-    () => customFilterChipsFor(
-      resourceView.state.filter,
-      resolvedFilterOptions,
-      resolvedCustomFilterFields,
-      textFilterField,
-    ),
+    () =>
+      customFilterChipsFor(
+        resourceView.state.filter,
+        resolvedFilterOptions,
+        resolvedCustomFilterFields,
+        textFilterField,
+      ),
     [
       resourceView.state.filter,
       resolvedCustomFilterFields,
@@ -176,7 +207,10 @@ export function useResourceViewToolbarInputs<TRow extends Row>({
       textFilterField,
     ],
   );
-  const filterText = textFilterValue(resourceView.state.filter, textFilterField);
+  const filterText = textFilterValue(
+    resourceView.state.filter,
+    textFilterField,
+  );
   return {
     pager,
     groupOptions: resolvedGroupOptions,

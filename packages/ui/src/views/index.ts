@@ -20,9 +20,26 @@ export {
   type UseListRecordNavigationOptions,
   type UseListRecordNavigationResult,
 } from "./resource/use-list-record-navigation";
-export { RECORD_TAB_SEARCH_KEY, RECORD_TASK_SEARCH_KEY, parseRecordNavigationScope, recordNavigationSearch, recordNavigationHref, recordTargetHref, recordTargetSearch, routeSearchParam, updateRouteSearch } from "./resource/record-navigation-context";
+export {
+  RECORD_TAB_SEARCH_KEY,
+  RECORD_TASK_SEARCH_KEY,
+  parseRecordNavigationScope,
+  recordNavigationSearch,
+  recordNavigationHref,
+  recordTargetHref,
+  recordTargetSearch,
+  routeSearchParam,
+  updateRouteSearch,
+} from "./resource/record-navigation-context";
 export type { RecordTargetSearch } from "./resource/record-navigation-context";
 export { RowsListView, type RowsListViewProps } from "./resource/RowsListView";
+export {
+  collectionQuery,
+  type CollectionSource,
+  type CollectionPage,
+  type CollectionPageRequest,
+  type CollectionGroupRequest,
+} from "./resource/collection-source";
 export {
   defineRowAction,
   rowIdVariables,
@@ -108,8 +125,19 @@ export {
   type GraphViewConnection,
   type GraphViewPosition,
 } from "./GraphView";
-export { DashboardView, type DashboardViewProps } from "./dashboard/DashboardView";
+export {
+  DashboardView,
+  type DashboardViewProps,
+} from "./dashboard/DashboardView";
 export { TreeView, type TreeViewProps } from "./tree/TreeView";
+export {
+  RelationFieldWidget,
+  type RelationFieldWidgetProps,
+} from "./relation/RelationFieldWidget";
+export {
+  CollectionTreeView,
+  type CollectionTreeViewProps,
+} from "./tree/CollectionTreeView";
 export {
   ScopedExplorerPane,
   type ScopedExplorerController,
@@ -155,7 +183,13 @@ export {
 } from "../ui/tree";
 export { Metric, type MetricProps } from "./dashboard/Metric";
 export { Form, type FormProps } from "./form/Form";
-export { RegisteredFormView, registerForm, useRegisteredForm, type RegisteredForm, type RegisteredFormProps } from "./form/registered-form";
+export {
+  RegisteredFormView,
+  registerForm,
+  useRegisteredForm,
+  type RegisteredForm,
+  type RegisteredFormProps,
+} from "./form/registered-form";
 export {
   FormView,
   acknowledgeFormSubmit,
@@ -183,7 +217,14 @@ export {
   type RecordChromeContext,
 } from "./resource/record-chrome-context";
 export { EditableLines, type EditableLinesProps } from "./form/EditableLines";
-export { BoundDescriptorField, BoundFormValue, useFormViewValues, type BoundDescriptorFieldProps, type BoundFormValueProps, type BoundFormValueRenderProps } from "./form/BoundDescriptorField";
+export {
+  BoundDescriptorField,
+  BoundFormValue,
+  useFormViewValues,
+  type BoundDescriptorFieldProps,
+  type BoundFormValueProps,
+  type BoundFormValueRenderProps,
+} from "./form/BoundDescriptorField";
 export { useListIdentities } from "./form/StructuredField";
 export {
   diffLines,
@@ -211,7 +252,11 @@ export {
   type ResourceRecordPlacement,
   type RecordSmartButtonDescriptor,
 } from "./resource/ResourceList";
-export { useRouteParam, useRouteRecordId, useRouteSearch } from "./resource/resource-routing";
+export {
+  useRouteParam,
+  useRouteRecordId,
+  useRouteSearch,
+} from "./resource/resource-routing";
 export {
   AggregatePanel,
   type AggregatePanelProps,
@@ -225,7 +270,10 @@ export {
   DeletePreviewTree,
   type DeletePreviewTreeProps,
 } from "./tree/DeletePreviewTree";
-export { useBulkDelete, type UseBulkDeleteResult } from "./resource/useBulkDelete";
+export {
+  useBulkDelete,
+  type UseBulkDeleteResult,
+} from "./resource/useBulkDelete";
 export {
   recordActionId,
   useActionOutcomeMutation,

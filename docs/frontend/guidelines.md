@@ -333,11 +333,20 @@ history uses native Query pages with domain-owned
   row models through `useClientResourceViewSurface` over the fetched set for a
   `rowModel:"client"` resource; `RowsListView` remains the
   renderer for the genuinely non-resource in-memory case — the operator-daemon
-  quarantine, and an explorer-scoped collection that is not a Hasura resource.
+  quarantine and bounded computed projections.
   Storage's `FileBrowserContent` is the contrasting server-backed example: it
   composes `List` over `storage.File` with drive/folder base filters and
   server-side folder grouping because a drive can contain hundreds of thousands
   of rows.
+- **Large scoped projections use the native server collection seam.** Compose
+  `ListView.source` with `collectionQuery` and an explicit `ResourceQuery`
+  contract when the server projects rows from a changing record scope. The
+  authored document owns variables, results and count units; the shared list
+  owns filtering, grouping, virtualized rendering and independent group pages.
+  `CollectionTreeView` composes the same transport with native tree expansion
+  and child paging. Do not register a fictional model, infer available choices
+  from one server page, or filter/group that page in the browser. Bounded
+  in-memory fixtures still use `RowsListView`.
 - **Card presentation does not change the query boundary.** An ordinary grouped
   board over a server resource uses the same server groups, exact counts and
   per-group record pages as the grouped list. Deriving its lanes from a flat

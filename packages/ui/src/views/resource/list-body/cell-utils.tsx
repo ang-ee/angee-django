@@ -1,7 +1,11 @@
 import * as React from "react";
 import { flexRender, type Cell as TableCellModel, type Column as TableColumn, type ColumnDef } from "@tanstack/react-table";
 import type { AggregateBucket, AggregateMeasureOperator } from "@angee/refine";
-import type { ModelEnumValueMetadata, ModelMetadata, Row } from "@angee/metadata";
+import type {
+  ModelEnumValueMetadata,
+  ModelMetadata,
+  Row,
+} from "@angee/metadata";
 import { isDateField, rowValueAtPath, resourceFieldPathToSnake } from "@angee/metadata";
 import { type UiTranslate } from "../../../i18n";
 import { RelativeTime } from "../../../fragments/RelativeTime";
@@ -198,6 +202,12 @@ export function alignOf<TRow extends Row>(column: ColumnDef<TRow>): PageColumnAl
   return columnMeta(column).align ?? "left";
 }
 
+export function columnHasInteractiveContent<TRow extends Row>(
+  column: ColumnDef<TRow>,
+): boolean {
+  return columnMeta(column).interactive === true;
+}
+
 function columnMeta<TRow extends Row>(
   column: ColumnDef<TRow>,
 ): {
@@ -206,18 +216,20 @@ function columnMeta<TRow extends Row>(
   field?: string;
   aggregate?: ColumnAggregate;
   queryOnly?: boolean;
+  interactive?: boolean;
 } {
   return (
-    column.meta as
+    (column.meta as
       | {
           align?: PageColumnAlign;
           label?: React.ReactNode;
           field?: string;
           aggregate?: ColumnAggregate;
           queryOnly?: boolean;
+          interactive?: boolean;
         }
-      | undefined
-  ) ?? {};
+      | undefined) ?? {}
+  );
 }
 
 /** A native accessor column for query behavior outside the declared display columns. */

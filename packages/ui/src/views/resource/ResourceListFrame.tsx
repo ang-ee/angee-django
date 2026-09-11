@@ -6,6 +6,9 @@ import {
 } from "../../layouts/ControlBand";
 import { ResourceToolbar, type ResourceToolbarProps } from "../../toolbars";
 import { cn } from "../../lib/cn";
+import { ErrorBanner } from "../../fragments/ErrorBanner";
+import { Button } from "../../ui/button";
+import { useUiT } from "../../i18n";
 import {
   ListLoadingFooter,
   SelectionBar,
@@ -24,6 +27,8 @@ export interface ResourceListFrameProps {
   className?: string;
   selection?: ResourceListFrameSelection;
   error?: Error | null;
+  onRetry?: () => void;
+  summary?: string;
   loadingFooter?: boolean;
   children: React.ReactNode;
   overlays?: React.ReactNode;
@@ -35,10 +40,13 @@ export function ResourceListFrame({
   className,
   selection,
   error = null,
+  onRetry,
+  summary,
   loadingFooter = false,
   children,
   overlays,
 }: ResourceListFrameProps): React.ReactElement {
+  const t = useUiT();
   return (
     <>
       <ControlBand>
@@ -53,6 +61,11 @@ export function ResourceListFrame({
           className,
         )}
       >
+        {summary ? (
+          <p className="border-b border-border-subtle px-3 py-2 text-2xs text-fg-muted">
+            {summary}
+          </p>
+        ) : null}
         {selection && selection.count > 0 ? (
           <SelectionBar
             count={selection.count}
@@ -63,9 +76,10 @@ export function ResourceListFrame({
           />
         ) : null}
         {error ? (
-          <div className="px-3 py-6 text-13 text-danger-text">
-            {error.message}
-          </div>
+          <ErrorBanner
+            description={error.message}
+            actions={onRetry ? <Button size="sm" onClick={onRetry}>{t("collection.retry")}</Button> : undefined}
+          />
         ) : (
           children
         )}
