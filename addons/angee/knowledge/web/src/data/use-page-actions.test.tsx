@@ -43,6 +43,13 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   })),
 }));
 
+// The owner's authored-model half needs a query client; it is covered where the
+// owner lives, in `useInvalidateDataResource.test.tsx`, against a real one.
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useInvalidateAuthoredModels: () => vi.fn(),
+}));
+
 vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();
   const mutation = (kind: string, response: (input: unknown) => unknown) =>
@@ -145,7 +152,7 @@ describe("knowledge page actions", () => {
     ]);
     expect(sdk.invalidations).toEqual([
       expect.objectContaining({
-        resource: "pages",
+        resource: "console:knowledge.Page",
         dataProviderName: "console",
         id: "pag_1",
         invalidates: ["list", "many", "detail"],

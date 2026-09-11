@@ -1,7 +1,6 @@
 import * as React from "react";
 import {
   useCan,
-  useInvalidate,
 } from "@refinedev/core";
 import {
   useAngeeDeletePreview,
@@ -21,7 +20,10 @@ import {
 
 import { errorMessage, useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
-import { useDeletePreviewOperation } from "./resource-operations";
+import {
+  useDeletePreviewOperation,
+  useInvalidateDataResource,
+} from "./resource-operations";
 
 const BULK_DELETE_PREVIEW_LIMIT = 25;
 
@@ -73,7 +75,7 @@ export function useBulkDelete(
   const deletePreview = useAngeeDeletePreview(deletePreviewOperation.target, {
     document: deletePreviewOperation.document,
   });
-  const invalidate = useInvalidate();
+  const invalidateDataResource = useInvalidateDataResource();
   const mutate = React.useCallback(
     async ({ id, confirm }: { id: string; confirm?: boolean }) => {
       if (!canDelete) {
@@ -84,12 +86,7 @@ export function useBulkDelete(
       }
       const preview = await deletePreview.mutate({ id, confirm });
       if (confirm === true) {
-        await invalidate({
-          resource: refineResourceName(dataResource),
-          dataProviderName: dataResource.schemaName,
-          id,
-          invalidates: ["list", "many", "detail"],
-        });
+        await invalidateDataResource(dataResource, id);
       }
       return preview;
     },
@@ -97,7 +94,7 @@ export function useBulkDelete(
       canDelete,
       dataResource,
       deletePreview.mutate,
-      invalidate,
+      invalidateDataResource,
       resource,
     ],
   );

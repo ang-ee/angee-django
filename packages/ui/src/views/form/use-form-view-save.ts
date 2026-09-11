@@ -9,7 +9,6 @@ import {
 } from "@angee/metadata";
 import { useAngeeResourceSave } from "@angee/refine";
 import {
-  useInvalidate,
   useOne,
   useCreate,
   useUpdate,
@@ -45,7 +44,10 @@ import {
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
-import { useSaveOperation } from "../resource/resource-operations";
+import {
+  useInvalidateDataResource,
+  useSaveOperation,
+} from "../resource/resource-operations";
 import { validationErrorsFromError, serverErrorsFromForm } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 
@@ -269,7 +271,6 @@ export function useFormViewSave({
   const resourceSave = useAngeeResourceSave(saveOperation.target, {
     document: saveOperation.document,
   });
-  const invalidate = useInvalidate();
   const linesActive =
     linesConfig !== null &&
     linesField !== null &&
@@ -295,15 +296,11 @@ export function useFormViewSave({
         : null,
     [linesActive, linesConfig, linesField],
   );
+  const invalidateDataResource = useInvalidateDataResource();
   const invalidateResource = React.useCallback(async () => {
     if (!dataResource) return;
-    await invalidate({
-      resource: refineResourceName(dataResource),
-      dataProviderName: dataResource.schemaName,
-      id: id ?? undefined,
-      invalidates: ["list", "many", "detail"],
-    });
-  }, [dataResource, id, invalidate]);
+    await invalidateDataResource(dataResource, id ?? undefined);
+  }, [dataResource, id, invalidateDataResource]);
 
   const values = React.useMemo(() => {
     if (acknowledgedSource !== undefined) {

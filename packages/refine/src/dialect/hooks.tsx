@@ -193,12 +193,16 @@ export function useAngeeAggregate(
     () => (target ? aggregateRequest(target, query, { document }) : null),
     [document, target, queryKey],
   );
+  // Register the read against its model so a write that moves rows refetches the
+  // footer total, exactly as the grouped reads do: a custom query carries no
+  // resource key, so refine's list/many/detail invalidation can never reach it.
+  const models = useStableArray(target?.modelLabel ? [target.modelLabel] : []);
   const run = useCustom<BaseRecord, HttpError>({
     url: "",
     method: "post",
     dataProviderName: request?.dataProviderName,
     meta: request?.meta,
-    queryOptions: { enabled: canQuery },
+    queryOptions: { enabled: canQuery, meta: authoredQueryMeta(models) },
   });
   const data = run.query.data?.data ?? run.result.data;
   return {

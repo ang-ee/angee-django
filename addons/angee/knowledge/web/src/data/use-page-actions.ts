@@ -3,7 +3,7 @@ import { useCallback, useMemo } from "react";
 import {
   resourceOperationTarget, type Row, } from "@angee/metadata";
 import {
-  useCreate, useInvalidate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
+  useCreate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
   refineFieldsFromPaths, } from "@angee/refine";
 import {
@@ -13,7 +13,7 @@ import {
 import {
   rowPublicId, } from "@angee/metadata";
 import {
-  useBusyRun, useLatestRef } from "@angee/ui";
+  useBusyRun, useInvalidateDataResource, useLatestRef } from "@angee/ui";
 import {
   useModelMetadata,
 } from "@angee/metadata";
@@ -72,7 +72,7 @@ export function usePageActions(
   const deletePreview = useAngeeDeletePreview(deletePreviewTarget, {
     document: deletePreviewDocument,
   });
-  const invalidate = useInvalidate();
+  const invalidateDataResource = useInvalidateDataResource();
   const { busy, run } = useBusyRun(onChanged);
 
   // The navigator publishes into the shell primary pane, so its action handlers
@@ -82,7 +82,7 @@ export function usePageActions(
   const actionRef = useLatestRef({
     createMutate,
     deletePreview,
-    invalidate,
+    invalidateDataResource,
     resource,
     run,
     updateMutate,
@@ -104,16 +104,11 @@ export function usePageActions(
 
   const deletePage = useCallback<PageActions["deletePage"]>(
     (id) => {
-      const { deletePreview, invalidate, resource, run } = actionRef.current;
+      const { deletePreview, invalidateDataResource, resource, run } = actionRef.current;
       return run(async () => {
         requirePageResource(resource);
         await deletePreview.mutate({ id, confirm: true });
-        await invalidate({
-          resource: refineResourceName(resource),
-          dataProviderName: resource.schemaName,
-          id,
-          invalidates: ["list", "many", "detail"],
-        });
+        await invalidateDataResource(resource, id);
       });
     },
     [],
