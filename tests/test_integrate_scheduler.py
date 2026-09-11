@@ -65,6 +65,14 @@ class SchedulerBridge(Bridge, Integration):
         self.cursor = {"seen": items}
         return items
 
+    def sync_summary(self, **kwargs: Any) -> dict[str, Any]:
+        """Project fixture run evidence through the public summary hook."""
+
+        summary = dict(super().sync_summary(**kwargs))
+        if self.config.get("custom_summary"):
+            summary["durable_run"] = self.config["custom_summary"]
+        return summary
+
     def handle_webhook(self, payload: Any) -> None:
         """Accept one webhook payload for the test fixture."""
 
@@ -251,6 +259,36 @@ def test_integration_error_reaches_sync_telemetry_verbatim(scheduler_tables: Non
     assert bridge.sync_progress["error"] == "Vendor refused the login for ada@example.com."
     assert integration.last_error == "Vendor refused the login for ada@example.com."
     assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
+
+
+@pytest.mark.django_db(transaction=True)
+def test_bridge_summary_hook_persists_durable_projection_on_success_and_error(scheduler_tables: None) -> None:
+    """Both outcomes call the overridable hook before saving the bridge row."""
+
+    del scheduler_tables
+    first = timezone.now()
+    with system_context(reason="test integrate scheduler setup"):
+        bridge = make_integration(
+            "custom-summary",
+            model=SchedulerBridge,
+            config={"items": 4, "custom_summary": "run-success"},
+            next_sync_at=first,
+        )
+    assert _enqueue_and_run_due(now=first) == {"ran": 1, "errors": 0}
+    bridge.refresh_from_db()
+    assert bridge.last_sync_summary["durable_run"] == "run-success"
+    assert bridge.last_sync_summary["items"] == 4
+
+    second = first + timedelta(seconds=bridge.poll_interval)
+    with system_context(reason="test integrate scheduler setup"):
+        bridge.config = {"mode": "error", "custom_summary": "run-failure"}
+        bridge.next_sync_at = second
+        bridge.save(update_fields=["config", "next_sync_at", "updated_at"])
+    assert _enqueue_and_run_due(now=second) == {"ran": 1, "errors": 1}
+    bridge.refresh_from_db()
+    assert bridge.last_sync_summary["durable_run"] == "run-failure"
+    assert bridge.last_sync_summary["status"] == "error"
+    assert bridge.last_sync_summary["error"] == "Integration operation failed."
 
 
 @pytest.mark.django_db(transaction=True)

@@ -901,8 +901,9 @@ def test_workflow_identity_migration_is_additive_and_matches_source_fields() -> 
                 *module.RUN_ORIGIN_CHOICES,
                 ("test", "Test"),
                 ("recovery", "Recovery"),
+                ("workflow", "Workflow"),
             }
-            assert len(current_choices) == len(module.RUN_ORIGIN_CHOICES) + 2
+            assert len(current_choices) == len(module.RUN_ORIGIN_CHOICES) + 3
         assert (migrated_path, migrated_args, migrated_kwargs) == (
             source_path,
             source_args,

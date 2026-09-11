@@ -2005,12 +2005,11 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
     def can_delete(self, *, post_access: bool) -> bool:
         """Return whether a post-authorised actor may delete this message.
 
-        Deletion carries no mail-kind restriction of its own, so the record thread's
-        post access is the whole gate; owned beside :meth:`can_edit` so the projection
-        mirrors the ``delete_record_message`` mutation without reassembling the rule.
+        Only internally authored rows are locally deletable. Synced inbound/outbound
+        source history is immutable even when the actor may post to the record thread.
         """
 
-        return post_access
+        return post_access and self.direction == self.Direction.INTERNAL
 
     @property
     def chronological_key(self) -> tuple[datetime, int]:

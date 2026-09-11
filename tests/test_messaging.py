@@ -613,6 +613,52 @@ def test_threaded_model_resolves_one_chatter_thread(messaging_tables: None) -> N
 
 
 @pytest.mark.django_db(transaction=True)
+def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: Any) -> None:
+    """Source history retains dates/replies without emitting a live workflow event."""
+    from angee.messaging.events import message_ingested
+
+    events: list[Any] = []
+
+    def capture(sender: Any, instance: Any, **kwargs: Any) -> None:
+        events.append(instance.pk)
+
+    message_ingested.connect(capture, weak=False)
+    try:
+        with system_context(reason="test historical source ingest"):
+            ticket = ThreadedTicket.objects.create(title="Imported record")
+            thread = ticket.message_thread()
+            other = ThreadedTicket.objects.create(title="Different source record").message_thread()
+            events.clear()
+            parent = _parsed("source-parent", sent_at=_AT)
+            reply = _parsed("source-reply", sent_at=_AT + timedelta(days=1), in_reply_to="source-parent")
+            first = Message.objects.ingest([reply], channel=channel, explicit_thread=thread,
+                                           historical=True, quote_edges=False)[0]
+            assert first.parent_id is None
+            # An unrelated record with the same source ID cannot become its parent.
+            other_channel = make_integration("other-source")
+            Message.objects.ingest([parent], channel=other_channel, explicit_thread=other,
+                                   historical=True, quote_edges=False)
+            Message.objects.ingest([reply], channel=channel, explicit_thread=thread,
+                                   historical=True, quote_edges=False)
+            first.refresh_from_db()
+            assert first.parent_id is None
+            landed = Message.objects.ingest(
+                [parent, reply], channel=channel, explicit_thread=thread,
+                historical=True, quote_edges=False, source_message_type="comment",
+            )
+            assert landed[1].pk == first.pk
+            assert landed[1].parent_id == landed[0].pk
+            assert landed[1].thread_id == thread.pk
+            assert landed[0].sent_at == _AT
+            assert landed[0].message_type == Message.MessageKind.COMMENT
+            assert landed[0].metadata["source_message_type"] == "comment"
+            assert Message.objects.filter(channel=channel, thread=thread).count() == 2
+        assert events == []
+    finally:
+        message_ingested.disconnect(capture)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_record_chatter_dedups_across_mti_levels(messaging_tables: None) -> None:
     """A record and its REBAC-typed MTI ancestor share one canonical chatter edge.
 

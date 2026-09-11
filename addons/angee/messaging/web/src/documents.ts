@@ -9,6 +9,7 @@ export const CHANNEL_MODEL = "messaging.Channel";
 export const READ_MODELS = [
   "parties.Handle",
   "messaging.Thread",
+  "messaging.ThreadAttachment",
   "messaging.Message",
   "messaging.ThreadFollower",
   "messaging.ThreadActivity",

@@ -6,7 +6,7 @@ category = "Foundation"
 depends_on = ["angee.iam", "angee.resources", "angee.graphql"]
 
 [resources]
-master = ["resources/master/010_money.currency.yaml"]
+master = [{ path = "resources/master/010_money.currency.yaml", adopt = "code" }]
 demo = [
   { path = "resources/demo/020_money.currencyrate.yaml", depends_on = "resources/master/010_money.currency.yaml" },
 ]

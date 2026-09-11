@@ -98,13 +98,14 @@ definition messaging/thread_notification {
 }
 
 definition messaging/part {
+    relation message: messaging/message // rebac:field=message
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
+    permission read   = message->read + owner + editor + reader + admin->member
     permission write  = owner + editor + admin->member
     permission delete = owner + admin->member
 }
