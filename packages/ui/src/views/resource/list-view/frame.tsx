@@ -140,6 +140,7 @@ function ListViewBody<TRow extends Row = Row>({
   availableViews: declaredViews,
   textFilterField,
   maxGroupDepth,
+  toolbarWrap,
   renderGroupLabel,
   columns,
   fields,
@@ -320,6 +321,7 @@ function ListViewBody<TRow extends Row = Row>({
       source={source}
       textFilterField={textFilterField}
       maxGroupDepth={maxGroupDepth}
+      toolbarWrap={toolbarWrap}
       renderGroupLabel={renderGroupLabel}
       resolvedColumns={resolvedColumns}
       modelMetadata={modelMetadata}

@@ -2,6 +2,7 @@ import * as React from "react";
 import { rowPublicId, type Row } from "@angee/metadata";
 import {
   useList,
+  useOne,
   type BaseRecord,
   type CrudFilter,
   type CrudSort,
@@ -52,6 +53,27 @@ export interface RelationOptionsResult {
   list: RelationOptionsList;
   options: readonly RelationOption[];
   rows: readonly Row[];
+}
+
+/** Resolve a selected identity independently of the option page or search. */
+export function useRelationSelectedOption(
+  relation: RelationFieldInfo,
+  value: string | null | undefined,
+): RelationOption | undefined {
+  const metadata = useModelMetadata(relation.resource);
+  const resource = metadata?.resource;
+  const fields = React.useMemo(
+    () => refineFieldsFromPaths(["id", relation.labelField]),
+    [relation.labelField],
+  );
+  const read = useOne<RowRecord, HttpError>({
+    resource: resource ? refineResourceName(resource) : "__angee_disabled__",
+    dataProviderName: resource?.schemaName,
+    id: value ?? "",
+    meta: { fields },
+    queryOptions: { enabled: Boolean(resource && value) },
+  });
+  return relationSelectedOption(read.result, relation.labelField);
 }
 
 export function useRelationOptions(

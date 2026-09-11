@@ -75,7 +75,12 @@ class InboxResults:
             raise ValueError("Unknown shared-text part role.")
         # Eligibility needs a second distinct readable message, not the full use
         # count. EXISTS can stop at the first other use of a ubiquitous fragment.
-        other_message = self.inbox.parts.filter(fragment_id=OuterRef("fragment_id")).exclude(
+        # Check each candidate use's message through an indexed existence read.
+        # A broad message-ID subquery can be aggregated again for every fragment.
+        readable_message = self.inbox.messages.filter(pk=OuterRef("message_id"))
+        other_message = self.inbox.collection("messaging", "Part").filter(
+            Exists(readable_message), fragment_id=OuterRef("fragment_id"),
+        ).exclude(
             message_id=OuterRef("message_id")
         )
         parts = parts.filter(fragment_id__isnull=False)
@@ -113,7 +118,7 @@ class InboxResults:
                     output_field=models.BigIntegerField(),
                 )
             )
-            kwargs.update(objects=accounts, empty_label="No account")
+            kwargs.update(objects=accounts, scope_field=f"{prefix}channel_id", empty_label="No account")
         elif axis == "sender":
             handles = self.inbox.handles
             rows = rows.annotate(
@@ -123,7 +128,10 @@ class InboxResults:
                     output_field=models.BigIntegerField(),
                 )
             )
-            kwargs.update(objects=handles, label_field="_sender_name", empty_label="Unknown sender")
+            kwargs.update(
+                objects=handles, scope_field=f"{prefix}sender_id",
+                label_field="_sender_name", empty_label="Unknown sender",
+            )
         elif axis == "conversation":
             threads = self.inbox.threads
             readable_thread = {f"{prefix}thread_id__in": Subquery(threads.values("pk"))}
@@ -139,7 +147,10 @@ class InboxResults:
                     output_field=models.TextField(),
                 ),
             )
-            kwargs.update(label_annotation="_group_label", timestamp="_order_at", oldest=self.options.oldest)
+            kwargs.update(
+                label_annotation="_group_label", scope_field=f"{prefix}thread_id",
+                timestamp="_order_at", oldest=self.options.oldest,
+            )
             return InboxConversationGroups(rows, inbox=self.inbox, **kwargs)
         return InboxGroups(rows, **kwargs)
 
@@ -268,4 +279,7 @@ class InboxConversationGroups(InboxGroups):
             raise ValueError("Unknown conversation selection.")
         if record is None:
             raise ValueError("Conversation unavailable.")
-        return self.rows.filter(_bucket=record.pk if kind == "thread" else -record.pk)
+        return (
+            self.rows.filter(**{self.scope_field: record.pk})
+            if kind == "thread" else self.rows.filter(_bucket=-record.pk)
+        )

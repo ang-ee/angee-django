@@ -271,6 +271,7 @@ export function ResourceToolbar({
       {viewControls ? <ResourceViewControls {...viewControls} /> : null}
       {capabilities.filter ? (
         <FilterPicker
+          wrap={wrap}
           groups={groups}
           groupControls={groupControls}
           groupOptions={toolbarGroupOptions}
@@ -291,26 +292,28 @@ export function ResourceToolbar({
           onFavoriteSelect={onFavoriteSelect}
         />
       ) : null}
-      <div className="min-w-2 flex-1" />
-      {capabilities.pagination ? (
-        <Pager
-          {...pager}
-          subject={pagerSubject}
-          unit={pagerTotalUnit}
-          pageSizeOptions={pagerPageSizeOptions}
-          maxPageSize={pagerMaxPageSize}
-          onPageChange={onPageChange}
-          onPageSizeChange={onPageSizeChange}
-        />
-      ) : null}
-      {view && onViewChange ? (
-        <ResourceViewSwitcher
-          view={view}
-          kinds={availableViews}
-          onViewChange={onViewChange}
-        />
-      ) : null}
-      {viewSwitcher}
+      {!wrap ? <div className="min-w-2 flex-1" /> : null}
+      <div className={wrap ? "ml-auto flex items-center gap-2" : "contents"}>
+        {capabilities.pagination ? (
+          <Pager
+            {...pager}
+            subject={pagerSubject}
+            unit={pagerTotalUnit}
+            pageSizeOptions={pagerPageSizeOptions}
+            maxPageSize={pagerMaxPageSize}
+            onPageChange={onPageChange}
+            onPageSizeChange={onPageSizeChange}
+          />
+        ) : null}
+        {view && onViewChange ? (
+          <ResourceViewSwitcher
+            view={view}
+            kinds={availableViews}
+            onViewChange={onViewChange}
+          />
+        ) : null}
+        {viewSwitcher}
+      </div>
     </section>
   );
 }
@@ -367,6 +370,7 @@ function ResourceViewControls({
 }
 
 function FilterPicker({
+  wrap,
   groups,
   groupControls,
   groupOptions,
@@ -386,6 +390,7 @@ function FilterPicker({
   onFavoriteSave,
   onFavoriteSelect,
 }: {
+  wrap?: boolean;
   groups: readonly ResourceViewGroup[];
   groupControls: boolean;
   groupOptions: readonly ResourceToolbarGroupOption[];
@@ -498,7 +503,12 @@ function FilterPicker({
 
   return (
     <PopoverRoot>
-      <div className="inline-flex h-8 min-w-0 max-w-xl flex-1 items-center gap-1 overflow-hidden rounded-6 border border-transparent bg-inset pl-2 pr-1 text-13 text-fg focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring">
+      <div
+        className={cn(
+          "inline-flex h-8 min-w-0 max-w-xl flex-1 items-center gap-1 overflow-hidden rounded-6 border border-transparent bg-inset pl-2 pr-1 text-13 text-fg focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring",
+          wrap && "min-w-48",
+        )}
+      >
         <Glyph name="search" className="size-3.5 shrink-0 text-fg-muted" />
         {groups.map((nextGroup, index) => (
           <FacetChip

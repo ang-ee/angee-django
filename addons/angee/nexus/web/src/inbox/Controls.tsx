@@ -5,6 +5,7 @@ import {
   RelationFieldWidget,
   Select,
   useResourceView,
+  useRelationSelectedOption,
   useEnumOptions,
   type ResourceToolbarFilterField,
   type ResourceToolbarFilterOption,
@@ -13,6 +14,7 @@ import { InboxAccounts } from "./documents";
 import { INBOX_MODELS } from "./state";
 import {
   COVERAGE_FIELDS,
+  InboxFilter,
   resultLenses,
   type NavigatorLens,
   type ResultLens,
@@ -58,6 +60,16 @@ export function InboxOrder({ navigator = false }: { navigator?: boolean }) {
 
 export function useResultControls(lens: ResultLens) {
   const t = useNexusT();
+  const view = useResourceView();
+  const handleRelation = {
+    resource: "parties.Handle",
+    labelField: "value",
+    canCreate: false,
+  };
+  const handle = useRelationSelectedOption(
+    handleRelation,
+    new InboxFilter(view.state.filter).one("handle"),
+  );
   const roles = useEnumOptions("messaging.Part", "role");
   const sources = useAuthoredQuery(InboxAccounts, {}, { models: INBOX_MODELS });
   const coverage = t("inbox.coverage");
@@ -164,13 +176,10 @@ export function useResultControls(lens: ResultLens) {
       label: t("inbox.exactHandle"),
       group: messages,
       operators: ["exact"],
+      options: handle ? [handle] : [],
       renderValue: ({ value, onValueChange }) => (
         <RelationFieldWidget
-          relation={{
-            resource: "parties.Handle",
-            labelField: "value",
-            canCreate: false,
-          }}
+          relation={handleRelation}
           searchFields={["value", "display_name"]}
           value={value}
           onChange={onValueChange}

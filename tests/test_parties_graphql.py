@@ -409,12 +409,6 @@ def test_contact_resources_accept_declared_consumer_fields(
                 ("first_met_note", "introduced_by"),
                 raising=False,
             )
-            patch.setattr(
-                party,
-                "hasura_readable_fields",
-                ("first_met_note", "notes", "addresses"),
-                raising=False,
-            )
             patch.setattr(party, "hasura_filterable_fields", ("notes",), raising=False)
             patch.setattr(party, "hasura_sortable_fields", ("notes",), raising=False)
             patch.setattr(party, "hasura_groupable_fields", ("notes",), raising=False)
@@ -423,6 +417,8 @@ def test_contact_resources_accept_declared_consumer_fields(
             resources = {item.model_label: item for item in schema.angee_resources}
             for label in ("parties.Party", "parties.Person", "parties.Organization"):
                 resource = resources[label]
+                # The shared Party type owns reads; model declarations extend
+                # write/query capabilities without implicitly exposing fields.
                 assert {"first_met_note", "notes", "addresses"} <= {
                     field.name for field in resource.fields if field.readable
                 }

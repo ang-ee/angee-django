@@ -110,6 +110,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   textFilterField?: string | null;
   /** Limit nested grouping where the source supports a single axis. */
   maxGroupDepth?: number;
+  /** Wrap native controls inside a narrow embedded collection pane. */
+  toolbarWrap?: boolean;
   /** A navigable group title; the native chevron independently expands its rows. */
   renderGroupLabel?: (group: GroupLabelContext) => ReactNode;
   /** Columns rendered by the list. */

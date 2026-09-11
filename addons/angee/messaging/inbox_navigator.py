@@ -182,7 +182,9 @@ class InboxNavigator(MessageInbox):
                     output_field=models.BigIntegerField(),
                 )
             )
-            return InboxGroups(activity, identity="_identity", objects=accounts, empty_label="No account")
+            return InboxGroups(
+                activity, identity="_identity", objects=accounts, scope_field="channel_id", empty_label="No account"
+            )
         if axis == "group":
             total_rows = activity
             threads = self.threads.filter(modality="group")
@@ -200,6 +202,7 @@ class InboxNavigator(MessageInbox):
                 total_rows=total_rows,
                 objects=threads,
                 label_field="title__text",
+                scope_field="thread_id",
                 empty_label="Direct only",
             )
         if axis == "link":

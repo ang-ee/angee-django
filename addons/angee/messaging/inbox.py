@@ -208,8 +208,14 @@ class MessageInbox:
         # Keep the two indexed access paths separate. A correlated recipient
         # EXISTS inside an OR makes PostgreSQL estimate almost every message as
         # a match, then evaluate shared-content predicates across the corpus.
-        authored = rows.filter(sender_id__in=Subquery(ids)).order_by().values("pk")
-        addressed = rows.filter(pk__in=Subquery(recipients.order_by().values("message_id"))).order_by().values("pk")
+        # Build membership from the authorized corpus, then intersect the caller's
+        # scope once. Reusing rows inside each branch recursively duplicates its
+        # earlier sender/circle predicates when an exact-handle filter is added.
+        authored = self.messages.filter(sender_id__in=Subquery(ids)).order_by().values("pk")
+        addressed = (
+            self.messages.filter(pk__in=Subquery(recipients.order_by().values("message_id")))
+            .order_by().values("pk")
+        )
         return rows.filter(pk__in=Subquery(authored.union(addressed)))
 
     def selection(self, *, sender: str = "", circle: str = "") -> InboxSelection | None:

@@ -152,6 +152,7 @@ export function InboxRelatedPane({
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             <ListView
+              toolbarWrap
               resource="nexus.InboxConnections"
               source={source}
               columns={columns}

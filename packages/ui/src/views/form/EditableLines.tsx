@@ -149,7 +149,7 @@ export function EditableLines({
     const index = current.fields.findIndex((field) => field.rhfKey === key);
     if (index < 0) return;
     for (const [field, value] of Object.entries(patch)) {
-      current.setValue(`${name}.${index}.${field}`, value, { shouldDirty: true });
+      current.setValue<string>(`${name}.${index}.${field}`, value, { shouldDirty: true });
     }
   }, [name]);
   const sensors = useDndKitSensors(4);

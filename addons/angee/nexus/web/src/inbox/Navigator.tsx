@@ -111,6 +111,7 @@ export function InboxNavigatorPane({
               navigation.circle ? `circle:${navigation.circle}` : undefined
             }
             onRowClick={select}
+            toolbarWrap
             textFilterField="text"
             {...controls}
             toolbarActions={toolbarActions}
@@ -122,6 +123,7 @@ export function InboxNavigatorPane({
             source={source}
             columns={columns}
             availableViews={["list"]}
+            toolbarWrap
             textFilterField="text"
             maxGroupDepth={1}
             defaultExpandedGroups="none"

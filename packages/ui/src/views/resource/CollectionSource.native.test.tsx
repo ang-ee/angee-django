@@ -354,7 +354,7 @@ test("a failed authored page retries the same native scope", async () => {
   f.custom.mockRejectedValueOnce(new Error("Temporary collection failure"));
   act(() => f.view.setPage(2));
   await screen.findByText("Temporary collection failure");
-  fireEvent.click(screen.getByRole("button", { name: "Retry", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await screen.findByText("Activity all page 2");
   expect(f.requests.at(-1)).toMatchObject({ page: 2, pageSize: 25 });
   expect(f.getList).not.toHaveBeenCalled();

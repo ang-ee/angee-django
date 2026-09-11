@@ -49,10 +49,14 @@ export function ResourceListFrame({
   const t = useUiT();
   return (
     <>
-      <ControlBand>
+      <ControlBand wrap={toolbar.wrap}>
         <ResourceToolbar
           {...toolbar}
-          className={cn(controlBandItemClassName, toolbar.className)}
+          className={cn(
+            controlBandItemClassName,
+            toolbar.wrap && "h-auto",
+            toolbar.className,
+          )}
         />
       </ControlBand>
       <div

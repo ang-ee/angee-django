@@ -7,9 +7,22 @@ import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@an
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { RelationFieldWidget } from "./RelationFieldWidget";
+import { useRelationSelectedOption } from "./relation-options";
+import { customFilterChipsFor } from "../resource/resource-view-utils";
 
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); });
+
+function SelectedFilter({ value }: { value: string }) {
+  const selected = useRelationSelectedOption(
+    { resource: "contacts.Address", labelField: "name", canCreate: false },
+    value,
+  );
+  const chips = customFilterChipsFor({ sender: { exact: value } }, [], [{
+    id: "sender", label: "Sender", options: selected ? [selected] : [],
+  }]);
+  return <span>{chips[0]?.label}</span>;
+}
 
 test("relation search reaches records beyond the first page and resolves a selected label separately", async () => {
   const selected = { id: "address-999", name: "Distant sender" };
@@ -27,9 +40,11 @@ test("relation search reaches records beyond the first page and resolves a selec
   render(<Refine dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
     <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([testDataResource("contacts.Address")])}>
       <RelationFieldWidget value={selected.id} onChange={change} relation={{ resource: "contacts.Address", labelField: "name", canCreate: false }} searchFields={["name", "value"]} aria-label="Exact address" />
+      <SelectedFilter value={selected.id} />
     </ModelMetadataProvider>
   </Refine>);
   await screen.findByText("Distant sender");
+  await screen.findByText("Sender is Distant sender");
   expect(getOne).toHaveBeenCalledOnce();
   expect(getList).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Exact address: Distant sender" }));

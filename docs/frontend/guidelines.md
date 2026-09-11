@@ -689,6 +689,10 @@ Hard-won traps — the wise learn from others' mistakes
   `PageHeader`/`PageFooter`/`Statusline`/`ChatBar` compose it. Never hand-spell a
   bar's `h-*`/`px-*`/`py-*`/`border-b|t`/`bg-sheet*` again — route it through the
   recipe so the bars stay in lockstep.
+- **Console side-pane controls stay local.** Primary and secondary panes isolate
+  their ControlBand providers from the main host. An embedded collection opts
+  into native toolbar wrapping; its band and toolbar must both grow with their
+  contents. Opening a main record must not move a finder toolbar across panes.
 - **Form controls `extend` `widget-control`; never re-hand-roll
   invalid/readOnly/disabled.** `widgetControlSurfaceVariants` (over the
   `interactiveSurfaceVariants` base) owns the control surface — focus ring,

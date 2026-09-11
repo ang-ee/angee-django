@@ -157,6 +157,11 @@ def test_confirmed_senders_consolidate_but_suggestions_do_not():
             Message.objects.all(), InboxCoverage(), InboxNavigatorOptions(lens="handles")
         ).page()
         assert {row.id for row in exact_handles.rows} == {f"handle:{handle.sqid}" for handle in handles}
+        exact = InboxSearch(handle=str(handles[0].sqid))
+        assert inbox.results(InboxCoverage(), exact, sender=f"handle:{handles[0].sqid}").count() == 2
+        both = inbox.results(InboxCoverage(), exact, sender=f"handle:{handles[1].sqid}")
+        assert list(both.values_list("pk", flat=True)) == [outbound.pk]
+        assert inbox.results(InboxCoverage(before=T0), exact, sender=f"party:{party.sqid}").count() == 0
 
 
 def test_navigator_headers_and_members_page_independently_with_distinct_root_counts():
@@ -263,6 +268,11 @@ def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
         assert related_target.page(text="no matching text").count == 0
         assert related_target.summary().count == 2
         assert related_target.summary().source.pk == rows[1].pk
+        with system_context(reason="remove the only other eligible shared-text use"):
+            Message._base_manager.filter(pk=rows[1].pk).update(status="draft")
+        # Repeated parts in one message, private uses and drafts cannot qualify
+        # a fragment as shared once the other accessible message disappears.
+        assert content.page().count == 0
 
 
 def test_related_relations_authorize_both_endpoints_and_keep_reply_provenance():

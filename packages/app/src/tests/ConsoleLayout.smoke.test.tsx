@@ -440,6 +440,31 @@ describe("ConsoleLayout", () => {
     expect(screen.getByRole("main").contains(button)).toBe(false);
   });
 
+  test("keeps the primary pane's controls local when the main collection opens a record", async () => {
+    function Page() {
+      const [reading, setReading] = useState(false);
+      const primary = useMemo(() => (
+        <section aria-label="Finder"><ControlBand><button>Finder filters</button></ControlBand></section>
+      ), []);
+      return <>
+        <PrimaryPanePublisher node={primary} />
+        {reading ? <p>Message record</p> : <ControlBand><button>Result filters</button></ControlBand>}
+        <button onClick={() => setReading(true)}>Read record</button>
+      </>;
+    }
+    const { container } = renderInRouter(<ConsoleLayout><Page /></ConsoleLayout>);
+    const finder = await screen.findByRole("button", { name: "Finder filters" });
+    const result = await screen.findByRole("button", { name: "Result filters" });
+    const host = container.querySelector(".area-control");
+    expect(host?.contains(result)).toBe(true);
+    expect(screen.getByRole("region", { name: "Finder" }).contains(finder)).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Read record" }));
+    await screen.findByText("Message record");
+    expect(host?.childNodes.length).toBe(0);
+    expect(screen.getByRole("button", { name: "Finder filters" })).toBe(finder);
+    expect(screen.getByRole("region", { name: "Finder" }).contains(finder)).toBe(true);
+  });
+
   test("uses browser scrolling for content and pins the statusline host", async () => {
     const { container } = renderInRouter(
       <ConsoleLayout>

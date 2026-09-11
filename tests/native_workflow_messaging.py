@@ -26,10 +26,11 @@ class MessageAdmissionTests(TransactionTestCase):
         self.Run = apps.get_model("workflows", "WorkflowRun")
         with system_context(reason="test message admission setup"):
             self.actor = get_user_model().objects.create_user(username="message-trigger-owner")
-            self.channel = apps.get_model("messaging", "Channel").objects.create(
-                display_name="Messages",
-                owner=self.actor,
-                created_by=self.actor,
+            apps.get_model("integrate", "Vendor").objects.get_or_create(
+                slug="manual", defaults={"display_name": "Manual messages"},
+            )
+            self.channel = apps.get_model("messaging", "Channel").objects.create_disconnected(
+                self.actor, name="Messages", backend_class="manual",
             )
             head = apps.get_model("workflows", "Workflow").objects.create(
                 name="Process message",
@@ -41,6 +42,8 @@ class MessageAdmissionTests(TransactionTestCase):
                 key="start",
                 name="Start",
                 is_entry=True,
+                step_class="wait",
+                config={"until": "2099-01-01T00:00:00Z"},
             )
             head.publish()
             self.trigger = self.Trigger.objects.create(

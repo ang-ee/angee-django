@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { modelLabelSegment } from "@angee/metadata";
 import { dedupeBy } from "../../../lib/dedupe";
-import type { ResourceToolbarCustomFilterOperator, ResourceToolbarFilterOption } from "../../../toolbars";
+import type { ResourceToolbarCustomFilterOperator, ResourceToolbarFilterField, ResourceToolbarFilterOption } from "../../../toolbars";
 import { Filter, type ResourceViewLookup, type ResourceViewLookupOperator, type FilterFacet } from "../resource-view-model";
 import { groupFieldLabel } from "../resource-view-list-body";
 export function createLabelForResource(resource: string): string {
@@ -42,10 +42,12 @@ export function customFilterChipLabel({
   fieldLabel,
   operator,
   value,
+  options,
 }: {
   fieldLabel: ReactNode;
   operator: ResourceViewLookupOperator;
   value: unknown;
+  options?: ResourceToolbarFilterField["options"];
 }): ReactNode {
   if (operator === "isNull") {
     return `${labelText(fieldLabel) ?? "Field"} is ${
@@ -53,7 +55,7 @@ export function customFilterChipLabel({
     }`;
   }
   return `${labelText(fieldLabel) ?? "Field"} ${filterOperatorLabel(operator)} ${
-    filterValueLabel(value)
+    filterValueLabel(value, options)
   }`;
 }
 
@@ -109,9 +111,10 @@ export function filterOperatorLabel(
   }
 }
 
-function filterValueLabel(value: unknown): string {
-  if (Array.isArray(value)) return value.map(String).join(", ");
-  return String(value ?? "");
+function filterValueLabel(value: unknown, options: ResourceToolbarFilterField["options"]): string {
+  if (Array.isArray(value)) return value.map(item => filterValueLabel(item, options)).join(", ");
+  const raw = String(value ?? "");
+  return labelText(options?.find(option => option.value === raw)?.label) ?? raw;
 }
 
 export function customFilterId(field: string, operator: ResourceViewLookupOperator): string {

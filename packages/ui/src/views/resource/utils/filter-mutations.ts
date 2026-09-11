@@ -60,8 +60,8 @@ export function customFilterChipsFor(
   textField: string | null = DEFAULT_TEXT_FILTER_FIELD,
 ): readonly ResourceToolbarCustomFilterChip[] {
   const chips: ResourceToolbarCustomFilterChip[] = [];
-  const fieldLabels = new Map(
-    fields.map((field) => [field.field ?? field.id, field.label]),
+  const fieldsByName = new Map(
+    fields.map((field) => [field.field ?? field.id, field]),
   );
   for (const [field, value] of Object.entries(filter)) {
     if (!isLookup(value)) continue;
@@ -75,9 +75,10 @@ export function customFilterChipsFor(
       chips.push({
         id: customFilterId(field, operator),
         label: customFilterChipLabel({
-          fieldLabel: fieldLabel(field, undefined, fieldLabels.get(field)),
+          fieldLabel: fieldLabel(field, undefined, fieldsByName.get(field)?.label),
           operator,
           value: operatorValue,
+          options: fieldsByName.get(field)?.options,
         }),
       });
     }

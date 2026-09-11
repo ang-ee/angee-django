@@ -25,6 +25,7 @@ export interface CollectionTreeViewProps<TRow extends Row> extends Pick<
   | "filterOptions"
   | "customFilterFields"
   | "toolbarActions"
+  | "toolbarWrap"
   | "textFilterField"
   | "onRowClick"
   | "emptyContent"
@@ -131,11 +132,13 @@ export function CollectionTreeView<TRow extends Row>(
     view: "list",
     availableViews: ["list"],
     actions: props.toolbarActions,
+    wrap: props.toolbarWrap,
   });
   return (
     <ResourceListFrame
       toolbar={toolbar}
       error={surface.list.error}
+      onRetry={() => void surface.list.refetch()}
       summary={surface.list.summary}
       className="min-h-0"
     >

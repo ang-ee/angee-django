@@ -302,6 +302,7 @@ export {
 } from "./relation/relation-facet";
 export {
   useRelationOptions,
+  useRelationSelectedOption,
   relationOptionsFromRows,
   relationSelectedOption,
   type RelationOptionsConfig,

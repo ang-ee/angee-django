@@ -1,12 +1,11 @@
 import { useMemo, useState, type ReactElement, type Ref } from "react";
-import { useOne, type CrudFilter, type HttpError } from "@refinedev/core";
-import { refineFieldsFromPaths } from "@angee/refine";
+import type { CrudFilter } from "@refinedev/core";
 import { useDebounce } from "use-debounce";
 
 import {
   useResourceRecordHref,
 } from "../../runtime";
-import { useModelMetadata, refineResourceName } from "@angee/metadata";
+import { useModelMetadata } from "@angee/metadata";
 
 import type { RelationOption } from "../../widgets/RelationField";
 import {
@@ -14,7 +13,7 @@ import {
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import { RelationPicker } from "./RelationPicker";
-import { relationSelectedOption, useRelationOptions } from "./relation-options";
+import { useRelationSelectedOption, useRelationOptions } from "./relation-options";
 
 export interface RelationFieldWidgetProps {
   value?: string | null;
@@ -59,26 +58,11 @@ export function RelationFieldWidget(
 function SelectedRelationFieldWidget(
   props: RelationFieldWidgetProps,
 ): ReactElement {
-  const metadata = useModelMetadata(props.relation.resource);
-  const resource = metadata?.resource;
-  const fields = useMemo(
-    () => refineFieldsFromPaths(["id", props.relation.labelField]),
-    [props.relation.labelField],
-  );
-  const read = useOne<Record<string, unknown> & { id: string }, HttpError>({
-    resource: resource ? refineResourceName(resource) : "__angee_disabled__",
-    dataProviderName: resource?.schemaName,
-    id: props.value ?? "",
-    meta: { fields },
-    queryOptions: { enabled: Boolean(resource && props.value) },
-  });
+  const selectedOption = useRelationSelectedOption(props.relation, props.value);
   return (
     <RelationFieldWidgetBody
       {...props}
-      selectedOption={relationSelectedOption(
-        read.result,
-        props.relation.labelField,
-      )}
+      selectedOption={selectedOption}
     />
   );
 }

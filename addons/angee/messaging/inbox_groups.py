@@ -57,6 +57,7 @@ class InboxGroups:
         message: str = "pk",
         objects: Any | None = None,
         label_field: str = "display_name",
+        scope_field: str = "_bucket",
         choices: tuple[tuple[str, str], ...] = (),
         empty_label: str = "None",
         label_annotation: str | None = None,
@@ -69,6 +70,7 @@ class InboxGroups:
         self.message = message
         self.objects = objects
         self.label_field = label_field
+        self.scope_field = scope_field
         self.choices = choices
         self.empty_label = empty_label
         self.label_annotation = label_annotation
@@ -84,7 +86,7 @@ class InboxGroups:
             record = self.objects.from_public_id(value)
             if record is None:
                 raise ValueError("Group unavailable.")
-            return self.rows.filter(_bucket=record.pk)
+            return self.rows.filter(**{self.scope_field: record.pk})
         if self.choices and value not in dict(self.choices):
             raise ValueError("Unknown group value.")
         return self.rows.filter(_bucket=value)

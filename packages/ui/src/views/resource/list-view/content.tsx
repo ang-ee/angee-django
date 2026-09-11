@@ -26,6 +26,7 @@ interface ListViewContentProps<TRow extends Row> {
   source?: ListViewProps<TRow>["source"];
   textFilterField?: string | null;
   maxGroupDepth?: number;
+  toolbarWrap?: boolean;
   renderGroupLabel?: ListViewProps<TRow>["renderGroupLabel"];
   surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>;
   resource: string;
@@ -64,6 +65,7 @@ export function ListViewContent<TRow extends Row = Row>({
   source,
   textFilterField: declaredTextField,
   maxGroupDepth,
+  toolbarWrap,
   renderGroupLabel,
   surface,
   resource,
@@ -162,6 +164,7 @@ export function ListViewContent<TRow extends Row = Row>({
   );
   const toolbar = useResourceToolbarProps({
     maxGroupDepth,
+    wrap: toolbarWrap,
     actions: toolbarActions,
     availableViews,
     pager: toolbarInputs.pager,
