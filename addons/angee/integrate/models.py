@@ -2360,7 +2360,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             items=result,
             completed_at=now.isoformat(),
         )
-        self.last_sync_summary = dict(self.sync_summary(status="ok", result=result, error=None, now=now))
+        self.last_sync_summary = {
+            "status": "ok",
+            "items": result,
+            "completed_at": now.isoformat(),
+        }
         self.next_sync_at = self._next_sync_at(now=now)
         with transaction.atomic():
             cast(Any, self).report_status(status=IntegrationRuntimeStatus.OK)
@@ -2388,13 +2392,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.sync_stage = self.SyncStage.FAILED
         self.sync_error = error_message
         self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=error_message)
-        self.last_sync_summary = dict(self.sync_summary(status="error", result=None, error=failure, now=now))
         self.next_sync_at = self._next_sync_at(now=now)
         with transaction.atomic():
             cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
             self.save(
                 update_fields=[
-                    "last_sync_summary",
                     "last_sync_status",
                     "next_sync_at",
                     "sync_error",
@@ -2403,28 +2405,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                     "updated_at",
                 ]
             )
-
-    def sync_summary(
-        self,
-        *,
-        status: str,
-        result: int | None,
-        error: IntegrationFailure | None,
-        now: datetime,
-    ) -> Mapping[str, Any]:
-        """Project durable bridge-specific evidence into the latest run summary.
-
-        Concrete bridges may override this hook to read their already-persisted
-        run/checkpoint records.  Both successful and failed scheduler outcomes
-        call it before the bridge row is saved.
-        """
-
-        summary: dict[str, Any] = {"status": status, "completed_at": now.isoformat()}
-        if result is not None:
-            summary["items"] = result
-        if error is not None:
-            summary["error"] = error.message
-        return summary
 
     def run_sync(self, *, now: datetime) -> int:
         """Run one sync attempt and persist its lifecycle telemetry."""

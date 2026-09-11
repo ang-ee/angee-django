@@ -2,16 +2,35 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
-from angee.base.sync import sync_ingestion_active, sync_ingestion_context
 from django.db import transaction
 
-bridge_sync_context = sync_ingestion_context
-bridge_sync_active = sync_ingestion_active
+from angee.graphql.publishing import publication_ingestion_context
+
+_bridge_sync_depth: ContextVar[int] = ContextVar("integrate_bridge_sync_depth", default=0)
+
+
+@contextmanager
+def bridge_sync_context() -> Iterator[None]:
+    """Mark a bridge sync and annotate the changes it publishes."""
+
+    token = _bridge_sync_depth.set(_bridge_sync_depth.get() + 1)
+    try:
+        with publication_ingestion_context():
+            yield
+    finally:
+        _bridge_sync_depth.reset(token)
+
+
+def bridge_sync_active() -> bool:
+    """Return whether integration bridge synchronization is active."""
+
+    return _bridge_sync_depth.get() > 0
+
 
 _current_bridge_progress: ContextVar[BridgeProgressReporter | None] = ContextVar(
     "angee_current_bridge_progress",

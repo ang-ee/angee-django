@@ -91,5 +91,5 @@ class Migration(migrations.Migration):
 
     # This backfill reads the resource ledger through Django's historical app
     # registry, so its model must exist before this operation is scheduled.
-    dependencies = [("resources", "0001_initial")]
+    dependencies = [("resources", "__first__")]
     operations = [migrations.RunPython(backfill_agent_session_identity, migrations.RunPython.noop)]

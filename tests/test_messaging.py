@@ -644,14 +644,13 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
             assert first.parent_id is None
             landed = Message.objects.ingest(
                 [parent, reply], channel=channel, explicit_thread=thread,
-                historical=True, quote_edges=False, source_message_type="comment",
+                historical=True, quote_edges=False,
             )
             assert landed[1].pk == first.pk
             assert landed[1].parent_id == landed[0].pk
             assert landed[1].thread_id == thread.pk
             assert landed[0].sent_at == _AT
-            assert landed[0].message_type == Message.MessageKind.COMMENT
-            assert landed[0].metadata["source_message_type"] == "comment"
+            assert landed[0].message_type == Message.MessageKind.CHAT
             assert Message.objects.filter(channel=channel, thread=thread).count() == 2
         assert events == []
     finally:

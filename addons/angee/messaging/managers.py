@@ -2548,9 +2548,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         quote_edges: bool = True,
         explicit_thread: Any = None,
         historical: bool = False,
-        source_message_type: Any = None,
-        source_subtype_key: str = "",
-        source_subtype_model_label: str = "",
     ) -> list[Any]:
         """Upsert each parsed message into a thread with its parts/participants/edges.
 
@@ -2592,14 +2589,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 raise ValueError("Explicit ingestion requires a saved messaging Thread.")
             if explicit_thread.channel_id not in (None, channel.pk):
                 raise ValueError("Explicit thread belongs to a different source channel.")
-        if source_message_type is not None:
-            allowed_source_types = {
-                self.model.MessageKind.EMAIL,
-                self.model.MessageKind.COMMENT,
-                self.model.MessageKind.AUTO_COMMENT,
-            }
-            if not historical or explicit_thread is None or source_message_type not in allowed_source_types:
-                raise ValueError("Source-authored message type requires explicit historical ingestion.")
         ingested: list[Any] = []
         unresolved_handles: dict[Any, Any] = {}
         for parsed in parsed_messages:
@@ -2615,9 +2604,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     visibility=visibility,
                     explicit_thread=explicit_thread,
                     historical=historical,
-                    source_message_type=source_message_type,
-                    source_subtype_key=source_subtype_key,
-                    source_subtype_model_label=source_subtype_model_label,
                 )
                 ingested.append(message)
                 for handle in handles:
@@ -2665,20 +2651,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         visibility: Any = None,
         explicit_thread: Any = None,
         historical: bool = False,
-        source_message_type: Any = None,
-        source_subtype_key: str = "",
-        source_subtype_model_label: str = "",
     ) -> Any:
         handle_model = apps.get_model("parties", "Handle")
         part_model = apps.get_model("messaging", "Part")
         envelope_metadata = _bounded_message_metadata(parsed.metadata)
-        if source_message_type is not None:
-            envelope_metadata = {
-                **envelope_metadata,
-                "source_message_type": str(source_message_type),
-                "source_subtype_key": source_subtype_key,
-                "source_subtype_model_label": source_subtype_model_label,
-            }
         thread = explicit_thread if explicit_thread is not None else thread_model.objects.resolve(
             platform=parsed.platform,
             channel=channel,
@@ -2745,18 +2721,13 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             "status": self.model.MessageStatus.SYNCED,
             # The kind derives from structure at the one write owner: public-thread
             # content is a COMMENT, a source-named conversation is CHAT, else EMAIL.
-            "message_type": source_message_type or (
+            "message_type": (
                 self.model.MessageKind.COMMENT
                 if thread.modality == thread_model.Modality.PUBLIC_THREAD
                 else self.model.MessageKind.CHAT
                 if parsed.thread is not None or explicit_thread is not None
                 else self.model.MessageKind.EMAIL
             ),
-            "subtype": _message_subtype(
-                subtype_key=source_subtype_key,
-                model_label=source_subtype_model_label,
-                owner_id=owner_id,
-            ) if source_subtype_key else None,
             "preview": strip_null_bytes(_preview(parsed.body)),
             "sent_at": parsed.sent_at,
             "received_at": parsed.received_at,

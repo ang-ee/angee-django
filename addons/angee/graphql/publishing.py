@@ -6,10 +6,10 @@ import logging
 import threading
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import partial
 from typing import Any
 
-from angee.base.sync import sync_ingestion_active
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
@@ -34,6 +34,24 @@ propagated to the save/delete caller or allowed to starve later receivers.
 logger = logging.getLogger(__name__)
 
 _mute_state = threading.local()
+_publication_ingestion_depth: ContextVar[int] = ContextVar("graphql_publication_ingestion_depth", default=0)
+
+
+@contextmanager
+def publication_ingestion_context() -> Iterator[None]:
+    """Mark emitted change payloads as ingestion while preserving broadcasting."""
+
+    token = _publication_ingestion_depth.set(_publication_ingestion_depth.get() + 1)
+    try:
+        yield
+    finally:
+        _publication_ingestion_depth.reset(token)
+
+
+def publication_ingestion_active() -> bool:
+    """Return the ingestion annotation for a change captured in this context."""
+
+    return _publication_ingestion_depth.get() > 0
 
 
 @contextmanager
@@ -199,7 +217,7 @@ def publish_change(
         action=action,
         update_fields=update_fields,
         readable_fields=readable_fields,
-        during_ingestion=sync_ingestion_active(),
+        during_ingestion=publication_ingestion_active(),
     )
     transaction.on_commit(lambda: _send_change(model, payload))
 
