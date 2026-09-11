@@ -2459,6 +2459,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         modality: Any = None,
         visibility: Any = None,
         quote_edges: bool = True,
+        explicit_thread: Any = None,
+        historical: bool = False,
     ) -> list[Any]:
         """Upsert each parsed message into a thread with its parts/participants/edges.
 
@@ -2477,19 +2479,30 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         ``PUBLIC_THREAD``/``PUBLIC``); each defaults to the private email-thread shape.
         The functional :class:`~angee.messaging.models.Message.MessageKind` is decided
         here, from the structural facts, never by the producer: content in a
-        ``PUBLIC_THREAD`` is a ``COMMENT`` (a public post, not email), a message whose
-        source names its conversation (``ParsedThread``) is ``CHAT``, and everything
-        else is ``EMAIL`` — so the same act cannot land under different kinds depending
-        on which backend delivered it. ``quote_edges`` runs the RFC-5322 quotation
+        record-attached thread or ``PUBLIC_THREAD`` is a ``COMMENT``, a message whose
+        source names its conversation (``ParsedThread`` or ``explicit_thread``) is
+        ``CHAT``, and everything else is ``EMAIL``. The same act keeps its kind across
+        backends. ``quote_edges`` runs the RFC-5322 quotation
         builder — email's shared-fragment graph — and defaults on; a non-email producer
         whose short shared text would otherwise mint spurious ``quote`` edges passes
         ``quote_edges=False``. The externally controlled metadata envelope is rejected
         above 512 KiB of canonical UTF-8 JSON so the lossless column remains
         deterministically bounded.
+
+        ``explicit_thread`` binds source record chatter to an already resolved,
+        saved thread, avoiding email subject/reply heuristics. Replaying a channel's
+        external ID into a different explicit thread is rejected. ``historical``
+        suppresses the live message event and party-suggestion side effects while
+        retaining original timestamps, content history and thread counters.
         """
 
         owner_id = owner_id if owner_id is not None else channel.owner_id
         thread_model = apps.get_model("messaging", "Thread")
+        if explicit_thread is not None:
+            if not isinstance(explicit_thread, thread_model) or explicit_thread.pk is None:
+                raise ValueError("Explicit ingestion requires a saved messaging Thread.")
+            if explicit_thread.channel_id not in (None, channel.pk):
+                raise ValueError("Explicit thread belongs to a different source channel.")
         ingested: list[Any] = []
         unresolved_handles: dict[Any, Any] = {}
         for parsed in parsed_messages:
@@ -2503,6 +2516,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     thread_model=thread_model,
                     modality=modality,
                     visibility=visibility,
+                    explicit_thread=explicit_thread,
+                    historical=historical,
                 )
                 ingested.append(message)
                 for handle in handles:
@@ -2517,7 +2532,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 edges.create_for_message(message)
         # Revisit unresolved envelopes after each committed batch so later directory
         # evidence can resolve an older sender without coupling it to first contact.
-        if unresolved_handles:
+        if unresolved_handles and not historical:
             handles = tuple(unresolved_handles.values())
 
             def suggest_parties() -> None:
@@ -2548,11 +2563,13 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         thread_model: Any,
         modality: Any = None,
         visibility: Any = None,
+        explicit_thread: Any = None,
+        historical: bool = False,
     ) -> Any:
         handle_model = apps.get_model("parties", "Handle")
         part_model = apps.get_model("messaging", "Part")
         envelope_metadata = _bounded_message_metadata(parsed.metadata)
-        thread = thread_model.objects.resolve(
+        thread = explicit_thread if explicit_thread is not None else thread_model.objects.resolve(
             platform=parsed.platform,
             channel=channel,
             subject=parsed.subject,
@@ -2602,7 +2619,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # resumed backup import heals reply order across batches).
             message = self.model._base_manager.select_related("thread").get(pk=prior["pk"])
             if parsed.in_reply_to and prior["parent_id"] is None:
-                parent = self._resolve_reply_parent(parsed, channel=channel)
+                parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
                 if parent is not None:
                     message.parent = parent
                     message.save(update_fields=("parent", "updated_at"))
@@ -2612,17 +2629,16 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             "thread": thread,
             "channel": channel,
             "sender": sender,
-            "parent": self._resolve_reply_parent(parsed, channel=channel),
+            "parent": self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread),
             "platform": parsed.platform,
             "direction": parsed.direction,
             "status": self.model.MessageStatus.SYNCED,
-            # The kind derives from structure at the one write owner: public-thread
-            # content is a COMMENT, a source-named conversation is CHAT, else EMAIL.
+            # Record chatter and public posts share the native COMMENT kind.
             "message_type": (
                 self.model.MessageKind.COMMENT
-                if thread.modality == thread_model.Modality.PUBLIC_THREAD
+                if thread.modality == thread_model.Modality.PUBLIC_THREAD or thread.is_record_attached()
                 else self.model.MessageKind.CHAT
-                if parsed.thread is not None
+                if parsed.thread is not None or explicit_thread is not None
                 else self.model.MessageKind.EMAIL
             ),
             "preview": strip_null_bytes(_preview(parsed.body)),
@@ -2649,7 +2665,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 created = False
         prior_hashes: list[str] = []
         if not created:
-            message = self.model._base_manager.get(pk=prior["pk"])
+            message = self.model._base_manager.select_for_update().get(pk=prior["pk"])
+            if explicit_thread is not None and message.thread_id != thread.pk:
+                raise ValueError("Source message already belongs to a different explicit thread.")
             prior_hashes = self._content_fragment_hashes(part_model, message)
             for field, value in defaults.items():
                 setattr(message, field, value)
@@ -2683,10 +2701,11 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             self._recount_thread(losing_thread)
         if created or thread_changed:
             self._bump_thread(thread_model, thread.pk, parsed.sent_at)
-            message_ingested.send(sender=self.model, instance=message)
+            if not historical:
+                message_ingested.send(sender=self.model, instance=message)
         return message, handles
 
-    def _resolve_reply_parent(self, parsed: ParsedMessage, *, channel: Any) -> Any:
+    def _resolve_reply_parent(self, parsed: ParsedMessage, *, channel: Any, explicit_thread: Any = None) -> Any:
         """Resolve ``in_reply_to`` onto the parent ``Message`` row, or ``None``.
 
         The single-parent reply pointer the model docstring promises. Resolution is
@@ -2702,9 +2721,12 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         reply_to = parsed.in_reply_to
         if not reply_to or reply_to == parsed.external_id:
             return None
-        rows = list(
-            _external_id_annotated(self.model._base_manager).filter(_external_id_q(reply_to), platform=parsed.platform)
+        queryset = _external_id_annotated(self.model._base_manager).filter(
+            _external_id_q(reply_to), platform=parsed.platform,
         )
+        if explicit_thread is not None:
+            queryset = queryset.filter(channel=channel, thread=explicit_thread)
+        rows = list(queryset)
         if not rows:
             return None
         return min(rows, key=lambda row: (row.channel_id != channel.pk, row.pk))

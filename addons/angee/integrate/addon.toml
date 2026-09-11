@@ -5,7 +5,7 @@ name = "angee.integrate"
 description = "The integration substrate — OAuth connections, credentials, and the bridge/capability runtime"
 keywords = ["integrations", "oauth", "connections"]
 category = "Integration"
-depends_on = ["angee.iam", "angee.resources", "angee.jobs"]
+depends_on = ["angee.iam", "angee.resources", "angee.jobs", "angee.graphql"]
 dependencies = [
   "authlib>=1.7.2",
   # httpcore is bounded and named directly: integrate.http subclasses its SyncBackend

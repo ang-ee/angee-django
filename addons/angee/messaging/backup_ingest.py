@@ -141,8 +141,8 @@ def batch_ingest(
     byte accounting); ``parsed_message`` maps one DTO onto the neutral messaging
     seam. A batch flushes at ``batch_size`` messages **or** ``max_batch_bytes`` of
     buffered media, whichever comes first. Every chat backup lands under the
-    ``CHAT`` kind with the email quotation graph off, so those are fixed here
-    rather than re-decided per addon.
+    ``CHAT`` kind with the email quotation graph off. Historical imports suppress
+    live message events and party suggestions through the shared ingest owner.
     """
 
     message_model = apps.get_model("messaging", "Message")
@@ -162,6 +162,7 @@ def batch_ingest(
                     batch,
                     channel=channel,
                     quote_edges=False,
+                    historical=True,
                 )
         total += len(batch)
         if on_batch is not None:

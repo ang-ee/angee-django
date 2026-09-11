@@ -901,8 +901,9 @@ def test_workflow_identity_migration_is_additive_and_matches_source_fields() -> 
                 *module.RUN_ORIGIN_CHOICES,
                 ("test", "Test"),
                 ("recovery", "Recovery"),
+                ("workflow", "Workflow"),
             }
-            assert len(current_choices) == len(module.RUN_ORIGIN_CHOICES) + 2
+            assert len(current_choices) == len(module.RUN_ORIGIN_CHOICES) + 3
         assert (migrated_path, migrated_args, migrated_kwargs) == (
             source_path,
             source_args,
@@ -917,11 +918,16 @@ def test_agent_session_identity_migration_waits_for_complete_identity_state() ->
     bridge = importlib.import_module(
         "angee.workflows_agents.runtime_migrations.agent_session_identity"
     )
-    assert ("resources", "0001_initial") in bridge.Migration.dependencies
+    resources = importlib.import_module(
+        "angee.workflows_agents.runtime_migrations.agent_session_resources"
+    )
+    assert bridge.Migration.dependencies == []
+    assert resources.Migration.dependencies == [("resources", "__latest__")]
     legacy = ProjectState()
     for name in ("Workflow", "WorkflowRun", "StepRun"):
         legacy.add_model(ModelState("workflows", name, [("id", models.AutoField(primary_key=True))]))
     assert bridge.applies(legacy) is False
+    assert resources.applies(legacy) is False
 
     migrated = identity.Migration("probe", "workflows").mutate_state(legacy)
     assert bridge.applies(migrated) is False
@@ -932,6 +938,7 @@ def test_agent_session_identity_migration_waits_for_complete_identity_state() ->
         ModelState("resources", "Resource", [("id", models.AutoField(primary_key=True))])
     )
     assert bridge.applies(migrated) is True
+    assert resources.applies(migrated) is True
 
 
 def _integration_lifecycle_state(

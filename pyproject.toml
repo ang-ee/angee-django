@@ -212,6 +212,8 @@ exclude = [
   # Django-authored migrations live here. The composer owns its shape; lint
   # the abstract sources instead.
   "**/runtime",
+  # Materialized addon migration sources are pinned by digest and immutable.
+  "**/runtime_migrations",
 ]
 
 [tool.ruff.lint]

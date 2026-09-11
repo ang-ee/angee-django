@@ -27,11 +27,11 @@ from strawberry_django.fields.types import field_type_map
 
 from angee.base.mixins import AuditMixin, TimestampMixin
 from angee.base.serialization import json_safe
-from angee.base.sync import sync_ingestion_context
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.graphql.field_types import register_field_type
+from angee.graphql.publishing import publication_ingestion_context
 from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from tests.conftest import SchemaAddon, _clear_model_tables, _create_missing_tables
@@ -262,7 +262,7 @@ def test_publish_change_marks_sync_ingestion_and_still_broadcasts(
         dispatch_uid="tests.publish_change_suppresses_sync_ingestion",
     )
     try:
-        with sync_ingestion_context():
+        with publication_ingestion_context():
             publishing.publish_change(Group(id=9, name="backfill"), action="update", update_fields=("name",))
     finally:
         publishing.change_published.disconnect(dispatch_uid="tests.publish_change_suppresses_sync_ingestion")
