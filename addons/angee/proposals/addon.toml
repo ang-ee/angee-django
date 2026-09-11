@@ -22,4 +22,5 @@ demo = [
   { path = "resources/demo/036_messaging.message.yaml", depends_on = "resources/demo/035_messaging.thread.yaml" },
   { path = "resources/demo/040_proposals.proposal.yaml", depends_on = ["resources/demo/020_proposals.round.yaml", "resources/demo/036_messaging.message.yaml", "money:resources/master/010_money.currency.yaml"] },
   { path = "resources/demo/050_proposals.answer.yaml", depends_on = ["resources/demo/030_proposals.topic.yaml", "resources/demo/040_proposals.proposal.yaml"] },
+  { path = "resources/demo/060_proposals.review.yaml", depends_on = ["resources/demo/040_proposals.proposal.yaml", "resources/demo/005_iam.user.yaml"] },
 ]

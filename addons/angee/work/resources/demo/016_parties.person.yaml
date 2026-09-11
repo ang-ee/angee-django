@@ -1,0 +1,21 @@
+_meta:
+  model: parties.Person
+rows:
+  - xref: person_alice
+    fields:
+      display_name: Alice Nguyen
+      given_name: Alice
+      family_name: Nguyen
+      user: iam.user_alice
+      notes: Leads the garden build. Prefers a heads-up before stand-up.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: person_bob
+    fields:
+      display_name: Bob Marsh
+      given_name: Bob
+      family_name: Marsh
+      user: iam.user_bob
+      notes: Runs signage and materials. Off site on Fridays.
+      created_by: iam.user_bob
+      updated_by: iam.user_bob
