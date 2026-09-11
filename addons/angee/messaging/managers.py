@@ -2479,10 +2479,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         ``PUBLIC_THREAD``/``PUBLIC``); each defaults to the private email-thread shape.
         The functional :class:`~angee.messaging.models.Message.MessageKind` is decided
         here, from the structural facts, never by the producer: content in a
-        ``PUBLIC_THREAD`` is a ``COMMENT`` (a public post, not email), a message whose
-        source names its conversation (``ParsedThread``) is ``CHAT``, and everything
-        else is ``EMAIL`` — so the same act cannot land under different kinds depending
-        on which backend delivered it. ``quote_edges`` runs the RFC-5322 quotation
+        record-attached thread or ``PUBLIC_THREAD`` is a ``COMMENT``, a message whose
+        source names its conversation (``ParsedThread`` or ``explicit_thread``) is
+        ``CHAT``, and everything else is ``EMAIL``. The same act keeps its kind across
+        backends. ``quote_edges`` runs the RFC-5322 quotation
         builder — email's shared-fragment graph — and defaults on; a non-email producer
         whose short shared text would otherwise mint spurious ``quote`` edges passes
         ``quote_edges=False``. The externally controlled metadata envelope is rejected
@@ -2490,7 +2490,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         deterministically bounded.
 
         ``explicit_thread`` binds source record chatter to an already resolved,
-        saved thread, avoiding email subject/reply heuristics. ``historical``
+        saved thread, avoiding email subject/reply heuristics. Replaying a channel's
+        external ID into a different explicit thread is rejected. ``historical``
         suppresses the live message event and party-suggestion side effects while
         retaining original timestamps, content history and thread counters.
         """
@@ -2632,11 +2633,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             "platform": parsed.platform,
             "direction": parsed.direction,
             "status": self.model.MessageStatus.SYNCED,
-            # The kind derives from structure at the one write owner: public-thread
-            # content is a COMMENT, a source-named conversation is CHAT, else EMAIL.
+            # Record chatter and public posts share the native COMMENT kind.
             "message_type": (
                 self.model.MessageKind.COMMENT
-                if thread.modality == thread_model.Modality.PUBLIC_THREAD
+                if thread.modality == thread_model.Modality.PUBLIC_THREAD or thread.is_record_attached()
                 else self.model.MessageKind.CHAT
                 if parsed.thread is not None or explicit_thread is not None
                 else self.model.MessageKind.EMAIL
@@ -2665,7 +2665,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 created = False
         prior_hashes: list[str] = []
         if not created:
-            message = self.model._base_manager.get(pk=prior["pk"])
+            message = self.model._base_manager.select_for_update().get(pk=prior["pk"])
+            if explicit_thread is not None and message.thread_id != thread.pk:
+                raise ValueError("Source message already belongs to a different explicit thread.")
             prior_hashes = self._content_fragment_hashes(part_model, message)
             for field, value in defaults.items():
                 setattr(message, field, value)

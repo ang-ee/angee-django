@@ -11,25 +11,13 @@ from django.db import transaction
 
 from angee.graphql.publishing import publication_ingestion_context
 
-_bridge_sync_depth: ContextVar[int] = ContextVar("integrate_bridge_sync_depth", default=0)
-
 
 @contextmanager
 def bridge_sync_context() -> Iterator[None]:
     """Mark a bridge sync and annotate the changes it publishes."""
 
-    token = _bridge_sync_depth.set(_bridge_sync_depth.get() + 1)
-    try:
-        with publication_ingestion_context():
-            yield
-    finally:
-        _bridge_sync_depth.reset(token)
-
-
-def bridge_sync_active() -> bool:
-    """Return whether integration bridge synchronization is active."""
-
-    return _bridge_sync_depth.get() > 0
+    with publication_ingestion_context():
+        yield
 
 
 _current_bridge_progress: ContextVar[BridgeProgressReporter | None] = ContextVar(
@@ -106,7 +94,6 @@ def current_bridge_progress() -> BridgeProgressReporter | None:
 __all__ = [
     "BridgeProgressReporter",
     "bridge_progress_context",
-    "bridge_sync_active",
     "bridge_sync_context",
     "current_bridge_progress",
 ]
