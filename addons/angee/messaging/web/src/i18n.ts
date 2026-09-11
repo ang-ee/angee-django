@@ -6,6 +6,12 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enMessagingMessages: Record<string, string> = {
+  "sources.empty": "No source conversations",
+  "sources.emptyHint": "Source messages linked to this record will appear here.",
+  "sources.loading": "Loading source conversations",
+  "sources.unavailable": "Source conversations unavailable",
+  "sources.unavailableHint": "You may not have access to the linked conversation.",
+  "sources.conversation": "Conversation",
   // RecordChatterPane — the Comments chatter tab.
   "chatter.noRecord": "No record selected",
   "chatter.noRecordHint": "Open a record to discuss it.",

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import traceback
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal, cast
@@ -105,12 +105,15 @@ def start(
     dedup_key: str | None = None,
     origin: RunOrigin | None = None,
     input: JsonPresence = JsonPresence(),
+    validate_new: Callable[[], None] | None = None,
 ) -> Any:
     """Start the current published version after validating its subject declaration.
 
     An empty subject declaration accepts any subject for backwards compatibility.
     A declared workflow raises ``ValidationError`` before creating a run when the
-    subject's concrete model differs.
+    subject's concrete model differs. ``validate_new`` is the manager-owned,
+    side-effect-free new-admission check; callers must authorize its inputs before
+    entering this system transaction.
     """
 
     run_model = _model("WorkflowRun")
@@ -123,6 +126,7 @@ def start(
         dedup_key=dedup_key,
         origin=origin,
         input=input,
+        validate_new=validate_new,
     )
 
 
@@ -1552,11 +1556,15 @@ def _map_output(children: list[Any]) -> dict[str, Any]:
 
 def _route_success(run: Any, step_run: Any) -> None:
     outgoing = list(step_run.step.outgoing_edges.select_related("target").order_by("pk"))
+    by_target: dict[int, tuple[Any, list[Any]]] = {}
     for edge in outgoing:
-        if edge.condition and edge.condition != step_run.outcome:
-            _ensure_skipped(run, edge.target, previous=[step_run])
+        target, edges = by_target.setdefault(edge.target_id, (edge.target, []))
+        edges.append(edge)
+    for target, edges in by_target.values():
+        if any(not edge.condition or edge.condition == step_run.outcome for edge in edges):
+            _maybe_schedule_target(run, target)
         else:
-            _maybe_schedule_target(run, edge.target)
+            _ensure_skipped(run, target, previous=[step_run])
 
 
 def _route_skip(run: Any, step_run: Any) -> None:

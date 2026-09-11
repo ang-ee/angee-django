@@ -479,6 +479,7 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
         (apps.get_model("messaging", "ThreadNotification"), by_message | by_thread),
         (apps.get_model("messaging", "ThreadFollower"), by_thread),
         (apps.get_model("messaging", "ThreadActivity"), by_thread),
+        (apps.get_model("messaging", "ThreadAttachment"), by_thread),
     )
 
 
@@ -494,7 +495,7 @@ class ThreadQuerySet(AngeeQuerySet[Any]):
         owner-scoped generic ``threads`` list, aggregate, or by-pk lookup.
         """
 
-        return cast(ThreadQuerySet, self.exclude(attachments__isnull=False))
+        return cast(ThreadQuerySet, self.exclude(attachments__role="chatter"))
 
     def for_channel(self, channel: Any) -> ThreadQuerySet:
         """Return the threads that belong to ``channel`` — the purge-scope predicate.
@@ -724,6 +725,78 @@ class ThreadAttachmentManager(AngeeManager):
             .first()
         )
 
+    def source_threads_for_record(self, record: Any) -> Any:
+        """Return every source-conversation edge attached to ``record``."""
+
+        if record.pk is None:
+            return self.model._base_manager.none()
+        record._require_record_access("read")
+        content_type, object_id = canonical_record_target(record)
+        visible_threads = apps.get_model("messaging", "Thread").objects.all().scoped().values("pk")
+        return self.all().scoped().select_related("thread").filter(
+            content_type=content_type,
+            object_id=object_id,
+            role="source",
+            thread_id__in=models.Subquery(visible_threads),
+        )
+
+    def bind_source_thread(
+        self,
+        record: Any,
+        thread: Any,
+        *,
+        label: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> Any:
+        """Attach one existing conversation as retained source evidence for ``record``.
+
+        Source edges do not turn the conversation into record chatter. The caller must
+        be able to write the target and read the source thread; only the canonical,
+        idempotent edge insertion is elevated.
+        """
+
+        if record.pk is None or thread.pk is None:
+            raise ValueError("Source thread attachment requires saved records.")
+        record._require_record_access("write")
+        thread._require_record_access("read")
+        content_type, object_id = canonical_record_target(record)
+        values = {
+            "label": strip_null_bytes(label or str(record)),
+            "metadata": strip_null_bytes(metadata or {}),
+        }
+        target_model = content_type.model_class()
+        if target_model is None:
+            raise ValueError("Source attachment target model is unavailable.")
+        with system_context(reason="messaging.thread_attachment.bind_source"), transaction.atomic():
+            target_model._base_manager.select_for_update().get(pk=object_id)
+            thread = type(thread)._base_manager.select_for_update().get(pk=thread.pk)
+            attachment, _created = self.model._base_manager.get_or_create(
+                thread=thread, content_type=content_type, object_id=object_id, role="source", defaults=values
+            )
+        return attachment
+
+    def unbind_source_thread(self, record: Any, thread: Any) -> int:
+        """Remove only the selected source edge, preserving its conversation graph."""
+
+        if record.pk is None or thread.pk is None:
+            return 0
+        record._require_record_access("write")
+        thread._require_record_access("read")
+        content_type, object_id = canonical_record_target(record)
+        target_model = content_type.model_class()
+        if target_model is None:
+            raise ValueError("Source attachment target model is unavailable.")
+        with system_context(reason="messaging.thread_attachment.unbind_source"), transaction.atomic():
+            target_model._base_manager.select_for_update().get(pk=object_id)
+            type(thread)._base_manager.select_for_update().get(pk=thread.pk)
+            deleted, _details = self.model._base_manager.filter(
+                thread=thread,
+                content_type=content_type,
+                object_id=object_id,
+                role="source",
+            ).delete()
+        return int(deleted)
+
     def ensure_for_record(self, record: Any, *, role: str = "chatter", title: str = "") -> Any:
         """Return ``record``'s attachment, creating its private chatter thread if needed.
 
@@ -804,35 +877,48 @@ class ThreadAttachmentManager(AngeeManager):
             thread.created_by_id = None
 
     def teardown_for_record(self, record: Any) -> None:
-        """Delete every chatter thread attached to ``record`` and its whole subtree.
+        """Detach ``record`` and delete only its unshared private chatter graph.
 
-        A record's chatter thread is private to that record, so a hard delete of the
-        record collects the thread graph with it — no orphaned thread survives to be
-        mis-resolved when a later row reuses the primary key. Deleting each ``Thread``
-        cascades its attachments, followers, activities, notifications, and
-        participants; its messages FK the thread with ``SET_NULL`` (an ingested email
-        message outlives a merged thread), so a private record thread's messages are
-        deleted explicitly first. The parent record delete is the authorization
-        boundary; the messaging subtree is private implementation state, so its
-        cleanup runs under the same system-context pattern as other messaging
-        bookkeeping writes.
+        Source edges are removed without deleting their shared conversation. A private
+        chatter graph is deleted only when no other attachment retains its thread;
+        messages are removed explicitly because their thread FK uses ``SET_NULL``.
+        The parent record delete is the authorization boundary, so cleanup runs under
+        the same system-context pattern as other messaging bookkeeping writes.
         """
 
         if record.pk is None:
             return
         content_type, object_id = canonical_record_target(record)
-        thread_ids = list(
-            self.model._base_manager.filter(content_type=content_type, object_id=object_id)
-            .values_list("thread_id", flat=True)
-            .distinct()
-        )
-        if not thread_ids:
+        target_model = content_type.model_class()
+        if target_model is None:
             return
         thread_model = self.model._meta.get_field("thread").related_model
         message_model = apps.get_model("messaging", "Message")
         with system_context(reason="messaging.record_thread.teardown"), transaction.atomic():
-            message_model._base_manager.filter(thread_id__in=thread_ids).delete()
-            thread_model._base_manager.filter(pk__in=thread_ids).delete()
+            target_model._base_manager.select_for_update().filter(pk=object_id).exists()
+            attachments = list(
+                self.model._base_manager.select_for_update()
+                .filter(content_type=content_type, object_id=object_id)
+                .values("pk", "thread_id", "role")
+                .order_by("pk")
+            )
+            if not attachments:
+                return
+            locked_thread_ids = sorted({row["thread_id"] for row in attachments})
+            list(thread_model._base_manager.select_for_update().filter(pk__in=locked_thread_ids).values_list("pk"))
+            attachment_ids = [row["pk"] for row in attachments]
+            chatter_thread_ids = {
+                row["thread_id"] for row in attachments if row["role"] == "chatter"
+            }
+            self.model._base_manager.filter(pk__in=attachment_ids).delete()
+            orphaned_chatter_ids = [
+                thread_id
+                for thread_id in chatter_thread_ids
+                if not self.model._base_manager.filter(thread_id=thread_id).exists()
+            ]
+            if orphaned_chatter_ids:
+                message_model._base_manager.filter(thread_id__in=orphaned_chatter_ids).delete()
+                thread_model._base_manager.filter(pk__in=orphaned_chatter_ids).delete()
 
 
 class ThreadFollowerQuerySet(AngeeQuerySet[Any]):
@@ -1839,7 +1925,7 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         in the inbox.
         """
 
-        return cast(MessageQuerySet, self.filter(thread__attachments__isnull=True))
+        return cast(MessageQuerySet, self.exclude(thread__attachments__role="chatter").distinct())
 
     def searching(self, term: str) -> MessageQuerySet:
         """Return messages matching one Odoo-style chatter search token."""
@@ -2882,7 +2968,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
         return cast(
             PartQuerySet,
-            self.filter(models.Q(message__thread__isnull=True) | models.Q(message__thread__attachments__isnull=True)),
+            self.exclude(message__thread__attachments__role="chatter").distinct(),
         )
 
     def attachments(self) -> PartQuerySet:

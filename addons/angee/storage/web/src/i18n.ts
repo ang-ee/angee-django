@@ -5,6 +5,7 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enStorageMessages: Record<string, string> = {
+  "upload.retry": "Retry",
   // Browser-level loading and empty states.
   "loading": "Loading files…",
   "loadingFile": "Loading file",

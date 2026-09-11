@@ -7,9 +7,7 @@ import {
   Column,
   Glyph,
   List,
-  SectionEyebrow,
   UploadDropTarget,
-  cn,
   formatSize,
   type ListProps,
   type ResourceListSnapshot,
@@ -17,17 +15,10 @@ import {
 
 import { useStorageT } from "../i18n";
 import { fileDragPayload, type StorageFileRow } from "../data/file-rows";
-import type { StorageUpload, UploadStatus, UploadTarget, UploadTask } from "../data/use-upload";
+import type { StorageUpload, UploadTarget } from "../data/use-upload";
 import { fileGalleryCard } from "./file-columns";
 import { fileStage, formatDate } from "../lib/file-display";
-
-type Translate = (key: string) => string;
-
-/** Upload-task status → its label. `t` is threaded in from the rendering
- * component; this map is not a component and cannot call the hook itself. */
-function statusLabel(status: UploadStatus, t: Translate): string {
-  return t(`upload.status.${status}`);
-}
+import { StorageUploadTasks } from "./StorageUploadPanel";
 
 export interface FileBrowserContentProps {
   baseFilter: ResourceFilter<"storage.File">;
@@ -174,7 +165,7 @@ export function FileBrowserContent({
       onFiles={startUpload}
     >
       {uploads.tasks.length > 0 ? (
-        <UploadStrip tasks={uploads.tasks} onClear={uploads.clearFinished} t={t} />
+        <StorageUploadTasks uploads={uploads} t={t} />
       ) : null}
       <div className="min-h-0 flex-1">
         {list}
@@ -190,42 +181,5 @@ export function FileBrowserContent({
         }}
       />
     </UploadDropTarget>
-  );
-}
-
-function UploadStrip({
-  tasks,
-  onClear,
-  t,
-}: {
-  tasks: readonly UploadTask[];
-  onClear: () => void;
-  t: Translate;
-}): ReactElement {
-  return (
-    <div className="flex max-h-32 flex-col gap-1 overflow-auto border-b border-border-subtle bg-sheet-2 px-3 py-2">
-      <div className="flex items-center justify-between">
-        <SectionEyebrow as="span">
-          {t("upload.heading")}
-        </SectionEyebrow>
-        <Button type="button" size="sm" variant="ghost" onClick={onClear}>
-          {t("upload.clearFinished")}
-        </Button>
-      </div>
-      {tasks.map((task) => (
-        <div key={task.id} className="flex items-center gap-2 text-13">
-          <span className="min-w-0 flex-1 truncate text-fg">{task.name}</span>
-          <span
-            className={cn(
-              "shrink-0 text-2xs",
-              task.status === "failed" ? "text-danger-text" : "text-fg-muted",
-            )}
-            title={task.error}
-          >
-            {statusLabel(task.status, t)}
-          </span>
-        </div>
-      ))}
-    </div>
   );
 }

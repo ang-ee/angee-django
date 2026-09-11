@@ -26,6 +26,13 @@ class EventAdmissionPolicy(StrEnum):
     EACH_CHANGE = "each_change"
 
 
+class EventSource(StrEnum):
+    """Declared owner of an event delivery."""
+
+    CHANGE_PUBLISHED = "change_published"
+    MESSAGE_INGESTED = "message_ingested"
+
+
 class TriggerConfig(BaseModel):
     """Common limits shared by trigger declarations."""
 
@@ -58,6 +65,7 @@ class EventTriggerConfig(TriggerConfig):
     """A change-feed model and its native Django lookup condition."""
 
     model: str = Field(min_length=1, title="Model")
+    source: EventSource = EventSource.CHANGE_PUBLISHED
     condition: dict[str, Any] | None = Field(default_factory=dict, json_schema_extra={"widget": "json"})
     admission_policy: EventAdmissionPolicy = Field(
         default=EventAdmissionPolicy.ONCE_PER_SUBJECT,

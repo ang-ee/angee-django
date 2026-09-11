@@ -20,3 +20,8 @@ module = "runtime_migrations.public_thread_message_kind"
 name = "alter_message_status"
 app_label = "messaging"
 module = "runtime_migrations.alter_message_status"
+
+[[migrations]]
+name = "thread_attachment_source_edges"
+app_label = "messaging"
+module = "runtime_migrations.thread_attachment_source_edges"

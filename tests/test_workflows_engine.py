@@ -492,6 +492,39 @@ def test_content_routing_uses_outcome_edges(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.parametrize("conditions", [("pdf", "image"), ("image", "pdf")])
+def test_alternative_outcomes_to_same_target_route_once_regardless_of_edge_order(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    conditions: tuple[str, str],
+) -> None:
+    """A nonmatching alternative cannot skip a target reached by a sibling edge."""
+
+    del workflow_engine_tables, no_workflow_queue
+    step_run_status = workflow_models.StepRunStatus
+    workflow = workflow_with_steps(
+        steps=(
+            {"key": "classify", "config": {"outcome": "pdf"}},
+            {"key": "normalize", "config": {"outcome": "done"}},
+            {"key": "finish", "config": {"outcome": "done"}},
+        ),
+        edges=(
+            ("classify", "normalize", conditions[0]),
+            ("classify", "normalize", conditions[1]),
+            ("normalize", "finish", "done"),
+        ),
+    )
+
+    run = run_to_terminal(start_run(workflow))
+
+    assert step_run_for(run, "normalize").status == step_run_status.SUCCEEDED
+    assert step_run_for(run, "finish").status == step_run_status.SUCCEEDED
+    with system_context(reason="verify one routed target row"):
+        assert StepRun.objects.filter(run=run, step__key="normalize").count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
 def test_max_steps_fails_run_before_claiming_next_step(
     workflow_engine_tables: None,
     no_workflow_queue: None,

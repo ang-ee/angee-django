@@ -45,15 +45,55 @@ const uiAllowedHosts = angeeUIAllowedHosts(process.env.ANGEE_UI_ALLOWED_HOSTS);
 
 // The project's `@angee/*` dependency set, read from the package.json at the
 // config cwd (the web package Vite runs in) and sorted for a deterministic
-// build. Derived from the manifest so it never drifts as a project adds or drops
-// an Angee package — the same drift-free shape the gql alias and tsconfig use.
-function angeePackagesAt(cwd: string): string[] {
+// build. Angee packages expose their root import as either linked TypeScript
+// source or built JavaScript. Only the latter is a dependency bundle; linked
+// source must remain in Vite's ordinary transform/HMR pipeline.
+interface AngeePackageSets {
+  all: string[];
+  built: string[];
+  source: string[];
+}
+
+function packageImportEntry(manifest: Record<string, unknown>): string | undefined {
+  const exports = manifest.exports;
+  const root = typeof exports === "object" && exports !== null
+    ? (exports as Record<string, unknown>)["."]
+    : exports;
+  if (typeof root === "string") return root;
+  if (typeof root !== "object" || root === null) return undefined;
+  const conditional = root as Record<string, unknown>;
+  return typeof conditional.import === "string"
+    ? conditional.import
+    : typeof conditional.default === "string"
+      ? conditional.default
+      : undefined;
+}
+
+function angeePackagesAt(cwd: string): AngeePackageSets {
   const manifest = JSON.parse(
     readFileSync(join(cwd, "package.json"), "utf8"),
   ) as { dependencies?: Record<string, string> };
-  return Object.keys(manifest.dependencies ?? {})
+  const all = Object.keys(manifest.dependencies ?? {})
     .filter((name) => name.startsWith("@angee/"))
     .sort();
+  const built: string[] = [];
+  const source: string[] = [];
+  for (const name of all) {
+    try {
+      const packageRoot = realpathSync(join(cwd, "node_modules", name));
+      const packageManifest = JSON.parse(
+        readFileSync(join(packageRoot, "package.json"), "utf8"),
+      ) as Record<string, unknown>;
+      const entry = packageImportEntry(packageManifest);
+      if (entry && existsSync(join(packageRoot, entry)) && /\.[cm]?js$/.test(entry)) built.push(name);
+      else source.push(name);
+    } catch {
+      // An absent or unfamiliar package cannot be safely forced through the
+      // dependency optimizer. Normal resolution will report a useful error.
+      source.push(name);
+    }
+  }
+  return { all, built, source };
 }
 
 // Generated/vendored trees that never feed the prebundle — skipped so an
@@ -178,12 +218,10 @@ export function angeePrebundleForcePlugin(webRoot: string, packages: string[]): 
 
 export interface AngeeWebViteConfig extends UserConfig {
   /**
-   * Whether Vite pre-bundles this project's `@angee/*` packages. A downstream
-   * project consumes them as installed (built) packages and pre-bundles them
-   * (`true`); the in-repo example consumes them as linked workspace source and
-   * excludes them so HMR serves the framework source (`false`). When `true`, a
-   * source signature over the packages busts the prebundle on a workspace edit
-   * (`angeePrebundleForce`), so a linked `@angee/*` change is never served stale.
+   * Whether Vite pre-bundles this project's built-JavaScript `@angee/*`
+   * packages. Linked TypeScript entrypoints always remain source so Vite owns
+   * their transforms, asset queries, and HMR. When `true`, a source signature
+   * over the included built packages busts the prebundle on a workspace edit.
    */
   prebundleAngeePackages: boolean;
   /**
@@ -212,10 +250,11 @@ export function defineAngeeWebViteConfig({
     plugins: [
       react(),
       tailwindcss(),
-      // Only when this project pre-bundles the linked `@angee/*` source: bust the
-      // optimizer cache on a workspace source edit, but only on `serve` (see
-      // `angeePrebundleForcePlugin`).
-      ...(prebundleAngeePackages ? [angeePrebundleForcePlugin(webRoot, angeePackages)] : []),
+      // Only an actually included built package set needs an optimizer cache
+      // signature, consumed on `serve` by `angeePrebundleForcePlugin`.
+      ...(prebundleAngeePackages && angeePackages.built.length > 0
+        ? [angeePrebundleForcePlugin(webRoot, angeePackages.built)]
+        : []),
     ],
     // The alias for this project's generated typed operations, pointing at the
     // project's OWN `runtime/gql/<name>/` tree (the web package generates it via
@@ -231,11 +270,12 @@ export function defineAngeeWebViteConfig({
       // useNavigate read a null RouterProvider context).
       dedupe: ["react", "react-dom", "@tanstack/react-router"],
     },
-    // Prebundle installed `@angee/*` packages; the serve-only
-    // `angeePrebundleForcePlugin` merges in `force` when their workspace source
-    // changed. A project consuming them as linked source excludes them so HMR
-    // serves the source directly.
-    optimizeDeps: prebundleAngeePackages ? { include: angeePackages } : { exclude: angeePackages },
+    // Built package outputs are dependency bundles. Linked TypeScript package
+    // entrypoints are application source: leave them in Vite's transform/HMR
+    // pipeline so addon asset imports such as `?url` keep their native meaning.
+    optimizeDeps: prebundleAngeePackages
+      ? { include: angeePackages.built, exclude: angeePackages.source }
+      : { exclude: angeePackages.all },
     server: {
       host: true,
       ...(uiAllowedHosts ? { allowedHosts: uiAllowedHosts } : {}),

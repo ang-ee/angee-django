@@ -57,7 +57,7 @@ class _ConfigFormSpecProjector:
     def __init__(self, model: type[BaseModel], *, owner: str) -> None:
         self.owner = owner
         self._validate_aliases(model, path="config", seen=frozenset())
-        self.schema = model.model_json_schema(by_alias=False)
+        self.schema = model.model_json_schema(by_alias=True)
         definitions = self.schema.pop("$defs", {})
         if not isinstance(definitions, dict):
             self._unsupported("config", "$defs")
@@ -219,13 +219,34 @@ class _ConfigFormSpecProjector:
         if unsupported:
             self._unsupported(path, f"keywords {', '.join(unsupported)}")
 
-    def _validate_aliases(self, model: type[BaseModel], *, path: str, seen: frozenset[type[BaseModel]]) -> None:
+    def _validate_aliases(
+        self, model: type[BaseModel], *, path: str, seen: frozenset[type[BaseModel]]
+    ) -> None:
         if model in seen:
             return
+        wire_names = [field.alias or name for name, field in model.model_fields.items()]
+        duplicates = sorted({name for name in wire_names if wire_names.count(name) > 1})
+        if duplicates:
+            raise ImproperlyConfigured(
+                f"{self.owner}.config_model field {path!r} has colliding wire names: {', '.join(duplicates)}."
+            )
         for name, field in model.model_fields.items():
             field_path = f"{path}.{name}"
-            if field.alias is not None or field.validation_alias is not None or field.serialization_alias is not None:
-                raise ImproperlyConfigured(f"{self.owner}.config_model field {field_path!r} cannot declare aliases.")
+            alias = field.alias
+            if (
+                alias is None
+                and (field.validation_alias is not None or field.serialization_alias is not None)
+            ) or (
+                alias is not None
+                and (
+                    not isinstance(alias, str)
+                    or field.validation_alias != alias
+                    or field.serialization_alias != alias
+                )
+            ):
+                raise ImproperlyConfigured(
+                    f"{self.owner}.config_model field {field_path!r} must use one string alias for validation and serialization."
+                )
             for nested in _pydantic_models_in(field.annotation):
                 self._validate_aliases(nested, path=field_path, seen=seen | {model})
 
@@ -344,7 +365,7 @@ class ImplBase:
                 path = f"config.{location}" if location else "config"
                 messages.setdefault(path, []).append(str(issue["msg"]))
             raise ValidationError(messages) from None
-        return validated.model_dump(mode="json")
+        return validated.model_dump(mode="json", by_alias=True)
 
     @classmethod
     def config_form_spec(cls) -> dict[str, Any] | None:

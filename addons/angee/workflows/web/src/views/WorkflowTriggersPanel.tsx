@@ -2,9 +2,9 @@ import * as React from "react";
 import { extractActionOutcome, runActionResult, useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
   Badge, Button, Collapsible, Column, EmptyState, ErrorBanner, errorMessage, Field, Form, Group, List,
-  LoadingPanel, ResourceList, REFINE_CREATE_ID, SegmentedControl, registerForm,
+  LoadingPanel, ResourceList, REFINE_CREATE_ID, SegmentedControl, SlotOutlet, registerForm,
   TextLink, useImplConfigFields, useFormViewValues,
-  useRouteHref, useToast, type RecordToolbarContext, type RegisteredFormProps,
+  useRouteHref, useSlot, useToast, type RecordToolbarContext, type RegisteredFormProps,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -15,6 +15,7 @@ import {
 import { useWorkflowsT } from "../i18n";
 import { JsonBlock } from "./JsonBlock";
 import { WorkflowEventConditionEditor } from "./WorkflowEventConditionEditor";
+import { WORKFLOW_TRIGGER_FORM_FIELDS_SLOT } from "../slots";
 
 const WORKFLOW_MODEL = "workflows.Workflow";
 const TRIGGER_MODEL = "workflows.Trigger";
@@ -113,6 +114,7 @@ function WorkflowTriggerForm({ resource: _resource, ...props }: RegisteredFormPr
     return [choice, { ...choice, key: declaration.kind.toUpperCase() }];
   }), [declarations]);
   const config = useImplConfigFields(TRIGGER_MODEL, "kind", choices);
+  const extensionFields = useSlot(WORKFLOW_TRIGGER_FORM_FIELDS_SLOT);
   const publisherOptions = React.useMemo(
     () => (authoring.data?.workflow_trigger_publishers ?? []).map(({ model, label }) => ({
       value: model,
@@ -187,6 +189,8 @@ function WorkflowTriggerForm({ resource: _resource, ...props }: RegisteredFormPr
         <Field name="kind" widget="select" options={kindOptions} createOnly required />
       </Group>
       {ruleFields.map((field) => <Field key={field.name} {...field} />)}
+      <SlotOutlet entries={extensionFields} />
+      <Field name="execution_actor" />
       <Group label={t("triggers.advanced")} columns={2} collapsible>
         {advancedFields.map((field) => <Field key={field.name} {...field} />)}
         <Field
