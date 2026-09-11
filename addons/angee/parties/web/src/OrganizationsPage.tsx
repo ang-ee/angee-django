@@ -2,17 +2,25 @@ import * as React from "react";
 import { Column, ResourceList, Field, Form, Group, List, slotContents, useSlot, type RecordTabDescriptor } from "@angee/ui";
 import { usePartiesT } from "./i18n";
 import { PartyAddresses } from "./PartyAddresses";
+import { IdentityTab } from "./IdentityTab";
 
 import { ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 
 const MODEL = "parties.Organization";
 
 function organizationTabs(t: ReturnType<typeof usePartiesT>): readonly RecordTabDescriptor[] {
-  return [{
-    id: "addresses",
-    label: t("organization.tabs.addresses"),
-    render: (context) => <PartyAddresses {...context} />,
-  }];
+  return [
+    {
+      id: "identity",
+      label: t("organization.tabs.identity"),
+      render: (context) => <IdentityTab {...context} />,
+    },
+    {
+      id: "addresses",
+      label: t("organization.tabs.addresses"),
+      render: (context) => <PartyAddresses {...context} />,
+    },
+  ];
 }
 
 const organizationsList = (

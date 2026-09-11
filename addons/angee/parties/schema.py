@@ -84,6 +84,12 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry.field
+    def concrete_kind(self) -> str | None:
+        """Return the native MTI subtype used for canonical Party navigation."""
+
+        return Party.concrete_kind.fget(self)  # type: ignore[union-attr]
+
     handles: list["HandleType"]
     party_handles: list["PartyHandleType"]
     addresses: list["AddressType"]

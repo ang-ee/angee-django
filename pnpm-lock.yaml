@@ -1376,6 +1376,9 @@ importers:
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
+      '@angee/workflows':
+        specifier: workspace:*
+        version: link:../../workflows/web
     devDependencies:
       '@tanstack/react-router':
         specifier: ^1.170.16

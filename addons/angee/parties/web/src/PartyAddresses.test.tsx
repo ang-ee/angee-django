@@ -1,4 +1,7 @@
+// @vitest-environment happy-dom
+
 import { describe, expect, test } from "vitest";
+import { renderHook } from "@testing-library/react";
 import { pageChildren, pageElementProps, parsePageFields, type FormProps } from "@angee/ui";
 
 import type { ReactNode } from "react";
@@ -6,7 +9,8 @@ import { PartyAddresses } from "./PartyAddresses";
 
 describe("PartyAddresses", () => {
   test("owns a scoped create/edit form with the complete postal address", () => {
-    const view = PartyAddresses({ recordId: "party_7" });
+    const { result } = renderHook(() => PartyAddresses({ recordId: "party_7" }));
+    const view = result.current;
     const props = view.props as { children?: ReactNode; [key: string]: unknown };
     expect(props).toMatchObject({
       resource: "parties.Address",

@@ -75,7 +75,8 @@ def test_new_graph_observes_previously_missing_manifest(tmp_path) -> None:
 
 def test_manifest_parser_retains_ordered_native_migration_entries(tmp_path) -> None:
     entries = (
-        {"name": "rename_owner", "app_label": "demo", "module": "runtime_migrations.rename_owner"},
+        {"name": "rename_owner", "app_label": "demo", "module": "runtime_migrations.rename_owner",
+         "compatible_source_sha256": ["a" * 64]},
         {"name": "backfill_owner", "app_label": "demo", "module": "runtime_migrations.backfill_owner"},
     )
     config = make_addon(name="example.demo", path=tmp_path, migrations=entries)

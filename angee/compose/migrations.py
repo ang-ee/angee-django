@@ -108,7 +108,11 @@ class RuntimeMigrations:
                             f"{origin}: materialized target {node[0]!r} differs from "
                             f"declared target {declaration['app_label']!r}"
                         )
-                    if getattr(migration, SOURCE_SHA256_ATTR, None) != source_sha256:
+                    accepted_source_digests = {
+                        source_sha256,
+                        *declaration.get("compatible_source_sha256", ()),
+                    }
+                    if getattr(migration, SOURCE_SHA256_ATTR, None) not in accepted_source_digests:
                         raise RuntimeError(f"{origin}: source digest changed after materialization")
                     continue
                 applies = getattr(module, "applies", None)
@@ -403,6 +407,15 @@ class RuntimeMigrations:
             raise RuntimeError(f"{origin}: unknown runtime migration target {declaration['app_label']!r}")
         if not declaration["name"].isidentifier() or not declaration["name"].islower():
             raise RuntimeError(f"{origin}: migration name must be a lower-case Python identifier")
+        compatible = declaration.get("compatible_source_sha256", [])
+        if not isinstance(compatible, list) or any(
+            not isinstance(digest, str) or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            for digest in compatible
+        ):
+            raise RuntimeError(
+                f"{origin}: compatible_source_sha256 must be a list of lowercase SHA-256 digests"
+            )
 
     @staticmethod
     def _source_module(addon: AppConfig, declaration: Mapping[str, Any], origin: str) -> ModuleType:

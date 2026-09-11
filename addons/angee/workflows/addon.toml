@@ -19,3 +19,8 @@ module = "runtime_migrations.workflow_stable_key"
 name = "workflow_identity"
 app_label = "workflows"
 module = "runtime_migrations.workflow_identity"
+
+[[migrations]]
+name = "decision_target"
+app_label = "workflows"
+module = "runtime_migrations.decision_target"

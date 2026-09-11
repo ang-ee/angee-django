@@ -51,6 +51,12 @@ const parties = defineBaseAddon({
     },
     ...resourcePageRoutes("parties.people", "/parties/people", lazyRouteComponent(() => import("./PeoplePage"), "PeoplePage"), "parties.Person"),
     ...resourcePageRoutes(
+      "parties.records",
+      "/parties/records",
+      lazyRouteComponent(() => import("./PartyRecordRedirect"), "PartyRecordRedirect"),
+      "parties.Party",
+    ),
+    ...resourcePageRoutes(
       "parties.organizations",
       "/parties/organizations",
       lazyRouteComponent(() => import("./OrganizationsPage"), "OrganizationsPage"),

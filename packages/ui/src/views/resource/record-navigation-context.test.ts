@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { testDataResource, testResourceQuery } from "@angee/metadata/testing";
-import { parseRecordNavigationScope, recordNavigationHref, recordNavigationSearch, routeSearchParam, updateRouteSearch } from "./record-navigation-context";
+import { parseRecordNavigationScope, recordNavigationHref, recordNavigationSearch, recordTargetHref, recordTargetSearch, routeSearchParam, updateRouteSearch } from "./record-navigation-context";
 const resource = testDataResource("notes.Note", {
   roots: { aggregate: "notes_aggregate" },
   typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy" },
@@ -11,6 +11,16 @@ const resource = testDataResource("notes.Note", {
     updated_at: { kind: "scalar", scalar: "DateTime", values: [], nullable: true, filter: { field: "updated_at", scalar: "DateTime", values: [], operators: ["gte", "lt"] }, sort: { field: "updated_at" } },
     "author.display_name": { kind: "scalar", scalar: "String", values: [], nullable: true, sort: { field: "author.display_name" } },
   } }),
+});
+
+test("record targets preserve unrelated search and encode an exact tab and task", () => {
+  expect(recordTargetSearch({ filter: "active", decision: "old" }, { tab: "addresses", task: "decision-2" })).toEqual({
+    filter: "active",
+    recordTab: "addresses",
+    decision: "decision-2",
+  });
+  expect(recordTargetHref("/parties/people/party%201?filter=active#details", { tab: "identity", task: "decision/1" }))
+    .toBe("/parties/people/party%201?filter=active&recordTab=identity&decision=decision%2F1#details");
 });
 import type { ListViewNavigationScope } from "./resource-view-surface";
 const scope: ListViewNavigationScope = { filter: { AND: [{ title: { iContains: "draft" } }, { updated_at: { gte: "2026-09-01", lt: "2026-10-01" } }] }, order: { updated_at: "DESC" }, page: 2, pageSize: 20 };

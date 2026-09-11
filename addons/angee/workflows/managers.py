@@ -11,17 +11,19 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any, Self, cast
 
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.core.validators import validate_slug
 from django.db import DEFAULT_DB_ALIAS, OperationalError, connections, models, transaction
 from django.utils import timezone
 from pydantic_core import PydanticSerializationError
-from rebac import RelationshipTuple, SubjectRef, actor_context, system_context, write_relationships
+from rebac import RelationshipTuple, SubjectRef, actor_context, current_actor, system_context, write_relationships
 from rebac.actors import NoActorResolvedError, to_subject_ref
 from rebac.resources import to_object_ref
 
-from angee.base.actors import actor_user_id
+from angee.base.actors import actor_user_id, is_user_actor
+from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
@@ -1508,7 +1510,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 and existing.origin == resolved_origin
                 and existing.trigger_id == (None if trigger is None else trigger.pk)
                 and existing.parent_step_run_id == (None if parent_step_run is None else parent_step_run.pk)
-                and existing.dedup_key == (run_dedup_key or "")
+                and existing.dedup_key == run_dedup_key
                 and existing.occurrence_id == occurrence_id
                 and existing.input_present is input.present
                 and json_values_equal(existing.input, input.value if input.present else None)
@@ -1717,9 +1719,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         return tuple(rows)
 
     @staticmethod
-    def _trigger_dedup_key(trigger: Any, content_type: Any, object_id: Any) -> str:
+    def _trigger_dedup_key(trigger: Any, content_type: Any, object_id: Any) -> str | None:
         if trigger is None:
-            return ""
+            return None
         subject = "none" if content_type is None or object_id is None else f"{content_type.pk}:{object_id}"
         return f"trigger:{trigger.pk}:subject:{subject}"
 
@@ -1951,7 +1953,10 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 return None
             if declaration.source != source:
                 return None
-            if source == EventSource.MESSAGE_INGESTED and getattr(trigger, "message_channel_id", None) != message_channel_id:
+            if (
+                source == EventSource.MESSAGE_INGESTED
+                and getattr(trigger, "message_channel_id", None) != message_channel_id
+            ):
                 return None
             if subject._meta.label_lower != declaration.model:
                 return None
@@ -4219,6 +4224,7 @@ class DecisionQuerySet(AngeeQuerySet[Any]):
         {
             "suspension_attempt", "suspension_attempt_id", "declaration_index",
             "priority", "action", "payload", "max_attempts", "expires_at", "escalate_at",
+            "target_model", "target_id", "target_tab",
             "verdict", "resolution", "resolved_by", "attempts",
         }
     )
@@ -4534,6 +4540,11 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 tuple(SubjectRef.parse(subject) for subject in spec.assignees),
                 SubjectRef.parse(spec.requester) if spec.requester else None,
                 tuple(SubjectRef.parse(subject) for subject in spec.escalation),
+                self._validated_target(
+                    spec,
+                    actor=self._target_actor(spec, step_run=step_run)
+                    or current_actor() or step_run.run.created_by,
+                ),
             )
             for spec in declarations
         )
@@ -4555,7 +4566,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         with transaction.atomic(using=using):
             connection = connections[using]
             manager = self.db_manager(using)
-            for index, (spec, assignees, requester, escalation) in enumerate(prepared):
+            for index, (spec, assignees, requester, escalation, target) in enumerate(prepared):
                 token = _decision_write_session.set(
                     _DecisionWriteSession(using, id(connection), step_run.pk, attempt.pk, index)
                 )
@@ -4567,6 +4578,9 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                         priority=spec.priority,
                         action=spec.action,
                         payload=spec.payload,
+                        target_model=target[0],
+                        target_id=target[1],
+                        target_tab=spec.target_tab,
                         max_attempts=spec.max_attempts,
                         expires_at=spec.expires_at,
                         escalate_at=spec.escalate_at,
@@ -4602,6 +4616,52 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                         )
                     )
         return tuple(decisions), tuple(timer_intents)
+
+    @staticmethod
+    def _target_actor(spec: DecisionSpec, *, step_run: Any) -> Any | None:
+        """Resolve a prior same-run human Decision as explicit target-read authority."""
+
+        if not spec.target_authority_decision_id:
+            return None
+        decision_model = step_run._meta.apps.get_model("workflows", "Decision")
+        prior = system_queryset(decision_model, using=step_run._state.db, lock=None).filter(
+            sqid=spec.target_authority_decision_id,
+            step_run__run_id=step_run.run_id,
+            verdict=Verdict.COMPLETED,
+        ).exclude(step_run_id=step_run.pk).first()
+        if prior is None:
+            raise ValidationError({
+                "target": "Decision target authority is not a prior completed Decision in this run."
+            })
+        try:
+            subject = SubjectRef.parse(prior.resolved_by)
+        except (TypeError, ValueError) as error:
+            raise ValidationError({"target": "Decision target authority requires a human resolver."}) from error
+        if not is_user_actor(subject) or actor_user_id(subject) is None:
+            raise ValidationError({"target": "Decision target authority requires a human resolver."})
+        return subject
+
+    @staticmethod
+    def _validated_target(spec: DecisionSpec, *, actor: Any | None = None) -> tuple[str, str]:
+        """Resolve one declared related record through the execution actor's read scope."""
+
+        if not spec.target_model:
+            return "", ""
+        try:
+            model = apps.get_model(spec.target_model)
+        except (LookupError, ValueError) as error:
+            raise ValidationError({"target_model": "Decision target model is not installed."}) from error
+        queryset = read_scoped_queryset(model, actor, action="read")
+        if queryset is None:
+            raise PermissionDenied("Decision target is not readable by the execution actor.")
+        target = instance_from_public_id(model, spec.target_id, queryset=queryset)
+        if target is None:
+            raise ValidationError({"target_id": "Decision target was not found."})
+        canonical = canonical_record_target(target)
+        canonical_model = canonical.content_type.model_class()
+        if canonical_model is None:  # pragma: no cover - ContentType integrity guard
+            raise ValidationError({"target_model": "Decision target model is not installed."})
+        return canonical_model._meta.label, public_id_for(canonical_model, canonical.object_id)
 
 
 class WorkflowDispatchQuerySet(AngeeQuerySet[Any]):

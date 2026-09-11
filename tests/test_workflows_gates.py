@@ -100,6 +100,61 @@ def test_suspend_result_creates_decision_rows_and_relationship_tuples(
     assert _relationship_subjects(decision, "escalation") == {str(to_subject_ref(escalated))}
 
 
+def test_decision_target_is_actor_validated_retained_and_immutable(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Related-record identity survives attempt replay without granting target access."""
+
+    del workflow_gate_tables, no_workflow_queue
+    admin = _platform_admin("wdc-target-admin")
+    assignee = User.objects.create_user(username="wdc-target-assignee")
+    stranger = User.objects.create_user(username="wdc-target-stranger")
+    target = workflow_with_steps(
+        name="Decision target",
+        steps=({"key": "target", "step_class": "handler", "config": {}},),
+        edges=(),
+    )
+    declaration = DecisionSpec(
+        assignees=(str(to_subject_ref(assignee)),),
+        action="review-target",
+        target_model=target._meta.label,
+        target_id=str(target.sqid),
+        target_tab="details",
+    )
+
+    with pytest.raises(ValidationError, match="not found"):
+        Decision.objects._validated_target(declaration, actor=stranger)
+
+    def suspend_from_handler(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, step_run, now
+        return StepResult.suspend(decisions=(declaration,))
+
+    monkeypatch.setattr(HandlerStep, "run", suspend_from_handler)
+    gate = workflow_with_steps(
+        name="Targeted decision",
+        steps=({"key": "handler", "step_class": "handler", "config": {}},),
+        edges=(),
+    )
+    run = engine.start(gate, None, actor=admin)
+    advance_once(run)
+    execute_started(run)
+    decision = _decision_for(run, "handler")
+
+    assert (decision.target_model, decision.target_id, decision.target_tab) == (
+        target._meta.label, str(target.sqid), "details",
+    )
+    with system_context(reason="test retained decision target attempt"):
+        retained = decision.suspension_attempt.result_decisions[0]
+    assert (retained["target_model"], retained["target_id"], retained["target_tab"]) == (
+        target._meta.label, str(target.sqid), "details",
+    )
+    decision.target_id = "wfl_tampered"
+    with pytest.raises(TypeError, match="immutable"):
+        decision.save(update_fields=("target_id",))
+
+
 def test_decision_act_blocks_requester_and_non_assignee_but_allows_non_requester_admin(
     workflow_gate_tables: None,
     no_workflow_queue: None,
@@ -647,6 +702,16 @@ def test_public_schema_exposes_decision_resource_decide_mutation_and_subscriptio
     assert "workflow_decisions" in sdl
     assert "decide(" in sdl
     assert "decisionChanged" in sdl
+    assert "target_model" in sdl
+    assert "target_id" in sdl
+
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    parts = {key: tuple(workflows_schema.schemas["public"].get(key, ())) for key in SCHEMA_PART_KEYS}
+    metadata = GraphQLSchemas([SchemaAddon({"public": parts})]).render_metadata()["public"]["angee"]
+    decision = next(
+        item for item in metadata["resources"] if item["modelLabel"] == "workflows.Decision"
+    )
+    assert decision["query"]["fields"]["step_run.run"]["filter"]["field"] == "step_run__run"
 
 
 def test_public_schema_decision_projection_excludes_step_run_journal(

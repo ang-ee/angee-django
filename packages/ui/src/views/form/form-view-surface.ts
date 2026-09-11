@@ -134,6 +134,10 @@ export interface UseFormViewSurfaceProps {
   /** Called after the native form baseline has been restored. */
   onDiscarded?: () => void;
   recordTabs?: readonly RecordTabDescriptor[];
+  /** Selected saved-record tab when an outer owner, such as the router, controls it. */
+  recordTab?: string;
+  /** Called when the selected saved-record tab changes. */
+  onRecordTabChange?: (tab: string) => void;
   defaultRecordTab?: string;
   deleteAction?: RecordDeleteAction;
   deleteVisibleWhen?: (record: Row) => boolean;
@@ -145,7 +149,7 @@ export interface FormViewSurface
   t: UiTranslate;
   activeRecordTab: string;
   requestedFocusPath: string | null;
-  setActiveRecordTab: React.Dispatch<React.SetStateAction<string>>;
+  setActiveRecordTab: (tab: string) => void;
   isCreate: boolean;
   modelMetadata: ModelMetadata | null;
   formFields: readonly FieldDescriptor[];
@@ -189,12 +193,19 @@ export function useFormViewSurface({
   onFieldInteractionCommit,
   onDiscarded,
   recordTabs,
+  recordTab,
+  onRecordTabChange,
   defaultRecordTab = FORM_VIEW_OVERVIEW_TAB_ID,
   deleteAction,
   deleteVisibleWhen,
 }: UseFormViewSurfaceProps): FormViewSurface {
   const t = useUiT();
-  const [requestedRecordTab, setActiveRecordTab] = React.useState(defaultRecordTab);
+  const [localRecordTab, setLocalRecordTab] = React.useState(defaultRecordTab);
+  const requestedRecordTab = recordTab ?? localRecordTab;
+  const setActiveRecordTab = React.useCallback((tab: string) => {
+    if (recordTab === undefined) setLocalRecordTab(tab);
+    onRecordTabChange?.(tab);
+  }, [onRecordTabChange, recordTab]);
   const hasFieldChildren = hasPageField(children);
   const hasGroupChildren = hasDirectPageElement(children, "group");
   if (
@@ -452,8 +463,8 @@ export function useFormViewSurface({
   });
 
   React.useEffect(() => {
-    setActiveRecordTab(defaultRecordTab);
-  }, [defaultRecordTab, resource, id]);
+    if (recordTab === undefined) setLocalRecordTab(defaultRecordTab);
+  }, [defaultRecordTab, resource, id, recordTab]);
   const fieldLayout = React.useMemo(
     () =>
       formViewFieldLayout(

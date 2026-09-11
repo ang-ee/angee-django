@@ -649,8 +649,8 @@ class AddressManager(AngeeManager):
         self, *, party: models.Model, values: Mapping[str, Any], actor: Any,
         label: str = "Billing", is_primary: bool = True, conflict: str = "raise",
     ) -> tuple[str, models.Model | None]:
-        if conflict not in {"raise", "retain"}:
-            raise ValueError("Address conflict policy must be 'raise' or 'retain'.")
+        if conflict not in {"raise", "retain", "append"}:
+            raise ValueError("Address conflict policy must be 'raise', 'retain', or 'append'.")
         normalized = {field: " ".join(str(values.get(field) or "").split()).strip()
                       for field in self.components}
         if not any(normalized.values()):
@@ -669,7 +669,9 @@ class AddressManager(AngeeManager):
             if existing:
                 if conflict == "retain":
                     return "conflict", None
-                raise ValidationError({"address": "A different address already exists for this party."})
+                if conflict == "raise":
+                    raise ValidationError({"address": "A different address already exists for this party."})
+                is_primary = False
             verified_actor = self.check_create({"party": (party,)})
             row = self.model(
                 party=party, label=" ".join(label.split()).strip()[:64], is_primary=is_primary,
@@ -678,6 +680,45 @@ class AddressManager(AngeeManager):
             row.sudo(reason="parties.address.attach_exact")
             row.save()
             return "created", row.with_actor(verified_actor)
+
+    def replace_primary_exact(
+        self, *, party: models.Model, values: Mapping[str, Any], actor: Any,
+        expected_id: Any | None, label: str = "Billing",
+    ) -> tuple[str, models.Model]:
+        """Replace the frozen primary address, or create it when none existed."""
+
+        normalized = {field: " ".join(str(values.get(field) or "").split()).strip()
+                      for field in self.components}
+        if not any(normalized.values()):
+            raise ValidationError({"address": "A replacement address must not be empty."})
+        with transaction.atomic(), actor_context(actor):
+            party.__class__._base_manager.select_for_update().get(pk=party.pk)
+            current = self.model._base_manager.select_for_update().filter(
+                party=party, is_primary=True,
+            ).first()
+            if (current.pk if current else None) != expected_id:
+                raise ValidationError({"address": "The party's primary address changed during review."})
+            if current is None:
+                status, created = self.attach_exact(
+                    party=party, values=normalized, actor=actor, label=label, is_primary=True,
+                )
+                if created is None:  # pragma: no cover - non-empty values cannot be missing
+                    raise ValidationError({"address": "The replacement address could not be created."})
+                return status, created
+            if not current.with_actor(actor).has_access("write"):
+                raise PermissionDenied("write access to the primary party address is required")
+            changed = [field for field, value in normalized.items() if getattr(current, field) != value]
+            normalized_label = " ".join(label.split()).strip()[:64]
+            if current.label != normalized_label:
+                current.label = normalized_label
+                changed.append("label")
+            for field in changed:
+                if field != "label":
+                    setattr(current, field, normalized[field])
+            if changed:
+                current.save(update_fields=[*changed, "updated_at"])
+                return "replaced", current.with_actor(actor)
+            return "matched", current.with_actor(actor)
 
 
 class Address(SqidMixin, AuditMixin, AngeeModel):

@@ -8,4 +8,6 @@ SETTINGS = {
     "ANGEE_WORKFLOW_STEP_CLASSES.parties_dedupe_scan": "angee.workflows_parties.steps.DedupeScanStepImpl",
     "ANGEE_WORKFLOW_STEP_CLASSES.parties_dedupe_gate": "angee.workflows_parties.steps.DedupeGateStepImpl",
     "ANGEE_WORKFLOW_STEP_CLASSES.parties_dedupe_execute": "angee.workflows_parties.steps.DedupeExecuteStepImpl",
+    "ANGEE_WORKFLOW_STEP_CLASSES.parties_identity_review": "angee.workflows_parties.steps.IdentityReviewStepImpl",
+    "ANGEE_WORKFLOW_STEP_CLASSES.parties_identity_apply": "angee.workflows_parties.steps.IdentityApplyStepImpl",
 }

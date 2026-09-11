@@ -524,6 +524,10 @@ data through REBAC, never a queryset bypass.
 
 ## Pitfalls
 
+- **Localhost ports do not isolate browser cookies.** Keep the project template's
+  project-scoped Django session and CSRF cookie names; two development stacks on
+  different ports otherwise replace each other's login cookies.
+
 - **An integration failure reaches the operator only as an `IntegrationError`.**
   `Bridge.record_sync_error` and the console action results project every other
   exception to the generic "Integration operation failed." — a vendor SDK's
