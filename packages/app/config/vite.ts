@@ -235,7 +235,15 @@ export function defineAngeeWebViteConfig({
     // `angeePrebundleForcePlugin` merges in `force` when their workspace source
     // changed. A project consuming them as linked source excludes them so HMR
     // serves the source directly.
-    optimizeDeps: prebundleAngeePackages ? { include: angeePackages } : { exclude: angeePackages },
+    optimizeDeps: prebundleAngeePackages
+      ? {
+          include: angeePackages,
+          // Framework addon packages publish source entrypoints. Vite's default
+          // optimizer predicate accepts `.ts` but excludes `.tsx`, so declare
+          // the JSX-bearing TypeScript entrypoint extension explicitly.
+          extensions: [".tsx"],
+        }
+      : { exclude: angeePackages },
     server: {
       host: true,
       ...(uiAllowedHosts ? { allowedHosts: uiAllowedHosts } : {}),
