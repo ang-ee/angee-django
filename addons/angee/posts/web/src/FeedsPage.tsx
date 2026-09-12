@@ -97,7 +97,7 @@ function FeedPostRow({
     postsReactionCopy(t),
   );
   const body = hasRenderableParts(message) ? (
-    <MessagePartsView parts={message.parts} resolveFileUrl={(file) => file.url} />
+    <MessagePartsView parts={message.parts} />
   ) : (
     <span>{message.preview || t("post.emptyBody")}</span>
   );

@@ -347,7 +347,6 @@ function TranscriptMessage({
     <>
       <MessagePartsView
         parts={message.parts}
-        resolveFileUrl={(file) => file.url}
       />
       {reactions.length > 0 ? (
         <div className="mt-2">

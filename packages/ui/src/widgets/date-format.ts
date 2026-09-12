@@ -47,9 +47,20 @@ export function formatDate(value: DateFormatValue): string {
 }
 
 /** Format a date-time value for display; empty/invalid values render empty. */
-export function formatDateTime(value: DateFormatValue): string {
+export function formatDateTime(
+  value: DateFormatValue,
+  options: { timeZone?: string } = {},
+): string {
   const date = dateFromValue(value);
-  return date ? format(date, DATETIME_DISPLAY_FORMAT) : "";
+  if (!date) return "";
+  if (options.timeZone) {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "medium",
+      timeZone: options.timeZone,
+    }).format(date);
+  }
+  return format(date, DATETIME_DISPLAY_FORMAT);
 }
 
 /** Format a value for a native `type=time` control. */

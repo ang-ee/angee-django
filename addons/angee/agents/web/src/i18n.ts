@@ -50,7 +50,9 @@ export const enAgentsMessages: Record<string, string> = {
   "chat.status.error": "Error",
   "chat.status.closed": "Disconnected",
   "chat.startFailed": "Failed to start the agent session.",
+  "chat.connectFailed": "Failed to connect to the agent.",
   "chat.messageRejected": "The agent did not accept the message.",
+  "chat.responseFailed": "The agent did not respond.",
 
   // AgentSessionsPage — the full-page sessions view (left rail + conversation).
   "sessions.railLabel": "Running agents",

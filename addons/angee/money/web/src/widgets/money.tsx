@@ -2,6 +2,7 @@ import type { ReactElement } from "react";
 
 import {
   TextInput,
+  rowValueAtPath,
   widgetLabel,
   type WidgetDefinition,
   type WidgetField,
@@ -26,26 +27,15 @@ export interface MoneyWidgetField extends WidgetField {
 }
 
 /**
- * Read the value at a dotted path (`"order.currency"`) on a row, tolerating
- * absent segments — the row may not have joined the currency relation.
- */
-function readPath(row: unknown, path: string): unknown {
-  return path.split(".").reduce<unknown>((node, key) => {
-    if (node && typeof node === "object") {
-      return (node as Record<string, unknown>)[key];
-    }
-    return undefined;
-  }, row);
-}
-
-/**
  * Resolve the ISO-4217 code that denominates the amount from the row, following
  * the MoneyField's `currencyField` path (defaulting to the sibling `"currency"`).
  * Returns undefined when the currency was not selected into the row, so the
  * caller falls back to a currency-neutral format rather than guessing.
  */
 function resolveCurrencyCode(row: unknown, currencyField: string | undefined): string | undefined {
-  const node = readPath(row, currencyField ?? "currency");
+  const node = row && typeof row === "object"
+    ? rowValueAtPath(row as Record<string, unknown>, currencyField ?? "currency")
+    : undefined;
   if (node && typeof node === "object") {
     const code = (node as { code?: unknown }).code;
     if (typeof code === "string" && code.length > 0) return code;

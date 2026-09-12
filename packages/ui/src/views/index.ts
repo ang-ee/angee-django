@@ -274,6 +274,12 @@ export {
   type UseBulkDeleteResult,
 } from "./resource/useBulkDelete";
 export {
+  useDeletePreviewOperation,
+  useDeleteWithPreview,
+  type ResourceOperation,
+  type UseDeleteWithPreviewResult,
+} from "./resource/resource-operations";
+export {
   recordActionId,
   useActionOutcomeMutation,
   useActionResultMutation,

@@ -180,7 +180,7 @@ export interface MessagePartsViewProps extends Omit<HTMLAttributes<HTMLDivElemen
   /** Ordered message parts as selected by the consumer's transport. */
   parts: readonly MessagePart[];
   /** Resolves a viewable/downloadable URL for a file part. */
-  resolveFileUrl: (file: MessagePartFile) => string | null | undefined;
+  resolveFileUrl?: (file: MessagePartFile) => string | null | undefined;
   /** Optional per-use actions such as backlinks, supplied by the consuming addon. */
   renderPartActions?: (part: MessagePart) => ReactNode;
   /** Reveal and scroll an addressed part, including folded quoted content. */
@@ -194,7 +194,7 @@ export interface MessagePartsViewProps extends Omit<HTMLAttributes<HTMLDivElemen
  *  here. */
 export function MessagePartsView({
   parts,
-  resolveFileUrl,
+  resolveFileUrl = defaultMessagePartFileUrl,
   renderPartActions,
   activePartId,
   onPreviewFile,
@@ -220,9 +220,13 @@ export function MessagePartsView({
   );
 }
 
+function defaultMessagePartFileUrl(file: MessagePartFile): string | null | undefined {
+  return file.url;
+}
+
 interface MessagePartItemProps {
   part: MessagePart;
-  resolveFileUrl: MessagePartsViewProps["resolveFileUrl"];
+  resolveFileUrl: NonNullable<MessagePartsViewProps["resolveFileUrl"]>;
   actions?: ReactNode;
   active?: boolean;
   onPreviewFile?: MessagePartsViewProps["onPreviewFile"];
@@ -311,7 +315,7 @@ function QuotedMessagePart({ text, file, active }: QuotedMessagePartProps): Reac
 function renderMessagePartFile(
   part: MessagePart,
   file: MessagePartFile,
-  resolveFileUrl: MessagePartsViewProps["resolveFileUrl"],
+  resolveFileUrl: NonNullable<MessagePartsViewProps["resolveFileUrl"]>,
   t: ReturnType<typeof useUiT>,
   onPreviewFile?: MessagePartsViewProps["onPreviewFile"],
 ): ReactElement {

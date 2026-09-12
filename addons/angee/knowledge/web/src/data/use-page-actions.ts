@@ -1,19 +1,17 @@
 import { useCallback, useMemo } from "react";
 
 import {
-  resourceOperationTarget, type Row, } from "@angee/metadata";
+  type Row, } from "@angee/metadata";
 import {
-  useCreate, useInvalidate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
+  useCreate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
   refineFieldsFromPaths, } from "@angee/refine";
-import {
-  deletePreviewDocumentForResource, useAngeeDeletePreview, useOperationDocuments, } from "@angee/refine";
 import {
   refineResourceName, } from "@angee/metadata";
 import {
   rowPublicId, } from "@angee/metadata";
 import {
-  useBusyRun, useLatestRef } from "@angee/ui";
+  useBusyRun, useDeleteWithPreview, useLatestRef } from "@angee/ui";
 import {
   useModelMetadata,
 } from "@angee/metadata";
@@ -44,7 +42,6 @@ export function usePageActions(
   const { onChanged } = options;
   const metadata = useModelMetadata(PAGE_MODEL);
   const resource = metadata?.resource ?? null;
-  const operationDocuments = useOperationDocuments();
   const resourceName = resource ? refineResourceName(resource) : "";
   const fields = useMemo(() => refineFieldsFromPaths(["id", "title"]), []);
   const createPageMutation = useCreate<RowRecord, HttpError, Record<string, unknown>>({
@@ -59,20 +56,7 @@ export function usePageActions(
     meta: { fields },
     invalidates: ["list", "many", "detail"],
   });
-  const deletePreviewTarget = resource
-    ? resourceOperationTarget(resource, "deletePreview")
-    : null;
-  const deletePreviewDocument = resource
-    ? deletePreviewDocumentForResource(
-        operationDocuments,
-        resource.schemaName,
-        resource.modelLabel,
-      )
-    : "";
-  const deletePreview = useAngeeDeletePreview(deletePreviewTarget, {
-    document: deletePreviewDocument,
-  });
-  const invalidate = useInvalidate();
+  const deleteWithPreview = useDeleteWithPreview(resource);
   const { busy, run } = useBusyRun(onChanged);
 
   // The navigator publishes into the shell primary pane, so its action handlers
@@ -81,8 +65,7 @@ export function usePageActions(
   const { mutateAsync: updateMutate } = updatePageMutation;
   const actionRef = useLatestRef({
     createMutate,
-    deletePreview,
-    invalidate,
+    deleteWithPreview,
     resource,
     run,
     updateMutate,
@@ -104,16 +87,10 @@ export function usePageActions(
 
   const deletePage = useCallback<PageActions["deletePage"]>(
     (id) => {
-      const { deletePreview, invalidate, resource, run } = actionRef.current;
+      const { deleteWithPreview, resource, run } = actionRef.current;
       return run(async () => {
         requirePageResource(resource);
-        await deletePreview.mutate({ id, confirm: true });
-        await invalidate({
-          resource: refineResourceName(resource),
-          dataProviderName: resource.schemaName,
-          id,
-          invalidates: ["list", "many", "detail"],
-        });
+        await deleteWithPreview.remove(id);
       });
     },
     [],

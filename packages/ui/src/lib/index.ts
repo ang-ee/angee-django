@@ -3,6 +3,7 @@
 
 export { cn } from "./cn";
 export { titleCase } from "./titleCase";
+export { rowValueAtPath } from "@angee/metadata";
 export { statusLabel } from "./labels";
 export { tv, type VariantProps } from "./variants";
 export { ANGEE_TW_MERGE_CONFIG } from "./tailwind-merge-config";

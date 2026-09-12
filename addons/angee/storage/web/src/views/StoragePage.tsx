@@ -85,11 +85,8 @@ const FILE_LIST_INITIAL_STATE = {
   sorting: [{ id: "updated_at", desc: true }],
 };
 // A single parent's children (and the drive's top level) come back in one
-// request, capped here. The Tree is not virtualized, so rendering far more than
-// this under one parent would be the real cost; the cap keeps each per-parent
-// fetch and render bounded. NOTE: a level with more than this many folders is
-// truncated (no continuation) — acceptable for now, since virtualization + paged
-// children is the tracked follow-up, not silent completeness.
+// bounded request. Folder traversal is lazy per expanded parent, keeping the
+// explorer responsive without constraining the independently paged file list.
 const FOLDER_PAGE_LIMIT = 5000;
 
 // Stable field projections for the drive tree roots: module-scope so the

@@ -1,6 +1,5 @@
 import * as React from "react";
-import { Badge, Column, List, ResourceList, TopMenuTabs, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
-import { useSearch } from "@tanstack/react-router";
+import { Badge, Column, List, ResourceList, TopMenuTabs, useRouteSearch, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
 
 import { useWorkflowsT } from "../i18n";
 import { WorkflowCanvas } from "./WorkflowCanvas";
@@ -19,7 +18,7 @@ export const WORKFLOW_CATALOGUE_FIELDS = ["current_published_version"] as const;
 
 export function WorkflowsPage(): React.ReactElement {
   const t = useWorkflowsT();
-  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const search = useRouteSearch();
   const collection = search.tab === "sessions" ? "sessions" : "automations";
   const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(() => [
     { id: "editor", label: t("tabs.editor"), icon: "workflow-canvas", render: (context) => <WorkflowCanvas context={context} />, keepMounted: true },

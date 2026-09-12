@@ -968,7 +968,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
           {subtypeDescription}
         </div>
       ) : null}
-      <MessagePartsView parts={message.parts} resolveFileUrl={(file) => file.url} />
+      <MessagePartsView parts={message.parts} />
     </MessageRow>
   );
 });

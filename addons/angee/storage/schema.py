@@ -13,7 +13,6 @@ from rebac import ObjectRef, system_context
 from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
-from strawberry_django.pagination import OffsetPaginated
 
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
@@ -226,13 +225,6 @@ class StorageAdminPermission(RolePermission):
 _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
 
 
-@strawberry.type
-class StorageQuery:
-    """Storage queries shared by the public and console schemas."""
-
-    mime_types: OffsetPaginated[MimeTypeType] = strawberry_django.offset_paginated()
-
-
 class FolderWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for folders: create belongs to the manager factory."""
 
@@ -251,6 +243,18 @@ class FolderWriteBackend(AngeeHasuraWriteBackend):
             raise ValueError(str(error)) from error
 
 
+_MIME_TYPE_RESOURCE = hasura_model_resource(
+    MimeTypeType,
+    model=MimeType,
+    name="mime_types",
+    filterable=["id", "mime_type", "category", "label", "icon_key"],
+    sortable=["mime_type", "category", "label"],
+    aggregatable=["id"],
+    groupable=["category"],
+    insert=False,
+    update=False,
+    delete=False,
+)
 _DRIVE_RESOURCE = hasura_model_resource(
     DriveType,
     model=Drive,
@@ -443,6 +447,7 @@ _SHARED_TYPES = [
     FileType,
     FileUploadBeginPayload,
     FileUploadFinalizePayload,
+    *_MIME_TYPE_RESOURCE.types,
     *_DRIVE_RESOURCE.types,
     *_FOLDER_RESOURCE.types,
     *_FILE_RESOURCE.types,
@@ -451,7 +456,7 @@ _SHARED_TYPES = [
 schemas = {
     "public": {
         "query": [
-            StorageQuery,
+            _MIME_TYPE_RESOURCE.query,
             _DRIVE_RESOURCE.query,
             _FOLDER_RESOURCE.query,
             _FILE_RESOURCE.query,
@@ -465,7 +470,7 @@ schemas = {
     },
     "console": {
         "query": [
-            StorageQuery,
+            _MIME_TYPE_RESOURCE.query,
             _DRIVE_RESOURCE.query,
             _FOLDER_RESOURCE.query,
             _FILE_RESOURCE.query,
