@@ -868,14 +868,11 @@ def test_event_condition_draft_preserves_json_scalar_presence_and_invalid_opaque
         def change_publisher_models(self) -> tuple[type[models.Model], ...]:
             return (TriggerSubject,)
 
-        def names(self) -> tuple[str, ...]:
-            return ("public",)
-
-        def resources(self, _name: str) -> tuple[object, ...]:
-            return (type("Resource", (), {"model": TriggerSubject})(),)
+        def model_readable_fields(self, model: type[models.Model]) -> frozenset[str]:
+            assert model is TriggerSubject
+            return frozenset({"name", "state"})
 
     monkeypatch.setattr(workflows_schema.GraphQLSchemas, "from_discovery", lambda: Discovery())
-    monkeypatch.setattr(workflows_schema, "readable_model_field_names", lambda _resource: {"name", "state"})
     admin = _platform_admin("workflow-trigger-condition-admin")
     catalogue_query = """
       query EventConditionCatalogue($model: String!, $condition: JSON) {

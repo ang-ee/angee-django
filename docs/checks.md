@@ -78,6 +78,7 @@ They are distinct lifecycle operations, not a mandatory sequence for every task:
 | Apply migrations | `uv run manage.py migrate` | Operates on the selected stack database |
 | Sync permissions | `uv run manage.py rebac sync` | After migrations when permissions change |
 | Load declared resource data | `uv run manage.py resources load` | After migrations when resource data changes |
+| Validate runtime contracts | `uv run --locked manage.py check` | Includes construction of every named GraphQL schema; run against deployment code and settings before starting writer tiers |
 | Emit GraphQL SDL | `uv run manage.py schema` | A fresh process loads the emitted concrete models |
 | Check GraphQL SDL | `uv run --locked manage.py schema --check` | Separate from the composer drift check |
 

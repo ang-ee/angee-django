@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from django.apps import AppConfig
+from django.core import checks
 
 
 class GraphQLConfig(AppConfig):
@@ -12,14 +13,16 @@ class GraphQLConfig(AppConfig):
     name = "angee.graphql"
 
     def ready(self) -> None:
-        """Connect change publishers and receivers for installed GraphQL resources."""
+        """Register schema checks and connect model-change publishers and receivers."""
 
         super().ready()
         # Phase-1 AppConfig loading imports this module before schema declarations
-        # and concrete runtime models are safe to resolve; defer both imports until
+        # and concrete runtime models are safe to resolve; defer these imports until
         # Django calls ready() after app population.
+        from angee.graphql.checks import check_graphql_schemas
         from angee.graphql.publishing import connect_change_broadcast_receiver
         from angee.graphql.schema import GraphQLSchemas
 
+        checks.register(check_graphql_schemas)
         connect_change_broadcast_receiver()
         GraphQLSchemas.from_discovery().connect_change_publishers()

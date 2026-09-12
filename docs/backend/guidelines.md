@@ -790,8 +790,25 @@ and current contracts before applying a historical example to a new deployment.
 - **Publishers wire during `angee.graphql` app `ready()`, not schema build or
   schema import.** GraphQL schema modules declare subscription surfaces;
   `GraphQLSchemas` connects publishers from declared `changes` metadata after
-  app population, so building a schema no longer mutates process-global signal
-  state.
+  model population without constructing schemas. Readable-field projection is
+  resolved only when an observable partial update needs changed values, through
+  the same schema owner used by workflow condition catalogues. Building a schema
+  never mutates process-global signal state.
+- **Validate every named schema before deploying writer processes.** The GraphQL
+  addon's [Django system check](../../addons/angee/graphql/checks.py) builds every
+  named schema through `GraphQLSchemas` and reports construction failures. It runs
+  in ordinary `manage.py check` and commands requesting the default system checks.
+  ASGI WebSocket routing at application boot and the `schema` command also demand
+  schema construction; MCP's resource-tool check validates its console contract.
+  Run the default checks against the deployment's code and settings before
+  starting writer tiers. Bare app population and `manage.py --help` stay
+  build-free. Writer-only processes that call `django.setup()` without running
+  checks deliberately retain lazy construction: their first observable partial
+  update builds the required schemas synchronously, including inside an open
+  transaction. This one-time latency keeps generic writer boot cheap; later
+  schema and model-projection cache hits do not acquire the build lock. A failed
+  check in another process does not prevent a writer from starting, and checking
+  a deployment does not warm another process's cache.
 - **Resource metadata is finalized from each named schema once.** A
   `HasuraResource` remains the native owner of its generated roots, types, and
   readable/writable field surfaces. Addon surfaces contribute that native
@@ -810,10 +827,11 @@ and current contracts before applying a historical example to a new deployment.
   independently of the composed schema.
 - **A custom model value field registers its GraphQL wire type when its field
   module imports.** Call `angee.graphql.field_types.register_field_type()` beside
-  the field declaration. `GraphQLConfig.ready()` may discover and build final
-  schemas before later app `ready()` callbacks run, so registration from a later
-  callback is unsupported and can leave Strawberry's exact-class `auto` lookup
-  unconfigured.
+  the field declaration. `GraphQLConfig.ready()` imports schema declarations to
+  discover publishers before later app `ready()` callbacks run. Deferring final
+  schema construction does not defer those declarations, so registration from a
+  later callback remains unsupported and can leave Strawberry's exact-class
+  `auto` lookup unconfigured.
 - **Change events read through the row unless the model declares another read
   anchor.** A target-derived child or polymorphic edge may implement
   `change_read_resource()` and return the `ObjectRef` whose `read` permission

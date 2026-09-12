@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, cast
 from uuid import uuid4
@@ -16,6 +16,9 @@ from strawberry.scalars import JSON
 
 from angee.base.identity import public_id_of
 from angee.base.serialization import json_safe
+
+ReadableFields = Iterable[str] | Callable[[], Iterable[str]]
+"""Readable model fields, resolved lazily only when building a partial-update payload."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,17 +62,16 @@ class ChangePayload:
         *,
         action: str,
         update_fields: Iterable[str] | None,
-        readable_fields: Iterable[str] = (),
+        readable_fields: ReadableFields = (),
         during_ingestion: bool = False,
     ) -> ChangePayload:
         """Return the channel payload for a saved or deleted model instance."""
 
         changed_fields = tuple(sorted(str(field) for field in update_fields)) if update_fields is not None else None
-        changed_values = (
-            _changed_values(instance, changed_fields, frozenset(readable_fields))
-            if changed_fields is not None
-            else None
-        )
+        changed_values = None
+        if changed_fields is not None:
+            readable = readable_fields() if callable(readable_fields) else readable_fields
+            changed_values = _changed_values(instance, changed_fields, frozenset(readable))
         resource_id = None
         if model_resource_type(type(instance)):
             resource_id = model_resource_id(instance)
@@ -98,11 +100,7 @@ class ChangePayload:
             model=str(payload["model"]),
             id=str(payload["id"]),
             action=str(payload["action"]),
-            occurrence_id=(
-                str(payload["occurrence_id"])
-                if payload.get("occurrence_id") is not None
-                else None
-            ),
+            occurrence_id=(str(payload["occurrence_id"]) if payload.get("occurrence_id") is not None else None),
             changed_fields=changed_fields,
             changed_values=dict(values) if isinstance(values, Mapping) else None,
             resource_id=str(payload["resource_id"]) if payload.get("resource_id") is not None else None,
