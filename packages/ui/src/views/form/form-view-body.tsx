@@ -23,6 +23,7 @@ import { statusTone } from "../../widgets/status-tones";
 import type { RelationOption } from "../../widgets/RelationField";
 import { EditableLines, type EditableLinesProps } from "./EditableLines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
+import { RecordActionBar } from "./RecordActionBar";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import type { FieldDescriptor } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
@@ -74,10 +75,13 @@ export const FORM_VIEW_COLUMN_CLASS =
 export function FormViewRecordHeader({
   surface,
   compact = false,
+  hideStatus = false,
   title,
 }: {
   surface: FormViewSurface;
   compact?: boolean;
+  /** Omit the status strip: the properties column is rendering it instead. */
+  hideStatus?: boolean;
   title?: React.ReactNode;
 }): React.ReactElement {
   const {
@@ -189,7 +193,7 @@ export function FormViewRecordHeader({
           ) : null}
           {!compact ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
         </div>
-        {currentStatusField && compact ? (
+        {hideStatus ? null : currentStatusField && compact ? (
           <Controller
             control={form.control}
             name={currentStatusField.name}
@@ -280,6 +284,12 @@ export function FormViewOverview({
       />
     );
   };
+  // Under `sidebar` the status display and the lifecycle verbs live on the
+  // column; the header omits the strip and the action bar keeps the rest.
+  const statusField = layout === "sidebar" ? surface.statusField : undefined;
+  const columnActions = layout === "sidebar"
+    ? surface.declaredActions.filter((action) => action.placement === "properties")
+    : [];
   const renderSections = (list: readonly FormSectionModel[]): React.ReactNode => {
     if (layout === "sidebar") {
       // The standing column holds what people check and change on every visit;
@@ -290,8 +300,40 @@ export function FormViewOverview({
       return (
         <div className="form-sidebar-grid">
           <div className="grid min-w-0 gap-6">{renderTabbed(main)}</div>
-          {properties.length > 0 ? (
+          {properties.length > 0 || statusField || columnActions.length > 0 ? (
             <aside className="grid min-w-0 gap-4">
+              {statusField ? (
+                <div className="grid gap-1.5">
+                  <SectionEyebrow as="h3">{statusField.label ?? t("form.status")}</SectionEyebrow>
+                  <Controller
+                    control={form.control}
+                    name={statusField.name}
+                    render={({ field: controller }) => {
+                      const value = typeof controller.value === "string" ? controller.value : "";
+                      // The badge sits in a flex row, not as a bare grid child:
+                      // a grid child stretches, and `justify-self-start` is not
+                      // a utility this build emits -- it stayed `auto` and the
+                      // pill rendered the full 256px column width.
+                      return value ? (
+                        <div className="flex">
+                          <Badge tone={statusTone(value)} density="compact" shape="pill">
+                            {optionLabel(statusField.options, value)}
+                          </Badge>
+                        </div>
+                      ) : <span aria-hidden />;
+                    }}
+                  />
+                </div>
+              ) : null}
+              {columnActions.length > 0 ? (
+                <RecordActionBar
+                  record={surface.displayRecord ?? null}
+                  actions={columnActions}
+                  applyPatch={surface.applyPatch}
+                  reload={surface.reload}
+                  presentation="buttons"
+                />
+              ) : null}
               {properties.map((section) => (
                 <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
               ))}

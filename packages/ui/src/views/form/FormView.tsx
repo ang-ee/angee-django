@@ -186,6 +186,13 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
+  // `sidebar` moves the status display and the lifecycle verbs onto the
+  // properties column, so the header drops its strip and the action bar keeps
+  // only what was not marked for the column.
+  const statusOnColumn = layout === "sidebar";
+  const barActions = statusOnColumn
+    ? declaredActions.filter((action) => action.placement !== "properties")
+    : declaredActions;
   const overview = <FormViewOverview surface={surface} layout={layout} />;
   const overviewLabel = overviewTab?.label ?? t("form.tabOverview");
   const orderedTabs = overviewTab?.position === "last"
@@ -255,10 +262,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             </Button>
           </div>
         ) : null}
-        {!readOnly && (declaredActions.length > 0 || visibleDeleteAction !== undefined) ? (
+        {!readOnly && (barActions.length > 0 || visibleDeleteAction !== undefined) ? (
           <RecordActionBar
             record={displayRecord ?? null}
-            actions={declaredActions}
+            actions={barActions}
             applyPatch={applyPatch}
             reload={reload}
             deleteAction={visibleDeleteAction}
@@ -323,7 +330,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             : "pb-12",
         )}
       >
-        <FormViewRecordHeader surface={surface} title={formTitle} />
+        <FormViewRecordHeader surface={surface} hideStatus={statusOnColumn} title={formTitle} />
         <ErrorBanner description={saveError} title={t("form.saveFailed")} />
         {tabbed ? (
           <>
@@ -373,7 +380,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} />
+            <FormViewRecordHeader surface={surface} compact hideStatus={statusOnColumn} title={formTitle} />
             <ErrorBanner description={saveError} title={t("form.saveFailed")} />
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (

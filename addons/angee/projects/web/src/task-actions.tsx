@@ -136,6 +136,7 @@ export function useTaskFormDeclaration(): React.ReactElement {
       <Field name="note" widget="markdown.editor" body />
       <Action
         id="complete"
+        placement="properties"
         label={t("task.action.complete")}
         icon="check"
         run={complete}
@@ -143,6 +144,7 @@ export function useTaskFormDeclaration(): React.ReactElement {
       />
       <Action
         id="drop"
+        placement="properties"
         label={t("task.action.drop")}
         icon="circle-x"
         danger
@@ -159,6 +161,7 @@ export function useTaskFormDeclaration(): React.ReactElement {
       />
       <Action
         id="reopen"
+        placement="properties"
         label={t("task.action.reopen")}
         icon="activity"
         run={reopen}

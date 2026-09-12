@@ -36,12 +36,20 @@ export function RecordActionBar({
   applyPatch,
   reload,
   deleteAction,
+  presentation = "menu",
 }: {
   record: Row | null;
   actions: readonly ActionDescriptor[];
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
   reload: () => void;
   deleteAction?: RecordDeleteAction;
+  /**
+   * `menu` is the action bar's dropdown. `buttons` lays the same actions out as
+   * plain buttons for a properties column, where a verb sits beside the state it
+   * changes and should not be a menu to find. Only the presentation differs --
+   * confirmation, prompts, typed-args forms and pending state are shared.
+   */
+  presentation?: "menu" | "buttons";
 }): React.ReactElement | null {
   const confirm = useConfirm();
   const prompt = usePrompt();
@@ -137,6 +145,54 @@ export function RecordActionBar({
   );
   if (visibleActions.length === 0 && deleteAction === undefined) return null;
 
+  // One element for both presentations: the dialog's contract is the action's,
+  // not the layout's, and two copies would drift.
+  const actionFormDialog = formAction ? (
+    <ActionFormDialog
+      key={formAction.id}
+      action={formAction}
+      context={{
+        record,
+        selectedIds: recordId !== null ? [recordId] : [],
+      }}
+      open
+      onOpenChange={(open) => {
+        if (!open) setFormAction(null);
+      }}
+      onSucceeded={reload}
+    />
+  ) : null;
+
+  const actionDisabled = (action: ActionDescriptor): boolean =>
+    Boolean(action.disabled) ||
+    pendingId === action.id ||
+    (recordId === null && !action.run && !action.submit);
+
+  if (presentation === "buttons") {
+    return (
+      <>
+        <div className="grid gap-2">
+          {visibleActions.map((action) => (
+            <Button
+              key={action.id}
+              type="button"
+              variant={action.danger ? "danger" : "secondary"}
+              size="sm"
+              className="justify-start"
+              loading={pendingId === action.id}
+              disabled={actionDisabled(action)}
+              onClick={() => void runAction(action)}
+            >
+              {action.icon ? <Glyph name={action.icon} /> : null}
+              {action.label}
+            </Button>
+          ))}
+        </div>
+        {actionFormDialog}
+      </>
+    );
+  }
+
   return (
     <>
       <DropdownMenu.Root>
@@ -193,21 +249,7 @@ export function RecordActionBar({
           </DropdownMenu.Positioner>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
-      {formAction ? (
-        <ActionFormDialog
-          key={formAction.id}
-          action={formAction}
-          context={{
-            record,
-            selectedIds: recordId !== null ? [recordId] : [],
-          }}
-          open
-          onOpenChange={(open) => {
-            if (!open) setFormAction(null);
-          }}
-          onSucceeded={reload}
-        />
-      ) : null}
+      {actionFormDialog}
     </>
   );
 }

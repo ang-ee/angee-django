@@ -218,6 +218,7 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
     ...(props.visibleWhen !== undefined
       ? { visibleWhen: props.visibleWhen }
       : {}),
+    ...(props.placement !== undefined ? { placement: props.placement } : {}),
   }));
 }
 
