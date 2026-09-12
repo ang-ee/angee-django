@@ -131,8 +131,8 @@ vi.mock("@angee/refine", async (importOriginal) => {
         error: null,
       };
     },
-    useAuthoredMutation: (document: unknown) => [
-      String(document).includes("Disable") ? authored.disable : authored.enable,
+    useActionMutation: (field: string) => [
+      field === "disable_workflow_trigger" ? authored.disable : authored.enable,
       { fetching: authored.fetching, error: null },
     ],
   };
@@ -140,8 +140,6 @@ vi.mock("@angee/refine", async (importOriginal) => {
 vi.mock("../documents.console", () => ({
   WorkflowTriggerAuthoringDocument: "WorkflowTriggerAuthoring",
   WorkflowSchedulePreviewDocument: "WorkflowSchedulePreview",
-  EnableWorkflowTriggerDocument: "EnableWorkflowTrigger",
-  DisableWorkflowTriggerDocument: "DisableWorkflowTrigger",
   WorkflowLaunchDocument: "WorkflowLaunch",
   WorkflowEventConditionDraftDocument: "WorkflowEventConditionDraft",
 }));
@@ -346,13 +344,10 @@ test("schedule mode changes preserve opaque rule JSON and submit one cadence", a
 test("activation reports business failures without reloading and reflects pending state", async () => {
   authored.enable.mockReset();
   authored.enable
-    .mockResolvedValueOnce({})
+    .mockResolvedValueOnce(undefined)
     .mockResolvedValueOnce({
-      enable_workflow_trigger: {
-        ok: false,
-        message: "The published workflow no longer matches this rule.",
-        validation_errors: [],
-      },
+      ok: false,
+      message: "The published workflow no longer matches this rule.",
     });
   const getOne = vi.fn(async () => ({
     data: {
@@ -417,7 +412,7 @@ test("activation reports business failures without reloading and reflects pendin
 test("disabling remains available with dirty rule edits and preserves them across reload", async () => {
   authored.disable.mockReset();
   authored.disable.mockResolvedValueOnce({
-    disable_workflow_trigger: { ok: true, message: "Disabled", validation_errors: [] },
+    ok: true, message: "Disabled",
   });
   const provider = {
     getApiUrl: () => "test://workflows",

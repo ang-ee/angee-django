@@ -9,6 +9,25 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — Inbox query performance
+
+- Personal inbox feeds deduplicate only when text search introduces multiplying
+  joins. Group pages obtain their header count from a SQL window; distinct root
+  totals remain exact when content or sender identities overlap.
+- Nexus result groups load previews on expansion through the native ListView.
+  Source accounts project only eligible channel IDs; relation choices use bounded
+  existence checks instead of scanning the full readable quote graph.
+- Explorer search combines indexed text matches and attachment filenames as
+  distinct message-ID candidates, retaining phrase, role and access boundaries.
+- Authored reads share in-flight requests across pane remounts when the data
+  provider ignores cancellation. Providers that consume the signal keep native
+  cancellation; explicit invalidation and live-connection catch-up remain intact.
+- Require django-zed-rebac 0.16.3 for lazy SQL authorization of acyclic,
+  non-caveated permissions. Shared access and revocation retain the engine's
+  semantics; recursive and caveated permissions keep its conservative fallback.
+  Grant expiry uses the application clock consistently; tuple-derived grants
+  for non-native identities use the queryset's database alias.
+
 ## Unreleased — upstream reuse
 
 - REBAC now owns schema introspection/rendering/extensions and scoped queryset

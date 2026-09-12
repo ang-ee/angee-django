@@ -10,23 +10,10 @@ from django.db import models
 
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.workflows_ocr.engines import OcrEngine
-
-
-class ImmutableEvidenceQuerySet(AngeeQuerySet[Any]):
-    """Prevent post-insert mutation and deletion through bulk ORM paths."""
-
-    def update(self, **kwargs: Any) -> int:
-        raise ValueError("Extraction evidence is immutable.")
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise ValueError("Extraction evidence is retained and cannot be deleted through the ORM.")
-
-
-class ImmutableEvidenceManager(AngeeManager.from_queryset(ImmutableEvidenceQuerySet)):  # type: ignore[misc]
-    """Manager exposing immutable evidence reads plus initial bulk insertion."""
+from angee.workflows_ocr.managers import ExtractionManager, ImmutableEvidenceManager
 
 
 class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
@@ -61,7 +48,7 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, related_name="+")
     object_id = models.CharField(max_length=255)
     target = GenericForeignKey("content_type", "object_id")
-    objects = ImmutableEvidenceManager()
+    objects = ExtractionManager()
 
     class Meta:
         abstract = True

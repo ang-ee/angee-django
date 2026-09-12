@@ -2,19 +2,18 @@ import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { PARTIES_OVERVIEW_SLOT } from "@angee/parties";
 import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { CalendarClock, History, Radar, Share2 } from "lucide-react";
+import { CalendarClock, History, Inbox, Radar, Share2 } from "lucide-react";
 
 import { enNexusMessages } from "./i18n";
 import { NetworkPane } from "./NetworkPane";
 import { NexusOverviewContribution } from "./NexusOverviewContribution";
 import { TimelinePane } from "./TimelinePane";
 
-// Nexus overlays parties rather than standing beside it: a tie and a cadence are
-// facts *about* a party, so they belong under the rail the party already owns. A
-// top-level root here would make nexus its own app (the chrome derives the app
-// rail from the menu roots), presenting an intelligence layer as a destination
-// separate from the people it describes.
+// The personal explorer is a Nexus destination. Relationship analytics retain
+// their established placement alongside the Parties records they describe.
 const nexusMenu: readonly BaseMenuItem[] = [
+  { id: "nexus", label: "Nexus", route: "nexus.inbox", icon: "nexus-inbox" },
+  { id: "nexus.inbox", label: "Inbox", route: "nexus.inbox", parentId: "nexus", icon: "nexus-inbox" },
   {
     id: "nexus.graph",
     label: "Graph",
@@ -41,6 +40,7 @@ const nexusMenu: readonly BaseMenuItem[] = [
 const nexus = defineBaseAddon({
   id: "nexus",
   routes: [
+    { name: "nexus.inbox", path: "/nexus/inbox", layout: "console", component: lazyRouteComponent(() => import("./InboxPage"), "InboxPage") },
     {
       name: "nexus.graph",
       path: "/nexus/graph",
@@ -51,7 +51,7 @@ const nexus = defineBaseAddon({
     ...resourcePageRoutes("nexus.cadences", "/nexus/cadences", lazyRouteComponent(() => import("./CadencesPage"), "CadencesPage"), "nexus.Cadence"),
   ],
   menus: nexusMenu,
-  icons: { cadence: CalendarClock, network: Share2, radar: Radar, timeline: History },
+  icons: { cadence: CalendarClock, network: Share2, radar: Radar, timeline: History, "nexus-inbox": Inbox },
   i18n: { nexus: enNexusMessages },
   // The cross-channel timeline rides the record chatter seam; the shell applies
   // each canonical model and record predicate before rendering the contribution.

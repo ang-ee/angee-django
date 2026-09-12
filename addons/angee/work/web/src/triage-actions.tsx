@@ -40,12 +40,15 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
     shouldInvalidate: (data) => data?.accept_task.ok === true,
   });
   const [decline] = useActionOutcomeMutation<ActionFieldName>("decline_task", {
+    idArgument: "task",
     invalidateModels: [TASK_MODEL],
   });
   const [snooze] = useActionOutcomeMutation<ActionFieldName>("snooze_task", {
+    idArgument: "task",
     invalidateModels: [TASK_MODEL],
   });
   const [duplicate] = useActionOutcomeMutation<ActionFieldName>("mark_task_duplicate", {
+    idArgument: "task",
     invalidateModels: [TASK_MODEL],
   });
 
@@ -92,7 +95,6 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
         submit: async (values, context) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return (await decline(task, {
-            task,
             reason: declineReason(declineReasonOptions, values.reason),
           })) ?? { ok: false, message: t("triage.action.failed") };
         },
@@ -111,7 +113,6 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
         submit: async (values, context) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return (await snooze(task, {
-            task,
             until: requiredString(values.until, "until"),
           })) ?? { ok: false, message: t("triage.action.failed") };
         },
@@ -133,7 +134,6 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
         submit: async (values, context) => {
           const task = recordId(context.record, t("triage.action.failed"));
           return (await duplicate(task, {
-            task,
             canonical: requiredString(values.canonical, "canonical"),
           })) ?? { ok: false, message: t("triage.action.failed") };
         },

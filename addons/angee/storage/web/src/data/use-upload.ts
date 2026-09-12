@@ -206,11 +206,10 @@ export function useStorageUpload(
   }, [fileResource, invalidate, onUploaded, patch, runOne]);
 
   const clearFinished = useCallback(() => {
-    setTasks((current) => {
-      current.filter((task) => FINISHED.has(task.status)).forEach((task) => sources.current.delete(task.id));
-      return current.filter((task) => !FINISHED.has(task.status));
-    });
-  }, []);
+    const finishedIds = new Set(tasks.filter((task) => FINISHED.has(task.status)).map((task) => task.id));
+    finishedIds.forEach((id) => sources.current.delete(id));
+    setTasks((current) => current.filter((task) => !finishedIds.has(task.id)));
+  }, [tasks]);
 
   return { tasks, upload, retry, clearFinished };
 }

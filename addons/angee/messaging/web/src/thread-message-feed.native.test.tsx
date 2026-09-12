@@ -84,7 +84,7 @@ test("real Refine transport sends fixed cuts and revalidation documents through 
   const feed = fixture();
   const { result, unmount } = renderHook(() => useThreadMessageFeed("thread-a"), { wrapper: feed.wrapper });
   await waitFor(() => expect(messageFeedRows(result.current.data)).toHaveLength(2));
-  expect(feed.custom.mock.calls[0]?.[0].meta.gqlVariables).toEqual({ threadId: "thread-a", beforeCursor: null, throughCursor: null, limit: 50 });
+  expect(feed.custom.mock.calls[0]?.[0].meta.gqlVariables).toEqual({ threadId: "thread-a", anchor: "", beforeCursor: null, throughCursor: null, limit: 50 });
   await act(async () => { await result.current.fetchNextPage({ cancelRefetch: false }); });
   expect(feed.custom.mock.calls[1]?.[0].meta.gqlVariables).toMatchObject({ beforeCursor: "opaque-message-2", throughCursor: null });
   feed.refresh();

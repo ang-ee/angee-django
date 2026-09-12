@@ -143,8 +143,9 @@ history uses native Query pages with domain-owned
   valibot schema (`safeParse`), never asserted into an application shape; a
   recursive shape a declarative schema cannot express may wrap its type guard
   in `v.custom`, keeping the parse boundary in the schema.
-- **Record-targeted action mutations are derived, not authored.** For a
-  `<field>(id: ID!, ...required scalar arguments): ActionResult` mutation, call
+- **ActionResult mutations with required arguments are derived, not authored.**
+  Codegen owns eligibility in `packages/app/bin/angee-web-codegen.mjs`: every
+  argument must be non-null without a default. Call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
   rendered-view code, or
   `useRecordActionMutation<ActionFieldName>("field")` for a rendered
@@ -153,7 +154,9 @@ history uses native Query pages with domain-owned
   variables are authored. The shared hook owns deriving the Hasura custom
   mutation and running it through refine `useCustomMutation`; the rendered record
   adapter owns binding it to `ActionContext` (record id, refresh,
-  missing-record handling, success hooks).
+  missing-record handling, success hooks). Set `idArgument` to the schema
+  argument that receives the record id when it is named differently (for example,
+  `"round"`); `null` on an outcome mutation sends only its explicit arguments.
   Don't hand-author these as `graphql()` documents or page-local
   `ctx.record.id → mutate → refresh` callbacks.
 - **A contributed record verb that needs input declares `args`.** A
@@ -333,11 +336,20 @@ history uses native Query pages with domain-owned
   row models through `useClientResourceViewSurface` over the fetched set for a
   `rowModel:"client"` resource; `RowsListView` remains the
   renderer for the genuinely non-resource in-memory case — the operator-daemon
-  quarantine, and an explorer-scoped collection that is not a Hasura resource.
+  quarantine and bounded computed projections.
   Storage's `FileBrowserContent` is the contrasting server-backed example: it
   composes `List` over `storage.File` with drive/folder base filters and
   server-side folder grouping because a drive can contain hundreds of thousands
   of rows.
+- **Large scoped projections use the native server collection seam.** Compose
+  `ListView.source` with `collectionQuery` and an explicit `ResourceQuery`
+  contract when the server projects rows from a changing record scope. The
+  authored document owns variables, results and count units; the shared list
+  owns filtering, grouping, virtualized rendering and independent group pages.
+  `CollectionTreeView` composes the same transport with native tree expansion
+  and child paging. Do not register a fictional model, infer available choices
+  from one server page, or filter/group that page in the browser. Bounded
+  in-memory fixtures still use `RowsListView`.
 - **Card presentation does not change the query boundary.** An ordinary grouped
   board over a server resource uses the same server groups, exact counts and
   per-group record pages as the grouped list. Deriving its lanes from a flat
@@ -677,6 +689,10 @@ Hard-won traps — the wise learn from others' mistakes
   `PageHeader`/`PageFooter`/`Statusline`/`ChatBar` compose it. Never hand-spell a
   bar's `h-*`/`px-*`/`py-*`/`border-b|t`/`bg-sheet*` again — route it through the
   recipe so the bars stay in lockstep.
+- **Console side-pane controls stay local.** Primary and secondary panes isolate
+  their ControlBand providers from the main host. An embedded collection opts
+  into native toolbar wrapping; its band and toolbar must both grow with their
+  contents. Opening a main record must not move a finder toolbar across panes.
 - **Form controls `extend` `widget-control`; never re-hand-roll
   invalid/readOnly/disabled.** `widgetControlSurfaceVariants` (over the
   `interactiveSurfaceVariants` base) owns the control surface — focus ring,

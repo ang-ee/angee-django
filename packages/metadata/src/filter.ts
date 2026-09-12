@@ -21,11 +21,44 @@ export class Filter {
     if (entries.length !== 1) return null;
     const [field] = entries[0]!;
     const lookup = filter.lookup(field);
-    if (typeof lookup?.exact === "string") return { field, value: lookup.exact, lookup: "exact" };
-    if (Array.isArray(lookup?.inList) && typeof lookup.inList[0] === "string") return { field, value: lookup.inList[0], lookup: "inList" };
+    if (typeof lookup?.exact === "string")
+      return { field, value: lookup.exact, lookup: "exact" };
+    if (
+      Array.isArray(lookup?.inList) &&
+      lookup.inList.length === 1 &&
+      typeof lookup.inList[0] === "string"
+    )
+      return { field, value: lookup.inList[0], lookup: "inList" };
     return null;
   }
   hasEntries(): boolean { return Object.keys(this.value).length > 0; }
+  /** Read an AND-only projection through its declared field comparisons.
+   * Authored transports with narrower Boolean syntax must reject OR/NOT rather
+   * than silently dropping predicates while translating to typed inputs. */
+  conjunctions(): readonly {
+    field: string;
+    operator: FilterOperator;
+    value: FilterValue;
+  }[] {
+    return Object.entries(this.value).flatMap(([field, operand]) => {
+      if (field === "AND")
+        return (operand as readonly QueryFilter[]).flatMap((branch) =>
+          Filter.from(branch).conjunctions(),
+        );
+      if (field === "OR" || field === "NOT")
+        throw new QueryParseError(
+          `filter.${field}`,
+          "this projection requires AND predicates",
+        );
+      return Object.entries(this.lookup(field) ?? {}).map(
+        ([operator, value]) => ({
+          field,
+          operator: operator as FilterOperator,
+          value,
+        }),
+      );
+    });
+  }
   and(value: unknown): QueryFilter {
     const right = Filter.from(value).value;
     if (!Object.keys(right).length) return this.value;
@@ -42,18 +75,55 @@ export class Filter {
   }
   withoutFields(fields: Iterable<string>): QueryFilter {
     const omitted = new Set(fields);
-    const remove = (filter: QueryFilter): QueryFilter => Object.fromEntries(
-      Object.entries(filter).flatMap(([field, operand]) => {
-        if (omitted.has(field)) return [];
-        if (field === "AND" || field === "OR") return [[field, (operand as readonly QueryFilter[]).map(remove)]];
-        if (field === "NOT") {
-          const child = remove(operand as QueryFilter);
-          return Object.keys(child).length ? [[field, child]] : [];
-        }
-        return [[field, operand]];
-      }),
-    );
+    const remove = (filter: QueryFilter): QueryFilter =>
+      Object.fromEntries(
+        Object.entries(filter).flatMap(([field, operand]) => {
+          if (omitted.has(field)) return [];
+          if (field === "OR")
+            return [[field, (operand as readonly QueryFilter[]).map(remove)]];
+          if (field === "AND") {
+            const branches = (operand as readonly QueryFilter[])
+              .map(remove)
+              .filter((branch) => Object.keys(branch).length);
+            return branches.length ? [[field, branches]] : [];
+          }
+          if (field === "NOT") {
+            const child = remove(operand as QueryFilter);
+            return Object.keys(child).length ? [[field, child]] : [];
+          }
+          return [[field, operand]];
+        }),
+      );
     return remove(this.value);
+  }
+  /** Keep declared fields through nested Boolean branches without losing their grouping. */
+  onlyFields(fields: Iterable<string>): QueryFilter {
+    const kept = new Set(fields);
+    const names = (filter: QueryFilter): string[] =>
+      Object.entries(filter).flatMap(([field, operand]) => {
+        if (field === "AND" || field === "OR")
+          return (operand as readonly QueryFilter[]).flatMap(names);
+        if (field === "NOT") return names(operand as QueryFilter);
+        return [field];
+      });
+    return this.withoutFields(
+      names(this.value).filter((field) => !kept.has(field)),
+    );
+  }
+  /** An authored preset replaces the selected fields as a unit. Single-value facets toggle individually. */
+  togglePreset(preset: QueryFilter): QueryFilter {
+    const value = Filter.from(preset);
+    const fields = Object.keys(value.value);
+    const remaining = this.withoutFields(fields);
+    return this.hasPreset(preset)
+      ? remaining
+      : Filter.combine(remaining, preset);
+  }
+  hasPreset(preset: QueryFilter): boolean {
+    return (
+      JSON.stringify(this.onlyFields(Object.keys(preset))) ===
+      JSON.stringify(Filter.from(preset).value)
+    );
   }
   facetValues(facet: FilterFacet | string): readonly string[] {
     const lookup = this.lookup(typeof facet === "string" ? facet : facet.field);

@@ -521,6 +521,9 @@ importers:
       '@angee/messaging':
         specifier: workspace:*
         version: link:../../messaging/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
       '@angee/parties':
         specifier: workspace:*
         version: link:../../parties/web

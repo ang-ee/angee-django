@@ -99,11 +99,9 @@ class PartyType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Person)
-class PersonType(AngeeNode):
+class PersonType(PartyType):
     """GraphQL projection of a person."""
 
-    display_name: auto
-    notes: auto
     name_prefix: auto
     given_name: auto
     additional_name: auto
@@ -113,8 +111,6 @@ class PersonType(AngeeNode):
     birthday: auto
     anniversary: auto
     folder: "ContactFolderType | None"
-    created_at: auto
-    updated_at: auto
 
     @strawberry_django.field(only=["id"])
     def circle_names(self) -> list[str]:
@@ -130,15 +126,11 @@ class PersonType(AngeeNode):
 
 
 @strawberry_django.type(Organization)
-class OrganizationType(AngeeNode):
+class OrganizationType(PartyType):
     """GraphQL projection of an organisation."""
 
-    display_name: auto
-    notes: auto
     legal_name: auto
     domain: auto
-    created_at: auto
-    updated_at: auto
 
 
 @strawberry_django.type(Handle)

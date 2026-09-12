@@ -27,9 +27,10 @@ import hashlib
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
+from zoneinfo import ZoneInfo
 
 from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
@@ -41,11 +42,12 @@ from rebac import PermissionDenied, current_actor, system_context
 
 from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.pagination import InvalidKeysetCursor, KeysetOrder
+from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import canonical_record_target
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.events import message_ingested
+from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
 from angee.parties.mixins import LinkSource
 
@@ -305,7 +307,6 @@ def _message_search_query(term: str) -> models.Q:
 # the window/cursor filter on the exact `(sent_at, pk)` tuple the feed displays by —
 # a backfilled email (older send time, newer pk) cannot skip, duplicate, or misorder
 # at a page boundary. These express the keyset comparison against an `(at, pk)` anchor.
-_MESSAGE_ORDER_ANNOTATION = Coalesce("sent_at", "created_at")
 
 
 _MESSAGE_ORDER = KeysetOrder("_order_at")
@@ -401,6 +402,11 @@ def _parsed_sync_hash(
 
 class FragmentManager(AngeeManager):
     """Content-addressed text store: one row per distinct (null-stripped) text."""
+
+    def search_query(self, term: str, *, search_type: str = "plain") -> SearchQuery:
+        """Build a query with the same configuration as this store's vectors."""
+
+        return SearchQuery(strip_null_bytes(term or "").strip(), search_type=search_type, config=_SEARCH_CONFIG)
 
     def upsert(self, *, text: str, kind: str = "paragraph", owner_id: Any = None) -> Any:
         """Get-or-create a fragment by the SHA-256 of its cleaned (null-stripped, trimmed) text.
@@ -715,11 +721,16 @@ class ThreadAttachmentManager(AngeeManager):
         record._require_record_access("read")
         content_type, object_id = canonical_record_target(record)
         visible_threads = apps.get_model("messaging", "Thread").objects.all().scoped().values("pk")
-        return self.all().scoped().select_related("thread").filter(
-            content_type=content_type,
-            object_id=object_id,
-            role="source",
-            thread_id__in=models.Subquery(visible_threads),
+        return (
+            self.all()
+            .scoped()
+            .select_related("thread")
+            .filter(
+                content_type=content_type,
+                object_id=object_id,
+                role="source",
+                thread_id__in=models.Subquery(visible_threads),
+            )
         )
 
     def bind_source_thread(
@@ -889,9 +900,7 @@ class ThreadAttachmentManager(AngeeManager):
             locked_thread_ids = sorted({row["thread_id"] for row in attachments})
             list(thread_model._base_manager.select_for_update().filter(pk__in=locked_thread_ids).values_list("pk"))
             attachment_ids = [row["pk"] for row in attachments]
-            chatter_thread_ids = {
-                row["thread_id"] for row in attachments if row["role"] == "chatter"
-            }
+            chatter_thread_ids = {row["thread_id"] for row in attachments if row["role"] == "chatter"}
             self.model._base_manager.filter(pk__in=attachment_ids).delete()
             orphaned_chatter_ids = [
                 thread_id
@@ -1005,7 +1014,9 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         """Anchor a fresh follower's receipt at the latest pre-join message."""
 
         message_model = apps.get_model("messaging", "Message")
-        queryset = message_model._base_manager.filter(thread=thread).annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
+        queryset = message_model._base_manager.filter(thread=thread).annotate(
+            _order_at=MessageQuerySet.chronological_time()
+        )
         if history_before is not None:
             queryset = queryset.filter(_MESSAGE_ORDER.before(history_before.chronological_key))
         latest = queryset.order_by("-_order_at", "-pk").first()
@@ -1039,7 +1050,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         if target is None:
             target = (
                 message_model._base_manager.filter(thread=thread)
-                .annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
+                .annotate(_order_at=MessageQuerySet.chronological_time())
                 .order_by("-_order_at", "-pk")
                 .first()
             )
@@ -1096,7 +1107,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             return message_model._base_manager.none()
         queryset = (
             message_model._base_manager.filter(thread=thread)
-            .annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
+            .annotate(_order_at=MessageQuerySet.chronological_time())
             .filter(follower.subscribed_subtype_q())
         )
         if follower.last_read_message is None:
@@ -1880,6 +1891,17 @@ class ReactionManager(AngeeManager):
 class MessageQuerySet(AngeeQuerySet[Any]):
     """Chainable read scopes for chatter/ingest messages."""
 
+    @staticmethod
+    def chronological_time(prefix: str = "") -> Any:
+        """Message chronology as a SQL expression, including through a joined message."""
+
+        return Coalesce(f"{prefix}sent_at", f"{prefix}created_at")
+
+    def explorer(self) -> MessageInbox:
+        """Compose personal-inbox reads from this collection's current scope."""
+
+        return MessageInbox(self)
+
     def for_thread(self, thread: Any) -> MessageQuerySet:
         """Return messages belonging to one thread."""
 
@@ -1907,7 +1929,7 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         in the inbox.
         """
 
-        return cast(MessageQuerySet, self.exclude(thread__attachments__role="chatter").distinct())
+        return cast(MessageQuerySet, self.exclude(thread__attachments__role="chatter"))
 
     def searching(self, term: str) -> MessageQuerySet:
         """Return messages matching one Odoo-style chatter search token."""
@@ -2003,7 +2025,7 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         substring predicates of :meth:`searching` would scan.
         """
 
-        query = SearchQuery(strip_null_bytes(term or "").strip(), config=_SEARCH_CONFIG)
+        query = apps.get_model("messaging", "Fragment").objects.search_query(term)
         return cast(MessageQuerySet, self.filter(parts__fragment__search=query))
 
     def involving_parties(self, parties: Any) -> MessageQuerySet:
@@ -2013,7 +2035,8 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         subtree) or a concrete iterable (one party). Participants are Handle-keyed
         and ``Handle.party`` is the resolution-materialised owner, so one join
         answers "every message exchanged with these parties across channels".
-        Distinct because one message may carry several matching handles.
+        The participant subquery preserves one row per message even when several
+        handles match.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -2036,10 +2059,13 @@ class MessageQuerySet(AngeeQuerySet[Any]):
     def for_feed(self, search: str = "") -> MessageQuerySet:
         """Apply current read scope, search and tuple order to an inbox scope."""
 
-        queryset = self.scoped().annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
-        for term in self._feed_search(search).split():
+        queryset = self.scoped().annotate(_order_at=MessageQuerySet.chronological_time())
+        terms = self._feed_search(search).split()
+        for term in terms:
             queryset = queryset.searching(term)
-        return cast(MessageQuerySet, queryset.distinct().order_by("-_order_at", "-pk"))
+        if terms:
+            queryset = queryset.distinct()
+        return cast(MessageQuerySet, queryset.order_by("-_order_at", "-pk"))
 
     @staticmethod
     def _feed_search(search: str) -> str:
@@ -2053,8 +2079,9 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         before_cursor: str | None = None,
         after_cursor: str | None = None,
         through_cursor: str | None = None,
+        anchor: str = "",
         limit: int = 50,
-    ) -> dict[str, Any]:
+    ) -> KeysetPage[Any]:
         """Read a currently authorized, newest-first fixed or discovery window.
 
         ``before_cursor`` is an exclusive upper cut; ``through_cursor`` is an
@@ -2066,19 +2093,38 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         """
 
         search = self._feed_search(search)
+        queryset = self.for_feed(search)
+        around = None
+        if anchor and before_cursor is None and after_cursor is None:
+            kind, _, value = anchor.partition(":")
+            if kind == "message":
+                around = queryset.from_public_id(value)
+            elif kind == "date":
+                day, _, zone = value.partition("@")
+                instant = datetime.combine(
+                    datetime.strptime(day, "%Y-%m-%d").date(),
+                    time.min,
+                    ZoneInfo(zone) if zone else timezone.get_current_timezone(),
+                )
+                around = queryset.filter(_order_at__gte=instant).order_by("_order_at", "pk").first() or queryset.first()
+            else:
+                raise ValueError("Unknown transcript anchor.")
+            if around is None and kind == "message":
+                raise ValueError("Message unavailable in this conversation.")
         try:
-            page = self.for_feed(search).keyset_page(
+            page = queryset.keyset_page(
                 order=_MESSAGE_ORDER,
                 cursor_scope=(scope, search),
                 cursor_salt="angee.messaging.feed.v1",
                 before_cursor=before_cursor,
                 after_cursor=after_cursor,
                 through_cursor=through_cursor,
+                around=around,
                 limit=limit,
             )
         except InvalidKeysetCursor as error:
             raise ValueError("Invalid message feed cursor for this scope.") from error
-        return {"messages": page.pop("rows"), **page}
+        return page
 
     def feed_revalidate(self, ids: list[str], *, search: str = "") -> dict[str, Any]:
         """Partition at most 200 submitted IDs into current survivors and absences.
@@ -2126,7 +2172,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             .for_thread(attachment.thread)
             .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
             .prefetch_related("parts__fragment", "parts__file", "tracking_values", "reactions__handle", "stars")
-            .annotate(_order_at=_MESSAGE_ORDER_ANNOTATION)
+            .annotate(_order_at=MessageQuerySet.chronological_time())
         )
         search = strip_null_bytes(search or "").strip()
         for term in (item for item in _WS_RE.split(search) if item):
@@ -2569,17 +2615,21 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         handle_model = apps.get_model("parties", "Handle")
         part_model = apps.get_model("messaging", "Part")
         envelope_metadata = _bounded_message_metadata(parsed.metadata)
-        thread = explicit_thread if explicit_thread is not None else thread_model.objects.resolve(
-            platform=parsed.platform,
-            channel=channel,
-            subject=parsed.subject,
-            in_reply_to=parsed.in_reply_to,
-            references=parsed.references,
-            message_external_id=parsed.external_id,
-            owner_id=owner_id,
-            modality=modality,
-            visibility=visibility,
-            thread=parsed.thread,
+        thread = (
+            explicit_thread
+            if explicit_thread is not None
+            else thread_model.objects.resolve(
+                platform=parsed.platform,
+                channel=channel,
+                subject=parsed.subject,
+                in_reply_to=parsed.in_reply_to,
+                references=parsed.references,
+                message_external_id=parsed.external_id,
+                owner_id=owner_id,
+                modality=modality,
+                visibility=visibility,
+                thread=parsed.thread,
+            )
         )
         sender = None
         if parsed.sender is not None:
@@ -2722,7 +2772,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if not reply_to or reply_to == parsed.external_id:
             return None
         queryset = _external_id_annotated(self.model._base_manager).filter(
-            _external_id_q(reply_to), platform=parsed.platform,
+            _external_id_q(reply_to),
+            platform=parsed.platform,
         )
         if explicit_thread is not None:
             queryset = queryset.filter(channel=channel, thread=explicit_thread)
@@ -2903,7 +2954,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
         return cast(
             PartQuerySet,
-            self.exclude(message__thread__attachments__role="chatter").distinct(),
+            self.exclude(message__thread__attachments__role="chatter"),
         )
 
     def attachments(self) -> PartQuerySet:

@@ -181,6 +181,9 @@ function columnDescriptor<TRow extends object = Record<string, unknown>>(
     ...(props.aggregate !== undefined ? { aggregate: props.aggregate } : {}),
     ...(props.align !== undefined ? { align: props.align } : {}),
     ...(props.render !== undefined ? { render: props.render } : {}),
+    ...(props.interactive !== undefined
+      ? { interactive: props.interactive }
+      : {}),
     ...(props.tone !== undefined ? { tone: props.tone } : {}),
   }));
 }

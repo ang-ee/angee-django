@@ -87,6 +87,8 @@ export interface SelectChoice {
   value: string;
   label: React.ReactNode;
   disabled?: boolean;
+  /** Optional native option-group label. Choices retain declaration order. */
+  group?: string;
 }
 
 export type SelectRootProps<
@@ -379,6 +381,16 @@ export const Select = function Select({
     () => new Map(options.map((option) => [option.value, option.label])),
     [options],
   );
+  const groups = React.useMemo(() => {
+    const result = new Map<string, SelectChoice[]>();
+    for (const option of options) {
+      const key = option.group ?? "";
+      const choices = result.get(key) ?? [];
+      choices.push(option);
+      result.set(key, choices);
+    }
+    return [...result];
+  }, [options]);
 
   function handleValueChange(
     nextValue: string | null,
@@ -416,21 +428,26 @@ export const Select = function Select({
         <SelectPositioner sideOffset={4}>
           <SelectContent size={size} className={contentClassName}>
             <SelectList>
-              {options.map((option) => (
-                <SelectItem
-                  key={option.value}
-                  value={option.value}
-                  disabled={option.disabled}
-                  label={
-                    typeof option.label === "string"
-                      ? option.label
-                      : undefined
-                  }
-                  size={size}
-                >
-                  <SelectItemText>{option.label}</SelectItemText>
-                  <SelectItemIndicator />
-                </SelectItem>
+              {groups.map(([label, choices]) => (
+                <SelectGroup key={label}>
+                  {label ? <SelectLabel>{label}</SelectLabel> : null}
+                  {choices.map((option) => (
+                    <SelectItem
+                      key={option.value}
+                      value={option.value}
+                      disabled={option.disabled}
+                      label={
+                        typeof option.label === "string"
+                          ? option.label
+                          : undefined
+                      }
+                      size={size}
+                    >
+                      <SelectItemText>{option.label}</SelectItemText>
+                      <SelectItemIndicator />
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               ))}
             </SelectList>
           </SelectContent>

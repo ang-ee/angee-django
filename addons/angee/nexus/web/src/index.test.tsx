@@ -10,6 +10,7 @@ describe("nexus addon manifest", () => {
 
   test("registers the graph explorer and the ties/cadence resource pages", () => {
     expect((nexus.routes ?? []).map((route) => route.name)).toEqual([
+      "nexus.inbox",
       "nexus.graph",
       "nexus.ties",
       "nexus.ties.record",
@@ -18,17 +19,15 @@ describe("nexus addon manifest", () => {
     ]);
   });
 
-  test("overlays the parties rail instead of standing up its own app", () => {
-    // The chrome derives the app rail from the menu roots, so contributing a root
-    // here would make nexus a destination beside parties rather than an
-    // intelligence layer over it. Every item hangs off the rail parties owns.
+  test("registers the Nexus inbox and retains relationship analytics under Parties", () => {
     const menus = nexus.menus ?? [];
     expect(menus.map((item) => item.route)).toEqual([
+      "nexus.inbox", "nexus.inbox",
       "nexus.graph",
       "nexus.ties",
       "nexus.cadences",
     ]);
-    expect(menus.map((item) => item.parentId)).toEqual(["parties", "parties", "parties"]);
+    expect(menus.map((item) => item.parentId)).toEqual([undefined, "nexus", "parties", "parties", "parties"]);
     expect(menus.some((item) => item.children)).toBe(false);
   });
 

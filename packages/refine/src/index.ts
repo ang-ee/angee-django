@@ -202,6 +202,7 @@ export {
   type AuthoredKeysetFeedOptions,
   type KeysetRow,
   type KeysetFeedPage,
+  type KeysetFeedCursor,
   type KeysetFeedWindow,
   type KeysetFeedRevalidation,
 } from "./dialect/keyset-feed";

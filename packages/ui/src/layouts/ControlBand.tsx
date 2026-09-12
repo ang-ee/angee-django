@@ -4,19 +4,10 @@ import { cn } from "../lib/cn";
 import { barVariants } from "./bar";
 import { createLayoutBand } from "./layout-band";
 
-const band = createLayoutBand(
-  "div",
-  barVariants({
-    height: "control",
-    edge: "bottom",
-    tone: "sheet",
-    pad: "flush",
-    gap: 3,
-  }),
-);
+const band = createLayoutBand("div", "");
 
 export const controlBandItemClassName =
-  "h-full min-h-0 flex-1 border-b-0 bg-transparent px-0 py-0";
+  "h-full min-h-0 min-w-0 flex-1 border-b-0 bg-transparent px-0 py-0";
 
 export interface ControlBandProviderProps {
   children: React.ReactNode;
@@ -49,5 +40,20 @@ export interface ControlBandProps {
  * layout above (standalone/test) it renders the band inline.
  */
 export function ControlBand({ wrap = false, className, ...props }: ControlBandProps): React.ReactElement | React.ReactPortal | null {
-  return <band.Band className={cn(wrap && "h-auto min-h-control-h flex-wrap py-2", className)} {...props} />;
+  return (
+    <band.Band
+      className={cn(
+        barVariants({
+          height: wrap ? "controlMin" : "control",
+          edge: "bottom",
+          tone: "sheet",
+          pad: wrap ? "comfortable" : "flush",
+          gap: 3,
+        }),
+        wrap && "flex-wrap",
+        className,
+      )}
+      {...props}
+    />
+  );
 }

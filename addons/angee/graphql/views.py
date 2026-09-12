@@ -41,7 +41,15 @@ def csrf_token(request: HttpRequest) -> JsonResponse:
     """Set the CSRF cookie and return its token for the SPA to echo.
 
     The session-cookie GraphQL endpoints are CSRF-protected; a browser client
-    fetches this once and sends the token as ``X-CSRFToken`` on every mutation.
+    learns the cookie name here and sends its current value as ``X-CSRFToken``.
+    Login rotates the cookie, so clients must not retain a pre-login token.
     """
 
-    return JsonResponse({"token": get_token(request)})
+    return JsonResponse(
+        {
+            "token": get_token(request),
+            "cookieName": (
+                None if settings.CSRF_USE_SESSIONS or settings.CSRF_COOKIE_HTTPONLY else settings.CSRF_COOKIE_NAME
+            ),
+        }
+    )

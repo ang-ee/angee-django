@@ -42,6 +42,9 @@ export {
   DEFAULT_LOGIN_PATH,
 } from "./runtime";
 export {
+  RECORD_NAVIGATION_SEARCH_KEY,
+  RECORD_TAB_SEARCH_KEY,
+  RECORD_SEARCH_KEYS,
   createRouteHref,
   routeParameterName,
   routeSearchString,

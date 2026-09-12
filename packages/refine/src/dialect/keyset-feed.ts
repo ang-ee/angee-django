@@ -26,7 +26,13 @@ export interface KeysetFeedWindow<TRow extends KeysetRow> {
   has_older: boolean;
   has_more_in_window: boolean;
   has_older_than_through: boolean;
+  newer_cursor?: string | null;
+  has_newer?: boolean;
+  has_newer_than_before?: boolean;
 }
+
+/** Native infinite-query page parameters distinguish older and newer discovery. */
+export type KeysetFeedCursor = string | null | { after: string } | { start: true };
 
 /** Every requested ID appears exactly once as a survivor or an absence. */
 export interface KeysetFeedRevalidation<TRow extends KeysetRow> {
@@ -40,6 +46,9 @@ export interface KeysetFeedPage<TRow extends KeysetRow> {
   through: string | null;
   hasOlder: boolean;
   count: number;
+  before?: string | null;
+  newer?: string | null;
+  hasNewer?: boolean;
 }
 
 interface KeysetFeedReads<TRow extends KeysetRow> {
@@ -55,6 +64,7 @@ interface KeysetFeedReads<TRow extends KeysetRow> {
     ids: string[],
     context: QueryFunctionContext,
   ) => Promise<KeysetFeedRevalidation<TRow>>;
+  newer?: (after: string, limit: number, context: QueryFunctionContext) => Promise<KeysetFeedWindow<TRow>>;
 }
 
 /**
@@ -69,45 +79,57 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
   client: QueryClient,
   reads: KeysetFeedReads<TRow>,
 ): ReturnType<typeof infiniteQueryOptions<
-  KeysetFeedPage<TRow>, Error, InfiniteData<KeysetFeedPage<TRow>, string | null>,
-  QueryKey, string | null
+  KeysetFeedPage<TRow>, Error, InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>,
+  QueryKey, KeysetFeedCursor
 >> {
   type Page = KeysetFeedPage<TRow>;
-  const cached = () => client.getQueryData<InfiniteData<Page, string | null>>(reads.queryKey);
+  const cached = () => client.getQueryData<InfiniteData<Page, KeysetFeedCursor>>(reads.queryKey);
   if (!Number.isInteger(reads.pageSize) || reads.pageSize < 1 || reads.pageSize > 200) {
     throw new Error("Keyset feed page size must be between 1 and 200.");
   }
-  return infiniteQueryOptions<Page, Error, InfiniteData<Page, string | null>, QueryKey, string | null>({
+  return infiniteQueryOptions<Page, Error, InfiniteData<Page, KeysetFeedCursor>, QueryKey, KeysetFeedCursor>({
     queryKey: reads.queryKey,
-    initialPageParam: null,
+    initialPageParam: { start: true },
     placeholderData: undefined,
     async queryFn(context): Promise<Page> {
       const previous = cached();
-      const index = previous?.pageParams.indexOf(context.pageParam) ?? -1;
+      const index = previous?.pageParams.findIndex(param => JSON.stringify(param ?? { start: true }) === JSON.stringify(context.pageParam ?? { start: true })) ?? -1;
       const oldPage = index < 0 ? undefined : previous?.pages[index];
       const owned = new Set(previous?.pages.flatMap((page) => page.rows.map((row) => row.id)));
+      const newer = context.pageParam !== null && typeof context.pageParam === "object" && "after" in context.pageParam
+        ? context.pageParam : null;
+      const older = typeof context.pageParam === "string" ? context.pageParam : null;
       if (!oldPage || oldPage.through === null) {
-        const page = await reads.window(context.pageParam, null, reads.pageSize, context);
+        if (newer && !reads.newer) throw new Error("Keyset feed does not support newer-page reads.");
+        const page = newer && reads.newer
+          ? await reads.newer(newer.after, reads.pageSize, context)
+          : await reads.window(older, null, reads.pageSize, context);
         context.signal.throwIfAborted();
         return {
           rows: page.rows.filter((row) => !owned.has(row.id)),
           through: page.older_cursor,
           hasOlder: page.has_older,
           count: page.count,
+          before: newer ? page.newer_cursor : undefined,
+          newer: page.newer_cursor,
+          hasNewer: page.has_newer,
         };
       }
 
       // These indexes contain IDs, live only for this request, and retain no rows.
-      const earlierIds = new Set(previous!.pages.slice(0, index).flatMap((page) => page.rows.map((row) => row.id)));
+      if (!previous) throw new Error("Keyset feed lost its retained page context.");
+      const earlierIds = new Set(previous.pages.slice(0, index).flatMap((page) => page.rows.map((row) => row.id)));
       const mine = [...new Set(oldPage.rows.map((row) => row.id).filter((id) => !earlierIds.has(id)))];
       const fresh: TRow[] = [];
       const freshIds = new Set<string>();
       const visited = new Set<string | null>();
-      let before = context.pageParam;
+      let before = newer ? oldPage.before ?? null : older;
       let page: KeysetFeedWindow<TRow>;
+      let firstWindow: KeysetFeedWindow<TRow> | undefined;
       do {
         visited.add(before);
         page = await reads.window(before, oldPage.through, reads.pageSize, context);
+        firstWindow ??= page;
         context.signal.throwIfAborted();
         for (const row of page.rows) {
           if (!owned.has(row.id) && !freshIds.has(row.id)) {
@@ -138,19 +160,30 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
         through: oldPage.through,
         hasOlder: page.has_older_than_through,
         count: page.count,
+        before: oldPage.before,
+        newer: newer ? oldPage.newer : firstWindow.newer_cursor,
+        hasNewer: newer ? firstWindow.has_newer_than_before : firstWindow.has_newer,
       };
     },
     getNextPageParam(lastPage, allPages) {
       // Native sequential refetch must not move older cuts with a growing head.
       const savedNext = cached()?.pageParams[allPages.length];
-      return savedNext !== undefined ? savedNext : lastPage.hasOlder ? lastPage.through ?? undefined : undefined;
+      // Null is the original anchored page after newer pages were prepended;
+      // TanStack reserves null for exhaustion, so keep that saved boundary as
+      // an explicit first-window cursor during sequential refetch.
+      if (savedNext === null) return { start: true };
+      if (savedNext !== undefined) return savedNext;
+      return lastPage.hasOlder ? lastPage.through ?? undefined : undefined;
+    },
+    getPreviousPageParam(firstPage) {
+      return reads.newer && firstPage.hasNewer && firstPage.newer ? { after: firstPage.newer } : undefined;
     },
   });
 }
 
 /** Derive display order without retaining a second copy outside Query's pages. */
 export function keysetFeedRows<TRow extends KeysetRow>(
-  data: InfiniteData<KeysetFeedPage<TRow>, string | null> | undefined,
+  data: InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor> | undefined,
   compare: (left: TRow, right: TRow) => number,
 ): TRow[] {
   const seen = new Set<string>();
@@ -182,6 +215,8 @@ export interface AuthoredKeysetFeedOptions<
     document: TWindow;
     variables: (before: string | null, through: string | null, limit: number) => AuthoredVariables<TWindow>;
     select: (data: DocumentData<TWindow>) => KeysetFeedWindow<TRow>;
+    /** Optional native newer-page read using the same operation and scope. */
+    newerVariables?: (after: string, limit: number) => AuthoredVariables<TWindow>;
   };
   revalidate: {
     document: TRevalidation;
@@ -196,7 +231,7 @@ export function useAuthoredKeysetFeed<
   TWindow extends AuthoredDocument,
   TRevalidation extends AuthoredDocument,
 >(options: AuthoredKeysetFeedOptions<TRow, TWindow, TRevalidation>): UseInfiniteQueryResult<
-  InfiniteData<KeysetFeedPage<TRow>, string | null>, Error
+  InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>, Error
 > {
   const client = useQueryClient();
   const dataProvider = useDataProvider();
@@ -216,6 +251,11 @@ export function useAuthoredKeysetFeed<
         dataProvider, provider, window.document, window.variables(before, through, limit), context,
       ),
     ),
+    newer: window.newerVariables ? async (after, limit, context) => window.select(
+      await requestAuthoredData<DocumentData<TWindow>>(
+        dataProvider, provider, window.document, window.newerVariables!(after, limit), context,
+      ),
+    ) : undefined,
     revalidate: async (ids, context) => revalidate.select(
       await requestAuthoredData<DocumentData<TRevalidation>>(
         dataProvider, provider, revalidate.document, revalidate.variables(ids), context,

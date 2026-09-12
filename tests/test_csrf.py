@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from django.http import HttpRequest, HttpResponse
 from django.test import Client, override_settings
 from django.urls import path
 
 from angee.graphql.views import csrf_token
+from angee.iam.autoconfig import settings
 
 
 def ok_view(request: HttpRequest) -> HttpResponse:
@@ -55,3 +58,25 @@ def test_cookie_graphql_posts_need_csrf_but_bearer_posts_are_exempt() -> None:
     assert rejected.status_code == 403
     assert accepted.status_code == 200
     assert bearer.status_code == 200
+
+
+def test_development_cookie_names_are_stable_and_isolated(tmp_path: Path) -> None:
+    """Local stacks isolate cookies without overriding explicit host settings."""
+
+    first = settings({"DEBUG": True, "BASE_DIR": tmp_path / "first"})
+    second = settings({"DEBUG": True, "BASE_DIR": tmp_path / "second"})
+    assert first == settings({"DEBUG": True, "BASE_DIR": tmp_path / "first"})
+    assert first["SESSION_COOKIE_NAME"] != second["SESSION_COOKIE_NAME"]
+    assert first["CSRF_COOKIE_NAME"] != second["CSRF_COOKIE_NAME"]
+    assert settings({"DEBUG": False, "BASE_DIR": tmp_path}) == {}
+    assert (
+        settings(
+            {
+                "DEBUG": True,
+                "BASE_DIR": tmp_path,
+                "SESSION_COOKIE_NAME": "explicit",
+                "CSRF_COOKIE_NAME": "explicit_csrf",
+            }
+        )
+        == {}
+    )

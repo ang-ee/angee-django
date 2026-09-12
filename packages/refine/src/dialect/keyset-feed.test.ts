@@ -15,6 +15,45 @@ const message = (position: number, values: { id?: string; body?: string; visible
   ...values,
 });
 
+test("an anchored native feed grows both ways and revalidates newer windows", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  let rows = [1, 2, 3, 4, 5, 6].map(position => message(position));
+  const options = keysetFeedOptions(client, {
+    queryKey: ["anchored"], pageSize: 2,
+    async window(before, through, limit) {
+      const upper = before ? Number(before) : 5;
+      const selected = rows.filter(row => row.position < upper && (!through || row.position >= Number(through))).sort((a, b) => b.position - a.position).slice(0, limit);
+      return { rows: selected, count: rows.length, older_cursor: selected.at(-1)?.position.toString() ?? null, newer_cursor: selected[0]?.position.toString() ?? null,
+        has_older: Boolean(selected.length && rows.some(row => row.position < selected.at(-1)!.position)),
+        has_newer: Boolean(selected.length && rows.some(row => row.position > selected[0]!.position)),
+        has_more_in_window: false, has_older_than_through: Boolean(through && rows.some(row => row.position < Number(through))),
+        has_newer_than_before: Boolean(before && rows.some(row => row.position > Number(before))) };
+    },
+    async newer(after, limit) {
+      const selected = rows.filter(row => row.position > Number(after)).sort((a, b) => a.position - b.position).slice(0, limit).reverse();
+      return { rows: selected, count: rows.length, older_cursor: selected.at(-1)?.position.toString() ?? null, newer_cursor: selected[0]?.position.toString() ?? null,
+        has_older: true, has_newer: Boolean(selected.length && rows.some(row => row.position > selected[0]!.position)), has_more_in_window: false, has_older_than_through: false };
+    },
+    async revalidate(ids) { return { rows: rows.filter(row => ids.includes(row.id)), absent_ids: ids.filter(id => !rows.some(row => row.id === id)) }; },
+  });
+  const observer = new InfiniteQueryObserver(client, options);
+  const stop = observer.subscribe(() => {});
+  try {
+    await observer.refetch();
+    expect(observer.getCurrentResult().hasPreviousPage).toBe(true);
+    await observer.fetchPreviousPage(); await observer.fetchNextPage();
+    expect(orderedRows(observer.getCurrentResult().data).map(row => row.position)).toEqual([6, 5, 4, 3, 2, 1]);
+    rows = rows.filter(row => row.position !== 5);
+    await observer.refetch();
+    expect(orderedRows(observer.getCurrentResult().data).map(row => row.position)).toEqual([6, 4, 3, 2, 1]);
+    expect(observer.getCurrentResult().hasPreviousPage).toBe(false);
+    rows.push(message(7)); await observer.refetch();
+    expect(observer.getCurrentResult().hasPreviousPage).toBe(true);
+    await observer.fetchPreviousPage();
+    expect(orderedRows(observer.getCurrentResult().data).map(row => row.position)).toEqual([7, 6, 4, 3, 2, 1]);
+  } finally { stop(); client.clear(); }
+});
+
 function fixture(gcTime = Infinity) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   let rows = Array.from({ length: 8 }, (_, index) => message(8 - index));

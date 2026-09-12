@@ -9,7 +9,7 @@ export function graphQLWebSocketUrl(endpoint: string, origin?: string): string {
   return url.toString();
 }
 
-/** A deduplicating, cacheable source of the Django CSRF token. */
+/** A deduplicating source of Django's current CSRF token, including login rotation. */
 export interface CsrfTokenProvider {
   token(): Promise<string | null>;
   clear(): void;
@@ -25,28 +25,33 @@ export function createCsrfTokenProvider(
 ): CsrfTokenProvider {
   const endpoint = options.endpoint ?? "/auth/csrf/";
   const fetchImpl = options.fetch ?? globalThis.fetch;
-  let cached: string | null = null;
+  let cookieName: string | null = null;
   let inFlight: Promise<string | null> | null = null;
 
   async function load(): Promise<string | null> {
     const response = await fetchImpl(endpoint, { credentials: "include" });
     if (!response.ok) return null;
-    const body = (await response.json()) as { token?: unknown };
+    const body = (await response.json()) as { token?: unknown; cookieName?: unknown };
+    cookieName = typeof body.cookieName === "string" ? body.cookieName : null;
     return typeof body.token === "string" ? body.token : null;
   }
 
   return {
     async token() {
-      if (cached !== null) return cached;
-      inFlight ??= load().then((token) => {
-        cached = token;
-        inFlight = null;
-        return token;
-      });
+      // Django accepts the unmasked CSRF cookie. Read it for every request:
+      // login can rotate it in another GraphQL client or another browser tab.
+      if (cookieName && typeof document !== "undefined") {
+        const prefix = `${encodeURIComponent(cookieName)}=`;
+        const cookie = document.cookie.split(";").map(value => value.trim()).find(value => value.startsWith(prefix));
+        if (cookie) return decodeURIComponent(cookie.slice(prefix.length));
+      }
+      // HttpOnly/session-backed CSRF has no readable cookie; fetch a fresh
+      // token, sharing only concurrent reads rather than caching across logins.
+      inFlight ??= load().finally(() => { inFlight = null; });
       return inFlight;
     },
     clear() {
-      cached = null;
+      cookieName = null;
       inFlight = null;
     },
   };

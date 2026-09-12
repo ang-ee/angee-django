@@ -8,15 +8,13 @@ import {
   DialogTitle,
   FORM_VIEW_RECORD_CHROME_SLOT,
   RECORD_TAB_SEARCH_KEY,
-  RECORD_TASK_SEARCH_KEY,
   Tab,
   formViewSectionsSlot,
-  recordTargetSearch,
   routeSearchParam,
   useRecordChromeContext,
   useRouteSearch,
 } from "@angee/ui";
-import { WorkflowApprovals } from "@angee/workflows";
+import { DECISION_SEARCH_KEY, decisionSearch, WorkflowApprovals } from "@angee/workflows";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
@@ -66,17 +64,17 @@ function PartyWorkflowActivity(): ReactElement {
   const record = useRecordChromeContext();
   const search = useRouteSearch();
   const navigate = useNavigate();
-  const decisionId = routeSearchParam(search, RECORD_TASK_SEARCH_KEY) ?? null;
+  const decisionId = routeSearchParam(search, DECISION_SEARCH_KEY) ?? null;
   return (
     <WorkflowApprovals
       target={{ model: "parties.Party", id: record.recordId }}
       includeResolved
       decisionId={decisionId}
-      onDecisionChange={(task) => {
+      onDecisionChange={(decision) => {
         void navigate({
           to: ".",
           replace: true,
-          search: (previous: Record<string, unknown>) => recordTargetSearch(previous, { task }),
+          search: (previous: Record<string, unknown>) => decisionSearch(previous, decision),
         });
       }}
     />
@@ -88,14 +86,14 @@ export function SelectedPartyDecision(): ReactElement | null {
   const search = useRouteSearch();
   const navigate = useNavigate();
   const tab = routeSearchParam(search, RECORD_TAB_SEARCH_KEY);
-  const decisionId = routeSearchParam(search, RECORD_TASK_SEARCH_KEY);
+  const decisionId = routeSearchParam(search, DECISION_SEARCH_KEY);
   if ((record.resource !== "parties.Person" && record.resource !== "parties.Organization")
       || !tab || tab === "workflow-activity" || !decisionId) return null;
   const clearDecision = (): void => {
     void navigate({
       to: ".",
       replace: true,
-      search: (previous: Record<string, unknown>) => recordTargetSearch(previous, { task: null }),
+      search: (previous: Record<string, unknown>) => decisionSearch(previous, null),
     });
   };
   return (

@@ -41,6 +41,7 @@ from angee.base.models import AngeeDataModel
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
 from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
+from angee.graphql.schema import GraphQLSchemas
 from angee.resources.mixins import ResourceLoadMixin, ResourceWritePreparation
 from angee.workflows.attempts import (
     AttemptCause,
@@ -82,8 +83,6 @@ from angee.workflows.managers import (
     WorkflowRecoveryEvidenceManager,
     WorkflowRunManager,
     WorkflowTestFixtureManager,
-    _change_publisher_model_labels,
-    _change_publisher_models,
     _combined_delete_results,
     _definition_rows,
 )
@@ -963,11 +962,11 @@ class Edge(AuditMixin, AngeeDataModel):
             raise ValidationError("Published workflow versions are immutable.")
 
 
-def check_event_trigger_change_publishers(
+def check_event_trigger_publishers(
     app_configs: list[object] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
-    """Report persisted event triggers targeting models outside the change feed."""
+    """Report persisted event triggers with invalid publisher declarations."""
 
     del app_configs, kwargs
     try:
@@ -975,31 +974,31 @@ def check_event_trigger_change_publishers(
     except LookupError:
         return []
     try:
-        published_labels = _change_publisher_model_labels()
-        invalid = list(
-            trigger_model._base_manager.filter(kind=TriggerKind.EVENT)
-            .exclude(event_model_label="")
-            .exclude(event_model_label__in=published_labels)
-            .order_by("pk")
-            .values_list("pk", "event_model_label")[:20]
-        )
+        errors = []
+        for trigger in trigger_model._base_manager.filter(kind=TriggerKind.EVENT).order_by("pk").iterator():
+            try:
+                trigger.validated_config(require_publisher=True)
+            except ValidationError as error:
+                errors.append(
+                    checks.Error(
+                        f"Workflow trigger {trigger.pk}: {'; '.join(error.messages)}",
+                        obj=trigger_model,
+                        id="angee.workflows.E001",
+                    )
+                )
+                if len(errors) == 20:
+                    break
     except (OperationalError, ProgrammingError):
         return []
-    return [
-        checks.Error(
-            f"Workflow trigger {pk} targets {label!r}, which is not in the change feed; {_CHANGE_FEED_FIX}.",
-            obj=trigger_model,
-            id="angee.workflows.E001",
-        )
-        for pk, label in invalid
-    ]
+    return errors
 
 
 class Trigger(AuditMixin, AngeeDataModel):
     """Start rule attached to a workflow lineage head.
 
-    Event triggers consume the GraphQL change feed: their target model must
-    declare ``changes()`` so publisher wiring and workflow delivery agree.
+    The default event publisher is the GraphQL change feed. Same-row donors
+    contribute additional publishers through ``event_publisher_model`` and own
+    their source-specific matching and admission rules.
     """
 
     runtime = True
@@ -1050,6 +1049,30 @@ class Trigger(AuditMixin, AngeeDataModel):
 
         del subject, actor, source
         return JsonPresence()
+
+    def event_publisher_model(self, declaration: EventTriggerConfig) -> type[models.Model]:
+        """Resolve a declared publisher; same-row donors handle their own source keys."""
+
+        if declaration.source != EventSource.CHANGE_PUBLISHED:
+            raise ValidationError({"config": f"Unknown event publisher {declaration.source!r}."})
+        for model in GraphQLSchemas.from_discovery().change_publisher_models():
+            if model._meta.label_lower == declaration.model:
+                return model
+        raise ValidationError(
+            {
+                "event_model_label": (
+                    f"Event trigger target {declaration.model!r} is not in the change feed; {_CHANGE_FEED_FIX}."
+                )
+            }
+        )
+
+    def event_subject_matches(self, subject: models.Model, *, source: str) -> bool:
+        """Let publisher donors constrain a delivery to their declared scope."""
+
+        return True
+
+    def validate_event_admission(self, subject: models.Model, *, source: str, dedup_key: str) -> None:
+        """Validate publisher-specific invariants under the locked workflow lineage."""
 
     def clean(self) -> None:
         """Validate lineage ownership and trigger declaration shape."""
@@ -1206,7 +1229,7 @@ class Trigger(AuditMixin, AngeeDataModel):
         if not isinstance(condition, Mapping):
             return False
         with system_context(reason="workflows.event_triggers.condition"):
-            return sender._default_manager.filter(pk=instance.pk, **dict(condition)).exists()
+            return sender._default_manager.using(instance._state.db).filter(pk=instance.pk, **dict(condition)).exists()
 
     def initial_fire_at(self, *, now: datetime) -> datetime | None:
         """Return the first persisted due timestamp for this schedule trigger."""
@@ -1232,25 +1255,8 @@ class Trigger(AuditMixin, AngeeDataModel):
         except (ValueError, TypeError) as error:
             raise ValidationError({"config": str(error)}) from error
         if require_publisher and isinstance(declaration, EventTriggerConfig):
-            if declaration.source == EventSource.MESSAGE_INGESTED and not hasattr(self, "message_channel_id"):
-                raise ValidationError(
-                    {"config": "The message-ingested event publisher addon is not installed."}
-                )
-            if declaration.model not in _change_publisher_model_labels():
-                raise ValidationError(
-                    {
-                        "event_model_label": (
-                            f"Event trigger target {declaration.model!r} is not in the change feed; "
-                            f"{_CHANGE_FEED_FIX}."
-                        )
-                    }
-                )
+            event_model = self.event_publisher_model(declaration)
             try:
-                event_model = next(
-                    model
-                    for model in _change_publisher_models()
-                    if model._meta.label_lower == declaration.model
-                )
                 condition_query = event_model._base_manager.filter(**(declaration.condition or {})).query
                 try:
                     condition_query.get_compiler(using=self._state.db or DEFAULT_DB_ALIAS).as_sql()

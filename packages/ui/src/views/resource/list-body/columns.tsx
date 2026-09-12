@@ -67,9 +67,14 @@ function displayColumns<TRow extends Row>(
   return columns.map((column) => ({
     id: column.field,
     accessorFn: (row) => readPath(row, column.field),
-    enableSorting: column.sortable !== false && (options.query
-      ? Boolean(options.query.fields[column.field]?.sort)
-      : resourceOrderFieldForPath(column.field, options.metadata?.resource) !== null),
+    enableSorting:
+      column.sortable !== false &&
+      (options.query
+        ? Boolean(options.query.fields[column.field]?.sort)
+        : resourceOrderFieldForPath(
+            column.field,
+            options.metadata?.resource,
+          ) !== null),
     sortDescFirst: false,
     header: ({ column: tableColumn }) => {
       const label = column.header ?? column.field;
@@ -95,6 +100,7 @@ function displayColumns<TRow extends Row>(
       label: column.header ?? column.field,
       field: column.field,
       aggregate: column.aggregate,
+      interactive: column.interactive,
     },
   }));
 }

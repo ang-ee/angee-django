@@ -1,12 +1,11 @@
 import { useMemo, useState, type ReactElement, type Ref } from "react";
 import type { CrudFilter } from "@refinedev/core";
+import { useDebounce } from "use-debounce";
 
 import {
   useResourceRecordHref,
 } from "../../runtime";
-import {
-  useModelMetadata,
-} from "@angee/metadata";
+import { useModelMetadata } from "@angee/metadata";
 
 import type { RelationOption } from "../../widgets/RelationField";
 import {
@@ -14,7 +13,7 @@ import {
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import { RelationPicker } from "./RelationPicker";
-import { useRelationOptions } from "./relation-options";
+import { useRelationSelectedOption, useRelationOptions } from "./relation-options";
 
 export interface RelationFieldWidgetProps {
   value?: string | null;
@@ -24,6 +23,7 @@ export interface RelationFieldWidgetProps {
   relation: RelationFieldInfo;
   /** Server-side filters narrowing the rows offered by this relation picker. */
   filters?: readonly CrudFilter[];
+  searchFields?: readonly string[];
   /**
    * The already-loaded selected record as a picker option (id + folded label),
    * derived by `FormView` from the parent read. Shows the trigger label before
@@ -41,16 +41,40 @@ export interface RelationFieldWidgetProps {
  * and — when the related model has a create mutation — offers in-place create
  * with fields derived from its metadata. `FormView` resolves the relation target
  * (model, display field, create) from the SDL and the selected record's label
- * from its own read, so the 200-row option list is fetched only once the picker
- * is first opened (a read-only/show view never opens it, so never fetches it).
+ * from its own read. Opening the picker starts the bounded option read, and
+ * typing searches that collection on the server.
  */
-export function RelationFieldWidget({
+export function RelationFieldWidget(
+  props: RelationFieldWidgetProps,
+): ReactElement {
+  return props.value && !props.selectedOption ? (
+    <SelectedRelationFieldWidget {...props} />
+  ) : (
+    <RelationFieldWidgetBody {...props} />
+  );
+}
+
+/** A selected relation's label is an independent record read, not an options-page fact. */
+function SelectedRelationFieldWidget(
+  props: RelationFieldWidgetProps,
+): ReactElement {
+  const selectedOption = useRelationSelectedOption(props.relation, props.value);
+  return (
+    <RelationFieldWidgetBody
+      {...props}
+      selectedOption={selectedOption}
+    />
+  );
+}
+
+function RelationFieldWidgetBody({
   value,
   onChange,
   onCommit,
   readOnly,
   relation,
   filters,
+  searchFields,
   selectedOption,
   placeholder,
   "aria-label": ariaLabel,
@@ -60,9 +84,13 @@ export function RelationFieldWidget({
   // enabled (so a later relabel/refetch keeps working), but never on a
   // read-only/show render where the popover never opens.
   const [opened, setOpened] = useState(false);
+  const [search, setSearch] = useState("");
+  const [searchText] = useDebounce(search, 250);
   const { list, options: fetched } = useRelationOptions(relation, {
     enabled: opened,
     filters,
+    searchText,
+    searchFields,
   });
   // The selected record's own (folded) label shows immediately; once the list
   // loads, its fresh label for the same record wins, and the selected option is
@@ -99,7 +127,14 @@ export function RelationFieldWidget({
       aria-label={ariaLabel}
       followHref={followHref}
       onOpenChange={(open) => {
+        setSearch("");
         if (open) setOpened(true);
+      }}
+      onSearchChange={setSearch}
+      searchState={{
+        pending: list.fetching || search !== searchText,
+        error: list.error,
+        retry: list.refetch,
       }}
       create={
         relation.canCreate && createFields.length > 0

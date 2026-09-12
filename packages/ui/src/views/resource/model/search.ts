@@ -61,9 +61,14 @@ export function resourceViewStateToSearch(
 
 /** Decode URL syntax into native state, never a second table state model. */
 export function resourceViewSearchToState(
-  search: ResourceViewSearch | Record<string, unknown>,
+  input: ResourceViewSearch | Record<string, unknown>,
   initial: ResourceViewInitialState = {},
+  namespace?: string,
 ): ResourceViewState {
+  const source: Record<string, unknown> = { ...input };
+  const search = namespace
+    ? Object.fromEntries(RESOURCE_VIEW_SEARCH_KEYS.map((key) => [key, source[resourceViewSearchKey(key, namespace)]]))
+    : source;
   const base = createResourceViewState(initial);
   try {
     const sort = parseSearchSort(search.sort);
@@ -105,13 +110,15 @@ export function normaliseGroupStack(groups: unknown): readonly ResourceViewGroup
 export function mergeResourceViewSearch(
   current: Record<string, unknown>,
   next: Partial<Record<ResourceViewSearchKey, unknown>>,
+  namespace?: string,
 ): Record<string, unknown> {
   const merged = { ...current };
   for (const key of RESOURCE_VIEW_SEARCH_KEYS) {
+    const target = resourceViewSearchKey(key, namespace);
     if (Object.prototype.hasOwnProperty.call(next, key)) {
-      merged[key] = next[key];
+      merged[target] = next[key];
     } else {
-      delete merged[key];
+      delete merged[target];
     }
   }
   return merged;
@@ -235,4 +242,8 @@ function isResourceViewKind(value: string): value is ResourceViewKind {
 
 function isCalendarViewMode(value: string): value is CalendarViewMode {
   return CALENDAR_VIEW_MODES.includes(value as CalendarViewMode);
+}
+
+function resourceViewSearchKey(key: ResourceViewSearchKey, namespace?: string): string {
+  return namespace ? `${namespace}.${key}` : key;
 }

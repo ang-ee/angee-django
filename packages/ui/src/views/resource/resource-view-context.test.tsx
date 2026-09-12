@@ -27,6 +27,7 @@ import {
 import {
   RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY,
   RESOURCE_VIEW_FAVORITES_VERSION,
+  readResourceViewFavoritesSlice,
 } from "./resource-view-favorites";
 import { resourceViewFavoritesFromUnknown } from "./model/favorites";
 
@@ -72,14 +73,66 @@ describe("ResourceViewProvider favorites", () => {
 
   test("an obsolete saved query stays visible, blocks the view, and can be reset", () => {
     const captured = captureRef();
-    const raw = { id: "favorite:old", label: "Old grouping", groupStack: [{ field: "channel", aggregateKey: "channel_id" }] };
-    renderFavoriteHarness({ captured, resource: "notes.Note", preferences: favoritesPreferences({ "notes.Note": [raw] }) });
+    const raw = {
+      id: "favorite:old",
+      label: "Old grouping",
+      groupStack: [{ field: "channel", aggregateKey: "channel_id" }],
+    };
+    renderFavoriteHarness({
+      captured,
+      resource: "notes.Note",
+      preferences: favoritesPreferences({ "notes.Note": [raw] }),
+    });
     expect(captured.current?.savedFavorites[0]).toEqual(raw);
-    act(() => captured.current?.applyFavorite(resourceViewFavoritesFromUnknown([raw])[0]!));
+    act(
+      () =>
+        captured.current?.applyFavorite(
+          resourceViewFavoritesFromUnknown([raw])[0]!,
+        ),
+    );
     expect(captured.current?.state.queryError).toBeInstanceOf(Error);
     act(() => captured.current?.resetQuery());
     expect(captured.current?.state.queryError).toBeNull();
     expect(captured.current?.state.groupStack).toEqual([]);
+  });
+
+  test("authored collections save favorites independently from model metadata and sibling lenses", async () => {
+    const captured = captureRef();
+    const persist = vi.fn(
+      async (_preferences: RuntimeUserPreferences) => undefined,
+    );
+    render(
+      <PreferencesHarness
+        available
+        initialPreferences={favoritesPreferences({
+          "collection:activity.people": [
+            { id: "favorite:people", label: "People" },
+          ],
+          "collection:activity.files": [
+            { id: "favorite:files", label: "Files" },
+          ],
+        })}
+        persist={persist}
+      >
+        <ResourceViewProvider scope="local" favoriteKey="activity.people">
+          <Capture
+            onValue={(value) => {
+              captured.current = value;
+            }}
+          />
+        </ResourceViewProvider>
+      </PreferencesHarness>,
+    );
+    expect(
+      captured.current?.savedFavorites.map((favorite) => favorite.label),
+    ).toEqual(["People"]);
+    act(() => captured.current?.saveFavorite?.("Recent"));
+    await waitFor(() => expect(persist).toHaveBeenCalledOnce());
+    expect(
+      readResourceViewFavoritesSlice(persist.mock.calls[0]![0]).document.models[
+        "collection:activity.files"
+      ],
+    ).toEqual([{ id: "favorite:files", label: "Files" }]);
   });
 
   test("reads versioned server favorites by canonical model label", () => {
@@ -89,7 +142,7 @@ describe("ResourceViewProvider favorites", () => {
       resource: "Note",
       preferences: favoritesPreferences({
         "notes.Note": [{ id: "favorite:server", label: "Server" }],
-        }),
+      }),
     });
 
     expect(captured.current?.savedFavorites).toEqual([
@@ -178,14 +231,20 @@ describe("ResourceViewProvider favorites", () => {
     act(() => captured.current?.saveFavorite?.("New"));
     await waitFor(() => expect(persist).toHaveBeenCalledOnce());
 
-    expect(committed).toEqual(favoritesPreferences({
-      "notes.Note": [
-        { id: "favorite:server", label: "Server" },
-        expect.objectContaining({ id: "favorite:new", label: "New" }),
-      ],
-    }));
-    expect(window.localStorage.getItem(legacyStorageKey("Note"))).not.toBeNull();
-    expect(window.localStorage.getItem(legacyStorageKey("Task"))).not.toBeNull();
+    expect(committed).toEqual(
+      favoritesPreferences({
+        "notes.Note": [
+          { id: "favorite:server", label: "Server" },
+          expect.objectContaining({ id: "favorite:new", label: "New" }),
+        ],
+      }),
+    );
+    expect(
+      window.localStorage.getItem(legacyStorageKey("Note")),
+    ).not.toBeNull();
+    expect(
+      window.localStorage.getItem(legacyStorageKey("Task")),
+    ).not.toBeNull();
 
     window.localStorage.setItem(
       legacyStorageKey("Note"),
@@ -201,7 +260,9 @@ describe("ResourceViewProvider favorites", () => {
       "New",
       "Second",
     ]);
-    expect(window.localStorage.getItem(legacyStorageKey("Note"))).not.toBeNull();
+    expect(
+      window.localStorage.getItem(legacyStorageKey("Note")),
+    ).not.toBeNull();
   });
 
   test("rolls an optimistic favorite back when persistence fails", async () => {
@@ -232,7 +293,9 @@ describe("ResourceViewProvider favorites", () => {
         { id: "favorite:retained", label: "Retained" },
       ]);
     });
-    expect(window.localStorage.getItem(legacyStorageKey("Note"))).not.toBeNull();
+    expect(
+      window.localStorage.getItem(legacyStorageKey("Note")),
+    ).not.toBeNull();
   });
 });
 

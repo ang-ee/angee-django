@@ -91,6 +91,9 @@ interface DynamicI18nKeyFamily {
 }
 
 const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
+  frameworkCriticalExport("collectionQuery", "@angee/ui", "src/views/resource/collection-source.ts"),
+  frameworkCriticalExport("CollectionTreeView", "@angee/ui", "src/views/tree/CollectionTreeView.tsx"),
+  frameworkCriticalExport("RelationFieldWidget", "@angee/ui", "src/views/relation/RelationFieldWidget.tsx"),
   frameworkCriticalExport("resourcePageRoutes", "@angee/app", "src/define-base-addon.ts"),
   frameworkCriticalExport("expectValidBaseAddon", "@angee/app", "src/testing.tsx"),
   frameworkCriticalExport("MutationDialog", "@angee/ui", "src/views/form/MutationDialog.tsx"),
@@ -183,6 +186,15 @@ describe("React architecture guardrails", () => {
       "Invalid addon guardrail registry packages/fixture/architecture.guardrails.json: "
       + "criticalExports must be an array",
     );
+  });
+
+  test("record routing consumes addon declarations without workflow vocabulary", () => {
+    for (const name of ["resource-routing.ts", "record-navigation-context.ts"]) {
+      const source = readFileSync(join(PACKAGES_ROOT, "ui/src/views/resource", name), "utf8");
+      expect(source).not.toMatch(/RECORD_TASK_SEARCH_KEY|["']decision["']/);
+    }
+    const routing = readFileSync(join(PACKAGES_ROOT, "ui/src/views/resource/resource-routing.ts"), "utf8");
+    expect(routing).toContain("recordSearchKeys");
   });
 
   test("framework-owned dynamic i18n families contain only UI vocabulary", () => {

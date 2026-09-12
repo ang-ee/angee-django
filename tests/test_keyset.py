@@ -23,27 +23,27 @@ def test_native_integer_keys_traverse_ties_and_keep_deleted_cuts() -> None:
     order = KeysetOrder("created_at")
     options = {"order": order, "cursor_scope": ("things",), "limit": 2}
     first = queryset.keyset_page(**options)
-    assert list(first["rows"]) == list(reversed(rows[-2:]))
-    second = queryset.keyset_page(before_cursor=first["older_cursor"], **options)
-    assert list(second["rows"]) == list(reversed(rows[1:3]))
-    newer = queryset.keyset_page(after_cursor=second["newer_cursor"], **options)
-    assert list(newer["rows"]) == list(first["rows"])
+    assert list(first.rows) == list(reversed(rows[-2:]))
+    second = queryset.keyset_page(before_cursor=first.older_cursor, **options)
+    assert list(second.rows) == list(reversed(rows[1:3]))
+    newer = queryset.keyset_page(after_cursor=second.newer_cursor, **options)
+    assert list(newer.rows) == list(first.rows)
 
     # A deleted anchor is still a cut; absence must not discard older history.
     SystemQueryThing._base_manager.filter(pk__in=[row.pk for row in rows[-2:]]).delete()
-    empty = queryset.keyset_page(through_cursor=first["older_cursor"], **options)
-    assert list(empty["rows"]) == []
-    assert empty["count"] == 3
-    assert empty["has_more_in_window"] is False
-    assert empty["has_older_than_through"] is True
-    assert list(queryset.keyset_page(before_cursor=first["older_cursor"], **options)["rows"]) == list(
+    empty = queryset.keyset_page(through_cursor=first.older_cursor, **options)
+    assert list(empty.rows) == []
+    assert empty.count == 3
+    assert empty.has_more_in_window is False
+    assert empty.has_older_than_through is True
+    assert list(queryset.keyset_page(before_cursor=first.older_cursor, **options).rows) == list(
         reversed(rows[1:3])
     )
     with pytest.raises(InvalidKeysetCursor):
-        queryset.keyset_page(order=order, cursor_scope=("other",), before_cursor=first["older_cursor"])
+        queryset.keyset_page(order=order, cursor_scope=("other",), before_cursor=first.older_cursor)
     with pytest.raises(InvalidKeysetCursor):
         queryset.with_actor(SubjectRef.of("iam/user", "other")).keyset_page(
-            before_cursor=first["older_cursor"], **options
+            before_cursor=first.older_cursor, **options
         )
 
 

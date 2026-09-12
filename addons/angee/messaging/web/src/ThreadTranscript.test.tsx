@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { ThreadTranscript } from "./ThreadTranscript";
 import type { ThreadTranscriptRow } from "./documents";
 
 // The virtualizer's windowing is the library owner's concern (and needs a real
@@ -42,7 +43,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
 
 vi.mock("./thread-message-feed", () => ({ useThreadMessageFeed: mocks.useThreadMessageFeed }));
 
-import { ThreadTranscript } from "./ThreadTranscript";
 
 function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscriptRow {
   return {
@@ -220,4 +220,18 @@ describe("ThreadTranscript", () => {
 
     expect(screen.getByText("No messages yet")).toBeTruthy();
   });
+});
+
+
+test("day separators and date anchors share the explicitly selected timezone", () => {
+  mocks.transcriptRows = [
+    message({ id: "late", sent_at: "2026-07-02T00:30:00Z" }),
+    message({ id: "early", sent_at: "2026-07-01T23:30:00Z" }),
+  ];
+  const onAnchorChange = vi.fn();
+  render(<ThreadTranscript threadId="thr_1" order="history" timezone="America/New_York" onAnchorChange={onAnchorChange} />);
+  const day = new Intl.DateTimeFormat(undefined, { timeZone: "America/New_York" }).format(new Date("2026-07-02T00:30:00Z"));
+  expect(screen.getAllByText(day)).toHaveLength(1);
+  fireEvent.change(screen.getByLabelText("Jump to date"), { target: { value: "2026-07-01" } });
+  expect(onAnchorChange).toHaveBeenCalledWith("date:2026-07-01@America/New_York");
 });

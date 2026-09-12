@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { MessagePartsView, type MessagePartFile } from "./index";
 
@@ -10,6 +10,18 @@ function fileUrl(file: MessagePartFile): string {
 }
 
 describe("MessagePartsView", () => {
+  test("reveals an addressed quote and keeps original-file preview separate from backlinks", () => {
+    const preview = vi.fn();
+    render(<MessagePartsView activePartId="quote" resolveFileUrl={fileUrl} onPreviewFile={preview}
+      renderPartActions={part => part.file ? <button>Other uses</button> : null}
+      parts={[{ id: "quote", role: "QUOTED", fragment: { text: "Addressed context" } },
+        { id: "file", name: "original.pdf", disposition: "ATTACHMENT", file: { id: "shared", filename: "canonical.pdf" } }]} />);
+    expect(screen.getByText("Addressed context")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "original.pdf" }));
+    expect(preview).toHaveBeenCalledWith(expect.objectContaining({ id: "file", name: "original.pdf" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other uses" }));
+    expect(preview).toHaveBeenCalledTimes(1);
+  });
   afterEach(() => {
     cleanup();
   });

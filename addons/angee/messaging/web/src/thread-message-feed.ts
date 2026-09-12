@@ -12,7 +12,7 @@ const MESSAGE_MODELS = [
 ] as const;
 
 /** The thread owns its scope and full transcript projection; Query owns state. */
-export function useThreadMessageFeed(threadId: string) {
+export function useThreadMessageFeed(threadId: string, anchor = "") {
   return useAuthoredKeysetFeed({
     actor: useAuth().user?.id,
     enabled: Boolean(threadId),
@@ -20,7 +20,8 @@ export function useThreadMessageFeed(threadId: string) {
     pageSize: 50,
     window: {
       document: ThreadTranscriptDocument,
-      variables: (beforeCursor, throughCursor, limit) => ({ threadId, beforeCursor, throughCursor, limit }),
+      variables: (beforeCursor, throughCursor, limit) => ({ threadId, anchor, beforeCursor, throughCursor, limit }),
+      newerVariables: (afterCursor, limit) => ({ threadId, anchor, afterCursor, limit }),
       select: (data) => messageFeedWindow(data.thread_message_feed),
     },
     revalidate: {

@@ -4,7 +4,7 @@
 // data, the mutations, and any streaming runtime around these. Tokens + `tone` follow
 // the base design system; copy routes through `useUiT`.
 
-import { useId, useState, type HTMLAttributes, type ReactElement, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type HTMLAttributes, type ReactElement, type ReactNode } from "react";
 
 import { Glyph } from "../../chrome/Glyph";
 import { RelativeTime } from "../../fragments/RelativeTime";
@@ -50,7 +50,9 @@ export function MessageFeed({ label, busy, className, children, ...props }: Mess
   );
 }
 
-export interface MessageDaySeparatorProps extends HTMLAttributes<HTMLLIElement> {
+export interface MessageDaySeparatorProps extends HTMLAttributes<HTMLElement> {
+  /** Use div within a virtualized message row; feeds default to a list item. */
+  as?: "li" | "div";
   /** The day label (e.g. "Today", "12 May"). The consumer owns the date formatting. */
   children: ReactNode;
 }
@@ -58,13 +60,13 @@ export interface MessageDaySeparatorProps extends HTMLAttributes<HTMLLIElement> 
 /** An optional day-group separator row: a centered, muted label dividing the feed into
  *  day buckets. Pure presentation — the consumer decides where the day boundaries fall
  *  and formats the label. */
-export function MessageDaySeparator({ children, className, ...props }: MessageDaySeparatorProps): ReactElement {
+export function MessageDaySeparator({ children, className, as: Component = "li", ...props }: MessageDaySeparatorProps): ReactElement {
   return (
-    <li className={cn("flex items-center gap-2 py-1", className)} {...props}>
+    <Component className={cn("flex items-center gap-2 py-1", className)} {...props}>
       <span className="h-px flex-1 bg-border-subtle" aria-hidden />
       <span className={cn(textRoleVariants({ role: "caption" }), "shrink-0")}>{children}</span>
       <span className="h-px flex-1 bg-border-subtle" aria-hidden />
-    </li>
+    </Component>
   );
 }
 
@@ -158,11 +160,15 @@ export interface MessagePartFile {
 }
 
 export interface MessagePartFragment {
+  id?: string | null;
   text?: string | null;
 }
 
 export interface MessagePart {
   id?: string | null;
+  /** Original filename and MIME type of this message's use of a file. */
+  name?: string | null;
+  type?: string | null;
   role?: string | null;
   fragment?: MessagePartFragment | null;
   disposition?: string | null;
@@ -175,6 +181,11 @@ export interface MessagePartsViewProps extends Omit<HTMLAttributes<HTMLDivElemen
   parts: readonly MessagePart[];
   /** Resolves a viewable/downloadable URL for a file part. */
   resolveFileUrl: (file: MessagePartFile) => string | null | undefined;
+  /** Optional per-use actions such as backlinks, supplied by the consuming addon. */
+  renderPartActions?: (part: MessagePart) => ReactNode;
+  /** Reveal and scroll an addressed part, including folded quoted content. */
+  activePartId?: string | null;
+  onPreviewFile?: (part: MessagePart) => void;
 }
 
 /** Renders a message's ordered MIME/JMAP part list: title/body/quote/signature text
@@ -184,6 +195,9 @@ export interface MessagePartsViewProps extends Omit<HTMLAttributes<HTMLDivElemen
 export function MessagePartsView({
   parts,
   resolveFileUrl,
+  renderPartActions,
+  activePartId,
+  onPreviewFile,
   className,
   ...props
 }: MessagePartsViewProps): ReactElement | null {
@@ -196,6 +210,9 @@ export function MessagePartsView({
             key={messagePartKey(part, index)}
             part={part}
             resolveFileUrl={resolveFileUrl}
+            actions={renderPartActions?.(part)}
+            active={Boolean(part.id && activePartId === part.id)}
+            onPreviewFile={onPreviewFile}
           />
         ) : null,
       )}
@@ -206,18 +223,30 @@ export function MessagePartsView({
 interface MessagePartItemProps {
   part: MessagePart;
   resolveFileUrl: MessagePartsViewProps["resolveFileUrl"];
+  actions?: ReactNode;
+  active?: boolean;
+  onPreviewFile?: MessagePartsViewProps["onPreviewFile"];
 }
 
-function MessagePartItem({ part, resolveFileUrl }: MessagePartItemProps): ReactElement | null {
+function MessagePartItem({ part, resolveFileUrl, actions, active, onPreviewFile }: MessagePartItemProps): ReactElement | null {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (active) ref.current?.scrollIntoView?.({ block: "center" }); }, [active]);
+  return <div ref={ref} data-part-id={part.id} className={cn("space-y-1", active && "rounded-6 bg-brand-soft p-2 ring-1 ring-brand/30")}>
+    <MessagePartContent part={part} resolveFileUrl={resolveFileUrl} active={active} onPreviewFile={onPreviewFile} />
+    {actions}
+  </div>;
+}
+
+function MessagePartContent({ part, resolveFileUrl, active, onPreviewFile }: MessagePartItemProps): ReactElement | null {
   const t = useUiT();
   const text = part.fragment?.text ?? "";
   const hasText = text.trim() !== "";
   const file = part.file;
-  const fileNode = file ? renderMessagePartFile(part, file, resolveFileUrl, t) : null;
+  const fileNode = file ? renderMessagePartFile(part, file, resolveFileUrl, t, onPreviewFile) : null;
   const role = normalisePartValue(part.role);
 
   if (role === "QUOTED") {
-    return <QuotedMessagePart text={text} file={fileNode} />;
+    return <QuotedMessagePart text={text} file={fileNode} active={active} />;
   }
 
   if (role === "TITLE") {
@@ -249,11 +278,13 @@ function MessagePartItem({ part, resolveFileUrl }: MessagePartItemProps): ReactE
 interface QuotedMessagePartProps {
   text: string;
   file: ReactNode;
+  active?: boolean;
 }
 
-function QuotedMessagePart({ text, file }: QuotedMessagePartProps): ReactElement | null {
+function QuotedMessagePart({ text, file, active }: QuotedMessagePartProps): ReactElement | null {
   const t = useUiT();
   const [open, setOpen] = useState(false);
+  useEffect(() => { if (active) setOpen(true); }, [active]);
   const contentId = useId();
   if (text.trim() === "" && !file) return null;
   return (
@@ -282,9 +313,10 @@ function renderMessagePartFile(
   file: MessagePartFile,
   resolveFileUrl: MessagePartsViewProps["resolveFileUrl"],
   t: ReturnType<typeof useUiT>,
+  onPreviewFile?: MessagePartsViewProps["onPreviewFile"],
 ): ReactElement {
   const url = safeMessagePartUrl(resolveFileUrl(file));
-  const label = file.title || file.filename || t("message.parts.attachment");
+  const label = part.name || file.title || file.filename || t("message.parts.attachment");
   const mime = normaliseMime(file.mime_type?.mime_type);
   if (
     url &&
@@ -316,6 +348,7 @@ function renderMessagePartFile(
       {label}
     </MessageAttachmentChip>
   );
+  if (onPreviewFile) return <button type="button" className="inline-flex max-w-full rounded-6 focus-visible:focus-ring" onClick={() => onPreviewFile(part)}>{chip}</button>;
   if (!url) return chip;
   return (
     <a href={url} download={file.filename ?? undefined} className="inline-flex max-w-full align-middle">

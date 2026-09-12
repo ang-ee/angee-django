@@ -1,9 +1,11 @@
 """Deliver the canonical messaging ingest event through native Trigger admission."""
 
+import logging
 from typing import Any
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.deletion import ProtectedError
 from django.db.models.signals import pre_delete
@@ -11,14 +13,18 @@ from django.utils import timezone
 
 from angee.messaging.events import message_ingested
 from angee.workflows.models import TriggerKind
-from angee.workflows.trigger_declarations import EventSource
+from angee.workflows_messaging.models import MESSAGE_INGESTED
+
+logger = logging.getLogger(__name__)
 
 
 def connect() -> None:
     message_ingested.connect(deliver_message_event, dispatch_uid="workflows.message_ingested")
     for name in ("Message", "Part", "Thread"):
         model = apps.get_model("messaging", name)
-        pre_delete.connect(protect_retained_source, sender=model, dispatch_uid=f"workflows.messaging.protect_{name.lower()}")
+        pre_delete.connect(
+            protect_retained_source, sender=model, dispatch_uid=f"workflows.messaging.protect_{name.lower()}"
+        )
 
 
 def protect_retained_source(sender: Any, instance: Any, **kwargs: Any) -> None:
@@ -54,10 +60,12 @@ def protect_retained_source(sender: Any, instance: Any, **kwargs: Any) -> None:
     else:
         content_type, object_id = targets[0]
         retained = artifact_model._base_manager.using(using).filter(
-            target_content_type=content_type, target_object_id=object_id,
+            target_content_type=content_type,
+            target_object_id=object_id,
         )
         retained_runs = run_model._base_manager.using(using).filter(
-            subject_content_type=content_type, subject_object_id=object_id,
+            subject_content_type=content_type,
+            subject_object_id=object_id,
         )
     if retained.exists() or retained_runs.exists():
         raise ProtectedError("Messaging source is retained by workflow evidence.", (retained, retained_runs))
@@ -66,8 +74,9 @@ def protect_retained_source(sender: Any, instance: Any, **kwargs: Any) -> None:
 def deliver_message_event(sender: Any, instance: Any, **kwargs: Any) -> None:
     """Synchronously admit one run per matching channel Trigger.
 
-    Admission shares the ingest transaction. A failure propagates so a bridge cursor
-    cannot advance past a Message whose required workflow run was not durably created.
+    Admission shares the ingest transaction. Invalid trigger configuration disables
+    the trigger without discarding the Message. Infrastructure failures propagate
+    so the bridge retries a delivery whose admission could not be persisted.
     """
 
     del sender, kwargs
@@ -75,7 +84,8 @@ def deliver_message_event(sender: Any, instance: Any, **kwargs: Any) -> None:
         return
     trigger_model = apps.get_model("workflows", "Trigger")
     triggers = (
-        trigger_model._base_manager.filter(
+        trigger_model._base_manager.using(instance._state.db)
+        .filter(
             kind=TriggerKind.EVENT,
             enabled=True,
             event_model_label="messaging.message",
@@ -85,21 +95,22 @@ def deliver_message_event(sender: Any, instance: Any, **kwargs: Any) -> None:
         .order_by("pk")
     )
     for trigger in triggers:
-        if trigger.validated_config(require_publisher=True).source != EventSource.MESSAGE_INGESTED:
-            continue
-        actor = trigger.execution_actor or instance.created_by or trigger.message_channel.created_by
-        if actor is None:
-            raise ValueError("Message workflow admission requires an execution actor.")
-        if not trigger.condition_matches(type(instance), instance):
-            continue
-        run = trigger_model.objects.start_event(
-            trigger.pk,
-            subject=instance,
-            occurrence_id=f"message-ingested:{instance.pk}",
-            timestamp=timezone.now(),
-            actor=actor,
-            source=EventSource.MESSAGE_INGESTED,
-            message_channel_id=instance.channel_id,
-        )
-        if run is None:
-            raise RuntimeError("Message workflow admission was not durably accepted.")
+        try:
+            if trigger.validated_config(require_publisher=True).source != MESSAGE_INGESTED:
+                continue
+            actor = trigger.execution_actor or instance.created_by or trigger.message_channel.created_by
+            if actor is None:
+                raise ValidationError("Message workflow admission requires an execution actor.")
+            if not trigger.condition_matches(type(instance), instance):
+                continue
+            trigger_model.objects.db_manager(instance._state.db).start_event(
+                trigger.pk,
+                subject=instance,
+                occurrence_id=f"message-ingested:{instance.pk}",
+                timestamp=timezone.now(),
+                actor=actor,
+                source=MESSAGE_INGESTED,
+            )
+        except ValidationError:
+            trigger.sudo(reason="workflows_messaging.invalid_admission").disable()
+            logger.exception("Disabled message workflow trigger %s after invalid admission.", trigger.pk)

@@ -23,6 +23,11 @@ import { useResourceToolbarProps } from "../resource-toolbar-props";
 import { useResourceViewToolbarInputs } from "../resource-view-toolbar-inputs";
 import { PAGE_SIZE_OPTIONS } from "../page-size";
 interface ListViewContentProps<TRow extends Row> {
+  source?: ListViewProps<TRow>["source"];
+  textFilterField?: string | null;
+  maxGroupDepth?: number;
+  toolbarWrap?: boolean;
+  renderGroupLabel?: ListViewProps<TRow>["renderGroupLabel"];
   surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>;
   resource: string;
   resolvedColumns: readonly ColumnDescriptor<TRow>[];
@@ -57,6 +62,11 @@ interface ListViewContentProps<TRow extends Row> {
 }
 
 export function ListViewContent<TRow extends Row = Row>({
+  source,
+  textFilterField: declaredTextField,
+  maxGroupDepth,
+  toolbarWrap,
+  renderGroupLabel,
   surface,
   resource,
   resolvedColumns,
@@ -99,13 +109,19 @@ export function ListViewContent<TRow extends Row = Row>({
     [declaredFacets.filters, scalarFacets.filters],
   );
   const facetCustomFilterFields = React.useMemo(
-    () => mergeFilterFields(declaredFacets.filterFields, scalarFacets.filterFields),
+    () =>
+      mergeFilterFields(declaredFacets.filterFields, scalarFacets.filterFields),
     [declaredFacets.filterFields, scalarFacets.filterFields],
   );
   // Search the model's real title field (recordRepresentation → e.g. displayName
   // for Person), not the hardcoded "title" that non-title models lack.
-  const textFilterField = resolveTextFilterField(modelMetadata);
+  const textFilterField =
+    declaredTextField === undefined
+      ? resolveTextFilterField(modelMetadata)
+      : declaredTextField;
   const toolbarInputs = useResourceViewToolbarInputs({
+    query: source?.query,
+    inferOptions: !source,
     columns: resolvedColumns,
     rows: surface.rows,
     modelMetadata,
@@ -124,7 +140,7 @@ export function ListViewContent<TRow extends Row = Row>({
   });
   const interactive = Boolean(onRowClick || rowHref);
   const bulkDelete = useBulkDelete(
-    resource,
+    source ? "" : resource,
     surface.selectedIds,
     resourceView.clearSelectedIds,
   );
@@ -147,6 +163,8 @@ export function ListViewContent<TRow extends Row = Row>({
     [cardActions, renderRowActions],
   );
   const toolbar = useResourceToolbarProps({
+    maxGroupDepth,
+    wrap: toolbarWrap,
     actions: toolbarActions,
     availableViews,
     pager: toolbarInputs.pager,
@@ -179,7 +197,7 @@ export function ListViewContent<TRow extends Row = Row>({
         count: surface.selectedIds.size,
         onClear: resourceView.clearSelectedIds,
         onDelete:
-          !bulkActions && bulkDelete.canDelete
+          !source && !bulkActions && bulkDelete.canDelete
             ? bulkDelete.deleteInitiate
             : undefined,
         deletePending: !bulkActions && bulkDelete.isPending,
@@ -189,11 +207,13 @@ export function ListViewContent<TRow extends Row = Row>({
             : undefined,
       }}
       error={surface.list.error}
+      onRetry={() => void surface.list.refetch()}
+      summary={surface.list.summary}
       loadingFooter={
-        !serverGroupedMode
-        && resourceView.state.view !== "board"
-        && surface.list.fetching
-        && surface.rowModels.length > 0
+        !serverGroupedMode &&
+        resourceView.state.view !== "board" &&
+        surface.list.fetching &&
+        surface.rowModels.length > 0
       }
       overlays={
         bulkDelete.isPreviewOpen && bulkDelete.previewState ? (
@@ -221,7 +241,9 @@ export function ListViewContent<TRow extends Row = Row>({
           rowHref={rowHref}
           onRowClick={onRowClick}
           onListStateChange={onListStateChange}
-          cardActions={cardActions || renderRowActions ? boardCardActions : undefined}
+          cardActions={
+            cardActions || renderRowActions ? boardCardActions : undefined
+          }
           cardActionContext={cardActionContext}
           renderCard={renderCard}
           fetching={surface.list.fetching}
@@ -230,6 +252,7 @@ export function ListViewContent<TRow extends Row = Row>({
         />
       ) : surface.kind === "grouped" ? (
         <GroupedListBody
+          renderGroupLabel={renderGroupLabel}
           table={surface.table}
           tableColumns={surface.tableColumns}
           visibleColumnCount={surface.visibleColumnCount}
@@ -266,7 +289,11 @@ export function ListViewContent<TRow extends Row = Row>({
           interactive={interactive}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}
-          rowHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
+          rowHref={
+            rowHref
+              ? (row) => rowHref(row, surface.listState.navigationScope)
+              : undefined
+          }
           onRowClick={onRowClick}
           cardActions={
             cardActions || renderRowActions ? boardCardActions : undefined
@@ -299,7 +326,11 @@ export function ListViewContent<TRow extends Row = Row>({
           resourceView={resourceView}
           groupStack={effectiveGroupStack}
           interactive={interactive}
-          rowHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
+          rowHref={
+            rowHref
+              ? (row) => rowHref(row, surface.listState.navigationScope)
+              : undefined
+          }
           renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}
@@ -322,7 +353,11 @@ export function ListViewContent<TRow extends Row = Row>({
           resourceView={resourceView}
           groupStack={effectiveGroupStack}
           interactive={interactive}
-          rowHref={rowHref ? (row) => rowHref(row, surface.listState.navigationScope) : undefined}
+          rowHref={
+            rowHref
+              ? (row) => rowHref(row, surface.listState.navigationScope)
+              : undefined
+          }
           renderRowActions={renderRowActions}
           onRowClick={onRowClick}
           emptyContent={emptyContent}

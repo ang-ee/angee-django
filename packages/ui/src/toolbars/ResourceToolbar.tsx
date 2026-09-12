@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { FilterValue } from "@angee/metadata";
-import { useDebouncedCallback } from "use-debounce";
+import { useDebouncedText } from "../lib/use-debounced-text";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -42,10 +42,9 @@ import {
   labelText,
 } from "../views/resource/resource-view-utils";
 
-const FILTER_TEXT_COMMIT_DELAY_MS = 300;
-
 export interface ResourceToolbarProps {
   pager: PagerState;
+  maxGroupDepth?: number;
   view?: ResourceViewKind;
   group?: ResourceViewGroup | null;
   groupStack?: readonly ResourceViewGroup[];
@@ -92,7 +91,10 @@ export interface ResourceToolbarFilterOption {
   id: string;
   label: ReactNode;
   chipLabel?: ReactNode;
+  /** Compound preset; its individual value chips describe the active predicates. */
+  preset?: boolean;
   filter: ResourceViewFilter;
+  group?: string;
 }
 
 /** The typed view-controls seam a kind contributes: mode switch + period nav +
@@ -139,9 +141,15 @@ export interface ResourceToolbarFilterField {
   id: string;
   field?: string;
   label: ReactNode;
+  group?: string;
   type?: ResourceToolbarFilterFieldType;
   options?: readonly ResourceToolbarFilterChoice[];
   operators?: readonly ResourceToolbarCustomFilterOperator[];
+  /** Declared value picker, for example an authorized relation search. */
+  renderValue?: (props: {
+    value: string;
+    onValueChange: (value: string) => void;
+  }) => ReactNode;
 }
 
 export interface ResourceToolbarCustomFilter {
@@ -180,6 +188,7 @@ const DEFAULT_SWITCHER_KINDS: readonly ResourceViewKind[] = ["list", "board"];
 
 export function ResourceToolbar({
   pager,
+  maxGroupDepth,
   view,
   group,
   groupStack,
@@ -199,7 +208,7 @@ export function ResourceToolbar({
   onFilterToggle,
   onFilterTextChange,
   onClearGroup,
-  onGroupStackChange,
+  onGroupStackChange: changeGroupStack,
   onPageChange,
   onPageSizeChange,
   pagerPageSizeOptions,
@@ -215,21 +224,33 @@ export function ResourceToolbar({
   wrap = false,
 }: ResourceToolbarProps): ReactElement {
   const t = useUiT();
+  const onGroupStackChange = React.useMemo(
+    () =>
+      changeGroupStack
+        ? (groups: readonly ResourceViewGroup[]) =>
+            changeGroupStack(
+              maxGroupDepth === undefined
+                ? groups
+                : groups.slice(-Math.max(1, maxGroupDepth)),
+            )
+        : undefined,
+    [changeGroupStack, maxGroupDepth],
+  );
   const resolvedCreateLabel = createLabel ?? t("resourceToolbar.create");
   // The active kind's applicability gates the data controls: the calendar shows
   // none of filter/pager/group-by; a surface that names no kind keeps them all.
   const capabilities = resourceViewKindCapabilities(view);
   const groupControls =
-    capabilities.grouping
-    && (groupOptions !== undefined
-      || groupStack !== undefined
-      || group !== undefined
-      || onGroupStackChange !== undefined
-      || onClearGroup !== undefined);
+    capabilities.grouping &&
+    (groupOptions !== undefined ||
+      groupStack !== undefined ||
+      group !== undefined ||
+      onGroupStackChange !== undefined ||
+      onClearGroup !== undefined);
   const toolbarGroupOptions = groupOptions ?? [];
   const groups = groupControls ? groupStack ?? (group ? [group] : []) : [];
-  const activeFilters = filterOptions.filter((option) =>
-    activeFilterIds.includes(option.id),
+  const activeFilters = filterOptions.filter(
+    (option) => activeFilterIds.includes(option.id) && !option.preset,
   );
   return (
     <section
@@ -250,6 +271,7 @@ export function ResourceToolbar({
       {viewControls ? <ResourceViewControls {...viewControls} /> : null}
       {capabilities.filter ? (
         <FilterPicker
+          wrap={wrap}
           groups={groups}
           groupControls={groupControls}
           groupOptions={toolbarGroupOptions}
@@ -270,26 +292,28 @@ export function ResourceToolbar({
           onFavoriteSelect={onFavoriteSelect}
         />
       ) : null}
-      <div className="min-w-2 flex-1" />
-      {capabilities.pagination ? (
-        <Pager
-          {...pager}
-          subject={pagerSubject}
-          unit={pagerTotalUnit}
-          pageSizeOptions={pagerPageSizeOptions}
-          maxPageSize={pagerMaxPageSize}
-          onPageChange={onPageChange}
-          onPageSizeChange={onPageSizeChange}
-        />
-      ) : null}
-      {view && onViewChange ? (
-        <ResourceViewSwitcher
-          view={view}
-          kinds={availableViews}
-          onViewChange={onViewChange}
-        />
-      ) : null}
-      {viewSwitcher}
+      {!wrap ? <div className="min-w-2 flex-1" /> : null}
+      <div className={wrap ? "ml-auto flex items-center gap-2" : "contents"}>
+        {capabilities.pagination ? (
+          <Pager
+            {...pager}
+            subject={pagerSubject}
+            unit={pagerTotalUnit}
+            pageSizeOptions={pagerPageSizeOptions}
+            maxPageSize={pagerMaxPageSize}
+            onPageChange={onPageChange}
+            onPageSizeChange={onPageSizeChange}
+          />
+        ) : null}
+        {view && onViewChange ? (
+          <ResourceViewSwitcher
+            view={view}
+            kinds={availableViews}
+            onViewChange={onViewChange}
+          />
+        ) : null}
+        {viewSwitcher}
+      </div>
     </section>
   );
 }
@@ -346,6 +370,7 @@ function ResourceViewControls({
 }
 
 function FilterPicker({
+  wrap,
   groups,
   groupControls,
   groupOptions,
@@ -365,6 +390,7 @@ function FilterPicker({
   onFavoriteSave,
   onFavoriteSelect,
 }: {
+  wrap?: boolean;
   groups: readonly ResourceViewGroup[];
   groupControls: boolean;
   groupOptions: readonly ResourceToolbarGroupOption[];
@@ -387,14 +413,24 @@ function FilterPicker({
   const t = useUiT();
   const defaultFavoriteLabel = t("resourceToolbar.savedSearch");
   const [customFilterOpen, setCustomFilterOpen] = React.useState(false);
+  const groupedFilters = React.useMemo(() => {
+    const sections = new Map<string, ResourceToolbarFilterOption[]>();
+    for (const option of filterOptions) {
+      const label = option.group ?? "";
+      const choices = sections.get(label) ?? [];
+      choices.push(option);
+      sections.set(label, choices);
+    }
+    return [...sections];
+  }, [filterOptions]);
   const [customFieldId, setCustomFieldId] = React.useState("");
   const [customOperator, setCustomOperator] =
     React.useState<ResourceToolbarCustomFilterOperator>("contains");
   const [customValue, setCustomValue] = React.useState("");
   const [customValueError, setCustomValueError] = React.useState<string>();
   const selectedCustomField =
-    customFilterFields.find((field) => field.id === customFieldId)
-    ?? customFilterFields[0];
+    customFilterFields.find((field) => field.id === customFieldId) ??
+    customFilterFields[0];
   const effectiveCustomOperator = operatorForField(
     selectedCustomField,
     customOperator,
@@ -404,23 +440,17 @@ function FilterPicker({
   const [customGroupGranularity, setCustomGroupGranularity] =
     React.useState<ResourceViewGroupGranularity>("day");
   const selectedCustomGroup =
-    groupOptions.find((option) => option.id === customGroupId) ?? groupOptions[0];
+    groupOptions.find((option) => option.id === customGroupId) ??
+    groupOptions[0];
   const [favoriteOpen, setFavoriteOpen] = React.useState(false);
   const [favoriteLabel, setFavoriteLabel] =
     React.useState(defaultFavoriteLabel);
   const favoritesEnabled = onFavoriteSave !== undefined;
-  const [draftFilterText, setDraftFilterText] = React.useState(filterText);
-  const commitFilterText = useDebouncedCallback((value: string) => {
-    if (value !== filterText) onFilterTextChange?.(value);
-  }, FILTER_TEXT_COMMIT_DELAY_MS);
-
-  React.useEffect(() => {
-    setDraftFilterText(filterText);
-  }, [filterText]);
-
-  React.useEffect(() => {
-    return () => commitFilterText.cancel();
-  }, [commitFilterText]);
+  const {
+    draft: draftFilterText,
+    setDraft: setDraftFilterText,
+    commit: commitFilterText,
+  } = useDebouncedText(filterText, onFilterTextChange);
 
   function addCustomFilter() {
     if (!selectedCustomField || !onCustomFilterAdd) return;
@@ -428,7 +458,11 @@ function FilterPicker({
     let value: FilterValue | undefined;
     try {
       value = needsValue
-        ? coerceFilterValue(selectedCustomField, customValue, effectiveCustomOperator)
+        ? coerceFilterValue(
+            selectedCustomField,
+            customValue,
+            effectiveCustomOperator,
+          )
         : undefined;
     } catch {
       setCustomValueError(t("resourceToolbar.invalidJson"));
@@ -469,16 +503,27 @@ function FilterPicker({
 
   return (
     <PopoverRoot>
-      <div className="inline-flex h-8 min-w-0 max-w-xl flex-1 items-center gap-1 overflow-hidden rounded-6 border border-transparent bg-inset pl-2 pr-1 text-13 text-fg focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring">
+      <div
+        className={cn(
+          "inline-flex h-8 min-w-0 max-w-xl flex-1 items-center gap-1 overflow-hidden rounded-6 border border-transparent bg-inset pl-2 pr-1 text-13 text-fg focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring",
+          wrap && "min-w-48",
+        )}
+      >
         <Glyph name="search" className="size-3.5 shrink-0 text-fg-muted" />
         {groups.map((nextGroup, index) => (
           <FacetChip
             key={`${nextGroup.field}:${nextGroup.granularity ?? ""}`}
-            label={index === 0 ? t("resourceToolbar.groupBy") : t("resourceToolbar.then")}
-            value={resourceViewGroupLabel(nextGroup)}
-            removeLabel={resourceViewGroupLabel(nextGroup)}
+            label={
+              index === 0
+                ? t("resourceToolbar.groupBy")
+                : t("resourceToolbar.then")
+            }
+            value={resourceViewGroupLabel(nextGroup, groupOptions)}
+            removeLabel={resourceViewGroupLabel(nextGroup, groupOptions)}
             onRemove={() => {
-              const next = groups.filter((_, groupIndex) => groupIndex !== index);
+              const next = groups.filter(
+                (_, groupIndex) => groupIndex !== index,
+              );
               if (next.length === 0) onClearGroup?.();
               else onGroupStackChange?.(next);
             }}
@@ -498,32 +543,36 @@ function FilterPicker({
             key={chip.id}
             label={t("resourceToolbar.filter")}
             value={chip.label}
-            removeLabel={labelText(chip.label) ?? t("resourceToolbar.filterFallback")}
+            removeLabel={
+              labelText(chip.label) ?? t("resourceToolbar.filterFallback")
+            }
             onRemove={() => onCustomFilterRemove?.(chip.id)}
           />
         ))}
-        {onFilterTextChange && <input
-          type="search"
-          value={draftFilterText}
-          placeholder={t("resourceToolbar.filterPlaceholder")}
-          aria-label={t("resourceToolbar.filterRecords")}
-          className="h-full min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted"
-          onBlur={(event) => {
-            commitFilterText(event.currentTarget.value);
-            commitFilterText.flush();
-          }}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            setDraftFilterText(value);
-            commitFilterText(value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
+        {onFilterTextChange && (
+          <input
+            type="search"
+            value={draftFilterText}
+            placeholder={t("resourceToolbar.filterPlaceholder")}
+            aria-label={t("resourceToolbar.filterRecords")}
+            className="h-full min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted"
+            onBlur={(event) => {
               commitFilterText(event.currentTarget.value);
               commitFilterText.flush();
-            }
-          }}
-        />}
+            }}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setDraftFilterText(value);
+              commitFilterText(value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                commitFilterText(event.currentTarget.value);
+                commitFilterText.flush();
+              }
+            }}
+          />
+        )}
         <PopoverTrigger
           className="grid size-6 shrink-0 place-content-center rounded-6 text-fg-muted outline-none transition-colors hover:bg-sheet hover:text-fg focus-visible:focus-ring"
           aria-label={
@@ -562,14 +611,27 @@ function FilterPicker({
               {filterOptions.length === 0 ? (
                 <PickerMuted>{t("resourceToolbar.noFilters")}</PickerMuted>
               ) : (
-                filterOptions.map((option) => (
-                  <PickerButton
-                    key={option.id}
-                    active={activeFilterIds.includes(option.id)}
-                    onClick={() => onFilterToggle?.(option.id)}
+                groupedFilters.map(([label, choices]) => (
+                  <section
+                    key={label}
+                    aria-label={label || undefined}
+                    className="grid gap-1"
                   >
-                    {option.label}
-                  </PickerButton>
+                    {label ? (
+                      <div className="px-2 pt-2 text-2xs font-semibold text-fg-muted">
+                        {label}
+                      </div>
+                    ) : null}
+                    {choices.map((option) => (
+                      <PickerButton
+                        key={option.id}
+                        active={activeFilterIds.includes(option.id)}
+                        onClick={() => onFilterToggle?.(option.id)}
+                      >
+                        {option.label}
+                      </PickerButton>
+                    ))}
+                  </section>
                 ))
               )}
               <PickerDivider />
@@ -590,15 +652,22 @@ function FilterPicker({
                   value={customValue}
                   error={customValueError}
                   onField={(id) => {
-                    const nextField = customFilterFields.find((field) =>
-                      field.id === id);
+                    const nextField = customFilterFields.find(
+                      (field) => field.id === id,
+                    );
                     setCustomFieldId(id);
                     setCustomOperator(defaultOperator(nextField));
                     setCustomValue("");
                     setCustomValueError(undefined);
                   }}
-                  onOperator={(operator) => { setCustomOperator(operator); setCustomValueError(undefined); }}
-                  onValue={(value) => { setCustomValue(value); setCustomValueError(undefined); }}
+                  onOperator={(operator) => {
+                    setCustomOperator(operator);
+                    setCustomValueError(undefined);
+                  }}
+                  onValue={(value) => {
+                    setCustomValue(value);
+                    setCustomValueError(undefined);
+                  }}
                   onAdd={addCustomFilter}
                 />
               ) : null}
@@ -632,7 +701,9 @@ function FilterPicker({
                     optionId={selectedCustomGroup?.id ?? ""}
                     granularity={customGroupGranularity}
                     onOption={(id) => {
-                      const option = groupOptions.find((item) => item.id === id);
+                      const option = groupOptions.find(
+                        (item) => item.id === id,
+                      );
                       setCustomGroupId(id);
                       setCustomGroupGranularity(
                         option?.group.granularity ?? "day",
@@ -670,7 +741,8 @@ function FilterPicker({
                       value={favoriteLabel}
                       aria-label={t("resourceToolbar.favoriteName")}
                       onChange={(event) =>
-                        setFavoriteLabel(event.currentTarget.value)}
+                        setFavoriteLabel(event.currentTarget.value)
+                      }
                     />
                     <Button
                       type="submit"
@@ -683,7 +755,9 @@ function FilterPicker({
                   </form>
                 ) : null}
                 {favorites.length === 0 ? (
-                  <PickerMuted>{t("resourceToolbar.noSavedSearches")}</PickerMuted>
+                  <PickerMuted>
+                    {t("resourceToolbar.noSavedSearches")}
+                  </PickerMuted>
                 ) : (
                   favorites.map((favorite) => (
                     <PickerButton
@@ -810,6 +884,7 @@ function CustomFilterEditor({
             options={fields.map((item) => ({
               value: item.id,
               label: item.label,
+              group: item.group,
             }))}
             onValueChange={onField}
           />
@@ -824,25 +899,38 @@ function CustomFilterEditor({
                 label: filterOperatorLabel(item),
               }))}
               onValueChange={(next) =>
-                onOperator(next as ResourceToolbarCustomFilterOperator)}
+                onOperator(next as ResourceToolbarCustomFilterOperator)
+              }
             />
             {needsValue ? (
-              (field?.options || field?.type === "boolean") && !structuredFilterOperand(operator) ? (
+              field?.renderValue && !structuredFilterOperand(operator) ? (
+                field.renderValue({ value, onValueChange: onValue })
+              ) : (field?.options || field?.type === "boolean") &&
+                !structuredFilterOperand(operator) ? (
                 <Select
                   size="sm"
                   value={value}
                   className="min-w-0 flex-1"
                   aria-label={t("resourceToolbar.filterValue")}
                   placeholder={t("resourceToolbar.value")}
-                  options={field.type === "boolean"
-                    ? [{ value: "true", label: t("list.yes") }, { value: "false", label: t("list.no") }]
-                    : field.options ?? []}
+                  options={
+                    field.type === "boolean"
+                      ? [
+                          { value: "true", label: t("list.yes") },
+                          { value: "false", label: t("list.no") },
+                        ]
+                      : field.options ?? []
+                  }
                   onValueChange={onValue}
                 />
               ) : (
                 <Input
                   size="sm"
-                  type={structuredFilterOperand(operator) ? "text" : filterInputType(field)}
+                  type={
+                    structuredFilterOperand(operator)
+                      ? "text"
+                      : filterInputType(field)
+                  }
                   value={value}
                   placeholder={t("resourceToolbar.value")}
                   aria-label={t("resourceToolbar.filterValue")}
@@ -853,7 +941,11 @@ function CustomFilterEditor({
               )
             ) : null}
           </div>
-          {error ? <p role="alert" className="text-xs text-danger-text">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-xs text-danger-text">
+              {error}
+            </p>
+          ) : null}
           <Button
             type="button"
             size="sm"
@@ -1062,9 +1154,17 @@ export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
   );
 }
 
-function resourceViewGroupLabel(group: ResourceViewGroup): string {
-  const field = groupFieldLabel(group.field);
-  return group.granularity ? `${field} · ${titleCase(group.granularity)}` : field;
+function resourceViewGroupLabel(
+  group: ResourceViewGroup,
+  options: readonly ResourceToolbarGroupOption[],
+): string {
+  const declared = options.find((option) => option.group.field === group.field)
+    ?.label;
+  const field =
+    typeof declared === "string" ? declared : groupFieldLabel(group.field);
+  return group.granularity
+    ? `${field} · ${titleCase(group.granularity)}`
+    : field;
 }
 
 function operatorsForField(

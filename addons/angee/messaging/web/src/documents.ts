@@ -102,17 +102,20 @@ export const MessageSenderFields = graphql(`
     display_name
     value
     party_link_confirmed
-    party { display_name }
+    party { id display_name }
   }
 `);
 
 export const MessagePartFields = graphql(`
   fragment MessagePartFields on PartType {
     id
+    name
+    type
+    position
     role
     disposition
     cid
-    fragment { text }
+    fragment { id text }
     file {
       id
       filename
@@ -264,14 +267,19 @@ export const ThreadTranscriptDocument = graphql(`
     $limit: Int!
     $beforeCursor: String
     $throughCursor: String
+    $afterCursor: String
+    $anchor: String! = ""
   ) {
     thread_message_feed(
       thread_id: $threadId
       before_cursor: $beforeCursor
       through_cursor: $throughCursor
+      after_cursor: $afterCursor
+      anchor: $anchor
       limit: $limit
     ) {
       ...MessageFeedWindowFields
+      newer_cursor has_newer has_newer_than_before
       messages {
         ...TranscriptMessageFields
       }

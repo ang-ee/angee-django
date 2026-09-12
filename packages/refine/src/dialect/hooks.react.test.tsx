@@ -92,6 +92,14 @@ describe("useActionMutation", () => {
     ]);
   });
 
+  test.each(["round", null])("binds only the declared target argument: %s", async (idArgument) => {
+    const { result } = renderHook(() => useActionMutation("run_probe", { idArgument }), { wrapper: ConsoleProvider });
+    await act(async () => { await result.current[0]("round_1", { proposals: ["proposal_2"] }); });
+    expect(mutationMock.calls[0]?.values).toEqual(idArgument === null
+      ? { proposals: ["proposal_2"] }
+      : { round: "round_1", proposals: ["proposal_2"] });
+  });
+
   test("forwards a required scalar argument beside the target id", async () => {
     const { result } = renderHook(() => useActionMutation("run_probe"), {
       wrapper: ConsoleProvider,

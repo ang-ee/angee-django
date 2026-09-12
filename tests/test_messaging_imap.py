@@ -934,7 +934,7 @@ def test_login_refusal_names_the_account_and_host(monkeypatch: pytest.MonkeyPatc
 
     def refuse(self: FakeIMAPClient, username: str, password: str) -> None:
         del self, password
-        raise LoginError("[AUTHENTICATIONFAILED] Authentication failed.")
+        raise LoginError("[AUTHENTICATIONFAILED] Authentication failed. Private server detail: pw")
 
     monkeypatch.setattr(FakeIMAPClient, "login", refuse)
     backend = _backend(monkeypatch, account, config={"host": "10.0.0.4"})
@@ -943,9 +943,11 @@ def test_login_refusal_names_the_account_and_host(monkeypatch: pytest.MonkeyPatc
         backend.fetch_messages()
 
     assert raised.value.public_message == (
-        "IMAP login failed for 'ada@example.com' at 10.0.0.4: [AUTHENTICATIONFAILED] Authentication failed."
+        "IMAP login failed for 'ada@example.com' at 10.0.0.4. Check the account credentials."
     )
     assert "pw" not in raised.value.public_message
+    assert "Private server detail" not in raised.value.public_message
+    assert isinstance(raised.value.__cause__, LoginError)
 
 
 def test_transport_failure_while_dialing_is_an_imap_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -960,8 +962,12 @@ def test_transport_failure_while_dialing_is_an_imap_error(monkeypatch: pytest.Mo
     monkeypatch.setattr(FakeIMAPClient, "__init__", refuse_dial)
     backend = _backend(monkeypatch, account, config={"host": "10.0.0.4"})
 
-    with pytest.raises(ImapError, match="IMAP connection to 10.0.0.4 failed: connection refused"):
+    with pytest.raises(ImapError) as raised:
         backend.fetch_messages()
+    assert raised.value.public_message == (
+        "IMAP connection to 10.0.0.4 failed. Check the host, port, and security settings."
+    )
+    assert isinstance(raised.value.__cause__, ConnectionRefusedError)
 
 
 def test_connection_test_signs_in_and_logs_out(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -245,7 +245,8 @@ class _ConfigFormSpecProjector:
                 )
             ):
                 raise ImproperlyConfigured(
-                    f"{self.owner}.config_model field {field_path!r} must use one string alias for validation and serialization."
+                    f"{self.owner}.config_model field {field_path!r} must use one string alias "
+                    "for validation and serialization."
                 )
             for nested in _pydantic_models_in(field.annotation):
                 self._validate_aliases(nested, path=field_path, seen=seen | {model})

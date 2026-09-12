@@ -43,7 +43,9 @@ describe("ResourceToolbar under the calendar kind", () => {
       availableViews: ["list", "board", "calendar"],
       viewControls: viewControls(),
       // Group + filter options are declared but must not render under calendar.
-      filterOptions: [{ id: "open", label: "Open", filter: { status: "open" } }],
+      filterOptions: [
+        { id: "open", label: "Open", filter: { status: "open" } },
+      ],
       groupStack: [{ field: "status" }],
       onGroupStackChange: vi.fn(),
     });
@@ -83,15 +85,35 @@ describe("ResourceToolbar under the calendar kind", () => {
 });
 
 describe("ResourceToolbar list-kind regression", () => {
+  test("a single-axis collection replaces its group through the native picker", () => {
+    const onGroupStackChange = vi.fn();
+    renderToolbar({
+      view: "list",
+      maxGroupDepth: 1,
+      groupStack: [{ field: "account" }],
+      groupOptions: [
+        { id: "account", label: "Account", group: { field: "account" } },
+        { id: "platform", label: "Platform", group: { field: "platform" } },
+      ],
+      onGroupStackChange,
+    });
+    fireEvent.click(screen.getByLabelText("Filter and group"));
+    fireEvent.click(screen.getByText("Platform"));
+    expect(onGroupStackChange).toHaveBeenCalledWith([{ field: "platform" }]);
+  });
   test("opts into wrapping for narrow containers", () => {
     renderToolbar({ wrap: true });
-    expect(screen.getByLabelText("Data controls").className).toContain("flex-wrap");
+    expect(screen.getByLabelText("Data controls").className).toContain(
+      "flex-wrap",
+    );
   });
   test("keeps filter, pager, and the list/board switcher; no view controls", () => {
     renderToolbar({
       view: "list",
       availableViews: ["list", "board"],
-      filterOptions: [{ id: "open", label: "Open", filter: { status: "open" } }],
+      filterOptions: [
+        { id: "open", label: "Open", filter: { status: "open" } },
+      ],
     });
 
     expect(screen.getByLabelText("Filter records")).toBeTruthy();

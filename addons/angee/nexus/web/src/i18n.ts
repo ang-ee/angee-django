@@ -1,6 +1,8 @@
 import { createNamespaceT } from "@angee/ui";
+import { inboxMessages } from "./inbox/copy";
 
 export const enNexusMessages: Record<string, string> = {
+  ...inboxMessages,
   "ties.partyA": "Party A",
   "ties.partyB": "Party B",
   "ties.aToB": "A → B",

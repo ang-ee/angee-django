@@ -25,12 +25,15 @@ import {
 } from "./resource-view-model";
 import type { UiTranslate } from "../../i18n";
 import { errorFromUnknown } from "../../data/errors";
+import type { CollectionGroupRequest } from "./collection-source";
 
 /** Leaf record page size inside a server-grouped bucket. */
 const GROUPED_LEAF_PAGE_SIZE = 20;
 const EMPTY_ARRAY = [] as const;
 
 export interface GroupedRenderParams {
+  query?: ResourceQuery;
+  leafPageSize?: number;
   groupStack: readonly ResourceViewGroup[];
   baseFilter: ResourceViewFilter | undefined;
   expandedKeys: ReadonlySet<string>;
@@ -58,11 +61,23 @@ export interface GroupedLeafScope {
 }
 
 export interface GroupedRenderModel<TRow extends Row> {
-  groupScopes: GroupByBatchScope[];
+  groupScopes: GroupedGroupScope[];
   leafScopes: GroupedLeafScope[];
   items: GroupedListItem<TRow>[];
-  rootResult: UseAngeeGroupByResult | undefined;
+  rootResult: GroupedQueryResult | undefined;
 }
+
+/** Native and authored transports expose the same server group facts. */
+export interface GroupedQueryResult extends GroupByResult {
+  summary?: string;
+  fetching: boolean;
+  error: Error | UseAngeeGroupByResult["error"];
+  refetch: () => void;
+}
+
+export interface GroupedGroupScope
+  extends GroupByBatchScope,
+    CollectionGroupRequest {}
 
 /**
  * Walk the server group tree once, collecting the request frontier and emitting
@@ -70,7 +85,7 @@ export interface GroupedRenderModel<TRow extends Row> {
  * leaf records resolve without acquiring data itself.
  */
 export function buildGroupedRenderModel<TRow extends Row>(
-  groupByResults: ReadonlyMap<string, UseAngeeGroupByResult>,
+  groupByResults: ReadonlyMap<string, GroupedQueryResult>,
   leafResults: ReadonlyMap<string, AngeeListBatchEntry>,
   rowModelsByScopeKey: ReadonlyMap<string, readonly TableRowModel<TRow>[]>,
   params: GroupedRenderParams,
@@ -92,11 +107,12 @@ export function buildGroupedRenderModel<TRow extends Row>(
     allRecordsLabel,
     t,
   } = params;
-  const groupScopes: GroupByBatchScope[] = [];
+  const groupScopes: GroupedGroupScope[] = [];
   const leafScopes: GroupedLeafScope[] = [];
   const items: GroupedListItem<TRow>[] = [];
-  let rootResult: UseAngeeGroupByResult | undefined;
-  const resourceQuery = modelMetadata ? ResourceQuery.from(modelMetadata) : null;
+  let rootResult: GroupedQueryResult | undefined;
+  const resourceQuery =
+    params.query ?? (modelMetadata ? ResourceQuery.from(modelMetadata) : null);
 
   const emitLeaf = (
     bucketKey: string,
@@ -105,7 +121,8 @@ export function buildGroupedRenderModel<TRow extends Row>(
     depth: number,
   ): GroupedListPager => {
     const pagination = paginationByScope[bucketKey];
-    const leafPageSize = pagination?.pageSize ?? GROUPED_LEAF_PAGE_SIZE;
+    const leafPageSize =
+      pagination?.pageSize ?? params.leafPageSize ?? GROUPED_LEAF_PAGE_SIZE;
     const pageCount = Math.max(1, Math.ceil(bucket.count / leafPageSize));
     const currentPage = Math.min((pagination?.pageIndex ?? 0) + 1, pageCount);
     leafScopes.push({
@@ -151,7 +168,12 @@ export function buildGroupedRenderModel<TRow extends Row>(
       });
     } else {
       for (const row of rows) {
-        items.push({ kind: "record", itemKey: `${bucketKey}:${row.id}`, row, nav });
+        items.push({
+          kind: "record",
+          itemKey: `${bucketKey}:${row.id}`,
+          row,
+          nav,
+        });
       }
     }
     return {
@@ -170,7 +192,8 @@ export function buildGroupedRenderModel<TRow extends Row>(
   ): GroupedListPager | undefined => {
     const axisGroup = groupStack[depth];
     if (!axisGroup) return;
-    if (!resourceQuery) throw new Error("Resource metadata is required for server grouping.");
+    if (!resourceQuery)
+      throw new Error("Resource metadata is required for server grouping.");
     const axis = resourceQuery.group(axisGroup);
     const projection = axis.groupBy();
     const levelWhere = resourceQuery.toWhere(parentFilter);
@@ -179,8 +202,10 @@ export function buildGroupedRenderModel<TRow extends Row>(
       filter: parentFilter ?? null,
     });
     const pagination = paginationByScope[levelScopeKey];
-    const levelPageSize = depth === 0 ? pageSize : pagination?.pageSize ?? pageSize;
-    const storedPage = depth === 0 ? rootPage : (pagination?.pageIndex ?? 0) + 1;
+    const levelPageSize =
+      depth === 0 ? pageSize : pagination?.pageSize ?? pageSize;
+    const storedPage =
+      depth === 0 ? rootPage : (pagination?.pageIndex ?? 0) + 1;
     const query: GroupByRequestOptions = {
       dimensions: projection.dimensions,
       ...(projection.orderBy ? { orderBy: projection.orderBy } : {}),
@@ -189,14 +214,26 @@ export function buildGroupedRenderModel<TRow extends Row>(
       page: storedPage,
       pageSize: levelPageSize,
     };
-    groupScopes.push({ key: levelScopeKey, query });
+    groupScopes.push({
+      key: levelScopeKey,
+      query,
+      group: axisGroup,
+      filter: parentFilter,
+      order: leafOrder,
+      page: storedPage,
+      pageSize: levelPageSize,
+    });
     const result = groupByResults.get(levelScopeKey);
     if (depth === 0) rootResult = result;
     const pager: GroupedListPager = {
       pageKey: levelScopeKey,
-      page: result && !result.error
-        ? Math.min(storedPage, Math.max(1, Math.ceil(result.totalCount / levelPageSize)))
-        : storedPage,
+      page:
+        result && !result.error
+          ? Math.min(
+              storedPage,
+              Math.max(1, Math.ceil(result.totalCount / levelPageSize)),
+            )
+          : storedPage,
       pageSize: levelPageSize,
       total: result?.error ? undefined : result?.totalCount,
       unit: "groups",
@@ -210,7 +247,8 @@ export function buildGroupedRenderModel<TRow extends Row>(
             kind: "status",
             itemKey: `error:${levelScopeKey}`,
             depth,
-            message: errorFromUnknown(result.error)?.message ?? "Request failed.",
+            message:
+              errorFromUnknown(result.error)?.message ?? "Request failed.",
             tone: "danger",
           });
         } else if (!result || result.fetching) {
@@ -250,6 +288,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
         emptyValueLabel,
         t,
         emptyRelationLabel,
+        resourceQuery,
       );
       const header: Extract<GroupedListItem<TRow>, { kind: "groupHeader" }> = {
         kind: "groupHeader",
@@ -283,6 +322,7 @@ function bucketLabel(
   emptyValueLabel: string,
   t: UiTranslate,
   emptyRelationLabel: (field: string) => string,
+  query: ResourceQuery,
 ): string {
   if (!group) return allRecordsLabel;
   const [label] = bucketValueLabels(
@@ -292,6 +332,7 @@ function bucketLabel(
     emptyValueLabel,
     t,
     emptyRelationLabel,
+    query,
   );
   return label ?? allRecordsLabel;
 }
@@ -304,9 +345,11 @@ export function groupScopesEqual(
   if (left.length !== right.length) return false;
   return left.every((scope, index) => {
     const other = right[index];
-    return other !== undefined
-      && scope.key === other.key
-      && stableSerialize(scope.query) === stableSerialize(other.query);
+    return (
+      other !== undefined &&
+      scope.key === other.key &&
+      stableSerialize(scope) === stableSerialize(other)
+    );
   });
 }
 

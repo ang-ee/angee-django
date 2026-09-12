@@ -1,10 +1,11 @@
+import { decisionHref } from "../decision-navigation";
 import * as React from "react";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
   Badge, Button, Collapsible, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
   Glyph, LabeledDescriptorField, LazyBoundary, Textarea, TextLink, formSpecInitialValues,
   PageAside,
-  errorMessage, recordTargetHref, useDottedPathFieldErrors, useFormSpecFields, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
+  errorMessage, useDottedPathFieldErrors, useFormSpecFields, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
   type DottedPathFieldErrorMap,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
@@ -81,7 +82,7 @@ function DecisionTargetLink({ approval }: { approval: PendingWorkflowDecision })
   const target = approval.target_reference;
   const base = target ? recordHref(target.model, target.id) : undefined;
   if (!base || !target) return null;
-  const href = recordTargetHref(base, { tab: target.tab ?? undefined, task: approval.id });
+  const href = decisionHref(base, approval.id, target.tab ?? undefined);
   return <TextLink href={href}>{t("inbox.openTarget")}</TextLink>;
 }
 

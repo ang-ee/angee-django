@@ -24,6 +24,8 @@ export type RecordActionRunner = (
 ) => ActionResult | Promise<ActionResult>;
 
 export interface UseRecordActionOptions {
+  /** Backend argument carrying the record id; defaults to `id`. */
+  idArgument?: string;
   /** Extra generated action arguments derived from the current record id. */
   actionArguments?: (id: string) => ActionArguments;
   /** Message returned when the action itself returns no message. */
@@ -93,6 +95,7 @@ export function useRecordActionMutation<TField extends string = string>(
   );
   const invalidates = useResourceInvalidates(canonicalInvalidateModels);
   const [mutate, state] = useActionMutation<TField>(field, {
+    ...(options?.idArgument !== undefined ? { idArgument: options.idArgument } : {}),
     ...(options?.invalidateModels !== undefined
       ? { invalidateModels: canonicalInvalidateModels }
       : {}),
@@ -137,6 +140,8 @@ export function useRecordActionMutation<TField extends string = string>(
 }
 
 export interface UseActionResultMutationOptions {
+  /** Backend argument carrying the record id; defaults to `id`. Null sends explicit arguments only. */
+  idArgument?: string | null;
   /** Angee model labels whose refine caches this verb moves. */
   invalidateModels?: readonly string[];
   /** Schema that owns the target record; defaults to the ambient data provider. */
@@ -198,6 +203,7 @@ export function useActionOutcomeMutation<TField extends string = string>(
   );
   const invalidates = useResourceInvalidates(canonicalInvalidateModels);
   return useActionMutation<TField>(field, {
+    ...(options.idArgument !== undefined ? { idArgument: options.idArgument } : {}),
     ...(dataProviderName !== undefined ? { dataProviderName } : {}),
     ...(options.invalidateModels !== undefined
       ? { invalidateModels: canonicalInvalidateModels }

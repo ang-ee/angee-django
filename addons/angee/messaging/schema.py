@@ -2,8 +2,8 @@
 
 Messages arrive through channel sync and the manager-owned ingest path; the
 console browses and moderates them through Hasura resources. Parts,
-participants, edges, and reactions remain nested read projections reached
-through their message/thread owners.
+participants and edges expose read-only collections; ingest and relation
+producers retain their writes. Reactions remain nested message projections.
 """
 
 from __future__ import annotations
@@ -1122,12 +1122,21 @@ class MessageFeedPage:
     has_newer: bool
     has_more_in_window: bool
     has_older_than_through: bool
+    has_newer_than_before: bool
 
     @classmethod
     def from_scope(cls, queryset: MessageQuerySet, **options: Any) -> Self:
         """Project a domain-scoped message window without re-deciding its scope."""
 
-        return cls(**queryset.feed_page(**options))
+        page = queryset.feed_page(**options)
+        return cls(
+            messages=cast(list[MessageType], page.rows), count=page.count,
+            older_cursor=page.older_cursor, newer_cursor=page.newer_cursor,
+            has_older=page.has_older, has_newer=page.has_newer,
+            has_more_in_window=page.has_more_in_window,
+            has_older_than_through=page.has_older_than_through,
+            has_newer_than_before=page.has_newer_than_before,
+        )
 
 
 @strawberry.type
@@ -1156,6 +1165,7 @@ class MessagingQuery:
         before_cursor: str | None = None,
         after_cursor: str | None = None,
         through_cursor: str | None = None,
+        anchor: str = "",
         limit: int = 50,
     ) -> MessageFeedPage:
         """Page an inbox thread through the current actor's message scope."""
@@ -1173,6 +1183,7 @@ class MessagingQuery:
             before_cursor=before_cursor,
             after_cursor=after_cursor,
             through_cursor=through_cursor,
+            anchor=anchor,
             limit=limit,
         )
 
@@ -1296,6 +1307,17 @@ class MessagingQuery:
 @strawberry.type
 class MessagingMutation:
     """Record-backed chatter mutations."""
+
+    @strawberry.mutation
+    def set_inbox_message_starred(self, info: strawberry.Info, id: strawberry.ID, starred: bool) -> MessageType:
+        """Set the viewer's star after authorizing the personal-message read."""
+
+        user = _request_user(info)
+        if user is None:
+            raise PermissionDenied("authentication required")
+        message = Message.objects.all().explorer().message(str(id))
+        apps.get_model("messaging", "MessageStar").objects.set_starred(message, user=user, starred=starred)
+        return cast(MessageType, message)
 
     @strawberry.mutation(name="post_record_message")
     def post_record_message(self, info: strawberry.Info, input: RecordMessagePostInput) -> RecordMessagePostPayload:
@@ -1874,11 +1896,48 @@ _PART_RESOURCE = hasura_model_resource(
     get_queryset=_part_inbox_queryset,
 )
 
+# Read-only collections expose canonical model metadata and live interests for
+# authored explorer reads; ingest and relation producers remain the write owners.
+_PARTICIPANT_RESOURCE = hasura_model_resource(
+    ParticipantType,
+    model=Participant,
+    name="participants",
+    filterable=["id", "message", "thread", "handle", "role"],
+    sortable=["created_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={
+        "message": public_pk_decoder(Message),
+        "thread": public_pk_decoder(Thread),
+        "handle": public_pk_decoder(Handle),
+    },
+)
+_MESSAGE_EDGE_RESOURCE = hasura_model_resource(
+    MessageEdgeType,
+    model=MessageEdge,
+    name="message_edges",
+    filterable=["id", "src", "dst", "kind", "fragment"],
+    sortable=["created_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={
+        "src": public_pk_decoder(Message),
+        "dst": public_pk_decoder(Message),
+        "fragment": public_pk_decoder(Fragment),
+    },
+)
+
 _RESOURCE_TYPES = [
     *_CHANNEL_RESOURCE.types,
     *_MESSAGE_RESOURCE.types,
     *_THREAD_RESOURCE.types,
     *_PART_RESOURCE.types,
+    *_PARTICIPANT_RESOURCE.types,
+    *_MESSAGE_EDGE_RESOURCE.types,
 ]
 
 
@@ -1890,6 +1949,8 @@ _MESSAGING_SCHEMA_BUCKET = {
         _MESSAGE_RESOURCE.query,
         _THREAD_RESOURCE.query,
         _PART_RESOURCE.query,
+        _PARTICIPANT_RESOURCE.query,
+        _MESSAGE_EDGE_RESOURCE.query,
     ],
     "mutation": [
         MessagingPairingMutation,
@@ -1955,6 +2016,9 @@ schemas = {
             changes(ThreadActivity, field="threadActivityChanged"),
             changes(ThreadNotification, field="threadNotificationChanged"),
             changes(MessageStar, field="messageStarChanged"),
+            changes(Part, field="partChanged"),
+            changes(Participant, field="participantChanged"),
+            changes(MessageEdge, field="messageEdgeChanged"),
         ],
     },
 }

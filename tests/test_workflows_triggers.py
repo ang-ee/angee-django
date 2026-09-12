@@ -252,7 +252,7 @@ def test_event_trigger_check_rejects_persisted_non_published_model(
     )
     Trigger._base_manager.bulk_create([trigger])
 
-    errors = workflow_models.check_event_trigger_change_publishers()
+    errors = workflow_models.check_event_trigger_publishers()
 
     assert any(error.id == "angee.workflows.E001" for error in errors)
     assert "declare changes() for the model to join the change feed" in "\n".join(

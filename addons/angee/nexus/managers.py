@@ -11,6 +11,7 @@ from django.apps import apps
 from django.db import models, transaction
 from django.db.models.functions import Coalesce
 from django.utils import timezone
+from rebac import current_actor
 
 from angee.base.models import AngeeManager, AngeeQuerySet
 
@@ -81,6 +82,22 @@ class TieQuerySet(AngeeQuerySet[Any]):
         """Return edges touching ``party``, retaining the queryset's REBAC scope."""
 
         return self.filter(models.Q(party_a=party) | models.Q(party_b=party))
+
+    def fading_parties_for(self, viewer: Any) -> Any:
+        """Readable counterparties of the viewer's persisted fading ties."""
+
+        ties = self.around_party(viewer).filter(is_fading=True).scoped_for_aggregate().order_by()
+        return (
+            apps.get_model("parties", "Party")
+            .objects.all()
+            .with_actor(self.actor() or current_actor())
+            .filter(
+                models.Q(pk__in=models.Subquery(ties.values("party_a_id")))
+                | models.Q(pk__in=models.Subquery(ties.values("party_b_id")))
+            )
+            .exclude(pk=viewer.pk)
+            .scoped_for_aggregate()
+        )
 
     def party_graph(
         self,

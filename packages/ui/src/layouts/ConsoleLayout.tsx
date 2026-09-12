@@ -139,7 +139,13 @@ function ConsoleWorkbench({
       autoSave="console.workbench"
       scrollMode="browser"
       secondaryDefaultCollapsed
-      primary={publishedPrimary ?? undefined}
+      primary={
+        publishedPrimary != null ? (
+          <ControlBandProvider host={undefined}>
+            {publishedPrimary}
+          </ControlBandProvider>
+        ) : undefined
+      }
       secondary={showChatter ? (
         <ControlBandProvider host={undefined}>
           <Chatter />

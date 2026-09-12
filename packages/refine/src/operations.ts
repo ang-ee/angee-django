@@ -270,7 +270,7 @@ export function extractSaveResult(
 
 export function actionRequest(
   field: string,
-  variables: ByIdVariables,
+  variables: Record<string, unknown>,
   options: { dataProviderName?: string; document: unknown },
 ): CustomGraphQLMutationRequest {
   const root = operationName(field);

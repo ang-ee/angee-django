@@ -16,6 +16,7 @@
   "dependencies": {
     "@angee/app": "workspace:*",
     "@angee/messaging": "workspace:*",
+    "@angee/metadata": "workspace:*",
     "@angee/parties": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",

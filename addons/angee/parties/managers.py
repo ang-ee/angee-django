@@ -44,15 +44,23 @@ _SIGNATURE_PHONE_CANDIDATE = re.compile(r"(?<!\w)\+?\d(?:[\d \t()./\-]*\d)?(?!\w
 class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
     """Circle read scopes: the hierarchy subtree vocabulary over the Angee base."""
 
+    def memberships(self, *, confirmed_only: bool = False) -> Any:
+        """Readable memberships in these readable circles, optionally confirmed only."""
+
+        member_model = apps.get_model("parties", "CircleMember")
+        members = member_model.objects.all().with_actor(self.actor() or current_actor()).scoped_for_aggregate()
+        members = members.filter(circle_id__in=Subquery(self.scoped_for_aggregate().order_by().values("pk")))
+        if confirmed_only:
+            members = members.filter(is_confirmed=True, is_dismissed=False)
+        return members
+
     def with_member_counts(self) -> Self:
         """Annotate each circle with its distinct-party count across its subtree."""
 
         circle_model = apps.get_model("parties", "Circle")
         circle_member_model = apps.get_model("parties", "CircleMember")
         person_model = apps.get_model("parties", "Person")
-        visible_person_ids = (
-            person_model.objects.all().scoped_for_aggregate().canonical().values("pk")
-        )
+        visible_person_ids = person_model.objects.all().scoped_for_aggregate().canonical().values("pk")
         visible_subtree_circle_ids = (
             circle_model.objects.all()
             .scoped_for_aggregate()
@@ -548,9 +556,7 @@ class PartyHandleManager(AngeeManager):
             # The durable-pair check reads once per owner, not once per pair:
             # steady state re-proposes tens of thousands of existing links, and a
             # get_or_create probe for each is the pass's dominant cost.
-            existing_pairs = set(
-                self.filter(handle__created_by_id=owner_id).values_list("party_id", "handle_id")
-            )
+            existing_pairs = set(self.filter(handle__created_by_id=owner_id).values_list("party_id", "handle_id"))
             pools: defaultdict[str, list[Any]] = defaultdict(list)
             for handle in handles:
                 normalized_name = handle_model.normalize_display_name(handle.display_name)
@@ -641,14 +647,6 @@ class DuplicatePartyCandidate:
     left: Any
     right: Any
     normalized_value: str
-
-
-@dataclass(frozen=True, slots=True)
-class IdentityCandidate:
-    """One actor-visible Party matched by an exact name or normalized handle."""
-
-    party: Any
-    reasons: tuple[str, ...]
 
 
 class MergeVetoManager(AngeeManager):
@@ -762,9 +760,7 @@ class PartyQuerySet(AngeeQuerySet):
 
         circle_model = apps.get_model("parties", "Circle")
         circle_member_model = apps.get_model("parties", "CircleMember")
-        visible_circle_ids = (
-            circle_model.objects.all().scoped_for_aggregate().values("pk")
-        )
+        visible_circle_ids = circle_model.objects.all().scoped_for_aggregate().values("pk")
         visible_memberships = (
             circle_member_model.objects.all()
             .scoped_for_aggregate()
@@ -785,9 +781,7 @@ class PartyQuerySet(AngeeQuerySet):
 
         circle_model = apps.get_model("parties", "Circle")
         circle_member_model = apps.get_model("parties", "CircleMember")
-        visible_circle_ids = (
-            circle_model.objects.all().scoped_for_aggregate().values("pk")
-        )
+        visible_circle_ids = circle_model.objects.all().scoped_for_aggregate().values("pk")
         visible_membership = (
             circle_member_model.objects.all()
             .scoped_for_aggregate()
@@ -796,9 +790,13 @@ class PartyQuerySet(AngeeQuerySet):
                 circle_id__in=Subquery(visible_circle_ids),
             )
         )
-        return self.canonical().annotate(
-            _has_visible_circle=Exists(visible_membership),
-        ).filter(_has_visible_circle=False)
+        return (
+            self.canonical()
+            .annotate(
+                _has_visible_circle=Exists(visible_membership),
+            )
+            .filter(_has_visible_circle=False)
+        )
 
     def to_review(self) -> Self:
         """Return canonical parties with an undecided low-confidence handle link."""
@@ -814,32 +812,32 @@ class PartyQuerySet(AngeeQuerySet):
                 is_dismissed=False,
             )
         )
-        return self.canonical().annotate(
-            _has_visible_review_link=Exists(visible_review_link),
-        ).filter(_has_visible_review_link=True)
+        return (
+            self.canonical()
+            .annotate(
+                _has_visible_review_link=Exists(visible_review_link),
+            )
+            .filter(_has_visible_review_link=True)
+        )
 
-    def in_circle(self, circle: Any) -> Self:
+    def in_circle(self, circle: Any, *, confirmed_only: bool = False) -> Self:
         """Return canonical parties in ``circle`` or any of its descendants."""
 
         circle_model = apps.get_model("parties", "Circle")
-        circle_member_model = apps.get_model("parties", "CircleMember")
-        subtree_ids = (
-            circle_model.objects.all()
-            .subtree_of(circle)
-            .scoped_for_aggregate()
-            .values("pk")
-        )
         visible_subtree_membership = (
-            circle_member_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                party_id=OuterRef("pk"),
-                circle_id__in=Subquery(subtree_ids),
-            )
+            circle_model.objects.all()
+            .with_actor(self.actor() or current_actor())
+            .subtree_of(circle)
+            .memberships(confirmed_only=confirmed_only)
+            .filter(party_id=OuterRef("pk"))
         )
-        return self.canonical().annotate(
-            _in_visible_circle_subtree=Exists(visible_subtree_membership),
-        ).filter(_in_visible_circle_subtree=True)
+        return (
+            self.canonical()
+            .annotate(
+                _in_visible_circle_subtree=Exists(visible_subtree_membership),
+            )
+            .filter(_in_visible_circle_subtree=True)
+        )
 
     def members_of(self, organization: Any) -> Self:
         """Return the parties whose relationships name ``organization`` as counterparty.
@@ -851,9 +849,25 @@ class PartyQuerySet(AngeeQuerySet):
         """
 
         return self.filter(
-            relationships__other_party=organization,
-            relationships__ended_at__isnull=True,
-        ).distinct()
+            pk__in=Subquery(self.organization_memberships().filter(other_party=organization).values("party_id"))
+        )
+
+    def organization_memberships(self) -> Any:
+        """Readable current organisation relationships anchored at these parties."""
+
+        actor = self.actor() or current_actor()
+        organizations = apps.get_model("parties", "Organization").objects.all()
+        relationships = apps.get_model("parties", "Relationship").objects.all()
+        if actor is not None:
+            organizations = organizations.with_actor(actor)
+            relationships = relationships.with_actor(actor)
+        organizations = organizations.scoped_for_aggregate()
+        relationships = relationships.scoped_for_aggregate()
+        return relationships.filter(
+            party_id__in=Subquery(self.scoped_for_aggregate().order_by().values("pk")),
+            other_party_id__in=Subquery(organizations.order_by().values("pk")),
+            ended_at__isnull=True,
+        )
 
     def duplicate_candidates(self, *, limit: int = 50) -> list[DuplicatePartyCandidate]:
         """Return bounded actor-visible party pairs sharing a normalized handle.
@@ -931,37 +945,6 @@ class PartyQuerySet(AngeeQuerySet):
             if party_a_id in parties and party_b_id in parties
         ]
 
-    def identity_candidates(
-        self, *, name: str = "", handles: Iterable[tuple[str, str]] = (), limit: int = 10,
-    ) -> list[IdentityCandidate]:
-        """Return bounded exact identity candidates without creating speculative links."""
-
-        bounded = max(0, min(int(limit), 50))
-        normalized_name = " ".join(name.split()).strip()
-        handle_model = apps.get_model("parties", "Handle")
-        normalized_handles = {
-            (str(platform), handle_model.normalize_value(platform, value))
-            for platform, value in handles if str(value).strip()
-        }
-        if bounded == 0 or (not normalized_name and not normalized_handles):
-            return []
-        visible = self.canonical().scoped_for_aggregate()
-        matched: dict[Any, set[str]] = defaultdict(set)
-        if normalized_name:
-            for party_id in visible.filter(display_name__iexact=normalized_name).values_list("pk", flat=True)[:bounded]:
-                matched[party_id].add("exact_name")
-        if normalized_handles:
-            handle_filter = Q()
-            for platform, normalized_value in sorted(normalized_handles):
-                handle_filter |= Q(platform=platform, normalized_value=normalized_value)
-            for party_id in (
-                handle_model.objects.all().scoped_for_aggregate()
-                .filter(handle_filter, party_id__in=Subquery(visible.values("pk")))
-                .values_list("party_id", flat=True).distinct()[:bounded]
-            ):
-                matched[party_id].add("exact_handle")
-        parties = {party.pk: party for party in visible.filter(pk__in=matched).order_by("pk")[:bounded]}
-        return [IdentityCandidate(parties[pk], tuple(sorted(matched[pk]))) for pk in sorted(parties)]
 
 
 class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[misc]
@@ -1004,9 +987,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
 
         circle_model = apps.get_model("parties", "Circle")
         circle_member_model = apps.get_model("parties", "CircleMember")
-        visible_circle_ids = (
-            circle_model.objects.all().scoped_for_aggregate().values("pk")
-        )
+        visible_circle_ids = circle_model.objects.all().scoped_for_aggregate().values("pk")
         return list(
             circle_member_model.objects.all()
             .scoped_for_aggregate()

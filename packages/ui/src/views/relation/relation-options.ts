@@ -1,10 +1,8 @@
 import * as React from "react";
-import {
-  rowPublicId,
-  type Row,
-} from "@angee/metadata";
+import { rowPublicId, type Row } from "@angee/metadata";
 import {
   useList,
+  useOne,
   type BaseRecord,
   type CrudFilter,
   type CrudSort,
@@ -13,9 +11,7 @@ import {
 import {
   refineFieldsFromPaths,
   } from "@angee/refine";
-import {
-  refineResourceName,
-} from "@angee/metadata";
+import { refineResourceName } from "@angee/metadata";
 import {
   useModelMetadata,
 } from "@angee/metadata";
@@ -28,6 +24,8 @@ import { DEFAULT_PAGE_SIZE } from "../resource/page-size";
 export const RELATION_OPTION_LIMIT = 200;
 
 export interface RelationOptionsConfig {
+  searchText?: string;
+  searchFields?: readonly string[];
   labelField?: string;
   /** Additional scalar fields a composing surface needs from each option row. */
   fields?: readonly string[];
@@ -46,6 +44,7 @@ export interface RelationOptionsConfig {
 }
 
 export interface RelationOptionsList {
+  error?: string;
   fetching: boolean;
   refetch: () => void;
 }
@@ -54,6 +53,27 @@ export interface RelationOptionsResult {
   list: RelationOptionsList;
   options: readonly RelationOption[];
   rows: readonly Row[];
+}
+
+/** Resolve a selected identity independently of the option page or search. */
+export function useRelationSelectedOption(
+  relation: RelationFieldInfo,
+  value: string | null | undefined,
+): RelationOption | undefined {
+  const metadata = useModelMetadata(relation.resource);
+  const resource = metadata?.resource;
+  const fields = React.useMemo(
+    () => refineFieldsFromPaths(["id", relation.labelField]),
+    [relation.labelField],
+  );
+  const read = useOne<RowRecord, HttpError>({
+    resource: resource ? refineResourceName(resource) : "__angee_disabled__",
+    dataProviderName: resource?.schemaName,
+    id: value ?? "",
+    meta: { fields },
+    queryOptions: { enabled: Boolean(resource && value) },
+  });
+  return relationSelectedOption(read.result, relation.labelField);
 }
 
 export function useRelationOptions(
@@ -68,6 +88,8 @@ export function useRelationOptions(
     pageSize = RELATION_OPTION_LIMIT,
     sort = false,
     sorters,
+    searchText,
+    searchFields,
   } = config;
   const labelField = optionLabelField ?? relation?.labelField ?? "id";
   // Stabilise filters/sorters by VALUE: a consumer that declares them inline
@@ -75,7 +97,19 @@ export function useRelationOptions(
   // forwarding a fresh identity into refine's `useList` drives an update loop.
   // A value-equal array keeps a stable identity, so plausible inline props are
   // safe without every caller memoising.
-  const stableFilters = useValueStable(filters);
+  const searchFilters: CrudFilter[] = searchText?.trim()
+    ? [
+        {
+          operator: "or",
+          value: (searchFields ?? [labelField]).map((field) => ({
+            field,
+            operator: "contains",
+            value: searchText.trim(),
+          })),
+        },
+      ]
+    : [];
+  const stableFilters = useValueStable([...(filters ?? []), ...searchFilters]);
   const stableSorters = useValueStable(sorters);
   const metadata = useModelMetadata(relation?.resource ?? "");
   const resource = metadata?.resource ?? null;
@@ -105,6 +139,7 @@ export function useRelationOptions(
   const list = React.useMemo<RelationOptionsList>(
     () => ({
       fetching: run.query.isFetching,
+      error: run.query.error?.message,
       refetch: () => {
         void run.query.refetch();
       },

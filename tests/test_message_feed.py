@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
+from datetime import timezone as datetime_timezone
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.test import RequestFactory
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
+from rebac.backends import backend
 
 from tests.conftest import Backend, Drive, File, MimeType, execute_schema, result_data
 from tests.test_messaging import (
@@ -198,6 +204,20 @@ def test_search_cursor_uses_the_same_normalized_predicate() -> None:
     assert _ids(second) == [str(rows[2].sqid), str(rows[1].sqid)]
 
 
+def test_feed_deduplicates_search_matches_without_distinct_on_plain_reads() -> None:
+    owner = User.objects.create_user(username="feed-search-duplicates")
+    thread, rows = _messages(owner, size=2)
+    with system_context(reason="seed multiple matching message parts"):
+        for index in range(3):
+            Part._base_manager.create(created_by=owner, message=rows[0], name=f"needle-{index}.txt")
+    with actor_context(owner):
+        plain = Message.objects.filter(thread=thread).for_feed()
+        searched = Message.objects.filter(thread=thread).for_feed("needle")
+        assert not plain.query.distinct
+        assert plain.count() == searched.count() == 2
+        assert len(list(searched)) == 2
+
+
 def test_each_page_rechecks_message_and_root_permissions() -> None:
     """An existing cursor neither grants message access nor keeps a root readable."""
 
@@ -312,10 +332,10 @@ def test_queryset_feed_clamps_native_page_size() -> None:
         scope = ("thread", str(thread.sqid))
         small = query.feed_page(scope=scope, limit=0)
         large = query.feed_page(scope=scope, limit=1000)
-    assert len(small["messages"]) == 1
-    assert len(large["messages"]) == 200
-    assert large["count"] == len(rows)
-    assert large["has_older"]
+    assert len(list(small.rows)) == 1
+    assert len(list(large.rows)) == 200
+    assert large.count == len(rows)
+    assert large.has_older
 
 
 def _revalidate(
@@ -440,8 +460,6 @@ def test_revalidation_enforces_submitted_limit_and_empty_partition() -> None:
 
 
 def test_order_key_preserves_full_pk_microseconds_timezone_and_null_send_order() -> None:
-    from datetime import timezone as datetime_timezone
-
     rows = [
         Message(pk=pk, sent_at=at, created_at=T0)
         for pk, at in [
@@ -459,13 +477,6 @@ def test_order_key_preserves_full_pk_microseconds_timezone_and_null_send_order()
 @pytest.mark.parametrize("size", [50, 200, 1000])
 def test_revalidation_sql_cost_with_native_authorization(size: int, capsys: Any) -> None:
     """Measure fresh-request native scope work and real transcript projections."""
-
-    import json
-    from unittest.mock import patch
-
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-    from rebac.backends import backend
 
     owner = User.objects.create_user(username=f"feed-cost-{size}")
     with system_context(reason="test retained feed cost seed"):
@@ -608,13 +619,15 @@ def test_revalidation_sql_cost_with_native_authorization(size: int, capsys: Any)
 
 
 def test_revalidation_projection_prefetch_preserves_related_permissions() -> None:
+    """Parts inherit the readable message; reactions retain their own read gate."""
+
     owner = User.objects.create_user(username="feed-prefetch-owner")
     other = User.objects.create_user(username="feed-prefetch-other")
     thread, rows = _messages(owner, size=1)
     with system_context(reason="test mixed visibility message children"):
         fragment = Fragment.objects.upsert(text="Shared text", owner_id=owner.pk)
         visible = Part._base_manager.create(message=rows[0], fragment=fragment, created_by=owner)
-        Part._base_manager.create(message=rows[0], fragment=fragment, created_by=other)
+        inherited = Part._base_manager.create(message=rows[0], fragment=fragment, position=1, created_by=other)
         handle = Handle._base_manager.create(platform="email", value="reaction@example.com", created_by=owner)
         Reaction._base_manager.create(message=rows[0], handle=handle, reaction="visible", created_by=owner)
         Reaction._base_manager.create(message=rows[0], handle=handle, reaction="hidden", created_by=other)
@@ -628,7 +641,10 @@ def test_revalidation_projection_prefetch_preserves_related_permissions() -> Non
         )
     )["result"]
     assert result["absent_ids"] == []
-    assert result["messages"][0]["parts"] == [{"id": str(visible.sqid), "fragment": {"text": "Shared text"}}]
+    assert result["messages"][0]["parts"] == [
+        {"id": str(visible.sqid), "fragment": {"text": "Shared text"}},
+        {"id": str(inherited.sqid), "fragment": {"text": "Shared text"}},
+    ]
     assert result["messages"][0]["reaction_groups"] == [{"reaction": "visible", "count": 1}]
 
 

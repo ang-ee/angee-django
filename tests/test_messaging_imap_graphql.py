@@ -252,7 +252,7 @@ def test_test_connection_reports_the_imap_refusal(
 
     def refuse(self: FakeIMAPClient, username: str, password: str) -> None:
         del self, username, password
-        raise LoginError("[AUTHENTICATIONFAILED] Authentication failed.")
+        raise LoginError("[AUTHENTICATIONFAILED] unexpected vendor payload mail-password")
 
     monkeypatch.setattr(FakeIMAPClient, "login", refuse)
 
@@ -262,7 +262,7 @@ def test_test_connection_reports_the_imap_refusal(
 
     assert result == {
         "ok": False,
-        "message": "IMAP login failed for 'ada@example.com' at 10.0.0.4: [AUTHENTICATIONFAILED] Authentication failed.",
+        "message": "IMAP login failed for 'ada@example.com' at 10.0.0.4. Check the account credentials.",
     }
 
 

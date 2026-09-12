@@ -130,6 +130,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   // A record is open when an id is selected or a create was requested.
   const open = hasRecordSurface && (resolvedCreating || resolvedRecordId != null);
   const editId = resolvedCreating ? null : resolvedRecordId ?? null;
+  const clearSelection = React.useCallback(() => handleSelectRecord?.(null), [handleSelectRecord]);
   const {
     selectRecord,
     retainLocalList,
@@ -144,7 +145,7 @@ export function ResourceListBody<TRow extends Row = Row>({
     onSetPage: resourceView.setPage,
     selectFirstRecord,
     firstSelectionKey: stableSerialize(baseFilter ?? null),
-    onClearSelection: () => handleSelectRecord?.(null),
+    onClearSelection: clearSelection,
   });
   React.useEffect(() => {
     if (open) return;
@@ -343,7 +344,7 @@ export function ResourceListBody<TRow extends Row = Row>({
       }
     >
       <ControlBandProvider inherit={!open} host={undefined}>
-        <div hidden={open} aria-hidden={open || undefined}>
+        <div hidden={open} aria-hidden={open || undefined} className="h-full min-h-0">
           {!open || retainLocalList ? list : null}
         </div>
       </ControlBandProvider>

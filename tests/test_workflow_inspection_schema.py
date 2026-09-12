@@ -2,20 +2,27 @@
 
 from __future__ import annotations
 
+import importlib
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
+import strawberry
 from django.contrib.auth import get_user_model
 from graphql import parse, validate
 from rebac import system_context
+from strawberry.schema.config import StrawberryConfig
 
 from angee.workflows import engine
 from angee.workflows.steps import HandlerStep, StepResult
 from tests.conftest import execute_schema, result_data
 from tests.test_workflows import _console_schema, _published_workflow
-from tests.workflows import WorkflowDispatch, advance_once
+from tests.workflows import Workflow, WorkflowDispatch, advance_once
 
 User = get_user_model()
+# Schema resolves concrete workflow models registered by the fixture imports above.
+workflow_schema = importlib.import_module("angee.workflows.schema")
 
 
 def test_artifact_target_reference_is_a_computed_object_not_an_unowned_relation() -> None:
@@ -181,3 +188,36 @@ def test_attempt_resource_denies_list_and_guessed_detail_without_step_run_read(
     assert denied["workflow_step_attempts"] == []
     assert denied["workflow_step_attempts_by_pk"] is None
     assert denied["workflow_step_attempts_aggregate"]["aggregate"]["count"] == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_decision_target_projection_reuses_one_authorized_lookup_per_viewer_request(
+    workflow_engine_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = User.objects.create_user(username="target-reader")
+    stranger = User.objects.create_user(username="target-stranger")
+    with system_context(reason="test decision target projection"):
+        target = Workflow.objects.create(name="Private target", created_by=owner)
+    decision = SimpleNamespace(target_model=target._meta.label, target_id=str(target.sqid), target_tab="details")
+    lookup = Mock(wraps=workflow_schema.instance_for_id)
+    monkeypatch.setattr(workflow_schema, "instance_for_id", lookup)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def decision(self) -> workflow_schema.DecisionTargetFields:
+            return decision
+
+    schema = strawberry.Schema(query=Query, config=StrawberryConfig(auto_camel_case=False))
+    document = "{ decision { target_model target_id target_tab target_reference { model id tab } } }"
+    for actor, expected in ((owner, str(target.sqid)), (stranger, None), (owner, str(target.sqid))):
+        context = SimpleNamespace(request=SimpleNamespace(user=actor))
+        result = schema.execute_sync(document, context_value=context)
+        assert result.errors is None
+        row = result.data["decision"]
+        assert row["target_id"] == expected
+        assert row["target_reference"] == (
+            {"model": target._meta.label, "id": expected, "tab": "details"} if expected else None
+        )
+        assert lookup.call_count == 1
+        lookup.reset_mock()

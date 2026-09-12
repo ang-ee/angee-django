@@ -41,7 +41,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import session_user
+from angee.iam.permissions import request_from_info, session_user
 from angee.workflows import engine
 from angee.workflows.attempts import JsonPresence
 from angee.workflows.data_contracts import DataContract, FlatDataContractEdge, FlatDataContractNode
@@ -1001,23 +1001,56 @@ class WorkflowArtifactTarget:
     id: PublicID
     tab: str | None = None
 
+    @classmethod
+    def for_decision(cls, decision: Any, info: strawberry.Info) -> WorkflowArtifactTarget | None:
+        """Resolve this immutable target once per row and viewer request, including denials."""
 
-def _decision_target_reference(root: Any, info: strawberry.Info) -> WorkflowArtifactTarget | None:
-    """Project a Decision target only when the viewer independently reads it."""
+        request, actor = request_from_info(info), session_user(info)
+        cached = getattr(decision, "_workflow_target_projection", None)
+        if cached is not None and cached[0] is request and cached[1] == actor:
+            return cast(WorkflowArtifactTarget | None, cached[2])
+        reference = cls.resolve(decision.target_model, decision.target_id, decision.target_tab, actor=actor)
+        decision._workflow_target_projection = (request, actor, reference)
+        return reference
 
-    model_label, target_id = str(root.target_model), str(root.target_id)
-    if not model_label or not target_id:
-        return None
-    try:
-        model = cast(type[models.Model], apps.get_model(model_label))
-    except (LookupError, ValueError):
-        return None
-    scoped = read_scoped_queryset(model, session_user(info), action="read")
-    if scoped is None or instance_for_id(model, target_id, queryset=scoped) is None:
-        return None
-    return WorkflowArtifactTarget(
-        model=model_label, id=cast(PublicID, target_id), tab=str(root.target_tab) or None,
-    )
+    @classmethod
+    def resolve(cls, model_label: str, target_id: str, tab: str, *, actor: Any) -> WorkflowArtifactTarget | None:
+        """Project only targets independently readable by the viewer."""
+
+        if not model_label or not target_id:
+            return None
+        try:
+            model = cast(type[models.Model], apps.get_model(model_label))
+        except (LookupError, ValueError):
+            return None
+        scoped = read_scoped_queryset(model, actor, action="read")
+        if scoped is None or instance_for_id(model, target_id, queryset=scoped) is None:
+            return None
+        return cls(model=model_label, id=cast(PublicID, target_id), tab=tab or None)
+
+
+@strawberry.type
+class DecisionTargetFields:
+    """Shared authorized target projection for the public and admin decision surfaces."""
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_reference(self, info: strawberry.Info) -> WorkflowArtifactTarget | None:
+        return WorkflowArtifactTarget.for_decision(self, info)
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_model(self, info: strawberry.Info) -> str | None:
+        reference = WorkflowArtifactTarget.for_decision(self, info)
+        return reference.model if reference else None
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_id(self, info: strawberry.Info) -> PublicID | None:
+        reference = WorkflowArtifactTarget.for_decision(self, info)
+        return reference.id if reference else None
+
+    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
+    def target_tab(self, info: strawberry.Info) -> str | None:
+        reference = WorkflowArtifactTarget.for_decision(self, info)
+        return reference.tab if reference else None
 
 
 @strawberry_django.type(StepArtifact)
@@ -1044,7 +1077,7 @@ class StepArtifactType(AngeeNode):
 
 
 @strawberry_django.type(Decision)
-class DecisionType(AngeeNode):
+class DecisionType(DecisionTargetFields, AngeeNode):
     """Admin projection of one awaited workflow decision."""
 
     priority: auto
@@ -1062,25 +1095,6 @@ class DecisionType(AngeeNode):
 
     decision_schema: JSON | None = _decision_schema_field()
 
-    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
-    def target_reference(self, info: strawberry.Info) -> WorkflowArtifactTarget | None:
-        return _decision_target_reference(self, info)
-
-    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
-    def target_model(self, info: strawberry.Info) -> str | None:
-        reference = _decision_target_reference(self, info)
-        return reference.model if reference else None
-
-    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
-    def target_id(self, info: strawberry.Info) -> PublicID | None:
-        reference = _decision_target_reference(self, info)
-        return reference.id if reference else None
-
-    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
-    def target_tab(self, info: strawberry.Info) -> str | None:
-        reference = _decision_target_reference(self, info)
-        return reference.tab if reference else None
-
     @strawberry_django.field(only=["step_run_id"])
     def step_run(self, info: strawberry.Info) -> StepRunType | None:
         """Return the journal row only when it is independently readable."""
@@ -1093,7 +1107,7 @@ class DecisionType(AngeeNode):
 
 
 @strawberry_django.type(Decision, name="DecisionType")
-class PublicDecisionType(AngeeNode):
+class PublicDecisionType(DecisionTargetFields, AngeeNode):
     """Public projection of one awaited workflow decision."""
 
     priority: auto
@@ -1110,25 +1124,6 @@ class PublicDecisionType(AngeeNode):
     updated_at: auto
 
     decision_schema: JSON | None = _decision_schema_field()
-
-    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
-    def target_reference(self, info: strawberry.Info) -> WorkflowArtifactTarget | None:
-        return _decision_target_reference(self, info)
-
-    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
-    def target_model(self, info: strawberry.Info) -> str | None:
-        reference = _decision_target_reference(self, info)
-        return reference.model if reference else None
-
-    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
-    def target_id(self, info: strawberry.Info) -> PublicID | None:
-        reference = _decision_target_reference(self, info)
-        return reference.id if reference else None
-
-    @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
-    def target_tab(self, info: strawberry.Info) -> str | None:
-        reference = _decision_target_reference(self, info)
-        return reference.tab if reference else None
 
     @strawberry_django.field(only=["step_run__run_id"])
     def source_run_id(self, info: strawberry.Info) -> PublicID | None:
@@ -1570,8 +1565,13 @@ _TRIGGER_RESOURCE = hasura_model_resource(
     TriggerType,
     model=Trigger,
     name="workflow_triggers",
-    filterable=["id", "workflow", "execution_actor", "kind", "enabled", "next_fire_at", "updated_at", *_TRIGGER_EXTENSION_FILTER_FIELDS],
-    sortable=["workflow", "kind", "enabled", "next_fire_at", "created_at", "updated_at", *_TRIGGER_EXTENSION_ORDER_FIELDS],
+    filterable=[
+        "id", "workflow", "execution_actor", "kind", "enabled", "next_fire_at", "updated_at",
+        *_TRIGGER_EXTENSION_FILTER_FIELDS,
+    ],
+    sortable=[
+        "workflow", "kind", "enabled", "next_fire_at", "created_at", "updated_at", *_TRIGGER_EXTENSION_ORDER_FIELDS,
+    ],
     aggregatable=["id"],
     groupable=["workflow", "workflow__name", "kind", "enabled", "updated_at", *_TRIGGER_EXTENSION_GROUP_FIELDS],
     insertable=["workflow", "execution_actor", "kind", "config", *_TRIGGER_EXTENSION_INSERT_FIELDS],

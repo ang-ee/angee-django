@@ -12,6 +12,7 @@ describe("messaging addon manifest", () => {
     expect(messaging.chatter?.map((entry) => entry.id)).toEqual([
       "comments",
       "activity",
+      "sources",
     ]);
     expect((messaging.routes ?? []).map((route) => route.name)).toEqual([
       "messaging.publicWebforms",

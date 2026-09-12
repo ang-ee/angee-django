@@ -1,16 +1,17 @@
 import * as React from "react";
-import { extractActionOutcome, runActionResult, useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { useAuthoredQuery } from "@angee/refine";
+import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   Badge, Button, Collapsible, Column, EmptyState, ErrorBanner, errorMessage, Field, Form, Group, List,
   LoadingPanel, ResourceList, REFINE_CREATE_ID, SegmentedControl, SlotOutlet, registerForm,
   TextLink, useImplConfigFields, useFormViewValues,
-  useRouteHref, useSlot, useToast, type RecordToolbarContext, type RegisteredFormProps,
+  useRouteHref, useSlot, useActionOutcomeMutation, useActionResultRun,
+  type RecordToolbarContext, type RegisteredFormProps,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
-  DisableWorkflowTriggerDocument, EnableWorkflowTriggerDocument, WorkflowLaunchDocument,
-  WorkflowSchedulePreviewDocument, WorkflowTriggerAuthoringDocument,
+  WorkflowLaunchDocument, WorkflowSchedulePreviewDocument, WorkflowTriggerAuthoringDocument,
 } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
 import { JsonBlock } from "./JsonBlock";
@@ -275,37 +276,22 @@ function ScheduleModeControl({ context }: { context: RecordToolbarContext }): Re
 function TriggerToolbar({ context }: { context: RecordToolbarContext }): React.ReactElement {
   const t = useWorkflowsT();
   const { close } = React.useContext(TriggerWorkflowContext);
-  const [enableMutation, enableState] = useAuthoredMutation(EnableWorkflowTriggerDocument);
-  const [disableMutation, disableState] = useAuthoredMutation(DisableWorkflowTriggerDocument);
-  const toast = useToast();
+  const [enableMutation, enableState] = useActionOutcomeMutation<ActionFieldName>("enable_workflow_trigger", {
+    idArgument: "trigger", invalidateModels: [TRIGGER_MODEL],
+  });
+  const [disableMutation, disableState] = useActionOutcomeMutation<ActionFieldName>("disable_workflow_trigger", {
+    idArgument: "trigger", invalidateModels: [TRIGGER_MODEL],
+  });
   const record = context.record as TriggerRecord | null;
   const blocker = typeof record?.activation_blocker === "string" ? record.activation_blocker : undefined;
+  const settleLifecycle = useActionResultRun({ noResultTitle: t("triggers.conditionError") });
   const runLifecycle = async (enabled: boolean) => {
     if (!context.recordId) return;
-    const request = enabled
-      ? enableMutation({ trigger: context.recordId })
-      : disableMutation({ trigger: context.recordId });
-    const result = await request.catch((error) => {
-      toast.danger({ title: errorMessage(error, t("triggers.conditionError")) });
-      return null;
-    });
-    if (result === null) return;
-    const outcome = extractActionOutcome(
-      result,
-      enabled ? "enable_workflow_trigger" : "disable_workflow_trigger",
-    );
-    if (!outcome) return;
-    try {
-      const message = runActionResult(outcome);
-      if (message) toast.success({ title: message });
-      context.reload();
-    } catch (error) {
-      toast.danger({
-        title: enabled ? t("triggers.enable") : t("triggers.disable"),
-        description: errorMessage(error, t("triggers.conditionError")),
-      });
-    }
+    const id = context.recordId;
+    const outcome = await settleLifecycle(() => enabled ? enableMutation(id) : disableMutation(id));
+    if (outcome?.ok) context.reload();
   };
+
   return (
     <>
       <Button type="button" size="sm" variant="ghost" onClick={() => {

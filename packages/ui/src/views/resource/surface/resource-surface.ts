@@ -8,7 +8,10 @@ import { modelRowId } from "../resource-view-codecs";
 import { useResourceViewPresentationSurfaceFromTable } from "./presentation";
 import { listResultFromTable, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState } from "./table-state";
 import type { ResourceViewSurface, UseResourceViewSurfaceProps } from "./types";
+import { useCollectionQueryBatch } from "../collection-source";
+import { EMPTY_ARRAY } from "./types";
 export function useResourceViewSurface<TRow extends Row = Row>({
+  source,
   columns,
   fields,
   filter,
@@ -20,24 +23,27 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   enabled = true,
   onListStateChange,
 }: UseResourceViewSurfaceProps<TRow>): ResourceViewSurface<TRow> {
-  const { requestedFields, mergedFilter, sortOrder } = useResourceViewQueryFacts({
-    columns,
-    fields,
-    filter,
-    order,
-    resourceView,
-    modelMetadata,
-    laneSource,
-    groupStack,
-  });
+  const { requestedFields, mergedFilter, sortOrder } =
+    useResourceViewQueryFacts({
+      columns,
+      fields,
+      filter,
+      order,
+      resourceView,
+      modelMetadata,
+      laneSource,
+      groupStack,
+    });
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   const [expanded, setExpanded] = React.useState<ExpandedState>({});
   const dataResource = modelMetadata?.resource ?? null;
   const tableState = useResourceViewTableState({
+    query: source?.query,
     columns,
     resourceView,
     modelMetadata,
-    groupStack: laneSource && resourceView.state.view === "board" ? [] : rowGroupStack,
+    groupStack:
+      laneSource && resourceView.state.view === "board" ? [] : rowGroupStack,
     sortOrder,
     maxPageSize: MAX_PAGE_SIZE,
   });
@@ -54,31 +60,72 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     handleSortingChange,
     handleRowSelectionChange,
   } = tableState;
-  const active = enabled && Boolean(dataResource);
+  const active = enabled && Boolean(source || dataResource);
   const listQuery = useResourceListQuery({
-    resource: dataResource,
+    resource: source ? null : dataResource,
     scope: {
-      filter: mergedFilter, order: sortOrder,
-      page: paginationState.pageIndex + 1, pageSize: paginationState.pageSize,
+      filter: mergedFilter,
+      order: sortOrder,
+      page: paginationState.pageIndex + 1,
+      pageSize: paginationState.pageSize,
     },
     fields: requestedFields,
-    enabled: active,
+    enabled: active && !source,
   });
-  const rows = listQuery.result.data as TRow[];
-  const total = listQuery.result.total;
+  const sourceRequests = React.useMemo(
+    () =>
+      active
+        ? [
+            {
+              key: "root",
+              filter: mergedFilter,
+              order: sortOrder,
+              page: paginationState.pageIndex + 1,
+              pageSize: paginationState.pageSize,
+            },
+          ]
+        : [],
+    [
+      active,
+      mergedFilter,
+      sortOrder,
+      paginationState.pageIndex,
+      paginationState.pageSize,
+    ],
+  );
+  const authored = useCollectionQueryBatch(source?.rows, sourceRequests).get(
+    "root",
+  );
+  const rows = (
+    source ? authored?.data?.rows ?? EMPTY_ARRAY : listQuery.result.data
+  ) as TRow[];
+  const total = source ? authored?.data?.total : listQuery.result.total;
+  const fetching = source
+    ? authored?.fetching ?? active
+    : listQuery.query.isFetching;
+  const error = source ? authored?.error : listQuery.query.error;
+  const refetchRows = source ? authored?.refetch : listQuery.query.refetch;
+  const settled = source
+    ? authored?.data !== undefined && !error
+    : listQuery.query.isSuccess && !listQuery.query.isPlaceholderData;
   React.useEffect(() => {
-    if (!active || !listQuery.query.isSuccess || listQuery.query.isFetching
-      || listQuery.query.isPlaceholderData || total === undefined) return;
+    if (!active || !settled || fetching || total === undefined) return;
     const lastPage = Math.max(1, Math.ceil(total / paginationState.pageSize));
     if (paginationState.pageIndex >= lastPage) resourceView.setPage(lastPage);
-  }, [active, listQuery.query.isSuccess, listQuery.query.isFetching,
-    listQuery.query.isPlaceholderData, total, paginationState.pageIndex,
-    paginationState.pageSize, resourceView.setPage]);
+  }, [
+    active,
+    settled,
+    fetching,
+    total,
+    paginationState.pageIndex,
+    paginationState.pageSize,
+    resourceView.setPage,
+  ]);
   const table = useReactTable<TRow>({
     data: rows,
     columns: tableColumns as ColumnDef<TRow>[],
-    rowCount: listQuery.result.total,
-    pageCount: listQuery.result.total === undefined ? -1 : undefined,
+    rowCount: total,
+    pageCount: total === undefined ? -1 : undefined,
     manualPagination: true,
     manualSorting: true,
     manualFiltering: true,
@@ -104,27 +151,36 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     autoResetPageIndex: false,
     autoResetExpanded: false,
   });
-  const refetchRows = listQuery.query.refetch;
   const boardLaneState = useBoardLaneState<TRow>({
     laneSource,
     modelMetadata,
     rows,
     enabled: active && resourceView.state.view === "board",
-    refetchRows,
+    refetchRows: refetchRows ?? (() => {}),
   });
   const list = React.useMemo(
-    () =>
-      listResultFromTable(table, {
-        error: listQuery.query.error ?? null,
-        fetching: listQuery.query.isFetching
-          || boardLaneState.fetching,
+    () => ({
+      ...listResultFromTable(table, {
+        error: error ?? null,
+        fetching: fetching || boardLaneState.fetching,
         refetch: () => {
-          void listQuery.query.refetch();
+          refetchRows?.();
         },
         rows,
-        total: listQuery.result.total,
+        total,
       }),
-    [boardLaneState.fetching, resourceView, rows, listQuery],
+      summary: authored?.data?.summary,
+    }),
+    [
+      authored?.data?.summary,
+      boardLaneState.fetching,
+      table,
+      rows,
+      total,
+      error,
+      fetching,
+      refetchRows,
+    ],
   );
   const listState = useResourceRowsSnapshot<TRow>(list, {
     navigation: { filter: mergedFilter, order: sortOrder },

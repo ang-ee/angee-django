@@ -1,3 +1,8 @@
+/** Query keys owned by shared record routing; addon detail state declares its own keys. */
+export const RECORD_NAVIGATION_SEARCH_KEY = "recordNav";
+export const RECORD_TAB_SEARCH_KEY = "recordTab";
+export const RECORD_SEARCH_KEYS: readonly string[] = [RECORD_NAVIGATION_SEARCH_KEY, RECORD_TAB_SEARCH_KEY];
+
 /** The route facts a rendered consumer may ask the composed app for. */
 export interface RuntimeRouteDescriptor {
   name: string;
