@@ -287,6 +287,14 @@ Use these owners instead of maintaining another contract in an addon:
   `kind` column. Reach for a child model, not a `StateField`, when the kinds carry
   their own fields (e.g. a `Person` linking to an `iam.User` that an `Organization`
   never has).
+- **Reference codes with upstream labels remain string fields.** A country code
+  identifies external ISO reference data; it is not a row lifecycle state.
+  `angee.parties.fields.CountryCodeField` therefore retains the GraphQL/string
+  boundary while its Django choices supply selector labels through resource
+  metadata. It accepts ISO codes and exact names/aliases recognized by
+  django-countries; fuzzy or colloquial names fail validation instead of being
+  guessed. Compose that owner for postal, tax, and bank countries instead of
+  declaring another country vocabulary or using `StateField`.
 - **A hand-written `@strawberry.type` owes the boundary the same enum.** The rule
   above is not about models — it is about the API boundary, so a `state: str`
   field on a plain strawberry type has the identical defect: it crosses as a bare

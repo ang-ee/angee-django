@@ -100,6 +100,7 @@ addons = [
     "defusedxml>=0.7,<1",
     "django-anymail>=15.1",
     "django-axes>=8.0",
+    "django-countries>=9,<10",
     "django-import-export>=4.4",
     "django-zed-rebac[strawberry-django]>=0.16.3",
     "fastmcp>=3.4.2,<4",

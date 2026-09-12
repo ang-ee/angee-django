@@ -46,6 +46,7 @@ from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
 from angee.integrate.models import Bridge
 from angee.parties.backends import DirectoryBackend
+from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
     CircleManager,
     HandleManager,
@@ -645,6 +646,14 @@ class AddressManager(AngeeManager):
 
     components = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
 
+    def _normalize_components(self, values: Mapping[str, Any]) -> dict[str, str]:
+        """Normalize address components through their owning model fields."""
+
+        return {
+            name: self.model._meta.get_field(name).to_python(" ".join(str(values.get(name) or "").split()).strip())
+            for name in self.components
+        }
+
     def lock_party(self, party_id: Any) -> None:
         """Serialize address writes for one party, including its first address."""
 
@@ -679,8 +688,7 @@ class AddressManager(AngeeManager):
     ) -> tuple[str, models.Model | None]:
         if conflict not in {"raise", "retain", "append"}:
             raise ValueError("Address conflict policy must be 'raise', 'retain', or 'append'.")
-        normalized = {field: " ".join(str(values.get(field) or "").split()).strip()
-                      for field in self.components}
+        normalized = self._normalize_components(values)
         if not any(normalized.values()):
             return "missing", None
         key = tuple(normalized[field].casefold() for field in self.components)
@@ -720,8 +728,7 @@ class AddressManager(AngeeManager):
     ) -> tuple[str, models.Model]:
         """Replace the frozen primary address, or create it when none existed."""
 
-        normalized = {field: " ".join(str(values.get(field) or "").split()).strip()
-                      for field in self.components}
+        normalized = self._normalize_components(values)
         if not any(normalized.values()):
             raise ValidationError({"address": "A replacement address must not be empty."})
         with transaction.atomic(using=self.db), actor_context(actor):
@@ -777,7 +784,7 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
     city = models.TextField(blank=True, default="")
     region = models.TextField(blank=True, default="")
     postal_code = models.CharField(max_length=32, blank=True, default="")
-    country = models.TextField(blank=True, default="")
+    country = CountryCodeField(blank=True, default="")
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
     is_primary = models.BooleanField(default=False)

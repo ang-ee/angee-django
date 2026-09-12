@@ -5,8 +5,9 @@ name = "angee.parties"
 description = "Contacts — people and organizations, their circles, relationships, addresses, and directory sync"
 keywords = ["parties", "contacts", "crm"]
 category = "Data"
-depends_on = ["angee.iam", "angee.integrate", "angee.storage"]
+depends_on = ["angee.graphql", "angee.iam", "angee.integrate", "angee.storage"]
 dependencies = [
+  "django-countries>=9,<10",
   "phonenumbers>=9.0",
 ]
 
@@ -29,6 +30,11 @@ module = "runtime_migrations.handle_normalized_value"
 name = "address_one_primary"
 app_label = "parties"
 module = "runtime_migrations.address_one_primary"
+
+[[migrations]]
+name = "address_country_code"
+app_label = "parties"
+module = "runtime_migrations.address_country_code"
 
 [resources]
 master = [
