@@ -102,7 +102,9 @@ class InboxResults:
             raise ValueError("This grouping does not apply to the result lens.")
         rows = self.activity(require_shared=require_shared)
         prefix = "message__" if self.is_content else ""
-        kwargs: dict[str, Any] = {"identity": "_identity", "message": "_message"}
+        kwargs: dict[str, Any] = {
+            "identity": "_identity", "message": "_message", "partitioned_messages": not self.is_content,
+        }
         if axis == "day":
             rows = rows.annotate(_bucket=Cast(TruncDate("_order_at", tzinfo=self.zone), models.TextField()))
             kwargs.update(timestamp="_order_at", oldest=self.options.oldest)
@@ -141,14 +143,9 @@ class InboxResults:
                     default=-F("_message"),
                     output_field=models.BigIntegerField(),
                 ),
-                _group_label=Case(
-                    When(**readable_thread, then=Coalesce(F(f"{prefix}thread__title__text"), Value("Conversation"))),
-                    default=Value("Standalone message"),
-                    output_field=models.TextField(),
-                ),
             )
             kwargs.update(
-                label_annotation="_group_label", scope_field=f"{prefix}thread_id",
+                label_expression=Value("Standalone message"), scope_field=f"{prefix}thread_id",
                 timestamp="_order_at", oldest=self.options.oldest,
             )
             return InboxConversationGroups(rows, inbox=self.inbox, **kwargs)
@@ -262,12 +259,22 @@ class InboxConversationGroups(InboxGroups):
 
     def page(self, *, page: int = 1, size: int = 25) -> InboxGroupPage:
         result = super().page(page=page, size=size)
+        titles = dict(
+            self.inbox.threads.filter(pk__in=[int(row.value) for row in result.rows if int(row.value) > 0])
+            .order_by().values_list(
+                "pk", Coalesce("title__text", Value("Conversation"), output_field=models.TextField())
+            )
+        )
         rows = []
         for row in result.rows:
             key = int(row.value)
             owner = self.inbox.threads.model if key > 0 else self.inbox.messages.model
             kind = "thread" if key > 0 else "message"
-            rows.append(replace(row, value=f"{kind}:{owner.public_id_from_pk(abs(key))}"))
+            rows.append(replace(
+                row,
+                value=f"{kind}:{owner.public_id_from_pk(abs(key))}",
+                label=titles.get(key, "Conversation") if key > 0 else "Standalone message",
+            ))
         return replace(result, rows=rows)
 
     def scope(self, value: str | None) -> Any:

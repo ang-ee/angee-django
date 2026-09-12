@@ -259,6 +259,69 @@ def test_group_windows_keep_exact_totals_on_empty_and_out_of_range_pages():
             assert (result.rows, result.count, result.record_count, result.message_count) == ([], 0, 0, 0)
 
 
+def test_message_group_totals_span_pages_and_conversation_titles_remain_exact():
+    owner = User.objects.create_user(username="explorer-partition-totals")
+    with system_context(reason="seed disjoint message groups"):
+        title = Fragment.objects.upsert(text="An invoice conversation", owner_id=owner.pk)
+        thread = Thread._base_manager.create(created_by=owner, title=title)
+        untitled = Thread._base_manager.create(created_by=owner)
+        for index, conversation in enumerate((thread, thread, untitled, None)):
+            Message._base_manager.create(
+                created_by=owner, thread=conversation, status="synced", direction="inbound",
+                platform="email" if index < 2 else "slack", sent_at=T0 + timedelta(days=index),
+            )
+    with actor_context(owner):
+        inbox = Message.objects.all().explorer()
+        results = InboxResults(inbox, inbox.messages, InboxResultOptions())
+        for axis, count in (("conversation", 3), ("platform", 2), ("account", 1), ("day", 4)):
+            groups = results.groups(axis)
+            for page in (1, 2, 20):
+                result = groups.page(page=page, size=1)
+                assert (result.count, result.record_count, result.message_count) == (count, 4, 4)
+            assert sum(row.message_count for row in groups.page().rows) == 4
+        conversations = results.groups("conversation").page()
+        assert [row.label for row in conversations.rows] == [
+            "Standalone message", "Conversation", "An invoice conversation",
+        ]
+        assert [row.message_count for row in conversations.rows] == [1, 1, 2]
+
+
+def test_navigator_name_fallbacks_and_recipient_overlap_keep_exact_totals():
+    owner = User.objects.create_user(username="explorer-name-totals")
+    other = User.objects.create_user(username="explorer-private-name")
+    with system_context(reason="seed readable names and overlapping recipients"):
+        blank = Party._base_manager.create(created_by=owner, display_name="")
+        private = Party._base_manager.create(created_by=other, display_name="Hidden party name")
+        handles = [
+            Handle._base_manager.create(
+                created_by=owner, platform="email", value=f"label{index}@example.com", display_name=name,
+                party=blank if index < 2 else private if index == 2 else None, party_link_confirmed=True,
+            )
+            for index, name in enumerate(("Zulu", "Alpha", "Beta", "Gamma"))
+        ]
+        for handle in handles[:3]:
+            Message._base_manager.create(
+                created_by=owner, sender=handle, status="synced", direction="inbound", sent_at=T0,
+            )
+        outbound = Message._base_manager.create(created_by=owner, status="sent", direction="outbound", sent_at=T0)
+        for handle in handles:
+            Participant._base_manager.create(created_by=owner, message=outbound, handle=handle, role="to")
+    with actor_context(owner):
+        for options, count, messages, labels in (
+            (InboxNavigatorOptions(sort="name"), 2, 3, ["Alpha", "Beta"]),
+            (InboxNavigatorOptions(sort="name", include_sent=True), 3, 4, ["Alpha", "Beta", "Gamma"]),
+            (InboxNavigatorOptions(sort="name", lens="recipients"), 3, 1, ["Alpha", "Beta", "Gamma"]),
+            (InboxNavigatorOptions(sort="name", lens="handles"), 3, 3, ["Alpha", "Beta", "Zulu"]),
+        ):
+            navigator = InboxNavigator(Message.objects.all(), InboxCoverage(), options)
+            result = navigator.page()
+            assert (result.count, result.message_count) == (count, messages)
+            assert [row.label for row in result.rows] == labels
+            for page in (1, 2, 20):
+                result = navigator.page(page=page, size=1)
+                assert (result.count, result.message_count) == (count, messages)
+
+
 def test_accounts_require_both_readable_account_and_eligible_readable_message():
     owner = User.objects.create_user(username="explorer-account-owner")
     other = User.objects.create_user(username="explorer-account-other")
@@ -325,7 +388,7 @@ def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
     owner = User.objects.create_user(username="explorer-related")
     other = User.objects.create_user(username="explorer-private")
     with system_context(reason="seed explorer"):
-        fragment = Fragment._base_manager.create(text="shared invoice text", hash="explorer-shared")
+        fragment = Fragment.objects.upsert(text="shared invoice text", owner_id=owner.pk)
         rows = [
             Message._base_manager.create(created_by=user, status=status, platform=platform, sent_at=T0)
             for user, status, platform in [
@@ -345,6 +408,10 @@ def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
         related = inbox.related(f"fragment:{fragment.sqid}")
         assert related.count == related.message_count == 2
         assert {row.pk for row in related.rows} == {row.pk for row in rows[:2]}
+        shared = InboxResults(inbox, inbox.messages, InboxResultOptions(lens="text"))
+        for axis in ("platform", "conversation"):
+            groups = shared.groups(axis).page(size=1)
+            assert (groups.count, groups.record_count, groups.message_count) == (2, 1, 2)
         results = inbox.results(InboxCoverage(platforms=["email"]), InboxSearch(text='"shared invoice"'))
         assert list(results.values_list("pk", flat=True)) == [rows[0].pk]
         content = InboxResults(inbox, results, InboxResultOptions(lens="text"))
