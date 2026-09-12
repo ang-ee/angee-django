@@ -244,11 +244,13 @@ function RouteResourceViewProvider({
       // lane by the time this runs, so React cannot skip scheduling them.
       //
       // Read through a ref, not the closure. A failed transition does not
-      // navigate, so `search` and `queryState` hold still. Measured, the
-      // callback is rebuilt anyway -- `rowSelection` changes identity on every
-      // render -- so a closure read happens to be correct today. That is
-      // incidental, and nothing states it. The ref keeps the clear correct
-      // without depending on an unrelated dependency continuing to churn.
+      // navigate, so `search` and `queryState` hold still. Measured, a closure
+      // read would still be correct today, but only by accident: every scope op
+      // goes through `resetScope`, which clears the selection with a fresh
+      // `{}`, so `rowSelection` changes and this callback is rebuilt around
+      // exactly the transitions that matter. It is the *selection* being
+      // cleared that refreshes the closure, not the failure. The ref does not
+      // depend on that holding.
       if (failedTransitionRef.current !== null) setFailedTransition(null);
       void navigate({
         search: (current) => {
