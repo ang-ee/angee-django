@@ -14,7 +14,7 @@ import {
   enOperatorMessages,
   operatorLogsDrawerTitle,
 } from "./i18n";
-import { OperatorGlyph, OperatorLogsGlyph } from "./OperatorGlyph";
+import { OperatorLogsGlyph } from "./OperatorGlyph";
 import { OperatorLogsDrawer } from "./views/sections/LogsDrawer";
 
 const OPERATOR_ID = "operator";
@@ -108,7 +108,7 @@ const operatorRoutes: readonly BaseAddonRoute[] = [
 const operatorRootMenu: BaseMenuItem = {
   id: OPERATOR_ID,
   label: OPERATOR_TITLE,
-  icon: OPERATOR_ID,
+  icon: "terminal",
   group: "platform",
   route: "operator.overview",
   children: [
@@ -168,7 +168,6 @@ const operator = defineBaseAddon({
     },
   },
   icons: {
-    operator: OperatorGlyph,
     "operator-logs": OperatorLogsGlyph,
     server: Server,
   },

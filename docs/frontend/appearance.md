@@ -38,7 +38,7 @@ independently. The stored document contains stable IDs and versioned inputs:
 ```json
 {
   "version": 1,
-  "themeId": "angee.brand",
+  "themeId": "angee.stock",
   "colorScheme": "system",
   "options": {
     "version": 3,
@@ -68,6 +68,12 @@ theme replaces the old theme's options. Reset removes the complete appearance
 slice. If a saved theme is later uninstalled, the UI uses the host or intrinsic
 fallback and retains the unavailable ID so reinstalling the addon can restore
 the selection.
+
+The former `angee.brand` theme ID is a compatibility alias claimed by Default.
+Its version 1, 2 and 3 customization envelopes resolve through Default's
+migrator and the next successful appearance save writes the canonical
+`angee.stock` ID. The deprecated `angee.theme_brand` addon contains no theme
+implementation; it only depends on `angee.theme_stock` for older stack manifests.
 
 The DOM uses `data-theme-id` for implementation identity and
 `data-color-scheme="light|dark"` for the resolved scheme. `data-theme` mirrors

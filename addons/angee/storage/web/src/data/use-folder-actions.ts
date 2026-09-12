@@ -1,13 +1,11 @@
-import { resourceOperationTarget, type Row, } from "@angee/metadata";
+import { type Row, } from "@angee/metadata";
 import {
-  useCreate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
+  useCreate, useInvalidate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
   refineFieldsFromPaths, } from "@angee/refine";
 import {
-  deletePreviewDocumentForResource, useAngeeDeletePreview, useOperationDocuments, } from "@angee/refine";
-import {
   refineResourceName, } from "@angee/metadata";
-import { useBusyRun, useInvalidateDataResource } from "@angee/ui";
+import { useBusyRun, useDeleteWithPreview } from "@angee/ui";
 import {
   useModelMetadata,
 } from "@angee/metadata";
@@ -39,7 +37,6 @@ export function useFolderActions(
   const metadata = useModelMetadata(FOLDER_MODEL);
   const resource = metadata?.resource ?? null;
   const fileResource = useModelMetadata(FILE_MODEL)?.resource ?? null;
-  const operationDocuments = useOperationDocuments();
   const resourceName = resource ? refineResourceName(resource) : "";
   const fields = refineFieldsFromPaths(["name"]);
   const createFolder = useCreate<RowRecord, HttpError, Record<string, unknown>>({
@@ -54,20 +51,8 @@ export function useFolderActions(
     meta: { fields },
     invalidates: ["list", "many", "detail"],
   });
-  const deletePreviewTarget = resource
-    ? resourceOperationTarget(resource, "deletePreview")
-    : null;
-  const deletePreviewDocument = resource
-    ? deletePreviewDocumentForResource(
-        operationDocuments,
-        resource.schemaName,
-        resource.modelLabel,
-      )
-    : "";
-  const deletePreview = useAngeeDeletePreview(deletePreviewTarget, {
-    document: deletePreviewDocument,
-  });
-  const invalidateDataResource = useInvalidateDataResource();
+  const deleteWithPreview = useDeleteWithPreview(resource);
+  const invalidate = useInvalidate();
   const { busy, run } = useBusyRun(onChanged);
 
   return {
@@ -81,14 +66,13 @@ export function useFolderActions(
       run(async () => {
         requireFolderResource(resource);
         await updateFolder.mutateAsync({ id, values: { name } });
-        await invalidateFiles(invalidateDataResource, fileResource);
+        await invalidateFiles(invalidate, fileResource);
       }),
     remove: (id) =>
       run(async () => {
         requireFolderResource(resource);
-        await deletePreview.mutate({ id, confirm: true });
-        await invalidateDataResource(resource, id);
-        await invalidateFiles(invalidateDataResource, fileResource);
+        await deleteWithPreview.remove(id);
+        await invalidateFiles(invalidate, fileResource);
       }),
   };
 }
@@ -107,11 +91,15 @@ function requireFolderResource(
 }
 
 async function invalidateFiles(
-  invalidateDataResource: ReturnType<typeof useInvalidateDataResource>,
+  invalidate: ReturnType<typeof useInvalidate>,
   resource: DataResourceMetadata | null,
 ): Promise<void> {
   if (!resource) {
     throw new Error(`Resource metadata for "${FILE_MODEL}" is not available.`);
   }
-  await invalidateDataResource(resource);
+  await invalidate({
+    resource: refineResourceName(resource),
+    dataProviderName: resource.schemaName,
+    invalidates: ["list", "many", "detail"],
+  });
 }

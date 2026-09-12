@@ -2,7 +2,7 @@ import { createNamespaceT } from "@angee/ui";
 export const enAppearanceMessages: Record<string, string> = {
   "title": "Appearance", "description": "Choose how Angee looks for your account.",
   "theme.title": "Theme", "theme.description": "Installed theme addons available in this app.",
-  "theme.followHost": "Follow app default", "scheme.title": "Color scheme",
+  "theme.followHost": "Follow app default", "theme.followHostDescription": "Use the theme chosen by this app.", "scheme.title": "Color scheme",
   "scheme.description": "Use a light or dark scheme, or follow your device.",
   "scheme.host": "Follow app default", "scheme.system": "System", "scheme.light": "Light", "scheme.dark": "Dark",
   "options.title": "Customize theme", "options.description": "Start with the selected theme, preview your changes in both schemes, then apply them to your account.", "options.apply": "Apply customization", "options.cancel": "Cancel changes",

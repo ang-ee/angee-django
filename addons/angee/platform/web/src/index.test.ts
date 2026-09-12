@@ -29,7 +29,7 @@ describe("platform addon manifest", () => {
     const root = platform.menus?.[0] as BaseMenuItem | undefined;
     expect(root?.id).toBe("platform");
     expect(root?.group).toBe("platform");
-    expect(root?.icon).toBe("platform");
+    expect(root?.icon).toBe("terminal");
   });
 
   test("groups the explorer sections under one Platform tree branch", () => {
@@ -50,7 +50,4 @@ describe("platform addon manifest", () => {
     ]);
   });
 
-  test("registers the platform glyph", () => {
-    expect(platform.icons?.platform).toBeDefined();
-  });
 });

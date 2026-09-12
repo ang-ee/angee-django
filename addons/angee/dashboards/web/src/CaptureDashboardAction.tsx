@@ -1,6 +1,9 @@
 import * as React from "react";
 import {
   Button,
+  DropdownMenu,
+  ErrorBanner,
+  Glyph,
   firstDashboardSlot,
   parseDashboardSnapshot,
   useDashboardRegistry,
@@ -10,6 +13,7 @@ import {
   type WidgetSpec,
 } from "@angee/ui";
 import type { DashboardStore } from "@angee/ui/dashboard/headless";
+import { useDashboardsT } from "./i18n";
 
 export function CaptureDashboardAction(): React.ReactElement | null {
   const store = useDashboardRegistry().store;
@@ -19,30 +23,34 @@ export function CaptureDashboardAction(): React.ReactElement | null {
 
 function CaptureDashboardMenu({ store }: { store: DashboardStore }): React.ReactElement | null {
   const catalogue = store.useCatalogue();
-  const [open, setOpen] = React.useState(false);
+  const t = useDashboardsT();
   const targets = catalogue.summaries.filter(
     (dashboard) => dashboard.target.scope === "personal" && dashboard.available && dashboard.capabilities.canEdit,
   );
   if (targets.length === 0) return null;
   return (
-    <span className="relative inline-flex">
-      <Button type="button" variant="ghost" size="sm" onClick={() => setOpen((value) => !value)}>Add to dashboard</Button>
-      {open ? (
-        <span className="absolute left-0 top-full z-popover mt-1 flex min-w-56 flex-col rounded-8 border border-border bg-sheet p-1 shadow-md">
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger
+        render={<Button type="button" variant="ghost" size="sm"><Glyph name="plus" />{t("capture.add")}</Button>}
+      />
+      <DropdownMenu.Portal>
+        <DropdownMenu.Positioner sideOffset={6} align="start">
+          <DropdownMenu.Content className="w-60">
           {targets.map((dashboard) => (
-            <CaptureDestination key={dashboard.id} store={store} dashboard={dashboard} onDone={() => setOpen(false)} />
+            <CaptureDestination key={dashboard.id} store={store} dashboard={dashboard} />
           ))}
-        </span>
-      ) : null}
-    </span>
+          </DropdownMenu.Content>
+        </DropdownMenu.Positioner>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 
-function CaptureDestination({ store, dashboard, onDone }: {
+function CaptureDestination({ store, dashboard }: {
   store: DashboardStore;
   dashboard: DashboardSummary;
-  onDone: () => void;
 }): React.ReactElement {
+  const t = useDashboardsT();
   const context = useResourceViewActionContext();
   const binding = store.useDashboard(dashboard.target);
   const [pending, setPending] = React.useState(false);
@@ -83,7 +91,6 @@ function CaptureDestination({ store, dashboard, onDone }: {
         description: binding.state.description,
         snapshot: parseDashboardSnapshot({ ...snapshot, widgets: [...snapshot.widgets, widget] }),
       });
-      onDone();
     } catch (cause) {
       setError(cause instanceof Error ? cause : new Error(String(cause)));
     } finally {
@@ -91,11 +98,12 @@ function CaptureDestination({ store, dashboard, onDone }: {
     }
   };
   return (
-    <span className="flex flex-col">
-      <button type="button" disabled={pending || binding.state.status !== "ready"} className="rounded-6 px-3 py-2 text-left text-13 text-fg hover:bg-inset disabled:opacity-50" onClick={() => void add()}>
-        {pending ? "Adding…" : dashboard.title}
-      </button>
-      {error ? <span role="alert" className="px-3 pb-2 text-2xs text-danger-text">{error.message}</span> : null}
-    </span>
+    <>
+      <DropdownMenu.Item disabled={pending || binding.state.status !== "ready"} onClick={() => void add()}>
+        <Glyph name="dashboard" />
+        {pending ? t("capture.adding") : dashboard.title}
+      </DropdownMenu.Item>
+      <ErrorBanner description={error?.message ?? null} className="my-1" />
+    </>
   );
 }

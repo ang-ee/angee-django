@@ -20,7 +20,7 @@ export const RESULT_LENSES = [
   "text",
 ] as const;
 export type ResultLens = (typeof RESULT_LENSES)[number];
-export const NAVIGATOR_AXES = [
+const NAVIGATOR_AXES = [
   "recency",
   "circle",
   "group",
@@ -28,13 +28,6 @@ export const NAVIGATOR_AXES = [
   "account",
   "link",
   "organization",
-] as const;
-export const RESULT_AXES = [
-  "conversation",
-  "day",
-  "account",
-  "platform",
-  "sender",
 ] as const;
 export const COVERAGE_FIELDS = [
   "platform",

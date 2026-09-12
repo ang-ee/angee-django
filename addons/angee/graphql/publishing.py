@@ -18,7 +18,7 @@ from django.db import models, transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import Signal
 
-from angee.graphql.events import ChangePayload
+from angee.graphql.events import ChangePayload, ReadableFields
 
 _INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
 _CHANGE_BROADCAST_DISPATCH_UID = "angee.graphql.change_broadcast"
@@ -88,14 +88,14 @@ def change_group(model: type[models.Model]) -> str:
 def connect_publishers(
     model: type[models.Model],
     *,
-    readable_fields: Iterable[str] = (),
+    readable_fields: ReadableFields = (),
 ) -> None:
     """Connect save/delete publishers with the model's readable projection."""
 
     dispatch_uid = f"angee-changes-{model._meta.label}"
     save_receiver = partial(
         _on_save,
-        readable_fields=frozenset(readable_fields),
+        readable_fields=(readable_fields if callable(readable_fields) else frozenset(readable_fields)),
     )
     post_save.connect(
         save_receiver,
@@ -162,7 +162,7 @@ def _on_save(
     created: bool = False,
     update_fields: Iterable[str] | None = None,
     raw: bool = False,
-    readable_fields: frozenset[str] = frozenset(),
+    readable_fields: ReadableFields = (),
     **kwargs: Any,
 ) -> None:
     """Publish a create or update event after the transaction commits."""
@@ -194,7 +194,7 @@ def publish_change(
     *,
     action: str,
     update_fields: Iterable[str] | None,
-    readable_fields: Iterable[str] = (),
+    readable_fields: ReadableFields = (),
 ) -> None:
     """Build and send one observable change payload after commit."""
 

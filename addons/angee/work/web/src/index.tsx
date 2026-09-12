@@ -19,13 +19,12 @@ import {
   Kanban,
   XCircle,
 } from "lucide-react";
+import { TASK_MODEL } from "@angee/projects";
 
 import { enWorkMessages } from "./i18n";
 import { QUEUE_MODEL } from "./resources";
 import { taskWorkDetailSection, taskWorkFormSection } from "./task-work";
 import { TriageRecordActions } from "./triage-actions";
-
-const TASK_MODEL = "projects.Task";
 
 const workRoutes: readonly BaseAddonRoute[] = [
   ...resourcePageRoutes(

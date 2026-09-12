@@ -38,7 +38,9 @@ export function AppearanceSettingsPage(): ReactElement {
     {appearance.error ? <Alert tone="danger" title={t("saveFailed")}>{appearance.error.message}</Alert> : null}
     <SettingsSection title={t("theme.title")} description={t("theme.description")}>
       <RadioGroupRoot value={selectedTheme} onValueChange={(value) => void appearance.setTheme(value === HOST_VALUE ? undefined : value)} className="grid gap-3 md:grid-cols-2">
-        <RadioGroupItem disabled={readOnly} variant="card" value={HOST_VALUE} label={t("theme.followHost")} description="Use the theme chosen by this app." />
+        <RadioGroupItem disabled={readOnly} variant="card" value={HOST_VALUE} label={t("theme.followHost")} description={t("theme.followHostDescription")}>
+          <ThemeSpecimen theme={appearance.hostTheme} options={appearance.hostOptions} />
+        </RadioGroupItem>
         {runtime.themes.map((theme) => <RadioGroupItem disabled={readOnly} key={theme.definition.id} variant="card" value={theme.definition.id} label={themeT(theme.definition.labelKey)} description={themeT(theme.definition.descriptionKey)}>
           <ThemeSpecimen theme={theme} />
         </RadioGroupItem>)}
@@ -74,13 +76,20 @@ function FullThemePreview({ theme, scheme, options }: { theme: ThemeContribution
   return <div className="grid gap-2"><div className="text-12 font-medium capitalize text-fg-muted">{scheme}</div><ThemePreviewFrame title={`${theme.definition.id} ${scheme} preview`} themeId={theme.definition.id} colorScheme={scheme} tokens={tokens} logo={logo}>{Preview ? <Preview definition={theme.definition} colorScheme={scheme} options={options} /> : null}</ThemePreviewFrame></div>;
 }
 
-function ThemeSpecimen({ theme }: { theme: ThemeContribution }): ReactElement {
-  return <span className="grid grid-cols-2 gap-2">{(["light", "dark"] as const).map((scheme) => <ThemeScheme key={scheme} theme={theme} scheme={scheme} />)}</span>;
+function ThemeSpecimen({ theme, options }: { theme: ThemeContribution | null; options?: ThemeOptionsEnvelope }): ReactElement {
+  return <span className="grid grid-cols-2 gap-2">{(["light", "dark"] as const).map((scheme) => theme
+    ? <ThemeScheme key={scheme} theme={theme} scheme={scheme} options={options} />
+    : <ThemePreviewFrame key={scheme} title={`app default ${scheme} card preview`} themeId={null} colorScheme={scheme} variant="card" />)}</span>;
 }
 
-function ThemeScheme({ theme, scheme }: { theme: ThemeContribution; scheme: ColorScheme }): ReactElement {
-  const tokens = useMemo(() => { const resolved = resolveThemeOptions(theme.definition); return { ...resolved.tokens.shared, ...resolved.tokens[scheme] } as CSSProperties; }, [theme, scheme]);
-  return <span data-theme-id={theme.definition.id} data-color-scheme={scheme} data-theme={scheme} style={tokens} className="grid h-20 grid-cols-[1fr_2fr] overflow-hidden rounded-6 border border-border bg-canvas p-2">
-    <span className="rounded-4 bg-rail" /><span className="m-1 rounded-4 border border-border bg-sheet"><span className="m-2 block h-2 rounded-full bg-brand" /></span>
-  </span>;
+function ThemeScheme({ theme, scheme, options }: { theme: ThemeContribution; scheme: ColorScheme; options?: ThemeOptionsEnvelope }): ReactElement {
+  const resolved = useMemo(() => {
+    try { return resolveThemeOptions(theme.definition, options); }
+    catch { return resolveThemeOptions(theme.definition); }
+  }, [options, theme]);
+  const tokens = { ...resolved.tokens.shared, ...resolved.tokens[scheme] } as CSSProperties;
+  let logo: ThemeCustomizationLogo | undefined;
+  try { logo = parseThemeCustomization(resolved.value).logo; }
+  catch { logo = undefined; }
+  return <ThemePreviewFrame title={`${theme.definition.id} ${scheme} card preview`} themeId={theme.definition.id} colorScheme={scheme} tokens={tokens} logo={logo} variant="card" />;
 }

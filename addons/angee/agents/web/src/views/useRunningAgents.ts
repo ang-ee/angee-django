@@ -14,7 +14,7 @@ import { AgentRoster, type AgentRosterItem } from "../documents";
  * `RuntimeStatus` enum union ('RUNNING' | 'STOPPED' | 'ERROR' | 'WARNING'), so this is an
  * exact-case compare against the wire value.
  */
-export function isRunningAgent(agent: AgentRosterItem): boolean {
+function isRunningAgent(agent: AgentRosterItem): boolean {
   return agent.runtime_status === "RUNNING" && agent.is_template !== true;
 }
 

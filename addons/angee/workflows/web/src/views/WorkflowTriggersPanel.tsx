@@ -3,7 +3,7 @@ import { useAuthoredQuery } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   Badge, Button, Collapsible, Column, EmptyState, ErrorBanner, errorMessage, Field, Form, Group, List,
-  LoadingPanel, ResourceList, REFINE_CREATE_ID, SegmentedControl, SlotOutlet, registerForm,
+  JsonValueView, LoadingPanel, ResourceList, REFINE_CREATE_ID, SegmentedControl, SlotOutlet, formatDateTime, registerForm,
   TextLink, useImplConfigFields, useFormViewValues,
   useRouteHref, useSlot, useActionOutcomeMutation, useActionResultRun,
   type RecordToolbarContext, type RegisteredFormProps,
@@ -14,7 +14,6 @@ import {
   WorkflowLaunchDocument, WorkflowSchedulePreviewDocument, WorkflowTriggerAuthoringDocument,
 } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
-import { JsonBlock } from "./JsonBlock";
 import { WorkflowEventConditionEditor } from "./WorkflowEventConditionEditor";
 import { WORKFLOW_TRIGGER_FORM_FIELDS_SLOT } from "../slots";
 
@@ -228,7 +227,7 @@ function TriggerRawConfig({
       </Collapsible.Trigger>
       <Collapsible.Panel>
         <section aria-label={t("triggers.ruleJson")}>
-          <JsonBlock value={values.config} />
+          <JsonValueView value={values.config} />
         </section>
       </Collapsible.Panel>
     </Collapsible>
@@ -363,7 +362,7 @@ function TriggerStatus({ context }: { context: RecordToolbarContext }): React.Re
             <>
               <p>{t("triggers.timezone", { timezone: result.timezone })}</p>
               <ol>{result.occurrences.map((occurrence) => (
-                <li key={occurrence}>{formatUtc(occurrence)}</li>
+                <li key={occurrence}>{formatDateTime(occurrence, { timeZone: "UTC" })}</li>
               ))}</ol>
             </>
           ) : null}
@@ -392,14 +391,8 @@ function scheduleMode(value: unknown): ScheduleMode | undefined {
   return hasCron === hasInterval ? undefined : hasCron ? "cron" : "interval";
 }
 
-function formatUtc(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "medium",
-    timeZone: "UTC",
-  }).format(new Date(value));
-}
-
 function formatOptionalUtc(value: unknown, fallback: string): string {
-  return typeof value === "string" && value ? formatUtc(value) : fallback;
+  return typeof value === "string" && value
+    ? formatDateTime(value, { timeZone: "UTC" })
+    : fallback;
 }

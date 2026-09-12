@@ -36,7 +36,7 @@ export const INBOX_MODELS = [
   "storage.File",
   "integrate.Integration",
 ] as const;
-export const PAGE_SIZE = 25;
+const PAGE_SIZE = 25;
 export const COLLECTION_INITIAL = {
   pageSize: PAGE_SIZE,
   sorting: [{ id: "latest", desc: true }],

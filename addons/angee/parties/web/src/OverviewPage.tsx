@@ -38,30 +38,41 @@ export function OverviewPage(): React.ReactElement {
     <DashboardView className="p-1">
       <Metric
         label={t("overview.metric.contacts")}
-        value={metricCount(data?.contacts.aggregate?.count, overview.isFetching)}
+        value={data?.contacts.aggregate?.count}
+        format="count"
+        loading={overview.isFetching}
         icon="parties"
       />
       <Metric
         label={t("overview.metric.organizations")}
-        value={metricCount(data?.organizations.aggregate?.count, overview.isFetching)}
+        value={data?.organizations.aggregate?.count}
+        format="count"
+        loading={overview.isFetching}
         icon="organization"
         tone="brand"
       />
       <Metric
         label={t("overview.metric.unresolvedHandles")}
-        value={metricCount(data?.unresolved_handles.aggregate?.count, overview.isFetching)}
+        value={data?.unresolved_handles.aggregate?.count}
+        format="count"
+        loading={overview.isFetching}
         icon="handle"
         tone="warning"
       />
       <Metric
         label={t("overview.metric.reviewQueue")}
-        value={metricCount(data?.review_queue.aggregate?.count, overview.isFetching)}
+        value={data?.review_queue.aggregate?.count}
+        format="count"
+        loading={overview.isFetching}
         icon="user-check"
         tone="info"
       />
       <Metric
         label={t("overview.metric.duplicates")}
-        value={duplicateMetric(duplicateCount, overview.isFetching)}
+        value={duplicateCount}
+        format="count"
+        loading={overview.isFetching}
+        max={DUPLICATE_COUNT_LIMIT}
         icon="users"
         tone="danger"
         detail={duplicateCount !== undefined && duplicateCount > DUPLICATE_COUNT_LIMIT ? t("overview.metric.duplicatesCapped") : undefined}
@@ -71,17 +82,4 @@ export function OverviewPage(): React.ReactElement {
       <SlotOutlet entries={contributions} />
     </DashboardView>
   );
-}
-
-function metricCount(value: number | undefined, fetching: boolean): string {
-  if (value === undefined && fetching) return "—";
-  return (value ?? 0).toLocaleString();
-}
-
-function duplicateMetric(value: number | undefined, fetching: boolean): string {
-  if (value === undefined && fetching) return "—";
-  if (value !== undefined && value > DUPLICATE_COUNT_LIMIT) {
-    return `${DUPLICATE_COUNT_LIMIT.toLocaleString()}+`;
-  }
-  return (value ?? 0).toLocaleString();
 }

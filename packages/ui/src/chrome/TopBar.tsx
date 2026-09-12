@@ -20,6 +20,10 @@ export interface TopBarProps {
   hideSearch?: boolean;
   onHelp?: () => void;
   onNotifications?: () => void;
+  navigation?: {
+    open: boolean;
+    toggle: () => void;
+  };
   primaryPane?: {
     collapsed: boolean;
     toggle: () => void;
@@ -37,6 +41,7 @@ export function TopBar({
   hideSearch = false,
   onHelp,
   onNotifications,
+  navigation,
   primaryPane,
   searchPlaceholder,
   showChatterToggle = false,
@@ -52,13 +57,14 @@ export function TopBar({
       className={cn(
         barVariants({ height: "topbar", edge: "bottom", tone: "rail", gap: 3 }),
         // Grid placement + stacking, plus TopBar's asymmetric leading pad.
-        "area-topbar z-topbar px-3 pl-4",
+        "area-topbar z-topbar gap-2 px-2 sm:gap-3 sm:px-3 sm:pl-4",
         className,
       )}
     >
+      {navigation ? <NavigationToggleButton navigation={navigation} /> : null}
       {brand}
       {primaryPane ? <PrimaryPaneToggleButton pane={primaryPane} /> : null}
-      <Breadcrumb className="ml-1" />
+      <Breadcrumb className="ml-1 max-sm:hidden" />
       <div className="min-w-2 flex-1" />
       {children}
       {hideSearch ? null : (
@@ -76,6 +82,30 @@ export function TopBar({
       {trailing}
       {showChatterToggle ? <ChatterToggleButton /> : null}
     </header>
+  );
+}
+
+function NavigationToggleButton({
+  navigation,
+}: {
+  navigation: NonNullable<TopBarProps["navigation"]>;
+}): ReactElement {
+  const t = useUiT();
+  return (
+    <Tooltip label={t("chrome.primaryNav")}>
+      <Button
+        type="button"
+        variant="icon"
+        size="iconSm"
+        active={navigation.open}
+        aria-label={t("chrome.primaryNav")}
+        aria-expanded={navigation.open}
+        onClick={navigation.toggle}
+        className="text-on-rail-mut hover:bg-rail-hi hover:text-on-rail-hi"
+      >
+        <Glyph name="app-rail" />
+      </Button>
+    </Tooltip>
   );
 }
 
@@ -98,6 +128,7 @@ function PrimaryPaneToggleButton({
         active={open}
         aria-label={label}
         aria-pressed={open}
+        aria-expanded={open}
         onClick={pane.toggle}
         className="text-on-rail-mut hover:bg-rail-hi hover:text-on-rail-hi"
       >
@@ -121,6 +152,7 @@ function ChatterToggleButton(): ReactElement {
         active={open}
         aria-label={label}
         aria-pressed={open}
+        aria-expanded={open}
         onClick={toggleCollapsed}
         className="text-on-rail-mut hover:bg-rail-hi hover:text-on-rail-hi"
       >

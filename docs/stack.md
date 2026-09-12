@@ -192,7 +192,7 @@ resource transport/auth/live integration. The active frontend owners are
 | react-day-picker | Calendar | Date widgets |
 | react-resizable-panels | Split panes | Layout and inspector panes |
 | CodeMirror 6 (+ @codemirror/lang-json) | Text / Markdown / JSON editor | Markdown and JSON widget editors (shared `useCodeMirrorEditor`) |
-| react-json-view-lite | JSON value tree rendering | JSON widget read tree and debug JSON panels |
+| react-json-view-lite | Installed for compatibility with stack lockfiles; new JSON reads use the shared flat code presentation |
 | @xyflow/react | node/edge graph canvas | `@angee/ui` `GraphView` canvas |
 | @dagrejs/dagre | directed-graph layout | `@angee/ui` `GraphView` node placement |
 | FullCalendar (Standard: `@fullcalendar/react` + `@fullcalendar/daygrid` + `@fullcalendar/timegrid` + `@fullcalendar/interaction`) | Month/week/day event calendar, drag/resize/select | `@angee/ui` `CalendarView` renders server-expanded occurrences and wires interactions to auto-CRUD; code-split behind a lazy import and themed through the token set |

@@ -7,6 +7,7 @@ import { Label } from "../ui/label";
 import { Select } from "../ui/select";
 import type { ThemeOptionsEditorProps } from "./index";
 import {
+  isThemeCustomizationOptions,
   parseThemeCustomization,
   resolveThemeOptions,
   type ThemeCustomization,
@@ -62,7 +63,7 @@ export function ThemeCustomizationEditor({
 }: ThemeOptionsEditorProps): ReactElement {
   const t = useUiT();
   const options = definition.options;
-  if (!options) throw new Error(`Theme ${definition.id} does not declare customization options.`);
+  if (!isThemeCustomizationOptions(options)) throw new Error(`Theme ${definition.id} does not declare palette customization options.`);
 
   let customization: ThemeCustomization;
   try {

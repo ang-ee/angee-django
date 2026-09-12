@@ -18,6 +18,10 @@ export const enKnowledgeMessages: Record<string, string> = {
   "page.notFoundDescription": "This page is no longer available.",
   "page.selectTitle": "Select a page",
   "page.selectDescription": "Choose a page from the tree to read it.",
+  "page.edit": "Edit",
+  "page.lastUpdated": "Updated {value}",
+  "page.emptyTitle": "This page is empty",
+  "page.emptyDescription": "Edit the page to add content.",
   "page.deleteConfirmTitle": 'Delete "{title}"?',
   "page.deleteConfirmBody":
     "Deleting a folder removes the pages inside it too.",
@@ -36,6 +40,7 @@ export const enKnowledgeMessages: Record<string, string> = {
   "editor.titlePlaceholder": "Untitled",
   "editor.titleLabel": "Page title",
   "editor.deleteLabel": "Delete page",
+  "editor.done": "Done",
   "editor.saving": "Saving…",
   "editor.saveFailed": "Save failed",
   "editor.saved": "Saved",

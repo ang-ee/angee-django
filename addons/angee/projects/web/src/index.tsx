@@ -15,6 +15,7 @@ export {
   TASK_MODEL,
 } from "./resources";
 export { useTaskFormDeclaration } from "./task-actions";
+export { TaskBoardSurface, type TaskBoardSurfaceProps } from "./task-board-surface";
 
 const projectsRoutes: readonly BaseAddonRoute[] = [
   {

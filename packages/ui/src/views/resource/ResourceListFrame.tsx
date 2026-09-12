@@ -13,6 +13,7 @@ import {
   ListLoadingFooter,
   SelectionBar,
 } from "./resource-view-list-body";
+import type { ResourceCollectionPresentation } from "./resource-view-types";
 
 export interface ResourceListFrameSelection {
   count: number;
@@ -25,6 +26,7 @@ export interface ResourceListFrameSelection {
 export interface ResourceListFrameProps {
   toolbar: ResourceToolbarProps;
   className?: string;
+  presentation?: ResourceCollectionPresentation;
   selection?: ResourceListFrameSelection;
   error?: Error | null;
   onRetry?: () => void;
@@ -38,6 +40,7 @@ export interface ResourceListFrameProps {
 export function ResourceListFrame({
   toolbar,
   className,
+  presentation = "page",
   selection,
   error = null,
   onRetry,
@@ -60,8 +63,12 @@ export function ResourceListFrame({
         />
       </ControlBand>
       <div
+        data-resource-presentation={presentation}
         className={cn(
-          "flex min-h-full flex-col overflow-visible bg-sheet",
+          "resource-list-frame flex min-w-0 flex-col bg-sheet",
+          presentation === "embedded"
+            ? "overflow-visible"
+            : "h-full min-h-0 overflow-hidden",
           className,
         )}
       >

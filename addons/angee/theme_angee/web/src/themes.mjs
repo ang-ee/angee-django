@@ -1,9 +1,4 @@
-import { createThemeCustomizationOptions, defineTheme, migrateThemeCustomization } from "@angee/ui/theme-runtime";
-
-function migrate(value, fromVersion, defaults) {
-  if (fromVersion !== 1) throw new TypeError(`Angee theme options version ${fromVersion} cannot be migrated.`);
-  return migrateThemeCustomization(value, defaults);
-}
+import { createThemeCustomizationOptions, defineTheme, migrateThemeCustomizationFromV1 } from "@angee/ui/theme-runtime";
 
 export const themes = [defineTheme({
   contractVersion: 1,
@@ -125,5 +120,5 @@ export const themes = [defineTheme({
     density: "theme",
     elevation: "theme",
     logo: "theme",
-  }, { version: 2, migrate }),
+  }, { version: 2, migrate: migrateThemeCustomizationFromV1 }),
 })];

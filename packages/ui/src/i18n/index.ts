@@ -11,6 +11,16 @@ export type UiMessageVars = MessageVars;
 // take a translator parameter use this type instead of respelling the signature.
 export type UiTranslate = (key: string, vars?: UiMessageVars) => string;
 
+/** Resolve an optional composed message without rendering its unresolved key. */
+export function optionalTranslation(
+  t: UiTranslate,
+  key: string,
+  vars?: UiMessageVars,
+): string | undefined {
+  const translated = t(key, vars);
+  return translated === key ? undefined : translated;
+}
+
 // A translator bound to the `ui` namespace: resolves against the host runtime's
 // merged i18n first, then falls back to the bundled English. Thin alias over the
 // shared `useNamespaceT` owner (the same pattern every addon's `useXT` uses).

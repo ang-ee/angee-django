@@ -6,8 +6,11 @@ import { useDndKitSensors } from "../lib/dnd";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Glyph } from "../chrome/Glyph";
-import { Card } from "../ui/card";
 import { Input } from "../ui/input";
+import { ErrorBanner } from "../fragments/ErrorBanner";
+import { InlineEmpty } from "../fragments/InlineEmpty";
+import { LoadingPanel } from "../fragments/LoadingPanel";
+import { PageHeader } from "../page/PageHeader";
 import type {
   DashboardDefinition,
   DashboardLoadState,
@@ -24,6 +27,8 @@ import { useDashboardWidgetData, type DashboardPageScope } from "./data";
 import { useUnsavedChangesNavigationGuard } from "../views/form/use-unsaved-changes-navigation-guard";
 import type { DashboardWidgetCatalogueEntry } from "./catalogue";
 import { DashboardWidgetPickerDialog } from "./WidgetPickerDialog";
+import { useDashboardT } from "./i18n";
+import { titleCase } from "../lib/titleCase";
 
 const ROW_HEIGHT = 56;
 const GRID_GAP = 12;
@@ -36,6 +41,7 @@ export interface DashboardSurfaceProps {
   className?: string;
   title?: string;
   headerActions?: React.ReactNode;
+  toolbar?: React.ReactNode;
 }
 
 function snapshotForDefinition(definition: DashboardDefinition | undefined): DashboardSnapshot | null {
@@ -66,7 +72,7 @@ export function DashboardSurface(props: DashboardSurfaceProps): React.ReactEleme
   if (registry.store) {
     return <StoredDashboardSurface {...props} registry={registry} definition={definition} baseline={baseline} />;
   }
-  if (!baseline) return <DashboardUnavailable message="This dashboard is unavailable." />;
+  if (!baseline) return <DashboardUnavailable />;
   return (
     <DashboardEditor
       {...props}
@@ -87,12 +93,13 @@ function StoredDashboardSurface(
 ): React.ReactElement {
   const binding = props.registry.store!.useDashboard(props.target);
   const state = binding.state;
-  if (state.status === "loading") return <p className="p-4 text-13 text-fg-muted">Loading dashboard…</p>;
-  if (state.status === "forbidden") return <DashboardUnavailable message={state.message ?? "You cannot open this dashboard."} />;
-  if (state.status === "unavailable") return <DashboardUnavailable message={state.message ?? "This dashboard is unavailable."} />;
+  const t = useDashboardT();
+  if (state.status === "loading") return <LoadingPanel message={t("surface.loading")} />;
+  if (state.status === "forbidden") return <DashboardUnavailable message={state.message ?? t("surface.forbidden")} />;
+  if (state.status === "unavailable") return <DashboardUnavailable message={state.message ?? t("surface.unavailable")} />;
   if (state.status === "error") return <DashboardUnavailable message={state.error.message} />;
   if (state.status === "absent") {
-    if (!props.baseline) return <DashboardUnavailable message="This dashboard has not been created." />;
+    if (!props.baseline) return <DashboardUnavailable message={t("surface.absent")} />;
     return (
       <DashboardEditor
         {...props}
@@ -125,6 +132,7 @@ function ReadyDashboardSurface(
   return (
     <DashboardEditor
       {...props}
+      title={props.title ?? state.name}
       committed={state.snapshot}
       capabilities={{ canEdit: state.capabilities.canEdit, canReset: state.capabilities.canReset }}
       onSave={async (snapshot) => {
@@ -146,8 +154,9 @@ function ReadyDashboardSurface(
   );
 }
 
-function DashboardUnavailable({ message }: { message: string }): React.ReactElement {
-  return <Card className="m-4 p-4"><p role="alert" className="text-13 text-fg-muted">{message}</p></Card>;
+function DashboardUnavailable({ message }: { message?: string }): React.ReactElement {
+  const t = useDashboardT();
+  return <ErrorBanner className="m-4" description={message ?? t("surface.unavailable")} />;
 }
 
 function DashboardEditor({
@@ -162,6 +171,7 @@ function DashboardEditor({
   className,
   title,
   headerActions,
+  toolbar,
 }: DashboardSurfaceProps & {
   registry: DashboardRegistry;
   definition?: DashboardDefinition;
@@ -171,6 +181,7 @@ function DashboardEditor({
   onReset?: () => Promise<void>;
   onReload?: () => Promise<void>;
 }): React.ReactElement {
+  const t = useDashboardT();
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(committed);
   const [pending, setPending] = React.useState(false);
@@ -197,11 +208,14 @@ function DashboardEditor({
 
   return (
     <section className={cn("flex min-h-0 flex-1 flex-col", className)}>
-      <header className="flex min-h-11 items-center gap-2 border-b border-border-subtle bg-sheet px-3 py-2">
-        <h2 className="min-w-0 flex-1 truncate text-14 font-semibold text-fg">{title ?? definition?.title ?? "Dashboard"}</h2>
-        {error ? (
+      <PageHeader
+        density="compact"
+        headingLevel={2}
+        title={title ?? definition?.title ?? t("surface.defaultTitle")}
+        actions={(
           <>
-            <span role="alert" className="text-12 text-danger-text">{error.message}</span>
+            {error ? (
+              <>
             {onReload ? (
               <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => {
                 setPending(true);
@@ -209,32 +223,36 @@ function DashboardEditor({
                   setEditing(false);
                   setError(null);
                 }).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
-              }}>Reload</Button>
+              }}>{t("surface.reload")}</Button>
             ) : null}
-          </>
-        ) : null}
+              </>
+            ) : null}
         {headerActions}
         {editing ? (
           <>
             <AddWidgetButton snapshot={draft} registry={registry} pageScope={pageScope} onAdd={(widget) => mutate([...draft.widgets, widget])} />
-            <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => { setDraft(committed); setEditing(false); setError(null); }}>Cancel</Button>
+            <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => { setDraft(committed); setEditing(false); setError(null); }}>{t("surface.cancel")}</Button>
             <Button type="button" variant="primary" size="sm" disabled={pending || !onSave} onClick={() => {
               if (!onSave) return;
               setPending(true);
               setError(null);
               void onSave(parseDashboardSnapshot(draft)).then(() => setEditing(false)).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
-            }}>{pending ? "Saving…" : "Save layout"}</Button>
+            }}>{pending ? t("surface.saving") : t("surface.saveLayout")}</Button>
           </>
         ) : capabilities.canEdit ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(true)}><Glyph name="pencil" size={14} />Edit</Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(true)}><Glyph name="pencil" size={14} />{t("surface.edit")}</Button>
         ) : null}
         {!editing && capabilities.canReset && onReset ? (
           <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => {
             setPending(true);
             void onReset().catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
-          }}>Reset</Button>
+          }}>{t("surface.reset")}</Button>
         ) : null}
-      </header>
+          </>
+        )}
+      />
+      {toolbar}
+      <ErrorBanner description={error?.message ?? null} />
       <DashboardGrid
         snapshot={draft}
         registry={registry}
@@ -271,11 +289,23 @@ function DashboardGrid({ snapshot, registry, definition, editing, pageScope, onW
   pageScope?: DashboardPageScope;
   onWidgetsChange: (widgets: readonly WidgetSpec[]) => void;
 }): React.ReactElement {
+  const t = useDashboardT();
   const sensors = useDndKitSensors(6);
   const [containerRef, responsiveColumns] = useResponsiveColumns(snapshot.columns);
   const columns = editing ? snapshot.columns : responsiveColumns;
   const active = snapshot.widgets.filter((widget) => !widget.isArchived);
-  const projected = editing ? packDashboardLayout(active, columns) : projectDashboardLayout(active, columns);
+  const projected = editing
+    ? packDashboardLayout(active, columns)
+    : columns < snapshot.columns
+      ? packDashboardLayout(
+          active.map((widget) => ({
+            ...widget,
+            w: responsiveWidgetWidth(widget, columns),
+            h: responsiveWidgetHeight(widget, columns, snapshot.columns),
+          })),
+          columns,
+        )
+      : projectDashboardLayout(active, columns, snapshot.columns);
   const handleDragEnd = ({ active: dragged, delta }: DragEndEvent) => {
     const element = containerRef.current;
     const cellWidth = element ? (element.clientWidth - GRID_GAP * (columns - 1)) / columns : 0;
@@ -291,7 +321,7 @@ function DashboardGrid({ snapshot, registry, definition, editing, pageScope, onW
   };
   return (
     <div ref={containerRef} className={cn("min-h-0 flex-1 overflow-auto p-3", editing && "min-w-[720px]")}>
-      {projected.length === 0 ? <p className="p-6 text-center text-13 text-fg-muted">This dashboard has no widgets.</p> : (
+      {projected.length === 0 ? <InlineEmpty icon="dashboard" label={t("surface.empty")} /> : (
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
           <div className="grid min-h-0" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gridAutoRows: `${ROW_HEIGHT}px`, gap: GRID_GAP }}>
             {projected.map((widget) => (
@@ -321,6 +351,19 @@ function DashboardGrid({ snapshot, registry, definition, editing, pageScope, onW
   );
 }
 
+function responsiveWidgetWidth(widget: WidgetSpec, columns: number): number {
+  if (columns < 4 || widget.data.shape === "rows" || widget.data.shape === "none") return columns;
+  return Math.ceil(columns / 2);
+}
+
+function responsiveWidgetHeight(widget: WidgetSpec, columns: number, canonicalColumns: number): number {
+  if (columns >= canonicalColumns) return widget.h;
+  if (widget.data.shape === "series") return Math.max(widget.h, 5);
+  if (widget.data.shape === "rows") return Math.max(widget.h, 6);
+  if (widget.data.shape === "none") return Math.max(widget.h, 4);
+  return Math.max(widget.h, 2);
+}
+
 function DashboardCell({ widget, registry, definition, editing, pageScope, onArchive, onUpdate, onMove, onResize }: {
   widget: WidgetSpec;
   registry: DashboardRegistry;
@@ -332,13 +375,20 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
   onMove: (dx: number, dy: number) => void;
   onResize: (dw: number, dh: number) => void;
 }): React.ReactElement {
+  const t = useDashboardT();
+  const sourceResource = widget.data.shape === "none" ? "" : widget.data.source.resource;
+  const sourceMetadata = useModelMetadata(sourceResource);
+  const resourceLabel = sourceMetadata?.resource.modelName
+    ? titleCase(sourceMetadata.resource.modelName)
+    : titleCase(sourceResource.split(".").at(-1) ?? sourceResource);
+  const visibleTitle = normalizeDashboardWidgetTitle(widget.title, sourceResource, resourceLabel);
   const drag = useDraggable({ id: widget.id, disabled: !editing });
   const transform = drag.transform;
   return (
     <article
       ref={drag.setNodeRef}
       tabIndex={editing ? 0 : undefined}
-      aria-label={editing ? `${widget.title} layout controls` : undefined}
+      aria-label={editing ? t("surface.layoutControls", { title: visibleTitle }) : undefined}
       onKeyDown={(event) => {
         if (!editing || event.target !== event.currentTarget) return;
         if (event.shiftKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
@@ -357,30 +407,30 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
           if (event.key === "ArrowDown") onMove(0, 1);
         }
       }}
-      className={cn("relative min-h-0 overflow-hidden rounded-8 border border-border bg-sheet", drag.isDragging && "z-10 opacity-90")}
+      className={cn("relative flex min-h-0 flex-col overflow-hidden rounded-8 border border-border-subtle bg-sheet shadow-sm", drag.isDragging && "z-10 opacity-90")}
       style={{
         gridColumn: `${widget.x + 1} / span ${widget.w}`,
         gridRow: `${widget.y + 1} / span ${widget.h}`,
         ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}),
       }}
     >
-      <header className="flex h-9 items-center gap-1 border-b border-border-subtle px-2">
-        {editing ? <button type="button" className="cursor-grab rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={`Move ${widget.title}`} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" size={14} /></button> : null}
+      <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border-subtle px-2">
+        {editing ? <button type="button" className="cursor-grab rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.move", { title: visibleTitle })} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" size={14} /></button> : null}
         {editing ? (
           <Input
             size="sm"
-            value={widget.title}
+            value={visibleTitle}
             onChange={(event) => onUpdate({ title: event.target.value })}
-            aria-label="Widget title"
+            aria-label={t("surface.widgetTitle")}
             className="min-w-0 flex-1"
           />
-        ) : <h3 className="min-w-0 flex-1 truncate text-13 font-medium text-fg">{widget.title}</h3>}
+        ) : <h3 className="min-w-0 flex-1 truncate text-13 font-medium text-fg">{visibleTitle}</h3>}
         {editing ? (
           <>
-            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label="Move left" onClick={() => onMove(-1, 0)}><Glyph name="arrow-left" size={12} /></button>
-            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label="Move right" onClick={() => onMove(1, 0)}><Glyph name="arrow-right" size={12} /></button>
-            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label="Make wider" onClick={() => onResize(1, 0)}><Glyph name="maximize-2" size={12} /></button>
-            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label="Remove widget" onClick={onArchive}><Glyph name="archive" fallbackName="x" size={12} /></button>
+            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.moveLeft")} onClick={() => onMove(-1, 0)}><Glyph name="arrow-left" size={12} /></button>
+            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.moveRight")} onClick={() => onMove(1, 0)}><Glyph name="arrow-right" size={12} /></button>
+            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.wider")} onClick={() => onResize(1, 0)}><Glyph name="maximize-2" size={12} /></button>
+            <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.removeWidget")} onClick={onArchive}><Glyph name="archive" fallbackName="x" size={12} /></button>
           </>
         ) : null}
       </header>
@@ -395,11 +445,19 @@ function ResolvedWidget({ widget, registry, definition, pageScope }: {
   definition?: DashboardDefinition;
   pageScope?: DashboardPageScope;
 }): React.ReactElement {
+  const t = useDashboardT();
   const kind = registry.widgetKinds[widget.kind];
   if (!kind || kind.version !== widget.kindVersion || kind.shape !== widget.data.shape) {
-    return <p role="alert" className="p-3 text-12 text-warning-text">Widget kind {widget.kind} v{widget.kindVersion} is unavailable.</p>;
+    return <ErrorBanner className="m-3" description={t("surface.widgetKindUnavailable", { kind: widget.kind, version: widget.kindVersion })} />;
   }
   return <WidgetDataBody widget={widget} kind={kind} definition={definition} pageScope={pageScope} />;
+}
+
+function normalizeDashboardWidgetTitle(title: string, resource: string, resourceLabel: string): string {
+  if (!resource) return title;
+  if (title === resource) return resourceLabel;
+  if (title.startsWith(`${resource} `)) return `${resourceLabel}${title.slice(resource.length)}`;
+  return title;
 }
 
 function WidgetDataBody({ widget, kind, definition, pageScope }: {
@@ -408,19 +466,25 @@ function WidgetDataBody({ widget, kind, definition, pageScope }: {
   definition?: DashboardDefinition;
   pageScope?: DashboardPageScope;
 }): React.ReactElement {
+  const t = useDashboardT();
   const data = useDashboardWidgetData(widget, pageScope);
   const Component = kind.Component;
   const Authored = definition?.authored?.[widget.id];
   return (
-    <div className="flex h-[calc(100%-2.25rem)] min-h-0 flex-col overflow-auto p-3">
-      <Component spec={widget} data={data} authored={Authored ? <Authored /> : undefined} />
-      <div className="mt-auto flex items-center justify-end gap-2 pt-2 text-2xs text-fg-subtle">
-        {pageScope && widget.data.shape !== "none" ? (
-          <span>{pageScope.resource === widget.data.source.resource ? "Page filters applied" : "Independent source"}</span>
-        ) : null}
-        <span>{data.live ? "Live" : data.updatedAt ? `Read ${new Date(data.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Manual"}</span>
-        <button type="button" className="rounded-4 px-1 text-fg-muted hover:text-fg focus-visible:focus-ring" onClick={data.refetch}>Refresh</button>
+    <div className={cn(
+      "flex min-h-0 flex-1 flex-col overflow-hidden",
+      "px-3 pt-2 pb-1.5",
+    )}>
+      <div className={cn("min-h-0 flex-1", kind.shape === "rows" ? "overflow-auto" : "overflow-hidden")}>
+        <Component spec={widget} data={data} authored={Authored ? <Authored /> : undefined} />
       </div>
+      <footer className="flex shrink-0 items-center justify-end gap-2 pt-1 text-2xs text-fg-subtle">
+        {pageScope && widget.data.shape !== "none" ? (
+          <span>{pageScope.resource === widget.data.source.resource ? t("surface.pageFilters") : t("surface.independentSource")}</span>
+        ) : null}
+        <span>{data.live ? t("surface.live") : data.updatedAt ? t("surface.readAt", { time: new Date(data.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }) : t("surface.manual")}</span>
+        <button type="button" className="rounded-4 px-1 text-fg-muted hover:text-fg focus-visible:focus-ring" onClick={data.refetch}>{t("surface.refresh")}</button>
+      </footer>
     </div>
   );
 }
@@ -431,6 +495,7 @@ function AddWidgetButton({ snapshot, registry, pageScope, onAdd }: {
   pageScope?: DashboardPageScope;
   onAdd: (widget: WidgetSpec) => void;
 }): React.ReactElement {
+  const t = useDashboardT();
   const [open, setOpen] = React.useState(false);
   const add = (entry: DashboardWidgetCatalogueEntry) => {
     const descriptor = registry.widgetKinds[entry.kind];
@@ -458,7 +523,7 @@ function AddWidgetButton({ snapshot, registry, pageScope, onAdd }: {
   return (
     <>
       <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(true)}>
-        <Glyph name="plus" size={14} />Add widget
+        <Glyph name="plus" size={14} />{t("surface.addWidget")}
       </Button>
       <DashboardWidgetPickerDialog
         open={open}
@@ -482,6 +547,7 @@ export function DashboardCollectionSurface({
   className?: string;
   onReturnToList?: () => void;
 }): React.ReactElement {
+  const t = useDashboardT();
   const metadata = useModelMetadata(resource);
   const registry = useDashboardRegistry();
   const declaredKey = registry.resourceDefaults[resource];
@@ -493,7 +559,7 @@ export function DashboardCollectionSurface({
       id: "count",
       kind: "stat",
       kindVersion: 1,
-      title: "Total",
+      title: t("surface.total"),
       data: { shape: "value", source: { resource, measure: { op: "count" } } },
       options: {},
       x: 0, y: 0, w: 3, h: 2,
@@ -508,7 +574,7 @@ export function DashboardCollectionSurface({
       id: `group-${axis.field}`,
       kind: "bar",
       kindVersion: 1,
-      title: `By ${axis.field.replaceAll("_", " ")}`,
+      title: t("surface.byField", { field: titleCase(axis.field) }),
       data: {
         shape: "series",
         source: {
@@ -528,7 +594,10 @@ export function DashboardCollectionSurface({
       isArchived: false,
     }));
     return parseDashboardSnapshot({ schemaVersion: 1, columns: 12, widgets: [count, ...charts] });
-  }, [definition, metadata?.resource, resource]);
+  }, [definition, metadata?.resource, resource, t]);
+  const resourceLabel = metadata?.resource.modelName
+    ? titleCase(metadata.resource.modelName)
+    : titleCase(resource.split(".").at(-1) ?? resource);
   return (
     <DashboardSurface
       target={{ scope: "resource", key: resource }}
@@ -536,10 +605,10 @@ export function DashboardCollectionSurface({
       fallbackSnapshot={fallback}
       pageScope={{ resource, filter }}
       className={className}
-      title={definition?.title ?? `${resource} dashboard`}
+      title={definition?.title ?? t("surface.resourceDashboard", { resource: resourceLabel })}
       headerActions={onReturnToList ? (
         <Button type="button" variant="ghost" size="sm" onClick={onReturnToList}>
-          <Glyph name="list" size={14} />List
+          <Glyph name="list" size={14} />{t("surface.list")}
         </Button>
       ) : undefined}
     />

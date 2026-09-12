@@ -54,6 +54,8 @@ export interface AppearanceState {
   effectiveColorSchemePreference: ColorSchemePreference;
   colorScheme: ColorScheme;
   theme: ThemeContribution | null;
+  hostTheme: ThemeContribution | null;
+  hostOptions?: ThemeOptionsEnvelope;
   effectiveOptions?: ThemeOptionsEnvelope;
   available: boolean;
   editable: boolean;
@@ -91,27 +93,42 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
   const runtime = useAppRuntime();
   const auth = useRuntimeAuth();
   const userPreferences = useRuntimeUserPreferences();
-  const catalogue = useMemo(
-    () => new Map(runtime.themes.map((theme) => [theme.definition.id, theme])),
-    [runtime.themes],
-  );
+  const catalogue = useMemo(() => {
+    const entries = new Map<string, ThemeContribution>();
+    for (const theme of runtime.themes) {
+      entries.set(theme.definition.id, theme);
+      for (const legacyId of theme.definition.legacyIds ?? []) entries.set(legacyId, theme);
+    }
+    return entries;
+  }, [runtime.themes]);
   const saved = readAppearancePreferences(userPreferences.preferences);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [pendingLegacy, setPendingLegacy] = useState<PendingLegacyColorScheme | null>(readPendingLegacyColorScheme);
   const system = useSystemColorScheme();
   const hostThemeId = host.themeId ?? null;
+  const hostTheme = hostThemeId ? catalogue.get(hostThemeId) ?? null : null;
   const selectedThemeId = saved.value.themeId === undefined ? hostThemeId : saved.value.themeId;
   const selectedTheme = selectedThemeId ? catalogue.get(selectedThemeId) ?? null : null;
   const colorSchemePreference = saved.value.colorScheme ?? host.colorScheme ?? "system";
   const colorScheme = colorSchemePreference === "system" ? system : colorSchemePreference;
   let notice = saved.notice;
   if (selectedThemeId && !selectedTheme) notice ??= "theme-unavailable";
-  const effectiveThemeId = selectedTheme ? selectedThemeId : catalogue.has(hostThemeId ?? "") ? hostThemeId : null;
+  const effectiveThemeId = selectedTheme?.definition.id ?? hostTheme?.definition.id ?? null;
   const effectiveTheme = effectiveThemeId ? catalogue.get(effectiveThemeId) ?? null : null;
   const requestedOptions = saved.value.themeId === undefined ? host.options : saved.value.options;
   let effectiveTokens: Partial<Record<ThemeTokenName, string>> = {};
   let cacheOptions: ThemeOptionsEnvelope | undefined;
+  let hostOptions: ThemeOptionsEnvelope | undefined;
+  if (hostTheme?.definition.options) {
+    try {
+      const resolved = resolveThemeOptions(hostTheme.definition, host.options);
+      hostOptions = { version: resolved.version, value: resolved.value };
+    } catch {
+      const resolved = resolveThemeOptions(hostTheme.definition);
+      hostOptions = { version: resolved.version, value: resolved.value };
+    }
+  }
   if (effectiveTheme) {
     try {
       const resolved = resolveThemeOptions(effectiveTheme.definition, requestedOptions);
@@ -159,9 +176,13 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
         if (!decoded.writable && operation !== "reset") {
           throw new Error("This appearance preference was written by a newer version. Reset it before editing.");
         }
-        const next = apply(decoded.value);
+        let next: AppearancePreferences | (Omit<AppearancePreferences, "options"> & { options?: unknown }) | undefined = apply(decoded.value);
         if (operation === "scheme" && next && decoded.hasRawOptions && next.options === undefined) {
-          return writeAppearancePreferences(current, { ...next, options: decoded.rawOptions });
+          next = { ...next, options: decoded.rawOptions };
+        }
+        if (next?.themeId) {
+          const canonical = catalogue.get(next.themeId)?.definition.id;
+          if (canonical) next = { ...next, themeId: canonical };
         }
         return writeAppearancePreferences(current, next);
       });
@@ -171,7 +192,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     } finally {
       setSaving(false);
     }
-  }, [userPreferences]);
+  }, [catalogue, userPreferences]);
 
   const setTheme = useCallback(async (themeId: string | undefined, options?: ThemeOptionsEnvelope) => {
     await update((current) => {
@@ -185,7 +206,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
       const resolved = definition.options ? resolveThemeOptions(definition, options) : null;
       return {
         ...current,
-        themeId,
+        themeId: definition.id,
         ...(resolved ? { options: { version: resolved.version, value: resolved.value } } : { options: undefined }),
       };
     }, "theme");
@@ -206,7 +227,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
       const definition = catalogue.get(themeId)?.definition;
       if (!definition?.options) throw new Error(`Theme ${JSON.stringify(themeId)} does not accept options.`);
       const resolved = resolveThemeOptions(definition, options);
-      return { ...current, themeId, options: { version: resolved.version, value: resolved.value } };
+      return { ...current, themeId: definition.id, options: { version: resolved.version, value: resolved.value } };
     });
   }, [catalogue, effectiveThemeId, update]);
   const reset = useCallback(async () => update(() => undefined, "reset"), [update]);
@@ -245,12 +266,17 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     return () => { active = false; };
   }, [auth.status, auth.user?.id, pendingLegacy, resolvingIdentity, saved.value.colorScheme, saved.writable, setColorScheme, userPreferences.available]);
 
+  const visiblePreferences = selectedTheme && saved.value.themeId
+    ? { ...saved.value, themeId: selectedTheme.definition.id }
+    : saved.value;
   const value = useMemo<AppearanceState>(() => ({
-    preferences: saved.value,
+    preferences: visiblePreferences,
     effectiveThemeId,
     effectiveColorSchemePreference: colorSchemePreference,
     colorScheme,
     theme: effectiveTheme,
+    hostTheme,
+    hostOptions,
     effectiveOptions: cacheOptions,
     available: userPreferences.available,
     editable: saved.writable,
@@ -262,7 +288,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     setColorScheme,
     setOptions,
     reset,
-  }), [saved.value, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, cacheOptions, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, reset]);
+  }), [visiblePreferences, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, hostTheme, hostOptions, cacheOptions, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, reset]);
   return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>;
 }
 

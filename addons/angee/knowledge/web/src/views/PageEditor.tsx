@@ -1,7 +1,7 @@
 import { useMemo, type ReactElement } from "react";
 
 import {
-  Button, EmptyState, Glyph, Spinner, cn, formatDate as formatBaseDate, textRoleVariants, useResolvedWidget, type WidgetField } from "@angee/ui";
+  Button, EmptyState, Glyph, Skeleton, SkeletonStatus, cn, formatDate as formatBaseDate, textRoleVariants, useResolvedWidget, type WidgetField } from "@angee/ui";
 import { useKnowledgeT } from "../i18n";
 import type { KnowledgePageDetail } from "../data/documents";
 import { usePageEditor, type SaveStatus } from "../data/use-page-editor";
@@ -15,6 +15,7 @@ export interface PageEditorProps {
   onTitleSaved: () => void;
   /** Delete this page (the page confirms first). */
   onDelete: () => void;
+  onDone: () => void;
 }
 
 /**
@@ -26,6 +27,7 @@ export function PageEditor({
   detail,
   onTitleSaved,
   onDelete,
+  onDone,
 }: PageEditorProps): ReactElement {
   const t = useKnowledgeT();
   const editor = usePageEditor(
@@ -62,6 +64,15 @@ export function PageEditor({
             onChange={(event) => editor.setTitle(event.currentTarget.value)}
             onBlur={editor.commitTitle}
           />
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={onDone}
+          >
+            <Glyph name="check" />
+            {t("editor.done")}
+          </Button>
           <Button
             type="button"
             size="iconMd"
@@ -106,10 +117,9 @@ function SaveBadge({
   if (status === "idle") return null;
   if (status === "saving") {
     return (
-      <span className="inline-flex items-center gap-1 text-fg-muted">
-        <Spinner size="sm" />
-        {t("editor.saving")}
-      </span>
+      <SkeletonStatus label={t("editor.saving")} className="inline-flex min-w-16 items-center">
+        <Skeleton className="h-3 w-16" shape="text" />
+      </SkeletonStatus>
     );
   }
   if (status === "error") {

@@ -9,7 +9,12 @@ import { PAGE_ELEMENT_SLOT } from "../page/types";
  * shares one tile row. */
 export interface MetricProps {
   label: ReactNode;
-  value: ReactNode;
+  value?: ReactNode;
+  /** Format numeric and absent values as a count; pending absent counts show an em dash. */
+  format?: "count";
+  loading?: boolean;
+  /** Render counts above this bound as `<bound>+`. */
+  max?: number;
   /** Icon registry name or a node. */
   icon?: ReactNode;
   /** Semantic tone for the tile label. */

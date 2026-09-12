@@ -1,6 +1,6 @@
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, Dialog, Glyph, MutationDialog, Spinner, errorMessage, mutationDialogValueCodecs, textRoleVariants, useAuthoredResourceMutation, useRelationOptions, useToast, type MutationDialogField, type MutationDialogValues } from "@angee/ui";
+import { Button, Dialog, Glyph, LoadingPanel, MutationDialog, errorMessage, mutationDialogValueCodecs, textRoleVariants, useAuthoredResourceMutation, useRelationOptions, useToast, type MutationDialogField, type MutationDialogValues } from "@angee/ui";
 import { ErrorBanner } from "@angee/ui/fragments/ErrorBanner";
 import { RepositoryPicker, VCS_BRIDGE_RELATION } from "@angee/integrate-vcs";
 import { PLATFORM_ADDON_MUTATION_INVALIDATES } from "@angee/platform";
@@ -241,11 +241,7 @@ function ScanSourceList({
 }): React.ReactElement {
   const t = usePlatformIntegrateVcsT();
   if (fetching && sources.length === 0) {
-    return (
-      <div className={textRoleVariants({ role: "meta" })}>
-        <Spinner size="sm" /> {t("apps.scan.loading")}
-      </div>
-    );
+    return <LoadingPanel density="inline" message={t("apps.scan.loading")} />;
   }
   if (sources.length === 0) {
     return <p className={textRoleVariants({ role: "meta" })}>{t("apps.scan.empty")}</p>;
@@ -267,13 +263,11 @@ function ScanSourceList({
               variant="secondary"
               size="sm"
               disabled={scanning !== null}
+              loading={scanning === source.id}
+              loadingText={t("apps.scan")}
               onClick={() => onScan(source.id)}
             >
-              {scanning === source.id ? (
-                <Spinner size="sm" />
-              ) : (
-                <Glyph decorative name="search" />
-              )}
+              <Glyph decorative name="search" />
               {t("apps.scan")}
             </Button>
           </li>

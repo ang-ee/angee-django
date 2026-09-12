@@ -18,6 +18,7 @@ import {
   List,
   LoadingPanel,
   ResourceList,
+  statusTone,
   TextLink,
   TopMenuTabs,
   Workbench,
@@ -712,12 +713,11 @@ export function attemptStateLabel(row: StepAttemptRow, t: ReturnType<typeof useW
 function AttemptResultBadge({ kind, t }: { kind: unknown; t: ReturnType<typeof useWorkflowsT> }): React.ReactElement | null {
   const value = String(kind ?? "").toUpperCase();
   if (!value) return null;
-  const tone = value === "ERROR" ? "danger" : value === "WAIT" || value === "SUSPEND" ? "warning" : value === "DONE" ? "success" : "neutral";
   const label = value === "ERROR" ? t("runs.resultERROR")
     : value === "WAIT" ? t("runs.resultWAIT")
       : value === "SUSPEND" ? t("runs.resultSUSPEND")
         : value === "DONE" ? t("runs.resultDONE") : value;
-  return <Badge tone={tone}>{label}</Badge>;
+  return <Badge tone={statusTone(value)}>{label}</Badge>;
 }
 
 export function inspectionSelectionSearch(

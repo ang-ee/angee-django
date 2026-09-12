@@ -1,7 +1,7 @@
 import * as React from "react";
 import { runActionResult, useAuthoredMutation } from "@angee/refine";
-import { Action, Column, Facet, Field, Form, Group, List, ResourceList, registerForm, useAuthoredResourceMutation, useEnumOptions, useImplConfigFields, useImplPrefill, useRecordAction, useRecordActionMutation, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
-import type { ActionFieldName } from "@angee/gql/console/actions";
+import { Action, Column, Facet, Field, Form, List, ResourceList, registerForm, useAuthoredResourceMutation, useEnumOptions, useImplConfigFields, useImplPrefill, useRecordAction, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
+import { IntegrationSyncColumns, IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
 import type { DocumentVariables } from "@angee/refine";
 
 import { useIntegrateVcsT } from "../i18n";
@@ -27,8 +27,7 @@ export function VcsBridgesPage(): React.ReactElement {
         <Column field="backend_class" header={t("vcs.backendClass")} />
         <Column field="lifecycle" header={t("col.lifecycle")} widget="statusBadge" />
         <Column field="runtime_status" header={t("col.runtimeStatus")} widget="colorDot" />
-        <Column field="sync_stage" />
-        <Column field="last_sync_completed_at" />
+        {IntegrationSyncColumns({ fields: ["sync_stage", "last_sync_completed_at"] })}
       </List>
     </ResourceList>
   );
@@ -36,7 +35,7 @@ export function VcsBridgesPage(): React.ReactElement {
 
 function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useIntegrateVcsT();
-  const [sync] = useRecordActionMutation<ActionFieldName>("sync_vcs_bridge");
+  const syncAction = useIntegrationSyncAction("sync_vcs_bridge", t("action.syncNow"));
   const [discover] = useAuthoredMutation(IntegrateDiscoverRepositories);
   const backendClassOptions = useEnumOptions(MODEL, "backend_class");
   const privateConfigReset = React.useMemo(() => ({ config: {} }), []);
@@ -105,26 +104,17 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
         />
         <Field name="credential" />
         <Field name="lifecycle" widget="statusbar" readOnly />
-        <Field name="runtime_status" readOnly />
+        <Field name="runtime_status" widget="colorDot" readOnly />
         <Field
           name="config"
           widget="json"
           showWhen={(values) => !implConfig.hasSchema(values.backend_class)}
         />
         {implConfig.fields.map((field) => <Field key={field.name} {...field} />)}
-        <Group label={t("bridge.group.sync")} columns={2}>
-          <Field name="is_syncing" readOnly />
-          <Field name="sync_stage" readOnly />
-          <Field name="sync_error" readOnly />
-          <Field name="sync_progress" widget="json" readOnly />
-          <Field name="last_sync_summary" widget="json" readOnly />
-          <Field name="last_sync_items" readOnly />
-          <Field name="last_sync_completed_at" readOnly />
-        </Group>
-        <Field name="last_sync_status" readOnly />
+        {IntegrationSyncFields({ label: t("bridge.group.sync") })}
         {/* Write-only signing secret — set on create, never read back. */}
         <Field name="webhookSecret" widget="text" kind="string" createOnly />
-        <Action id="sync" label={t("action.syncNow")} icon="refresh" run={sync} />
+        {syncAction}
         <Action id="discover" label={t("vcs.discover")} run={discoverAll} />
       </Form>
   );

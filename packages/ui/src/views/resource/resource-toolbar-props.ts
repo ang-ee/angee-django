@@ -75,6 +75,11 @@ export function useResourceToolbarProps({
         resourceView.setFilter(removeCustomFilter(resourceView.state.filter, id)),
       onFavoriteSave: resourceView.saveFavorite,
       onFavoriteSelect: resourceView.applyFavorite,
+      onQueryReset: resourceView.resetQuery,
+      queryDirty:
+        Object.keys(resourceView.state.filter).length > 0
+        || resourceView.state.groupStack.length > 0
+        || Boolean(resourceView.state.sorting?.length),
       onFilterToggle: (id) =>
         resourceView.setFilter(
           nextFacetFilter(resourceView.state.filter, filterOptions, id),
@@ -93,11 +98,14 @@ export function useResourceToolbarProps({
       props,
       resourceView.applyFavorite,
       resourceView.saveFavorite,
+      resourceView.resetQuery,
       resourceView.setFilter,
       resourceView.setGroupStack,
       resourceView.setPageSize,
       resourceView.setView,
       resourceView.state.filter,
+      resourceView.state.groupStack,
+      resourceView.state.sorting,
       setPage,
       textFilterField,
       view,

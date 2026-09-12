@@ -1,0 +1,8 @@
+{
+  "criticalExports": [
+    {
+      "name": "dashboardStore",
+      "ownerFile": "src/store.ts"
+    }
+  ]
+}

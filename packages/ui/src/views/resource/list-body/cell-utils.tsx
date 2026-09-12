@@ -24,7 +24,7 @@ export function cellContent<TRow extends Row>(
   metadata?: ModelMetadata | null,
 ): React.ReactNode {
   if (column.render) return column.render(row);
-  const value = readPath(row, column.field);
+  const value = rowValueAtPath(row, column.field);
   const tone = columnTone(column, value);
   if (tone) {
     const label = value == null ? "" : String(value);
@@ -73,7 +73,7 @@ export function rowActionLabelForTableColumn<TRow extends Row>(
   row: TRow,
   t: UiTranslate,
 ): string {
-  const value = readPath(row, column.id);
+  const value = rowValueAtPath(row, column.id);
   if (Array.isArray(value)) {
     const label = value.map((item) => String(item)).join(", ").trim();
     return label || t("list.record");
@@ -84,9 +84,7 @@ export function rowActionLabelForTableColumn<TRow extends Row>(
   return t("list.record");
 }
 
-export function readPath(row: Row, path: string): unknown {
-  return rowValueAtPath(row, path);
-}
+export { rowValueAtPath as readPath } from "@angee/metadata";
 
 export function groupMeasuresFromColumns<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],

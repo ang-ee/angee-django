@@ -18,7 +18,7 @@ export interface AgentSessionContribution {
 
 export const AGENT_SESSION_SLOT = "agents.session.content";
 
-export function agentSessionContribution(value: unknown): AgentSessionContribution | null {
+function agentSessionContribution(value: unknown): AgentSessionContribution | null {
   if (typeof value !== "object" || value === null || !("render" in value)) return null;
   const render = value.render;
   return typeof render === "function" ? { render: (context) => render(context) } : null;

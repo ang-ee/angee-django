@@ -10,6 +10,7 @@ import { Gauge, LayoutDashboard } from "lucide-react";
 
 import { CaptureDashboardAction } from "./CaptureDashboardAction";
 import { dashboardStore } from "./store";
+import { enDashboardsMessages } from "./i18n";
 
 const DASHBOARDS_MODEL = "dashboards.Dashboard";
 
@@ -100,8 +101,9 @@ const dashboards = defineBaseAddon({
   id: "dashboards",
   routes,
   menus,
+  i18n: { dashboards: enDashboardsMessages },
   dashboards: [overview],
-  icons: { dashboards: LayoutDashboard, "dashboard-diagnostics": Gauge },
+  icons: { dashboards: LayoutDashboard, dashboard: LayoutDashboard, "dashboard-diagnostics": Gauge },
   slots: [
     {
       slot: DASHBOARD_STORE_SLOT,

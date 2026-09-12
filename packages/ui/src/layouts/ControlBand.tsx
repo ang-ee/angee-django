@@ -44,7 +44,7 @@ export function ControlBand({ wrap = false, className, ...props }: ControlBandPr
     <band.Band
       className={cn(
         barVariants({
-          height: wrap ? "controlMin" : "control",
+          height: "controlMin",
           edge: "bottom",
           tone: "sheet",
           pad: wrap ? "comfortable" : "flush",

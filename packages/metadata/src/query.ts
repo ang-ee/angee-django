@@ -156,7 +156,8 @@ export class ResourceQuery {
   /** Parse every input, preserving empty membership/boolean branches and null comparisons. */
   toWhere(...values: readonly unknown[]): Record<string, unknown> {
     const parts = values.map((value) => this.where(this.filterFrom(value))).filter((value) => Object.keys(value).length > 0);
-    return parts.length === 0 ? {} : parts.length === 1 ? parts[0]! : { _and: parts };
+    const combined = parts.length === 0 ? {} : parts.length === 1 ? parts[0]! : { _and: parts };
+    return hasuraWhereRoot(combined);
   }
 
   /** Remove facet constraints while retaining the logic of every other branch. */
@@ -488,6 +489,15 @@ function mergeConditions(conditions: readonly Record<string, unknown>[]): Record
     }
   }
   return merged;
+}
+/** Refine's Hasura adapter requires one Boolean operator when metadata supplies
+ * multiple root predicates. Preserve every compiled predicate while making the
+ * implicit conjunction explicit at the provider boundary. */
+function hasuraWhereRoot(where: Record<string, unknown>): Record<string, unknown> {
+  const entries = Object.entries(where);
+  return entries.length <= 1
+    ? where
+    : { _and: entries.map(([field, value]) => ({ [field]: value })) };
 }
 function wireOperand(operator: FilterOperator, value: FilterValue): FilterValue {
   if (["contains", "iContains", "startsWith", "iStartsWith", "endsWith", "iEndsWith"].includes(operator)) {

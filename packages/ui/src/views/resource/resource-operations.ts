@@ -1,3 +1,5 @@
+import { useCallback } from "react";
+import { useInvalidate } from "@refinedev/core";
 import {
   refineResourceIdentifier,
   refineResourceName,
@@ -9,12 +11,13 @@ import {
 import {
   maybeOperationDocument,
   useInvalidateAuthoredModels,
+  useAngeeDeletePreview,
   useOperationDocuments,
   type CustomGraphQLOperationTarget,
   type ListBatchTarget,
   type OperationDocumentKind,
+  type UseAngeeDeletePreviewResult,
 } from "@angee/refine";
-import { useInvalidate } from "@refinedev/core";
 import * as React from "react";
 
 export interface ResourceOperation {
@@ -106,6 +109,44 @@ export function useDeletePreviewOperation(
   resource: DataResourceMetadata | null,
 ): ResourceOperation {
   return useResourceOperation(resource, "deletePreview", "deletePreviews");
+}
+
+export interface UseDeleteWithPreviewResult extends UseAngeeDeletePreviewResult {
+  available: boolean;
+  remove: (id: string) => Promise<void>;
+}
+
+/**
+ * Own the standard single-record delete-preview confirmation plus Refine cache
+ * invalidation tail. Domain callers retain their own confirmation copy and any
+ * related-resource invalidations, while the generated operation/document seam
+ * stays in one place.
+ */
+export function useDeleteWithPreview(
+  resource: DataResourceMetadata | null,
+): UseDeleteWithPreviewResult {
+  const operation = useDeletePreviewOperation(resource);
+  const preview = useAngeeDeletePreview(operation.target, {
+    document: operation.document,
+  });
+  const invalidate = useInvalidate();
+  const remove = useCallback(async (id: string): Promise<void> => {
+    if (!resource || !operation.target) {
+      throw new Error("Delete preview is unavailable for this resource.");
+    }
+    await preview.mutate({ id, confirm: true });
+    await invalidate({
+      resource: refineResourceName(resource),
+      dataProviderName: resource.schemaName,
+      id,
+      invalidates: ["list", "many", "detail"],
+    });
+  }, [invalidate, operation.target, preview.mutate, resource]);
+  return {
+    ...preview,
+    available: Boolean(resource && operation.target && operation.document),
+    remove,
+  };
 }
 
 export function useRevisionOperation(

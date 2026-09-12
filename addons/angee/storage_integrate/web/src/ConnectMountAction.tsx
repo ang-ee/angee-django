@@ -7,6 +7,7 @@ import {
   Glyph,
   MutationDialog,
   mutationDialogValueCodecs,
+  optionalTranslation,
   type MutationDialogControlProps,
   type MutationDialogField,
   type MutationDialogValues,
@@ -104,14 +105,6 @@ export function ConnectMountAction({
         size="lg"
     />
   );
-}
-
-function optionalTranslation(
-  t: ReturnType<typeof useStorageIntegrateT>,
-  key: string,
-): string | undefined {
-  const translated = t(key);
-  return translated === key ? undefined : translated;
 }
 
 function parseMountConnectValues(

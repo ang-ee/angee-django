@@ -22,6 +22,7 @@ export function RoadmapPage(): React.ReactElement {
       >
         <List<StringIdRow>
           resource={PROJECT_MODEL}
+          presentation="embedded"
           defaultGroup={{ field: "product" }}
           order={{ sort_order: "ASC" }}
         >
@@ -38,6 +39,7 @@ export function RoadmapPage(): React.ReactElement {
       >
         <List<StringIdRow>
           resource={INITIATIVE_PROJECT_MODEL}
+          presentation="embedded"
           scope="local"
           defaultGroup={{ field: "initiative" }}
           order={{ sort_order: "ASC" }}

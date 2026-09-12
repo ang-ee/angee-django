@@ -11,9 +11,8 @@ import {
   ClientSideConnection, PROTOCOL_VERSION, type Agent, type AvailableCommand, type Client, type ContentBlock, type McpServer, type NewSessionResponse, type PromptCapabilities, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigSelectGroup, type SessionConfigSelectOption, type SessionNotification, } from "@agentclientprotocol/sdk";
 import * as v from "valibot";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
-import { useLatestRef } from "@angee/ui";
+import { errorMessage, useLatestRef } from "@angee/ui";
 
-import { messageOf } from "./acp-error";
 import { convertMessage, foldIntoLog, type ChatMessage, type ChatPart } from "./acp-log";
 import { emptySession, foldIntoSession, type AcpSession } from "./acp-session";
 import { openAcpTransport, type AcpTransport } from "./acp-transport";
@@ -27,6 +26,7 @@ import {
   type McpServerConfig,
 } from "./documents";
 import type { AgentSessionRecord } from "./session-contributions";
+import { useAgentsT } from "./i18n";
 
 // Re-mint the route token this far before it expires, so the socket reconnects while
 // the old one is still valid rather than after the agent has dropped it.
@@ -77,6 +77,7 @@ export interface AcpRuntime {
  * identity-keyed message cache re-renders the streamed text/reasoning/tool calls.
  */
 export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime {
+  const t = useAgentsT();
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [status, setStatus] = React.useState<AcpStatus>("idle");
   const [error, setError] = React.useState<string | null>(null);
@@ -201,7 +202,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
       } catch (caught) {
         if (!active) return;
         setStatus("error");
-        setError(messageOf(caught, "Failed to connect to the agent."));
+        setError(errorMessage(caught, t("chat.connectFailed")));
       }
     };
 
@@ -222,7 +223,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
       if (refreshTimer !== undefined) clearTimeout(refreshTimer);
       tearDown();
     };
-  }, [agentId, mintEndpoint, reconnectNonce]);
+  }, [agentId, mintEndpoint, reconnectNonce, t]);
 
   // The attachment adapter, wired onto the runtime only when the agent advertises `image`.
   // `SimpleImageAttachmentAdapter` reads pasted/picked images into data-URL parts; `onNew`
@@ -269,12 +270,12 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
         const prompt = buildPromptBlocks(context, userText, promptCapabilitiesRef.current, blocks);
         await connection.prompt({ sessionId, prompt });
       } catch (caught) {
-        setError(messageOf(caught, "The agent did not respond."));
+        setError(errorMessage(caught, t("chat.responseFailed")));
       } finally {
         setIsRunning(false);
       }
     },
-    [agentId, renderPrompt],
+    [agentId, renderPrompt, t],
   );
 
   const onCancel = React.useCallback(async (): Promise<void> => {

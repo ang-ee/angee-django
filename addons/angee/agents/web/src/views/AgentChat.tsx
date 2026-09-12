@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Alert, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, statusTone, textRoleVariants } from "@angee/ui";
+import { Alert, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, InfoRow, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, statusTone, textRoleVariants } from "@angee/ui";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -527,8 +527,8 @@ function SessionInfo({
   const servers = Object.keys(mcpServers);
   return (
     <div className="space-y-2 text-2xs">
-      <InfoRow label={t("chat.model")} value={modelHandle || "—"} />
-      <InfoRow label={t("chat.viewLabel")} value={`${view.kind} · ${view.type}`} />
+      <InfoRow className="px-0 py-0 text-2xs" label={t("chat.model")} value={modelHandle || "—"} />
+      <InfoRow className="px-0 py-0 text-2xs" label={t("chat.viewLabel")} value={`${view.kind} · ${view.type}`} />
       <div>
         <div className="font-medium text-fg-muted">{t("chat.mcpServers")}</div>
         {servers.length === 0 ? (
@@ -542,15 +542,6 @@ function SessionInfo({
         )}
       </div>
       <ContextBlock label={t("chat.context")}>{context || "—"}</ContextBlock>
-    </div>
-  );
-}
-
-function InfoRow({ label, value }: { label: string; value: string }): React.ReactElement {
-  return (
-    <div className="flex justify-between gap-2">
-      <span className="text-fg-muted">{label}</span>
-      <span className="truncate text-fg">{value}</span>
     </div>
   );
 }

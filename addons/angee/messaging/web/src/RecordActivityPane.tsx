@@ -1,6 +1,6 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, DatePopover, EmptyState, FieldRoot, Glyph, LoadingPanel, Textarea, cn, dateFromValue, errorMessage, formatDate, formatDateStorage, textRoleVariants, useActionForm } from "@angee/ui";
+import { Button, DatePopover, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, Textarea, cn, dateFromValue, errorMessage, formatDate, formatDateStorage, textRoleVariants, useActionForm } from "@angee/ui";
 import type { ChatterViewContext } from "@angee/ui/runtime";
 import { userDisplayName } from "@angee/iam";
 
@@ -234,9 +234,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
           </Button>
         </div>
         {(scheduleForm.formError ?? error) ? (
-          <p className={cn(textRoleVariants({ role: "caption" }), "text-danger-text")}>
-            {scheduleForm.formError ?? error}
-          </p>
+          <ErrorBanner description={scheduleForm.formError ?? error} />
         ) : null}
       </form>
     </div>

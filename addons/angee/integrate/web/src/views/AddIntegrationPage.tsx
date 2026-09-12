@@ -11,8 +11,9 @@ import {
   useResourceRecordHrefLookup,
   useResourceRoute,
   useRouteHref,
+  useRouteSearch,
 } from "@angee/ui";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import {
@@ -25,7 +26,7 @@ export function AddIntegrationPage(): React.ReactElement {
   const t = useIntegrateT();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
-  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const search = useRouteSearch();
   const recordHref = useResourceRecordHrefLookup();
   const query = useAuthoredQuery(IntegrationCapabilities);
   const selectedResource = typeof search.capability === "string" ? search.capability : "";

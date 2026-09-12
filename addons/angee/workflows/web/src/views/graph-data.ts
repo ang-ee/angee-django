@@ -94,17 +94,6 @@ export function workflowNodeKind(value: string): WorkflowGraphNodeKind {
   return "HANDLER";
 }
 
-export function latestStepRunByStep(
-  stepRuns: readonly WorkflowRunStepRun[],
-): Map<string, WorkflowRunStepRun> {
-  const latest = new Map<string, WorkflowRunStepRun>();
-  for (const stepRun of stepRuns) {
-    if (!stepRun.step) continue;
-    latest.set(stepRun.step.id, stepRun);
-  }
-  return latest;
-}
-
 function positionFromJson(value: unknown): GraphViewPosition | undefined {
   if (!value || typeof value !== "object") return undefined;
   const position = value as { x?: unknown; y?: unknown };

@@ -5,29 +5,6 @@ export type OperatorGlyphProps = SVGProps<SVGSVGElement> & {
   strokeWidth?: number | string;
 };
 
-export function OperatorGlyph({
-  size = 24,
-  strokeWidth = 2,
-  ...props
-}: OperatorGlyphProps) {
-  return (
-    <svg
-      fill="none"
-      height={size}
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={strokeWidth}
-      viewBox="0 0 24 24"
-      width={size}
-      {...props}
-    >
-      <path d="m6.5 7.25 5.25 4.75-5.25 4.75" />
-      <path d="M13.75 16.75h4.75" />
-    </svg>
-  );
-}
-
 /** A scroll/log-lines glyph for the operator logs drawer's edge stripe-tab. */
 export function OperatorLogsGlyph({
   size = 24,

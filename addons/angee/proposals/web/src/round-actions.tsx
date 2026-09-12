@@ -273,7 +273,7 @@ function isCollectingRound(record: Row): boolean {
   return roundState(record) === "collecting";
 }
 
-export function isOpenedRound(record: Row): boolean {
+function isOpenedRound(record: Row): boolean {
   return roundState(record) === "opened";
 }
 

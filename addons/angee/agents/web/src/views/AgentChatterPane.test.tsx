@@ -161,7 +161,7 @@ describe("AgentChatterPane", () => {
   test("leaves the no-agent state when the session query refetches with a running agent", async () => {
     sdkMocks.sessionData = { resolve_session_for_view: null };
 
-    const view = render(<AgentChatterPane resource="notes/note" recordId="nte_1" />);
+    const view = render(<AgentChatterPane view={{ kind: "record", type: "notes/note", sqid: "nte_1" }} />);
 
     expect(screen.getByText("No agent yet")).toBeTruthy();
     expect(
@@ -175,7 +175,7 @@ describe("AgentChatterPane", () => {
     sdkMocks.sessionData = {
       resolve_session_for_view: session(),
     };
-    view.rerender(<AgentChatterPane resource="notes/note" recordId="nte_1" />);
+    view.rerender(<AgentChatterPane view={{ kind: "record", type: "notes/note", sqid: "nte_1" }} />);
 
     expect(screen.queryByText("No agent yet")).toBeNull();
     // The chat surface is lazy-mounted (its own chunk), so it resolves a tick after render.

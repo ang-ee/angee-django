@@ -248,9 +248,11 @@ async function loadInstalledThemes(addonSources) {
     if (!Array.isArray(module.themes)) throw new Error(`${packageName} ./themes must export an array named themes.`);
     const packageDefinitions = assertThemeCatalogue(module.themes);
     for (const definition of packageDefinitions) {
-      const previous = owners.get(definition.id);
-      if (previous) throw new Error(`Duplicate installed theme id ${JSON.stringify(definition.id)} from ${previous} and ${packageName}.`);
-      owners.set(definition.id, packageName);
+      for (const id of [definition.id, ...(definition.legacyIds ?? [])]) {
+        const previous = owners.get(id);
+        if (previous) throw new Error(`Duplicate installed theme id or legacy alias ${JSON.stringify(id)} from ${previous} and ${packageName}.`);
+        owners.set(id, packageName);
+      }
       definitions.push(definition);
     }
     packages.push({ packageName, packageRoot, entry, definitions: packageDefinitions });

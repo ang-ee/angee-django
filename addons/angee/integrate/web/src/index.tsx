@@ -187,5 +187,13 @@ export {
   connectCallbackRedirectUri,
   currentConnectCallbackRedirectUri,
 } from "./connect/redirects";
+export {
+  IntegrationSyncColumns,
+  IntegrationSyncFields,
+  useIntegrationSyncAction,
+  type IntegrationSyncFieldName,
+  type IntegrationSyncFieldsOptions,
+  type IntegrationSyncFragmentOptions,
+} from "./sync-fragments";
 
 export default integrate;

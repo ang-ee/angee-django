@@ -220,7 +220,6 @@ export function InboxMessageReader({
             </div>
             <MessagePartsView
               parts={message.parts}
-              resolveFileUrl={(file) => file.url}
               activePartId={navigation.part}
               onPreviewFile={(part) =>
                 navigation.patch({ part: part.id ?? undefined, tab: "preview" })

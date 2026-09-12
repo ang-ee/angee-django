@@ -30,7 +30,7 @@ const WORKFLOW_MODEL = "workflows.Workflow";
 const WORKFLOW_RUN_MODEL = "workflows.WorkflowRun";
 
 /** Workflow editor records whose chrome must never advertise record automations. */
-export const WORKFLOW_TECHNICAL_MODELS: ReadonlySet<string> = new Set([
+const WORKFLOW_TECHNICAL_MODELS: ReadonlySet<string> = new Set([
   WORKFLOW_MODEL,
   "workflows.Step",
   "workflows.Edge",

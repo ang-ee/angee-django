@@ -99,9 +99,14 @@ export interface ListEmptyState {
 
 export type ListEmptyContent = ReactNode | ListEmptyState;
 
+/** Vertical-scroll ownership for a collection surface. */
+export type ResourceCollectionPresentation = "page" | "workspace" | "embedded";
+
 export interface ListViewProps<TRow extends Row = Row> {
   /** Model label rendered by this list, e.g. `"notes.Note"`. */
   resource: string;
+  /** Page/workspace surfaces fill their owner; embedded surfaces grow in flow. */
+  presentation?: ResourceCollectionPresentation;
   /** Authored server projection using the same native collection surface. */
   source?: CollectionSource<TRow>;
   /** Allowed render kinds; defaults to the resource's available kinds. */

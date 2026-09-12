@@ -3,6 +3,9 @@ import { useCallback, useSyncExternalStore } from "react";
 /** Tailwind's `lg` boundary, owned here for JS-driven responsive behavior. */
 export const LARGE_VIEWPORT_QUERY = "(min-width: 64rem)";
 
+/** Handheld layout boundary, kept in sync with Tailwind's `sm` boundary. */
+export const MOBILE_VIEWPORT_QUERY = "(max-width: 39.999rem)";
+
 /**
  * Tailwind's `xl` boundary. The width a record needs before it can carry a
  * third pane: below it, nav plus a form plus an open rail do not fit, and the

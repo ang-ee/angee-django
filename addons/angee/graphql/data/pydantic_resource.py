@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 import strawberry.experimental.pydantic
 from django.core.exceptions import ImproperlyConfigured
@@ -56,6 +56,7 @@ def hasura_pydantic_resource(
     source: RowSource | None = None,
     node_name: str | None = None,
     id_field: str = "id",
+    frontend_row_model: Literal["client", "server"] = "client",
 ) -> HasuraResource:
     """Build a read-only Hasura resource from a pydantic row model.
 
@@ -93,10 +94,10 @@ def hasura_pydantic_resource(
             # library uses for ``<name>_by_pk``; keep them one source of truth.
             native_resource=resource,
             policy=DataResourcePolicy(
-                # A computed pydantic source is small and admin-only: the frontend
-                # fetches it once and filters/sorts/paginates/groups in the browser.
+                # Small computed sources may deliberately execute in the browser;
+                # larger sources keep filter/sort/page execution on the server.
                 public_id_field=id_field,
-                row_model="client",
+                row_model=frontend_row_model,
                 filter_fields=tuple(filterable),
                 order_fields=tuple(sortable),
                 default_measures=(DataAggregateMeasureMetadata(op="count"),),

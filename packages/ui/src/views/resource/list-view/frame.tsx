@@ -169,6 +169,7 @@ function ListViewBody<TRow extends Row = Row>({
   renderCard,
   emptyContent,
   className,
+  presentation = "page",
   resourceView,
 }: ListViewProps<TRow> & {
   resourceView: ResourceViewContextValue;
@@ -183,7 +184,17 @@ function ListViewBody<TRow extends Row = Row>({
   // effect settle after a single dispatch.
   const laneSource = useValueStable(laneSourceInput);
   const rowActionSurface = useRowActionsSurface(rowActions);
-  const resolvedEmptyContent = emptyContent ?? t("list.empty");
+  const filtered = Object.keys(resourceView.state.filter).length > 0;
+  const resolvedEmptyContent = filtered
+    ? {
+        title: t("list.noMatchingRecords"),
+        description: t("list.noMatchingRecordsHint"),
+        action: {
+          label: t("resourceToolbar.clearQuery"),
+          onClick: resourceView.resetQuery,
+        },
+      }
+    : emptyContent ?? t("list.empty");
   const discoveredMetadata = useModelMetadata(source ? "" : resource);
   const modelMetadata = source ? null : discoveredMetadata;
   // The Calendar kind is offered only where the page declares occurrence sources;
@@ -356,6 +367,7 @@ function ListViewBody<TRow extends Row = Row>({
       renderCard={renderCard}
       emptyContent={resolvedEmptyContent}
       className={className}
+      presentation={presentation}
     />
   );
   if (resourceView.state.view === "dashboard") {

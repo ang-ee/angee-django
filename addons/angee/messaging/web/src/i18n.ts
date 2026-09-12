@@ -126,6 +126,7 @@ export const enMessagingMessages: Record<string, string> = {
   // ThreadsPage — the threads list + detail.
   "threads.tabConversation": "Conversation",
   "threads.title": "Title",
+  "threads.noTitle": "(No subject)",
   "threads.channelType": "Channel",
   "threads.channel": "Channel",
   "threads.messageCount": "Messages",
@@ -179,6 +180,7 @@ export const enMessagingMessages: Record<string, string> = {
   // MessagesPage — the inbox list + detail.
   "messages.channel": "Channel",
   "messages.title": "Subject",
+  "messages.noSubject": "(No subject)",
   "messages.tabContent": "Content",
   "messages.sender": "Sender",
   "messages.thread": "Thread",

@@ -6,7 +6,7 @@
   "sideEffects": ["**/*.css"],
   "exports": {
     ".": "./src/index.ts",
-    "./themes": "./src/themes.mjs"
+    "./themes": { "types": "./src/themes.d.mts", "import": "./src/themes.mjs" }
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

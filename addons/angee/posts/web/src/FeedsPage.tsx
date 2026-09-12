@@ -1,4 +1,5 @@
 import { senderDisplayName } from "@angee/parties";
+import { IntegrationSyncColumns, IntegrationSyncFields } from "@angee/integrate";
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
 import {
@@ -97,7 +98,7 @@ function FeedPostRow({
     postsReactionCopy(t),
   );
   const body = hasRenderableParts(message) ? (
-    <MessagePartsView parts={message.parts} resolveFileUrl={(file) => file.url} />
+    <MessagePartsView parts={message.parts} />
   ) : (
     <span>{message.preview || t("post.emptyBody")}</span>
   );
@@ -177,8 +178,13 @@ export function FeedsPage(): React.ReactElement {
         <Column field="handle.display_name" header={t("feed.handle")} />
         <Column field="lifecycle" header={t("feed.lifecycle")} widget="statusBadge" />
         <Column field="runtime_status" header={t("feed.runtime")} widget="statusBadge" />
-        <Column field="last_sync_status" header={t("feed.sync")} widget="statusBadge" />
-        <Column field="last_sync_completed_at" header={t("feed.syncedAt")} />
+        {IntegrationSyncColumns({
+          fields: ["last_sync_status", "last_sync_completed_at"],
+          labels: {
+            last_sync_status: t("feed.sync"),
+            last_sync_completed_at: t("feed.syncedAt"),
+          },
+        })}
       </List>
     </ResourceList>
   );
@@ -195,13 +201,19 @@ function FeedForm({ resource: _resource, ...props }: RegisteredFormProps): React
           <Field name="handle" label={t("feed.handle")} readOnly />
           <Field name="lifecycle" label={t("feed.lifecycle")} readOnly />
           <Field name="runtime_status" label={t("feed.runtime")} readOnly />
-          <Field name="last_sync_status" label={t("feed.sync")} readOnly />
-          <Field name="last_sync_completed_at" label={t("feed.syncedAt")} readOnly />
-          <Field name="last_sync_items" label={t("feed.items")} readOnly />
         </Group>
         <Field name="config" label={t("feed.config")} readOnly />
-        <Field name="sync_progress" label={t("feed.progress")} readOnly />
-        <Field name="sync_error" label={t("feed.error")} readOnly />
+        {IntegrationSyncFields({
+          label: t("feed.sync"),
+          fields: ["last_sync_status", "last_sync_completed_at", "last_sync_items", "sync_progress", "sync_error"],
+          labels: {
+            last_sync_status: t("feed.sync"),
+            last_sync_completed_at: t("feed.syncedAt"),
+            last_sync_items: t("feed.items"),
+            sync_progress: t("feed.progress"),
+            sync_error: t("feed.error"),
+          },
+        })}
       </Form>
   );
 }

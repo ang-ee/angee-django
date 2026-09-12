@@ -1,4 +1,4 @@
-export { estimateGroupedItemSize, ALIGN_CLASS, LIST_VIEW_SCROLL_BUDGET, TABLE_SCROLL_STYLE, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, GROUP_HEADER_HEIGHT, SKELETON_ROW_HEIGHT, GROUP_STATUS_HEIGHT } from "./list-body/types";
+export { estimateGroupedItemSize, ALIGN_CLASS, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, GROUP_HEADER_HEIGHT, SKELETON_ROW_HEIGHT, GROUP_STATUS_HEIGHT } from "./list-body/types";
 export type { ColumnAlign, ListColumn, VisibleFieldOption, GroupByDimension, RowGroup, GroupMeasure, GroupedListPager, GroupedRecordNav, GroupedListItem } from "./list-body/types";
 export { SelectionBar, FlatListBody, MeasureFooter, RowActionsHeader, ListHeaderCell, VisibleFieldsMenu } from "./list-body/table-pieces";
 export type { FlatListBodyProps } from "./list-body/table-pieces";

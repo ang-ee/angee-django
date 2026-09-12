@@ -29,13 +29,17 @@ export function NexusOverviewContribution(): React.ReactElement {
     <DashboardView>
       <Metric
         label={t("overview.fading.metric")}
-        value={count(overview?.fading_count, query.isFetching)}
+        value={overview?.fading_count}
+        format="count"
+        loading={query.isFetching}
         icon="radar"
         tone="warning"
       />
       <Metric
         label={t("overview.due.metric")}
-        value={count(overview?.due_count, query.isFetching)}
+        value={overview?.due_count}
+        format="count"
+        loading={query.isFetching}
         icon="cadence"
         tone="warning"
       />
@@ -82,8 +86,4 @@ export function NexusOverviewContribution(): React.ReactElement {
       </div>
     </DashboardView>
   );
-}
-
-function count(value: number | undefined, fetching: boolean): string {
-  return value === undefined && fetching ? "—" : (value ?? 0).toLocaleString();
 }

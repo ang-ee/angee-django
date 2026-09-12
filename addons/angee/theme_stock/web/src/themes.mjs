@@ -1,13 +1,21 @@
 import { createThemeCustomizationOptions, defineTheme, migrateThemeCustomization } from "@angee/ui/theme-runtime";
 
 function migrate(value, fromVersion, defaults) {
-  if (fromVersion !== 1) throw new TypeError(`Default theme options version ${fromVersion} cannot be migrated.`);
-  return migrateThemeCustomization(value, defaults);
+  if (fromVersion === 2) return migrateThemeCustomization(value, defaults);
+  if (fromVersion !== 1 || !value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`Default theme options version ${fromVersion} cannot be migrated.`);
+  }
+  const radii = { "0px": "square", "4px": "compact", "6px": "standard", "8px": "soft", "12px": "round" };
+  return migrateThemeCustomization({
+    ...value,
+    ...(typeof value.radius === "string" && value.radius in radii ? { radius: radii[value.radius] } : {}),
+  }, defaults);
 }
 
 export const themes = [defineTheme({
   contractVersion: 1, id: "angee.stock", labelKey: "stock.label",
-  descriptionKey: "stock.description", revision: 3,
+  legacyIds: ["angee.brand"],
+  descriptionKey: "stock.description", revision: 4,
   tokens: { shared: {}, light: {}, dark: {} },
   options: createThemeCustomizationOptions({
     brand: "#5b5bd6",
@@ -25,5 +33,5 @@ export const themes = [defineTheme({
     density: "theme",
     elevation: "theme",
     logo: "theme",
-  }, { version: 2, migrate }),
+  }, { version: 3, migrate }),
 })];

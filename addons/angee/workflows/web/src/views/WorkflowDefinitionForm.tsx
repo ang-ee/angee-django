@@ -20,9 +20,10 @@ import {
   type RecordToolbarContext,
   type RegisteredFormProps,
   useRouteHref,
+  useRouteSearch,
 } from "@angee/ui";
 import { fieldsWithMetadataDefaults } from "@angee/ui/views/model-metadata-defaults";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 
 import {
   PublishWorkflowDefinitionDocument,
@@ -79,7 +80,7 @@ function WorkflowDefinitionEditForm({ resource: _resource, id, ...props }: Regis
       .sort((left, right) => left.label.localeCompare(right.label));
   }, [metadata.resources, registeredResources]);
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as Readonly<Record<string, unknown>>;
+  const search = useRouteSearch();
   const repairAttempt = typeof search.repairAttempt === "string" ? search.repairAttempt : "";
   const routeHref = useRouteHref();
   const definition = useAuthoredQuery(

@@ -1,4 +1,4 @@
-import { useTaskFormDeclaration } from "@angee/projects";
+import { TASK_MODEL, TaskBoardSurface } from "@angee/projects";
 import {
   Column,
   ErrorBanner,
@@ -6,11 +6,8 @@ import {
   Page,
   PageBody,
   PageHeader,
-  ResourceList,
   useRouteParam,
-  useRouteHref,
 } from "@angee/ui";
-import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import { useQueueContext } from "../context";
@@ -18,17 +15,11 @@ import { useWorkT } from "../i18n";
 import { queueStageFilters } from "../stage-filters";
 import { WorkTaskCard, type WorkTaskRow } from "../task-work";
 
-const TASK_MODEL = "projects.Task";
-
 /** Queue projection: stage lanes, sort_order rank, lane quick-create, task deep-links. */
 export function QueueBoardPage(): React.ReactElement {
   const queueId = useRouteParam("queueId") ?? "";
   const t = useWorkT();
   const queue = useQueueContext(queueId);
-  const navigate = useNavigate();
-  const routeHref = useRouteHref();
-  const [creating, setCreating] = React.useState(false);
-  const form = useTaskFormDeclaration();
   const name = queue.data?.work_queues_by_pk?.name ?? queueId;
   const scale = queue.data?.work_queues_by_pk?.estimate_scale;
   // Memoized, not inline: these are identity-compared downstream, so a fresh
@@ -48,17 +39,6 @@ export function QueueBoardPage(): React.ReactElement {
     }),
     [queueId],
   );
-  const select = React.useCallback(
-    (id: string | null) => {
-      if (id === null) {
-        setCreating(true);
-        return;
-      }
-      setCreating(false);
-      void navigate({ to: routeHref("projects.tasks.record", { id }) });
-    },
-    [navigate, routeHref],
-  );
 
   return (
     <Page>
@@ -68,14 +48,7 @@ export function QueueBoardPage(): React.ReactElement {
       />
       <PageBody gutter="none" scroll="hidden">
         {queue.error ? <ErrorBanner description={queue.error.message} /> : null}
-        <ResourceList<WorkTaskRow>
-          resource={TASK_MODEL}
-          placement="drawer"
-          creating={creating}
-          onSelect={select}
-          onClose={() => setCreating(false)}
-          createDefaults={createDefaults}
-        >
+        <TaskBoardSurface<WorkTaskRow> createDefaults={createDefaults}>
           <List<WorkTaskRow>
             resource={TASK_MODEL}
             defaultView="board"
@@ -86,7 +59,6 @@ export function QueueBoardPage(): React.ReactElement {
             baseFilter={baseFilter}
             order={{ sort_order: "ASC" }}
             laneSource={laneSource}
-            rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
             renderCard={(task) => <WorkTaskCard task={task} estimateScale={scale} />}
             emptyContent={{
               icon: "work-board",
@@ -101,8 +73,7 @@ export function QueueBoardPage(): React.ReactElement {
             <Column field="priority" widget="priority" />
             <Column field="due_date" />
           </List>
-          {form}
-        </ResourceList>
+        </TaskBoardSurface>
       </PageBody>
     </Page>
   );

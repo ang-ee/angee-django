@@ -1,5 +1,5 @@
 import { useAuthoredQuery, type MessageVars } from "@angee/refine";
-import { Alert, Badge, Code, GraphView, InlineEmpty, PageAside, PrimaryPanePublisher, RailPanel, SearchInput, Spinner, TreeView, barVariants, cn, routeSearchParam, textRoleVariants, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+import { Alert, Badge, Code, GraphView, InlineEmpty, LoadingPanel, PageAside, PrimaryPanePublisher, RailPanel, SearchInput, TreeView, barVariants, cn, routeSearchParam, textRoleVariants, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useState, } from "react";
 
@@ -9,7 +9,7 @@ import {
   type IAMRelationSchema,
   type IAMResourceSchema,
 } from "../documents";
-import { resourceLabel, titleLabel } from "../identity-labels";
+import { resourceLabel } from "../identity-labels";
 import { useIamT } from "../i18n";
 
 type SchemaNodeKind = "resource" | "relation" | "permission";
@@ -174,10 +174,7 @@ export function SchemaPage(): ReactElement {
     return (
       <>
         <PrimaryPanePublisher node={explorer} />
-        <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center gap-2 rounded-6 border border-border-subtle bg-sheet px-4 py-3")}>
-          <Spinner size="sm" />
-          {t("schema.loading")}
-        </div>
+        <LoadingPanel density="inline" message={t("schema.loading")} />
       </>
     );
   }
@@ -347,7 +344,7 @@ function RelationList({
           <InspectorRow
             key={relation.name}
             code={relation.name}
-            title={titleLabel(relation.name)}
+            title={titleCase(relation.name)}
           >
             <ChipList
               values={relation.allowed_subject_types}
@@ -375,7 +372,7 @@ function PermissionList({
           <InspectorRow
             key={permission.name}
             code={permission.name}
-            title={titleLabel(permission.name)}
+            title={titleCase(permission.name)}
           >
             <ChipList
               values={permission.conditions.map((condition) => condition.name)}
@@ -499,7 +496,7 @@ function buildSchemaGraph(
           kind: "relation",
           resource_type: resource.resource_type,
           highlighted,
-          title: titleLabel(relation.name),
+          title: titleCase(relation.name),
           code: relation.name,
           detail: t("schema.subjectCount", {
             count: relation.allowed_subject_types.length,
@@ -526,7 +523,7 @@ function buildSchemaGraph(
           kind: "permission",
           resource_type: resource.resource_type,
           highlighted,
-          title: titleLabel(permission.name),
+          title: titleCase(permission.name),
           code: permission.name,
           detail: t("schema.conditionCount", {
             count: permission.conditions.length,

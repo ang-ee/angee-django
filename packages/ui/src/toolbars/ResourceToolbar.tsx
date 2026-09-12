@@ -2,6 +2,7 @@ import * as React from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { FilterValue } from "@angee/metadata";
 import { useDebouncedText } from "../lib/use-debounced-text";
+import { useContainerQuery } from "../lib/use-container-query";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -80,6 +81,9 @@ export interface ResourceToolbarProps {
   onCustomFilterRemove?: (id: string) => void;
   onFavoriteSave?: (label: string) => void;
   onFavoriteSelect?: (favorite: ResourceViewFavorite) => void;
+  /** Clear filter, sorting and grouping state together. */
+  onQueryReset?: () => void;
+  queryDirty?: boolean;
   pagerSubject?: string;
   pagerTotalUnit?: string;
   className?: string;
@@ -186,6 +190,13 @@ const RESOURCE_VIEW_KIND_SWITCHER: Record<
 };
 
 const DEFAULT_SWITCHER_KINDS: readonly ResourceViewKind[] = ["list", "board"];
+const PRIMARY_GROUP_GRANULARITIES = new Set<ResourceViewGroupGranularity>([
+  "year",
+  "quarter",
+  "month",
+  "week",
+  "day",
+]);
 
 export function ResourceToolbar({
   pager,
@@ -219,6 +230,8 @@ export function ResourceToolbar({
   onCustomFilterRemove,
   onFavoriteSave,
   onFavoriteSelect,
+  onQueryReset,
+  queryDirty = false,
   pagerSubject,
   pagerTotalUnit,
   className,
@@ -257,44 +270,57 @@ export function ResourceToolbar({
     <section
       aria-label={t("resourceToolbar.controls")}
       className={cn(
-        "flex min-h-11 items-center gap-2 border-b border-border-subtle bg-sheet px-3 py-2",
-        wrap && "flex-wrap",
+        "resource-toolbar min-h-11 border-b border-border-subtle bg-sheet px-3 py-2",
+        wrap && "resource-toolbar-wrap",
         className,
       )}
     >
-      {onCreate ? (
-        <Button type="button" variant="primary" size="sm" onClick={onCreate}>
-          <Glyph name="plus" className="glyph" />
-          {resolvedCreateLabel}
-        </Button>
-      ) : null}
-      {actions}
-      {viewControls ? <ResourceViewControls {...viewControls} /> : null}
+      <div className="resource-toolbar-actions">
+        {onCreate ? (
+          <Button type="button" variant="primary" size="sm" onClick={onCreate}>
+            <Glyph name="plus" className="glyph" />
+            {resolvedCreateLabel}
+          </Button>
+        ) : null}
+        {actions}
+        {viewControls ? <ResourceViewControls {...viewControls} /> : null}
+      </div>
       {capabilities.filter ? (
-        <FilterPicker
-          wrap={wrap}
-          groups={groups}
-          groupControls={groupControls}
-          groupOptions={toolbarGroupOptions}
-          activeFilters={activeFilters}
-          activeFilterIds={activeFilterIds}
-          filterOptions={filterOptions}
-          customFilterFields={customFilterFields}
-          customFilterChips={customFilterChips}
-          favorites={favorites}
-          filterText={filterText}
-          onClearGroup={onClearGroup}
-          onFilterTextChange={onFilterTextChange}
-          onFilterToggle={onFilterToggle}
-          onGroupStackChange={onGroupStackChange}
-          onCustomFilterAdd={onCustomFilterAdd}
-          onCustomFilterRemove={onCustomFilterRemove}
-          onFavoriteSave={onFavoriteSave}
-          onFavoriteSelect={onFavoriteSelect}
-        />
+        <div className="resource-toolbar-query">
+          <FilterPicker
+            groups={groups}
+            groupControls={groupControls}
+            groupOptions={toolbarGroupOptions}
+            activeFilters={activeFilters}
+            activeFilterIds={activeFilterIds}
+            filterOptions={filterOptions}
+            customFilterFields={customFilterFields}
+            customFilterChips={customFilterChips}
+            favorites={favorites}
+            filterText={filterText}
+            onClearGroup={onClearGroup}
+            onFilterTextChange={onFilterTextChange}
+            onFilterToggle={onFilterToggle}
+            onGroupStackChange={onGroupStackChange}
+            onCustomFilterAdd={onCustomFilterAdd}
+            onCustomFilterRemove={onCustomFilterRemove}
+            onFavoriteSave={onFavoriteSave}
+            onFavoriteSelect={onFavoriteSelect}
+          />
+        </div>
       ) : null}
-      {!wrap ? <div className="min-w-2 flex-1" /> : null}
-      <div className={wrap ? "ml-auto flex items-center gap-2" : "contents"}>
+      <div className="resource-toolbar-utilities">
+        {queryDirty && onQueryReset ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="iconSm"
+            aria-label={t("resourceToolbar.clearQuery")}
+            onClick={onQueryReset}
+          >
+            <Glyph name="undo-2" fallbackName="x" />
+          </Button>
+        ) : null}
         {capabilities.pagination ? (
           <Pager
             {...pager}
@@ -371,7 +397,6 @@ function ResourceViewControls({
 }
 
 function FilterPicker({
-  wrap,
   groups,
   groupControls,
   groupOptions,
@@ -391,7 +416,6 @@ function FilterPicker({
   onFavoriteSave,
   onFavoriteSelect,
 }: {
-  wrap?: boolean;
   groups: readonly ResourceViewGroup[];
   groupControls: boolean;
   groupOptions: readonly ResourceToolbarGroupOption[];
@@ -412,6 +436,8 @@ function FilterPicker({
   onFavoriteSelect?: (favorite: ResourceViewFavorite) => void;
 }): ReactElement {
   const t = useUiT();
+  const [pickerHostRef, roomyPicker] = useContainerQuery(640);
+  const [pickerOpen, setPickerOpen] = React.useState(false);
   const defaultFavoriteLabel = t("resourceToolbar.savedSearch");
   const [customFilterOpen, setCustomFilterOpen] = React.useState(false);
   const groupedFilters = React.useMemo(() => {
@@ -429,6 +455,7 @@ function FilterPicker({
     React.useState<ResourceToolbarCustomFilterOperator>("contains");
   const [customValue, setCustomValue] = React.useState("");
   const [customValueError, setCustomValueError] = React.useState<string>();
+  const customEditorRef = React.useRef<HTMLDivElement | null>(null);
   const selectedCustomField =
     customFilterFields.find((field) => field.id === customFieldId) ??
     customFilterFields[0];
@@ -481,7 +508,12 @@ function FilterPicker({
       ...(selectedCustomField.type ? { type: selectedCustomField.type } : {}),
     });
     setCustomValue("");
-    setCustomFilterOpen(false);
+    globalThis.requestAnimationFrame(() => {
+      const target = customEditorRef.current?.querySelector<HTMLElement>(
+        "input:not([disabled]), button:not([disabled]), [tabindex='0']",
+      );
+      target?.focus();
+    });
   }
 
   function addCustomGroup() {
@@ -503,15 +535,15 @@ function FilterPicker({
   }
 
   return (
-    <PopoverRoot>
+    <PopoverRoot open={pickerOpen} onOpenChange={setPickerOpen}>
       <div
+        ref={pickerHostRef}
         className={cn(
-          "inline-flex h-8 min-w-0 max-w-xl flex-1 items-center gap-1 overflow-hidden rounded-6 border border-transparent bg-inset pl-2 pr-1 text-13 text-fg focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring",
-          wrap && "min-w-48",
+          "flex h-8 w-full min-w-0 items-center gap-1 rounded-6 border border-transparent bg-inset pl-2 pr-1 text-13 text-fg focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring",
         )}
       >
         <Glyph name="search" className="size-3.5 shrink-0 text-fg-muted" />
-        {groups.map((nextGroup, index) => (
+        {groups.slice(0, roomyPicker ? undefined : 1).map((nextGroup, index) => (
           <FacetChip
             key={`${nextGroup.field}:${nextGroup.granularity ?? ""}`}
             label={
@@ -530,7 +562,7 @@ function FilterPicker({
             }}
           />
         ))}
-        {activeFilters.map((option) => (
+        {activeFilters.slice(0, roomyPicker ? undefined : Math.max(0, 1 - groups.length)).map((option) => (
           <FacetChip
             key={option.id}
             label={t("resourceToolbar.filter")}
@@ -539,7 +571,7 @@ function FilterPicker({
             onRemove={() => onFilterToggle?.(option.id)}
           />
         ))}
-        {customFilterChips.map((chip) => (
+        {customFilterChips.slice(0, roomyPicker ? undefined : Math.max(0, 1 - groups.length - activeFilters.length)).map((chip) => (
           <FacetChip
             key={chip.id}
             label={t("resourceToolbar.filter")}
@@ -550,6 +582,15 @@ function FilterPicker({
             onRemove={() => onCustomFilterRemove?.(chip.id)}
           />
         ))}
+        {!roomyPicker && groups.length + activeFilters.length + customFilterChips.length > 1 ? (
+          <button
+            type="button"
+            className="h-6 shrink-0 rounded-6 bg-brand-soft px-2 text-xs font-medium text-brand-soft-text outline-none focus-visible:focus-ring"
+            onClick={() => setPickerOpen(true)}
+          >
+            +{groups.length + activeFilters.length + customFilterChips.length - 1}
+          </button>
+        ) : null}
         {onFilterTextChange && (
           <input
             type="search"
@@ -597,18 +638,47 @@ function FilterPicker({
         <PopoverPositioner sideOffset={6} align="start">
           <PopoverContent
             className={cn(
-              "grid max-w-[calc(100vw-2rem)]",
-              groupControls && favoritesEnabled
-                ? "w-[45rem] grid-cols-3"
-                : groupControls || favoritesEnabled
-                  ? "w-[30rem] grid-cols-2"
-                  : "w-[15rem] grid-cols-1",
+              "grid max-h-[min(36rem,calc(100dvh-5rem))] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain",
+              roomyPicker
+                ? groupControls && favoritesEnabled
+                  ? "w-[45rem] grid-cols-3"
+                  : groupControls || favoritesEnabled
+                    ? "w-[30rem] grid-cols-2"
+                    : "w-[18rem] grid-cols-1"
+                : "w-[min(22rem,calc(100vw-1rem))] grid-cols-1",
             )}
           >
             <PickerColumn
+              stacked={!roomyPicker}
               icon={<Glyph name="filter" className="size-3.5" />}
               title={t("resourceToolbar.filters")}
             >
+              {activeFilters.length > 0 || customFilterChips.length > 0 ? (
+                <div className="mb-2 flex min-w-0 flex-wrap gap-1 border-b border-border-subtle pb-2">
+                  {activeFilters.map((option) => (
+                    <RemovableChip
+                      key={option.id}
+                      tone="brand"
+                      size="sm"
+                      removeLabel={String(option.chipLabel ?? option.label)}
+                      onRemove={() => onFilterToggle?.(option.id)}
+                    >
+                      {option.chipLabel ?? option.label}
+                    </RemovableChip>
+                  ))}
+                  {customFilterChips.map((chip) => (
+                    <RemovableChip
+                      key={chip.id}
+                      tone="brand"
+                      size="sm"
+                      removeLabel={labelText(chip.label) ?? t("resourceToolbar.filterFallback")}
+                      onRemove={() => onCustomFilterRemove?.(chip.id)}
+                    >
+                      {chip.label}
+                    </RemovableChip>
+                  ))}
+                </div>
+              ) : null}
               {filterOptions.length === 0 ? (
                 <PickerMuted>{t("resourceToolbar.noFilters")}</PickerMuted>
               ) : (
@@ -646,6 +716,7 @@ function FilterPicker({
               </PickerButton>
               {customFilterOpen ? (
                 <CustomFilterEditor
+                  editorRef={customEditorRef}
                   fields={customFilterFields}
                   field={selectedCustomField}
                   fieldId={selectedCustomField?.id ?? ""}
@@ -675,6 +746,7 @@ function FilterPicker({
             </PickerColumn>
             {groupControls ? (
               <PickerColumn
+                stacked={!roomyPicker}
                 icon={<Glyph name="sliders-horizontal" className="size-3.5" />}
                 title={t("resourceToolbar.groupBy")}
               >
@@ -718,6 +790,7 @@ function FilterPicker({
             ) : null}
             {favoritesEnabled ? (
               <PickerColumn
+                stacked={!roomyPicker}
                 icon={<Glyph name="star" className="size-3.5" />}
                 title={t("resourceToolbar.favorites")}
               >
@@ -798,16 +871,23 @@ function FacetChip({
 }
 
 function PickerColumn({
+  stacked,
   icon,
   title,
   children,
 }: {
+  stacked: boolean;
   icon: ReactNode;
   title: ReactNode;
   children: ReactNode;
 }): ReactElement {
   return (
-    <section className="min-w-0 border-r border-border-subtle p-3 last:border-r-0">
+    <section className={cn(
+      "min-w-0 p-3",
+      stacked
+        ? "border-b border-border-subtle last:border-b-0"
+        : "border-r border-border-subtle last:border-r-0",
+    )}>
       <h3 className="mb-2 flex items-center gap-2 text-13 font-semibold text-fg">
         <span className="text-brand-soft-text">{icon}</span>
         {title}
@@ -839,6 +919,7 @@ function PickerButton({
             ? "text-fg-muted hover:bg-inset hover:text-fg"
             : "text-fg hover:bg-inset",
       )}
+      aria-pressed={active}
       onClick={onClick}
     >
       {children}
@@ -847,6 +928,7 @@ function PickerButton({
 }
 
 function CustomFilterEditor({
+  editorRef,
   fields,
   field,
   fieldId,
@@ -858,6 +940,7 @@ function CustomFilterEditor({
   onValue,
   onAdd,
 }: {
+  editorRef: React.Ref<HTMLDivElement>;
   fields: readonly ResourceToolbarFilterField[];
   field: ResourceToolbarFilterField | undefined;
   fieldId: string;
@@ -873,7 +956,7 @@ function CustomFilterEditor({
   const operators = operatorsForField(field);
   const needsValue = customFilterNeedsValue(operator);
   return (
-    <div className="mt-2 grid gap-2 rounded-6 border border-border-subtle bg-sheet p-2 shadow-xs">
+    <div ref={editorRef} className="mt-2 grid gap-2 rounded-6 border border-border-subtle bg-sheet p-2 shadow-xs">
       {fields.length === 0 ? (
         <PickerMuted>{t("resourceToolbar.noFilterFields")}</PickerMuted>
       ) : (
@@ -889,7 +972,7 @@ function CustomFilterEditor({
             }))}
             onValueChange={onField}
           />
-          <div className="flex min-w-0 gap-2">
+          <div className="flex min-w-0 flex-col gap-2">
             <Select
               size="sm"
               value={operator}
@@ -1035,8 +1118,19 @@ function GroupOptionButton({
   groups: readonly ResourceViewGroup[];
   onGroupStackChange?: (groups: readonly ResourceViewGroup[]) => void;
 }): ReactElement {
+  const t = useUiT();
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const active = groups.some((group) => group.field === option.group.field);
   const granularities = option.granularities ?? [];
+  const primaryGranularities = granularities.filter((granularity) =>
+    PRIMARY_GROUP_GRANULARITIES.has(granularity),
+  );
+  const advancedGranularities = granularities.filter((granularity) =>
+    !PRIMARY_GROUP_GRANULARITIES.has(granularity),
+  );
+  const visibleGranularities = advancedOpen
+    ? granularities
+    : primaryGranularities;
   const selectedGranularities = new Set(
     groups
       .filter((group) => group.field === option.group.field && group.granularity)
@@ -1064,8 +1158,8 @@ function GroupOptionButton({
         <span className="min-w-0 flex-1 truncate">{option.label}</span>
       </PickerButton>
       {option.type === "date" ? (
-        <div className="flex px-2 pb-1">
-          {granularities.map((granularity) => (
+        <div className="flex flex-wrap gap-0.5 px-2 pb-1">
+          {visibleGranularities.map((granularity) => (
             <button
               key={granularity}
               type="button"
@@ -1090,6 +1184,18 @@ function GroupOptionButton({
               {titleCase(granularity)}
             </button>
           ))}
+          {advancedGranularities.length > 0 ? (
+            <button
+              type="button"
+              className="h-5 rounded-6 px-1.5 text-2xs font-medium text-fg-muted outline-none hover:bg-sheet focus-visible:focus-ring"
+              aria-expanded={advancedOpen}
+              onClick={() => setAdvancedOpen((open) => !open)}
+            >
+              {t(advancedOpen
+                ? "resourceToolbar.basicGranularity"
+                : "resourceToolbar.advancedGranularity")}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -1177,7 +1283,13 @@ function operatorsForField(
 function defaultOperator(
   field: ResourceToolbarFilterField | undefined,
 ): ResourceToolbarCustomFilterOperator {
-  return operatorsForField(field)[0] ?? "contains";
+  const operators = operatorsForField(field);
+  const preferred = field?.type === "text"
+    ? (["iContains", "contains", "exact"] as const)
+    : (["exact"] as const);
+  return preferred.find((operator) => operators.includes(operator))
+    ?? operators[0]
+    ?? "exact";
 }
 
 function operatorForField(

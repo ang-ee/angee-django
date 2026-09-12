@@ -3,4 +3,4 @@ name = "angee.appearance_integrate"
 description = "Extract bounded brand facts from a public website into Appearance"
 keywords = ["appearance", "theme", "website", "integration"]
 category = "Integration"
-depends_on = ["angee.appearance", "angee.theme_brand", "angee.integrate"]
+depends_on = ["angee.appearance", "angee.integrate"]

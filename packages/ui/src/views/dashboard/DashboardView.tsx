@@ -32,7 +32,7 @@ export function DashboardView({
     if (metric) {
       metrics.push({
         label: metric.label,
-        value: metric.value,
+        value: dashboardMetricValue(metric),
         icon: metric.icon,
         tone: metric.tone,
         detail: metric.detail,
@@ -48,4 +48,16 @@ export function DashboardView({
       {content}
     </div>
   );
+}
+
+function dashboardMetricValue(metric: MetricProps): ReactNode {
+  if (metric.format !== "count") return metric.value;
+  if (metric.value == null && metric.loading) return "—";
+  const value = typeof metric.value === "number" && Number.isFinite(metric.value)
+    ? metric.value
+    : 0;
+  if (metric.max !== undefined && value > metric.max) {
+    return `${metric.max.toLocaleString()}+`;
+  }
+  return value.toLocaleString();
 }

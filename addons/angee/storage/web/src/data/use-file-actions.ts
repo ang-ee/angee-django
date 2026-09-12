@@ -1,10 +1,9 @@
-import { resourceOperationTarget, type Row, } from "@angee/metadata";
+import { type Row } from "@angee/metadata";
 import {
-  useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
+  useInvalidate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  deletePreviewDocumentForResource, useAngeeDeletePreview, useAuthoredMutation, useOperationDocuments, type UseAngeeDeletePreviewResult, } from "@angee/refine";
-import {
-  useBusyRun, useInvalidateDataResource } from "@angee/ui";
+  useAuthoredMutation, } from "@angee/refine";
+import { useBusyRun, useDeleteWithPreview } from "@angee/ui";
 import {
   refineResourceName,
   useModelMetadata,
@@ -40,45 +39,28 @@ export function useFileActions(
   const { onChanged } = options;
   const metadata = useModelMetadata(FILE_MODEL);
   const resource = metadata?.resource ?? null;
-  const operationDocuments = useOperationDocuments();
-  const deletePreviewTarget = resource
-    ? resourceOperationTarget(resource, "deletePreview")
-    : null;
-  const deletePreviewDocument = resource
-    ? deletePreviewDocumentForResource(
-        operationDocuments,
-        resource.schemaName,
-        resource.modelLabel,
-      )
-    : "";
-  const deletePreview = useAngeeDeletePreview(deletePreviewTarget, {
-    document: deletePreviewDocument,
-  });
+  const deleteWithPreview = useDeleteWithPreview(resource);
   const [restoreFile] = useAuthoredMutation(StorageRestoreFile);
   const updateFile = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: resource ? refineResourceName(resource) : "",
     dataProviderName: resource?.schemaName,
     invalidates: ["list", "many", "detail"],
   });
-  const invalidateDataResource = useInvalidateDataResource();
+  const invalidate = useInvalidate();
   const { busy, run } = useBusyRun(onChanged);
 
   return {
     busy,
     trash: (id) =>
       run(async () => {
-        await trashFile({
-          deletePreview,
-          invalidateDataResource,
-          resource,
-          id,
-        });
+        requireFileResource(resource);
+        await deleteWithPreview.remove(id);
       }),
     restore: (id) =>
       run(async () => {
         requireFileResource(resource);
         await restoreFile({ id });
-        await invalidateDataResource(resource, id);
+        await invalidateFileResource(invalidate, resource, id);
       }),
     move: (id, folder) =>
       run(async () => {
@@ -88,19 +70,15 @@ export function useFileActions(
     trashMany: (ids) =>
       run(async () => {
         for (const id of ids) {
-          await trashFile({
-            deletePreview,
-            invalidateDataResource,
-            resource,
-            id,
-          });
+          requireFileResource(resource);
+          await deleteWithPreview.remove(id);
         }
       }),
     restoreMany: (ids) =>
       run(async () => {
         requireFileResource(resource);
         for (const id of ids) await restoreFile({ id });
-        await invalidateDataResource(resource);
+        await invalidateFileResource(invalidate, resource);
       }),
   };
 }
@@ -109,20 +87,17 @@ const FILE_MODEL = "storage.File";
 
 type RowRecord = BaseRecord & Row;
 
-async function trashFile({
-  deletePreview,
-  invalidateDataResource,
-  resource,
-  id,
-}: {
-  deletePreview: UseAngeeDeletePreviewResult;
-  invalidateDataResource: ReturnType<typeof useInvalidateDataResource>;
-  resource: DataResourceMetadata | null;
-  id: string;
-}): Promise<void> {
-  requireFileResource(resource);
-  await deletePreview.mutate({ id, confirm: true });
-  await invalidateDataResource(resource, id);
+async function invalidateFileResource(
+  invalidate: ReturnType<typeof useInvalidate>,
+  resource: DataResourceMetadata,
+  id?: string,
+): Promise<void> {
+  await invalidate({
+    resource: refineResourceName(resource),
+    dataProviderName: resource.schemaName,
+    ...(id ? { id } : {}),
+    invalidates: ["list", "many", "detail"],
+  });
 }
 
 function requireFileResource(

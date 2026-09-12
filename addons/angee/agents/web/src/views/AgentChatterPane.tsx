@@ -27,8 +27,7 @@ const AgentChat = React.lazy(() =>
  * renders the live ACP chat bound to the open record, so the agent sees what the user is
  * looking at and can read/edit it through its MCP tools. Shows a call-to-action when the user
  * has no running agent. The agents addon contributes it as the global chatter "agents"
- * tab, driven by the active page's `view`; back-compat callers may still pass an explicit
- * `{ resource, recordId }`.
+ * tab, driven by the active page's `view`.
  *
  * The chooser in the chat bar switches between the user's running agents: the effective
  * selection is derived — only the user's explicit pick is state, defaulting to the
@@ -38,13 +37,9 @@ const AgentChat = React.lazy(() =>
  * (driving the per-send `<system_context>`).
  */
 export function AgentChatterPane({
-  resource,
-  recordId,
   view,
 }: {
-  resource?: string;
-  recordId?: string;
-  view?: ChatterView | AgentChatView;
+  view: ChatterView | AgentChatView;
 }): React.ReactElement {
   const t = useAgentsT();
   const routeHref = useRouteHref();
@@ -52,18 +47,10 @@ export function AgentChatterPane({
   // already filtered to the running, non-template agents.
   const { running: agents } = useRunningAgents();
 
-  // The live view that tracks the open record, passed to the chat for context. A
-  // global chatter contribution drives this through `view`; the back-compat
-  // `{ resource, recordId }` callers fall through to the derived envelope.
+  // The live view that tracks the open record, passed to the chat for context.
   const liveView = React.useMemo<AgentChatView>(
-    () =>
-      normalizeAgentChatView(
-        view ??
-          (recordId !== undefined
-            ? { kind: "record", type: requiredResource(resource), sqid: recordId }
-            : { kind: "dashboard", type: requiredResource(resource) }),
-      ),
-    [recordId, resource, view],
+    () => normalizeAgentChatView(view),
+    [view],
   );
   // Resolved per resource only — the agent doesn't depend on the open record in v1.
   const resolveView = React.useMemo<AgentChatView>(
@@ -139,13 +126,6 @@ export function AgentChatterPane({
       }}
     />
   );
-}
-
-function requiredResource(resource: string | undefined): string {
-  if (!resource) {
-    throw new Error("AgentChatterPane requires either view or resource.");
-  }
-  return resource;
 }
 
 function normalizeAgentChatView(view: ChatterView | AgentChatView): AgentChatView {

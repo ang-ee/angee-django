@@ -22,7 +22,7 @@ export const STATUS_TONES: ToneValueBuckets = {
   success: [
     "active", "connected", "published", "approved", "live", "open", "done",
     "running", "ready", "up", "online", "healthy", "completed",
-    "succeeded", "won", "ok",
+    "succeeded", "won", "ok", "on_track", "complete",
     // Document lifecycle (accounting/sales): a posted/paid/confirmed/invoiced
     // document has reached its healthy terminal state.
     "posted", "paid", "confirmed", "invoiced",
@@ -30,13 +30,14 @@ export const STATUS_TONES: ToneValueBuckets = {
   warning: [
     "draft", "paused", "review", "pending", "in_review",
     "provisioning", "deprovisioning", "starting", "connecting",
-    "closed", "warning", "degraded", "waiting",
+    "closed", "warning", "degraded", "waiting", "wait", "suspend",
+    "at_risk", "escalated",
     // A work-stage category that is explicitly asking for a human decision.
     "triage",
     // Document lifecycle: awaiting money or an invoice — in-flight, needs attention.
     "not_paid", "partial", "to_invoice",
   ],
-  danger: ["error", "failed", "denied", "lost", "down", "crashed"],
+  danger: ["error", "failed", "denied", "lost", "down", "crashed", "off_track"],
   // Work-stage categories (`work.Stage.category`) read on the same axis as the
   // statuses above: `started` is already in-flight blue, `completed` already
   // green. `backlog` and `unstarted` are the not-yet-picked-up greys, `triage`

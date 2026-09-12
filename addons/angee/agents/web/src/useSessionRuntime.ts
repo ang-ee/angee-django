@@ -5,9 +5,9 @@ import { useExternalStoreRuntime, type AppendMessage } from "@assistant-ui/react
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import type { DocumentType } from "@angee/gql/console";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { errorMessage } from "@angee/ui";
 import * as v from "valibot";
 
-import { messageOf } from "./acp-error";
 import { convertMessage, foldIntoLog, type ChatMessage } from "./acp-log";
 import { emptySession, foldIntoSession } from "./acp-session";
 import {
@@ -123,7 +123,7 @@ export function useSessionRuntime(
       .catch((caught) => {
         if (!active || activeAgentRef.current !== agentId || startingRef.current !== attempt) return;
         startingRef.current = null;
-        setError(messageOf(caught, t("chat.startFailed")));
+        setError(errorMessage(caught, t("chat.startFailed")));
       });
     return () => {
       active = false;
@@ -159,7 +159,7 @@ export function useSessionRuntime(
         await postMessage({ session: sessionId, text });
       } catch (caught) {
         if (activeAgentRef.current === requestAgent && requestSequence.current === request) {
-          setError(messageOf(caught, t("chat.messageRejected")));
+          setError(errorMessage(caught, t("chat.messageRejected")));
         }
       } finally {
         if (

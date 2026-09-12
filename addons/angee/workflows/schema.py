@@ -34,7 +34,6 @@ from angee.graphql.data import (
     hasura_model_resource,
     public_pk_decoder,
 )
-from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.ids import PublicID, instance_for_id, to_public_id
 from angee.graphql.impl import ImplChoice as GraphQLImplChoice
 from angee.graphql.node import AngeeNode
@@ -649,14 +648,10 @@ class WorkflowTriggerDeclarationQuery:
                 condition=condition,
                 errors=["Event publisher is unavailable."],
             )
-        readable = {
-            field
-            for schema_name in schemas.names()
-            for resource in schemas.resources(schema_name)
-            if resource.model is publisher
-            for field in readable_model_field_names(resource)
-        }
-        catalogue = EventConditionCatalogue.from_model(publisher, readable_fields=readable)
+        catalogue = EventConditionCatalogue.from_model(
+            publisher,
+            readable_fields=schemas.model_readable_fields(publisher),
+        )
         errors: list[str] = []
         projected_condition: object = condition
         if clauses is not None:

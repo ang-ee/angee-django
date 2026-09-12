@@ -30,8 +30,8 @@ const ESTIMATED_ROW_HEIGHT = 96;
 type MessagingT = ReturnType<typeof useMessagingT>;
 
 /** How the transcript reads — decided by where it is placed, not hardcoded:
- *  - `conversation`: a chat/drawer surface — newest at the bottom, scrolled to the
- *    latest turn once on open, scroll position anchored across "Load older" prepends.
+ *  - `conversation`: a chat/drawer surface — newest at the bottom, opened at its
+ *    heading or explicit anchor, with position preserved across "Load older" prepends.
  *  - `history`: a mail-like aside — oldest at the top, read top-down, no auto-scroll.
  *  Both render the same oldest→newest order; the mode only decides the scroll behavior. */
 export type TranscriptOrder = "conversation" | "history";
@@ -142,8 +142,8 @@ function TranscriptBody({
   });
   const totalSize = virtualizer.getTotalSize();
 
-  // Conversation mode reads newest-at-bottom: land on the latest turn once per thread
-  // on open, and keep the viewport anchored when "Load older" prepends earlier turns.
+  // Conversation mode keeps the viewport anchored when "Load older" prepends
+  // earlier turns. Initial travel happens only for an explicit message anchor.
   const scrolledThreadRef = React.useRef<string | null>(null);
   const prependAnchorRef = React.useRef<number | null>(null);
   React.useLayoutEffect(() => {
@@ -162,7 +162,6 @@ function TranscriptBody({
         : -1;
       if (anchorIndex >= 0)
         virtualizer.scrollToIndex(anchorIndex, { align: "center" });
-      else if (!anchor) scroll.scrollTop = scroll.scrollHeight;
       scrolledThreadRef.current = threadId;
     }
   }, [conversation, threadId, messages, totalSize, anchor, virtualizer]);
@@ -215,7 +214,7 @@ function TranscriptBody({
 
   const virtualItems = virtualizer.getVirtualItems();
   const content = (
-    <div className="rounded-6 border border-border-subtle bg-sheet">
+    <div className="flex h-full min-h-0 flex-col rounded-6 border border-border-subtle bg-sheet">
       {onAnchorChange ? (
         <div className="flex items-center gap-2 border-b border-border-subtle p-2">
           <label className="flex items-center gap-2 text-13">
@@ -249,8 +248,7 @@ function TranscriptBody({
       ) : null}
       <div
         ref={scrollRef}
-        className="overflow-y-auto"
-        style={{ maxHeight: "calc(100vh - 16rem)" }}
+        className="min-h-0 flex-1 overscroll-contain overflow-y-auto"
       >
         <ul
           ref={listRef}
@@ -347,7 +345,6 @@ function TranscriptMessage({
     <>
       <MessagePartsView
         parts={message.parts}
-        resolveFileUrl={(file) => file.url}
       />
       {reactions.length > 0 ? (
         <div className="mt-2">

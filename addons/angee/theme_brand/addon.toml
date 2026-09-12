@@ -1,6 +1,6 @@
 [addon]
 name = "angee.theme_brand"
-description = "A bounded configurable brand theme for Angee"
-keywords = ["theme", "appearance", "brand"]
+description = "Deprecated compatibility alias for the Default theme"
+keywords = ["theme", "appearance", "compatibility"]
 category = "User interface"
-depends_on = []
+depends_on = ["angee.theme_stock"]

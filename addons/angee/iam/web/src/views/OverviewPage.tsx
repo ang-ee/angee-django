@@ -2,7 +2,7 @@ import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import { useEffect, useId, useMemo, useState, type FormEvent, type ReactElement, } from "react";
 
 import {
-  Alert, Button, DashboardView, FieldDescription, FieldLabel, FieldRoot, InlineEmpty, Metric, MiniCard, Select, SurfacePanel, errorMessage, textRoleVariants } from "@angee/ui";
+  Alert, Button, DashboardView, FieldDescription, FieldLabel, FieldRoot, InlineEmpty, Metric, MiniCard, Select, SurfacePanel, errorMessage, textRoleVariants, titleCase } from "@angee/ui";
 
 import {
   IamGrantRole,
@@ -13,7 +13,7 @@ import {
   type IAMOverviewVariables,
   type IAMUsersVariables,
 } from "../documents";
-import { titleLabel, userLabel } from "../identity-labels";
+import { userLabel } from "../identity-labels";
 import { grantRows } from "../identity-rows";
 import { IAM_LIST_LIMIT } from "../list-config";
 import { useIamT } from "../i18n";
@@ -111,12 +111,12 @@ export function OverviewPage(): ReactElement {
 
   return (
     <DashboardView className="p-1">
-      <Metric label={t("overview.metric.users")} value={count(overviewFacts?.user_count, loading)} icon="users" />
-      <Metric label={t("overview.metric.roles")} value={count(overviewFacts?.role_count, loading)} icon="auth" tone="brand" />
-      <Metric label={t("overview.metric.grants")} value={count(overviewFacts?.grant_count, loading)} icon="check" tone="success" />
-      <Metric label={t("overview.metric.relationships")} value={count(overviewFacts?.relationship_count, loading)} icon="share" tone="info" />
-      <Metric label={t("overview.metric.privileged")} value={count(overviewFacts?.privileged_grant_count, loading)} icon="auth" tone="warning" detail={t("overview.metric.privilegedDetail")} />
-      <Metric label={t("overview.metric.unassigned")} value={count(overviewFacts?.unassigned_user_count, loading)} icon="users" tone="danger" detail={t("overview.metric.unassignedDetail")} />
+      <Metric label={t("overview.metric.users")} value={overviewFacts?.user_count} format="count" loading={loading} icon="users" />
+      <Metric label={t("overview.metric.roles")} value={overviewFacts?.role_count} format="count" loading={loading} icon="auth" tone="brand" />
+      <Metric label={t("overview.metric.grants")} value={overviewFacts?.grant_count} format="count" loading={loading} icon="check" tone="success" />
+      <Metric label={t("overview.metric.relationships")} value={overviewFacts?.relationship_count} format="count" loading={loading} icon="share" tone="info" />
+      <Metric label={t("overview.metric.privileged")} value={overviewFacts?.privileged_grant_count} format="count" loading={loading} icon="auth" tone="warning" detail={t("overview.metric.privilegedDetail")} />
+      <Metric label={t("overview.metric.unassigned")} value={overviewFacts?.unassigned_user_count} format="count" loading={loading} icon="users" tone="danger" detail={t("overview.metric.unassignedDetail")} />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="space-y-6">
@@ -199,7 +199,7 @@ export function OverviewPage(): ReactElement {
               {namespaces.map((namespace) => (
                 <MiniCard
                   key={namespace.namespace}
-                  title={titleLabel(namespace.namespace)}
+                  title={titleCase(namespace.namespace)}
                   meta={t("overview.namespaces.roleCount", {
                     count: namespace.role_count,
                   })}
@@ -250,7 +250,7 @@ function PrivilegedGrantRow({
     <div className="flex items-center justify-between gap-3 px-4 py-3">
       <div className="min-w-0">
         <div className="truncate text-13 font-medium text-fg">{grant.principal_label}</div>
-        <div className={textRoleVariants({ role: "caption", truncate: true })}>{titleLabel(grant.namespace)} · {grant.role_name}</div>
+        <div className={textRoleVariants({ role: "caption", truncate: true })}>{titleCase(grant.namespace)} · {grant.role_name}</div>
       </div>
       <Button
         variant="danger"
@@ -264,9 +264,4 @@ function PrivilegedGrantRow({
       </Button>
     </div>
   );
-}
-
-function count(value: number | undefined, loading: boolean): string {
-  if (value === undefined && loading) return "—";
-  return (value ?? 0).toLocaleString();
 }

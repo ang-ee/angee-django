@@ -37,6 +37,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   renderRecord,
   selectFirstRecord = false,
   splitLayout,
+  presentation,
   baseFilter,
   filterOptions,
   facets,
@@ -90,6 +91,7 @@ export function ResourceListBody<TRow extends Row = Row>({
     : facets;
   const resolvedLaneSource = declarations.list?.props.laneSource ?? laneSource;
   const listRenderProps = {
+    presentation,
     fields,
     baseFilter,
     filterOptions,

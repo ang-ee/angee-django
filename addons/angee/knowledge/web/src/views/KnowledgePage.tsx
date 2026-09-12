@@ -1,5 +1,5 @@
 import { useAuthoredQuery } from "@angee/refine";
-import { useCallback, useMemo, type ReactElement } from "react";
+import { useCallback, useMemo, useState, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
@@ -27,6 +27,7 @@ import { usePageActions } from "../data/use-page-actions";
 import { BacklinksPanel } from "./BacklinksPanel";
 import { NewPageControl, type NewPageKind } from "./NewPageControl";
 import { PageEditor } from "./PageEditor";
+import { PageReader } from "./PageReader";
 import { useKnowledgeT } from "../i18n";
 
 // One safety-capped read each of vaults/pages; the browser scopes the set
@@ -48,6 +49,7 @@ type KnowledgeExplorerController = ScopedExplorerController<
  */
 export function KnowledgePage(): ReactElement {
   const t = useKnowledgeT();
+  const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const variables = useMemo(
     () => ({ offset: 0, limit: KNOWLEDGE_LIST_LIMIT }),
     [],
@@ -69,11 +71,13 @@ export function KnowledgePage(): ReactElement {
   const openPageId = useRouteRecordId() ?? null;
   const openPage = useCallback(
     (id: string) => {
+      setEditingPageId(null);
       void navigate({ to: routeHref("knowledge.page", { id }) });
     },
     [navigate, routeHref],
   );
   const closePage = useCallback(() => {
+    setEditingPageId(null);
     void navigate({ to: routeHref("knowledge.home") });
   }, [navigate, routeHref]);
 
@@ -253,6 +257,8 @@ export function KnowledgePage(): ReactElement {
           openPageId={openPageId}
           detail={detail}
           detailFetching={detailQuery.isFetching}
+          editingPageId={editingPageId}
+          onEditingPageChange={setEditingPageId}
           onOpenPage={openPage}
           onTitleSaved={handleTitleSaved}
           onDeletePage={handleDeletePage}
@@ -268,6 +274,8 @@ function KnowledgeExplorerContent({
   openPageId,
   detail,
   detailFetching,
+  editingPageId,
+  onEditingPageChange,
   onOpenPage,
   onTitleSaved,
   onDeletePage,
@@ -277,6 +285,8 @@ function KnowledgeExplorerContent({
   openPageId: string | null;
   detail: KnowledgePageDetail | null;
   detailFetching: boolean;
+  editingPageId: string | null;
+  onEditingPageChange: (id: string | null) => void;
   onOpenPage: (id: string) => void;
   onTitleSaved: () => void;
   onDeletePage: () => Promise<void>;
@@ -298,12 +308,22 @@ function KnowledgeExplorerContent({
     <WikilinkProvider resolve={resolveWikilink}>
       {openPageId ? (
         detail && detail.id === openPageId ? (
-          <PageEditor
-            key={openPageId}
-            detail={detail}
-            onTitleSaved={onTitleSaved}
-            onDelete={onDeletePage}
-          />
+          editingPageId === openPageId ? (
+            <PageEditor
+              key={openPageId}
+              detail={detail}
+              onTitleSaved={onTitleSaved}
+              onDelete={onDeletePage}
+              onDone={() => onEditingPageChange(null)}
+            />
+          ) : (
+            <PageReader
+              key={openPageId}
+              detail={detail}
+              onEdit={() => onEditingPageChange(openPageId)}
+              onDelete={onDeletePage}
+            />
+          )
         ) : detailFetching || detail ? (
           <LoadingPanel message={t("page.loading")} />
         ) : (
