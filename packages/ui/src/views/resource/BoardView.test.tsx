@@ -141,6 +141,32 @@ describe("BoardView", () => {
     expect(screen.getByText("Notes")).toBeTruthy();
   });
 
+  test("makes the whole column a drop target, not just its cards", () => {
+    renderBoard({
+      groups: [
+        lane([{ id: "1", label: "First" }]),
+        { ...lane([]), key: "empty", label: "Empty" },
+      ],
+      dragEnabled: true,
+      onCardMove: vi.fn(),
+    });
+
+    // The lane's droppable node is its frame, so a frame that stops at its last
+    // card leaves the space below it belonging to nobody -- which is why a drop
+    // into an empty column, or below a short one's cards, did nothing.
+    const laneRegion = screen.getByRole("region", { name: "Empty" });
+    const surface = laneRegion.parentElement;
+    expect(surface?.className).toContain("items-stretch");
+    expect(surface?.className).not.toContain("items-start");
+
+    // Every lane is a droppable, the empty one included.
+    const droppableIds = dndMocks.useDroppable.mock.calls.map(
+      (call) => (call as unknown as readonly [{ id: string }])[0].id,
+    );
+    expect(droppableIds).toContain("board-lane:empty");
+    expect(laneRegion.className).not.toContain("self-start");
+  });
+
   test("lets the browser own board overflow instead of internal board scrollbars", () => {
     renderBoard();
 
