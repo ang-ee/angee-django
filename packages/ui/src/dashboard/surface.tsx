@@ -1,6 +1,6 @@
 import * as React from "react";
 import { DndContext, useDraggable, type DragEndEvent } from "@dnd-kit/core";
-import { modelMetadataForLabel, useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
+import { useModelMetadata } from "@angee/metadata";
 import { useDashboardRegistry } from "../runtime/runtime";
 import { useDndKitSensors } from "../lib/dnd";
 import { cn } from "../lib/cn";
@@ -22,6 +22,8 @@ import { DASHBOARD_SCHEMA_VERSION, parseDashboardSnapshot } from "./headless";
 import { firstDashboardSlot, moveDashboardRect, packDashboardLayout, projectDashboardLayout, resizeDashboardRect } from "./layout";
 import { useDashboardWidgetData, type DashboardPageScope } from "./data";
 import { useUnsavedChangesNavigationGuard } from "../views/form/use-unsaved-changes-navigation-guard";
+import type { DashboardWidgetCatalogueEntry } from "./catalogue";
+import { DashboardWidgetPickerDialog } from "./WidgetPickerDialog";
 
 const ROW_HEIGHT = 56;
 const GRID_GAP = 12;
@@ -430,97 +432,43 @@ function AddWidgetButton({ snapshot, registry, pageScope, onAdd }: {
   onAdd: (widget: WidgetSpec) => void;
 }): React.ReactElement {
   const [open, setOpen] = React.useState(false);
-  const [title, setTitle] = React.useState("New statistic");
-  const schemaMetadata = useSchemaFieldMetadata();
-  const resources = React.useMemo(
-    () => schemaMetadata.resources
-      .filter((candidate) => Boolean(candidate.roots.aggregate || candidate.roots.list))
-      .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel)),
-    [schemaMetadata.resources],
-  );
-  const [selectedResource, setSelectedResource] = React.useState(pageScope?.resource ?? "");
-  const resource = selectedResource || pageScope?.resource || resources[0]?.modelLabel || "";
-  const metadata = React.useMemo(
-    () => resource ? modelMetadataForLabel(schemaMetadata, resource) : null,
-    [resource, schemaMetadata],
-  );
-  const add = (kind: "stat" | "bar" | "donut" | "table") => {
-    if (!resource) return;
-    const descriptor = registry.widgetKinds[kind];
+  const add = (entry: DashboardWidgetCatalogueEntry) => {
+    const descriptor = registry.widgetKinds[entry.kind];
     if (!descriptor) return;
-    const slot = firstDashboardSlot(snapshot.widgets.filter((widget) => !widget.isArchived), descriptor.defaultSize, snapshot.columns);
+    const slot = firstDashboardSlot(
+      snapshot.widgets.filter((widget) => !widget.isArchived),
+      entry.size,
+      snapshot.columns,
+    );
     const id = globalThis.crypto?.randomUUID?.() ?? `widget-${Date.now()}`;
-    const shape = descriptor.shape;
-    const firstAxis = metadata?.resource
-      ? Object.values(metadata.resource.query.axes).find((axis) => {
-        const field = metadata.resource.query.fields[axis.field];
-        return axis.server && field?.kind !== "json" && field?.kind !== "list" && field?.kind !== "object";
-      })
-      : undefined;
-    if (shape === "series" && !firstAxis) return;
-    const identityField = metadata?.resource.query.identity.field ?? "id";
-    const rowFields = metadata?.resource
-      ? Object.entries(metadata.resource.query.fields)
-        .filter(([, field]) => field.row)
-        .map(([field]) => field)
-        .slice(0, 4)
-      : [identityField];
     const widget: WidgetSpec = {
       schemaVersion: 1,
       id,
-      kind,
+      kind: entry.kind,
       kindVersion: descriptor.version,
-      title,
-      data: shape === "none"
-        ? { shape: "none", binding: { dashboardKey: "personal", widgetId: id } }
-        : {
-            shape,
-            source: {
-              resource,
-              ...(shape === "series" && firstAxis ? {
-                groups: [{
-                  field: firstAxis.field,
-                  ...(firstAxis.kind === "date" && firstAxis.extractions.some(({ name }) => name === "month")
-                    ? { granularity: "month" }
-                    : {}),
-                }],
-              } : {}),
-              ...(shape === "rows" ? { fields: rowFields.length ? rowFields : [identityField], limit: 10 } : {}),
-            },
-          },
+      title: entry.title,
+      data: entry.data,
       options: {},
       ...slot,
-      ...descriptor.defaultSize,
+      ...entry.size,
       isArchived: false,
     };
     onAdd(widget);
-    setOpen(false);
   };
-  if (!resource) return <span className="text-12 text-fg-muted">No queryable resources are available.</span>;
-  return open ? (
-    <div className="flex max-w-full items-center gap-1">
-      <Input size="sm" value={title} onChange={(event) => setTitle(event.target.value)} aria-label="Widget title" className="w-40" />
-      <select
-        aria-label="Widget resource"
-        value={resource}
-        onChange={(event) => setSelectedResource(event.target.value)}
-        className="h-8 max-w-56 rounded-6 border border-border bg-sheet px-2 text-12 text-fg focus-visible:focus-ring"
-      >
-        {resources.map((candidate) => (
-          <option key={candidate.modelLabel} value={candidate.modelLabel}>{candidate.modelLabel}</option>
-        ))}
-      </select>
-      {(["stat", "bar", "donut", "table"] as const).map((kind) => {
-        const disabled = kind === "table"
-          ? !metadata?.resource.roots.list
-          : !metadata?.resource.roots.aggregate
-            || ((kind === "bar" || kind === "donut")
-              && !Object.values(metadata?.resource.query.axes ?? {}).some((axis) => axis.server));
-        return <Button key={kind} type="button" variant="ghost" size="sm" disabled={disabled} onClick={() => add(kind)}>{kind}</Button>;
-      })}
-      <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>Close</Button>
-    </div>
-  ) : <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(true)}><Glyph name="plus" size={14} />Add widget</Button>;
+  return (
+    <>
+      <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(true)}>
+        <Glyph name="plus" size={14} />Add widget
+      </Button>
+      <DashboardWidgetPickerDialog
+        open={open}
+        onOpenChange={setOpen}
+        onPick={add}
+        preferredResource={pageScope?.resource}
+        registry={registry}
+      />
+    </>
+  );
 }
 
 export function DashboardCollectionSurface({
