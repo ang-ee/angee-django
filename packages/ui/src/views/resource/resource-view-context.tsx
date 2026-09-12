@@ -393,13 +393,26 @@ function useResourceViewContextValue({
     },
     [clearSelectedIds, updateState],
   );
+  // One clamp for both the no-op check and the write, so they cannot disagree
+  // about what a requested page index means.
+  const pageIndexFrom = (pageIndex: number): number =>
+    Math.max(0, Number.isFinite(pageIndex) ? Math.floor(pageIndex) : 0);
   const setPagination = useCallback<OnChangeFn<PaginationState>>(
     (updater) => {
+      const requested = functionalUpdate(updater, state.pagination);
+      // This state lives in the URL, so `updateState` navigates. A setter called
+      // with the page it is already on would navigate to the same search, render
+      // again, and re-run whatever effect called it -- which is how a board load
+      // reaches "Maximum update depth exceeded". Nothing changed means nothing to
+      // do, and React's own bail-out cannot help here because the write is a
+      // navigation rather than a `useState`.
       if (
-        functionalUpdate(updater, state.pagination).pageSize !==
-        state.pagination.pageSize
-      )
-        clearSelectedIds();
+        normalisePageSize(requested.pageSize) === state.pagination.pageSize &&
+        pageIndexFrom(requested.pageIndex) === state.pagination.pageIndex
+      ) {
+        return;
+      }
+      if (requested.pageSize !== state.pagination.pageSize) clearSelectedIds();
       updateState((current) => {
         const next = functionalUpdate(updater, current.pagination);
         const sizeChanged = next.pageSize !== current.pagination.pageSize;
@@ -407,14 +420,7 @@ function useResourceViewContextValue({
           ...current,
           ...(sizeChanged ? { rowSelection: {} } : {}),
           pagination: {
-            pageIndex: sizeChanged
-              ? 0
-              : Math.max(
-                  0,
-                  Number.isFinite(next.pageIndex)
-                    ? Math.floor(next.pageIndex)
-                    : 0,
-                ),
+            pageIndex: sizeChanged ? 0 : pageIndexFrom(next.pageIndex),
             pageSize: normalisePageSize(next.pageSize),
           },
         };
