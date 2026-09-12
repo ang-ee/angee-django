@@ -47,7 +47,15 @@ export interface RelationFieldWidgetProps {
 export function RelationFieldWidget(
   props: RelationFieldWidgetProps,
 ): ReactElement {
-  return props.value && !props.selectedOption ? (
+  // An option whose label is its own id is a placeholder, not a label: the form
+  // builds one for a value it has no record for, which is every preset relation
+  // in a create dialog (the draft holds an id and there is no saved record to
+  // fold a label from). Treating it as a resolved label is what put `prj_…`,
+  // `grp_…` and `stg_…` in front of the user. It still shows while the record
+  // read is in flight -- an id beats an empty trigger -- but it no longer stops
+  // the read from happening.
+  const unresolved = !props.selectedOption || props.selectedOption.label === props.value;
+  return props.value && unresolved ? (
     <SelectedRelationFieldWidget {...props} />
   ) : (
     <RelationFieldWidgetBody {...props} />
@@ -58,11 +66,13 @@ export function RelationFieldWidget(
 function SelectedRelationFieldWidget(
   props: RelationFieldWidgetProps,
 ): ReactElement {
-  const selectedOption = useRelationSelectedOption(props.relation, props.value);
+  const resolved = useRelationSelectedOption(props.relation, props.value);
   return (
     <RelationFieldWidgetBody
       {...props}
-      selectedOption={selectedOption}
+      // The id-labelled placeholder holds the trigger until the real label
+      // arrives; a resolved label always wins.
+      selectedOption={resolved ?? props.selectedOption}
     />
   );
 }
