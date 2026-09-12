@@ -54,6 +54,7 @@ export interface AppearanceState {
   effectiveColorSchemePreference: ColorSchemePreference;
   colorScheme: ColorScheme;
   theme: ThemeContribution | null;
+  effectiveOptions?: ThemeOptionsEnvelope;
   available: boolean;
   editable: boolean;
   resolvingIdentity: boolean;
@@ -250,6 +251,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     effectiveColorSchemePreference: colorSchemePreference,
     colorScheme,
     theme: effectiveTheme,
+    effectiveOptions: cacheOptions,
     available: userPreferences.available,
     editable: saved.writable,
     resolvingIdentity,
@@ -260,7 +262,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     setColorScheme,
     setOptions,
     reset,
-  }), [saved.value, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, reset]);
+  }), [saved.value, effectiveThemeId, colorSchemePreference, colorScheme, effectiveTheme, cacheOptions, userPreferences.available, saved.writable, resolvingIdentity, saving, error, notice, setTheme, setColorScheme, setOptions, reset]);
   return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>;
 }
 

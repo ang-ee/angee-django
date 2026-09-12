@@ -1,11 +1,16 @@
-import { createThemeCustomizationOptions, defineTheme } from "@angee/ui/theme-runtime";
+import { createThemeCustomizationOptions, defineTheme, migrateThemeCustomization } from "@angee/ui/theme-runtime";
+
+function migrate(value, fromVersion, defaults) {
+  if (fromVersion !== 1) throw new TypeError(`Fyltr theme options version ${fromVersion} cannot be migrated.`);
+  return migrateThemeCustomization(value, defaults);
+}
 
 export const themes = [defineTheme({
   contractVersion: 1,
   id: "angee.fyltr",
   labelKey: "fyltr.label",
   descriptionKey: "fyltr.description",
-  revision: 2,
+  revision: 3,
   tokens: {
     shared: {
       "--font-family-sans": "Inter, SF Pro Display, system-ui, sans-serif",
@@ -108,9 +113,17 @@ export const themes = [defineTheme({
     brand: "#00c853",
     accent: "#008f78",
     neutral: "#60717b",
+    canvas: "#f6faf8",
+    surface: "#ffffff",
+    rail: "#0b0f14",
+    success: "#00c853",
+    warning: "#d9a928",
+    danger: "#dc3f45",
+    info: "#3182bd",
     font: "theme",
     radius: "theme",
     density: "theme",
     elevation: "theme",
-  }),
+    logo: "theme",
+  }, { version: 2, migrate }),
 })];

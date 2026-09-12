@@ -6,9 +6,10 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { AngeeLogo, AngeeLogoCube, PRESETS } from "@angee/logo-react";
+import { AngeeLogoCube, PRESETS } from "@angee/logo-react";
 import "@angee/logo-react/style.css";
 import { useSlot } from "@angee/ui/runtime";
+import { ThemeLogo, useThemeLogoChoice } from "@angee/ui/theme";
 
 import { useUiT } from "@angee/ui/i18n";
 import { cn } from "@angee/ui/lib/cn";
@@ -417,11 +418,8 @@ function AngeeIdentity({
             : "border-border-subtle bg-sheet",
         )}
       >
-        <AngeeLogo
+        <ThemeLogo
           aria-hidden="true"
-          preset="gold"
-          geometry="full"
-          bgColor={null}
           size={22}
           width={22}
           height={22}
@@ -438,6 +436,7 @@ function DefaultCardHeader({
   brand?: ReactNode;
 }): ReactNode {
   const t = useUiT();
+  const logo = useThemeLogoChoice();
   if (brand) {
     return (
       <div className="mb-8">
@@ -458,15 +457,19 @@ function DefaultCardHeader({
         className="pointer-events-none grid size-16 p-2"
         aria-hidden="true"
       >
-        <AngeeLogoCube
-          size={9}
-          gap={0.75}
-          leftColor={LOGIN_LOGO_PRESET.colors.left}
-          rightColor={LOGIN_LOGO_PRESET.colors.right}
-          baseDark={LOGIN_LOGO_PRESET.colors.top}
-          animationSpeed={18}
-          animationType="rotate"
-        />
+        {logo === "theme" ? (
+          <AngeeLogoCube
+            size={9}
+            gap={0.75}
+            leftColor={LOGIN_LOGO_PRESET.colors.left}
+            rightColor={LOGIN_LOGO_PRESET.colors.right}
+            baseDark={LOGIN_LOGO_PRESET.colors.top}
+            animationSpeed={18}
+            animationType="rotate"
+          />
+        ) : (
+          <ThemeLogo logo={logo} size={48} width={48} height={48} />
+        )}
       </div>
       <div className="min-w-0 pt-1">
         <p className="mb-2 text-base font-semibold leading-none text-fg">

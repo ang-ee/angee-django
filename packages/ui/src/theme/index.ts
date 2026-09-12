@@ -13,4 +13,5 @@ export function defineThemeContribution<TOptions>(contribution: { definition: Th
 
 export * from "./appearance";
 export * from "./customization";
+export * from "./logo";
 export * from "./preview";

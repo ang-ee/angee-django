@@ -41,15 +41,23 @@ independently. The stored document contains stable IDs and versioned inputs:
   "themeId": "angee.brand",
   "colorScheme": "system",
   "options": {
-    "version": 2,
+    "version": 3,
     "value": {
       "brand": "#5b5bd6",
       "accent": "#0d9488",
       "neutral": "#6b7280",
+      "canvas": "#f7f8fa",
+      "surface": "#ffffff",
+      "rail": "#0a0c10",
+      "success": "#10b981",
+      "warning": "#f59e0b",
+      "danger": "#ef4444",
+      "info": "#3b82f6",
       "font": "theme",
       "radius": "soft",
       "density": "theme",
-      "elevation": "theme"
+      "elevation": "theme",
+      "logo": "brand"
     }
   }
 }
@@ -68,11 +76,19 @@ the scheme for one compatibility cycle.
 ## Customizing a base theme
 
 Selecting a theme chooses the authored base design. A customizable theme then
-accepts seven bounded inputs: brand, accent and neutral colors plus approved
-typography, corner, control-density and elevation choices. The generator derives
-semantic tokens for light and dark together, including readable foregrounds and
-interaction states. Appearance stores the inputs in the user's preference and
-rebuilds the token overrides whenever the generator changes.
+accepts bounded inputs for identity, page and panel surfaces, app-rail chrome,
+the four semantic status roles, typography, corners, control density, elevation
+and logo treatment. The generator derives semantic tokens for light and dark
+together, including readable foregrounds, borders, interaction states and the
+complete solid/soft/surface status matrix. Appearance stores the inputs in the
+user's preference and rebuilds the token overrides whenever the generator
+changes.
+
+Logo choices are named treatments of the shared `@angee/logo-react` mark:
+theme default, brand palette, accent palette, monochrome, star and corner. The
+app chooser, public brand mark and sign-in identity all read the same resolved
+appearance choice. A theme preference therefore stores a small stable name
+rather than image data or a remote asset URL.
 
 An unchanged field emits no override. This keeps the selected addon's authored
 tokens authoritative and makes **Restore theme defaults** exact. Customizing
@@ -94,10 +110,18 @@ export const themes = [defineTheme({
     brand: "#315c52",
     accent: "#8b5cf6",
     neutral: "#777064",
+    canvas: "#f8f6f1",
+    surface: "#ffffff",
+    rail: "#18211e",
+    success: "#16845b",
+    warning: "#b7791f",
+    danger: "#c2413a",
+    info: "#3178c6",
     font: "theme",
     radius: "theme",
     density: "theme",
     elevation: "theme",
+    logo: "theme",
   }),
 })];
 ```

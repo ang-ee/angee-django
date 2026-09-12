@@ -1,11 +1,16 @@
-import { createThemeCustomizationOptions, defineTheme } from "@angee/ui/theme-runtime";
+import { createThemeCustomizationOptions, defineTheme, migrateThemeCustomization } from "@angee/ui/theme-runtime";
+
+function migrate(value, fromVersion, defaults) {
+  if (fromVersion !== 1) throw new TypeError(`Angee theme options version ${fromVersion} cannot be migrated.`);
+  return migrateThemeCustomization(value, defaults);
+}
 
 export const themes = [defineTheme({
   contractVersion: 1,
   id: "angee.angee",
   labelKey: "angee.label",
   descriptionKey: "angee.description",
-  revision: 2,
+  revision: 3,
   tokens: {
     shared: {
       "--font-family-sans": "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
@@ -108,9 +113,17 @@ export const themes = [defineTheme({
     brand: "#e7b008",
     accent: "#6366f1",
     neutral: "#71717a",
+    canvas: "#fafaf9",
+    surface: "#ffffff",
+    rail: "#09090b",
+    success: "#22c55e",
+    warning: "#eab308",
+    danger: "#dc2626",
+    info: "#4f46e5",
     font: "theme",
     radius: "theme",
     density: "theme",
     elevation: "theme",
-  }),
+    logo: "theme",
+  }, { version: 2, migrate }),
 })];

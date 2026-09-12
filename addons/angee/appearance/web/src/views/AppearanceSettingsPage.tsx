@@ -13,7 +13,7 @@ import {
   useSlot,
   useT,
 } from "@angee/ui";
-import { resolveThemeOptions, type ColorScheme, type ThemeContribution, type ThemeOptionsEnvelope } from "@angee/ui/theme";
+import { parseThemeCustomization, resolveThemeOptions, type ColorScheme, type ThemeContribution, type ThemeCustomizationLogo, type ThemeOptionsEnvelope } from "@angee/ui/theme";
 import { APPEARANCE_TOOLS_SLOT } from "../index";
 import { useAppearanceT } from "../i18n";
 
@@ -67,8 +67,11 @@ function FullThemePreview({ theme, scheme, options }: { theme: ThemeContribution
     catch { return resolveThemeOptions(theme.definition); }
   }, [options, theme]);
   const tokens = { ...resolved.tokens.shared, ...resolved.tokens[scheme] };
+  let logo: ThemeCustomizationLogo | undefined;
+  try { logo = parseThemeCustomization(resolved.value).logo; }
+  catch { logo = undefined; }
   const Preview = theme.preview;
-  return <div className="grid gap-2"><div className="text-12 font-medium capitalize text-fg-muted">{scheme}</div><ThemePreviewFrame title={`${theme.definition.id} ${scheme} preview`} themeId={theme.definition.id} colorScheme={scheme} tokens={tokens}>{Preview ? <Preview definition={theme.definition} colorScheme={scheme} options={options} /> : null}</ThemePreviewFrame></div>;
+  return <div className="grid gap-2"><div className="text-12 font-medium capitalize text-fg-muted">{scheme}</div><ThemePreviewFrame title={`${theme.definition.id} ${scheme} preview`} themeId={theme.definition.id} colorScheme={scheme} tokens={tokens} logo={logo}>{Preview ? <Preview definition={theme.definition} colorScheme={scheme} options={options} /> : null}</ThemePreviewFrame></div>;
 }
 
 function ThemeSpecimen({ theme }: { theme: ThemeContribution }): ReactElement {

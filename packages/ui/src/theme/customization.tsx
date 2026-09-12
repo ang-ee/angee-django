@@ -11,6 +11,7 @@ import {
   resolveThemeOptions,
   type ThemeCustomization,
 } from "./runtime.mjs";
+import { ThemeLogo } from "./logo";
 
 const FONT_OPTIONS = [
   ["theme", "theme.customization.themeDefault"],
@@ -43,6 +44,14 @@ const ELEVATION_OPTIONS = [
   ["soft", "theme.customization.elevation.soft"],
   ["dramatic", "theme.customization.elevation.dramatic"],
 ] as const;
+const LOGO_OPTIONS = [
+  ["theme", "theme.customization.themeDefault"],
+  ["brand", "theme.customization.logo.brand"],
+  ["accent", "theme.customization.logo.accent"],
+  ["mono", "theme.customization.logo.mono"],
+  ["star", "theme.customization.logo.star"],
+  ["corner", "theme.customization.logo.corner"],
+] as const;
 
 /** Shared editor for themes using createThemeCustomizationOptions. */
 export function ThemeCustomizationEditor({
@@ -68,17 +77,42 @@ export function ThemeCustomizationEditor({
 
   return <div className="grid gap-5">
     <p className="text-13 text-fg-muted">{t("theme.customization.description")}</p>
-    <div className="grid gap-4 sm:grid-cols-3">
-      <ThemeColorField disabled={disabled} label={t("theme.customization.brand")} value={customization.brand} onChange={(brand) => update({ brand })} />
-      <ThemeColorField disabled={disabled} label={t("theme.customization.accent")} value={customization.accent} onChange={(accent) => update({ accent })} />
-      <ThemeColorField disabled={disabled} label={t("theme.customization.neutral")} value={customization.neutral} onChange={(neutral) => update({ neutral })} />
-    </div>
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <ThemeSelect disabled={disabled} label={t("theme.customization.font")} value={customization.font} choices={FONT_OPTIONS} onChange={(font) => update({ font: font as ThemeCustomization["font"] })} />
-      <ThemeSelect disabled={disabled} label={t("theme.customization.radius")} value={customization.radius} choices={RADIUS_OPTIONS} onChange={(radius) => update({ radius: radius as ThemeCustomization["radius"] })} />
-      <ThemeSelect disabled={disabled} label={t("theme.customization.density")} value={customization.density} choices={DENSITY_OPTIONS} onChange={(density) => update({ density: density as ThemeCustomization["density"] })} />
-      <ThemeSelect disabled={disabled} label={t("theme.customization.elevation")} value={customization.elevation} choices={ELEVATION_OPTIONS} onChange={(elevation) => update({ elevation: elevation as ThemeCustomization["elevation"] })} />
-    </div>
+    <CustomizationSection title={t("theme.customization.section.identity")}>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <ThemeColorField disabled={disabled} label={t("theme.customization.brand")} value={customization.brand} onChange={(brand) => update({ brand })} />
+        <ThemeColorField disabled={disabled} label={t("theme.customization.accent")} value={customization.accent} onChange={(accent) => update({ accent })} />
+        <ThemeColorField disabled={disabled} label={t("theme.customization.neutral")} value={customization.neutral} onChange={(neutral) => update({ neutral })} />
+      </div>
+    </CustomizationSection>
+    <CustomizationSection title={t("theme.customization.section.surfaces")}>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <ThemeColorField disabled={disabled} label={t("theme.customization.canvas")} value={customization.canvas} onChange={(canvas) => update({ canvas })} />
+        <ThemeColorField disabled={disabled} label={t("theme.customization.surface")} value={customization.surface} onChange={(surface) => update({ surface })} />
+        <ThemeColorField disabled={disabled} label={t("theme.customization.rail")} value={customization.rail} onChange={(rail) => update({ rail })} />
+      </div>
+    </CustomizationSection>
+    <CustomizationSection title={t("theme.customization.section.feedback")}>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <ThemeColorField disabled={disabled} label={t("theme.customization.success")} value={customization.success} onChange={(success) => update({ success })} />
+        <ThemeColorField disabled={disabled} label={t("theme.customization.warning")} value={customization.warning} onChange={(warning) => update({ warning })} />
+        <ThemeColorField disabled={disabled} label={t("theme.customization.danger")} value={customization.danger} onChange={(danger) => update({ danger })} />
+        <ThemeColorField disabled={disabled} label={t("theme.customization.info")} value={customization.info} onChange={(info) => update({ info })} />
+      </div>
+    </CustomizationSection>
+    <CustomizationSection title={t("theme.customization.section.form")}>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <ThemeSelect disabled={disabled} label={t("theme.customization.font")} value={customization.font} choices={FONT_OPTIONS} onChange={(font) => update({ font: font as ThemeCustomization["font"] })} />
+        <ThemeSelect disabled={disabled} label={t("theme.customization.radius")} value={customization.radius} choices={RADIUS_OPTIONS} onChange={(radius) => update({ radius: radius as ThemeCustomization["radius"] })} />
+        <ThemeSelect disabled={disabled} label={t("theme.customization.density")} value={customization.density} choices={DENSITY_OPTIONS} onChange={(density) => update({ density: density as ThemeCustomization["density"] })} />
+        <ThemeSelect disabled={disabled} label={t("theme.customization.elevation")} value={customization.elevation} choices={ELEVATION_OPTIONS} onChange={(elevation) => update({ elevation: elevation as ThemeCustomization["elevation"] })} />
+        <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] items-end gap-2">
+          <ThemeSelect disabled={disabled} label={t("theme.customization.logo")} value={customization.logo} choices={LOGO_OPTIONS} onChange={(logo) => update({ logo: logo as ThemeCustomization["logo"] })} />
+          <span className="grid size-9 place-content-center rounded-6 border border-border bg-rail text-on-rail">
+            <ThemeLogo logo={customization.logo} size={22} width={22} height={22} />
+          </span>
+        </div>
+      </div>
+    </CustomizationSection>
     <div>
       <Button
         type="button"
@@ -90,6 +124,19 @@ export function ThemeCustomizationEditor({
       </Button>
     </div>
   </div>;
+}
+
+function CustomizationSection({
+  children,
+  title,
+}: {
+  children: ReactElement;
+  title: string;
+}): ReactElement {
+  return <section className="grid gap-3">
+    <h3 className="text-12 font-semibold uppercase tracking-wide text-fg-muted">{title}</h3>
+    {children}
+  </section>;
 }
 
 function ThemeColorField({
@@ -151,8 +198,16 @@ function sameCustomization(left: ThemeCustomization, right: ThemeCustomization):
   return left.brand === right.brand
     && left.accent === right.accent
     && left.neutral === right.neutral
+    && left.canvas === right.canvas
+    && left.surface === right.surface
+    && left.rail === right.rail
+    && left.success === right.success
+    && left.warning === right.warning
+    && left.danger === right.danger
+    && left.info === right.info
     && left.font === right.font
     && left.radius === right.radius
     && left.density === right.density
-    && left.elevation === right.elevation;
+    && left.elevation === right.elevation
+    && left.logo === right.logo;
 }
