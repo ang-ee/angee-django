@@ -112,17 +112,15 @@ export function useTaskFormDeclaration(): React.ReactElement {
           same column from its own manifest. */}
       <Group label={t("task.group.properties")} columns={1} placement="properties">
         <Field name="assignee" />
+        <Field name="delegate" />
         <Field name="priority" widget="priority" options={priorityOptions} />
         <Field name="due_date" />
+        <Field name="recurrence" />
       </Group>
       <Group label={t("task.group.placement")} columns={2}>
         <Field name="project" />
         <Field name="milestone" />
         <Field name="parent" />
-      </Group>
-      <Group label={t("task.group.assignment")} columns={2}>
-        <Field name="delegate" />
-        <Field name="recurrence" />
       </Group>
       <Group label={t("task.group.ordering")} columns={2}>
         <Field name="sort_order" label={t("common.order")} createOnly />

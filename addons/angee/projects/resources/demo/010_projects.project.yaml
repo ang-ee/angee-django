@@ -3,8 +3,8 @@ _meta:
 rows:
   - xref: neighborhood_garden
     fields:
-      title: Neighborhood garden launch
-      body: Coordinate the first shared growing season, from plot layout through opening day.
+      title: Investor demo launch
+      body: Every tool and data stream the family office runs, sequenced into Angee for go-live.
       status: open
       lead: iam.user_alice
       start_date: 2026-09-01

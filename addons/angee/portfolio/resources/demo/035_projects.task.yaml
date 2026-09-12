@@ -1,0 +1,74 @@
+# Plain tasks for the two workstream projects this addon owns. No queue, stage
+# or cycle: those xrefs belong to the work addon, which portfolio does not
+# depend on, and a task does not need them to read as a checklist.
+_meta:
+  model: projects.Task
+rows:
+  - xref: fin_custodian_statements
+    fields:
+      project: portfolio.accessible_plot_booking
+      title: Reconcile the Q3 custodian statements
+      note: Tie every position back to the custodian file before the quarter closes.
+      assignee: iam.user_alice
+      priority: high
+      due_date: 2026-09-30
+      sort_order: 1024.0
+      sub_sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: fin_addepar_refresh
+    fields:
+      project: portfolio.accessible_plot_booking
+      title: Set the Addepar nightly refresh window
+      note: Run it after the custodian drops land so the morning numbers are final.
+      assignee: iam.user_bob
+      priority: medium
+      sort_order: 2048.0
+      sub_sort_order: 2048.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: fin_carta_verify
+    fields:
+      project: portfolio.accessible_plot_booking
+      title: Verify the Carta cap-table sync against the last round
+      note: Check option pools and post-money against the signed documents.
+      assignee: iam.user_bob
+      priority: medium
+      sort_order: 3072.0
+      sub_sort_order: 3072.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: ir_lp_letter
+    fields:
+      project: portfolio.seed_exchange
+      title: Draft the Q3 LP letter
+      note: Performance, new positions, and what changed in the operating entities.
+      assignee: iam.user_alice
+      priority: high
+      due_date: 2026-10-09
+      sort_order: 1024.0
+      sub_sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: ir_hubspot_list
+    fields:
+      project: portfolio.seed_exchange
+      title: Wire the HubSpot LP list into the send flow
+      note: One list, deduplicated, so nobody gets the letter twice.
+      assignee: iam.user_bob
+      priority: medium
+      sort_order: 2048.0
+      sub_sort_order: 2048.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: ir_portal_logins
+    fields:
+      project: portfolio.seed_exchange
+      title: Publish the investor-portal logins
+      note: Credentials out with the letter so the portal is used from day one.
+      assignee: iam.user_alice
+      priority: low
+      sort_order: 3072.0
+      sub_sort_order: 3072.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

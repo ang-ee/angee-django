@@ -7,8 +7,8 @@ rows:
       stage: work.eng_in_progress
       cycle: work.eng_active
       project: projects.neighborhood_garden
-      title: Persist board drag as a stage write
-      note: Keep stage as the fine-grained owner and project coarse task status from it.
+      title: Bring Slack and WhatsApp threads into Angee
+      note: Thread identity has to survive the import so replies land on the right record.
       assignee: iam.user_alice
       priority: high
       estimate: 3.0
@@ -22,8 +22,8 @@ rows:
       stage: work.eng_backlog
       cycle: work.eng_active
       project: projects.neighborhood_garden
-      title: Exercise the projects plus work composition profile
-      note: Confirm donor columns live on projects_task with no donor table.
+      title: Unify contact identities across channels
+      note: One person, one record, whether they arrive by mail, Slack or WhatsApp.
       assignee: iam.user_bob
       priority: medium
       estimate: 2.0
@@ -36,8 +36,8 @@ rows:
       queue: work.eng
       stage: work.eng_triage
       project: projects.neighborhood_garden
-      title: Confirm raised-bed delivery access
-      note: Validate the delivery route before the supplier books a vehicle.
+      title: Pull Carta cap tables for the direct investments
+      note: Ownership and option pools per company, refreshed on each round.
       assignee: iam.user_alice
       priority: urgent
       estimate: 2.0
@@ -50,8 +50,8 @@ rows:
       queue: work.eng
       stage: work.eng_triage
       project: projects.neighborhood_garden
-      title: Review volunteer orientation request
-      note: Decide whether an extra weekday orientation belongs in this cycle.
+      title: Auto-capture inbound deals from email referrals
+      note: Referrals arrive as mail; they should land in the pipeline without retyping.
       assignee: iam.user_bob
       priority: medium
       estimate: 1.0
@@ -64,8 +64,8 @@ rows:
       queue: work.eng
       stage: work.eng_triage
       project: projects.neighborhood_garden
-      title: Investigate accessible water-point request
-      note: Confirm hose reach and an accessible turning area near the shared beds.
+      title: Wire Plaid for real-time bank balances
+      note: Operating cash in the same view as the custodial positions.
       assignee: iam.user_alice
       priority: high
       estimate: 3.0
@@ -78,8 +78,8 @@ rows:
       queue: work.eng
       stage: work.eng_todo
       project: projects.neighborhood_garden
-      title: Draft signage for the accessible water point
-      note: One sign at the path junction and one at the tap, in both languages.
+      title: Route the shared team calendar into Angee
+      note: Family, office and travel calendars in one agenda without cross-posting.
       assignee: iam.user_bob
       priority: medium
       estimate: 1.0
@@ -93,8 +93,8 @@ rows:
       stage: work.eng_done
       cycle: work.eng_active
       project: projects.neighborhood_garden
-      title: Publish the first cycle report
-      note: Summarize what the cycle closed and what rolled over, for the committee.
+      title: Connect Gmail and Outlook to the Angee inbox
+      note: Both estates, shared mailboxes included, with history backfilled.
       assignee: iam.user_bob
       priority: low
       estimate: 1.0
@@ -113,8 +113,8 @@ rows:
       stage: work.eng_done
       cycle: work.eng_cycle_two
       project: projects.neighborhood_garden
-      title: Survey the path junction for the water point
-      note: Measured the turning area and the hose run before the tap was ordered.
+      title: Import the Affinity and DealCloud pipeline
+      note: Stages, owners and last-touch dates carried across as they stand.
       assignee: iam.user_alice
       priority: medium
       estimate: 2.0
@@ -129,8 +129,8 @@ rows:
       stage: work.eng_in_progress
       cycle: work.eng_cycle_three
       project: projects.neighborhood_garden
-      title: Install the accessible water point
-      note: Fit the tap and the hard standing so a wheelchair can reach the tap.
+      title: Sync Addepar portfolio accounting nightly
+      note: Performance and exposure reconciled against the custodian feeds each night.
       assignee: iam.user_admin
       priority: high
       estimate: 5.0
@@ -144,8 +144,8 @@ rows:
       stage: work.eng_todo
       cycle: work.eng_cycle_three
       project: projects.neighborhood_garden
-      title: Plant the raised beds with the autumn list
-      note: Two volunteer sessions, one per weekend, once the beds are filled.
+      title: Launch the investor portal for quarterly reporting
+      note: LPs self-serve statements and capital accounts instead of emailing for them.
       assignee: iam.user_admin
       priority: medium
       estimate: 3.0
@@ -159,8 +159,8 @@ rows:
       stage: work.eng_todo
       cycle: work.eng_cycle_three
       project: projects.neighborhood_garden
-      title: Mount the bilingual signage at the tap and the junction
-      note: Follows the signage draft; needs the tap fitted before the tap sign goes up.
+      title: Migrate LP updates and newsletters from Mailchimp
+      note: Lists, templates and send history, so the quarterly note goes out from Angee.
       assignee: iam.user_bob
       priority: low
       estimate: 1.0
@@ -168,3 +168,77 @@ rows:
       sub_sort_order: 18432.0
       created_by: iam.user_alice
       updated_by: iam.user_bob
+  - xref: onb_custodian_feeds
+    fields:
+      queue: work.eng
+      stage: work.eng_in_progress
+      cycle: work.eng_active
+      project: projects.neighborhood_garden
+      title: Link custodian feeds from Fidelity, Schwab and JP Morgan
+      note: Positions and transactions nightly, so the numbers stop being a spreadsheet.
+      assignee: iam.user_alice
+      priority: high
+      estimate: 5.0
+      sort_order: 19456.0
+      sub_sort_order: 19456.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: onb_data_room
+    fields:
+      queue: work.eng
+      stage: work.eng_todo
+      cycle: work.eng_cycle_two
+      project: projects.neighborhood_garden
+      title: Stand up the due-diligence data-room workflow
+      note: Request, upload and sign-off in one trail attached to the deal.
+      assignee: iam.user_admin
+      priority: medium
+      estimate: 3.0
+      sort_order: 20480.0
+      sub_sort_order: 20480.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: onb_ic_memo
+    fields:
+      queue: work.eng
+      stage: work.eng_todo
+      cycle: work.eng_cycle_two
+      project: projects.neighborhood_garden
+      title: Template the IC memo and approval flow
+      note: One memo shape, one approval path, so decisions are comparable later.
+      assignee: iam.user_bob
+      priority: medium
+      estimate: 2.0
+      sort_order: 21504.0
+      sub_sort_order: 21504.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: onb_hubspot_contacts
+    fields:
+      queue: work.eng
+      stage: work.eng_backlog
+      project: projects.neighborhood_garden
+      title: Connect HubSpot CRM contacts
+      note: Investor and adviser records, deduplicated against the unified identities.
+      assignee: iam.user_bob
+      priority: low
+      estimate: 2.0
+      sort_order: 22528.0
+      sub_sort_order: 22528.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: onb_performance_email
+    fields:
+      queue: work.eng
+      stage: work.eng_done
+      cycle: work.eng_active
+      project: projects.neighborhood_garden
+      title: Automate the monthly performance email
+      note: Numbers pulled from the portfolio, sent without anyone assembling it.
+      assignee: iam.user_alice
+      priority: low
+      estimate: 1.0
+      sort_order: 23552.0
+      sub_sort_order: 23552.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
