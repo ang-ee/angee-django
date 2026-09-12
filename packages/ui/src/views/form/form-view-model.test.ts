@@ -4,6 +4,7 @@ import type { FieldDescriptor } from "../page";
 import {
   emptyDraft,
   addFieldSelection,
+  formViewFieldLayout,
   missingRequiredFieldNames,
   mutationData,
   recordToValues,
@@ -19,6 +20,34 @@ const fields: readonly FieldDescriptor[] = [
 test("titleText preserves string and numeric scalar titles", () => {
   expect(titleText("Daily briefing", "Untitled")).toBe("Daily briefing");
   expect(titleText(42, "Untitled")).toBe("42");
+});
+
+test("keeps long text fields in declaration order when they opt out of body placement", () => {
+  const addressFields: readonly FieldDescriptor[] = [
+    { name: "label", title: true },
+    { name: "street", widget: "textarea", body: false },
+    { name: "extended", widget: "textarea", body: false },
+    { name: "po_box" },
+    { name: "city" },
+    { name: "region" },
+    { name: "postal_code" },
+    { name: "country" },
+    { name: "is_primary", widget: "switch" },
+  ];
+
+  const layout = formViewFieldLayout(addressFields, addressFields, [], null);
+
+  expect(layout.bodyField).toBeUndefined();
+  expect(layout.gridFields.map((field) => field.name)).toEqual([
+    "street",
+    "extended",
+    "po_box",
+    "city",
+    "region",
+    "postal_code",
+    "country",
+    "is_primary",
+  ]);
 });
 
 test("object fields select only their declared row projection paths", () => {

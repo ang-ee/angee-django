@@ -1,7 +1,8 @@
 /* ============================================================================
    @angee/ui — Tailwind 4 entry stylesheet.
 
-   Imports tokens, binds the dark-mode variant to [data-theme="dark"], and
+   Imports tokens, binds the dark-mode variant to the canonical color-scheme
+   attribute (with a temporary legacy mirror), and
    bridges every semantic token into a Tailwind utility through the @theme
    block.
 
@@ -17,10 +18,9 @@
 @import "tw-animate-css";
 @import "./tokens.css";
 
-/* Bind Tailwind's `dark:` variant to the existing [data-theme="dark"]
-   selector so authoring `dark:bg-rail` matches what tokens.css already
-   does. The `:where()` keeps specificity at zero. */
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+/* The canonical selector drives authored dark utilities. The legacy selector
+   remains for one compatibility cycle while consumers migrate. */
+@custom-variant dark (&:where([data-color-scheme="dark"], [data-color-scheme="dark"] *, [data-theme="dark"], [data-theme="dark"] *));
 
 @theme {
   /* ----------------------------------------------------------------
@@ -218,20 +218,20 @@
    *  (1=4px … 16=64px) already matches --sp-* tokens, so we only add
    *  the named chrome dimensions. Emits w-rail-w, h-topbar-h, etc.
    * ---------------------------------------------------------------- */
-  --spacing-rail-w:        2.5rem;   /* 40px — rail outer width */
+  --spacing-rail-w:        var(--rail-w);
   --spacing-rail-expanded-w: 13rem;  /* 208px — expanded app navigation */
-  --spacing-topbar-h:      2.625rem; /* 42px — dark menu-bar */
-  --spacing-control-h:     3rem;     /* 48px — control panel row */
-  --spacing-chatter-w:     20.75rem; /* 332px — right pane */
+  --spacing-topbar-h:      var(--topbar-h);
+  --spacing-control-h:     var(--controlpanel-h);
+  --spacing-chatter-w:     var(--chatter-w);
   --spacing-search-w:      13.5rem;  /* 216px — topbar global-search pill */
 
   /* Per-component sizing referenced from multiple primitives. */
-  --spacing-btn-sm:        1.625rem; /* 26px */
-  --spacing-btn-md:        1.875rem; /* 30px */
-  --spacing-btn-lg:        2.25rem;  /* 36px */
+  --spacing-btn-sm:        var(--control-h-sm);
+  --spacing-btn-md:        var(--control-h-md);
+  --spacing-btn-lg:        var(--control-h-lg);
   --spacing-icon-btn-sm:   1.5rem;   /* 24px */
-  --spacing-icon-btn-md:   1.875rem; /* 30px */
-  --spacing-icon-btn-lg:   2.25rem;  /* 36px */
+  --spacing-icon-btn-md:   var(--control-h-md);
+  --spacing-icon-btn-lg:   var(--control-h-lg);
   --spacing-avatar-sm:     1.25rem;  /* 20px */
   --spacing-avatar-md:     1.5rem;   /* 24px */
   --spacing-avatar-lg:     2rem;     /* 32px */
@@ -239,8 +239,8 @@
   --spacing-avatar-xxl:    4.5rem;   /* 72px — detail-page heads */
   --spacing-tag-h:         1.125rem; /* 18px */
   --spacing-kbd-h:         1.125rem; /* 18px */
-  --spacing-input-h:       1.875rem; /* 30px — same as btn-md */
-  --spacing-input-h-lg:    2.25rem;  /* 36px */
+  --spacing-input-h:       var(--control-h-md);
+  --spacing-input-h-lg:    var(--control-h-lg);
 
   /* Modal / popover surface dimensions. Recurring chrome widths only —
      per-component one-offs stay inline. */
@@ -277,23 +277,20 @@
   /* ----------------------------------------------------------------
    *  RADII — emit `rounded-2`, `rounded-4`, etc.
    * ---------------------------------------------------------------- */
-  --radius-2:    2px;
-  --radius-4:    4px;
-  --radius-6:    6px;
-  --radius-8:    8px;
-  --radius-10:   10px;
-  --radius-12:   12px;
-  --radius-full: 999px;
+  --radius-2:    var(--r-2);
+  --radius-4:    var(--r-4);
+  --radius-6:    var(--r-6);
+  --radius-8:    var(--r-8);
+  --radius-10:   var(--r-10);
+  --radius-12:   var(--r-12);
+  --radius-full: var(--r-full);
   --radius:      var(--r-6);
 
   /* ----------------------------------------------------------------
    *  TYPOGRAPHY — fonts + scale.
    * ---------------------------------------------------------------- */
-  --font-sans:
-    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  --font-mono:
-    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: var(--font-family-sans);
+  --font-mono: var(--font-family-mono);
 
   /* Type scale tokens not in Tailwind's default (11/13/15/22/28/34).
      12/14/16/18 align with text-xs/text-sm/text-base/text-lg already. */
@@ -360,10 +357,10 @@
    Tailwind's auto-generated `ring-brand` utility. */
 @layer utilities {
   .focus-ring {
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--brand) 30%, transparent);
+    box-shadow: var(--ring);
   }
   .focus-ring-danger {
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--red-500) 30%, transparent);
+    box-shadow: var(--ring-danger);
   }
 }
 

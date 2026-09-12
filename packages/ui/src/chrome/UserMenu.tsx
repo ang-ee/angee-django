@@ -3,8 +3,10 @@ import { useNavigate } from "@tanstack/react-router";
 
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
-import { useThemePreference, type ThemePreference } from "../lib/theme";
-import { useLoginPath, useRuntimeAuth, useRuntimeLogoutAction } from "../runtime";
+import { useColorSchemePreference, type ColorSchemePreference } from "../lib/color-scheme";
+import { useOptionalAppearance } from "../theme";
+import { useLoginPath, useRuntimeAuth, useRuntimeLogoutAction, useSlot } from "../runtime";
+import { SlotOutlet } from "../lib/slot-outlet";
 import { avatarInitials } from "../ui/avatar";
 import {
   DropdownMenu,
@@ -20,6 +22,8 @@ export interface UserMenuProps {
   sideOffset?: DropdownMenuPositionerProps["sideOffset"];
 }
 
+export const USER_MENU_ITEMS_SLOT = "chrome.user-menu.items";
+
 export function UserMenu({
   className,
   side = "bottom",
@@ -31,8 +35,11 @@ export function UserMenu({
   const { logout, fetching } = useRuntimeLogoutAction();
   const loginPath = useLoginPath();
   const navigate = useNavigate();
-  const { resolved, setPreference } = useThemePreference();
-  const nextTheme: ThemePreference = resolved === "dark" ? "light" : "dark";
+  const localScheme = useColorSchemePreference();
+  const appearance = useOptionalAppearance();
+  const resolved = appearance?.colorScheme ?? localScheme.resolved;
+  const nextTheme: ColorSchemePreference = resolved === "dark" ? "light" : "dark";
+  const contributedItems = useSlot(USER_MENU_ITEMS_SLOT);
   const themeLabel = nextTheme === "dark"
     ? t("chrome.switchToDarkTheme")
     : t("chrome.switchToLightTheme");
@@ -67,10 +74,11 @@ export function UserMenu({
                 <div className={textRoleVariants({ role: "caption", truncate: true })}>{email}</div>
               ) : null}
             </div>
-            <DropdownMenu.Item onClick={() => setPreference(nextTheme)}>
+            <DropdownMenu.Item onClick={() => appearance ? void appearance.setColorScheme(nextTheme) : localScheme.setPreference(nextTheme)}>
               <Glyph name={nextTheme === "dark" ? "moon" : "sun"} />
               <span className="flex-1 truncate">{themeLabel}</span>
             </DropdownMenu.Item>
+            <SlotOutlet entries={contributedItems} />
             <DropdownMenu.Separator />
             <DropdownMenu.Item
               disabled={fetching}

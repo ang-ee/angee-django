@@ -14,6 +14,8 @@ import type {
   AddonManifest,
   AddonRoute,
 } from "./define-addon";
+import type { DashboardDefinition } from "@angee/ui/dashboard/headless";
+import type { ThemeContribution } from "@angee/ui/theme";
 
 /** A route that also carries the page component the chrome renders. */
 export interface BaseAddonRoute extends AddonRoute {
@@ -30,6 +32,8 @@ export interface BaseAddonRoute extends AddonRoute {
   menu?: string;
   title?: ReactNode;
   icon?: string;
+  /** Dashboard definition registered with this routed page. */
+  dashboard?: DashboardDefinition;
 }
 
 export interface ResourcePageRoutesOptions {
@@ -76,9 +80,30 @@ export function resourcePageRoutes(
   ];
 }
 
+export interface DashboardPageRouteOptions {
+  name: string;
+  path: string;
+  dashboard: DashboardDefinition;
+  component: RouteComponent;
+  layout?: string;
+  menu?: string;
+}
+
+/** Declare a routed dashboard while retaining its registry-owned definition. */
+export function dashboardPageRoute(options: DashboardPageRouteOptions): BaseAddonRoute {
+  return {
+    name: options.name,
+    path: options.path,
+    component: options.component,
+    layout: options.layout ?? "console",
+    dashboard: options.dashboard,
+    ...(options.menu ? { menu: options.menu } : {}),
+  };
+}
+
 /** An addon manifest whose routes carry their page components. */
 export interface BaseAddon
-  extends Omit<AddonManifest, "routes" | "menus" | "previews"> {
+  extends Omit<AddonManifest, "routes" | "menus" | "previews" | "themes"> {
   routes?: readonly BaseAddonRoute[];
   menus?: readonly BaseMenuItem[];
   /**
@@ -94,6 +119,8 @@ export interface BaseAddon
    * registers it alongside the schema-named providers.
    */
   dataProviders?: Readonly<Record<string, Required<RefineDataProvider>>>;
+  /** Browser presentation attached to canonical installed theme definitions. */
+  themes?: readonly ThemeContribution[];
 }
 
 /**
@@ -104,9 +131,12 @@ export interface BaseAddon
  * instead of annotating `const x: BaseAddon = {...}`.
  */
 export function defineBaseAddon(addon: BaseAddon): BaseAddon {
+  const routeDashboards = addon.routes
+    ?.flatMap((route) => route.dashboard ? [route.dashboard] : []) ?? [];
   return {
     ...addon,
     routes: addon.routes?.map(normalizeBaseAddonRoute),
+    dashboards: [...(addon.dashboards ?? []), ...routeDashboards],
   };
 }
 

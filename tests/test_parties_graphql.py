@@ -204,6 +204,10 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
         "created_at",
     }
     assert address.create_fields[0] == "party"
+    country = {field.name: field for field in address.fields}["country"]
+    assert country.kind == "enum"
+    assert country.widget == "select"
+    assert ("DE", "Germany") in {(value.value, value.description) for value in country.values}
 
     relationship = resources["parties.Relationship"]
     assert relationship.roots.list_name == "party_relationships"

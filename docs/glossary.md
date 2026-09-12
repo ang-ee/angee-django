@@ -23,6 +23,8 @@ wheel, not an addon.
 **Framework addon** — a reusable product capability that is part of Angee itself
 and builds on the framework core. Framework addons live under `addons/`.
 
+**Base addon** — a synonym for framework addon, not another architectural level.
+
 **Consumer addon** — an addon written by a product team for a specific project,
 built on top of the framework and base addons.
 
@@ -48,7 +50,7 @@ a separate concern. Both the default development stack and a self-contained
 instance chain the project at the stack root; the stack keeps its own
 `.copier-answers.stack.yml` so the project's canonical `.copier-answers.yml`
 stays the project's. The two stack layouts live in the operator's
-[Concepts](/operator/concepts#two-stack-layouts).
+[Concepts](https://docs.angee.ai/operator/concepts#two-stack-layouts).
 
 **Host** — the application runtime a stack runs. `angee-django` is the first and
 default Host; a project *is* the Host's source. The operator is Host-agnostic — to
@@ -214,6 +216,24 @@ before copying or forking a component.
 
 **Token** — a semantic styling value (Tailwind). Theme by overriding tokens rather
 than passing color props or one-off variants.
+
+**Theme** — a named visual implementation contributed by an installed addon.
+It may provide semantic token layers, bounded options, scoped CSS and bundled
+assets. Its stable ID is stored as an appearance preference.
+
+**Theme addon** — the ordinary Angee addon that distributes one or more themes.
+Installing it adds choices to the composed catalogue; installation does not
+activate a theme.
+
+**Appearance** — the effective presentation and the user or host settings that
+select it: a theme, a color-scheme preference and that theme's supported options.
+
+**Color scheme** — the light or dark rendering of a theme. A preference may be
+`light`, `dark` or `system`; the resolved DOM state is always `light` or `dark`.
+
+**Template** — a reusable scaffold or content/layout structure, such as a
+project template or dashboard template. A visual design selected at runtime is
+a theme rather than a template.
 
 **Rendered binding** — the single rendered (styled) Angee binding over Refine
 state, owned by `@angee/ui`.

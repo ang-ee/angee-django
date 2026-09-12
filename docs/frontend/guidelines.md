@@ -4,52 +4,46 @@ Frontend code is TypeScript, React, and the rendered Angee experience. It owns
 presentation, routes, menus, widgets, layouts, resource-view state, and
 interaction.
 
+Theme authors and host operators should also read the
+[Appearance and theme addons guide](appearance.md). It defines the public token,
+headless definition, build-default and preference boundaries.
+
 Follow the shared development process and coding principles in the
-[Development Guidelines](/guide/guidelines) for every task; the rules below are the
+[Development Guidelines](../guidelines.md) for every task; the rules below are the
 frontend-specific layer applied during the Build step.
 
 ## Stack
 
-The [opinionated stack](/guide/stack) is the source of truth for frontend libraries
+The [opinionated stack](../stack.md) is the source of truth for frontend libraries
 and what each one owns. Check it before adding a dependency or
 hand-rolling a concern. TypeScript dependency setup belongs in `package.json`,
 `pnpm-workspace.yaml`, and `pnpm-lock.yaml`.
 
 ## Package Layering
 
-The frontend workspace is a strict one-way stack. Each package owns one concern
-and depends only on packages below it. [The opinionated stack](/guide/stack) says
-which rented library owns what; this section says which Angee package wraps it and
-who may import whom.
+Framework package imports follow this DAG. Each arrow means "may import";
+each package also uses its declared library dependencies.
 
-### Target DAG
-
-Dependencies point down only. A package never imports a package above it.
-
-```
-rented libs   @refinedev/core · @refinedev/hasura · graphql-request/ws ·
-              TanStack Router/Table/Query · react-hook-form · Valibot · i18next · lucide · Base UI
-   │
-@angee/refine     Hasura-dialect Refine binding — zero domain/metadata knowledge
-   │
-@angee/metadata  metadata (angee.resources) → Refine config bridge
-   │
-@angee/ui         the single rendered binding + headless view-state
-   │
-@angee/app        composition + app shell — the only package depending on all above
-   │
-@angee/<domain>   addons: pages + codegen documents
+```text
+@angee/app ──→ @angee/ui ──→ @angee/refine
+     │             └─────→ @angee/metadata
+     ├───────────────────→ @angee/refine
+     └───────────────────→ @angee/metadata
 ```
 
-| Package | Owns |
+`refine` and `metadata` are independent leaves. Addons and the composed project
+use these packages through declared dependencies; framework packages never
+depend on addons or a composed project's generated schema.
+
+| Owner | Responsibility and reference |
 |---|---|
-| `@angee/refine` | the parts of a Refine+Hasura app every project shares, with **zero domain/metadata knowledge**: data/transport/live providers, the router bridge, typed-document contracts, and the `dialect/` operation hooks; authored reads use native TanStack Query options/results through the Refine data provider, while mutations use Refine core. |
-| `@angee/metadata` | the **only** consumer of `angee.resources` metadata: artifact load/validate, projection to Refine `resources[]` + `meta`, the one field kind/scalar/widget classifier, group/facet/drill-down dimension specs, and per-action capabilities → accessControl. |
-| `@angee/ui` | the single rendered binding + headless view-state: resource list/form/record/relation/visualization surfaces under `views/`, chrome (rail/topbar/breadcrumb/spotlight), widgets, feedback (toast), the Base UI primitives binding, and the `runtime/` contracts it consumes — the `AppRuntime` registry/session context + its lookup hooks, `makeContext`, and the menu/slot/preview/widget/form contribution types (the binding owns the runtime it renders against; `@angee/app` only mounts the provider). |
-| `@angee/app` | assembles the app: `define-addon`, `defineBaseAddon`, `createApp`, the `providers/{auth,i18n,notification,accessControl}`, addon-route → TanStack tree routing, the slot/widget/form/preview/icon registries, and the app shell. |
-| `@angee/<domain>` | a domain addon: its pages and codegen `documents*.ts`. |
+| [`@angee/refine`](../../packages/refine/README.md) | Transport, live providers, router binding and typed operations, with no domain or metadata knowledge |
+| [`@angee/metadata`](../../packages/metadata/README.md) | Parse resource metadata and own its query, field, dimension and capability semantics |
+| [`@angee/ui`](../../packages/ui/README.md) | Shared rendered surfaces and the runtime contracts those surfaces consume |
+| [`@angee/app`](../../packages/app/README.md) | Compose addon declarations, routes, providers, registries and the application shell |
+| Addon / composed project | Domain pages and schema-dependent generated documents |
 
-### Target Decisions
+### Ownership boundaries
 
 - Auth, preferences, and runtime i18n are app-owned providers under
   `@angee/app/src/providers/{auth,i18n}`. Transport auth headers stay in
@@ -65,27 +59,7 @@ rented libs   @refinedev/core · @refinedev/hasura · graphql-request/ws ·
   `id` floor; it does not probe candidate display fields.
 - Layering and unconsumed-owner guardrails are Vitest checks over the locked
   package graph. Do not add a boundary-lint dependency without updating
-  [the opinionated stack](/guide/stack) and the manifests together.
-
-### Current → target
-
-Where each concern lives **today** versus where the open refactor waves move the
-remaining debt. Deleted shell packages are historical only; new code uses the
-real package names below.
-
-| Concern | Current owner | Target owner |
-|---|---|---|
-| Data/transport/live providers, router bridge, typed-document contracts, stable-deps | `@angee/refine` | `@angee/refine` |
-| Dialect data hooks (aggregate/action/deletePreview/facets/groupBy, revisions, authored-hooks) | `@angee/refine` dialect hooks | `@angee/refine` dialect hooks (metadata-free; target resolved at the caller edge as `{ root }`) |
-| Metadata artifact, resource projection, field classifier, dimensions, capabilities, row contracts | `@angee/metadata` | `@angee/metadata` |
-| Invalidation: resource targets vs authored-query metadata | `@angee/metadata` resource targets + `@angee/refine` authored-query metadata | `@angee/metadata` resource targets + `@angee/refine` authored-query metadata |
-| Rendered views / chrome / widgets / feedback / primitives | `@angee/ui` | `@angee/ui` |
-| `lib/` styling helpers (cn/tv/tones/dnd) | `@angee/ui` | `@angee/ui` |
-| Runtime contracts the binding consumes — the `AppRuntime` registry + its `useWidget`/`useSlot`/`usePreviews`/`useT`/`useNamespaceT` lookups, the `makeContext` factory, and the menu/slot/preview/widget/form contribution contracts | `@angee/ui` | `@angee/ui` |
-| `defineAddon` / `composeAddons` (addon-manifest composition) | `@angee/app` | `@angee/app` |
-| `createApp` / `defineBaseAddon` + app shell (the single `<Refine>`/cache/live owner) | `@angee/app` | `@angee/app` |
-| Auth provider | `@angee/app` `providers/auth` | `@angee/app` `providers/auth` |
-| i18n provider | `@angee/app` i18n provider | `@angee/app` i18n provider |
+  [the opinionated stack](../stack.md) and the manifests together.
 
 ### One-way rules
 
@@ -101,8 +75,8 @@ convenience.
 - `@angee/metadata` must **NOT** import `@angee/refine`.
 - `@angee/ui` may import `@angee/refine` + `@angee/metadata`, but **not**
   `@angee/app`.
-- `@angee/app` is the **ONLY** package that may import compose / `createApp`-level
-  concerns. The `AppRuntime` context and its lookup hooks live in **`@angee/ui`**
+- `@angee/app` owns composition and `createApp`; lower framework packages do not
+  import those concerns. The `AppRuntime` context and its lookup hooks live in **`@angee/ui`**
   (the binding owns the runtime it renders against); `@angee/app` composes the
   addon manifests (`composeAddons`) and mounts that `AppRuntimeProvider` with the
   merged value. `@angee/ui` reads it via the context — never by importing
@@ -110,7 +84,7 @@ convenience.
 - No addon imports deleted shell packages; addon web code composes the real
   framework owners directly.
 
-### Carried debts
+### Native state owners
 
 Client-side filtering, sorting, grouping, expansion, row selection, and pagination
 compose TanStack Table row models. Angee keeps the thin lookup evaluator that lets
@@ -122,11 +96,12 @@ history uses native Query pages with domain-owned
 
 - Python ships schema and operations. TypeScript ships UX.
 - **Schema dependence stops at the composition boundary.** `@angee/refine`,
-  `@angee/metadata`, and `@angee/ui` stay schema-independent; when they need a
-  bespoke operation they hand-author a typed `TypedDocumentNode` (see
-  `ui/views/resource/documents.ts`) rather than importing a project runtime. `@angee/app`
-  is the sanctioned schema-dependent composition package, and it and addon web
-  packages consume generated documents from the composed stack's `@angee/gql`.
+  `@angee/metadata`, `@angee/ui`, and `@angee/app` stay schema-independent.
+  Framework-owned operations use typed documents against their owned contract;
+  project-specific operations arrive through explicit composition inputs.
+  Only addon web packages and the composed project import generated documents
+  from the host's `@angee/gql`. See the executable
+  [architecture guardrails](../../packages/app/src/architecture-guardrails.test.ts).
 - **Generated authored operations are typed, never hand-mirrored.** In a
   schema-dependent package, a bespoke (non-CRUD) operation is a `graphql()`
   document imported from `@angee/gql/<schema>`; its
@@ -195,7 +170,7 @@ history uses native Query pages with domain-owned
   rendered addon composition, and `createApp` for the project's host
   composition. One greppable seam per addon — never annotate a bare
   `const x: BaseAddon = {…}`. These contracts and the packages that own them are
-  described under "Package layering" below.
+  described under [Package Layering](#package-layering).
 - Rendered resource pages use `resourcePageRoutes(name, path, component,
   resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
   the default `"console"` layout. Addon manifest tests call
@@ -297,18 +272,18 @@ history uses native Query pages with domain-owned
   declarations, and record fragments (`RecordHeader`/`MetaGrid`/`MetricStrip`);
   for a linked cell, compose `TextLink`/`Chip`/`MetricTile`, never a bespoke link
   class. If a shared view lacks what your case needs, extend it in `@angee/ui`
-  (the owner) so every addon gets it. The principle and what a hand-rolled copy
-  silently drops live in `AGENTS.md` → "Compose, never re-implement, at the addon
-  level".
+  (the owner) so every addon gets it. The shared-primitive rule lives in the
+  [constitution](../../AGENTS.md#constitution).
 - **Routes and pages stay thin.** A route declares URL, layout, menu/chrome,
   refine resource, action, and component. A resource-backed page composes the
   standard resource action components with `List` and `Form` declarations; a
   daemon/remote/in-memory collection composes `RowsListView` or a named shared
   owner; a grouped or board-capable resource composes `ListView` with grouping
-  and the matching backend aggregate/filter contract. Page components may add small
-  action controls or hooks, but they do not own table mechanics, duplicate route
-  params, cache state, bespoke loading/error surfaces, or local copies of shared
-  resource-view state.
+  and the matching backend aggregate/filter contract. Local action controls or
+  hooks supply only domain-specific composition glue after checking existing
+  owners. Small size does not excuse duplication. Pages do not own table
+  mechanics, duplicate route params, cache state, bespoke loading/error surfaces,
+  or local copies of shared resource-view state.
 - A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
   hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
 - **Two-collection settings pages are a sanctioned family, not a double toolbar.**
@@ -471,23 +446,19 @@ clears the dirty state, including the editable lines.
 ## Pitfalls
 
 Hard-won traps — the wise learn from others' mistakes
-([Development Guidelines](/guide/guidelines)).
+([Development Guidelines](../guidelines.md)).
 
 - **Plural copy uses native i18next suffixes:** declare `key_one`/`key_other` in the bundle and call `t("key", { count })` with a numeric count; `createNamespaceT` applies the same `Intl.PluralRules` selection in provider-less renders.
 - **Server preference writes are live but not transactional across tabs:** each delivered `changes()` event rebases later patches immediately, while whole-document writes already in flight can still be accepted in server order and the last accepted write wins.
 - **Effect cleanup must not permanently kill a memoized resource:** StrictMode's simulated mount → cleanup → remount leaves it dead; own the resource inside the effect or explicitly re-arm it on mount, as the preference patch queue does.
 - **A render callback may only read fields some column declares or the `ListView fields={[…]}` extras name:** the selection owner (`requestedFieldPaths`) fetches column-declared paths plus those extras and nothing else — an undeclared read is `undefined` on every row (a link built from it throws, a caption silently blanks). Still null-guard values a row may legitimately lack.
 - **A nested list shares the ambient resource-view state only when that owner is for its own resource or is bound to no resource;** sort fields, filters and group axes are resource-specific, so a list under an owner of another resource keeps local state. Pass `scope="inherit"` to follow any ambient owner, or `scope="local"` to keep a same-resource list apart.
-- **A filtered `pnpm typecheck`/`test` skips the root `pretypecheck: codegen` hook.**
-  The root `typecheck`/`test` scripts run `pnpm codegen` first; `pnpm --filter <pkg>
-  typecheck` (and filtered vitest) does not. After any SDL change it then runs against
-  stale generated `@angee/gql` types and fails with spurious `Cannot find module
-  '@angee/gql/console'` or implicit-`any` errors in `documents.ts` consumers — not real
-  defects. After a schema change, regenerate in order: `manage.py schema` (the SDL — see
-  the backend "Regenerate the SDL after `angee build`" pitfall) → `pnpm codegen` → then the
-  filtered typecheck/test. Addon fragments resolve generated documents from the composed
-  stack first because that host owns codegen; the repository-local `.angee/runtime` tree
-  is only the standalone-checkout fallback and may be stale in a workspace slot.
+- **Generated documents are an explicit prerequisite for addon checks.** Neither
+  root nor package typecheck/test scripts regenerate them automatically. After a
+  schema change, refresh the host's SDL and codegen before checking consumers;
+  [Checks](../checks.md) owns the command order and working directories. Addon
+  fragments resolve the composed stack's generated documents first. The
+  repository-local `.angee/runtime` fallback may be stale in a workspace slot.
 - **Relation widgets follow the SDL field kind** — a nested object FK
   (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
   node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:
@@ -538,7 +509,7 @@ Hard-won traps — the wise learn from others' mistakes
   `RelationPicker` own their query state and filter a fixed `options` list
   client-side, so they cannot drive a remote search. For one (e.g. a host repo
   search), build a thin control on the dialog/`Input` primitives whose debounced
-  query feeds `@angee/ui`'s refine-backed `useAuthoredQuery`, and run the write
+  query feeds `@angee/refine`'s `useAuthoredQuery`, and run the write
   through `useAuthoredMutation(..., { invalidateModels: [...] })` or the
   matching refine invalidation owner after the write.
 - **A FormView create dialog under the console layout** needs
@@ -547,10 +518,10 @@ Hard-won traps — the wise learn from others' mistakes
 - **Layouts bind their own schema** (`RefineLayoutConfig.schema`): console-only fields
   need the console client — set `defaultSchema: "console"` and pin the
   public/login layout to `public`.
-- **Keep urql out of app data paths.** The only remaining urql owner is the
-  operator daemon quarantine. Django-backed app resources use refine data hooks,
-  react-query invalidation, and the Hasura provider; do not reintroduce a
-  second app cache/live engine.
+- **Use the shared Refine/TanStack Query data path.** Django resources and the
+  operator's request/response calls use declared Refine providers. Operator
+  subscriptions feed the same Query cache; raw log streams stay with their
+  streaming transport. Do not introduce a second application cache/live engine.
 - **react-query freshness rides invalidation, not mount-refetch.** `createApp`
   sets an app-wide `staleTime` (via refine's `reactQuery.clientConfig`, which
   layers `refetchOnWindowFocus:false` + `placeholderData:keepPreviousData`
@@ -571,9 +542,10 @@ Hard-won traps — the wise learn from others' mistakes
   Project TypeScript configs must allow importing `.ts`/`.tsx` extensions because
   the generated runtime imports addon index source files by their package export
   paths.
-- **Generate the operator console's types from the Go daemon's introspected SDL**
-  (`operator_schema` → codegen), never by hand; daemon actions return
-  `MutationResult{status}`, not `{ok}`.
+- **Generate operator types from the daemon-owned SDL.** The operator's
+  [addon manifest](../../addons/angee/operator/addon.toml) contributes the
+  committed SDL and daemon document glob to the shared codegen pass. Do not
+  hand-author daemon result types; actions return `MutationResult{status}`.
 - **Expose every addon web package through the composed web manifest** — the
   composer emits `runtime/web/tailwind.sources.css` from declared package
   sources. Do not hand-edit runtime CSS; a package missing from the manifest will
@@ -582,17 +554,14 @@ Hard-won traps — the wise learn from others' mistakes
   composition is fail-fast on id, so an addon cannot re-register another's glyph,
   **and adding a name to `baseIcons` collides with any addon already contributing
   it** (base composes first). This throws only at app boot — `typecheck`/`build`
-  miss it — so verify the full composed app still boots (`angee dev`, or the
-  stack CI lane's composed render) after touching `baseIcons` or an addon's
-  `icons`; `tsc` alone cannot catch the collision.
-- **A new web package needs a stack-owned `pnpm install` + a Vite restart** (Vite snapshots
-  workspace packages at start) plus registration in the host `main.tsx` addons and
-  `package.json`.
-- **pnpm 11 can install dependencies before running scripts.** Inside a source
-  worktree slot, use `pnpm --config.verify-deps-before-run=false run <script>`
-  (or the same flag with `--filter`). Its `verifyDepsBeforeRun=install` default
-  otherwise turns a test/typecheck command into an install inside the slot.
-  Dependency installation belongs to the owning stack workspace.
+  miss it — so verify the full composed app still boots after touching `baseIcons`
+  or an addon's `icons`; `tsc` alone cannot catch the collision. Use the browser
+  verification path in [Checks](../checks.md).
+- **A new web package must enter the composed manifest and dependency graph.**
+  Declare it through the addon/template owners, refresh the stack-owned install
+  and generated composition, and restart the frontend through the stack
+  lifecycle owner so Vite sees the new package. See [Checks](../checks.md) for
+  environment setup and safe script invocation.
 - **Install JS dependencies once at the owning stack workspace root.** Never run
   `pnpm install` inside a source slot, `packages/`, `addons/`, or `examples/`: a
   nested install forks linked
@@ -645,14 +614,13 @@ Hard-won traps — the wise learn from others' mistakes
   item's id) or the chrome derivation throws "referenced by multiple menu items" —
   or make the root route-less so it inherits its target through a descendant and the
   leaf is the route's sole reference.
-- **Group by a to-one relation with the camel group-key field.** A server group-by
-  axis may traverse a forward FK/OneToOne (e.g. `group_by_fields=["oauth_client__is_enabled"]`
-  in `schema.py`; to-many stays refused). The backend emits the group-key field in
-  camel form (`oauthClient_IsEnabled`) and the groupable enum in `__` SNAKE_UPPER
-  (`OAUTH_CLIENT__IS_ENABLED`). A `ResourceToolbarGroupOption`'s `group.field` is the
-  *camel key* (`"oauthClient_IsEnabled"`) — `resourceViewGroupToAggregateDimension`
-  reads it verbatim as the bucket key and `fieldToSnake`-uppercases it to the enum
-  (a `_<Capital>` restores the Django `__`). Use the camel key, not the snake path.
+- **A group names the resource's canonical query axis.** `ResourceQuery` owns
+  the translation from that axis to relation identity, label selections, server
+  inputs and bucket keys. Never derive those transport names from casing or
+  display labels. Use the resource query's advertised axes; the
+  [query owner](../../packages/metadata/src/query.ts) and its
+  [identity/label tests](../../packages/metadata/src/query.test.ts) define the
+  contract.
 - **Live cross-actor refresh requires a `changes()` subscription.** A list/picker
   auto-invalidates from `<model>Changed` on the subscription schema, gated on the
   schema actually declaring it — so a model without
@@ -745,32 +713,26 @@ Hard-won traps — the wise learn from others' mistakes
 
 ## Checks
 
-Run package-scoped commands while editing, then the broad checks before handoff:
-
-```sh
-pnpm --config.verify-deps-before-run=false run typecheck
-pnpm --config.verify-deps-before-run=false run test
-pnpm --config.verify-deps-before-run=false run build
-```
+Use [Checks](../checks.md) for package, composed-addon, distribution, architecture
+and browser commands, including their working directories and prerequisites.
+Run focused checks while editing and the relevant broad checks before handoff.
 
 Run the package vitest suite — not just `tsc` and a story render, which miss
 stale assertion drift. When verifying data-bound views, wait for the async query
-to load before asserting. Use browser verification for meaningful UI changes.
+to load before asserting. Meaningful UI changes require browser verification;
+[End-to-End Testing](e2e.md) owns browser authoring and isolation expectations.
 
 For page/addon changes, run a primitive-drift scan and explain every hit outside
-`@angee/ui`:
+`@angee/ui`. From the framework repository root:
 
 ```sh
-rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages addons examples ../angee-messaging-bridges/addons -g '*.tsx'
-rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages addons examples ../angee-messaging-bridges/addons -g '*.ts' -g '*.tsx'
+rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages addons examples -g '*.tsx'
+rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages addons examples -g '*.ts' -g '*.tsx'
 ```
 
-Run the architecture guardrail when changing package layering, public shared
-owners, or addon manifests:
-
-```sh
-pnpm --config.verify-deps-before-run=false --filter @angee/app exec vitest run src/architecture-guardrails.test.ts
-```
+Include `../angee-messaging-bridges/addons` in the scan when that optional slot is
+present and affected. Run the architecture guardrail when changing package
+layering, public shared owners, or addon manifests.
 
 A hit is not automatically wrong, but it must either compose the shared primitive
 or identify the owning framework gap to fix first.

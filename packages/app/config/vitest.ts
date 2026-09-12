@@ -5,9 +5,9 @@ import type { InlineConfig } from "vitest/node";
 // The framework owner of the web/package Vitest defaults: the DOM-inline set, the
 // `src/**` test globs, and the generated-schema alias builder. Shipped in `@angee/app` (not a repo-root file) so a project
 // reaches it by package name whether the framework is an editable checkout or an
-// installed wheel. These builders carry NO framework-repo fixture: the gql alias
-// is always supplied by the caller (the repo-root `vitest.shared.ts` wrapper
-// injects the in-repo notes fixture; a project passes its own).
+// installed package. These builders carry no framework-repo fixture. Framework
+// packages use schema-independent defaults; addon/project configs supply their
+// own generated-document alias when they consume a composed schema.
 
 // The generated-schema module alias for test runs. Vitest does not read
 // tsconfig `paths`, so a suite that loads a generated document import needs

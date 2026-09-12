@@ -17,10 +17,11 @@ conventions and has never seen the source.
 - **Never `cp`, `mv`, or paste source files verbatim.** Read the source, then write
   fresh against local conventions. If a file you produce is byte-identical to a
   source file, you did it wrong — start that file over.
-- **Green-field — no provenance anywhere.** Never mention the source repo, a
-  prototype, an earlier version, "lifted/ported from", plan numbers, a rebuild, or a
-  migration — not in code, comments, docs, resource data, filenames, or commit
-  messages. The origin of the code must not appear in any artifact.
+- **Describe the resulting behavior in native terms.** Keep private source names,
+  plan numbers, and incidental reconstruction history out of public artifacts.
+  Preserve required attribution and license notices, and keep migration or
+  compatibility context when it explains a real contract. Private task history
+  follows the work-state routing in `AGENTS.md`.
 - **Stay DRY and land at the right level.** Reuse existing local primitives instead
   of reimporting; put each change at the level that owns the concern — framework /
   base addon vs consumer addon (see `AGENTS.md` → Repository Role).
@@ -47,7 +48,7 @@ conventions and has never seen the source.
    don't understand, reinventing a tested wheel).
 5. **Verify it belongs.** Re-read your output as if reviewing a native contribution:
    local conventions, DRY, no dangling references to things that don't exist here, no
-   provenance. Run the relevant per-area checks if they are wired.
+   incidental reconstruction history. Run the relevant checks in `docs/checks.md`.
 
 ## Report
 

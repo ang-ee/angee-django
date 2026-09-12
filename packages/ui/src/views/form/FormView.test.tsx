@@ -89,7 +89,11 @@ const sdkMocks = vi.hoisted(() => ({
   // FormView *selects* what it reads turns it on.
   projectToSelection: false,
   mutationAction: undefined as string | undefined,
-  mutationOptions: undefined as { fields?: readonly string[]; enabled?: boolean } | undefined,
+  mutationOptions: undefined as {
+    fields?: readonly string[];
+    enabled?: boolean;
+    successNotification?: false;
+  } | undefined,
 }));
 
 type TestSchemaMetadata = Pick<SchemaFieldMetadata, "types"> &
@@ -132,11 +136,12 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   const mutationResult = (
     action: "create" | "update",
     mutateAsync: (input: { id?: string | number; values?: Record<string, unknown> }) => Promise<{ data: Row | null }>,
-  ) => (options?: { meta?: unknown }) => {
+  ) => (options?: { meta?: unknown; successNotification?: false }) => {
     sdkMocks.mutationAction = action;
     sdkMocks.mutationOptions = {
       fields: fieldsFromMeta(options?.meta),
       enabled: true,
+      successNotification: options?.successNotification,
     };
     return {
       mutateAsync,
@@ -745,6 +750,8 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "Renamed", id: "note-1" },
     });
+    expect(sdkMocks.mutationOptions?.successNotification).toBe(false);
+    expect(await screen.findByText("Changes saved")).toBeTruthy();
   });
 
   test("submits through a custom owner when the stock update root is absent", async () => {
@@ -1232,6 +1239,8 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "", note: "" },
     });
+    expect(sdkMocks.mutationOptions?.successNotification).toBe(false);
+    expect(await screen.findByText("Record created")).toBeTruthy();
   });
 
   test("omits blank numeric fields from create payloads", async () => {

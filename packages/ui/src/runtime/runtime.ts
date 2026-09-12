@@ -24,8 +24,45 @@ import {
   createRouteHref,
   type RouteHref,
 } from "./route-href";
+import type { DashboardRegistry } from "../dashboard/headless";
+import type { ThemeContribution } from "../theme";
 
 export const DEFAULT_LOGIN_PATH = "/login";
+export const HOME_PATH_PREFERENCE_KEY = "homePath";
+export const ROUTE_SHORTCUTS_PREFERENCE_KEY = "chrome.routeShortcuts";
+
+export interface RuntimeRouteShortcut {
+  id: string;
+  label: string;
+  path: string;
+  icon?: string;
+}
+
+/** Read generic dynamic route shortcuts without importing an addon's domain types. */
+export function readRuntimeRouteShortcuts(
+  preferences: RuntimeUserPreferences | null | undefined,
+): readonly RuntimeRouteShortcut[] {
+  const raw = preferences?.[ROUTE_SHORTCUTS_PREFERENCE_KEY];
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const value = item as Record<string, unknown>;
+    if (
+      typeof value.id !== "string" || !value.id
+      || typeof value.label !== "string" || !value.label
+      || typeof value.path !== "string" || !value.path.startsWith("/")
+      || seen.has(value.id)
+    ) return [];
+    seen.add(value.id);
+    return [{
+      id: value.id,
+      label: value.label,
+      path: value.path,
+      ...(typeof value.icon === "string" && value.icon ? { icon: value.icon } : {}),
+    }];
+  });
+}
 
 /** Route names derived from one resource-tagged collection declaration. */
 export interface RuntimeResourceRoutes {
@@ -67,12 +104,16 @@ export interface AppRuntime {
   recordSearchKeys: readonly string[];
   previews: readonly PreviewContribution[];
   drawers: readonly DrawerContribution[];
+  /** Composed dashboard definitions, kinds and optional persistence adapter. */
+  dashboards: DashboardRegistry;
   /** Composed collection/record route names per resource id. */
   routesByResource: Readonly<Record<string, RuntimeResourceRoutes>>;
   /** Resolve a composed route name to an encoded href. */
   routeHref: RouteHref;
   /** App-owned sign-in destination shared by auth gates and chrome. */
   loginPath: string;
+  /** Installed theme catalogue composed from addon contributions. */
+  themes: readonly ThemeContribution[];
 }
 
 export interface RuntimeI18n {
@@ -98,7 +139,7 @@ export interface RuntimeAuthUser {
 
 export interface RuntimeAuthState {
   user: RuntimeAuthUser | null;
-  status: "anonymous" | "authenticated";
+  status: "resolving" | "anonymous" | "authenticated";
   hasRole: (role: string) => boolean;
 }
 
@@ -149,9 +190,16 @@ const EMPTY_RUNTIME: AppRuntime = {
   recordSearchKeys: [],
   previews: [],
   drawers: [],
+  dashboards: {
+    definitions: {},
+    resourceDefaults: {},
+    widgetKinds: {},
+    store: null,
+  },
   routesByResource: {},
   routeHref: createRouteHref([]),
   loginPath: DEFAULT_LOGIN_PATH,
+  themes: [],
 };
 
 const RuntimeContext = makeContext<AppRuntime>("AppRuntime");
@@ -173,6 +221,11 @@ export function AppRuntimeProvider(props: {
 /** The merged runtime, or the empty runtime when unprovided. */
 export function useAppRuntime(): AppRuntime {
   return RuntimeContext.useMaybe() ?? EMPTY_RUNTIME;
+}
+
+/** The dashboard registry composed once by the app owner. */
+export function useDashboardRegistry(): DashboardRegistry {
+  return useAppRuntime().dashboards ?? EMPTY_RUNTIME.dashboards;
 }
 
 /** Look up a contributed widget by id. */

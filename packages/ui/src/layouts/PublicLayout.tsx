@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { AngeeLogo } from "@angee/logo-react";
 
 import { cn } from "../lib/cn";
+import { ThemeLogo } from "../theme/logo";
 
 export interface PublicLayoutProps {
   children: ReactNode;
@@ -92,10 +92,8 @@ function BackgroundAtmosphere({
       <div className="absolute inset-0 bg-grid opacity-15 mix-blend-screen" />
       <div className="absolute inset-x-0 top-0 h-24 border-b border-n-0/10 bg-n-950/10 backdrop-blur-[1px]" />
       <div className="absolute left-12 top-10 hidden opacity-45 xl:block">
-        <AngeeLogo
-          preset="gold"
-          geometry="cube"
-          bgColor={null}
+        <ThemeLogo
+          themeGeometry="cube"
           size={56}
           width={56}
           height={56}

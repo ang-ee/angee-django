@@ -342,18 +342,24 @@ Django and Celery processes. If `ollama_port` is changed or leased to a workspac
 set the Ollama inference provider row's `base_url` to
 `http://localhost:<ollama_port>/v1`.
 
-To run one-shot management commands against the example (emit runtime sources,
-migrate, sync permissions, load data, check the GraphQL SDL), drive its
-`manage.py` through `uv` from the root — the full sequence is in
-[`AGENTS.md`](../../AGENTS.md) under "Run From The Root". To work on a change in
+To run one-shot management commands against the stack host (build the runtime,
+migrate, sync permissions, load data, check GraphQL SDL), drive its `manage.py`
+through `uv` from the controlling stack root. [Checks](../checks.md#composition-and-schema)
+owns the prerequisites and ordering. To work on a change in
 isolation, create a src-style workspace — the consolidated framework source and
 optional external sources are pinned to `workspace/<name>`:
 
 ```sh
 # Resolve angee_root with .agents/skills/angee-workspace/SKILL.md.
-angee --root "$angee_root" ws create my-feature --template src --input base_ref=main
+angee --root "$angee_root" ws create my-feature --template src --input angee_ref=main
 cd "$angee_root/workspaces/my-feature"
 ```
+
+This creates source worktrees. It does not create an isolated running host or
+database. `angee_ref` selects the framework slot's parent; optional external
+slots use the parents declared by the template. Preserve stack-provided
+work-state defaults unless intentionally overriding them; see the
+[workspace workflow](../../.agents/skills/angee-workspace/SKILL.md#create-workspace).
 
 ## What's needed for agents to self-build?
 
@@ -362,10 +368,10 @@ exposed on the same CLI + REST + GraphQL surface a human uses. Two layers
 cooperate:
 
 - **The operator gives agents a control plane.** An agent declares Sources,
-  renders an isolated **Workspace** (`angee workspace create … --template
-  dev-pr`), brings up that workspace's inner Stack, stays current with `main`
-  via `workspaceSyncBase`, pushes its branches, and promotes to production by
-  syncing the production Stack — all without touching anyone else's environment.
+  creates source **Workspaces**, inspects per-slot Git state, and integrates
+  changes through workspace source operations. Running-host isolation requires
+  a separately configured stack; a source workspace alone does not provide it.
+  Publication and production promotion remain separate authorized operations.
   This loop is described in full under
   [What "Self-Building" Looks Like](https://docs.angee.ai/guide/concepts#what-self-building-looks-like).
 - **The framework gives agents a build step.** Inside the Host, an agent changes

@@ -58,6 +58,7 @@ function result(
     buckets,
     fetching: false,
     error: null,
+    updatedAt: null,
     refetch: vi.fn(),
     ...overrides,
   };

@@ -2,7 +2,7 @@
 // from the live console mockup without hand-listing every detail.
 //
 // For a given screen it records two ground-truth artifacts:
-//   1. a full screenshot (the visual truth)
+//   1. a viewport screenshot (the same visible region as the extract)
 //   2. a placement-aware STRUCTURAL EXTRACT (JSON): every visible control and
 //      heading with its label, its layout BAND (top control strip / body /
 //      bottom bar) and SIDE (left / right). This captures facts like
@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 // This tool lives at .agents/tools/; the repo root is two levels up, and the
-// stack root (the working surface post-host-dissolution) is the nearest
+// stack root is the nearest
 // ancestor with an angee.yaml — its workspace install owns Playwright.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const stackRoot = (() => {
@@ -32,23 +32,24 @@ const stackRoot = (() => {
   for (;;) {
     if (existsSync(resolve(dir, "angee.yaml"))) return dir;
     const parent = dirname(dir);
-    if (parent === dir) return repoRoot;
+    if (parent === dir) throw new Error("No ancestor angee.yaml; run this tool from a framework checkout in a stack.");
     dir = parent;
   }
 })();
-
-// Resolve Playwright from the stack's e2e suite (the angee-examples slot),
-// so this tool runs from any cwd.
-const require = createRequire(
-  resolve(stackRoot, "workspaces/src/angee-examples/e2e/package.json"),
-);
-const { chromium } = require("@playwright/test");
 
 const [baseUrl, route, name, ...flags] = process.argv.slice(2);
 if (!baseUrl || !route || !name) {
   console.error("usage: fidelity-capture.mjs <base-url> <route> <name> [--hash]");
   process.exit(2);
 }
+if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) {
+  throw new Error("Capture name must be a filename, not a path.");
+}
+
+// The framework harness is present in every profile; the example suite is optional.
+// Resolve its Playwright dependency through the stack install regardless of cwd.
+const require = createRequire(resolve(repoRoot, "packages/e2e/package.json"));
+const { chromium } = require("@playwright/test");
 const hash = flags.includes("--hash");
 const dirty = flags.includes("--dirty"); // type into the form to surface dirty-only controls
 const storageState = (flags.find((f) => f.startsWith("--storage=")) || "").split("=")[1]; // capture an authenticated app screen
@@ -131,6 +132,7 @@ try {
   for (const [k, v] of Object.entries(data.summary)) console.log(`${k.padEnd(12)} ${v.join(" · ")}`);
 } catch (e) {
   console.error("capture error:", e.message.slice(0, 160));
+  process.exitCode = 1;
 } finally {
   await browser.close();
 }

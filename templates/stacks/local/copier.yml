@@ -65,6 +65,9 @@ _angee:
         addon_namespace: "${inputs.addon_namespace}"
         addon_installer_backend: operator
         include_operator_installer: true
+        appearance_theme_id: "${inputs.appearance_theme_id}"
+        appearance_color_scheme: "${inputs.appearance_color_scheme}"
+        appearance_options: "${inputs.appearance_options}"
         # The rendered pyproject resolves django-angee editable from the same
         # checkout the framework=source stack runs, so `uv run manage.py` works
         # bare from the instance root.
@@ -93,6 +96,25 @@ web_path:
   type: str
   default: "web"
   help: Path of the web package relative to the project root.
+
+appearance_theme_id:
+  type: str
+  default: angee.stock
+  help: Stable ID of the installed host-default theme; empty selects the intrinsic base look.
+
+appearance_color_scheme:
+  type: str
+  default: system
+  choices:
+    - system
+    - light
+    - dark
+  help: Host-default color-scheme preference.
+
+appearance_options:
+  type: str
+  default: ""
+  help: Optional JSON object with `version` and `value` for the configured host theme; empty uses the theme defaults.
 
 # How the django service obtains the framework code. `source` (default) runs the
 # deps-only base image and links the framework editable from a `sources/angee`

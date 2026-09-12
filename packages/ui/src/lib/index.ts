@@ -22,6 +22,8 @@ export {
 export { useRender } from "./slot";
 export { useLatestRef } from "./use-latest-ref";
 export { LARGE_VIEWPORT_QUERY, XL_VIEWPORT_QUERY, useMediaQuery } from "./use-media-query";
+export * from "./color-scheme";
+export * from "./theme";
 export { useContainerQuery } from "./use-container-query";
 export type {
   UseRenderComponentProps,

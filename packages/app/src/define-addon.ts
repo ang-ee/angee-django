@@ -31,6 +31,19 @@ import type {
   WidgetMap,
 } from "@angee/ui/runtime";
 import { RECORD_SEARCH_KEYS, isModelScopedSlot } from "@angee/ui/runtime";
+import {
+  DASHBOARD_STORE_SLOT,
+  parseDashboardSnapshot,
+  type DashboardDefinition,
+  type DashboardRegistry,
+  type DashboardStore,
+  type DashboardWidgetKind,
+} from "@angee/ui/dashboard/headless";
+import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "@angee/ui/dashboard/kinds";
+import {
+  assertThemeDefinition,
+  type ThemeDefinition,
+} from "@angee/ui/theme";
 
 export type {
   ChatterContribution,
@@ -97,7 +110,17 @@ export interface AddonManifest {
    * endpoint (e.g. the operator daemon) under its own provider name.
    */
   dataProviders?: Readonly<Record<string, unknown>>;
+  /** Code-owned dashboard defaults composed before persisted customizations. */
+  dashboards?: readonly DashboardDefinition[];
+  /** Namespaced widget kinds or explicit compatible replacements. */
+  dashboardWidgetKinds?: readonly DashboardWidgetKind[];
+  /** Installed visual implementations. Theme ids are globally unique. */
+  themes?: readonly ThemeManifestContribution[];
 }
+
+export type ThemeManifestContribution =
+  | ThemeDefinition<unknown>
+  | { definition: ThemeDefinition<unknown> };
 
 /** The merged runtime an app composes from its addon manifests. */
 export interface ComposedAddons {
@@ -114,6 +137,8 @@ export interface ComposedAddons {
   recordSearchKeys: readonly string[];
   drawers: readonly DrawerContribution[];
   dataProviders: Readonly<Record<string, unknown>>;
+  dashboards: DashboardRegistry;
+  themes: readonly ThemeManifestContribution[];
 }
 
 export interface ComposeAddonsOptions {
@@ -230,8 +255,19 @@ export function composeAddons(
   const menuIds: Record<string, true> = {};
   const previewIds: Record<string, true> = {};
   const recordSearchKeys: Record<string, true> = {};
+  const themes: ThemeManifestContribution[] = [];
+  const themeIds: Record<string, true> = {};
 
   for (const addon of addons) {
+    for (const contribution of addon.themes ?? []) {
+      const definition = "definition" in contribution
+        ? contribution.definition
+        : contribution;
+      assertThemeDefinition(definition);
+      assertUnclaimed(themeIds, definition.id, addon.id, "theme id");
+      themeIds[definition.id] = true;
+      themes.push(contribution);
+    }
     for (const key of addon.recordSearchKeys ?? []) {
       if (!key || RECORD_SEARCH_KEYS.includes(key)) {
         throw new Error(`Addon "${addon.id}" declares reserved or empty record search key "${key}".`);
@@ -308,6 +344,15 @@ export function composeAddons(
     }
   }
 
+  const slots = mergeSlotContributions(
+    ...addons.map((addon) =>
+      normalizeSlotContributions(
+        addon.slots ?? [],
+        canonicalizeModel,
+        addon.id,
+      ),
+    ),
+  );
   return {
     routes,
     menus,
@@ -322,19 +367,88 @@ export function composeAddons(
         normalizeChatterContributions(addon.chatter ?? [], canonicalizeModel),
       ),
     ),
-    slots: mergeSlotContributions(
-      ...addons.map((addon) =>
-        normalizeSlotContributions(
-          addon.slots ?? [],
-          canonicalizeModel,
-          addon.id,
-        ),
-      ),
-    ),
+    slots,
     drawers: mergeDrawerContributions(...addons.map((a) => a.drawers ?? [])),
     previews,
     recordSearchKeys: Object.keys(recordSearchKeys).sort(),
+    dashboards: composeDashboardRegistry(addons, slots, canonicalizeModel),
+    themes: themes.sort((left, right) => {
+      const leftId = "definition" in left ? left.definition.id : left.id;
+      const rightId = "definition" in right ? right.definition.id : right.id;
+      return leftId.localeCompare(rightId);
+    }),
   };
+}
+
+function composeDashboardRegistry(
+  addons: readonly AddonManifest[],
+  slots: readonly SlotContribution[],
+  canonicalizeModel: (spelling: string) => string,
+): DashboardRegistry {
+  const definitions: Record<string, DashboardDefinition> = {};
+  const resourceDefaults: Record<string, string> = {};
+  for (const addon of addons) {
+    for (const definition of addon.dashboards ?? []) {
+      if (!definition.key.startsWith(`${addon.id}.`)) {
+        throw new Error(`Addon "${addon.id}" dashboard key "${definition.key}" must use the addon namespace.`);
+      }
+      assertUnclaimed(definitions, definition.key, addon.id, "dashboard");
+      const resource = definition.resource ? canonicalizeModel(definition.resource) : undefined;
+      const snapshot = parseDashboardSnapshot({
+        schemaVersion: 1,
+        columns: definition.columns ?? 12,
+        widgets: definition.widgets,
+      });
+      definitions[definition.key] = { ...definition, ...snapshot, ...(resource ? { resource } : {}) };
+      if (resource) {
+        assertUnclaimed(resourceDefaults, resource, addon.id, "resource dashboard default");
+        resourceDefaults[resource] = definition.key;
+      }
+    }
+  }
+
+  const byContribution = new Set<string>();
+  const widgetKinds = Object.fromEntries(
+    BUILTIN_DASHBOARD_WIDGET_KINDS.map((kind) => [kind.id, kind]),
+  ) as Record<string, DashboardWidgetKind>;
+  const replacements = new Map<string, DashboardWidgetKind>();
+  for (const addon of addons) {
+    for (const kind of addon.dashboardWidgetKinds ?? []) {
+      if (byContribution.has(kind.contributionId)) {
+        throw new Error(`Dashboard widget contribution "${kind.contributionId}" is duplicated.`);
+      }
+      byContribution.add(kind.contributionId);
+      if (kind.replaces) {
+        const existing = widgetKinds[kind.replaces];
+        if (!existing) throw new Error(`Dashboard widget replacement targets unknown kind "${kind.replaces}".`);
+        if (replacements.has(kind.replaces)) throw new Error(`Dashboard widget kind "${kind.replaces}" has competing replacements.`);
+        if (kind.shape !== existing.shape || kind.version !== existing.version) {
+          throw new Error(`Dashboard widget replacement "${kind.contributionId}" is incompatible with "${kind.replaces}".`);
+        }
+        replacements.set(kind.replaces, { ...kind, id: kind.replaces });
+      } else {
+        assertUnclaimed(widgetKinds, kind.id, addon.id, "dashboard widget kind");
+        widgetKinds[kind.id] = kind;
+      }
+    }
+  }
+  for (const [id, replacement] of replacements) widgetKinds[id] = replacement;
+
+  const stores = slots.filter((slot) => slot.slot === DASHBOARD_STORE_SLOT);
+  if (stores.length > 1) throw new Error("The dashboard.store slot accepts exactly zero or one contribution.");
+  const storeEntry = stores[0];
+  if (storeEntry?.model || storeEntry?.impl) throw new Error("The dashboard.store contribution must be unscoped.");
+  const store = storeEntry?.content == null ? null : dashboardStore(storeEntry.content);
+  return { definitions, resourceDefaults, widgetKinds, store };
+}
+
+function dashboardStore(value: unknown): DashboardStore {
+  if (!value || typeof value !== "object") throw new Error("The dashboard.store contribution has invalid content.");
+  const candidate = value as Partial<Record<keyof DashboardStore, unknown>>;
+  for (const method of ["useDashboard", "useCatalogue"] as const) {
+    if (typeof candidate[method] !== "function") throw new Error(`The dashboard.store contribution is missing ${method}().`);
+  }
+  return value as DashboardStore;
 }
 
 function isRuntimeFormRegistration(value: unknown): value is RuntimeFormRegistration {

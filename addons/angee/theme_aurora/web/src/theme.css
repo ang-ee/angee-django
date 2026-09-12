@@ -1,0 +1,9 @@
+[data-theme-id="angee.aurora"] body::before {
+  background: url("./aurora-orb.svg") top right / 28rem auto no-repeat;
+  content: "";
+  inset: 0;
+  opacity: .18;
+  pointer-events: none;
+  position: fixed;
+  z-index: -1;
+}

@@ -1,6 +1,6 @@
 import { createElement, type ComponentType, type SVGProps } from "react";
-import { AngeeLogo } from "@angee/logo-react";
 import { useAppRuntime } from "../runtime";
+import { ThemeLogo } from "../theme/logo";
 import {
   Activity,
   Archive,
@@ -60,6 +60,12 @@ import {
   Star,
   Sun,
   Trash2,
+  ArrowLeft,
+  ArrowRight,
+  ChartNoAxesCombined,
+  Contrast,
+  Maximize2,
+  Paintbrush,
   SignalHigh,
   SignalLow,
   SignalMedium,
@@ -85,11 +91,9 @@ function AngeeLogoIcon({
   strokeWidth: _strokeWidth,
   ...props
 }: IconProps) {
-  return createElement(AngeeLogo, {
+  return createElement(ThemeLogo, {
     ...props,
-    bgColor: null,
     height: props.height ?? size,
-    preset: "gold",
     width: props.width ?? size,
   });
 }
@@ -158,6 +162,12 @@ export const baseIcons = {
   star: Star,
   sun: Sun,
   trash: Trash2,
+  "arrow-left": ArrowLeft,
+  "arrow-right": ArrowRight,
+  "chart-no-axes-combined": ChartNoAxesCombined,
+  contrast: Contrast,
+  "maximize-2": Maximize2,
+  paintbrush: Paintbrush,
   "signal-high": SignalHigh,
   "signal-low": SignalLow,
   "signal-medium": SignalMedium,

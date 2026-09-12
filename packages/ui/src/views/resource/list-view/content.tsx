@@ -23,6 +23,8 @@ import { requireDataResource, useAggregateOperation } from "../resource-operatio
 import { useResourceToolbarProps } from "../resource-toolbar-props";
 import { useResourceViewToolbarInputs } from "../resource-view-toolbar-inputs";
 import { PAGE_SIZE_OPTIONS } from "../page-size";
+import { ResourceViewActions } from "../resource-view-actions";
+import type { ResourceViewFilter } from "../resource-view-model";
 interface ListViewContentProps<TRow extends Row> {
   source?: ListViewProps<TRow>["source"];
   textFilterField?: string | null;
@@ -36,6 +38,7 @@ interface ListViewContentProps<TRow extends Row> {
   resourceView: ResourceViewContextValue;
   availableViews: readonly ResourceViewKind[];
   effectiveGroupStack: readonly ResourceViewGroup[];
+  effectiveFilter?: ResourceViewFilter;
   boardGroupingPinned: boolean;
   clientRowModel: boolean;
   serverGroupedMode: boolean;
@@ -75,6 +78,7 @@ export function ListViewContent<TRow extends Row = Row>({
   resourceView,
   availableViews,
   effectiveGroupStack,
+  effectiveFilter,
   boardGroupingPinned,
   clientRowModel,
   serverGroupedMode,
@@ -173,10 +177,23 @@ export function ListViewContent<TRow extends Row = Row>({
     },
     [cardActions, renderRowActions],
   );
+  const contributedActions = source ? null : (
+    <ResourceViewActions
+      value={{
+        resource: modelMetadata?.resource.modelLabel ?? resource,
+        filter: effectiveFilter,
+        fields: resolvedColumns.flatMap((column) => column.field ? [column.field] : []),
+        refresh: () => void surface.list.refetch(),
+      }}
+    />
+  );
+  const actions = toolbarActions || contributedActions
+    ? <>{toolbarActions}{contributedActions}</>
+    : undefined;
   const toolbar = useResourceToolbarProps({
     maxGroupDepth,
     wrap: toolbarWrap,
-    actions: toolbarActions,
+    actions,
     availableViews,
     pager: toolbarInputs.pager,
     view: resourceView.state.view,

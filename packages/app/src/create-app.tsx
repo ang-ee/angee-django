@@ -19,6 +19,7 @@ import {
 } from "@angee/refine";
 import {
   Refine,
+  useInvalidateAuthStore,
   type AuthProvider as RefineAuthProvider,
   type DataProvider as RefineDataProvider,
   type DataProviders,
@@ -40,6 +41,7 @@ import {
 } from "@tanstack/react-router";
 import {
   StrictMode,
+  useCallback,
   useEffect,
   useMemo,
   type ReactNode,
@@ -52,6 +54,7 @@ import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import {
   AppRuntimeProvider,
   DEFAULT_LOGIN_PATH,
+  HOME_PATH_PREFERENCE_KEY,
   UnknownRouteError,
   createRouteHref,
   type AppRuntime,
@@ -76,6 +79,14 @@ import {
 import { useChromeMenuTree } from "@angee/ui/chrome/refine-menu";
 import { enUiBundle } from "@angee/ui/i18n";
 import { defaultWidgets } from "@angee/ui/widgets/index";
+import type { ThemeContribution } from "@angee/ui/theme";
+import {
+  APPEARANCE_CACHE_KEY,
+  AppearanceProvider,
+  appearanceCacheActorId,
+  clearAppearanceCache,
+  type HostAppearanceDefaults,
+} from "@angee/ui/theme";
 import { createAngeeI18nRuntime } from "./providers/i18n";
 import {
   type BaseAddon,
@@ -110,10 +121,12 @@ import {
 } from "./route-tree";
 
 export {
+  dashboardPageRoute,
   defineBaseAddon,
   resourcePageRoutes,
   type BaseAddon,
   type BaseAddonRoute,
+  type DashboardPageRouteOptions,
   type ResourcePageRoutesOptions,
   type RefineLayoutChromeProps,
   type RefineLayoutConfig,
@@ -139,6 +152,8 @@ export interface CreateAppInput {
   loginPath?: string;
   /** Host-level UI slot contributions, merged with the addons'. */
   slots?: readonly SlotContribution[];
+  /** Build-owned defaults used until an authenticated user overrides them. */
+  appearance?: HostAppearanceDefaults;
 }
 
 export type AngeeAppSchemaConfig =
@@ -262,9 +277,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
     // runtime carries only addon-contributed providers.
     previews: composed.previews,
     drawers: composed.drawers,
+    dashboards: composed.dashboards,
     routesByResource,
     routeHref,
     loginPath,
+    themes: composed.themes as readonly ThemeContribution[],
   };
   const operationDocuments = operationDocumentsForSchemas(schemas);
   const refineResources = refineResourcesForSchemas(
@@ -345,6 +362,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         <AppFrame
           authSchema={authSchema}
           loginPath={loginPath}
+          appearance={input.appearance}
         >
           <Outlet />
         </AppFrame>
@@ -551,14 +569,36 @@ function createAuthProviderForSchema(
 function AppFrame({
   authSchema,
   loginPath,
+  appearance,
   children,
 }: {
   authSchema: string;
   loginPath: string;
+  appearance?: HostAppearanceDefaults;
   children: ReactNode;
 }): ReactNode {
   const { auth } = useRuntimeAuthState();
-  const logoutAction = useLogoutAction();
+  const invalidateAuthStore = useInvalidateAuthStore();
+  const sourceLogoutAction = useLogoutAction();
+  const actorId = auth.status === "resolving" ? null : auth.user?.id ?? "anonymous";
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== APPEARANCE_CACHE_KEY) return;
+      const nextActorId = appearanceCacheActorId(event.newValue);
+      if (event.newValue === null || (actorId !== null && nextActorId !== null && nextActorId !== actorId)) {
+        void invalidateAuthStore();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [actorId, invalidateAuthStore]);
+  const logout = useCallback(async () => {
+    const success = await sourceLogoutAction.logout();
+    if (success) clearAppearanceCache();
+    return success;
+  }, [sourceLogoutAction.logout]);
+  const logoutAction = useMemo(() => ({ ...sourceLogoutAction, logout }), [logout, sourceLogoutAction]);
   return (
     <AuthStateProvider auth={auth}>
       <UserPreferencesProvider dataProviderName={authSchema}>
@@ -566,6 +606,7 @@ function AppFrame({
           auth={auth}
           logoutAction={logoutAction}
           loginPath={loginPath}
+          appearance={appearance}
         >
           {children}
         </RuntimeSessionProvider>
@@ -578,11 +619,13 @@ function RuntimeSessionProvider({
   auth,
   logoutAction,
   loginPath,
+  appearance,
   children,
 }: {
   auth: AuthState;
   logoutAction: ReturnType<typeof useLogoutAction>;
   loginPath: string;
+  appearance?: HostAppearanceDefaults;
   children: ReactNode;
 }): ReactNode {
   const userPreferences = useUserPreferences();
@@ -590,13 +633,21 @@ function RuntimeSessionProvider({
     () => ({ auth, logoutAction, userPreferences, loginPath }),
     [auth, loginPath, logoutAction, userPreferences],
   );
-  return <AppRuntimeProvider runtime={runtime}>{children}</AppRuntimeProvider>;
+  return (
+    <AppRuntimeProvider runtime={runtime}>
+      <AppearanceProvider host={appearance}>{children}</AppearanceProvider>
+    </AppRuntimeProvider>
+  );
 }
 
 function HomeRedirect({ fallback }: { fallback: string }): ReactNode {
   const menuTree = useChromeMenuTree();
   const { preferences } = useUserPreferences();
   const target = useMemo(() => {
+    const preferredPath = preferences[HOME_PATH_PREFERENCE_KEY];
+    if (typeof preferredPath === "string" && preferredPath.startsWith("/")) {
+      return preferredPath;
+    }
     const defaultItemId = readAppRailPreferences(preferences).defaultItemId;
     if (!defaultItemId) return fallback;
     const item = menuTree

@@ -5,7 +5,7 @@ description: Use only in the Angee repository when the user invokes /workspace o
 
 # Workspace
 
-Load `.agents/skills/angee-workspace/SKILL.md` and follow its Create Workspace
-and reporting workflows. That owner resolves the parent ref, validates and
-supplies the required `work_state_path`, creates the workspace, and inspects
-Angee's native workspace and GitOps state.
+Load `.agents/skills/angee-workspace/SKILL.md`. For a create request, follow its
+Create Workspace and reporting workflows; for a status request or bare existing
+name, follow Inspect Workspace. The owner resolves per-slot refs and preserves
+effective template defaults, including optional `work_state_source`.

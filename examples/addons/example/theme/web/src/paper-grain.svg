@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <filter id="paper-grain">
+    <feTurbulence type="fractalNoise" baseFrequency="0.75" numOctaves="2" seed="11"/>
+  </filter>
+  <rect width="64" height="64" filter="url(#paper-grain)" opacity="0.55"/>
+</svg>

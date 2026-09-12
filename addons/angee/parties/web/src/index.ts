@@ -4,6 +4,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { AtSign, Building2, CircleDot, Contact, HeartHandshake, LayoutDashboard, UserCheck, Users } from "lucide-react";
 import { enPartiesMessages } from "./i18n";
 import { directoryForm } from "./DirectoriesPage";
+import { organizationForm } from "./OrganizationsPage";
 
 // One rail root ("Parties") whose children are the People and Organizations
 // pages. The root is route-less and inherits its target from the first child.
@@ -99,7 +100,10 @@ const parties = defineBaseAddon({
     "user-check": UserCheck,
   },
   i18n: { parties: enPartiesMessages },
-  forms: { "parties.Directory": directoryForm },
+  forms: {
+    "parties.Directory": directoryForm,
+    "parties.Organization": organizationForm,
+  },
 });
 
 export { PARTIES_OVERVIEW_SLOT, PARTIES_REVIEW_TOOLBAR_SLOT, PERSON_FORM_FIELDS_SLOT, ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";

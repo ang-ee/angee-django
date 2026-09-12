@@ -7,7 +7,9 @@ import {
   readdirSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { generate } from "@graphql-codegen/cli";
 import {
@@ -24,6 +26,12 @@ import {
   parse,
   validate,
 } from "graphql";
+import {
+  assertThemeCatalogue,
+  compileThemeCss,
+  resolveThemeOptions,
+  serializableThemeMetadata,
+} from "@angee/ui/theme-runtime";
 
 const AGGREGATE_MEASURE_OPERATORS = ["sum", "avg", "min", "max"];
 const DELETE_PREVIEW_SELECTION =
@@ -49,6 +57,7 @@ const addonSources = addonSourceDirectories(runtimeDir, webRoot, manifest);
 const externalEntries = Array.isArray(manifest.codegen) ? manifest.codegen : [];
 const djangoSchemas = schemaNamesFor(runtimeDir);
 const documentRoots = documentRootsFor(webRoot, manifest, addonSources);
+const installedThemes = await loadInstalledThemes(addonSources);
 
 // Django Angee schemas: client preset + authored operation documents, composed
 // as createApp schemas. Their SDL is the GraphQLSdl-owned runtime/schemas tree.
@@ -64,7 +73,8 @@ for (const entry of externalEntries) {
   const documents = documentRoots.map((root) => `${root}/**/${entry.documents}`);
   await runCodegen(entry.schema, schemaPath, runtimeDir, documents, entry.types === true);
 }
-emitAppModule(runtimeDir, manifest, djangoSchemas, addonSources);
+emitThemeArtifacts(runtimeDir, installedThemes);
+emitAppModule(runtimeDir, manifest, djangoSchemas, addonSources, installedThemes);
 
 function parseOptions(args) {
   const parsed = {};
@@ -164,13 +174,17 @@ function schemaIsLive(sdlPath) {
   return buildSchema(readFileSync(sdlPath, "utf8")).getSubscriptionType() != null;
 }
 
-function emitAppModule(runtimeDir, manifest, schemaNames, addonSources) {
+function emitAppModule(runtimeDir, manifest, schemaNames, addonSources, installedThemes) {
   const addonPackages = Array.isArray(manifest.addonPackages) ? manifest.addonPackages : [];
   // `runtime/web/app.ts` imports the concrete source directory selected from the
   // settings-derived manifest root or the host node_modules fallback.
   const addonImports = addonPackages.map((pkg, index) => {
     const entry = addonEntryImport(runtimeDir, addonSources.get(pkg.package));
     return `import addon${index} from ${JSON.stringify(entry)};`;
+  });
+  const themeImports = installedThemes.packages.map((pkg, index) => {
+    const entry = relativeRuntimeImport(runtimeDir, pkg.entry);
+    return `import { themes as canonicalThemes${index} } from ${JSON.stringify(entry)};`;
   });
   const schemaImports = [];
   const schemaEntries = schemaNames.map((name, index) => {
@@ -194,9 +208,14 @@ function emitAppModule(runtimeDir, manifest, schemaNames, addonSources) {
     "// Generated composed web runtime - do not edit by hand.",
     "// Run `pnpm codegen`; `manage.py angee build` emits the manifest it reads.",
     "",
-    [...addonImports, ...schemaImports].join("\n"),
+    [...addonImports, ...themeImports, ...schemaImports].join("\n"),
     "",
     `export const composedAddons = [${addonValues}] as const;`,
+    `export const composedThemeDefinitions = [${installedThemes.packages.map((_pkg, index) => `...canonicalThemes${index}`).join(", ")}].sort((left, right) => left.id.localeCompare(right.id));`,
+    "const contributedThemeDefinitions = composedAddons.flatMap((addon) => (addon.themes ?? []).map((entry) => \"definition\" in entry ? entry.definition : entry)).sort((left, right) => left.id.localeCompare(right.id));",
+    "if (contributedThemeDefinitions.length !== composedThemeDefinitions.length || contributedThemeDefinitions.some((definition, index) => definition !== composedThemeDefinitions[index])) {",
+    "  throw new Error(\"Composed theme contributions must reference their package's canonical ./themes definitions in id order.\");",
+    "}",
     "",
     "export const schemas = {",
     schemaEntries.join("\n"),
@@ -209,6 +228,155 @@ function emitAppModule(runtimeDir, manifest, schemaNames, addonSources) {
   console.log(
     `composed web runtime: ${addonPackages.length} addon(s), ${schemaNames.length} schema(s)`,
   );
+}
+
+async function loadInstalledThemes(addonSources) {
+  const packages = [];
+  const owners = new Map();
+  const definitions = [];
+  for (const [packageName, sourceDir] of [...addonSources.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const packageRoot = path.dirname(sourceDir);
+    const manifestPath = path.join(packageRoot, "package.json");
+    const packageManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const exported = packageExport(packageManifest.exports, "./themes");
+    if (!exported) continue;
+    const entry = path.resolve(packageRoot, exported);
+    if (!entry.startsWith(`${packageRoot}${path.sep}`) || !existsSync(entry)) {
+      throw new Error(`${packageName} exports ./themes from an invalid or missing path: ${exported}`);
+    }
+    const module = await import(pathToFileURL(entry).href);
+    if (!Array.isArray(module.themes)) throw new Error(`${packageName} ./themes must export an array named themes.`);
+    const packageDefinitions = assertThemeCatalogue(module.themes);
+    for (const definition of packageDefinitions) {
+      const previous = owners.get(definition.id);
+      if (previous) throw new Error(`Duplicate installed theme id ${JSON.stringify(definition.id)} from ${previous} and ${packageName}.`);
+      owners.set(definition.id, packageName);
+      definitions.push(definition);
+    }
+    packages.push({ packageName, packageRoot, entry, definitions: packageDefinitions });
+  }
+  definitions.sort((left, right) => left.id.localeCompare(right.id));
+  packages.sort((left, right) => left.definitions[0]?.id.localeCompare(right.definitions[0]?.id ?? "") ?? left.packageName.localeCompare(right.packageName));
+  return { packages, definitions };
+}
+
+function emitThemeArtifacts(runtimeDir, installedThemes) {
+  const imports = [];
+  const fingerprintSources = new Map();
+  for (const pkg of installedThemes.packages) {
+    for (const source of collectHeadlessSources(pkg.entry, pkg.packageRoot)) {
+      fingerprintSources.set(
+        `headless:${pkg.packageName}:${slash(path.relative(pkg.packageRoot, source))}`,
+        source,
+      );
+    }
+    for (const definition of pkg.definitions) {
+      for (const stylesheet of definition.stylesheets ?? []) {
+        const absolute = path.resolve(path.dirname(pkg.entry), stylesheet);
+        if (!absolute.startsWith(`${pkg.packageRoot}${path.sep}`) || !existsSync(absolute)) {
+          throw new Error(`Theme ${definition.id} references missing stylesheet ${stylesheet}.`);
+        }
+        fingerprintSources.set(
+          `stylesheet:${definition.id}:${slash(path.relative(pkg.packageRoot, absolute))}`,
+          absolute,
+        );
+        const stylesheetSource = readFileSync(absolute, "utf8");
+        for (const asset of stylesheetAssets(stylesheetSource, absolute, pkg.packageRoot, definition.id)) {
+          fingerprintSources.set(
+            `asset:${definition.id}:${slash(path.relative(pkg.packageRoot, asset))}`,
+            asset,
+          );
+        }
+        const relative = slash(path.relative(path.join(runtimeDir, "web"), absolute));
+        imports.push(`@import ${JSON.stringify(relative.startsWith(".") ? relative : `./${relative}`)};`);
+      }
+    }
+  }
+  const css = [...imports.sort(), imports.length ? "" : null, compileThemeCss(installedThemes.definitions)]
+    .filter((line) => line !== null)
+    .join("\n");
+  const metadata = installedThemes.definitions.map((definition) => ({
+    ...serializableThemeMetadata(definition),
+    defaultTokens: resolveThemeOptions(definition).tokens,
+  }));
+  const headlessEntries = new Map(
+    installedThemes.packages.flatMap((pkg) =>
+      pkg.definitions.map((definition) => [
+        definition.id,
+        relativeRuntimeImport(runtimeDir, pkg.entry),
+      ]),
+    ),
+  );
+  const catalogueThemes = metadata.map((theme) => ({
+    ...theme,
+    headlessEntry: headlessEntries.get(theme.id),
+  }));
+  const fingerprintHash = createHash("sha256")
+    .update(css)
+    .update(JSON.stringify(metadata))
+    .update(readFileSync(fileURLToPath(import.meta.url)))
+    .update(readFileSync(fileURLToPath(import.meta.resolve("@angee/ui/theme-runtime"))));
+  for (const [key, source] of [...fingerprintSources.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    fingerprintHash.update(key).update(readFileSync(source));
+  }
+  const fingerprint = fingerprintHash.digest("hex");
+  const webRuntime = path.join(runtimeDir, "web");
+  mkdirSync(webRuntime, { recursive: true });
+  writeFileSync(path.join(webRuntime, "themes.css"), css);
+  writeFileSync(path.join(webRuntime, "themes.catalog.json"), `${JSON.stringify({ schema: 1, fingerprint, themes: catalogueThemes }, null, 2)}\n`);
+}
+
+function collectHeadlessSources(entry, packageRoot, seen = new Set()) {
+  const absolute = path.resolve(entry);
+  if (seen.has(absolute)) return seen;
+  if (!absolute.startsWith(`${packageRoot}${path.sep}`) || !existsSync(absolute)) {
+    throw new Error(`Headless theme source escapes its package or is missing: ${absolute}`);
+  }
+  seen.add(absolute);
+  const source = readFileSync(absolute, "utf8");
+  const imports = /(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']/g;
+  for (const match of source.matchAll(imports)) {
+    const specifier = match[1];
+    if (!specifier.endsWith(".mjs")) {
+      throw new Error(`Headless theme source ${absolute} must use explicit .mjs for relative import ${specifier}.`);
+    }
+    collectHeadlessSources(path.resolve(path.dirname(absolute), specifier), packageRoot, seen);
+  }
+  return seen;
+}
+
+function stylesheetAssets(source, stylesheet, packageRoot, themeId) {
+  if (/@import\s/i.test(source)) {
+    throw new Error(`Theme ${themeId} stylesheet ${stylesheet} must declare additional stylesheets through the theme definition.`);
+  }
+  const assets = [];
+  const urls = /url\(\s*(["']?)([^"')]+)\1\s*\)/gi;
+  for (const match of source.matchAll(urls)) {
+    const reference = match[2].trim();
+    if (reference.startsWith("data:") || reference.startsWith("#")) continue;
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(reference)) {
+      throw new Error(`Theme ${themeId} stylesheet may reference only bundled relative assets: ${reference}.`);
+    }
+    const asset = path.resolve(path.dirname(stylesheet), reference.split(/[?#]/, 1)[0]);
+    if (!asset.startsWith(`${packageRoot}${path.sep}`) || !existsSync(asset)) {
+      throw new Error(`Theme ${themeId} stylesheet asset escapes its package or is missing: ${reference}.`);
+    }
+    assets.push(asset);
+  }
+  return assets;
+}
+
+function packageExport(exports, name) {
+  if (!exports || typeof exports !== "object") return undefined;
+  const value = exports[name];
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return undefined;
+  return typeof value.import === "string" ? value.import : typeof value.default === "string" ? value.default : undefined;
+}
+
+function relativeRuntimeImport(runtimeDir, entry) {
+  const relative = slash(path.relative(path.join(runtimeDir, "web"), entry));
+  return relative.startsWith(".") ? relative : `./${relative}`;
 }
 
 function addonEntryImport(runtimeDir, sourceDir) {

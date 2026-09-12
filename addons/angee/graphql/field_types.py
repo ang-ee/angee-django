@@ -11,7 +11,7 @@ registers its GraphQL type at its own module import. Self-registration guarantee
 the type exists before any schema resource that uses the field can be constructed,
 independent of ``INSTALLED_APPS`` order.
 
-Choice and id fields need no entry: strawberry-django resolves ``StateField`` by
+State and id fields need no entry: strawberry-django resolves ``StateField`` by
 ``isinstance`` against ``django-choices-field``'s ``TextChoicesField``, and the
 opaque-id ``SqidField`` is a non-concrete column projected explicitly as
 ``strawberry.ID`` by ``AngeeNode`` — neither reaches ``field_type_map``.
@@ -21,10 +21,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from angee.base.fields import FractionalRankField
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from strawberry_django.fields.types import field_type_map
+
+from angee.base.fields import FractionalRankField
 
 
 def register_field_type(field_class: type[models.Field[Any, Any]], wire_type: type) -> None:

@@ -4,7 +4,8 @@
      1. Primitive — raw color ramps. Never reference these from components;
         they exist so semantic tokens have a single source.
      2. Semantic — what components reference. Same names work in both themes.
-     3. Theme — light is default; dark overrides via [data-theme="dark"].
+     3. Color scheme — light is default; dark overrides via the canonical
+        [data-color-scheme="dark"] selector and its temporary legacy mirror.
 
    Discipline: every semantic token MUST reference a primitive via
    `var(--<primitive>)`. Raw hex / rgba in the semantic / theme layers is a
@@ -166,6 +167,18 @@
   --pink-soft:         var(--pink-100);
   --pink-soft-text:    var(--pink-700);
 
+  /* Data-series roles. Identity is always reinforced by labels/legends. */
+  --chart-1:           var(--b-600);
+  --chart-2:           var(--t-600);
+  --chart-3:           var(--blue-700);
+  --chart-4:           var(--purple-700);
+  --chart-5:           var(--pink-700);
+  --chart-6:           var(--green-700);
+  --chart-7:           var(--amber-700);
+  --chart-8:           var(--red-700);
+  --chart-other:       var(--n-500);
+  --chart-surface:     var(--surface-sheet);
+
   /* ---------------------------------------------------------------------------
      Two-axis fill matrix (tone × variant). `soft` (above) and the brand/danger
      solids already exist; these complete the palette so lib/tones.ts can map
@@ -233,9 +246,9 @@
   /* -------------------------------------------------------------------------
      Type scale
      ------------------------------------------------------------------------- */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-               "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-family-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                      "Helvetica Neue", Arial, sans-serif;
+  --font-family-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   --fs-11: 11px;  --lh-11: 16px;
   --fs-12: 12px;  --lh-12: 16px;
@@ -283,6 +296,9 @@
   --topbar-h:      42px;
   --controlpanel-h:48px;
   --chatter-w:     332px;
+  --control-h-sm:  26px;
+  --control-h-md:  30px;
+  --control-h-lg:  36px;
 
   /* Motion */
   --dur-fast:  120ms;
@@ -298,6 +314,7 @@
    n-775, n-825, n-875, n-925, n-935, n-1000) so the primitive layer is
    still the single source of truth.
    ============================================================================ */
+[data-color-scheme="dark"],
 [data-theme="dark"] {
   --surface-canvas:    var(--n-950);
   --surface-sheet:     var(--n-850);
@@ -320,6 +337,17 @@
   --border-subtle:     var(--n-825);
   --border-default:    var(--n-775);
   --border-strong:     var(--n-680);
+
+  --chart-1:           var(--b-300);
+  --chart-2:           var(--t-300);
+  --chart-3:           var(--blue-300);
+  --chart-4:           var(--purple-300);
+  --chart-5:           var(--pink-300);
+  --chart-6:           var(--green-300);
+  --chart-7:           var(--amber-300);
+  --chart-8:           var(--red-300);
+  --chart-other:       var(--n-400);
+  --chart-surface:     var(--surface-sheet);
   --border-on-rail:    var(--n-935);
 
   --brand:             var(--b-400);
