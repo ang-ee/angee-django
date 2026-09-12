@@ -388,7 +388,7 @@ function BoundFormField({
     ? relationSelectedOption(value, relation.labelField)
       ?? (savedOption?.value === currentRelationId
         ? savedOption
-        : { value: currentRelationId, label: currentRelationId, unresolved: true })
+        : { value: currentRelationId, label: currentRelationId })
     : undefined;
   return (
     <Controller
