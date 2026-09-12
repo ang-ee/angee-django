@@ -1,386 +1,274 @@
 # AGENTS.md
 
-Angee is a thin composition framework for Django + React applications. It binds
-boring, proven libraries into one deterministic product surface. Before adding,
-replacing, or hand-rolling a capability, check the opinionated stack in
-`docs/stack.md`; it is the single source of truth for which library owns what.
-The dependency manifests lock the install shape: `pyproject.toml` + `uv.lock`
-for Python, and the root `package.json` + `pnpm-workspace.yaml` +
-`pnpm-lock.yaml` for the one TypeScript workspace.
-
-The framework owns the seams, not the concerns. Product logic belongs in addons.
-The composer turns addon contracts and project settings into a runnable project.
-A project declares the root apps it composes through Django `INSTALLED_APPS`.
-
-## Repository Role
-
-This repository holds the Angee framework core: the language and the loom — the
-data contract, composer, model toolkit, serving seams, and jobs seam. The core is
-not an addon. Everything that gives a product a capability, including its API
-protocol, is an addon; framework addons live under `addons/`, and consumer
-addons are a product team's own code. See `docs/glossary.md` for these terms.
-
-The first question for any change is *what level does it belong to?*
-
-- **Framework core** — the composition language and shared machinery inherited
-  by every project downstream. A change here is copied into every consumer, so
-  hold it to the highest bar.
-- **Framework addon** — a reusable product capability that ships with Angee.
-- **Consumer addon** — product logic for a specific project, built on the
-  framework.
-
-Put each change at the level that owns the concern. Never solve at the consumer
-level what the framework should own, and never push product specifics down into
-the framework. Keeping each fact at its owning level is what keeps the whole
-stack DRY.
-
-## Repository Layout
-
-A map by role, not a file inventory — core module docstrings and addon contracts
-own the current behavior, and this points to those owners. The framework core at
-`angee/` is the one real Python package (`django-angee`); product capabilities
-live beside it under `addons/`. The `angee.*` namespace spans the core and base
-addons without changing any import.
-
-```text
-.                           # the consolidated framework source checkout
-├── angee/                  # `django-angee` — framework core + composer (PEP 420 namespace, no __init__.py)
-│   ├── base/               # framework core: the model toolkit (abstract models, mixins, fields, managers)
-│   ├── data/               # framework core: the product data-surface description contract
-│   ├── compose/            # the composer — emits the concrete runtime (`manage.py angee build`)
-│   └── jobs/               # the Celery seam (broker wiring, beat, queue routing)
-├── docs/                   # intent docs — glossary, stack, guidelines, and `docs/howto/`
-├── addons/                 # standard `angee.*` folder addons + co-located web fragments
-├── packages/               # `@angee/{app,ui,refine,metadata}` + Storybook/e2e tooling (guide: docs/frontend/e2e.md)
-├── examples/               # showcase consumer addons + reference Playwright suite
-├── templates/              # Copier project / stack / workspace / service templates
-├── tests/                  # merged core, addon, and template contract tests
-├── .agents/                # shared agent methodology — reviewer agents, commands, skills, workflows (`.agents/README.md`; public)
-├── .work/                  # private agent work-state — plans, notes, handovers (gitignored symlink to a separate private repo; never mirrored)
-├── README.md               # human entry point; `AGENTS.md` is the agent/contributor entry point
-└── pyproject.toml, uv.lock, package.json, pnpm-lock.yaml
-```
-
-The opt-in personal-messaging bridges remain in the external
-`angee-messaging-bridges` repository. The Go operator, `hatch-angee`, and
-`strawberry-django-hasura` also remain independently published repositories.
-
-You edit **source models** in addons; the composer emits the concrete apps and
-the `runtime/` tree. Generated `runtime/` is output — change the source, not the
-artifact (see `docs/glossary.md`).
-
-## Area Rules
-
-### Framework core (`angee/`)
-
-The core owns composition language and shared machinery inherited by every
-project. It must not absorb product capability or addon vocabulary. Run the
-full Python suite before handoff because core changes can affect every composed
-area.
-
-### Framework addons (`addons/`)
-
-Each standard addon is a source folder with an `addon.toml`, not a separately
-distributed Python package. Keep its capability, manifest, resources,
-permissions, and `web/` fragment together. Generated SDL and `@angee/gql`
-documents belong to the composed host; never move them into source or core.
-
-### Frontend packages (`packages/`)
-
-Schema independence is an invariant for the published framework packages: they
-must not import project-generated `@angee/gql/*` modules. Package layering is
-`refine` and `metadata` → rented libraries, `ui` → `refine` + `metadata`, and
-`app` → all three. `packages/tsconfig.base.json` and
-`packages/vitest.shared.ts` own shared package configuration. Update
-`packages/app/src/architecture-guardrails.test.ts` deliberately when changing a
-package edge or shared export.
-
-### Examples (`examples/`)
-
-Examples are consumer code and the reference for third-party addon authors.
-They may consume framework addons and packages but never become dependencies of
-them. Keep the example addon and its e2e coverage representative of public
-extension seams rather than privileged monorepo internals.
-
-### Templates (`templates/`)
-
-Templates own the source that renders projects, stacks, workspaces, and
-services. Change the template, not rendered output, and update the corresponding
-contract tests under `tests/`. Preserve Copier answers and path semantics across
-the complete template chain.
-
-### Checks by area
-
-Run `uv run pytest -q` for Python, addon, or template changes. Run
-`pnpm -r typecheck` and `pnpm -r test` for package or addon-web changes, and the
-package build/distribution checks for published frontend surfaces. Meaningful UI
-changes also require browser verification described in `docs/frontend/`.
+Angee is a thin composition framework for Django + React applications. The
+framework owns the seams; addons own product capabilities. The composer turns
+addon contracts and project settings into a runnable project. Projects declare
+root apps through Django `INSTALLED_APPS`.
 
 ## Constitution
 
-**Find the owner — the first question for every change.** Every fact has one
-owner: an existing Angee pattern, an underlying framework or library, a file, or
-a class. Ask that owner; never re-derive, re-decode, or re-decide from the
-outside what it already knows. If the owner should answer but cannot, add the
-method there instead of writing a helper that reaches in. If no Angee pattern
-exists, follow the underlying framework's pattern. If the framework leaves
-multiple plausible patterns, escalate to the human architect to set the pattern.
-Code establishes patterns and docs reference them; a mismatch between code and
-docs is a bug that requires reconciliation.
+These are binding engineering rules for every change. Task size changes the
+amount of process, never the standard. Area guides and agent workflows apply
+these rules; they do not relax them. Framework defects multiply through addons,
+projects, examples, tests, and future designs, so the foundation demands the
+highest standard.
 
-Dependencies point toward stable owners and policy, never outward toward details.
-Framework and base addons must not depend on consumer addons; serving/runtime code
-must not import the build-time composer; addon dependencies stay one-way; UI,
-GraphQL, CLI, filesystem, vendor SDK, and generated-runtime details translate to
-owners instead of deciding rules themselves.
+- **Find the owner first.** Every fact and behavior has an owning level: an
+  upstream library, framework primitive, model, field, manager, queryset,
+  manifest, or addon. Read that owner before writing a caller. Never re-derive,
+  re-decode, or re-decide from outside what it already knows. Put behavior on the
+  object that owns the data; repair or extend an insufficient owner there.
+- **DRY: one fact, one rule, one implementation.** A reusable capability lives
+  once at its owning level; all consumers compose it. When the same rule appears
+  twice, find the owner, consolidate callers, and delete the copy. This applies
+  to code, state, schemas, configuration, and documentation. Different intent
+  must remain distinct; superficial similarity does not justify an abstraction.
+  The [DRY guide](docs/guidelines.md#dont-repeat-yourself-dry) explains the test.
+- **Do not reinvent the wheel. Lean hard on upstream libraries.** Consult
+  [the stack](docs/stack.md), the locked dependency's native API, and existing
+  usage before implementing a concern. If a library owns it, wire that library;
+  do not rebuild it. Use its native types, state, lifecycle, and extension points.
+  Angee owns the missing composition seam and keeps that glue thin.
+- **Compose reusable components; never reimplement them locally.** Search the
+  framework's views, forms, navigation, glyphs, state surfaces, and backend
+  primitives before creating one. A gap requires fixing or extending the shared
+  owner so every consumer inherits the result. Copies and hand-rolled substitutes
+  silently lose shared behavior and fixes. Addons and pages declare intent and
+  compose owners; they do not carry private versions of framework capabilities.
+- **No parallel implementations alongside an existing owner.** Do not add a
+  second helper, service, cache, registry, parser, state machine, or configuration
+  surface for a concern already owned by the framework or a dependency. A new
+  name or wrapper does not make duplication legitimate. Extend the owner through
+  its contract. When replacing an implementation, migrate its callers and remove
+  the superseded path and guidance; leaving both behind is unfinished work.
+  Preserve required historical imports through narrow compatibility aliases to
+  the canonical implementation, and preserve released migration bodies under the
+  [migration policy](docs/backend/guidelines.md#migrations-and-runtime). These
+  required contracts do not authorize a competing active implementation.
+- **Less code is more. Prefer deletion to abstraction.** Remove dead paths,
+  redundant wrappers, speculative options, and unnecessary indirection before
+  adding machinery. A new abstraction must remove real duplication or own a
+  demonstrated required capability that no existing owner or native extension
+  can provide. Use the smallest shape that makes the next change smaller and
+  clearer; speculative abstraction is forbidden. Reduce total maintained code
+  across owners and callers while preserving required behavior, clarity, and
+  useful checks.
+- **Kill rot and technical debt whenever you encounter it.** Fix the cause at
+  its owner, migrate callers, and delete obsolete code, stale instructions, and
+  workarounds. Existing debt is a defect to remove, never a pattern to copy or an
+  excuse to add more. If removal requires a broader migration or exceeds the
+  user's authorization, report the exact debt and required fix explicitly; do
+  not hide it or claim the affected work is complete.
+- **Never quick-fix merely to make something run.** Invest in the correct owner
+  even when that fix is harder. Do not cut agreed features, weaken contracts or
+  checks, or add consumer workarounds to hide build, schema, test, or dev failures.
+  A green check does not excuse an architectural defect.
+- **Dependencies point toward stable owners.** Framework and base addons never
+  depend on consumers or examples; serving code never imports the build-time
+  composer. Commands, resolvers, routes, and adapters dispatch to policy owners.
+- **Compose through declared contracts.** Addon declaration facts belong to
+  `addon.toml`; Django `AppConfig` owns app identity and lifecycle. Use schema
+  buckets, model `extends`, input/type extensions, settings/autoconfig,
+  `ImplClassField`, slots, registered forms/glyphs, generated SDL, and native
+  dependency extension points. Never probe foreign object shapes or monkey-patch
+  composed model classes. The [owner decision tree](docs/guidelines.md#put-behavior-on-the-owning-object)
+  distinguishes owner behavior from legitimate cross-owner orchestration.
+- **Composition belongs to the composer.** Source declarations and the compiler
+  own generated output. Do not hand-edit artifacts or add addon-local runtime
+  registries. Native Django app population/signals and composer-owned bootstrap
+  remain valid lifecycle mechanisms; see [composition phases](docs/composer.md#flow).
+- **Keep domain vocabulary with its addon.** Contribute additively through the
+  framework seam instead of editing a framework/base-addon file to name a product
+  concept. `tests/extcontrib` is the living REBAC extension example.
+- **Docs teach intent; code explains concrete contracts.** Public APIs explain
+  their current behavior in names, types, and docstrings. A mismatch requires
+  [reconciliation](docs/guidelines.md#reconcile-code-docs-and-tests), not automatic
+  acceptance of either stale prose or defective code.
 
-The smell that means stop: a function that takes an object and inspects it to
-decide something. This law has three faces:
-
-- **Delegate to the library that owns the concern.** If `docs/stack.md` says a
-  library owns it, wire it; do not rebuild it. Owner = a library.
-- **Keep one source of truth per fact.** Move knowledge to the owning file or
-  level instead of repeating it. Owner = a file or repository level.
-- **Put behavior on the object that owns the data.** Prefer methods and
-  properties on the owning class over loose helpers that decode its shape from
-  outside; a function that switches on a value's type wants polymorphism. Owner =
-  a class.
-
-Before decomposing code, make an owner map. Classify each fact by the thing that
-would answer it in the underlying framework: persisted facts live beside the
-field or record that stores them, collection behavior lives on the collection
-abstraction, instance behavior lives on the instance, declaration facts live on
-the declaring object, and commands or routes stay thin dispatchers. If a helper
-mostly forwards to, mutates, or interprets one owner, move the behavior to that
-owner. If the move creates more ceremony than clarity, stop and choose the
-smaller native framework shape.
+If no Angee pattern exists, follow the underlying framework. When a new
+architectural convention still has multiple plausible shapes after researching
+the owners, ask the human architect to choose it.
 
 ## Architecture Gate
 
-Before editing source for a structural change, refactor, new view, addon,
-integration, model, or shared primitive, make the architecture check explicit in
-your working note, plan, or user update. The goal is not ceremony; it is to stop
-local patches from bypassing the owner that should make the whole platform
-cleaner.
+Before source edits for a structural change, refactor, new view, addon,
+integration, model, or shared primitive, make these checks explicit in a working
+note, plan, or user update:
 
-- **Owner map:** name the owner of each fact you are about to encode. Owners are
-  Django, React, a locked dependency in `docs/stack.md`, an Angee primitive, an
-  addon `AppConfig`, a model/manager/queryset, a schema contract, or a specific
-  class. If no owner exists, create or extend the smallest owner at the right
-  level before adding callers.
-- **Analog inventory:** search for the same page type, model pattern, schema
-  pattern, or integration pattern in at least two nearby addons/packages. If the
-  same shape appears twice, fix the shared owner or document why the shapes have
-  different intent.
-- **Dependency check:** consult `docs/stack.md` before hand-rolling behavior. If
-  a locked library owns the concern, use its native shape and keep Angee glue
-  thin. Add a dependency only by updating the stack row and manifest together.
-- **Thin caller check:** entrypoints, routes, commands, resolvers, and page
-  components should declare intent and dispatch. They should not accumulate
-  business rules, persistence rules, data-view mechanics, or framework glue that
-  belongs to an owner.
-- **Deletion check:** a DRY/refactor change should make some existing code
-  unnecessary. If lines increase, explain what owner is being introduced and what
-  follow-up deletion it unlocks; otherwise stop and find the smaller native
-  shape.
-- **Naming check:** use one name for one concept across files, classes, routes,
-  GraphQL fields, menu labels, settings, tests, and docs. A synonym is a design
-  decision, not a convenience.
+- **Owner map:** name the owner of every fact being encoded. Reuse it or extend
+  its missing behavior. Create an owner only when none exists at the right level.
+- **Reuse evidence:** search at least two nearby addons/packages for the same
+  concern. Name the existing components and upstream APIs to compose. Before
+  adding an implementation, identify the concrete gap in those owners and why
+  their native extension points do not already satisfy it.
+- **Dependency check:** consult the stack; update the concern row and owning
+  manifest together when changing dependencies.
+- **Thin caller check:** keep business rules, persistence policy, and shared
+  view mechanics out of dispatching entrypoints and pages.
+- **Deletion check:** a DRY change must delete the targeted duplication; every
+  refactor must simplify ownership, callers, or maintained structure. Name the
+  copies, wrappers, obsolete paths, and workarounds it removes. Explain any growth
+  by the missing behavior or owner it introduces and the simplification it buys;
+  otherwise stop and find the smaller native shape.
+- **Debt check:** identify rot encountered in the affected owners and callers,
+  remove it at its source, and report any concrete migration or authorization
+  blocker. Do not build a new layer on top of a known defect.
+- **Naming check:** use one name per concept across code, routes, GraphQL,
+  settings, menus, tests, and docs.
 
-- Docs teach principles and point to owners; code states the concrete contract.
-  Do not maintain a parallel code inventory in prose. Public classes, methods,
-  fields, and settings helpers explain their current API with docstrings.
-- Less is more. Better code is the documentation and the example.
-- Compose at build time. Do not monkey-patch, register at runtime, or edit
-  generated output.
-- Prefer deletion to abstraction. Add an abstraction only when it removes real
-  duplication.
-- Make extension mechanical: named hooks, explicit owners, deterministic order,
-  fail-fast collisions.
-- Cross boundaries only through declared Angee contracts: `AppConfig`
-  attributes, schema buckets, model `extends`, input/type extensions,
-  settings/autoconfig, `ImplClassField` registries, slots, registered glyphs and
-  forms, generated SDL, and dependency-native extension points. Do not cross a
-  boundary by ad hoc import, object-shape probing, monkey-patching, or runtime
-  registration.
-- Domain knowledge never leaks into a framework-owned file. The framework owns
-  the seam; each addon owns its own vocabulary and contributes it additively
-  through that seam — never by editing a framework/base-addon file to name a
-  product concept. A REBAC `permissions.extends.zed` fragment is the named
-  example: a consumer addon contributes its own role relation to an existing
-  resource definition from the addon that owns the role vocabulary; see
-  `tests/extcontrib` for the living fixture.
-- **Compose, never re-implement, at the addon level.** An addon composes the
-  framework's shared primitives (the data grid/list/group/board views, forms,
-  detail/record views, navigation, glyphs, state surfaces); it never hand-rolls
-  one. A hand-rolled copy is a bug — it drifts from the owner and silently drops
-  the affordances it never reproduced (a hand-rolled grid loses grouping,
-  group-collapse, the column show/hide chooser, selection, sort/filter, keyboard
-  nav). When you reach for a local component, first prove no shared primitive owns
-  it (`docs/stack.md`; the view/form/table/shell primitives). If a primitive is
-  missing, insufficient, or has a gap for your case, fix or extend it **at its
-  owning level** (a base addon or the framework core) so every addon inherits it,
-  then compose it; the gap is the signal the change belongs in the framework, not
-  a workaround in the addon. For React, apply the same owner test to state: URL
-  facts live in the router/search owner, server facts in GraphQL/urql,
-  collection facts in the data-view primitive, form facts in the form primitive,
-  and only short-lived interaction state stays local. Routes and pages compose
-  those owners and pass declarations/handlers; they do not mirror facts into a
-  bespoke component tree or hand-roll a shared view.
-- Verify before claiming done. Drift is a bug, whether it is code, docs, schema,
-  generated output, or tests.
+Keep extension mechanical: named hooks, explicit owners, deterministic ordering,
+and fail-fast collisions. A failed gate requires changing the design; documenting
+the violation does not make it acceptable.
 
-## DRY
+## Read By Task
 
-DRY is a core coding principle (`docs/guidelines.md`); this section is how it
-applies here. This is framework code: every impurity in the foundation is copied
-into addons, projects, examples, tests, and future decisions. Keep the foundation
-clean so the code people copy is the code we want them to write.
+Read the applicable parent `AGENTS.md` files first. Stack instructions own
+lifecycle and the stack root; workspace instructions own source slots; this file
+owns framework architecture and repository work. A source checkout is not a stack
+root. Template `AGENTS.md` files describe their rendered targets, not additional
+rules for editing the template source.
 
-A fact, rule, or primitive lives once, at the level that owns it (see Repository
-Role), and everything above reuses it. When the same idea appears twice, find the
-owner and remove the copy. Extract a helper only when it makes the next change
-smaller and clearer.
+| Document | Owns | Read when |
+|---|---|---|
+| [Development guidelines](docs/guidelines.md) | Research, implementation, DRY, naming, and reconciliation of conflicting evidence | All development work |
+| [Opinionated stack](docs/stack.md) | Which dependency owns each concern | Before adding or replacing behavior or dependencies |
+| [Glossary](docs/glossary.md) | Shared terms | Establishing vocabulary |
+| [Backend guidelines](docs/backend/guidelines.md) | Python, Django, and backend extension rules | Backend or composer work |
+| [Frontend guidelines](docs/frontend/guidelines.md) | TypeScript, React, and rendered behavior | Packages or addon web work |
+| [Checks](docs/checks.md) | Command context, prerequisites, verification, and actual CI coverage | Before running checks or handing off |
+| [Composer](docs/composer.md) | Composition flow and links to implementing owners | Changing composition or generated artifacts |
+| [Agent methodology](.agents/README.md) | Reusable workflows and their tool adapters | Using or changing an agent workflow |
 
-- Same rule in two places: choose the owner, delete the copy, link if needed.
-- Same shape in three places: extract the smallest boring primitive.
-- Same words in docs: keep the durable sentence where the contract lives.
-- Same bug in generated files: fix the generator or source contract.
-- Similar code with different intent: leave it separate.
+These links route reading; they do not imply every guide or tool definition has
+already been loaded. Read the relevant owner before acting.
+
+## Repository Role
+
+The first question for any change is *what level does it belong to?*
+
+- **Framework core** — the composition language, model/data toolkit, serving
+  seams, and jobs seam inherited by every project. The core is not an addon.
+- **Framework addon** — a reusable product capability that ships with Angee;
+  also called a base addon. API protocols are capabilities too.
+- **Consumer addon** — product logic for a specific project.
+
+Never solve at the consumer level what the framework should own, and never push
+product specifics down into the framework. Every fact lives at its owning level.
+
+## Repository Layout
+
+```text
+.                    # consolidated framework source slot
+├── angee/           # django-angee core: base/, data/, compose/, jobs/, serving seams
+├── addons/          # standard angee.* folder addons with co-located web fragments
+├── packages/        # schema-independent @angee/* packages and workshop/test tooling
+├── examples/        # consumer addons and reference browser suite
+├── templates/       # Copier project, stack, workspace, service, and addon sources
+├── tests/           # core, addon, and template contract tests
+├── docs/            # principles, operational guidance, and owner links
+├── .agents/         # public shared agent methodology
+└── README.md        # human entry point; this file is the contributor entry point
+```
+
+The `angee.*` namespace spans the core and folder addons. The core wheel is
+`django-angee`; each addon is a source folder with `addon.toml`, not a separately
+distributed Python package. Core dependencies belong to `pyproject.toml`, addon
+dependencies to their manifests, and resolved versions to lockfiles. In a
+materialized workspace the stack root owns the JS install; the repository's own
+pnpm manifest also supports standalone package CI. See [the stack](docs/stack.md).
+
+Personal-messaging bridges remain in the optional external
+`angee-messaging-bridges` repository. The Go operator, `hatch-angee`, and
+`strawberry-django-hasura` remain independently published. Private work-state is
+an optional **workspace sibling slot**, not a required directory in this tree;
+see [Where Knowledge Lives](#where-knowledge-lives).
+
+## Area Rules
+
+- **Core:** do not absorb product capability or addon vocabulary. Core changes
+  require the full Python suite because every composed area can be affected.
+- **Addons:** keep the manifest, capability, resources, permissions, and web
+  fragment together. Generated SDL and `@angee/gql` belong to the composed host.
+- **Packages:** all published framework packages, including `@angee/app`, remain
+  schema-independent and never import project-generated `@angee/gql/*`.
+  `refine` and `metadata` are independent leaves; `ui` uses both; `app` composes
+  all three. Shared configuration belongs to `packages/tsconfig.base.json` and
+  `packages/vitest.shared.ts`. Update the executable package/exports policy in
+  `packages/app/src/architecture-guardrails.test.ts` deliberately when changing it.
+- **Examples:** exercise public consumer extension seams; never make framework
+  code depend on an example or privileged monorepo internals.
+- **Templates:** edit the template source, not rendered copies. Preserve Copier
+  answers and path semantics across the complete chain and update its tests.
+
+Use [Checks](docs/checks.md) for area-specific commands and prerequisites.
+Meaningful UI changes require browser verification as well as relevant tests.
 
 ## Mechanical Overrides
 
-- Never quick-fix to make something run. This is non-negotiable. In this repo
-  every change creates technical *investment* — a fix at the owning level that
-  leaves the whole platform cleaner — never technical *debt*, a workaround in the
-  consuming code that papers over the real defect. Cutting scope, dropping a
-  feature, weakening or disabling a check, or working around a failure to get a
-  build / schema / test / `angee dev` to pass is a bug, not a fix — find the owner
-  and fix it at the right level, however much more work that is. A workaround that
-  only makes it run hides the defect and does more harm than the failure it
-  silenced. When a fix is genuinely out of scope, stop and surface it; do not
-  paper over it.
 - Before structural refactors, remove dead code first.
-- Re-read a file before editing it, and read it again after.
-- If a search looks too small, narrow and rerun it.
-- Sort build-time iteration; never use wall-clock time, random ids, or
-  filesystem order in emitted artifacts.
-- A clean/reset command may delete only the configured generated runtime
-  directory, and only after verifying Angee's generated sentinel in it; it must
-  preserve `*/migrations/` unless it explicitly documents deleting migrations.
-- Put scratch files, screenshots, and logs only in gitignored locations such as
+- Re-read files before editing and after editing.
+- If search results are unexpectedly sparse, inspect scope and ignored paths,
+  then rerun a focused search; absence from one search is not proof of absence.
+- Sort build-time iteration. Never put wall-clock time, random IDs, or
+  filesystem-order dependence in emitted artifacts.
+- A clean/reset command may delete only the configured generated runtime after
+  verifying its generated sentinel. Preserve `*/migrations/` unless deletion is
+  explicitly documented for that command and appropriate to that history.
+- Put screenshots, logs, and disposable scratch in gitignored locations such as
   `.playwright-mcp/`, `test-results/`, or `playwright-report/`.
-- Keep the shared agent methodology — reviewer agents, slash commands, skills,
-  workflows — in `.agents/` (see `.agents/README.md`). Keep private work-state —
-  plans, notes, handover prompts — in `.work/` (a gitignored symlink to a
-  separate private repo, never mirrored), not in `/tmp` or other scratch.
+- User instructions control task scope and authorization, including requests not
+  to commit or publish. A workflow does not grant additional permission.
 
 ## Run From The Root
 
-Resolve the stack that owns lifecycle before running `angee init`, `angee ws`,
-or another stack command. An existing current or ancestor `angee.yaml` owns
-this checkout: this repository is normally a workspace slot
-(`<stack>/workspaces/<ws>/angee-django`) of a framework-dev stack whose root
-manifest declares the project host, the sources, and the workspaces. Never
-initialize a stack under a source checkout. Load
-`.agents/skills/angee-workspace/SKILL.md` for the canonical resolution flow; it
-binds the result as `angee_root` and runs lifecycle commands as
-`angee --root "$angee_root" ws ...`.
+An existing current or ancestor `angee.yaml` owns stack lifecycle. Never
+initialize a stack under a source checkout. Resolve it with
+[the workspace skill](.agents/skills/angee-workspace/SKILL.md#resolve-the-controlling-stack-root)
+and pass it explicitly as `angee --root "$angee_root" ws ...`.
 
-`angee dev` is the only supported way to bring the local stack up — do not start
-Django, Vite, Daphne, workers, or watchers by hand. Run it against the resolved
-stack root; the stack's project host composes this checkout editable (the
-rendered pyproject resolves `django-angee` from this slot).
-
-```sh
-angee --root "$angee_root" dev
-```
-
-`angee dev` is for bringing the long-running stack up. To run a one-shot Django
-management command, drive the stack host's `manage.py` through `uv` from the
-STACK root, never by `cd`-ing into a slot. The composer is emit-only;
-migrations, permission sync, resource data, and GraphQL SDL checks are separate
-later steps (a fresh process loads the freshly emitted concrete models):
-
-```sh
-cd "$angee_root"
-uv run manage.py angee build              # emit runtime sources
-uv run manage.py makemigrations base notes
-uv run manage.py migrate
-uv run manage.py rebac sync               # permissions, after migrate
-uv run manage.py resources load           # data, after migrate
-uv run manage.py schema                   # write SDL
-uv run manage.py schema --check           # SDL, after runtime load
-```
-
-For an isolated branch, load `.agents/skills/angee-workspace/SKILL.md` and
-follow its **Create Workspace** workflow — the src template cuts the consolidated
-framework source plus optional external sources on `workspace/<name>`.
-
-A workspace is pinned to `workspace/<name>` — never `git checkout`/`switch`
-inside it; make a new workspace for a different branch.
-
-## Development Process
-
-Every task follows the process and coding principles in `docs/guidelines.md`:
-research before building, think in first principles, describe and discuss the
-goal, build with the right primitives, and stop when the code grows instead of
-getting smarter. Apply it first, then follow the language-specific rules below.
-
-## Definition of Done
-
-A change is done only when the code and the architecture are both checked.
-
-- The architecture gate above has been satisfied for any structural work.
-- The change is at the level that owns the concern: framework/core, base addon,
-  consumer addon, project settings, generated artifact source, or dependency.
-- New behavior composes shared primitives or locked dependencies. Any exception
-  is narrow, named, and documented where future work will find it.
-- DRY/refactor work reports the net shape: what was deleted, what callers became
-  thinner, and why any line increase is temporary or earns its keep.
-- Generated outputs are regenerated from source, never edited by hand.
-- Names are normalized across code, tests, docs, menus/routes, GraphQL, settings,
-  and files touched by the change.
-- Relevant backend, frontend, schema, browser, or e2e checks from the
-  language-specific guidelines have run, or the final handoff states exactly why
-  they could not run.
-
-## Guide Split
-
-- The development process and coding principles live in `docs/guidelines.md`;
-  follow them for all development work.
-- Term definitions live in `docs/glossary.md`.
-- The opinionated stack lives in `docs/stack.md`; manifests lock exact
-  dependency setup.
-- Backend rules live in `docs/backend/guidelines.md`.
-- Frontend rules live in `docs/frontend/guidelines.md`.
-- Root rules stay here. Do not duplicate language-specific guidance in this
-  file.
+`angee dev` is the supported way to start the complete local stack. Run it against
+the resolved stack root; never start Django, Vite, ASGI servers, workers, or
+watchers by hand. One-shot management commands use the stack host's `manage.py`.
+[Checks](docs/checks.md#composition-and-schema) owns their command context and
+ordering. For a new branch, use the workspace skill's Create Workspace workflow.
+Never `git checkout` or `git switch` inside a pinned workspace slot.
 
 ## Where Knowledge Lives
 
-Durable project knowledge is checked in, not held in any agent's private memory
-— so the whole team and every future agent inherits it.
+Durable project knowledge is checked in, not held only in private agent memory.
 
-- **Durable knowledge — conventions, gotchas/pitfalls, and architecture
-  decisions — goes into the checked-in docs.** When you learn something that will
-  matter next time, extend the owning guideline (`docs/backend/guidelines.md`,
-  `docs/frontend/guidelines.md`, `docs/guidelines.md`, or `docs/stack.md`) as a
-  terse rule or a `Pitfalls` entry. Don't restate code contracts (field/API
-  inventories) — those live beside the code (see "Let Code Carry Code Contracts"
-  in `docs/guidelines.md`).
-- **Shared agent methodology — reviewer agents, slash commands, skills, and
-  workflows — lives in `.agents/`** (committed and public; see `.agents/README.md`).
-- **Agent work-state goes into `.work/`:** design specs: `.work/plans/specs/`;
-  plans: `.work/plans/`; notes: `.work/notes/`; handovers: `.work/handovers/`.
-  `.work/` is a gitignored symlink to a separate, private work-state repo; it is
-  never mirrored to the public repo, and nothing in it is published. Global
-  skill defaults such as `docs/superpowers/**` are overridden and forbidden in
-  this repository.
-- **Work-state is history, not reference.** Specs, plans, and notes capture
-  intent at the time of writing and go stale as the code moves. To know how the
-  system works now, read the code; verify any claim a spec or plan makes against
-  the code before acting on it (see "Research" in `docs/guidelines.md`).
-- **Durable rules the team must inherit never live only in `.work/`.** A private
-  note is invisible to teammates and to the next agent; capture the durable rule
-  in the owning `docs/` guideline instead.
+- **Principles and pitfalls:** extend the owning `docs/` guide with a terse rule
+  and an owner link. Exact API details belong beside the implementing code.
+- **Shared methodology:** reviewer prompts, skills, commands, and workflows live
+  in public `.agents/`; private task history does not.
+- **Private work-state:** resolve the current workspace through the workspace
+  skill. Its optional work-state slot is `<workspace>/.work`, materialized as a
+  Git clone or local-source symlink. Use its `plans/specs/`, `plans/`, `notes/`,
+  and `handovers/` directories; do not create `angee/.work` inside this source
+  slot. Follow the workspace's synchronization rules and the user's instructions.
+- **No work-state source:** keep task-specific plans and handoff notes in the
+  conversation. Do not invent a private repository/path or put private history
+  into public docs or `.agents/`. Global defaults such as `docs/superpowers/**`
+  are overridden and forbidden here.
+- **History is not reference:** specs, plans, and notes recover prior intent.
+  Verify their claims against current code before acting. Promote enduring
+  lessons into the owning public guideline rather than leaving them only in
+  private history.
+
+## Definition of Done
+
+- Every change satisfies the constitution; structural work also satisfies the
+  architecture gate. Passing tests alone is insufficient.
+- Behavior composes shared primitives and upstream libraries at the owning
+  level. New implementation fills a demonstrated gap; it does not run alongside
+  an existing implementation of the same concern.
+- Refactors name the ownership, duplication, naming, or complexity defect they
+  removed, what was deleted or simplified, and why any added structure earns its
+  place. DRY refactors leave no copies of the targeted rule behind.
+- Encountered rot and debt are removed at their owners. Any blocked cleanup is
+  named with the required fix and blocker; affected work remains incomplete.
+- Artifacts are regenerated from source; names agree across touched surfaces.
+- Relevant [checks](docs/checks.md) have run, or the handoff states exactly which
+  could not run and why. Evidence distinguishes local checks from CI coverage.
+- Changed contracts and their documentation agree; no stale guidance is left
+  recommending the superseded shape.

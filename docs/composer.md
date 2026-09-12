@@ -189,14 +189,26 @@ Explicit `angee build` evaluates declarations in addon and manifest order. For
 each applicable origin it copies the complete source module to
 `runtime/<app_label>/migrations/`, gives it the next numeric name, and attaches
 it to the target app's single current leaf. The footer records the stable
-`<addon>:<name>` origin and source digest. Existing origins are immutable and
-idempotent; source edits, copied-body edits, duplicate origins, split leaves,
-and invalid graphs fail before any planned file is written. A dependency on
+`<addon>:<name>` origin and source digest. Existing materialized bodies are
+immutable and repeated builds are idempotent. Changed source digests,
+copied-body edits, duplicate origins, split leaves, and invalid graphs fail
+before any planned file is written. A source compatibility exception can declare
+specific accepted historical digests through `compatible_source_sha256`; it
+preserves existing copies rather than rewriting them. The exact validation
+contract belongs to [`RuntimeMigrations`](../angee/compose/migrations.py) and its
+[history tests](../tests/test_runtime_migrations.py). A dependency on
 `(<app_label>, "__latest__")` is resolved to a concrete current leaf when copied.
+
+For new transitions, add a new declaration. Preserve old import paths needed by
+released history when code moves. See the [backend migration
+rules](backend/guidelines.md#migrations-and-runtime) before recovering a local
+database or changing historical source compatibility.
 
 Normal app boot and `emit_if_stale()` never materialize migrations.
 `angee build --check` validates existing history and reports applicable pending
-origins without writing. After a successful build, normal `makemigrations` may
+origins without writing migration files. Django setup still repairs generated
+sources before command dispatch, so the management command as a whole is not a
+read-only filesystem probe. After a successful build, normal `makemigrations` may
 generate any remaining lossless changes and Django handles the rest of the
 migration lifecycle.
 
@@ -322,7 +334,9 @@ explicit `None` disabling migrations for an emitted label, fail clearly.
 - Settings composition does not import source models.
 - Rendering produces artifacts; explicit lifecycle operations bind derived integration paths.
 - Normal startup heals the runtime in place but never resets or prunes it.
-- Composer drift checks cover composer-owned runtime sources only.
+- Composer drift checks cover runtime sources, the generated host dependency
+  group, and addon migration history; GraphQL SDL and frontend codegen checks
+  belong to their respective owners.
 - Apps read `django.conf.settings`; process environment is normalized during
   settings composition.
 - `addon.toml` owns addon declarations; native AppConfig owns Django identity and lifecycle.

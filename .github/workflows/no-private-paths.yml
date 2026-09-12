@@ -1,8 +1,8 @@
 name: no private paths
 
-# Guards the public mirror: private per-developer work-state lives in `.work/`
-# (a gitignored symlink to a separate private repo) and must never be committed
-# here. See AGENTS.md -> Where Knowledge Lives.
+# Guards against committing legacy checkout-local .work paths. Current private
+# work-state belongs to the workspace-sibling slot, outside this source repo.
+# See AGENTS.md -> Where Knowledge Lives.
 
 on:
   push:

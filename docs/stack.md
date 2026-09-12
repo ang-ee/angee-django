@@ -20,12 +20,14 @@ Dependency changes must update this file in the same change.
   floors in their owning manifests and registry artifacts in `uv.lock`. The
   Strawberry fork remains necessary for native input/object extensions.
   Use `uv add` / `uv lock`; do not use `pip install` by hand.
-- `package.json` owns JavaScript package scripts and declared dependencies.
-  `pnpm-workspace.yaml` owns workspace membership. `pnpm-lock.yaml` pins the
-  resolved JavaScript graph. Use `pnpm add` / `pnpm install`; do not use npm or
-  yarn.
+- Package `package.json` files own scripts and declared JavaScript dependencies.
+  The installing workspace's `pnpm-workspace.yaml` owns membership and its
+  `pnpm-lock.yaml` pins the resolved graph. In a materialized source workspace,
+  the stack root owns the install; never run `pnpm install` in a source slot.
+  Standalone repository CI uses the repository workspace. Use pnpm at the owning
+  root, not npm or yarn; see [Checks](checks.md) for execution contexts.
 - A dependency change is complete only when the concern row here and the owning
-  `pyproject.toml` or addon manifest plus lockfile agree.
+  Python/addon/package manifest plus the owning lockfile agree.
 
 ## Backend
 
@@ -64,7 +66,7 @@ Dependency changes must update this file in the same change.
 | authlib | OAuth2/OIDC client protocol — authorization-code + refresh-token requests, client authentication, PKCE (RFC 7636), and token revocation (RFC 7009) | Thin per-`OAuthClient` `OAuth2Client` adapter behind the stable `OAuthClientProtocol` seam, plus the non-standard JSON-token-body shim; id_token verification stays on pyjwt |
 | httpx | HTTP client/transport for all integrate outbound calls | `integrate.http.PinnedTransport` — an SSRF-pinned httpx transport that resolves once and dials a validated IP (judgement owned by `integrate.net.is_unsafe_address`) with system-store TLS. Composed by `HttpClient` (the integration backends) and by the OAuth client (handed to authlib's `OAuth2Client`); the honest `Angee-Integrate/1.0` UA and an injected transport test seam ride on it |
 | httpcore | httpx's low-level connection pool + network backend | `integrate.http._PinnedBackend` subclasses `httpcore.SyncBackend` and overrides `connect_tcp` to dial the validated IP; `PinnedTransport` swaps it into the pool's `_network_backend`. Named and bounded directly because the SSRF pin owns httpcore's `SyncBackend`/`ConnectionPool` API, not just via httpx |
-| mcp (jlowin FastMCP v2) | MCP server — tool registration, JSON-RPC, StreamableHTTP ASGI app, bearer auth (`TokenVerifier`), per-call middleware | Mounts one StreamableHTTP app at `/mcp` via the `asgi.py` `http_mounts` seam (its `http_app` lifespan entered by `angee.asgi` via `router.lifespan_context`), authenticates the bearer to a REBAC actor with a `fastmcp.server.auth.TokenVerifier` and brackets each tool call in that actor; addon tools — incl. `GraphQLTool` operations executed under the actor (`angee.mcp.graphql`) — run scoped, and rebac authorizes |
+| FastMCP + mcp | MCP server framework and protocol SDK — tool registration, StreamableHTTP, bearer auth, and middleware | The `angee.mcp` addon owns mounting and actor-scoped tool execution; its [manifest](../addons/angee/mcp/addon.toml) owns the supported FastMCP and SDK versions |
 | anthropic | Anthropic Claude API SDK — Messages API client, model catalogue, retries, typed SDK models | `agents_integrate_anthropic` maps Angee inference providers/models to the SDK and contributes the backend into `ANGEE_INFERENCE_BACKEND_CLASSES` |
 | openai | OpenAI Python SDK — Chat Completions client for OpenAI and compatible endpoints, model catalogue, retries, typed SDK models | `agents_integrate_openai` maps Angee inference providers/models to the SDK and contributes the reusable backend into `ANGEE_INFERENCE_BACKEND_CLASSES`; compatible addons such as Ollama specialize it without another dependency |
 | python-magic | MIME detection from file bytes | Storage finalize detection (requires the system libmagic) |
@@ -221,7 +223,7 @@ calendar.
 | Playwright | Browser tests | `@angee/e2e` harness: workspace-isolated runner, role `storageState` login, GraphQL `api` fixture, Page Object base ([E2E guide](frontend/e2e.md)) |
 | @playwright/mcp | Interactive browser-driving for host coding agents | Repo-root `.mcp.json` server (npx-run, pinned), bound to the base stack's `chrome-profile` (`.angee/data/chrome`); the agent navigates to the stack's `ANGEE_UI_PORT` (`:5173`). Distinct from `@angee/e2e` (the deterministic test runner) and `agents.MCPServer` (the MCP config rendered for operator-provisioned product agents) |
 | Storybook | Component workshop | `@angee/ui` and addon previews |
-| GitHub Actions | CI | Build, lint, type, test gates |
+| GitHub Actions | CI | Implemented build/type/test lanes and repository policies; [Checks](checks.md#what-ci-actually-runs) distinguishes local requirements and manual browser verification |
 | Copier | Project and addon templates | Angee templates |
 
 ## Proposed, Not Locked

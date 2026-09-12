@@ -14,4 +14,4 @@ argument-hint: "<name> [parent-ref] | status [name]"
   Angee's native workspace and GitOps state.
 
 Read `.agents/skills/angee-workspace/SKILL.md` and follow its **Create
-Workspace** and reporting workflows.
+Workspace** or **Inspect Workspace** workflow according to the request.

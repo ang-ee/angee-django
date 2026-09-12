@@ -15,8 +15,11 @@ standard addons, React packages, examples, and templates shipped together (see
 
 ## Running the stack
 
-`angee dev` is the only supported way to bring the local stack up — run it from
-the repository root. See `docs/howto/getstarted.md`.
+`angee dev` is the supported way to bring the complete local stack up. Resolve
+the controlling stack root containing `angee.yaml` and run
+`angee --root "$angee_root" dev`; the framework source slot is not that root.
+See [Get Started](docs/howto/getstarted.md) and [Checks](docs/checks.md) for
+command context and prerequisites.
 
 ## Pull requests
 
@@ -24,8 +27,8 @@ the repository root. See `docs/howto/getstarted.md`.
   consumer addon), per `AGENTS.md`.
 - Regenerate any generated output from source; never hand-edit generated
   `runtime/` trees.
-- Run the relevant backend / frontend / schema / e2e checks described in the
-  guidelines, and state in the PR what you ran.
+- Run the relevant checks in [Checks](docs/checks.md), and state in the PR what
+  you ran and what could not run.
 - Sign the [Contributor License Agreement](CLA.md) — an automated check asks you
   to on your first pull request. You keep the copyright in your contribution; the
   agreement grants Angee the right to relicense it, which is what lets Angee ship

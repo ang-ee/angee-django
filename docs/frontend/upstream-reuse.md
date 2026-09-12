@@ -1,19 +1,31 @@
 # Native frontend state and authored reads
 
+This guide explains ownership and consistency boundaries. The linked code owns
+the current API; [Frontend Guidelines](guidelines.md) owns contributor policy.
+
+| Concern | Owner |
+|---|---|
+| Resource query semantics | [`ResourceQuery`](../../packages/metadata/src/query.ts) |
+| Controlled view state | [resource-view state](../../packages/ui/src/views/resource/resource-view-model.ts) with TanStack Table's native values |
+| Form save baselines and conflicts | [form save owner](../../packages/ui/src/views/form/use-form-view-save.ts) with React Hook Form |
+| Authored query identity and interests | [query options](../../packages/refine/src/dialect/authored-query-options.ts) with native TanStack Query |
+| Retained keyset history | [keyset feed](../../packages/refine/src/dialect/keyset-feed.ts) with native InfiniteData |
+| Messaging scope, wire projection and order | [thread feed adapter](../../addons/angee/messaging/web/src/thread-message-feed.ts) and [message projection](../../addons/angee/messaging/web/src/message-feed.ts) |
+
+## Resource and form state
+
 TanStack Table supplies native pagination, sorting and selection contracts and
 row models. Router or local React state holds the controlled values. Refine core
 `useList` owns the resource request. `ResourceViewState` is a native-shape value:
 `pagination: {pageIndex, pageSize}`, `sorting: [{id, desc}]`, and
 `rowSelection: {[id]: boolean}`, together with Angee filter/group/view facts.
-The state class and action reducer are removed. Table callbacks consume native
-updaters; callers use native table commands.
+Table callbacks consume native updaters; callers use native table commands.
 
-URL pages remain one-based; native pageIndex is zero-based. The existing
-`sort=field:asc|desc`, filter/group/calendar keys, clear sentinels, unrelated URL
-keys and replace-history behavior remain. Favorites remain version 1 with their
-existing persistence codecs. Multi-sort is disabled; embedded views keep local
-state and do not mutate the surrounding route. Unknown totals retain their
-existing disabled-next/last behavior.
+URL pages are one-based; native pageIndex is zero-based. Keep URL and favorite
+serialization at their codec owners, preserve unrelated search keys and use
+replace-history for view-state changes. Multi-sort is disabled; embedded views
+keep local state and do not mutate the surrounding route. Unknown totals disable
+next/last navigation.
 
 React Hook Form owns form values, dirty/touched/error state and validation
 execution. Refine core owns resource reads/writes. Same-record refreshes keep
@@ -25,21 +37,21 @@ lines cannot be inferred across concurrent local edits, so those drafts use the
 same explicit conflict boundary. Identity changes remount the owning form. Partial/no-row responses,
 manual slug intent, field permissions, nested errors and atomic line diffs keep
 their domain contracts. Custom submissions use native Query mutations so a query
-refresh cannot clear their pending status. `@refinedev/react-table` and
-`@refinedev/react-hook-form` are no longer dependencies.
+refresh cannot clear their pending status.
+
+## Authored reads and invalidation
 
 Authored singleton and batch reads use the same native queryOptions factory.
-Imperative reads use
-`authoredQueryOptions(queryClient, dataProvider, providerName, document, variables, models)`;
-this keeps client defaults, custom hashing and model interests on the same native entry.
+Imperative reads use the shared `authoredQueryOptions` owner; this keeps client
+defaults, custom hashing and model interests on the same native entry.
 The key contains provider, printed GraphQL document and variables; a batch label
-only addresses its result map. Domain infinite reads compose native
-`useInfiniteQuery` with `requestAuthoredData`, `sharedAuthoredMeta`,
-`useAuthoredErrorPolicy` and `useAuthoredLiveInterest`. The generic
-`useAuthoredInfiniteQuery` and `authoredInfiniteQueryOptions` are removed.
-Messaging's `messageFeedOptions` owns its history protocol; consumers use native
-`isFetching`, `isFetchingNextPage`, `hasNextPage`, `fetchNextPage`, `refetch` and
-`data.pages`. `messageFeedRows` derives presentation without a separate row store.
+only addresses its result map. Keyset history composes `useAuthoredKeysetFeed`
+from `@angee/refine`. That hook binds authored transport, live/error policy and
+actor-specific cache identity to `keysetFeedOptions` and native `useInfiniteQuery`.
+Domain adapters supply typed documents, scopes, model interests and result
+projections. Consumers use native query results; `messageFeedRows` supplies
+messaging's presentation order through the shared `keysetFeedRows` owner without
+a separate row store.
 
 Each native Query entry retains the union of every canonical model interest
 registered for that operation until garbage collection. Model labels do not fork
@@ -68,7 +80,7 @@ The operator transport has one snapshot subscription. Pushes update each matchin
 Query entry with its requested sections; omitted fields in a partial update
 preserve cached fields, while explicit null/empty fields replace them. HTTP
 supplies the initial read and post-mutation refetch. Completions win in arrival
-order, as before; no daemon revision field exists to establish stronger ordering.
+order; no daemon revision field exists to establish stronger ordering.
 
 Generated metadata and the supported recursive form-spec subset are validated
 with Valibot schemas, and wire types are inferred from those schemas. Permitted
@@ -88,16 +100,14 @@ directions return newest-first messages, with `has_older`/`has_newer`; page size
 are bounded to 200. Clients use those flags and render server order. A row moving
 between requests can repeat, so row overlap alone is not an exhaustion signal.
 
-These fields replace the development `party_timeline`/`circle_timeline` roots
-and their public-message-ID anchors. Record-attached chatter retains its separate
-record-gated paging contract.
+Record-attached chatter retains its separate record-gated paging contract.
 
 ## History retention
 
-Message history lives only in native InfiniteData; the generic row archive is
-removed. Each native page keeps its original lower cut. On refresh, the domain
-options enumerate that complete window and revalidate every previously retained
-ID through the matching `*_message_feed_revalidate` field. Complete survivors and
+Message history lives only in native InfiniteData. Each native page keeps its
+original lower cut. On refresh, the shared keyset-feed owner enumerates that
+complete window and revalidates every previously retained ID through the domain's
+matching `*_message_feed_revalidate` operation. Complete survivors and
 absent IDs form the authoritative result; missing or partial responses reject the
 refresh. Moved messages retain their native-page owner. Their model-owned
 `feed_order_key` supplies a complete ASCII sort key; consumers compare it without
@@ -118,6 +128,6 @@ releases the sole cache after it becomes inactive.
 
 Revalidation runs on invalidation and reconnect, with the existing focus/staleness
 defaults. Unannounced permission changes remain cached until a refresh runs.
-Immediate revocation needs a separate epoch or polling policy; stronger
+Immediate revocation needs an explicit server revocation signal or epoch; stronger
 cross-request consistency needs a server snapshot/revision contract. Neither is
 implied by cursor stability or native Query lifecycle.

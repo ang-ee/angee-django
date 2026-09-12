@@ -1,345 +1,241 @@
 # Development Guidelines
 
-> Based on the [Apexive Development Philosophy](https://apexive.com/post/apexive-development-philosophy).
-
-Technology moves fast and only keeps accelerating. Traditional development cycles
-are too lengthy and inefficient to keep up. These guidelines capture how we deliver
-quality software fast — doing more with less, without compromising on quality.
-
-The philosophy has two parts:
-
-1. **The Development Mantra** — the process to follow for any piece of work.
-2. **The Coding Principles** — the standards the resulting code must meet.
-
----
+Based on the [Apexive Development Philosophy](https://apexive.com/post/apexive-development-philosophy).
+These guidelines own the development process and general coding principles.
+[AGENTS.md](../AGENTS.md#constitution) owns the binding constitution; the language
+guides apply it to their areas. Task size changes process, never engineering
+standards: a small correction can be explained in a user update; structural work
+needs an explicit owner map. A specialized workflow adds obligations only within
+its stated scope and the user's authorization; it cannot relax the constitution.
 
 ## The Development Mantra
 
-Follow these steps, in order, for every task. Think before you build.
-
 ### 1. Research
 
-Before writing a single line of code, research the problem and think of all
-possible solutions. Don't rush into coding without a clear understanding of the
-problem.
+Before writing code, understand the problem, its current owner, and nearby
+solutions. Check [the stack](stack.md), search existing implementations and
+relevant upstream patterns, then read the native manifest, model/manager/queryset,
+shared primitive, compiler, or dependency API that should answer the question.
+For structural work, record the [architecture gate](../AGENTS.md#architecture-gate)
+before editing. Research should identify a concrete reuse/deletion path, not
+become an unrelated survey.
 
-Ask yourself:
-
-- **Have we done this before?** Check previous projects or modules. Ask the team.
-- **Has anyone else done it before?** Look at open-source projects and modules.
-- **What are the existing best practices?**
-
-For Angee work, research is a small architecture inventory, not a broad essay:
-
-- Check `docs/stack.md` for the dependency that owns the concern.
-- Search the repo for the same concept, shape, page type, model pattern, schema
-  pattern, or integration pattern before adding another one.
-- Read the owner: the model/manager/queryset, `AppConfig`, shared primitive,
-  schema builder, or dependency API that should answer the question.
-- For structural refactors, record the owner map and expected deletion/reuse path
-  in `.work/` or in the handoff note.
-
-Specs, plans, and notes — in `.work/` or anywhere else — are snapshots of intent
-at the moment they were written, and nothing reconciles them when the code moves.
-Use them only to recover intent, history, and decisions; never as a reference for
-how the system works now. The code is the only current reference: verify every
-claim a spec or plan makes against the code before acting on it.
+Plans and notes recover history and intent; they are not current API references.
+Verify their claims against code. Follow [knowledge routing](../AGENTS.md#where-knowledge-lives)
+for persistent notes, including the conversation-only fallback when private
+work-state is absent.
 
 ### 2. Think
 
-Take time to think about the problem and possible solutions. Break down complex
-problems into their basic elements using [first-principles thinking](#use-first-principles-thinking).
+Break the problem into its facts, owners, and constraints using
+[first principles](#use-first-principles-thinking). Distinguish the needed
+behavior from the implementation shape that first comes to mind.
 
 ### 3. Describe
 
-Outline your objectives. A specified goal keeps you focused and ensures your code
-meets requirements. Keep the description concise and clear for teammates. Document
-it in the README or a GitHub issue so the team has access.
-Include relevant links or references. For architecture work, include the owner
-map, analog inventory, dependency owner, naming vocabulary, and what existing
-code should become unnecessary.
+State the objective and verification evidence in a concise working note or user
+update. For architecture work, include the owner map, reuse evidence, dependency
+choice, vocabulary, and expected deletion. Task-specific plans follow
+the repository's knowledge-routing rules; a README carries durable project
+intent, not a running task diary. Publishing an issue or message still requires
+the user's authorization.
 
 ### 4. Discuss
 
-If you're unsure about any aspect of your code or the problem you're solving,
-discuss it with your team or a knowledgeable colleague. Collaboration leads to
-better solutions.
+Resolve uncertainty that affects requirements, architectural conventions, or
+scope with the team or human architect. Existing patterns and explicit user
+instructions should settle routine choices without another approval ritual.
 
 ### 5. Build
 
-Once you clearly understand the problem and the solution you want to implement,
-start coding. Follow the best practices and established principles for the
-framework you're using — for this project, that means the language-specific rules
-in [Backend Guidelines](backend/guidelines.md) and
-[Frontend Guidelines](frontend/guidelines.md), and the library ownership in
-[the opinionated stack](stack.md).
+Implement through the established owners and the relevant
+[backend](backend/guidelines.md) or [frontend](frontend/guidelines.md) rules.
+Use the [checks guide](checks.md) for working directories, prerequisites, and
+verification commands. Do not silently expand scope or weaken a contract to
+make a failing check pass.
 
 ### 6. Stop
 
-If your code becomes overly complex or difficult to read, stop. Consider a
-different approach to [avoid red flags](#avoid-red-flags). It's okay to refactor
-or rewrite code to improve its clarity and maintainability.
+When the implementation grows through copies, boundary leaks, or ceremony, stop
+extending that design. Reconsider the owner and the smaller native shape. Remove
+encountered debt at its source. If removal requires a broader migration or exceeds
+the user's authorization, describe the exact debt, owner-level fix, and blocker;
+do not hide it with a workaround or claim the affected work is complete. See
+[red flags](#avoid-red-flags).
 
 ### 7. Repeat
 
-If you hit a big roadblock, restart the process. Continuously improve your code
-with feedback. Refine it until it meets quality standards.
-
----
+Use failures and review findings to refine the same objective. Update changed
+contracts and their callers together, then verify the resulting behavior.
+Report what ran and what remains unverified.
 
 ## Coding Principles
 
 ### Don't Repeat Yourself (DRY)
 
-Don't Repeat Yourself is a fundamental software development principle that
-encourages avoiding code repetition. **Reuse highly tested existing code
-whenever possible.**
+Every fact, rule, and reusable capability lives once at its owning level. Before
+adding an implementation or extracting a helper, search the concept and nearby
+names with `rg`, read the existing components and upstream APIs, identify the
+owner, and apply these distinctions:
 
-Before copying code or extracting a helper, run the duplication gate:
+- Same rule twice: choose one owner and delete the copy.
+- Repeated shape with shared intent: consolidate into the smallest useful owner.
+- An existing owner already provides it: compose that owner, even for one caller.
+- Generated duplication: fix the declaration or generator.
+- Similar code with different intent: keep it separate and name the difference.
+- Repeated prose: keep the durable rule with its owner and link to it.
 
-- Search for the concept, name, shape, and nearby synonyms with `rg`.
-- Identify the owner that should hold the fact or primitive.
-- Same rule twice means choose one owner and delete the copy.
-- Same shape three times means extract the smallest boring primitive.
-- Generated duplication means fix the source declaration or generator.
-- Similar code with different intent should remain separate and be named by that
-  different intent.
-
-DRY refactors should make callers thinner. If the line count grows, explain what
-owner was missing and what deletion the new owner unlocks.
+Do not create a parallel implementation beside an existing owner or keep a
+superseded path after migrating its callers. A DRY refactor must delete the copies
+and make callers thinner; hiding copies behind another helper is unfinished work.
+Every refactor must simplify ownership, callers, or maintained structure. Explain
+any line growth by the missing behavior or owner it introduces and the
+simplification it buys. Prefer deletion of wrappers, options, and dead paths to
+another abstraction; measure total maintained code, not just the size of a caller.
+A short summary pointing to an owner is useful; an independently maintained copy
+of its exact contract is not.
 
 ### Keep Policy Above Detail
 
-Clean architecture is useful here only when translated into Angee's native
-owners. Policy is the rule the product or framework cares about. Detail is the
-transport, UI, storage, SDK, generated artifact, command, or resolver that lets a
-user reach that rule.
+Policy lives on models, fields, managers, querysets, addon-owned use cases, and
+shared framework primitives. UI, GraphQL resolvers, commands, filesystem emitters,
+vendor SDK clients, and generated output translate inputs and dispatch to those
+owners. They do not independently decide business state, persistence rules,
+permissions, or cross-addon composition policy.
 
-- Domain policy lives on models, fields, managers, querysets, addon-owned
-  services/use cases, and the shared primitives that own a framework behavior.
-- Details include React components, GraphQL resolvers, management commands,
-  filesystem emitters, vendor SDK clients, generated runtime code, and browser or
-  CLI adapters.
-- Details translate inputs, acquire context, call the owner, and format output.
-  They do not decide permissions, persistence rules, business state, model shape,
-  or cross-addon composition policy.
-- Dependencies point inward toward the stable owner. If a policy needs a detail,
-  invert through an explicit Angee contract such as settings/autoconfig,
-  `ImplClassField`, schema buckets, slots, registered forms/glyphs, or an
-  addon-owned interface.
+When policy needs an implementation detail, use the appropriate explicit
+contract: an addon manifest, settings/autoconfig, `ImplClassField`, schema bucket,
+slot, registered form/glyph, or addon-owned interface. Do not introduce a parallel
+registry merely to avoid the framework's extension point.
 
 ### Put Behavior on the Owning Object
 
-This is the class-scope face of **Find the owner** in
-[`AGENTS.md`](../AGENTS.md#constitution).
+This applies [Find the owner](../AGENTS.md#constitution) at class scope:
 
-Before changing code structure, make a quick owner map. Identify the owner of
-each fact and place the behavior there:
+- A record owns the fact: use a model method, property, or field behavior.
+- A collection owns it: use its queryset or manager.
+- An addon declaration owns it: use `addon.toml` and its native parsed manifest.
+- Django app identity or lifecycle owns it: use `AppConfig` and native app hooks.
+- No participant owns a cross-owner rule: use the smallest addon-local service
+  or use case to orchestrate those owners.
+- An entrypoint sees it first: parse/validate input, acquire context, dispatch,
+  and format the result.
 
-- Persisted facts live beside the field, record, or schema item that stores them.
-- Instance behavior lives on the instance type.
-- Collection behavior lives on the collection abstraction.
-- Declaration facts live on the declaring object.
-- Commands, routes, and other entrypoints parse inputs and dispatch to the owner.
-- Cross-object orchestration stays loose only when no single participant owns it.
+When a helper primarily interprets, mutates, or forwards to one object's
+internals, move that behavior onto its owner. Dispatch that decodes another
+owner's type or shape belongs behind that owner's interface; use its native
+polymorphism or extension point. Keep functions loose for orchestration when no
+participant owns the cross-object rule, pure transforms with no natural owner,
+and thin integration entrypoints. For example, Django's `DateField.to_python`
+owns field conversion and can call the ownerless `parse_date` string transform.
 
-Use this decision tree:
-
-- One object owns the data: add a method, property, or field behavior there.
-- A row owns it: use a model method/property.
-- A row set owns it: use a queryset or manager.
-- An addon declaration owns it: use the addon's `AppConfig`.
-- A cross-owner workflow owns it: create the smallest addon-local service/use
-  case and keep callers thin.
-- A route, command, resolver, view, or event handler sees it first: parse,
-  validate, acquire context, and dispatch; do not keep the rule there.
-
-Rules belong beside the data they interpret. Prefer methods and properties on the
-class that owns a fact over loose helper functions that repeatedly decode the
-same shape from the outside. The test: if a function branches on — or repeatedly
-reads — the internal shape of one object, it wants to be a method on that object;
-a function that switches on a value's type is asking for polymorphism on that
-type.
-
-Keep a function loose for orchestration across objects, a pure transform with no
-natural owner, or an integration entrypoint — and such a function may still call
-into the owners. Django draws the line cleanly: `DateField.to_python` is a method
-on the field, but it calls the ownerless `parse_date` to parse the string.
-
-Do not fix hidden magic by adding ceremony. If a refactor replaces implicit
-behavior with a larger explicit ritual, stop and look for the smaller native
-framework shape.
-
-Thin entrypoint budget: a command, route, resolver, React handler, resource
-command, or worker task may parse/validate input, resolve actor/context, call the
-owner/use case, and format the result. If it branches on business state, builds
-query policy, duplicates permission logic, chooses a dependency implementation,
-or inspects model/component shape, move that behavior inward.
+An entrypoint's budget is input validation, context acquisition, dispatch, and
+result formatting. Business-state branching, query policy, permission decisions,
+implementation selection, and model/component introspection belong at their
+respective owners. Native adapters translate contracts; they do not duplicate
+the policy on either side.
 
 ### Let Code Carry Code Contracts
 
-Guidelines teach principles and ownership rules; code owns current API details.
-Do not keep lists of fields, classes, settings, or model-specific behavior in
-prose when the contract can live in names, types, and docstrings beside the code.
-Documentation may point to the owning module or class, but it should not become a
-second spec that can drift.
+Names, types, and docstrings explain current API shapes beside their owner.
+Guidelines teach intent, invariants, and ownership; they should not repeat field
+inventories, defaults, or model-specific algorithms. Link to the public owner and
+its tests for exact behavior. A pitfall should state its trigger, the enduring
+rule, and the owner to consult, not preserve an obsolete repair recipe.
+
+### Reconcile Code, Docs, And Tests
+
+Code shows current behavior; the constitution expresses intended invariants.
+Neither a stale paragraph nor an accidental implementation establishes a new
+architectural rule by itself. When evidence disagrees:
+
+1. Read the implementing owner, its manifest/docstrings, focused tests, and the
+   applicable invariant. Use history only to recover the reason for a change.
+2. Identify whether the prose is stale, the implementation violates the intended
+   contract, or the intended contract is genuinely undecided.
+3. Correct stale prose to the verified owner, or fix defective behavior and add
+   meaningful coverage. Do not weaken tests or rewrite policy to bless a defect.
+4. If choosing a new convention is necessary, present the alternatives to the
+   human architect. Reconcile affected callers, docs, and tests in the same change.
+
+Historical migration guidance must name its applicable versions or state
+conditions and the current owner. Once a migration is complete, remove superseded
+instructions from active guides. An environment failure belongs in scoped
+troubleshooting, not an unconditional framework rule.
 
 ### Use First-Principles Thinking
 
-First-principles thinking is one of the best ways to reverse-engineer complicated
-problems and unleash creative possibilities. Also known as "reasoning from first
-principles," the idea is to break down complicated problems into their basic
-elements and reassemble them from the ground up.
+Separate the required facts and constraints from inherited implementation
+assumptions, then compose the smallest design from proven primitives. Existing
+framework patterns and locked dependencies are evidence to investigate, not
+machinery to reconstruct from scratch.
 
-### Follow Proven Best Practices and Patterns
+### Follow Proven Best Practices And Patterns
 
-- Do not reinvent the wheel.
-- Every piece of functionality should be built as a clean and reusable module.
-- Let the host framework's conventional objects own the design. In Django, prefer
-  reusable apps, `AppConfig`, models, fields, managers, querysets, forms, admin,
-  management commands, settings, and the app registry over neutral helper modules
-  or parallel registries. In React, prefer component composition, props, render
-  derivation, route/search owners, form owners, and shared view primitives over
-  mirrored local state or forked component trees.
-- When a new convention or seam is necessary, add a check or focused test that
-  prevents future reinvention and drift.
-- Follow the best practices for the framework you're using — for example, PEP 8
-  for Python. For this project, the specifics live in
-  [Backend Guidelines](backend/guidelines.md) and
-  [Frontend Guidelines](frontend/guidelines.md).
+Lean on native Django and React ownership and the dependency APIs listed in the
+stack. Read the locked library's implementation, public types, and extension
+points before declaring a gap. If upstream owns the concern, wire it directly;
+do not rebuild it with a local helper, wrapper framework, or competing state.
+Extend the shared Angee owner only for the missing composition behavior, then
+make consumers reuse it. When a new convention or seam is necessary, add a
+focused behavioral or architecture check that prevents the actual reinvention
+or drift. Test outcomes and boundaries, not merely that prescribed words occur
+in a file.
 
 ### Name So Code Can Be Found, Not Guessed
 
-This is a framework, and its names are the index people navigate by. Consistent,
-predictable naming of files, folders, packages, classes, and methods lets a reader
-know what a thing is called and where it lives without searching. Inconsistent
-naming taxes every future reader, forever — so naming gets special attention here.
+Names are the index of a framework:
 
-- **One concept, one name, everywhere** — across files, directories, packages,
-  classes, and methods. A new name is a design decision; don't coin a synonym for
-  something that already has one.
-- **Encode the role in the name, consistently** — the file says what kind of code
-  it holds, the class suffix says what kind of thing it is, the method verb says
-  what it does, and they all agree.
-- **Follow the host framework's conventions exactly** instead of inventing your
-  own; match the surrounding ecosystem so the framework can locate code by name
-  (convention over configuration). The concrete per-language conventions — modeled
-  on Django for the backend — live in [Backend Guidelines](backend/guidelines.md)
-  and [Frontend Guidelines](frontend/guidelines.md).
+- Use one name per concept across files, classes, methods, routes, settings,
+  GraphQL, menus, tests, and docs.
+- Encode roles consistently so a filename, class, and method agree about what
+  owns the behavior.
+- Follow the host framework's naming and discovery conventions. A new synonym
+  is a design choice with a maintenance cost.
 
-> A **smart** person learns from their mistakes, but a truly **wise** person
-> learns from the mistakes of others.
+The [backend](backend/guidelines.md) and [frontend](frontend/guidelines.md) guides
+own language-specific naming conventions.
 
 ### Avoid Red Flags
 
-Red flags are warning signs that your approach is going wrong. They rarely announce
-themselves loudly — they creep in. Train yourself to notice them early, because the
-cost of fixing them grows the longer they live in the codebase. When you spot one,
-stop, step back, and reconsider the approach (see [Stop](#6-stop)) rather than
-pushing through.
+When a red flag appears, stop extending that implementation and reconsider its
+owner and shape. Existing rot requires removal, not another layer that hides it.
 
 #### The code is bigger instead of smarter
 
-If a feature keeps growing in size as you work on it, that's a signal the solution
-isn't [DRY](#dont-repeat-yourself-dry) — you're solving the problem by adding more
-code instead of finding the smarter, smaller abstraction.
-
-- **What it looks like:** large blocks of near-identical code, sprawling functions,
-  copy-pasted variations that differ by only a value or two, line counts that climb
-  with every edge case.
-- **Why it's bad:** more code means more surface area for bugs, more to read, more
-  to test, and more to keep in sync. Volume is not progress.
-- **What to do:** look for the underlying pattern and extract it into a single,
-  well-named, reusable piece. Prefer a small, sharp abstraction over many concrete
-  repetitions.
+Repeated branches, copied shapes, and increasing ceremony reveal work to
+simplify. Find the shared rule, reuse its owner, and delete the redundant code.
+Required behavior can justify growth; duplication and speculative flexibility
+cannot. Preserve clarity and contracts while reducing what must be maintained.
 
 #### Spaghetti code
 
-Tangled control flow and hidden dependencies where everything reaches into
-everything else.
-
-- **What it looks like:** deeply nested conditionals, functions that do many
-  unrelated things, state mutated from far-away places, no clear boundaries between
-  components.
-- **Why it's bad:** you can't change one thing without breaking another, and you
-  can't reason about a piece in isolation. It resists testing and onboarding.
-- **What to do:** separate concerns into clean modules with clear inputs and
-  outputs. Each unit should do one thing and expose a small, predictable interface.
+Tangled dependencies and mixed responsibilities make isolated changes difficult.
+Keep policy with its owner and cross boundaries through explicit contracts.
 
 #### You do not understand your own code
 
-If you can't explain — clearly and simply — what your code does and why, that's a
-red flag, not a detail to sort out later.
-
-- **What it looks like:** code that "works" but you're not sure how; logic you'd
-  struggle to walk a teammate through; changes made by trial and error until tests
-  pass.
-- **Why it's bad:** code you don't understand, you can't safely maintain, debug, or
-  extend — and neither can anyone else. It's a liability disguised as a feature.
-- **What to do:** simplify until it's clear. Rename things to say what they mean,
-  break complex steps into named pieces, and remove cleverness that doesn't earn its
-  keep. If you can't make it understandable, go back to [Think](#2-think).
+Trial-and-error patches that happen to pass tests need further research.
+Explain the cause and resulting behavior before claiming the fix is understood.
 
 #### Repeating coding work unnecessarily
 
-Catching yourself solving a problem that has already been solved — by you, by the
-team, or by the wider community — when a highly tested solution already exists.
-
-- **What it looks like:** hand-rolling something a standard library, framework
-  feature, or well-known package already provides; rewriting a utility that lives
-  elsewhere in the codebase.
-- **Why it's bad:** you're reinventing the wheel, and your version is almost
-  certainly less tested, less robust, and more work to maintain than the established
-  one.
-- **What to do:** do your [Research](#1-research) first. Reuse existing, well-tested
-  code. Don't reinvent the wheel.
+Search before implementing. Reuse the native owner or repair its missing seam
+instead of growing another partial version.
 
 #### Boundary leaks and detail-driven policy
 
-Letting an outer detail decide an inner rule, or crossing a boundary by probing a
-foreign object shape instead of using a declared contract.
-
-- **What it looks like:** React deciding permissions, GraphQL resolvers
-  re-deriving model rules, vendor SDK clients shaping domain models, serving code
-  importing the composer, addon code importing downstream consumers, or page code
-  recreating table/filter/form behavior.
-- **Why it's bad:** the same policy gets rewritten in every adapter, and the next
-  feature has to rediscover which copy is authoritative.
-- **What to do:** move the rule to the owner and cross the boundary through the
-  declared Angee contract: model fields/methods, managers/querysets, `AppConfig`,
-  schema buckets, generated SDL, settings/autoconfig, slots, registered forms, or
-  shared primitives.
+Permission decisions in React, model rules in resolvers, and view mechanics in
+pages indicate that a caller has absorbed its owner's behavior. Move the rule
+inward and keep the adapter thin.
 
 #### Following antipatterns
 
-Reaching for a "solution" that is a known mistake — a pattern that looks helpful but
-reliably causes problems down the line.
-
-- **What it looks like:** copying an approach without understanding it, choosing the
-  expedient hack over the right design, or repeating a structure that has burned the
-  team before.
-- **Why it's bad:** antipatterns trade short-term convenience for long-term pain;
-  they're traps that have already been documented as traps.
-- **What to do:** learn the established best practices and patterns for your stack
-  and follow them. Remember: a **smart** person learns from their own mistakes, but
-  a truly **wise** person learns from the mistakes of others.
-
----
+Do not copy a familiar workaround without understanding its assumptions. Check
+existing failures, current contracts, and native framework alternatives.
 
 ## Applying These Guidelines
 
-This document is the shared **development process and coding principles** for all
-work in the Django / React Runtime. It sits above the language-specific rules:
-
-- **Process and principles (this file)** — how to approach any task, regardless of
-  language or layer.
-- **[Backend Guidelines](backend/guidelines.md)** — Python, Django, and the
-  composer.
-- **[Frontend Guidelines](frontend/guidelines.md)** — TypeScript, React, and the
-  rendered experience.
-- **[The Opinionated Stack](stack.md)** — which library owns which concern.
-- **[Glossary](glossary.md)** — shared vocabulary (composer, host, addon, seams…).
-- **[AGENTS.md](../AGENTS.md)** — root rules and how the framework composes.
-
-Follow this process first, then apply the relevant language-specific guidelines
-during the [Build](#5-build) step.
+Use the process above, the root [constitution](../AGENTS.md#constitution), the
+relevant language guide, and [Checks](checks.md). Read the [glossary](glossary.md)
+when a term is ambiguous and [the stack](stack.md) before changing dependencies.

@@ -39,9 +39,9 @@ examples/*/runtime/
 .angee/data/
 .angee/workspaces/
 
-# Agent work-state (plans, notes, handovers) lives in a SEPARATE private repo,
-# symlinked in as `.work` (see AGENTS.md → Where Knowledge Lives). Never tracked
-# or mirrored here. No trailing slash, so the pattern also matches the symlink.
+# Agent work-state belongs to the optional workspace-sibling .work slot.
+# Also ignore legacy checkout-local .work paths: private history must never be
+# tracked here. No trailing slash, so this matches both directories and symlinks.
 /.work
 
 # Claude Code session state

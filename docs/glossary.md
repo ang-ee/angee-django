@@ -23,6 +23,8 @@ wheel, not an addon.
 **Framework addon** — a reusable product capability that is part of Angee itself
 and builds on the framework core. Framework addons live under `addons/`.
 
+**Base addon** — a synonym for framework addon, not another architectural level.
+
 **Consumer addon** — an addon written by a product team for a specific project,
 built on top of the framework and base addons.
 
@@ -48,7 +50,7 @@ a separate concern. Both the default development stack and a self-contained
 instance chain the project at the stack root; the stack keeps its own
 `.copier-answers.stack.yml` so the project's canonical `.copier-answers.yml`
 stays the project's. The two stack layouts live in the operator's
-[Concepts](/operator/concepts#two-stack-layouts).
+[Concepts](https://docs.angee.ai/operator/concepts#two-stack-layouts).
 
 **Host** — the application runtime a stack runs. `angee-django` is the first and
 default Host; a project *is* the Host's source. The operator is Host-agnostic — to

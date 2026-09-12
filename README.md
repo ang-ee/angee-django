@@ -167,12 +167,12 @@ which points at the constitution in
 the process in
 **[development guidelines](https://docs.angee.ai/guide/guidelines)**.
 
-- Bring the stack up with `angee dev` from the repository root — never start the
-  individual processes by hand.
-- Run the backend checks (ruff, mypy, pytest) and the frontend checks from the
-  [backend](https://docs.angee.ai/django/guidelines) and
-  [frontend](https://docs.angee.ai/react/guidelines)
-  guidelines before opening a pull request.
+- Bring the stack up with `angee --root "$angee_root" dev` against the resolved
+  stack root containing `angee.yaml`; the framework source slot is not that root.
+  Never start individual processes by hand.
+- Follow [Checks](docs/checks.md) for backend, frontend, schema, and browser
+  verification before opening a pull request. It distinguishes prescribed local
+  checks from the coverage currently provided by CI.
 - By participating you agree to uphold our
   **[Code of Conduct](https://github.com/ang-ee/angee-django/blob/main/CODE_OF_CONDUCT.md)**.
 

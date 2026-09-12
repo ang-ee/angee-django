@@ -2,12 +2,15 @@ export const meta = {
   name: 'research-sonnet',
   description: 'Deep research harness, Sonnet-pinned fan-out — search/fetch/verify run on Sonnet; synthesis degrades to a verified-claims dump instead of failing the whole run.',
   whenToUse: 'When the user wants a deep, multi-source, fact-checked research report on any topic. BEFORE invoking, check if the question is specific enough to research directly — if underspecified (e.g., "what car to buy" without budget/use-case/region), ask 2-3 clarifying questions to narrow scope. Then pass the refined question as args, weaving the answers in.',
-  phases: [{"title":"Scope","detail":"Decompose question (from args) into 5 search angles"},{"title":"Search","detail":"5 parallel WebSearch agents, one per angle"},{"title":"Fetch","detail":"URL-dedup, fetch top 15 sources, extract falsifiable claims"},{"title":"Verify","detail":"3-vote adversarial verification per claim (need 2/3 refutes to kill)"},{"title":"Synthesize","detail":"Merge semantic dupes, rank by confidence, cite sources"}],
+  phases: [{"title":"Scope","detail":"Decompose question (from args) into 5 search angles"},{"title":"Search","detail":"5 parallel WebSearch agents, one per angle"},{"title":"Fetch","detail":"URL-dedup, fetch at most 15 sources, extract falsifiable claims"},{"title":"Verify","detail":"3-vote review per claim; require 2 supporting or refuting votes, otherwise unverified"},{"title":"Synthesize","detail":"Merge semantic dupes, rank by confidence, cite sources"}],
 }
 
-// deep-research: Scope → pipeline(Search → URL-dedup → Fetch+Extract) → 3-vote Verify → Synthesize
+// research-sonnet: Scope → pipeline(Search → URL-dedup → Fetch+Extract) → 3-vote Verify → Synthesize
 // WebSearch/WebFetch are the sources here, in place of a codebase's git/grep.
-// Question is passed via Workflow({name: 'deep-research', args: '<question>'}).
+// Requires the optional host Workflow DSL; see .agents/README.md. This is not
+// a standalone Node module. The host supplies args, phase, log, agent, pipeline,
+// and parallel, and executes this body in an async function after reading meta.
+// Question is passed via Workflow({name: 'research-sonnet', args: '<question>'}).
 
 const VOTES_PER_CLAIM = 3
 const REFUTATIONS_REQUIRED = 2
@@ -15,10 +18,8 @@ const MAX_FETCH = 15
 const MAX_VERIFY_CLAIMS = 25
 
 // Model pins for this Sonnet variant. The fan-out (scope/search/fetch/verify —
-// 100+ agents, where the tokens go) runs on Sonnet. Flip SYNTH_MODEL to "opus"
-// if you want a higher-quality / more reliable final synthesis (it's one cheap
-// agent). The synthesis is also wrapped so a structured-output failure salvages
-// the verified claims rather than discarding the whole run.
+// bounded by source and claim budgets) runs on Sonnet. Synthesis failure
+// returns the adjudicated claims rather than discarding the completed work.
 const FANOUT_MODEL = "sonnet"
 const SYNTH_MODEL = "sonnet"
 
@@ -68,38 +69,19 @@ const EXTRACT_SCHEMA = {
   },
 }
 const VERDICT_SCHEMA = {
-  type: "object", required: ["refuted", "evidence", "confidence"],
+  type: "object", required: ["verdict", "evidence", "confidence"],
   properties: {
-    refuted: { type: "boolean" },
+    verdict: { enum: ["supported", "refuted", "unverified"] },
     evidence: { type: "string" },
     confidence: { enum: ["high", "medium", "low"] },
     counterSource: { type: "string" },
   },
 }
-const REPORT_SCHEMA = {
-  type: "object", required: ["summary", "findings", "caveats"],
-  properties: {
-    summary: { type: "string" },
-    findings: { type: "array", items: {
-      type: "object", required: ["claim", "confidence", "sources", "evidence"],
-      properties: {
-        claim: { type: "string" },
-        confidence: { enum: ["high", "medium", "low"] },
-        sources: { type: "array", items: { type: "string" } },
-        evidence: { type: "string" },
-        vote: { type: "string" },
-      },
-    }},
-    caveats: { type: "string" },
-    openQuestions: { type: "array", items: { type: "string" } },
-  },
-}
-
 // ─── Phase 0: Scope — decompose question into search angles ───
 phase("Scope")
 const QUESTION = (typeof args === "string" && args.trim()) || ""
 if (!QUESTION) {
-  return { error: "No research question provided. Pass it as args: Workflow({name: 'deep-research', args: '<question>'})." }
+  return { error: "No research question provided. Pass it as args: Workflow({name: 'research-sonnet', args: '<question>'})." }
 }
 const scope = await agent(
   "Decompose this research question into complementary search angles.\n\n" +
@@ -123,8 +105,9 @@ log("Decomposed into " + scope.angles.length + " angles: " + scope.angles.map(a 
 const normURL = u => {
   try {
     const p = new URL(u)
-    return (p.hostname.replace(/^www\./, "") + p.pathname.replace(/\/$/, "")).toLowerCase()
-  } catch { return u.toLowerCase() }
+    p.hash = ""
+    return p.href
+  } catch { return u }
 }
 const seen = new Map()
 const dupes = []
@@ -158,7 +141,7 @@ const FETCH_PROMPT = (source, angle) =>
 
 const VERIFY_PROMPT = (claim, v) =>
   "## Adversarial Claim Verifier (voter " + (v + 1) + "/" + VOTES_PER_CLAIM + ")\n\n" +
-  "Be SKEPTICAL. Try to REFUTE this claim. ≥" + REFUTATIONS_REQUIRED + "/" + VOTES_PER_CLAIM + " refutations kill it.\n\n" +
+  "Be SKEPTICAL. Check evidence for and against this claim.\n\n" +
   "## Research question\n" + QUESTION + "\n\n" +
   "## Claim under review\n\"" + claim.claim + "\"\n\n" +
   "**Source:** " + claim.sourceUrl + " (" + claim.sourceQuality + ")\n" +
@@ -169,9 +152,9 @@ const VERIFY_PROMPT = (claim, v) =>
   "3. Is the source quality sufficient for the claim's strength? (extraordinary claims need primary sources)\n" +
   "4. Is the claim outdated? (check dates — old claims about fast-moving fields are suspect)\n" +
   "5. Is this a marketing claim / press release / cherry-picked benchmark / forum speculation?\n\n" +
-  "**refuted=true** if: unsupported by quote / contradicted / low-quality source for strong claim / outdated / marketing fluff.\n" +
-  "**refuted=false** ONLY if: claim is well-supported, current, and source quality matches claim strength.\n" +
-  "Default to refuted=true if uncertain.\n\nStructured output only. Evidence MUST be specific."
+  "**verdict=refuted** if specific evidence contradicts the claim or establishes a misreading.\n" +
+  "**verdict=supported** ONLY if the claim is well-supported, current, and source quality matches claim strength.\n" +
+  "**verdict=unverified** if evidence is unavailable, ambiguous, weak, or you are uncertain.\n\nStructured output only. Evidence MUST be specific."
 
 // ─── Pipeline: search → dedup → fetch+extract (no barrier) ───
 const searchResults = await pipeline(
@@ -183,9 +166,13 @@ const searchResults = await pipeline(
     if (!r) return null
     log(angle.label + ": " + r.results.length + " results")
     return { angle: angle.label, results: r.results }
+  }).catch(e => {
+    log("search failed: " + angle.label + " — " + (e.message || e))
+    return null
   }),
 
   searchResult => {
+    if (!searchResult) return []
     const sorted = [...searchResult.results].sort((a, b) => relRank[a.relevance] - relRank[b.relevance])
     const novel = sorted.filter(r => {
       const key = normURL(r.url)
@@ -193,7 +180,7 @@ const searchResults = await pipeline(
         dupes.push({ ...r, angle: searchResult.angle, dupOf: seen.get(key) })
         return false
       }
-      if (fetchSlots <= 0 && relRank[r.relevance] >= 1) {
+      if (fetchSlots <= 0) {
         budgetDropped.push({ ...r, angle: searchResult.angle })
         return false
       }
@@ -246,7 +233,7 @@ if (rankedClaims.length === 0) {
   return {
     question: QUESTION,
     summary: "No claims extracted. " + allSources.length + " sources fetched, all empty/failed. " + dupes.length + " URL dupes, " + budgetDropped.length + " budget-dropped.",
-    findings: [], refuted: [], sources: allSources.map(s => ({ url: s.url, quality: s.sourceQuality })),
+    findings: [], refuted: [], unverified: [], sources: allSources.map(s => ({ url: s.url, quality: s.sourceQuality })),
     stats: { angles: scope.angles.length, sources: allSources.length, claims: 0, dupes: dupes.length },
   }
 }
@@ -263,36 +250,38 @@ const voted = (await parallel(
           phase: "Verify",
           model: FANOUT_MODEL,
           schema: VERDICT_SCHEMA,
+        }).catch(e => {
+          log("verification failed: " + (e.message || e))
+          return null
         })
       )
     ).then(verdicts => {
-      // A vote can be null (user-skip or agent error) — treat as abstain.
       const valid = verdicts.filter(Boolean)
-      const refuted = valid.filter(v => v.refuted).length
-      // Survive only if the claim was actually adjudicated: a quorum of
-      // valid votes AND fewer than REFUTATIONS_REQUIRED refuting. Too many
-      // abstentions = unverified, which must NOT pass into the report
-      // (otherwise all-abstain → refuted=0 → false survive).
-      const abstained = VOTES_PER_CLAIM - valid.length
-      const survives = valid.length >= REFUTATIONS_REQUIRED && refuted < REFUTATIONS_REQUIRED
-      log("\"" + claim.claim.slice(0, 50) + "…\": " + (valid.length - refuted) + "-" + refuted + (abstained > 0 ? " (" + abstained + " abstain)" : "") + " " + (survives ? "✓" : "✗"))
-      return { ...claim, verdicts: valid, refutedVotes: refuted, survives }
+      const refutedVotes = valid.filter(v => v.verdict === "refuted").length
+      const supportedVotes = valid.filter(v => v.verdict === "supported").length
+      const status = refutedVotes >= REFUTATIONS_REQUIRED ? "refuted"
+        : supportedVotes >= REFUTATIONS_REQUIRED ? "confirmed" : "unverified"
+      log("\"" + claim.claim.slice(0, 50) + "…\": " + supportedVotes + "-" + refutedVotes + " " + status)
+      return { ...claim, verdicts: valid, refutedVotes, supportedVotes, status }
     })
   )
 )).filter(Boolean)
 
-const confirmed = voted.filter(c => c.survives)
-const killed = voted.filter(c => !c.survives)
-log("Verify done: " + voted.length + " claims → " + confirmed.length + " confirmed, " + killed.length + " killed")
+const confirmed = voted.filter(c => c.status === "confirmed")
+const killed = voted.filter(c => c.status === "refuted")
+const unverified = voted.filter(c => c.status === "unverified")
+const voteSummary = c => ({ claim: c.claim, vote: c.supportedVotes + "-" + c.refutedVotes, source: c.sourceUrl })
+log("Verify done: " + voted.length + " claims → " + confirmed.length + " confirmed, " + killed.length + " refuted, " + unverified.length + " unverified")
 
 if (confirmed.length === 0) {
   return {
     question: QUESTION,
-    summary: "All " + voted.length + " claims refuted by adversarial verification. Research inconclusive — sources may be low-quality or claims overstated.",
+    summary: "No claims confirmed: " + killed.length + " refuted, " + unverified.length + " unverified. Research inconclusive.",
     findings: [],
-    refuted: killed.map(c => ({ claim: c.claim, vote: (c.verdicts.length - c.refutedVotes) + "-" + c.refutedVotes, source: c.sourceUrl })),
+    refuted: killed.map(voteSummary),
+    unverified: unverified.map(voteSummary),
     sources: allSources.map(s => ({ url: s.url, quality: s.sourceQuality, claimCount: s.claims.length })),
-    stats: { angles: scope.angles.length, sources: allSources.length, claims: allClaims.length, verified: voted.length, confirmed: 0, killed: killed.length },
+    stats: { angles: scope.angles.length, sources: allSources.length, claims: allClaims.length, verified: voted.length, confirmed: 0, killed: killed.length, unverified: unverified.length },
   }
 }
 
@@ -300,15 +289,19 @@ if (confirmed.length === 0) {
 phase("Synthesize")
 const confRank = { high: 0, medium: 1, low: 2 }
 const block = confirmed.map((c, i) => {
-  const best = c.verdicts.filter(v => !v.refuted).sort((a, b) => confRank[a.confidence] - confRank[b.confidence])[0]
+  const best = c.verdicts.filter(v => v.verdict === "supported").sort((a, b) => confRank[a.confidence] - confRank[b.confidence])[0]
   return "### [" + i + "] " + c.claim + "\n" +
-    "Vote: " + (c.verdicts.length - c.refutedVotes) + "-" + c.refutedVotes + " · Source: " + c.sourceUrl + " (" + c.sourceQuality + ")\n" +
+    "Vote: " + c.supportedVotes + "-" + c.refutedVotes + " · Source: " + c.sourceUrl + " (" + c.sourceQuality + ")\n" +
     "Quote: \"" + c.quote + "\"\nVerifier evidence (" + best.confidence + "): " + best.evidence + "\n"
 }).join("\n")
 
 const killedBlock = killed.length > 0
   ? "\n## Refuted claims (for transparency)\n" +
-    killed.map(c => "- \"" + c.claim + "\" (" + c.sourceUrl + ", vote " + (c.verdicts.length - c.refutedVotes) + "-" + c.refutedVotes + ")").join("\n")
+    killed.map(c => "- \"" + c.claim + "\" (" + c.sourceUrl + ", vote " + c.supportedVotes + "-" + c.refutedVotes + ")").join("\n")
+  : ""
+const unverifiedBlock = unverified.length > 0
+  ? "\n## Unverified claims (insufficient evidence or votes; not findings)\n" +
+    unverified.map(c => "- " + c.claim + " (" + c.sourceUrl + ")").join("\n")
   : ""
 
 // Markdown synthesis (no schema) — free text CANNOT hit the StructuredOutput
@@ -320,13 +313,13 @@ try {
     "## Synthesis: research report\n\n" +
     "**Question:** " + QUESTION + "\n\n" +
     confirmed.length + " claims survived " + VOTES_PER_CLAIM + "-vote adversarial verification. Merge semantic duplicates and synthesize.\n\n" +
-    "## Confirmed claims\n" + block + "\n" + killedBlock + "\n\n" +
+    "## Confirmed claims\n" + block + "\n" + killedBlock + unverifiedBlock + "\n\n" +
     "## Instructions\n" +
     "1. Identify claims that say the same thing — merge them, combine their sources.\n" +
     "2. Group related claims into coherent findings. Each finding should directly address the research question.\n" +
     "3. Assign confidence per finding: high (multiple primary sources, unanimous votes), medium (secondary sources or split votes), low (single source or blog-quality).\n" +
     "4. Open with a 3-5 sentence executive summary answering the research question.\n" +
-    "5. Note caveats: what's uncertain, what sources were weak, what time-sensitivity applies.\n" +
+    "5. Note caveats: what's uncertain, what sources were weak, what time-sensitivity applies. Unverified claims must not become findings or be called refuted. Model votes are review outcomes, not independent sources.\n" +
     "6. End with 2-4 open questions that emerged but weren't answered.\n\n" +
     "Write the report as a thorough, well-structured MARKDOWN document: headings, grouped findings each tagged with its confidence, and inline source URLs. Return the markdown directly — do NOT call any tool.",
     { label: "synthesize", model: SYNTH_MODEL }
@@ -338,10 +331,11 @@ try {
 
 const salvage = {
   question: QUESTION,
-  confirmed: confirmed.map(c => ({ claim: c.claim, source: c.sourceUrl, quote: c.quote, confidence: (c.verdicts.filter(v => !v.refuted)[0] || {}).confidence || null, vote: (c.verdicts.length - c.refutedVotes) + "-" + c.refutedVotes })),
-  refuted: killed.map(c => ({ claim: c.claim, vote: (c.verdicts.length - c.refutedVotes) + "-" + c.refutedVotes, source: c.sourceUrl })),
+  confirmed: confirmed.map(c => ({ claim: c.claim, source: c.sourceUrl, quote: c.quote, confidence: (c.verdicts.filter(v => v.verdict === "supported")[0] || {}).confidence || null, vote: c.supportedVotes + "-" + c.refutedVotes })),
+  refuted: killed.map(voteSummary),
+  unverified: unverified.map(voteSummary),
   sources: allSources.map(s => ({ url: s.url, quality: s.sourceQuality, angle: s.angle, claimCount: s.claims.length })),
-  stats: { angles: scope.angles.length, sourcesFetched: allSources.length, claimsExtracted: allClaims.length, claimsVerified: voted.length, confirmed: confirmed.length, killed: killed.length, urlDupes: dupes.length, budgetDropped: budgetDropped.length },
+  stats: { angles: scope.angles.length, sourcesFetched: allSources.length, claimsExtracted: allClaims.length, claimsVerified: voted.length, confirmed: confirmed.length, killed: killed.length, unverified: unverified.length, urlDupes: dupes.length, budgetDropped: budgetDropped.length },
 }
 
 return report ? { ...salvage, report } : { ...salvage, report: null, note: "Synthesis failed — verified claims returned raw." }
