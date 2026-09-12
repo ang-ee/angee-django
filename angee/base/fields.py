@@ -23,7 +23,8 @@ must not guess an epsilon or silently reuse a rank. Rebalance rewrites only that
 context under one transaction, preserves its visible ``(rank, pk)`` order, and
 is idempotent. Allocation is optimistic: the contextual unique constraint
 arbitrates concurrent writers, and a losing writer rereads its neighbors before
-retrying.
+retrying. Rows that predate a rank column take ``1024.0`` from its database
+default; new rows still allocate their contextual rank on save.
 """
 
 from __future__ import annotations
@@ -251,9 +252,16 @@ class FractionalRankField(models.FloatField):
     angee_widget = "float"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Default ranks to indexed because ordered contexts query by them."""
+        """Default ranks to indexed, and seed rows that predate the column.
+
+        Ordered contexts query by rank. Schema backfill copies existing rows
+        without a model instance, so ``pre_save`` never allocates for them; the
+        database default seeds them instead, and ``get_default`` still defers
+        new rows to ``pre_save``.
+        """
 
         kwargs.setdefault("db_index", True)
+        kwargs.setdefault("db_default", self.STEP)
         super().__init__(*args, **kwargs)
 
     def has_default(self) -> bool:
