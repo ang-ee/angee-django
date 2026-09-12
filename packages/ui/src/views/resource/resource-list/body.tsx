@@ -324,8 +324,10 @@ export function ResourceListBody<TRow extends Row = Row>({
         >
           <DialogPortal>
             <DialogBackdrop />
-            <Dialog.Content size="md" className="p-5">
-              {recordContent}
+            <Dialog.Content size="md">
+              <Dialog.Body className="p-5">
+                {recordContent}
+              </Dialog.Body>
             </Dialog.Content>
           </DialogPortal>
         </DialogRoot>

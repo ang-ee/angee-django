@@ -1297,8 +1297,9 @@ describe("ResourceList", () => {
     fireEvent.click(await screen.findByRole("button", { name: "New note" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect((within(dialog).getByLabelText("Title") as HTMLInputElement).value)
-      .toBe("");
+    const title = within(dialog).getByLabelText("Title") as HTMLInputElement;
+    expect(title.value).toBe("");
+    expect(title.closest(".overflow-y-auto")).not.toBeNull();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Board view" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

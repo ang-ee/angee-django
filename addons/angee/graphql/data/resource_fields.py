@@ -180,7 +180,7 @@ def final_resource_fields(
             is_object=is_object,
         )
         scalar = _graphql_scalar(named, kind=kind, field_name=name, node_name=node_name)
-        values = _graphql_enum_values(model_field, named) if kind == "enum" else ()
+        values = _field_enum_values(model_field, named) if kind == "enum" else ()
         projected.append(
             data_contract.DataResourceFieldMetadata(
                 name=name,
@@ -257,7 +257,7 @@ def final_input_only_resource_fields(
                 name=name,
                 kind=kind,
                 scalar=scalar,
-                values=_graphql_enum_values(model_field, named) if kind == "enum" else (),
+                values=_field_enum_values(model_field, named) if kind == "enum" else (),
                 widget=_projected_widget(model_field, kind, scalar),
                 readable=False,
                 aggregatable=name in aggregatable or python_name in aggregatable,
@@ -472,24 +472,34 @@ def _graphql_scalar(value: object, *, kind: str, field_name: str, node_name: str
     return scalar
 
 
-def _graphql_enum_values(
+def _field_enum_values(
     field: models.Field[Any, Any] | None,
     value: object,
 ) -> tuple[data_contract.DataResourceEnumValueMetadata, ...]:
-    if not isinstance(value, GraphQLEnumType):
-        return ()
-    labels = _field_choice_labels(field)
-    result: list[data_contract.DataResourceEnumValueMetadata] = []
-    for name, enum_value in value.values.items():
-        raw = getattr(enum_value.value, "value", enum_value.value)
-        description = labels.get(str(raw)) or enum_value.description
-        result.append(
-            data_contract.DataResourceEnumValueMetadata(
-                value=name,
-                description=str(description) if description is not None and str(description).strip() else None,
+    """Project selector options from the final enum or a string field's Django choices."""
+
+    if isinstance(value, GraphQLEnumType):
+        labels = _field_choice_labels(field)
+        result: list[data_contract.DataResourceEnumValueMetadata] = []
+        for name, enum_value in value.values.items():
+            raw = getattr(enum_value.value, "value", enum_value.value)
+            description = labels.get(str(raw)) or enum_value.description
+            result.append(
+                data_contract.DataResourceEnumValueMetadata(
+                    value=name,
+                    description=str(description) if description is not None and str(description).strip() else None,
+                )
             )
+        return tuple(result)
+    if field is None or not getattr(field, "choices", None):
+        return ()
+    return tuple(
+        data_contract.DataResourceEnumValueMetadata(
+            value=str(raw),
+            description=str(label) if str(label).strip() else None,
         )
-    return tuple(result)
+        for raw, label in field.flatchoices
+    )
 
 
 def _graphql_relation_model_label(value: object) -> str | None:
