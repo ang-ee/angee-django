@@ -85,6 +85,7 @@ export function QueueBoardPage(): React.ReactElement {
             <Column field="work_key" header={t("common.key")} />
             <Column field="title" />
             <Column field="estimate" header={t("common.estimate")} />
+            <Column field="assignee" />
             <Column field="priority" />
             <Column field="due_date" />
           </List>
