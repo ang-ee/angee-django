@@ -6,9 +6,16 @@ selects one of those implementations, its light/dark behavior and any bounded
 options it declares. Templates remain scaffolds or content structures.
 
 The renderer has an intrinsic base token set even when no theme addon is
-installed. `angee.theme_stock` makes that unchanged look selectable as
-`angee.stock`. Installing another theme adds it to the catalogue and never
-activates it by import order.
+installed. `angee.theme_stock` makes that unchanged blue look selectable as
+**Default** under the stable `angee.stock` preference key. Installing another
+theme adds it to the catalogue and never activates it by import order.
+
+The framework identity catalogue includes two product themes. **Angee**
+(`angee.theme_angee`, theme ID `angee.angee`) uses the `angee.ai` graphite and
+gold identity; **Fyltr** (`angee.theme_fyltr`, theme ID `angee.fyltr`) uses the
+`fyltr.ai` charcoal, cool-white and green identity. Each is one selectable
+theme with light and dark token layers. The full project profile installs both;
+the default profile remains Default plus Appearance.
 
 ## Host and user precedence
 

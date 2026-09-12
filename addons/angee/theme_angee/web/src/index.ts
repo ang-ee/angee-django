@@ -1,13 +1,15 @@
 import { defineBaseAddon } from "@angee/app";
 import { defineThemeContribution } from "@angee/ui/theme";
+
 import { themes } from "./themes.mjs";
+
 export default defineBaseAddon({
-  id: "theme.stock",
+  id: "theme.angee",
   themes: [defineThemeContribution({ definition: themes[0] })],
   i18n: {
     themes: {
-      "stock.label": "Default",
-      "stock.description": "The original blue Angee application palette.",
+      "angee.label": "Angee",
+      "angee.description": "The angee.ai gold identity on crisp neutral surfaces.",
     },
   },
 });

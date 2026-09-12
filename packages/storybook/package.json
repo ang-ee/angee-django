@@ -17,9 +17,11 @@
   "dependencies": {
     "@angee/refine": "workspace:*",
     "@angee/metadata": "workspace:*",
+    "@angee/theme-angee": "workspace:*",
     "@angee/theme-aurora": "workspace:*",
     "@angee/theme-brand": "workspace:*",
     "@angee/theme-carbon": "workspace:*",
+    "@angee/theme-fyltr": "workspace:*",
     "@angee/theme-midnight": "workspace:*",
     "@angee/theme-stock": "workspace:*",
     "@angee/theme-warm-red": "workspace:*",
