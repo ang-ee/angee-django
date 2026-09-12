@@ -48,12 +48,23 @@ describe("projects addon manifest", () => {
   test("owns one Projects place with four routed children", () => {
     expect(projects.menus).toHaveLength(1);
     expect(projects.menus?.[0]?.id).toBe("projects");
-    expect(projects.menus?.[0]?.route).toBeUndefined();
+    // The header routes to the projects list. It used to carry no route and
+    // fall through to its first child, so "Projects" the header went to My Work
+    // while "Projects" the child went to the list: one name, two destinations.
+    // This assertion was `toBeUndefined()` and pinned that behaviour.
+    expect(projects.menus?.[0]?.route).toBe("projects.projects");
     expect(projects.menus?.[0]?.children?.map((item) => item.route)).toEqual([
       "projects.my-work",
       "projects.projects",
       "projects.tasks",
       "projects.board",
     ]);
+    // My Work stays first, and the list child is named for what it is, so no two
+    // entries in the group share a label.
+    const labels = projects.menus?.[0]?.children?.map((item) => item.label) ?? [];
+    expect(labels[0]).toBe("My Work");
+    expect(labels).toContain("All projects");
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels).not.toContain(projects.menus?.[0]?.label);
   });
 });
