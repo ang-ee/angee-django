@@ -172,6 +172,15 @@ class MessageInbox:
             message_id__in=Subquery(messages.order_by().values("pk"))
         )
 
+    def accounts(self) -> Any:
+        """Readable accounts with an indexed existence check for eligible messages."""
+
+        return (
+            self.collection("integrate", "Integration")
+            .filter(Exists(self.messages.filter(channel_id=OuterRef("pk"))))
+            .order_by("display_name", "pk")
+        )
+
     def coverage(self, coverage: InboxCoverage) -> Any:
         """Apply source/date coverage without silently relaxing contradictions."""
 

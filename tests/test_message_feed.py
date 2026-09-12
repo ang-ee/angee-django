@@ -204,6 +204,20 @@ def test_search_cursor_uses_the_same_normalized_predicate() -> None:
     assert _ids(second) == [str(rows[2].sqid), str(rows[1].sqid)]
 
 
+def test_feed_deduplicates_search_matches_without_distinct_on_plain_reads() -> None:
+    owner = User.objects.create_user(username="feed-search-duplicates")
+    thread, rows = _messages(owner, size=2)
+    with system_context(reason="seed multiple matching message parts"):
+        for index in range(3):
+            Part._base_manager.create(created_by=owner, message=rows[0], name=f"needle-{index}.txt")
+    with actor_context(owner):
+        plain = Message.objects.filter(thread=thread).for_feed()
+        searched = Message.objects.filter(thread=thread).for_feed("needle")
+        assert not plain.query.distinct
+        assert plain.count() == searched.count() == 2
+        assert len(list(searched)) == 2
+
+
 def test_each_page_rechecks_message_and_root_permissions() -> None:
     """An existing cursor neither grants message access nor keeps a root readable."""
 

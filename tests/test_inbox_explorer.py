@@ -15,7 +15,7 @@ from angee.messaging.inbox_related import InboxRelated
 from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.inbox_transcript import InboxTranscript
 from angee.nexus.inbox import NexusInboxNavigator, NexusInboxNavigatorOptions
-from tests.conftest import execute_schema, result_data
+from tests.conftest import execute_schema, make_integration, result_data
 from tests.test_messaging import Fragment, Handle, Message, Part, Participant, Party, Thread
 from tests.test_nexus import (
     _schema,
@@ -190,6 +190,52 @@ def test_navigator_headers_and_members_page_independently_with_distinct_root_cou
         assert all(row.count == 1 for row in leaves.rows)
         empty_account = navigator.groups("account").page()
         assert [(row.value, row.label, row.count) for row in empty_account.rows] == [(None, "No account", 27)]
+
+
+def test_group_windows_keep_exact_totals_on_empty_and_out_of_range_pages():
+    owner = User.objects.create_user(username="explorer-window-counts")
+    with system_context(reason="seed paged activity"):
+        handle = Handle._base_manager.create(created_by=owner, platform="email", value="window@example.com")
+        message = Message._base_manager.create(
+            created_by=owner, sender=handle, status="synced", direction="inbound", sent_at=T0
+        )
+    with actor_context(owner):
+        navigator = InboxNavigator(Message.objects.all(), InboxCoverage(), InboxNavigatorOptions())
+        inbox = Message.objects.all().explorer()
+        groups = InboxResults(inbox, inbox.messages, InboxResultOptions()).groups("conversation")
+        for page in (1, 2, 20):
+            result = groups.page(page=page, size=1)
+            senders = navigator.page(page=page, size=1)
+            assert (result.count, result.record_count, result.message_count) == (1, 1, 1)
+            assert (senders.count, senders.message_count) == (1, 1)
+            assert len(result.rows) == len(senders.rows) == (1 if page == 1 else 0)
+        empty = InboxResults(inbox, inbox.messages.exclude(pk=message.pk), InboxResultOptions())
+        for page in (1, 2):
+            result = empty.groups("conversation").page(page=page)
+            assert (result.rows, result.count, result.record_count, result.message_count) == ([], 0, 0, 0)
+
+
+def test_accounts_require_both_readable_account_and_eligible_readable_message():
+    owner = User.objects.create_user(username="explorer-account-owner")
+    other = User.objects.create_user(username="explorer-account-other")
+    with system_context(reason="seed source account eligibility"):
+        accounts = {
+            name: make_integration(f"explorer-{name}", owner=owner, created_by=owner)
+            for name in ("eligible", "draft", "public", "private-message", "empty")
+        }
+        hidden = make_integration("explorer-hidden", owner=other, created_by=other)
+        public = Thread._base_manager.create(created_by=owner, modality="public_thread")
+        for name, account in accounts.items():
+            if name != "empty":
+                Message._base_manager.create(
+                    created_by=other if name == "private-message" else owner,
+                    channel=account,
+                    status="draft" if name == "draft" else "synced",
+                    thread=public if name == "public" else None,
+                )
+        Message._base_manager.create(created_by=owner, channel=hidden, status="synced")
+    with actor_context(owner):
+        assert [account.pk for account in Message.objects.all().explorer().accounts()] == [accounts["eligible"].pk]
 
 
 def test_recency_classifies_latest_identity_activity_and_keeps_older_messages(monkeypatch):

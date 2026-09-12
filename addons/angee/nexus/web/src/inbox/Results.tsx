@@ -93,6 +93,7 @@ export function InboxResultsPane({
           availableViews={["list"]}
           textFilterField="text"
           maxGroupDepth={1}
+          defaultExpandedGroups="none"
           {...controls}
           toolbarActions={
             <>

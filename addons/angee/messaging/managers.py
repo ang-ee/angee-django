@@ -2035,7 +2035,8 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         subtree) or a concrete iterable (one party). Participants are Handle-keyed
         and ``Handle.party`` is the resolution-materialised owner, so one join
         answers "every message exchanged with these parties across channels".
-        Distinct because one message may carry several matching handles.
+        The participant subquery preserves one row per message even when several
+        handles match.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -2059,9 +2060,12 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         """Apply current read scope, search and tuple order to an inbox scope."""
 
         queryset = self.scoped().annotate(_order_at=MessageQuerySet.chronological_time())
-        for term in self._feed_search(search).split():
+        terms = self._feed_search(search).split()
+        for term in terms:
             queryset = queryset.searching(term)
-        return cast(MessageQuerySet, queryset.distinct().order_by("-_order_at", "-pk"))
+        if terms:
+            queryset = queryset.distinct()
+        return cast(MessageQuerySet, queryset.order_by("-_order_at", "-pk"))
 
     @staticmethod
     def _feed_search(search: str) -> str:

@@ -31,6 +31,23 @@ export function QueueBoardPage(): React.ReactElement {
   const form = useTaskFormDeclaration();
   const name = queue.data?.work_queues_by_pk?.name ?? queueId;
   const scale = queue.data?.work_queues_by_pk?.estimate_scale;
+  // Memoized, not inline: these are identity-compared downstream, so a fresh
+  // object on every render re-runs the collection surface's effects and its
+  // grouped-scope work for a board that has not changed.
+  const createDefaults = React.useMemo(() => ({ queue: queueId }), [queueId]);
+  const baseFilter = React.useMemo(
+    () => ({ queue: { exact: queueId } }),
+    [queueId],
+  );
+  const laneSource = React.useMemo(
+    () => ({
+      field: "stage",
+      rankField: "sort_order",
+      filters: queueStageFilters(queueId),
+      sorters: [{ field: "position", order: "asc" as const }],
+    }),
+    [queueId],
+  );
   const select = React.useCallback(
     (id: string | null) => {
       if (id === null) {
@@ -57,7 +74,7 @@ export function QueueBoardPage(): React.ReactElement {
           creating={creating}
           onSelect={select}
           onClose={() => setCreating(false)}
-          createDefaults={{ queue: queueId }}
+          createDefaults={createDefaults}
         >
           <List<WorkTaskRow>
             resource={TASK_MODEL}
@@ -66,14 +83,9 @@ export function QueueBoardPage(): React.ReactElement {
             // queueStageFilters, which excludes triage/duplicate stages —
             // `stage` is an ID comparison on the wire, so a nested
             // stage.category filter is not expressible here.
-            baseFilter={{ queue: { exact: queueId } }}
+            baseFilter={baseFilter}
             order={{ sort_order: "ASC" }}
-            laneSource={{
-              field: "stage",
-              rankField: "sort_order",
-              filters: queueStageFilters(queueId),
-              sorters: [{ field: "position", order: "asc" }],
-            }}
+            laneSource={laneSource}
             rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
             renderCard={(task) => <WorkTaskCard task={task} estimateScale={scale} />}
             emptyContent={{

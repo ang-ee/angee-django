@@ -35,6 +35,26 @@ export function CycleBoardPage(): React.ReactElement {
   const queueFacts = queue.data?.work_queues_by_pk;
   const cycleFacts = cycle.data?.work_cycles_by_pk;
   const title = cycleFacts?.name ?? id;
+  // Memoized, not inline: these are identity-compared downstream, so a fresh
+  // object on every render re-runs the collection surface's effects and its
+  // grouped-scope work for a board that has not changed.
+  const createDefaults = React.useMemo(
+    () => ({ queue: queueId, cycle: id }),
+    [queueId, id],
+  );
+  const baseFilter = React.useMemo(
+    () => ({ queue: { exact: queueId }, cycle: { exact: id } }),
+    [queueId, id],
+  );
+  const laneSource = React.useMemo(
+    () => ({
+      field: "stage",
+      rankField: "sort_order",
+      filters: queueStageFilters(queueId),
+      sorters: [{ field: "position", order: "asc" as const }],
+    }),
+    [queueId],
+  );
   const select = React.useCallback(
     (taskId: string | null) => {
       if (taskId === null) {
@@ -74,24 +94,16 @@ export function CycleBoardPage(): React.ReactElement {
           creating={creating}
           onSelect={select}
           onClose={() => setCreating(false)}
-          createDefaults={{ queue: queueId, cycle: id }}
+          createDefaults={createDefaults}
         >
           <List<WorkTaskRow>
             resource={TASK_MODEL}
             defaultView="board"
             // System-staged rows never render: lane filters exclude
             // triage/duplicate — `stage` is an ID comparison on the wire.
-            baseFilter={{
-              queue: { exact: queueId },
-              cycle: { exact: id },
-            }}
+            baseFilter={baseFilter}
             order={{ sort_order: "ASC" }}
-            laneSource={{
-              field: "stage",
-              rankField: "sort_order",
-              filters: queueStageFilters(queueId),
-              sorters: [{ field: "position", order: "asc" }],
-            }}
+            laneSource={laneSource}
             rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
             renderCard={(task) => (
               <WorkTaskCard task={task} estimateScale={queueFacts?.estimate_scale} />

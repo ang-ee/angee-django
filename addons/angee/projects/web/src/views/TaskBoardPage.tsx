@@ -23,6 +23,15 @@ export function TaskBoardPage(): React.ReactElement {
   const [creating, setCreating] = React.useState(false);
   const rowActions = useTaskRowActions<TaskActionRow>();
   const form = useTaskFormDeclaration();
+  // Memoized, not inline: these are identity-compared downstream, so a fresh
+  // object on every render re-runs the collection surface's effects and its
+  // grouped-scope work for a board that has not changed.
+  const baseFilter = React.useMemo(() => ({ status: { exact: "OPEN" } }), []);
+  const order = React.useMemo(() => ({ sort_order: "ASC" as const }), []);
+  const laneSource = React.useMemo(
+    () => ({ field: "assignee", rankField: "sort_order" }),
+    [],
+  );
   const select = React.useCallback(
     (id: string | null) => {
       if (id === null) {
@@ -46,9 +55,9 @@ export function TaskBoardPage(): React.ReactElement {
       <List<TaskActionRow>
         resource={TASK_MODEL}
         defaultView="board"
-        baseFilter={{ status: { exact: "OPEN" } }}
-        order={{ sort_order: "ASC" }}
-        laneSource={{ field: "assignee", rankField: "sort_order" }}
+        baseFilter={baseFilter}
+        order={order}
+        laneSource={laneSource}
         rowActions={rowActions}
         emptyContent={{
           icon: "task-board",
