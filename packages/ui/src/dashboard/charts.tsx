@@ -58,30 +58,41 @@ export function DashboardBars({
   const t = useDashboardT();
   const values = finitePoints(points);
   const extent = values.reduce((max, point) => Math.max(max, Math.abs(point.value)), 0);
+  const diverges = values.some((point) => point.value < 0)
+    && values.some((point) => point.value >= 0);
   if (values.length === 0 || extent === 0) {
     return <p className="text-12 text-fg-muted">{emptyLabel ?? t("widget.noData")}</p>;
   }
   return (
-    <figure aria-label={title} className="min-w-0">
+    <figure aria-label={title} className="h-full min-h-0 min-w-0">
       <figcaption className="sr-only">{title}</figcaption>
-      <ul className="grid gap-2.5" aria-hidden>
+      <ul
+        className="grid h-full min-h-0 gap-1.5"
+        style={{ gridTemplateRows: `repeat(${values.length}, minmax(0, 1fr))` }}
+        aria-hidden
+      >
         {values.map((point, index) => (
-          <li key={point.key} className="grid min-w-0 grid-cols-[minmax(0,9rem)_1fr] items-center gap-3">
-            <span className="truncate text-12 text-fg" title={point.label}>{point.label}</span>
-            <span className="relative grid min-w-0 grid-cols-2 items-center">
-              <span className="absolute inset-y-0 left-1/2 w-px bg-border" />
-              <span className={point.value < 0 ? "col-start-1 flex justify-end" : "col-start-2"}>
+          <li key={point.key} className="grid min-h-0 min-w-0 grid-cols-[minmax(0,8rem)_1fr] items-center gap-3">
+            <span className="col-start-1 row-start-1 truncate text-12 text-fg" title={point.label}>{point.label}</span>
+            <span className={diverges
+              ? "relative col-start-2 row-start-1 grid min-w-0 grid-cols-2 items-center"
+              : "relative col-start-2 row-start-1 grid min-w-0 grid-cols-1 items-center"}
+            >
+              {diverges ? <span className="absolute inset-y-0 left-1/2 w-px bg-border" /> : null}
+              <span className={diverges && point.value < 0 ? "col-start-1 flex justify-end" : diverges ? "col-start-2" : "col-start-1"}>
                 <span
-                  className="block h-[18px] min-w-[3px] rounded-4"
+                  className="block h-5 min-w-[3px] rounded-4 opacity-90"
                   style={{
                     width: `${Math.max((Math.abs(point.value) / extent) * 100, 1.5)}%`,
                     backgroundColor: seriesColor(point, index),
                   }}
                 />
               </span>
-              <span className={point.value < 0
+              <span className={diverges && point.value < 0
                 ? "col-start-1 row-start-1 mr-1 justify-self-start text-12 text-fg-muted"
-                : "col-start-2 row-start-1 ml-1 justify-self-end text-12 text-fg-muted"}
+                : diverges
+                  ? "col-start-2 row-start-1 ml-1 justify-self-end text-12 text-fg-muted"
+                  : "col-start-1 row-start-1 mr-1 justify-self-end text-12 text-fg-muted"}
               >
                 {formatNumber(point.value)}
               </span>

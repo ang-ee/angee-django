@@ -7,6 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import type { DashboardWidgetKind, DashboardWidgetRenderProps } from "./headless";
 import { DashboardBars, DashboardDonut } from "./charts";
 import { useDashboardT } from "./i18n";
+import { formatDateTime } from "../widgets/date-format";
+import { titleCase } from "../lib/titleCase";
 
 function DataState({ data, children }: DashboardWidgetRenderProps & { children: React.ReactNode }): React.ReactElement {
   const t = useDashboardT();
@@ -26,10 +28,11 @@ function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   return (
     <DataState {...props}>
       <MetricTile
-        className="h-full border-0 bg-transparent p-0 shadow-none [&>div:first-child]:mb-1"
-        density="prominent"
+        className="h-full border-0 bg-transparent p-0 shadow-none"
+        density="compact"
         label={t("widget.value")}
         value={value}
+        valueClassName="text-xl font-semibold leading-6 tabular-nums"
       />
     </DataState>
   );
@@ -47,16 +50,21 @@ function TableWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   const t = useDashboardT();
   const columns = React.useMemo(() => {
     const first = props.data.rows[0];
-    return first ? Object.keys(first).filter((key) => key !== "id") : [];
+    if (!first) return [];
+    const keys = new Set(Object.keys(first));
+    return [...keys].filter((key) => key !== "id" && !(key.endsWith("_label") && keys.has(key.slice(0, -6))));
   }, [props.data.rows]);
   return (
     <DataState {...props}>
       {props.data.rows.length === 0 ? <InlineEmpty label={t("widget.noRows")} /> : (
-        <Table density="compact">
-          <TableHeader><TableRow>{columns.map((column) => <TableHead key={column}>{column.replaceAll("_", " ")}</TableHead>)}</TableRow></TableHeader>
+        <Table density="compact" className="table-fixed">
+          <TableHeader><TableRow>{columns.map((column) => <TableHead key={column} className="max-w-64">{titleCase(column)}</TableHead>)}</TableRow></TableHeader>
           <TableBody>
             {props.data.rows.map((row, index) => (
-              <TableRow key={String(row.id ?? index)}>{columns.map((column) => <TableCell key={column}>{cellText(row[column])}</TableCell>)}</TableRow>
+              <TableRow key={String(row.id ?? index)}>{columns.map((column) => {
+                const value = cellText(row, column);
+                return <TableCell key={column} className="max-w-64 truncate" title={value}>{value}</TableCell>;
+              })}</TableRow>
             ))}
           </TableBody>
         </Table>
@@ -70,11 +78,21 @@ function AuthoredWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   return <>{props.authored ?? <InlineEmpty label={t("widget.authoredUnavailable")} />}</>;
 }
 
-function cellText(value: unknown): string {
+function cellText(row: Record<string, unknown>, column: string): string {
+  const labelledValue = row[`${column}_label`];
+  const value = labelledValue ?? row[column];
   if (value == null) return "—";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "string") {
+    if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)) {
+      const formatted = formatDateTime(value);
+      if (formatted) return formatted;
+    }
+    return value;
+  }
   if (typeof value !== "object") return String(value);
-  const row = value as Record<string, unknown>;
-  return String(row.name ?? row.label ?? row.title ?? row.id ?? "—");
+  const record = value as Record<string, unknown>;
+  return String(record.name ?? record.label ?? record.title ?? record.id ?? "—");
 }
 
 export const BUILTIN_DASHBOARD_WIDGET_KINDS: readonly DashboardWidgetKind[] = [

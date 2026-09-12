@@ -33,6 +33,8 @@ export type MetricTileProps = Omit<
   MetricTileValue & {
     className?: string;
     density?: MetricDensity;
+    /** Optional value typography override for constrained composed surfaces. */
+    valueClassName?: string;
   };
 
 export type MetricDensity = "compact" | "prominent";
@@ -78,7 +80,7 @@ export const metricStripVariants = tv({
 
 export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
   function MetricTile(
-    { className, density = "compact", detail, icon, label, value, tone, href, onNavigate, onClick, ...props },
+    { className, density = "compact", detail, icon, label, value, tone, href, onNavigate, onClick, valueClassName, ...props },
     ref,
   ) {
     const styles = metricStripVariants({ density });
@@ -94,7 +96,7 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
           )}
           {icon ? <IconTile icon={icon} size="md" /> : null}
         </div>
-        <dd className={styles.value()}>{value}</dd>
+        <dd className={styles.value({ className: valueClassName })}>{value}</dd>
         {detail ? <p className={styles.detail()}>{detail}</p> : null}
       </>
     );

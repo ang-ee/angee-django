@@ -407,7 +407,7 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
           if (event.key === "ArrowDown") onMove(0, 1);
         }
       }}
-      className={cn("relative flex min-h-0 flex-col overflow-hidden rounded-8 border border-border bg-sheet", drag.isDragging && "z-10 opacity-90")}
+      className={cn("relative flex min-h-0 flex-col overflow-hidden rounded-8 border border-border-subtle bg-sheet shadow-sm", drag.isDragging && "z-10 opacity-90")}
       style={{
         gridColumn: `${widget.x + 1} / span ${widget.w}`,
         gridRow: `${widget.y + 1} / span ${widget.h}`,
@@ -473,12 +473,12 @@ function WidgetDataBody({ widget, kind, definition, pageScope }: {
   return (
     <div className={cn(
       "flex min-h-0 flex-1 flex-col overflow-hidden",
-      kind.shape === "value" ? "px-3 pt-2 pb-1.5" : "p-3",
+      "px-3 pt-2 pb-1.5",
     )}>
       <div className={cn("min-h-0 flex-1", kind.shape === "rows" ? "overflow-auto" : "overflow-hidden")}>
         <Component spec={widget} data={data} authored={Authored ? <Authored /> : undefined} />
       </div>
-      <footer className="flex shrink-0 items-center justify-end gap-2 pt-2 text-2xs text-fg-subtle">
+      <footer className="flex shrink-0 items-center justify-end gap-2 pt-1 text-2xs text-fg-subtle">
         {pageScope && widget.data.shape !== "none" ? (
           <span>{pageScope.resource === widget.data.source.resource ? t("surface.pageFilters") : t("surface.independentSource")}</span>
         ) : null}
