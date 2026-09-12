@@ -5,6 +5,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
 
 import { enProjectsMessages } from "./i18n";
+import { taskCreateForm } from "./views/task-create-form";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 
 export {
@@ -90,6 +91,9 @@ const projects = defineBaseAddon({
   routes: projectsRoutes,
   menus: projectsMenu,
   i18n: { projects: enProjectsMessages },
+  // The create form for a task, used wherever one is created; the record keeps
+  // the tabbed form for its long tail.
+  forms: { "projects.Task": taskCreateForm },
   icons: {
     projects: Briefcase,
     "project-task": ListChecks,
