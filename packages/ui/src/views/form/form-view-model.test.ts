@@ -8,6 +8,7 @@ import {
   mutationData,
   recordToValues,
   titleText,
+  recordSubtitleParts,
 } from "./form-view-model";
 
 const fields: readonly FieldDescriptor[] = [
@@ -203,5 +204,46 @@ describe("dotted form fields", () => {
         isCreate: false,
       },
     )).toEqual({ id: "record-1", count: null, ratio: null });
+  });
+});
+
+describe("recordSubtitleParts", () => {
+  const t = ((key: string, vars?: Record<string, unknown>) =>
+    `${key}:${String(vars?.value ?? "")}`) as never;
+
+  test("never puts an internal id in the record header", () => {
+    // The header led with the sqid, which names the row for the database and
+    // tells the reader nothing. A record's human key is what identifies it, and
+    // it is shown where it exists -- cards, the list's Key column, triage.
+    const parts = recordSubtitleParts(
+      { id: "tsk_2KY5XM6f", created_at: "2026-09-01T10:00:00Z" },
+      "tsk_2KY5XM6f",
+      { created: "created_at", updated: null, wordCount: null },
+      t,
+    );
+
+    expect(parts.join(" ")).not.toContain("tsk_2KY5XM6f");
+    expect(parts).toHaveLength(1);
+    expect(String(parts[0])).toContain("form.created");
+  });
+
+  test("still carries the facts the subtitle vocabulary names", () => {
+    const parts = recordSubtitleParts(
+      { id: "tsk_1", created_at: "2026-09-01T10:00:00Z", updated_at: "2026-09-02T10:00:00Z" },
+      "tsk_1",
+      { created: "created_at", updated: "updated_at", wordCount: null },
+      t,
+    );
+    expect(parts).toHaveLength(2);
+  });
+
+  test("a record with no subtitle facts has no subtitle at all", () => {
+    const parts = recordSubtitleParts(
+      { id: "tsk_1" },
+      "tsk_1",
+      { created: null, updated: null, wordCount: null },
+      t,
+    );
+    expect(parts).toEqual([]);
   });
 });
