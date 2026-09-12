@@ -100,6 +100,50 @@ def test_missing_attachment_bytes_still_match_attachment_filter():
         assert inbox.matching(inbox.messages, InboxSearch(attachment="none")).count() == 0
 
 
+def test_search_candidates_preserve_terms_roles_and_distinct_message_uses():
+    owner = User.objects.create_user(username="explorer-search-owner")
+    other = User.objects.create_user(username="explorer-search-other")
+    with system_context(reason="seed indexed search candidates"):
+        invoice = Fragment.objects.upsert(text="invoice", owner_id=owner.pk)
+        alpha = Fragment.objects.upsert(text="alpha", owner_id=owner.pk)
+        phrase = Fragment.objects.upsert(text="invoice alpha", owner_id=owner.pk)
+        public = Thread._base_manager.create(created_by=owner, modality="public_thread")
+        messages = {
+            name: Message._base_manager.create(
+                created_by=other if name == "hidden" else owner,
+                status="draft" if name == "draft" else "synced",
+                thread=public if name == "public" else None,
+                sent_at=T0,
+            )
+            for name in ("text", "shared", "quoted", "filename", "inline", "hidden", "draft", "public")
+        }
+        for name in ("text", "shared", "hidden", "draft", "public"):
+            for position, fragment in enumerate((invoice, alpha, invoice)):
+                Part._base_manager.create(
+                    created_by=owner, message=messages[name], role="body", fragment=fragment, position=position,
+                )
+        Part._base_manager.create(created_by=owner, message=messages["quoted"], role="quoted", fragment=phrase)
+        for name in ("text", "filename", "inline"):
+            Part._base_manager.create(
+                created_by=owner, message=messages[name], name="invoice alpha.pdf",
+                disposition="inline" if name == "inline" else "attachment", position=10,
+            )
+    with actor_context(owner):
+        inbox = Message.objects.all().explorer()
+        matches = inbox.results(InboxCoverage(), InboxSearch(text="invoice alpha"))
+        assert set(matches.values_list("pk", flat=True)) == {
+            messages[name].pk for name in ("text", "shared", "filename")
+        }
+        assert matches.count() == 3
+        quoted = inbox.results(InboxCoverage(), InboxSearch(text='"invoice alpha"', quoted=True))
+        assert set(quoted.values_list("pk", flat=True)) == {
+            messages[name].pk for name in ("text", "quoted", "filename")
+        }
+        assert inbox.results(InboxCoverage(), InboxSearch(text="invoice missing-token")).count() == 0
+        groups = InboxResults(inbox, matches, InboxResultOptions()).groups("conversation").page()
+        assert (groups.count, groups.record_count, groups.message_count) == (3, 3, 3)
+
+
 def test_sections_page_threads_before_bounded_previews():
     owner = User.objects.create_user(username="explorer-sections")
     with system_context(reason="seed explorer"):

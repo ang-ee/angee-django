@@ -173,11 +173,11 @@ class MessageInbox:
         )
 
     def accounts(self) -> Any:
-        """Readable accounts with an indexed existence check for eligible messages."""
+        """Readable accounts projected from eligible messages without full-row deduplication."""
 
         return (
             self.collection("integrate", "Integration")
-            .filter(Exists(self.messages.filter(channel_id=OuterRef("pk"))))
+            .filter(pk__in=Subquery(self.messages.order_by().values("channel_id").distinct()))
             .order_by("display_name", "pk")
         )
 
@@ -305,8 +305,14 @@ class MessageInbox:
                 if connections[rows.db].vendor == "postgresql"
                 else Q(fragment__text__icontains=term)
             )
-            matches = parts.filter((Q(role__in=roles) & text) | Q(name__icontains=term, disposition="attachment"))
-            rows = rows.filter(Exists(matches))
+            # Independent candidate paths let PostgreSQL start at the fragment
+            # GIN index. A correlated text-or-filename predicate instead probes
+            # parts for every message before it can narrow the population.
+            text_matches = self.parts.filter(Q(role__in=roles) & text).order_by().values("message_id")
+            filenames = (
+                self.parts.filter(name__icontains=term, disposition="attachment").order_by().values("message_id")
+            )
+            rows = rows.filter(pk__in=Subquery(text_matches.union(filenames)))
         if search.relations:
             if set(search.relations) - {*apps.get_model("messaging", "MessageEdge").EdgeKind.values, "reply"}:
                 raise ValueError("Unknown message relation kind.")
@@ -329,7 +335,10 @@ class MessageInbox:
     def relation_kinds(self) -> list[str]:
         """Expose the kinds of available readable connections, including reply pointers."""
 
-        kinds = set(self.edges().order_by().values_list("kind", flat=True).distinct())
+        edges = self.edges()
+        # Availability needs one match per declared kind, not a distinct scan of
+        # the entire quote graph and both authorized endpoint populations.
+        kinds = {kind for kind in edges.model.EdgeKind.values if edges.filter(kind=kind).exists()}
         if self.messages.filter(parent_id__in=Subquery(self.messages.order_by().values("pk"))).exists():
             kinds.add("reply")
         return sorted(kinds)

@@ -53,12 +53,12 @@ export async function requestAuthoredData<TData>(
   const response = await custom<BaseRecord>({
     url: "",
     method: "post",
-    // Refine exposes Query context in request metadata. Hasura7 ignores the
-    // signal; consuming it here still lets Query discard a cancelled result.
+    // Consume Query's signal only if the provider can use it. Reading it here
+    // would cancel a shared request on unmount even when transport keeps running.
     meta: {
       ...queryMeta(document, variables),
       queryKey: context.queryKey,
-      signal: context.signal,
+      get signal() { return context.signal; },
     },
   });
   const data = authoredOperationData<TData>(response.data);

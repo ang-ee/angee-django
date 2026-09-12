@@ -3,7 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { Refine, type DataProvider, type LiveProvider } from "@refinedev/core";
 import { QueryClient, keepPreviousData } from "@tanstack/react-query";
 import { parse } from "graphql";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { authoredQueryKey, authoredQueryOptions, useAuthoredQuery, useAuthoredQueryBatch } from "./authored-hooks";
@@ -104,6 +104,39 @@ test("Query cancellation discards a late provider response even when transport i
   await act(async () => { await f.client.cancelQueries({ queryKey: authoredQueryKey(DOCUMENT, { id: "a" }) }); });
   await act(async () => { pending.resolve({ data: { notes: [{ id: "late" }] } }); });
   expect(result.current.data).toBeUndefined();
+});
+
+test("StrictMode and pane remounts share the in-flight read when its provider cannot cancel transport", async () => {
+  const pending = deferred<{ data: Data }>();
+  const f = fixture(vi.fn(() => pending.promise));
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <StrictMode><f.wrapper>{children}</f.wrapper></StrictMode>
+  );
+  const first = renderHook(() => useAuthoredQuery(DOCUMENT, { id: "a" }), { wrapper });
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
+  first.unmount();
+  const { result } = renderHook(() => useAuthoredQuery(DOCUMENT, { id: "a" }), { wrapper });
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
+  await act(async () => { pending.resolve({ data: { notes: [{ id: "a" }] } }); });
+  await waitFor(() => expect(result.current.data?.notes[0]?.id).toBe("a"));
+  expect(f.custom).toHaveBeenCalledTimes(1);
+});
+
+test("providers that consume the signal still receive native unmount cancellation", async () => {
+  const pending = deferred<{ data: Data }>();
+  let signal: AbortSignal | undefined;
+  const custom = vi.fn(({ meta }: { meta?: { signal?: AbortSignal } } = {}) => {
+    signal = meta?.signal;
+    return pending.promise;
+  });
+  const f = fixture(custom);
+  const first = renderHook(() => useAuthoredQuery(DOCUMENT, { id: "a" }), { wrapper: f.wrapper });
+  await waitFor(() => expect(signal).toBeDefined());
+  expect(signal?.aborted).toBe(false);
+  first.unmount();
+  expect(signal?.aborted).toBe(true);
+  await act(async () => { pending.resolve({ data: { notes: [{ id: "late" }] } }); });
+  expect(f.client.getQueryData(authoredQueryKey(DOCUMENT, { id: "a" }))).toBeUndefined();
 });
 
 test("real Refine live subscriptions register canonical interests and clean up", async () => {
