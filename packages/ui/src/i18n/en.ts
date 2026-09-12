@@ -26,6 +26,10 @@ export const enUiMessages: Record<string, string> = {
   "dialog.close": "Close",
   "dialog.cancel": "Cancel",
   "error.generic": "Something went wrong.",
+  "appError.title": "Something went wrong",
+  "appError.description":
+    "This page could not be displayed. Trying again often clears it.",
+  "appError.retry": "Try again",
   "query.reset": "Reset filters, sorting and grouping",
   "alert.dismiss": "Dismiss",
   "chip.remove": "Remove {label}",
@@ -255,6 +259,10 @@ export const enUiMessages: Record<string, string> = {
   "form.genericSaveError": "Could not save record.",
   "form.leave": "Leave",
   "form.loading": "Loading…",
+  "form.notFoundTitle": "Record not found",
+  "form.notFoundDescription":
+    "This record does not exist, or you do not have access to it. It may have been deleted, or the address may be wrong.",
+  "form.notFoundRetry": "Try again",
   "form.value.notSet": "Not set",
   "form.value.leftEmpty": "Left empty",
   "form.value.useDefault": "Use default",

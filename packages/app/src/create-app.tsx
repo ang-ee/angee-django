@@ -68,7 +68,7 @@ import {
 import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
 import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
-import { LoadingPanel } from "@angee/ui/fragments/index";
+import { ErrorPanel, LoadingPanel } from "@angee/ui/fragments/index";
 import {
   MenuTree,
   type ChromeMenuItem,
@@ -351,7 +351,23 @@ export function createApp(input: CreateAppInput): AngeeApp {
     );
   }
 
-  const rootRoute = createRootRoute({ component: RootOutlet });
+  // A route that throws otherwise leaves a blank frame with nothing to act on.
+  // `reset` re-runs the failed match, which clears the transient causes (a
+  // dropped request, a chunk that failed to load) without a full reload.
+  function RouteErrorPanel({
+    error,
+    reset,
+  }: {
+    error: unknown;
+    reset: () => void;
+  }): ReactNode {
+    return <ErrorPanel error={error} onRetry={reset} />;
+  }
+
+  const rootRoute = createRootRoute({
+    component: RootOutlet,
+    errorComponent: RouteErrorPanel,
+  });
 
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -390,6 +406,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
     // (and any future loader-bearing route, after `defaultPendingMs`) renders
     // this inside its parent layout's <Outlet/>, so the chrome stays mounted.
     defaultPendingComponent: () => <LoadingPanel />,
+    // Every route without its own boundary reports the throw in place, inside
+    // whatever layout is already mounted.
+    defaultErrorComponent: RouteErrorPanel,
   });
 
   return {

@@ -122,6 +122,10 @@ async function fixture(options: {
   acknowledgedSource?: FormViewAcknowledgedSource;
   boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[];
   publicView?: boolean;
+  /** Make the record read throw, standing in for a failed request. */
+  readRejects?: boolean;
+  /** Make the record read succeed with no row, standing in for an absent id. */
+  readEmpty?: boolean;
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
   recordTabs?: readonly RecordTabDescriptor[];
@@ -141,7 +145,11 @@ async function fixture(options: {
       : {}),
   };
   const onSaved = vi.fn();
-  const getOne = vi.fn(async () => ({ data: record }));
+  const getOne = vi.fn(async () => {
+    if (options.readRejects) throw new Error("Note 'nope' was not found");
+    if (options.readEmpty) return { data: null as unknown as Row };
+    return { data: record };
+  });
   const update = vi.fn(async ({ variables }: { variables?: unknown }) => {
     record = { ...record, ...(variables as Row) };
     return { data: record };
@@ -905,4 +913,32 @@ test("native bound widgets delimit text, discrete, structured and presence inter
   expect(commits).toHaveBeenCalledWith("settings.optional");
   expect(starts).not.toHaveBeenCalledWith("settings.locked");
   expect(commits).not.toHaveBeenCalledWith("settings.locked");
+});
+
+
+test("a record read that fails reports it and offers a retry, not an empty form", async () => {
+  const f = await fixture({ publicView: true, readRejects: true });
+  expect(await screen.findByText("Something went wrong")).toBeTruthy();
+  expect(screen.getByText("Note 'nope' was not found")).toBeTruthy();
+  // The editable shell must be gone: it would offer a save onto a record nobody
+  // has read.
+  expect(screen.queryByLabelText("title")).toBeNull();
+
+  // Retry re-reads rather than making the user reload the page.
+  const reads = f.getOne.mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(f.getOne.mock.calls.length).toBeGreaterThan(reads));
+});
+
+test("an id that reads back with no record shows a not-found panel", async () => {
+  await fixture({ publicView: true, readEmpty: true });
+  expect(await screen.findByText("Record not found")).toBeTruthy();
+  expect(screen.queryByLabelText("title")).toBeNull();
+});
+
+test("a record that reads back normally still renders its form", async () => {
+  await fixture({ publicView: true });
+  expect(await screen.findByDisplayValue("First")).toBeTruthy();
+  expect(screen.queryByText("Record not found")).toBeNull();
+  expect(screen.queryByText("Something went wrong")).toBeNull();
 });

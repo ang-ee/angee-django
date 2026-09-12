@@ -7,6 +7,8 @@ import { renderGlyph } from "../../chrome/Glyph";
 import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
 import { cn } from "../../lib/cn";
 import { SlotOutlet } from "../../lib/slot-outlet";
+import { EmptyState } from "../../fragments/EmptyState";
+import { ErrorPanel } from "../../fragments/ErrorPanel";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import {
   RecordChromeProvider,
@@ -161,6 +163,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     formReadOnly,
     formIsDirty,
     displayRecord,
+    recordMissing,
+    readFailure,
     saveError,
     declaredActions,
     recordChrome,
@@ -276,6 +280,29 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
       </div>
     </ControlBand>
   );
+
+  // A read that failed is retryable and says so; the form must not stand in for
+  // a record nobody has read yet.
+  if (readFailure) {
+    return <ErrorPanel error={readFailure} onRetry={reload} />;
+  }
+  // An id that resolves to nothing is not an empty record: rendering the form
+  // would offer a save that has nothing to save onto.
+  if (recordMissing) {
+    return (
+      <EmptyState
+        fill
+        icon="search"
+        title={t("form.notFoundTitle")}
+        description={t("form.notFoundDescription")}
+        actions={
+          <Button type="button" variant="secondary" size="sm" onClick={reload}>
+            {t("form.notFoundRetry")}
+          </Button>
+        }
+      />
+    );
+  }
 
   const formElement = (
     <form
