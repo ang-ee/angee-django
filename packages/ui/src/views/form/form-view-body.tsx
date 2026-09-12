@@ -38,6 +38,7 @@ import {
   visibleSections,
   type FormSectionModel,
   type FormValues,
+  type FormViewLayout,
 } from "./form-view-model";
 import type { FormViewSurface } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
@@ -240,7 +241,7 @@ export function FormViewOverview({
   layout,
 }: {
   surface: FormViewSurface;
-  layout: "stacked" | "tabs";
+  layout: FormViewLayout;
 }): React.ReactElement {
   const {
     t,
@@ -280,7 +281,29 @@ export function FormViewOverview({
     );
   };
   const renderSections = (list: readonly FormSectionModel[]): React.ReactNode => {
-    if (layout !== "tabs") {
+    if (layout === "sidebar") {
+      // The standing column holds what people check and change on every visit;
+      // the rest keeps the tabbed body, so a record with a long tail does not
+      // pay for it on first read.
+      const properties = list.filter((section) => section.placement === "properties");
+      const main = list.filter((section) => section.placement !== "properties");
+      return (
+        <div className="form-sidebar-grid">
+          <div className="grid min-w-0 gap-6">{renderTabbed(main)}</div>
+          {properties.length > 0 ? (
+            <aside className="grid min-w-0 gap-4">
+              {properties.map((section) => (
+                <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
+              ))}
+            </aside>
+          ) : null}
+        </div>
+      );
+    }
+    return renderTabbed(list);
+  };
+  const renderTabbed = (list: readonly FormSectionModel[]): React.ReactNode => {
+    if (layout === "stacked") {
       return list.map((section) => (
         <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
       ));

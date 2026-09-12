@@ -22,7 +22,7 @@ import {
 
 import { enWorkMessages } from "./i18n";
 import { QUEUE_MODEL } from "./resources";
-import { taskWorkFormSection } from "./task-work";
+import { taskWorkDetailSection, taskWorkFormSection } from "./task-work";
 import { TriageRecordActions } from "./triage-actions";
 
 const TASK_MODEL = "projects.Task";
@@ -150,6 +150,12 @@ const work = defineBaseAddon({
       id: "work.task-fields",
       sequence: 40,
       content: taskWorkFormSection,
+    },
+    {
+      ...formViewSectionsSlot(TASK_MODEL),
+      id: "work.task-detail-fields",
+      sequence: 45,
+      content: taskWorkDetailSection,
     },
     {
       ...formViewRecordActionsSlot(TASK_MODEL),

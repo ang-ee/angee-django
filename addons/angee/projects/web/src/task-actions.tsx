@@ -104,19 +104,24 @@ export function useTaskFormDeclaration(): React.ReactElement {
   );
 
   return (
-    <Form resource={TASK_MODEL} layout="tabs">
+    <Form resource={TASK_MODEL} layout="sidebar">
       <Field name="title" title />
       <Field name="status" widget="statusbar" options={statusOptions} createOnly />
+      {/* The standing column: what a reader checks and changes on every visit.
+          The work addon contributes queue, stage, cycle and estimate into the
+          same column from its own manifest. */}
+      <Group label={t("task.group.properties")} columns={1} placement="properties">
+        <Field name="assignee" />
+        <Field name="priority" widget="priority" options={priorityOptions} />
+        <Field name="due_date" />
+      </Group>
       <Group label={t("task.group.placement")} columns={2}>
         <Field name="project" />
         <Field name="milestone" />
         <Field name="parent" />
       </Group>
       <Group label={t("task.group.assignment")} columns={2}>
-        <Field name="assignee" />
         <Field name="delegate" />
-        <Field name="priority" options={priorityOptions} />
-        <Field name="due_date" />
         <Field name="recurrence" />
       </Group>
       <Group label={t("task.group.ordering")} columns={2}>

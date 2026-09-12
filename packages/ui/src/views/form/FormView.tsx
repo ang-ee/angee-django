@@ -32,6 +32,7 @@ import {
   FormViewOverview,
   FormViewRecordHeader,
 } from "./form-view-body";
+import type { FormViewLayout } from "./form-view-model";
 
 export {
   acknowledgeFormSubmit,
@@ -74,7 +75,7 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   /** Non-form content rendered after the overview fields for both create and edit. */
   formExtras?: (context: RecordToolbarContext) => React.ReactNode;
   /** Group presentation; ungrouped/title/body/status placement is unchanged. */
-  layout?: "stacked" | "tabs";
+  layout?: FormViewLayout;
   /** Record chrome density and height behavior. */
   recordPresentation?: RecordPresentation;
   /** Initial saved-record tab; invalid or unavailable ids fall back to Overview. */

@@ -226,6 +226,58 @@ const fields = [
   { name: "wordCount", label: "Word Count", readOnly: true },
 ] satisfies readonly FormField[];
 
+describe("FormView sidebar layout", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const sidebarGroups = [
+    {
+      label: "Properties",
+      placement: "properties" as const,
+      fields: [{ name: "reminderAt", label: "Reminder", widget: "datetime" }],
+      actions: [],
+    },
+    {
+      label: "Detail",
+      fields: [{ name: "wordCount", label: "Word Count", readOnly: true }],
+      actions: [],
+    },
+  ];
+
+  function renderSidebar(layout: "sidebar" | "tabs"): HTMLElement | null {
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        id="note-1"
+        layout={layout}
+        fields={fields}
+        groups={sidebarGroups}
+      />,
+    );
+    return document.querySelector(".form-sidebar-grid");
+  }
+
+  test("puts a group marked properties in the standing column, and the rest in the body", () => {
+    const grid = renderSidebar("sidebar");
+    expect(grid).not.toBeNull();
+    const column = grid!.querySelector("aside");
+    expect(column).not.toBeNull();
+    // The marked group is in the column...
+    expect(column!.textContent).toContain("Properties");
+    // ...and the unmarked one is not.
+    expect(column!.textContent).not.toContain("Detail");
+    expect(grid!.firstElementChild!.textContent).toContain("Detail");
+  });
+
+  test("leaves every other layout alone", () => {
+    // A donor addon marks its group once; a host form that did not ask for the
+    // column must render it as an ordinary section rather than losing it.
+    expect(renderSidebar("tabs")).toBeNull();
+    expect(document.body.textContent).toContain("Properties");
+  });
+});
+
 describe("FormView", () => {
   afterEach(() => {
     cleanup();

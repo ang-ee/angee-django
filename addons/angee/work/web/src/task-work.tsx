@@ -23,13 +23,31 @@ function WorkSectionLabel(): React.ReactElement {
   return <>{t("task.group.work")}</>;
 }
 
-/** Work-owned donor fields contributed into the projects-owned task FormView. */
+function WorkDetailSectionLabel(): React.ReactElement {
+  const t = useWorkT();
+  return <>{t("task.group.workDetail")}</>;
+}
+
+/**
+ * Work-owned donor fields contributed into the projects-owned task FormView.
+ *
+ * Split by how often they are read, not by who owns them. Where a task sits in
+ * the flow -- its queue, stage, cycle and size -- is checked on every visit, so
+ * it goes in the standing properties column beside status; the identifiers and
+ * triage timestamps are a long tail and stay in the body. A host form on any
+ * other layout ignores the placement and renders both as ordinary sections.
+ */
 export const taskWorkFormSection = (
-  <Group label={<WorkSectionLabel />} columns={2}>
+  <Group label={<WorkSectionLabel />} columns={1} placement="properties">
     <Field name="queue" readOnly />
     <Field name="stage" readOnly />
     <Field name="cycle" readOnly />
     <Field name="estimate" />
+  </Group>
+);
+
+export const taskWorkDetailSection = (
+  <Group label={<WorkDetailSectionLabel />} columns={2}>
     <Field name="number" readOnly />
     <Field name="snoozed_until" readOnly />
     <Field name="snoozed_by" readOnly />

@@ -22,6 +22,7 @@ export const enProjectsMessages: Record<string, string> = {
   "project.action.complete": "Complete",
   "project.action.drop": "Drop",
   "task.group.placement": "Placement",
+  "task.group.properties": "Properties",
   "task.group.assignment": "Assignment",
   "task.group.ordering": "Ordering",
   "task.tabs.subtasks": "Subtasks",

@@ -19,6 +19,7 @@ import {
   isRelationIdField,
   type FieldDescriptor,
   type GroupDescriptor,
+  type GroupPlacement,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
@@ -57,6 +58,7 @@ export interface FormSectionModel {
   columns?: number;
   collapsible?: boolean;
   defaultOpen?: boolean;
+  placement?: GroupPlacement;
   fields: readonly FieldDescriptor[];
   render?: () => ReactNode;
   sequence?: number;
@@ -88,6 +90,7 @@ export function formSections(
         columns: group.columns,
         collapsible: group.collapsible,
         defaultOpen: group.defaultOpen,
+        placement: group.placement,
         fields: group.fields,
         sequence: sequences[index],
         order: index,
@@ -98,6 +101,13 @@ export function formSections(
   if (ungrouped.length > 0) sections.unshift({ key: "fields", fields: ungrouped });
   return sections;
 }
+
+/**
+ * How a form arranges its sections. `sidebar` keeps the tabbed body and adds a
+ * standing properties column beside it, for records whose state is checked far
+ * more often than their long tail is read.
+ */
+export type FormViewLayout = "stacked" | "tabs" | "sidebar";
 
 /** Classify fields rendered in record chrome versus the section grid/body. */
 export function formViewFieldLayout(

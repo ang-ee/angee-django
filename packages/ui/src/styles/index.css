@@ -399,6 +399,23 @@
 @utility area-content { grid-area: content; }
 @utility area-status  { grid-area: status; }
 
+/* The record properties column (`FormView layout="sidebar"`). Written here
+   rather than as a Tailwind arbitrary value because the grid template is a
+   layout contract, and the record it serves already shares its row with a
+   chatter rail: the column holds a fixed, readable width and the body takes
+   what is left, collapsing to one column when there is not room for both. */
+.form-sidebar-grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+@media (min-width: 60rem) {
+  .form-sidebar-grid {
+    grid-template-columns: minmax(0, 1fr) 16rem;
+    align-items: start;
+  }
+}
+
 .console-browser-scroll-main {
   height: 100%;
   min-height: 100%;

@@ -14,7 +14,7 @@ import type {
 import type { ColumnDescriptor, ColumnProps } from "./Column";
 import type { FacetDescriptor, FacetProps } from "./Facet";
 import type { FieldDescriptor, FieldProps } from "./Field";
-import type { GroupDescriptor, GroupProps } from "./Group";
+import type { GroupDescriptor, GroupPlacement, GroupProps } from "./Group";
 import type { TabDescriptor, TabProps } from "./Tab";
 import { pageChildren, pageChildrenCacheKey, pageElementProps } from "./types";
 
@@ -59,6 +59,7 @@ export type {
   FieldDescriptor,
   FieldProps,
   GroupDescriptor,
+  GroupPlacement,
   GroupProps,
   TabDescriptor,
   TabProps,
@@ -226,6 +227,7 @@ function groupDescriptor(props: GroupProps): GroupDescriptor {
     ...(props.columns !== undefined ? { columns: props.columns } : {}),
     ...(props.collapsible !== undefined ? { collapsible: props.collapsible } : {}),
     ...(props.defaultOpen !== undefined ? { defaultOpen: props.defaultOpen } : {}),
+    ...(props.placement !== undefined ? { placement: props.placement } : {}),
     fields: parseDirectPageFields(props.children),
     actions: parsePageActions(props.children),
   }));

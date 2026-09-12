@@ -66,6 +66,7 @@ describe("work addon manifest", () => {
     ]);
     expect(work.slots?.map((slot) => slot.id)).toEqual([
       "work.task-fields",
+      "work.task-detail-fields",
       "work.task-triage-actions",
     ]);
     expect(Object.keys(work.icons ?? {}).sort()).toEqual([
