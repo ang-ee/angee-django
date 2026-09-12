@@ -47,7 +47,7 @@ export function resourceViewStateToSearch(
       search.group = serializeResourceViewGroup(state.groupStack[0]!);
       if (state.groupStack.length > 1) search.then = serializeResourceViewGroupStack(state.groupStack.slice(1));
     }
-  } else if (base.groupStack.length > 0) {
+  } else if (state.groupDefaultCleared || base.groupStack.length > 0) {
     search.group = "";
     if (base.groupStack.length > 1) search.then = "";
   }
@@ -75,7 +75,8 @@ export function resourceViewSearchToState(
     const group = parseSearchGroup(search.group);
     const then = parseSearchGroupStack(search.then);
     const thenCleared = isClearedSearchValue(search.then);
-    const groupStack = isClearedSearchValue(search.group)
+    const groupDefaultCleared = isClearedSearchValue(search.group);
+    const groupStack = groupDefaultCleared
       ? []
       : group || then || thenCleared
         ? normaliseGroupStack([...(group ? [group] : []), ...(thenCleared ? [] : (then ?? []))])
@@ -91,6 +92,7 @@ export function resourceViewSearchToState(
       filter: isClearedSearchValue(search.filter) ? {} : parseSearchFilter(search.filter) ?? base.filter,
       group: groupStack[0] ?? null,
       groupStack,
+      groupDefaultCleared,
       view: parseSearchView(search.view) ?? base.view,
       mode: parseSearchMode(search.mode) ?? base.mode,
       anchor: parseSearchAnchor(search.anchor) ?? base.anchor,

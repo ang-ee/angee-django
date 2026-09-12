@@ -418,6 +418,7 @@ function useResourceViewContextValue({
         ...current,
         group: groupStack[0] ?? null,
         groupStack,
+        groupDefaultCleared: groupStack.length === 0,
       }));
     },
     [resetScope],
@@ -448,6 +449,7 @@ function useResourceViewContextValue({
           sorting: [],
           group: null,
           groupStack: [],
+          groupDefaultCleared: true,
           queryError: null,
         })),
       setGroup: (group: ResourceViewGroup | null) =>
@@ -460,7 +462,12 @@ function useResourceViewContextValue({
         })),
       clearSelectedIds,
       setView: (view: ResourceViewKind) =>
-        updateState((current) => ({ ...current, view })),
+        updateState((current) => ({
+          ...current,
+          view,
+          groupDefaultCleared:
+            view === current.view ? current.groupDefaultCleared : false,
+        })),
       setMode: (mode: CalendarViewMode) =>
         updateState((current) => ({ ...current, mode })),
       setAnchor: (anchor: string) =>
@@ -468,16 +475,18 @@ function useResourceViewContextValue({
       applyFavorite: (favorite: ResourceViewFavorite) =>
         resetScope((current) => {
           try {
+            const favoriteState = createResourceViewState({
+              ...favorite,
+              filter: Filter.from(favorite.filter).value,
+              groupStack: normaliseGroupStack(favorite.groupStack ?? []),
+              sort: favorite.sort ?? null,
+              mode: current.mode,
+              anchor: current.anchor,
+            });
             return {
               ...current,
-              ...createResourceViewState({
-                ...favorite,
-                filter: Filter.from(favorite.filter).value,
-                groupStack: normaliseGroupStack(favorite.groupStack ?? []),
-                sort: favorite.sort ?? null,
-                mode: current.mode,
-                anchor: current.anchor,
-              }),
+              ...favoriteState,
+              groupDefaultCleared: favoriteState.groupStack.length === 0,
               queryError: null,
             };
           } catch (error) {

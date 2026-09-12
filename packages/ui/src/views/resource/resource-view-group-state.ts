@@ -51,6 +51,7 @@ export function useResourceViewGroupState({
   const defaultGroupPending =
     activeDefaultGroup !== null
     && resourceView.state.group === null
+    && !resourceView.state.groupDefaultCleared
     && (
       handledDefaultGroupRef.current === null
       || !resourceViewGroupsEqual(handledDefaultGroupRef.current, activeDefaultGroup)
@@ -80,6 +81,10 @@ export function useResourceViewGroupState({
       ) {
         resourceView.setGroup(null);
       }
+      return;
+    }
+    if (resourceView.state.groupDefaultCleared && !pinned) {
+      handledDefaultGroupRef.current = activeDefaultGroup;
       return;
     }
     if (
@@ -112,6 +117,7 @@ export function useResourceViewGroupState({
     clearRemovedDefault,
     pinned,
     resourceView.setGroup,
+    resourceView.state.groupDefaultCleared,
     resourceView.state.group,
   ]);
   return effectiveGroupStack;

@@ -16,6 +16,8 @@ export interface ResourceViewState {
   queryError?: Error | null;
   group: ResourceViewGroup | null;
   groupStack: readonly ResourceViewGroup[];
+  /** The user explicitly cleared a declared default group. */
+  groupDefaultCleared: boolean;
   view: ResourceViewKind;
   mode: CalendarViewMode;
   anchor: string;
@@ -36,6 +38,7 @@ export function createResourceViewState(initial: ResourceViewInitialState = {}):
     filter: Filter.from(initial.filter).value,
     group: groupStack[0] ?? null,
     groupStack,
+    groupDefaultCleared: false,
     view: initial.view ?? "list",
     mode: initial.mode ?? DEFAULT_CALENDAR_VIEW_MODE,
     anchor: initial.anchor ?? todayCalendarAnchor(),
