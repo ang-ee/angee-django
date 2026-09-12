@@ -92,6 +92,26 @@ describe("work board stage lanes", () => {
   });
 });
 
+test("keeps identity-compared board props stable across renders", () => {
+  // The collection surface compares these by identity, so a fresh object each
+  // render re-runs its effects and grouped-scope work for a board that has not
+  // changed -- the amplifier behind the board's update-depth errors.
+  for (const Board of [QueueBoardPage, CycleBoardPage]) {
+    const view = render(<Board />);
+    const first = {
+      baseFilter: mocks.listProps?.baseFilter,
+      laneSource: mocks.listProps?.laneSource,
+    };
+    expect(first.baseFilter).toBeDefined();
+    expect(first.laneSource).toBeDefined();
+
+    view.rerender(<Board />);
+    expect(mocks.listProps?.baseFilter).toBe(first.baseFilter);
+    expect(mocks.listProps?.laneSource).toBe(first.laneSource);
+    view.unmount();
+  }
+});
+
 function expectBoardStageScope(
   props: Record<string, unknown> | null,
   baseFilter: Record<string, unknown>,
