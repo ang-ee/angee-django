@@ -176,7 +176,12 @@ export function RecordActionBar({
             <Button
               key={action.id}
               type="button"
-              variant={action.danger ? "danger" : "secondary"}
+              // A filled danger block is a safety signal, and these verbs do not
+              // earn one: a destructive action here opens its confirmation or
+              // reason dialog first. In a column read at rest, the forward verb
+              // carries the emphasis and the destructive one is calm, with its
+              // icon doing the work the colour did in the menu.
+              variant={action.danger ? "secondary" : "primary"}
               size="sm"
               className="justify-start"
               loading={pendingId === action.id}
