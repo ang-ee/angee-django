@@ -21,6 +21,14 @@ const RelationFieldCommandList = lazy(() => import("./RelationFieldCommandList")
 export interface RelationOption {
   value: string;
   label: string;
+  /**
+   * The label is a stand-in for a label we do not have yet -- a form holding an
+   * id with no record read behind it. A consumer may show it, but should treat
+   * the record's own label as the real one when it arrives. Never inferred from
+   * `label === value`: a relation whose representation genuinely is its id is a
+   * resolved label, not a placeholder.
+   */
+  unresolved?: boolean;
 }
 
 export interface RelationSearchState {

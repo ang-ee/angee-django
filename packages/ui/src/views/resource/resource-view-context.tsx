@@ -217,7 +217,9 @@ function RouteResourceViewProvider({
         setFailedTransition({ search, error: next.queryError });
         return;
       }
-      setFailedTransition(null);
+      // Same-value writes are not free here: the fiber usually has a pending
+      // lane by the time this runs, so React cannot skip scheduling them.
+      if (failedTransition !== null) setFailedTransition(null);
       void navigate({
         search: (current) => {
           const updated = functionalUpdate(
