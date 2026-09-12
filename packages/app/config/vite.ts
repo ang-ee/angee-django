@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, mergeConfig, type Plugin, type UserConfig } from "vite";
+import {
+  assertThemeCatalogue,
+  resolveThemeOptions,
+  THEME_TOKEN_NAMES,
+  type ThemeDefinition,
+} from "@angee/ui/theme-runtime";
 
 // The framework owner of the web Vite defaults: the plugin pair, the dev-server
 // host/port/proxy wiring, the generated-schema alias, and the project-derived
@@ -236,18 +243,27 @@ export interface AngeeWebViteConfig extends UserConfig {
    * direct `vite` usage, but `angee dev` may launch Vite from the repo root.
    */
   webRoot?: string;
+  /** Build-owned appearance defaults injected into first paint and the app. */
+  appearance?: {
+    themeId?: string | null;
+    colorScheme?: "light" | "dark" | "system";
+    options?: { version: number; value: unknown };
+  };
 }
 
-export function defineAngeeWebViteConfig({
+export async function defineAngeeWebViteConfig({
   prebundleAngeePackages,
   gqlRuntimeDir,
   webRoot = process.cwd(),
+  appearance,
   ...overrides
-}: AngeeWebViteConfig): UserConfig {
+}: AngeeWebViteConfig): Promise<UserConfig> {
   const angeePackages = angeePackagesAt(webRoot);
+  const appearancePayload = await appearanceBuildPayload(gqlRuntimeDir, appearance);
   const base = defineConfig({
     root: webRoot,
     plugins: [
+      angeeAppearancePlugin(appearancePayload),
       react(),
       tailwindcss(),
       // Only an actually included built package set needs an optimizer cache
@@ -319,4 +335,145 @@ export function defineAngeeWebViteConfig({
     },
   });
   return mergeConfig(base, overrides);
+}
+
+const VIRTUAL_APPEARANCE = "virtual:angee-appearance";
+const RESOLVED_VIRTUAL_APPEARANCE = `\0${VIRTUAL_APPEARANCE}`;
+
+interface AppearanceBuildPayload {
+  fingerprint: string;
+  host: {
+    themeId: string | null;
+    colorScheme: "light" | "dark" | "system";
+    options?: { version: number; value: unknown };
+    fingerprint: string;
+    tokenLayers: Record<"shared" | "light" | "dark", Record<string, string>>;
+  };
+  catalogue: {
+    schema: number;
+    fingerprint: string;
+    themes: Array<{ id: string; defaultTokens?: Record<string, Record<string, string>> }>;
+  };
+  tokenNames: readonly string[];
+}
+
+interface ThemeCatalogueFile {
+  schema: number;
+  fingerprint: string;
+  themes: Array<{
+    id: string;
+    optionsVersion?: number | null;
+    headlessEntry?: string;
+    defaultTokens?: Record<"shared" | "light" | "dark", Record<string, string>>;
+  }>;
+}
+
+async function appearanceBuildPayload(
+  gqlRuntimeDir: string,
+  raw: AngeeWebViteConfig["appearance"],
+): Promise<AppearanceBuildPayload> {
+  const colorScheme = raw?.colorScheme ?? "system";
+  if (colorScheme !== "light" && colorScheme !== "dark" && colorScheme !== "system") {
+    throw new Error(`Unsupported host appearance color scheme ${JSON.stringify(colorScheme)}.`);
+  }
+  const catalogPath = join(dirname(gqlRuntimeDir), "web", "themes.catalog.json");
+  let sourceCatalogue: ThemeCatalogueFile = { schema: 1, fingerprint: "", themes: [] };
+  if (existsSync(catalogPath)) {
+    sourceCatalogue = JSON.parse(readFileSync(catalogPath, "utf8")) as ThemeCatalogueFile;
+  }
+  const themeId = raw?.themeId ?? null;
+  const selectedTheme = themeId === null
+    ? undefined
+    : sourceCatalogue.themes.find((theme) => theme.id === themeId);
+  if (themeId !== null && !selectedTheme) {
+    throw new Error(`Host appearance theme ${JSON.stringify(themeId)} is not installed.`);
+  }
+  if (raw?.options && themeId === null) {
+    throw new Error("Host appearance options require an installed themeId.");
+  }
+  if (raw?.options && selectedTheme?.optionsVersion == null) {
+    throw new Error(`Host appearance theme ${JSON.stringify(themeId)} does not accept options.`);
+  }
+
+  let normalizedOptions = raw?.options;
+  let tokenLayers = selectedTheme?.defaultTokens ?? { shared: {}, light: {}, dark: {} };
+  if (raw?.options && selectedTheme) {
+    if (typeof selectedTheme.headlessEntry !== "string") {
+      throw new Error(`Theme ${JSON.stringify(themeId)} is missing its generated headless entry.`);
+    }
+    const entry = resolve(dirname(catalogPath), selectedTheme.headlessEntry);
+    const themeModule = await importNodeModule(pathToFileURL(entry).href);
+    const definitions = assertThemeCatalogue(themeModule.themes as readonly ThemeDefinition<unknown>[]);
+    const definition = definitions.find((candidate) => candidate.id === themeId);
+    if (!definition) {
+      throw new Error(`Theme ${JSON.stringify(themeId)} is missing from ${selectedTheme.headlessEntry}.`);
+    }
+    const resolvedOptions = resolveThemeOptions(definition, raw.options);
+    normalizedOptions = { version: resolvedOptions.version, value: resolvedOptions.value };
+    tokenLayers = resolvedOptions.tokens;
+  }
+
+  const normalizedHost = {
+    themeId,
+    colorScheme,
+    ...(normalizedOptions ? { options: normalizedOptions } : {}),
+    tokenLayers,
+  };
+  const fingerprint = createHash("sha256")
+    .update(sourceCatalogue.fingerprint)
+    .update(JSON.stringify(normalizedHost))
+    .digest("hex");
+  const catalogue: AppearanceBuildPayload["catalogue"] = {
+    schema: sourceCatalogue.schema,
+    fingerprint: sourceCatalogue.fingerprint,
+    themes: sourceCatalogue.themes.map(({ id, defaultTokens }) => ({ id, defaultTokens })),
+  };
+  return {
+    fingerprint,
+    host: {
+      ...normalizedHost,
+      fingerprint,
+    },
+    catalogue,
+    tokenNames: THEME_TOKEN_NAMES,
+  };
+}
+
+async function importNodeModule(specifier: string): Promise<{ themes?: unknown }> {
+  // Vite's config runner rewrites lexical import() calls through its module
+  // transport, which may close while an async user config is still resolving.
+  // Keep canonical generated file URLs on Node's native ESM loader.
+  const load = Function("specifier", "return import(specifier)") as (value: string) => Promise<{ themes?: unknown }>;
+  return load(specifier);
+}
+
+function angeeAppearancePlugin(payload: AppearanceBuildPayload): Plugin {
+  const serialized = JSON.stringify(payload).replaceAll("<", "\\u003c");
+  return {
+    name: "angee:appearance",
+    resolveId(id) {
+      return id === VIRTUAL_APPEARANCE ? RESOLVED_VIRTUAL_APPEARANCE : undefined;
+    },
+    load(id) {
+      const { tokenLayers: _tokenLayers, ...appearance } = payload.host;
+      return id === RESOLVED_VIRTUAL_APPEARANCE
+        ? `export const appearance = ${JSON.stringify(appearance)}; export default appearance;`
+        : undefined;
+    },
+    transformIndexHtml: {
+      order: "pre",
+      handler() {
+        return [{
+          tag: "script",
+          attrs: { "data-angee-appearance-bootstrap": "" },
+          children: appearanceBootstrapScript(serialized),
+          injectTo: "head-prepend",
+        }];
+      },
+    },
+  };
+}
+
+function appearanceBootstrapScript(serializedPayload: string): string {
+  return `(()=>{const p=${serializedPayload},r=document.documentElement,n=new Set(p.tokenNames),themes=new Map(p.catalogue.themes.map(t=>[t.id,t])),safeValue=x=>typeof x==="string"&&x.length>0&&x.length<=256&&!/[;{}@]|url\\s*\\(|expression\\s*\\(|!important/i.test(x),safeTokens=t=>t&&typeof t==="object"&&!Array.isArray(t)&&Object.entries(t).length<=n.size&&Object.entries(t).every(([k,x])=>n.has(k)&&safeValue(x)),hostTokens=s=>({...p.host.tokenLayers.shared,...p.host.tokenLayers[s]});let v={themeId:p.host.themeId,colorSchemePreference:p.host.colorScheme,options:p.host.options,tokens:null};try{const s=localStorage.getItem("angee:appearance");if(s&&s.length<=131072){const c=JSON.parse(s),validTheme=c.themeId===null||typeof c.themeId==="string"&&themes.has(c.themeId),validScheme=c.colorSchemePreference==="light"||c.colorSchemePreference==="dark"||c.colorSchemePreference==="system";if(c.schema===1&&c.fingerprint===p.fingerprint&&validTheme&&validScheme&&(c.tokens==null||safeTokens(c.tokens))){v=c}}}catch{}const q=v.colorSchemePreference||"system",scheme=q==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):q,t=v.tokens||(v.themeId===p.host.themeId?hostTokens(scheme):(()=>{const d=themes.get(v.themeId)?.defaultTokens;return d?{...(d.shared||{}),...(d[scheme]||{})}:{}})());if(v.themeId)r.dataset.themeId=v.themeId;else delete r.dataset.themeId;r.dataset.colorScheme=scheme;r.dataset.theme=scheme;r.style.colorScheme=scheme;for(const [k,x] of Object.entries(t||{})){if(n.has(k)&&safeValue(x))r.style.setProperty(k,x)}})();`;
 }

@@ -1,9 +1,9 @@
 import { createApp, defineBaseAddon } from "@angee/app";
 import { IamLoginPage } from "@angee/iam";
 import { ConsoleLayout } from "@angee/ui";
+import { appearance } from "virtual:angee-appearance";
 
 import { composedAddons, schemas } from "../../runtime/web/app";
-import "./index.css";
 
 createApp({
   addons: [
@@ -27,4 +27,5 @@ createApp({
   schemas,
   defaultSchema: "console",
   home: "platform.graph",
+  appearance,
 }).mount("#root");

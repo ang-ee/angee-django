@@ -1,0 +1,1 @@
+"""Stock Angee theme addon."""

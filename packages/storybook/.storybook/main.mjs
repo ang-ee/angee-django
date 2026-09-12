@@ -10,7 +10,7 @@ const ROOT = join(HERE, "..");
 const config = {
   framework: "@storybook/react-vite",
   stories: ["../src/stories/**/*.stories.@(ts|tsx)"],
-  addons: ["@storybook/addon-themes"],
+  addons: [],
   typescript: { reactDocgen: false },
   viteFinal: async (vite) => {
     const tailwind = (await import("@tailwindcss/vite")).default;

@@ -1,0 +1,6 @@
+[addon]
+name = "angee.theme_warm_red"
+description = "A warm red visual theme for Angee"
+keywords = ["theme", "appearance", "red"]
+category = "User interface"
+depends_on = []

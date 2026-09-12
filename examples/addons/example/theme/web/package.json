@@ -1,0 +1,28 @@
+{
+  "name": "@angee-example/theme-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": ["**/*.css"],
+  "exports": {
+    ".": "./src/index.tsx",
+    "./themes": "./src/themes.mjs"
+  },
+  "dependencies": {
+    "@angee/app": "workspace:*",
+    "@angee/ui": "workspace:*"
+  },
+  "peerDependencies": {
+    "@tanstack/react-router": "^1",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@tanstack/react-router": "^1.170.16",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^6.0.3"
+  }
+}

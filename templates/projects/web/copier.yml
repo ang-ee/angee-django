@@ -100,6 +100,28 @@ framework_workspace:
   default: false
   help: Point ANGEE_ADDON_DIRS at the stack's workspaces/src/* source slots (framework-dev layout).
 
+# Appearance defaults are frontend build inputs. They are validated against the
+# composed theme catalogue by @angee/app's Vite integration and emitted once to
+# both the synchronous head bootstrap and the browser runtime.
+appearance_theme_id:
+  type: str
+  default: angee.stock
+  help: Stable ID of the installed theme selected when a user follows the host default; empty selects the intrinsic base look.
+
+appearance_color_scheme:
+  type: str
+  default: system
+  choices:
+    - system
+    - light
+    - dark
+  help: Default color-scheme preference for users who follow the host setting.
+
+appearance_options:
+  type: str
+  default: ""
+  help: Optional JSON object with `version` and `value` for the configured host theme; empty uses the theme defaults.
+
 
 # The rendered web package reaches the framework's build-config (Vite, Vitest) by
 # PACKAGE NAME — `@angee/app/vite`, `@angee/app/vitest` — not a sibling path.

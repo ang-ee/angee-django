@@ -1,0 +1,7 @@
+{
+  "name": "@angee/theme-aurora", "version": "0.0.0", "private": true, "type": "module", "sideEffects": ["**/*.css"],
+  "exports": { ".": "./src/index.ts", "./themes": "./src/themes.mjs", "./styles": "./src/theme.css" }, "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "@angee/app": "workspace:*", "@angee/ui": "workspace:*" },
+  "peerDependencies": { "react": "^19", "react-dom": "^19", "@tanstack/react-router": "^1" },
+  "devDependencies": { "typescript": "^6.0.3", "react": "^19.2.7", "react-dom": "^19.2.7", "@types/react": "^19.2.17", "@types/react-dom": "^19.2.3", "@tanstack/react-router": "^1.170.16" }
+}

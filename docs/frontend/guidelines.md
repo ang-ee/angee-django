@@ -4,6 +4,10 @@ Frontend code is TypeScript, React, and the rendered Angee experience. It owns
 presentation, routes, menus, widgets, layouts, resource-view state, and
 interaction.
 
+Theme authors and host operators should also read the
+[Appearance and theme addons guide](appearance.md). It defines the public token,
+headless definition, build-default and preference boundaries.
+
 Follow the shared development process and coding principles in the
 [Development Guidelines](../guidelines.md) for every task; the rules below are the
 frontend-specific layer applied during the Build step.
