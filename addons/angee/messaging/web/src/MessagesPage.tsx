@@ -14,6 +14,7 @@ import {
   type ListColumn,
   type RecordPanelContext,
   type RecordTabDescriptor,
+  type StringIdRow,
 } from "@angee/ui";
 
 import { useMessagingT } from "./i18n";
@@ -35,6 +36,9 @@ const DEFAULT_GROUPS = { list: { field: "channel" } } as const;
 const PART_GROUPS = { list: { field: "role" } } as const;
 
 type PartRow = PartListRow;
+interface MessageListRow extends StringIdRow {
+  title?: unknown;
+}
 // The nested selection the part columns render from: the part's structural
 // facts plus its fragment's identity (kind, hash) and connectivity counts —
 // how many parts and messages share that exact text.
@@ -162,13 +166,17 @@ export function MessagesPage(): React.ReactElement {
   const t = useMessagingT();
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);
   return (
-    <ResourceList resource={MODEL} placement="inline" routed hideCreate recordTabs={recordTabs}>
-      <List
+    <ResourceList<MessageListRow> resource={MODEL} placement="inline" routed hideCreate recordTabs={recordTabs}>
+      <List<MessageListRow>
         resource={MODEL}
         defaultGroups={DEFAULT_GROUPS}
       >
         <Facet field="channel" label={t("messages.channel")} />
-        <Column field="title" header={t("messages.title")} />
+        <Column<MessageListRow>
+          field="title"
+          header={t("messages.title")}
+          render={(row) => messageSubject(row.title, t("messages.noSubject"))}
+        />
         <Column
           field="sender_name"
           header={t("messages.sender")}
@@ -181,7 +189,10 @@ export function MessagesPage(): React.ReactElement {
         <Column field="status" widget="statusBadge" />
         <Column field="sent_at" />
       </List>
-      <Form resource={MODEL}>
+      <Form
+        resource={MODEL}
+        title={({ record }) => messageSubject(record?.title, t("messages.noSubject"))}
+      >
         {/* The record heading: the message's TITLE-part text (its subject). */}
         <Field name="title" title readOnly />
         {/* status reads the UPPERCASE enum member name but its String patch input
@@ -218,4 +229,9 @@ export function MessagesPage(): React.ReactElement {
       </Form>
     </ResourceList>
   );
+}
+
+function messageSubject(value: unknown, fallback: string): string {
+  const subject = typeof value === "string" ? value.trim() : "";
+  return subject || fallback;
 }

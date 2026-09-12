@@ -15,6 +15,7 @@ export interface PageEditorProps {
   onTitleSaved: () => void;
   /** Delete this page (the page confirms first). */
   onDelete: () => void;
+  onDone: () => void;
 }
 
 /**
@@ -26,6 +27,7 @@ export function PageEditor({
   detail,
   onTitleSaved,
   onDelete,
+  onDone,
 }: PageEditorProps): ReactElement {
   const t = useKnowledgeT();
   const editor = usePageEditor(
@@ -62,6 +64,15 @@ export function PageEditor({
             onChange={(event) => editor.setTitle(event.currentTarget.value)}
             onBlur={editor.commitTitle}
           />
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={onDone}
+          >
+            <Glyph name="check" />
+            {t("editor.done")}
+          </Button>
           <Button
             type="button"
             size="iconMd"

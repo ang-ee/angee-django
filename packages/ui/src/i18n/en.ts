@@ -233,6 +233,7 @@ export const enUiMessages: Record<string, string> = {
   "message.parts.hideQuoted": "Hide quoted text",
   "message.parts.attachment": "Attachment",
   "message.parts.inlineImage": "Inline image",
+  "message.parts.htmlBody": "HTML message body",
   "chat.typing": "Agent is thinking…",
   "chat.reasoning.label": "Thinking",
   "chat.tool.input": "Input",

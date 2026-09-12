@@ -1,10 +1,13 @@
 import * as React from "react";
-import { Action, Column, ResourceList, Facet, Field, Form, Group, List, type RecordTabDescriptor } from "@angee/ui";
+import { Action, Column, ResourceList, Facet, Field, Form, Group, List, rowValueAtPath, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
 
 import { ThreadTranscript } from "./ThreadTranscript";
 import { useMessagingT } from "./i18n";
 
 const MODEL = "messaging.Thread";
+interface ThreadListRow extends StringIdRow {
+  title?: unknown;
+}
 
 function threadRecordTabs(
   t: ReturnType<typeof useMessagingT>,
@@ -30,16 +33,20 @@ export function ThreadsPage(): React.ReactElement {
   const t = useMessagingT();
   const recordTabs = React.useMemo(() => threadRecordTabs(t), [t]);
   return (
-    <ResourceList resource={MODEL} placement="inline" routed hideCreate recordTabs={recordTabs}>
-      <List resource={MODEL}>
+    <ResourceList<ThreadListRow> resource={MODEL} placement="inline" routed hideCreate recordTabs={recordTabs}>
+      <List<ThreadListRow> resource={MODEL}>
         <Facet field="channel" label={t("threads.channel")} />
-        <Column field="title.text" header={t("threads.title")} />
+        <Column<ThreadListRow>
+          field="title.text"
+          header={t("threads.title")}
+          render={(row) => threadTitle(row, t("threads.noTitle"))}
+        />
         <Column field="channel.vendor.display_name" header={t("threads.channelType")} />
         <Column field="modality" />
         <Column field="message_count" header={t("threads.messageCount")} />
         <Column field="last_message_at" />
       </List>
-      <Form resource={MODEL}>
+      <Form resource={MODEL} title={({ record }) => threadTitle(record, t("threads.noTitle"))}>
         {/* The title is a pointer at a shared content-addressed fragment, derived
             by the ingest (normalized subject / record label) — not directly editable. */}
         <Group label={t("threads.groupAbout")} columns={2}>
@@ -78,4 +85,10 @@ export function ThreadsPage(): React.ReactElement {
       </Form>
     </ResourceList>
   );
+}
+
+function threadTitle(row: Record<string, unknown> | null, fallback: string): string {
+  const value = row ? rowValueAtPath(row, "title.text") : undefined;
+  const title = typeof value === "string" ? value.trim() : "";
+  return title || fallback;
 }

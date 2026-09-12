@@ -329,6 +329,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
       '@angee/metadata':
         specifier: workspace:*
         version: link:../../../../packages/metadata
@@ -745,6 +748,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine
@@ -926,6 +932,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
       '@angee/parties':
         specifier: workspace:*
         version: link:../../parties/web
@@ -1217,6 +1226,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine

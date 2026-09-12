@@ -1,7 +1,7 @@
 import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Action, Button, Column, ResourceList, Field, Form, Glyph, Group, List, MutationDialog, mutationDialogValueCodecs, registerForm, useRecordActionMutation, type MutationDialogField, type MutationDialogValues, type RegisteredFormProps } from "@angee/ui";
-import type { ActionFieldName } from "@angee/gql/console/actions";
+import { Button, Column, ResourceList, Field, Form, Glyph, List, MutationDialog, mutationDialogValueCodecs, registerForm, type MutationDialogField, type MutationDialogValues, type RegisteredFormProps } from "@angee/ui";
+import { IntegrationSyncColumns, IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
 
 import { ConnectCardDavDirectory } from "./documents";
 import { usePartiesT } from "./i18n";
@@ -25,10 +25,7 @@ export function DirectoriesPage(): React.ReactElement {
         <Column field="lifecycle" widget="statusBadge" />
         <Column field="runtime_status" widget="colorDot" />
         <Column field="backend_class" />
-        <Column field="sync_stage" />
-        <Column field="last_sync_status" />
-        <Column field="last_sync_items" />
-        <Column field="last_sync_completed_at" />
+        {IntegrationSyncColumns()}
       </List>
     </ResourceList>
   );
@@ -36,25 +33,16 @@ export function DirectoriesPage(): React.ReactElement {
 
 function DirectoryForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = usePartiesT();
-  const [sync] = useRecordActionMutation<ActionFieldName>("sync_integration");
+  const syncAction = useIntegrationSyncAction("sync_integration", t("directory.action.sync"));
   return (
       <Form {...props} resource={MODEL}>
         <Field name="display_name" title readOnly />
         <Field name="lifecycle" readOnly />
-        <Field name="runtime_status" readOnly />
+        <Field name="runtime_status" widget="colorDot" readOnly />
         <Field name="backend_class" readOnly />
         <Field name="config" readOnly />
-        <Group label={t("directory.group.lastSync")} columns={2}>
-          <Field name="is_syncing" readOnly />
-          <Field name="sync_stage" readOnly />
-          <Field name="sync_error" readOnly />
-          <Field name="sync_progress" widget="json" readOnly />
-          <Field name="last_sync_summary" widget="json" readOnly />
-          <Field name="last_sync_status" readOnly />
-          <Field name="last_sync_items" readOnly />
-          <Field name="last_sync_completed_at" readOnly />
-        </Group>
-        <Action id="sync" label={t("directory.action.sync")} icon="refresh" run={sync} />
+        {IntegrationSyncFields({ label: t("directory.group.lastSync") })}
+        {syncAction}
       </Form>
   );
 }

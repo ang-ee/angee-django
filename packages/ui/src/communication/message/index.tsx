@@ -209,6 +209,7 @@ export function MessagePartsView({
           <MessagePartItem
             key={messagePartKey(part, index)}
             part={part}
+            allParts={parts}
             resolveFileUrl={resolveFileUrl}
             actions={renderPartActions?.(part)}
             active={Boolean(part.id && activePartId === part.id)}
@@ -226,31 +227,35 @@ function defaultMessagePartFileUrl(file: MessagePartFile): string | null | undef
 
 interface MessagePartItemProps {
   part: MessagePart;
+  allParts: readonly MessagePart[];
   resolveFileUrl: NonNullable<MessagePartsViewProps["resolveFileUrl"]>;
   actions?: ReactNode;
   active?: boolean;
   onPreviewFile?: MessagePartsViewProps["onPreviewFile"];
 }
 
-function MessagePartItem({ part, resolveFileUrl, actions, active, onPreviewFile }: MessagePartItemProps): ReactElement | null {
+function MessagePartItem({ part, allParts, resolveFileUrl, actions, active, onPreviewFile }: MessagePartItemProps): ReactElement | null {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current?.scrollIntoView?.({ block: "center" }); }, [active]);
   return <div ref={ref} data-part-id={part.id} className={cn("space-y-1", active && "rounded-6 bg-brand-soft p-2 ring-1 ring-brand/30")}>
-    <MessagePartContent part={part} resolveFileUrl={resolveFileUrl} active={active} onPreviewFile={onPreviewFile} />
+    <MessagePartContent part={part} allParts={allParts} resolveFileUrl={resolveFileUrl} active={active} onPreviewFile={onPreviewFile} />
     {actions}
   </div>;
 }
 
-function MessagePartContent({ part, resolveFileUrl, active, onPreviewFile }: MessagePartItemProps): ReactElement | null {
+function MessagePartContent({ part, allParts, resolveFileUrl, active, onPreviewFile }: MessagePartItemProps): ReactElement | null {
   const t = useUiT();
   const text = part.fragment?.text ?? "";
   const hasText = text.trim() !== "";
   const file = part.file;
   const fileNode = file ? renderMessagePartFile(part, file, resolveFileUrl, t, onPreviewFile) : null;
   const role = normalisePartValue(part.role);
+  const textNode = hasText
+    ? renderMessagePartText(text, part.type, allParts, resolveFileUrl, t)
+    : null;
 
   if (role === "QUOTED") {
-    return <QuotedMessagePart text={text} file={fileNode} active={active} />;
+    return <QuotedMessagePart content={textNode} file={fileNode} active={active} />;
   }
 
   if (role === "TITLE") {
@@ -265,7 +270,7 @@ function MessagePartContent({ part, resolveFileUrl, active, onPreviewFile }: Mes
   if (role === "SIGNATURE") {
     return (
       <div className="space-y-1 text-current opacity-70">
-        {hasText ? <div className="whitespace-pre-wrap">{text}</div> : null}
+        {textNode}
         {fileNode}
       </div>
     );
@@ -273,24 +278,24 @@ function MessagePartContent({ part, resolveFileUrl, active, onPreviewFile }: Mes
 
   return (
     <div className="space-y-1">
-      {hasText ? <div className="whitespace-pre-wrap">{text}</div> : null}
+      {textNode}
       {fileNode}
     </div>
   );
 }
 
 interface QuotedMessagePartProps {
-  text: string;
+  content: ReactNode;
   file: ReactNode;
   active?: boolean;
 }
 
-function QuotedMessagePart({ text, file, active }: QuotedMessagePartProps): ReactElement | null {
+function QuotedMessagePart({ content, file, active }: QuotedMessagePartProps): ReactElement | null {
   const t = useUiT();
   const [open, setOpen] = useState(false);
   useEffect(() => { if (active) setOpen(true); }, [active]);
   const contentId = useId();
-  if (text.trim() === "" && !file) return null;
+  if (!content && !file) return null;
   return (
     <div className="space-y-1">
       <button
@@ -304,12 +309,54 @@ function QuotedMessagePart({ text, file, active }: QuotedMessagePartProps): Reac
       </button>
       {open ? (
         <blockquote id={contentId} className="space-y-1 border-l-2 border-current pl-3 text-current opacity-75">
-          {text.trim() !== "" ? <div className="whitespace-pre-wrap">{text}</div> : null}
+          {content}
           {file}
         </blockquote>
       ) : null}
     </div>
   );
+}
+
+function renderMessagePartText(
+  text: string,
+  mime: string | null | undefined,
+  parts: readonly MessagePart[],
+  resolveFileUrl: NonNullable<MessagePartsViewProps["resolveFileUrl"]>,
+  t: ReturnType<typeof useUiT>,
+): ReactNode {
+  if (normaliseMime(mime) !== "text/html") {
+    return <div className="whitespace-pre-wrap break-words">{text}</div>;
+  }
+  return (
+    <iframe
+      title={t("message.parts.htmlBody")}
+      sandbox=""
+      referrerPolicy="no-referrer"
+      srcDoc={sandboxedMessageHtml(text, parts, resolveFileUrl)}
+      className="block h-96 w-full max-w-full rounded-6 border border-current/20 bg-white"
+    />
+  );
+}
+
+function sandboxedMessageHtml(
+  html: string,
+  parts: readonly MessagePart[],
+  resolveFileUrl: NonNullable<MessagePartsViewProps["resolveFileUrl"]>,
+): string {
+  let body = html;
+  for (const part of parts) {
+    const cid = part.cid?.trim();
+    const file = part.file;
+    if (!cid || !file) continue;
+    const url = safeMessagePartUrl(resolveFileUrl(file));
+    if (!url) continue;
+    body = body.replaceAll(`cid:${cid}`, escapeHtmlAttribute(url));
+  }
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob: http: https:; style-src 'unsafe-inline'"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html{color-scheme:light}body{box-sizing:border-box;margin:0;padding:12px;max-width:100%;overflow-wrap:anywhere;font:14px/1.5 system-ui,sans-serif;color:#172033;background:#fff}img,table,pre{max-width:100%}img{height:auto}pre{white-space:pre-wrap}a{color:#2457c5}</style></head><body>${body}</body></html>`;
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
 }
 
 function renderMessagePartFile(
