@@ -1,7 +1,7 @@
 {
   "name": "@angee/theme-stock", "version": "0.0.0", "private": true, "type": "module",
   "sideEffects": ["**/*.css"],
-  "exports": { ".": "./src/index.ts", "./themes": "./src/themes.mjs" },
+  "exports": { ".": "./src/index.ts", "./themes": { "types": "./src/themes.d.mts", "import": "./src/themes.mjs" } },
   "scripts": { "typecheck": "tsc --noEmit" },
   "dependencies": { "@angee/app": "workspace:*", "@angee/ui": "workspace:*" },
   "peerDependencies": { "react": "^19", "react-dom": "^19", "@tanstack/react-router": "^1" },

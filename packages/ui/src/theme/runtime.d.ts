@@ -20,7 +20,8 @@ export type ThemeTokenName =
 export type TokenLayer = Partial<Record<ThemeTokenName, string>>;
 export interface ThemeTokenLayers { shared: TokenLayer; light: TokenLayer; dark: TokenLayer }
 export interface ThemeOptionsEnvelope { version: number; value: unknown }
-export interface ThemeOptionsDefinition<TOptions> { version: number; defaults: TOptions; parse(value: unknown): TOptions; migrate?(value: unknown, fromVersion: number): TOptions; resolve(value: TOptions): Partial<ThemeTokenLayers> }
+export type ThemeOptionsCapability = "palette-customization";
+export interface ThemeOptionsDefinition<TOptions> { version: number; defaults: TOptions; capability?: ThemeOptionsCapability; parse(value: unknown): TOptions; migrate?(value: unknown, fromVersion: number): TOptions; resolve(value: TOptions): Partial<ThemeTokenLayers> }
 export type ThemeCustomizationFont = "theme" | "system" | "inter" | "humanist" | "industrial" | "editorial" | "mono";
 export type ThemeCustomizationRadius = "theme" | "square" | "compact" | "standard" | "soft" | "round";
 export type ThemeCustomizationDensity = "theme" | "compact" | "balanced" | "comfortable" | "spacious";
@@ -47,9 +48,9 @@ export interface ThemeCustomizationConfiguration {
   version?: number;
   migrate?(value: unknown, fromVersion: number, defaults: ThemeCustomization): ThemeCustomization;
 }
-export interface ThemeDefinition<TOptions = Record<string, never>> { contractVersion: 1; id: string; labelKey: string; descriptionKey: string; revision: number; tokens: ThemeTokenLayers; stylesheets?: readonly string[]; options?: ThemeOptionsDefinition<TOptions> }
+export interface ThemeDefinition<TOptions = Record<string, never>> { contractVersion: 1; id: string; legacyIds?: readonly string[]; labelKey: string; descriptionKey: string; revision: number; tokens: ThemeTokenLayers; stylesheets?: readonly string[]; options?: ThemeOptionsDefinition<TOptions> }
 export interface ResolvedThemeOptions<TOptions = unknown> { version: number; value: TOptions; tokens: ThemeTokenLayers }
-export interface SerializableThemeMetadata { contractVersion: 1; id: string; labelKey: string; descriptionKey: string; revision: number; optionsVersion: number | null; optionDefaults: unknown }
+export interface SerializableThemeMetadata { contractVersion: 1; id: string; legacyIds: readonly string[]; labelKey: string; descriptionKey: string; revision: number; optionsVersion: number | null; optionDefaults: unknown; optionsCapability: ThemeOptionsCapability | null }
 export const THEME_CONTRACT_VERSION: 1;
 export const THEME_ID_PATTERN: RegExp;
 export const THEME_TOKEN_NAMES: readonly ThemeTokenName[];
@@ -58,7 +59,9 @@ export function assertThemeDefinition(value: unknown): ThemeDefinition<unknown>;
 export function assertThemeCatalogue(definitions: readonly ThemeDefinition<unknown>[]): ThemeDefinition<unknown>[];
 export function resolveThemeOptions<TOptions>(definition: ThemeDefinition<TOptions>, envelope?: ThemeOptionsEnvelope | null): ResolvedThemeOptions<TOptions>;
 export function createThemeCustomizationOptions(defaults: ThemeCustomization, configuration?: ThemeCustomizationConfiguration): ThemeOptionsDefinition<ThemeCustomization>;
+export function isThemeCustomizationOptions(options: ThemeOptionsDefinition<unknown> | undefined): options is ThemeOptionsDefinition<ThemeCustomization> & { capability: "palette-customization" };
 export function migrateThemeCustomization(value: unknown, defaults: ThemeCustomization): ThemeCustomization;
+export function migrateThemeCustomizationFromV1(value: unknown, fromVersion: number, defaults: ThemeCustomization): ThemeCustomization;
 export function parseThemeCustomization(value: unknown): ThemeCustomization;
 export function compileThemeCss(definitions: readonly ThemeDefinition<unknown>[]): string;
 export function serializableThemeMetadata(definition: ThemeDefinition<unknown>): SerializableThemeMetadata;

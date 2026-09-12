@@ -360,7 +360,7 @@ interface AppearanceBuildPayload {
   catalogue: {
     schema: number;
     fingerprint: string;
-    themes: Array<{ id: string; defaultTokens?: Record<string, Record<string, string>> }>;
+    themes: Array<{ id: string; legacyIds?: readonly string[]; defaultTokens?: Record<string, Record<string, string>> }>;
   };
   tokenNames: readonly string[];
 }
@@ -370,6 +370,7 @@ interface ThemeCatalogueFile {
   fingerprint: string;
   themes: Array<{
     id: string;
+    legacyIds?: readonly string[];
     optionsVersion?: number | null;
     headlessEntry?: string;
     defaultTokens?: Record<"shared" | "light" | "dark", Record<string, string>>;
@@ -389,19 +390,20 @@ async function appearanceBuildPayload(
   if (existsSync(catalogPath)) {
     sourceCatalogue = JSON.parse(readFileSync(catalogPath, "utf8")) as ThemeCatalogueFile;
   }
-  const themeId = raw?.themeId ?? null;
-  const selectedTheme = themeId === null
+  const requestedThemeId = raw?.themeId ?? null;
+  const selectedTheme = requestedThemeId === null
     ? undefined
-    : sourceCatalogue.themes.find((theme) => theme.id === themeId);
-  if (themeId !== null && !selectedTheme) {
-    throw new Error(`Host appearance theme ${JSON.stringify(themeId)} is not installed.`);
+    : sourceCatalogue.themes.find((theme) => theme.id === requestedThemeId || theme.legacyIds?.includes(requestedThemeId));
+  if (requestedThemeId !== null && !selectedTheme) {
+    throw new Error(`Host appearance theme ${JSON.stringify(requestedThemeId)} is not installed.`);
   }
-  if (raw?.options && themeId === null) {
+  if (raw?.options && requestedThemeId === null) {
     throw new Error("Host appearance options require an installed themeId.");
   }
   if (raw?.options && selectedTheme?.optionsVersion == null) {
-    throw new Error(`Host appearance theme ${JSON.stringify(themeId)} does not accept options.`);
+    throw new Error(`Host appearance theme ${JSON.stringify(requestedThemeId)} does not accept options.`);
   }
+  const themeId = selectedTheme?.id ?? null;
 
   let normalizedOptions = raw?.options;
   let tokenLayers = selectedTheme?.defaultTokens ?? { shared: {}, light: {}, dark: {} };
@@ -434,7 +436,7 @@ async function appearanceBuildPayload(
   const catalogue: AppearanceBuildPayload["catalogue"] = {
     schema: sourceCatalogue.schema,
     fingerprint: sourceCatalogue.fingerprint,
-    themes: sourceCatalogue.themes.map(({ id, defaultTokens }) => ({ id, defaultTokens })),
+    themes: sourceCatalogue.themes.map(({ id, legacyIds, defaultTokens }) => ({ id, legacyIds, defaultTokens })),
   };
   return {
     fingerprint,
@@ -483,5 +485,5 @@ function angeeAppearancePlugin(payload: AppearanceBuildPayload): Plugin {
 }
 
 function appearanceBootstrapScript(serializedPayload: string): string {
-  return `(()=>{const p=${serializedPayload},r=document.documentElement,n=new Set(p.tokenNames),themes=new Map(p.catalogue.themes.map(t=>[t.id,t])),safeValue=x=>typeof x==="string"&&x.length>0&&x.length<=256&&!/[;{}@]|url\\s*\\(|expression\\s*\\(|!important/i.test(x),safeTokens=t=>t&&typeof t==="object"&&!Array.isArray(t)&&Object.entries(t).length<=n.size&&Object.entries(t).every(([k,x])=>n.has(k)&&safeValue(x)),hostTokens=s=>({...p.host.tokenLayers.shared,...p.host.tokenLayers[s]});let v={themeId:p.host.themeId,colorSchemePreference:p.host.colorScheme,options:p.host.options,tokens:null};try{const s=localStorage.getItem("angee:appearance");if(s&&s.length<=131072){const c=JSON.parse(s),validTheme=c.themeId===null||typeof c.themeId==="string"&&themes.has(c.themeId),validScheme=c.colorSchemePreference==="light"||c.colorSchemePreference==="dark"||c.colorSchemePreference==="system";if(c.schema===1&&c.fingerprint===p.fingerprint&&validTheme&&validScheme&&(c.tokens==null||safeTokens(c.tokens))){v=c}}}catch{}const q=v.colorSchemePreference||"system",scheme=q==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):q,t=v.tokens||(v.themeId===p.host.themeId?hostTokens(scheme):(()=>{const d=themes.get(v.themeId)?.defaultTokens;return d?{...(d.shared||{}),...(d[scheme]||{})}:{}})());if(v.themeId)r.dataset.themeId=v.themeId;else delete r.dataset.themeId;r.dataset.colorScheme=scheme;r.dataset.theme=scheme;r.style.colorScheme=scheme;for(const [k,x] of Object.entries(t||{})){if(n.has(k)&&safeValue(x))r.style.setProperty(k,x)}})();`;
+  return `(()=>{const p=${serializedPayload},r=document.documentElement,n=new Set(p.tokenNames),themes=new Map(p.catalogue.themes.flatMap(t=>[[t.id,t],...(t.legacyIds||[]).map(a=>[a,t])])),safeValue=x=>typeof x==="string"&&x.length>0&&x.length<=256&&!/[;{}@]|url\\s*\\(|expression\\s*\\(|!important/i.test(x),safeTokens=t=>t&&typeof t==="object"&&!Array.isArray(t)&&Object.entries(t).length<=n.size&&Object.entries(t).every(([k,x])=>n.has(k)&&safeValue(x)),hostTokens=s=>({...p.host.tokenLayers.shared,...p.host.tokenLayers[s]});let v={themeId:p.host.themeId,colorSchemePreference:p.host.colorScheme,options:p.host.options,tokens:null};try{const s=localStorage.getItem("angee:appearance");if(s&&s.length<=131072){const c=JSON.parse(s),validTheme=c.themeId===null||typeof c.themeId==="string"&&themes.has(c.themeId),validScheme=c.colorSchemePreference==="light"||c.colorSchemePreference==="dark"||c.colorSchemePreference==="system";if(c.schema===1&&c.fingerprint===p.fingerprint&&validTheme&&validScheme&&(c.tokens==null||safeTokens(c.tokens))){v=c}}}catch{}v={...v,themeId:themes.get(v.themeId)?.id??v.themeId};const q=v.colorSchemePreference||"system",scheme=q==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):q,t=v.tokens||(v.themeId===p.host.themeId?hostTokens(scheme):(()=>{const d=themes.get(v.themeId)?.defaultTokens;return d?{...(d.shared||{}),...(d[scheme]||{})}:{}})());if(v.themeId)r.dataset.themeId=v.themeId;else delete r.dataset.themeId;r.dataset.colorScheme=scheme;r.dataset.theme=scheme;r.style.colorScheme=scheme;for(const [k,x] of Object.entries(t||{})){if(n.has(k)&&safeValue(x))r.style.setProperty(k,x)}})();`;
 }

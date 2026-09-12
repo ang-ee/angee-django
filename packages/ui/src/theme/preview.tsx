@@ -18,12 +18,13 @@ export interface ThemePreviewFrameProps {
   colorScheme: ColorScheme;
   tokens?: Partial<Record<ThemeTokenName, string>>;
   logo?: ThemeCustomizationLogo;
-  children: ReactNode;
+  children?: ReactNode;
   className?: string;
+  variant?: "full" | "card";
 }
 
 /** Isolated preview document using the host's compiled presentation assets. */
-export function ThemePreviewFrame({ title, themeId, colorScheme, tokens, logo, children, className }: ThemePreviewFrameProps): ReactNode {
+export function ThemePreviewFrame({ title, themeId, colorScheme, tokens, logo, children, className, variant = "full" }: ThemePreviewFrameProps): ReactNode {
   const frame = useRef<HTMLIFrameElement>(null);
   const [target, setTarget] = useState<Document | null>(null);
 
@@ -39,11 +40,32 @@ export function ThemePreviewFrame({ title, themeId, colorScheme, tokens, logo, c
       title={title}
       sandbox="allow-same-origin"
       srcDoc="<!doctype html><html><head></head><body></body></html>"
-      className={className ?? "h-[30rem] w-full rounded-8 border border-border bg-canvas"}
+      className={className ?? (variant === "card" ? "h-24 w-full rounded-6 border border-border bg-canvas" : "h-[30rem] w-full rounded-8 border border-border bg-canvas")}
       onLoad={() => setTarget(frame.current?.contentDocument ?? null)}
     />
-    {target ? createPortal(<main className="min-h-screen bg-canvas p-5 text-fg"><ThemeSpecimenSurface logo={logo} />{children}</main>, target.body) : null}
+    {target ? createPortal(
+      <main className={variant === "card" ? "h-screen overflow-hidden bg-canvas p-2 text-fg" : "min-h-screen bg-canvas p-5 text-fg"}>
+        {variant === "card" ? <ThemeCardSpecimen logo={logo} /> : <ThemeSpecimenSurface logo={logo} />}
+        {children}
+      </main>,
+      target.body,
+    ) : null}
   </>;
+}
+
+function ThemeCardSpecimen({ logo }: { logo?: ThemeCustomizationLogo }): ReactNode {
+  return <div className="grid h-full grid-cols-[4.5rem_minmax(0,1fr)] overflow-hidden rounded-6 border border-border bg-sheet shadow-sm">
+    <aside className="grid content-start gap-1 bg-rail p-2 text-on-rail">
+      <ThemeLogo logo={logo} size={16} width={16} height={16} />
+      <span className="mt-1 h-1.5 rounded-full bg-rail-hi" />
+      <span className="h-1.5 w-4/5 rounded-full bg-rail-hi" />
+    </aside>
+    <section className="grid content-start gap-2 p-2">
+      <span className="h-2 w-2/3 rounded-full bg-fg-muted opacity-40" />
+      <span className="h-4 rounded-4 bg-brand" />
+      <span className="grid grid-cols-2 gap-1"><i className="h-7 rounded-4 border border-border bg-canvas" /><i className="h-7 rounded-4 border border-border bg-sheet-2" /></span>
+    </section>
+  </div>;
 }
 
 /** Shared controls and data surfaces used to review every installed theme. */
