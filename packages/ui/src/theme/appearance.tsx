@@ -318,11 +318,29 @@ export function clearAppearanceCache(): void {
   try { window.localStorage.removeItem(APPEARANCE_CACHE_KEY); } catch { /* storage is disposable */ }
 }
 
+/** Read the actor bound to a current, bounded appearance bootstrap cache entry. */
+export function appearanceCacheActorId(encoded: string | null): string | null {
+  if (!encoded || encoded.length > APPEARANCE_CACHE_LIMIT) return null;
+  try {
+    const value = JSON.parse(encoded) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const source = value as Record<string, unknown>;
+    return source.schema === APPEARANCE_CACHE_SCHEMA && typeof source.actorId === "string"
+      ? source.actorId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function writeAppearanceCache(value: unknown): void {
   if (typeof window === "undefined") return;
   try {
     const encoded = JSON.stringify(value);
-    if (encoded.length <= APPEARANCE_CACHE_LIMIT) window.localStorage.setItem(APPEARANCE_CACHE_KEY, encoded);
+    if (
+      encoded.length <= APPEARANCE_CACHE_LIMIT
+      && window.localStorage.getItem(APPEARANCE_CACHE_KEY) !== encoded
+    ) window.localStorage.setItem(APPEARANCE_CACHE_KEY, encoded);
   } catch { /* storage is disposable */ }
 }
 
