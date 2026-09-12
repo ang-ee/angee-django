@@ -49,8 +49,13 @@ const projectsRoutes: readonly BaseAddonRoute[] = [
 const projectsMenu: readonly BaseMenuItem[] = [
   {
     id: "projects",
+    // The group header targets the projects list. Without a route of its own it
+    // fell through to its first child, so "Projects" the header went to My Work
+    // while "Projects" the child went to the list -- two entries with one name,
+    // lighting up for different pages.
     label: "Projects",
     icon: "projects",
+    route: "projects.projects",
     children: [
       {
         id: "projects.my-work",
@@ -60,7 +65,7 @@ const projectsMenu: readonly BaseMenuItem[] = [
       },
       {
         id: "projects.projects",
-        label: "Projects",
+        label: "All projects",
         icon: "projects",
         route: "projects.projects",
       },
