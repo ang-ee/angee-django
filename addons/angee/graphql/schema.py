@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import copy
 import logging
+import threading
 import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, ClassVar, cast
 
 import strawberry
@@ -257,6 +259,10 @@ class GraphQLSchemas:
 
         self.addons = tuple(addons)
         self._builds: dict[str, strawberry.Schema] = {}
+        self._model_readable_fields: dict[type[models.Model], frozenset[str]] = {}
+        # Projection resolution calls resources(), which can enter build() while
+        # this same owner is already serializing its first-use cache population.
+        self._build_lock = threading.RLock()
 
     @classmethod
     def from_discovery(cls) -> GraphQLSchemas:
@@ -287,9 +293,15 @@ class GraphQLSchemas:
     ) -> strawberry.Schema:
         """Return the merged live Strawberry schema named ``name``."""
 
-        if name not in self._builds:
-            self._builds[name] = self._build(name)
-        return self._builds[name]
+        cached = self._builds.get(name)
+        if cached is not None:
+            return cached
+        with self._build_lock:
+            cached = self._builds.get(name)
+            if cached is None:
+                cached = self._build(name)
+                self._builds[name] = cached
+            return cached
 
     def graphql_schema(self, name: str = DEFAULT_SCHEMA_NAME) -> GraphQLSchema:
         """Return the introspectable graphql-core schema for the named bucket.
@@ -334,18 +346,40 @@ class GraphQLSchemas:
 
         return frozenset(model._meta.label_lower for model in self.change_publisher_models())
 
+    def model_readable_fields(self, model: type[models.Model]) -> frozenset[str]:
+        """Return model fields projected readably across every named schema.
+
+        First use builds named schemas as needed to obtain their finalized
+        resources, then memoizes the union for ``model`` on this instance.
+        """
+
+        cached = self._model_readable_fields.get(model)
+        if cached is not None:
+            return cached
+        with self._build_lock:
+            cached = self._model_readable_fields.get(model)
+            if cached is not None:
+                return cached
+            readable = frozenset(
+                field
+                for schema_name in self.names()
+                for resource in self.resources(schema_name)
+                if resource.model is model
+                for field in readable_model_field_names(resource)
+            )
+            self._model_readable_fields[model] = readable
+            return readable
+
     def connect_change_publishers(self) -> None:
         """Connect save/delete publishers for every declared change-feed model."""
 
         from angee.graphql.publishing import connect_publishers
 
-        readable_by_model = {model: set[str]() for model in self.change_publisher_models()}
-        for schema_name in self.names():
-            for resource in self.resources(schema_name):
-                if resource.model in readable_by_model:
-                    readable_by_model[resource.model].update(readable_model_field_names(resource))
-        for model, readable_fields in readable_by_model.items():
-            connect_publishers(model, readable_fields=readable_fields)
+        for model in self.change_publisher_models():
+            connect_publishers(
+                model,
+                readable_fields=partial(self.model_readable_fields, model),
+            )
 
     def _build(
         self,

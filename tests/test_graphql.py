@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
@@ -23,6 +26,7 @@ from strawberry.extensions import SchemaExtension
 from angee.base.fields import StateField
 from angee.base.mixins import RevisionMixin
 from angee.base.models import AngeeManager, AngeeModel
+from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.revisions import revisions
@@ -1037,6 +1041,130 @@ def test_build_schema_requires_query_root() -> None:
 
     with pytest.raises(ImproperlyConfigured, match="no query root"):
         GraphQLSchemas([addon(public={"mutation": [PingMutation]})]).build("public")
+
+
+def test_concurrent_first_build_is_shared(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Concurrent cold consumers receive one successfully cached schema build."""
+
+    schemas = GraphQLSchemas([addon(public={"query": [HelloQuery]})])
+    original_build = schemas._build
+    build_count = 0
+    callers = Barrier(8)
+
+    def slow_build(name: str) -> strawberry.Schema:
+        nonlocal build_count
+        build_count += 1
+        time.sleep(0.05)
+        return original_build(name)
+
+    monkeypatch.setattr(schemas, "_build", slow_build)
+
+    def concurrent_build(name: str) -> strawberry.Schema:
+        callers.wait()
+        return schemas.build(name)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        built = list(executor.map(concurrent_build, ["public"] * 8))
+
+    assert build_count == 1
+    assert all(schema is built[0] for schema in built)
+
+
+def test_failed_build_is_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed cold build leaves no partial cache entry behind."""
+
+    schemas = GraphQLSchemas([addon(public={"query": [HelloQuery]})])
+    original_build = schemas._build
+    attempts = 0
+
+    def fail_once(name: str) -> strawberry.Schema:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient build failure")
+        return original_build(name)
+
+    monkeypatch.setattr(schemas, "_build", fail_once)
+    with pytest.raises(RuntimeError, match="transient build failure"):
+        schemas.build("public")
+
+    assert schemas.build("public").execute_sync("{ hello }").data == {"hello": "hi"}
+    assert attempts == 2
+
+
+def test_readable_model_fields_union_named_schemas_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The schema owner memoizes the readable model/attname union across schemas."""
+
+    schemas = GraphQLSchemas([addon(public={"query": [HelloQuery]}, console={"query": [WorldQuery]})])
+    public_resource = SimpleNamespace(
+        model=GatedWriteThing,
+        fields=(SimpleNamespace(readable=True, model_field_name="owner"),),
+    )
+    console_resource = SimpleNamespace(
+        model=GatedWriteThing,
+        fields=(SimpleNamespace(readable=True, model_field_name="name"),),
+    )
+    schemas._builds.update(
+        {
+            "public": cast(strawberry.Schema, SimpleNamespace(angee_resources=(public_resource,))),
+            "console": cast(strawberry.Schema, SimpleNamespace(angee_resources=(console_resource,))),
+        }
+    )
+    calls = 0
+    callers = Barrier(6)
+    original_readable = schema_module.readable_model_field_names
+
+    def counted_readable(resource: Any) -> frozenset[str]:
+        nonlocal calls
+        calls += 1
+        time.sleep(0.02)
+        return original_readable(resource)
+
+    monkeypatch.setattr(schema_module, "readable_model_field_names", counted_readable)
+
+    def concurrent_readable(model: type[models.Model]) -> frozenset[str]:
+        callers.wait()
+        return schemas.model_readable_fields(model)
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        results = list(executor.map(concurrent_readable, [GatedWriteThing] * 6))
+
+    assert results == [frozenset({"owner", "owner_id", "name"})] * 6
+    assert calls == 2
+
+
+def test_warm_schema_and_model_projection_reads_do_not_wait_for_build_lock() -> None:
+    """Successful warm owner reads return while another thread holds the cold-path lock."""
+
+    schemas = GraphQLSchemas([addon(public={"query": [HelloQuery]})])
+    cached_schema = cast(strawberry.Schema, SimpleNamespace())
+    schemas._builds["public"] = cached_schema
+    schemas._model_readable_fields[GatedWriteThing] = frozenset()
+    lock_acquired = Event()
+    release_lock = Event()
+
+    def hold_build_lock() -> None:
+        with schemas._build_lock:
+            lock_acquired.set()
+            release_lock.wait()
+
+    def read_warm_values() -> tuple[strawberry.Schema, frozenset[str]]:
+        return schemas.build("public"), schemas.model_readable_fields(GatedWriteThing)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        lock_holder = executor.submit(hold_build_lock)
+        assert lock_acquired.wait(timeout=1)
+        warm_read = executor.submit(read_warm_values)
+        try:
+            built, readable = warm_read.result(timeout=1)
+        finally:
+            release_lock.set()
+        lock_holder.result(timeout=1)
+
+    assert built is cached_schema
+    assert readable == frozenset()
 
 
 def test_merge_root_field_collision() -> None:

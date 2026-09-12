@@ -17,6 +17,7 @@ import strawberry_django
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.core.checks.registry import registry
 from django.db import connection, models
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext, isolate_apps
@@ -29,12 +30,21 @@ from angee.base.mixins import AuditMixin, TimestampMixin
 from angee.base.serialization import json_safe
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
+from angee.graphql.data import hasura_model_resource
 from angee.graphql.events import ChangePayload
 from angee.graphql.field_types import register_field_type
 from angee.graphql.publishing import publication_ingestion_context
 from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from tests.conftest import SchemaAddon, _clear_model_tables, _create_missing_tables
+
+
+@pytest.fixture(autouse=True)
+def isolate_system_check_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep manual app-ready calls from registering checks beyond their test."""
+
+    monkeypatch.setattr(registry, "registered_checks", set(registry.registered_checks))
+    monkeypatch.setattr(registry, "deployment_checks", set(registry.deployment_checks))
 
 
 def payload(**overrides: object) -> dict[str, object]:
@@ -168,6 +178,85 @@ def test_publish_uses_public_id_and_changed_values(
             },
         )
     ]
+
+
+def test_readable_fields_provider_resolves_only_for_observable_partial_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Suppressed and value-free events do not force readable-field metadata."""
+
+    resolutions: list[str] = []
+    callbacks: list[Any] = []
+
+    def readable_fields() -> tuple[str, ...]:
+        resolutions.append("resolved")
+        return ("name",)
+
+    monkeypatch.setattr(publishing.transaction, "on_commit", callbacks.append)
+    group = Group(id=7, name="editors")
+
+    publishing.publish_change(group, action="create", update_fields=None, readable_fields=readable_fields)
+    publishing.publish_change(group, action="update", update_fields=None, readable_fields=readable_fields)
+    publishing.publish_change(group, action="delete", update_fields=None, readable_fields=readable_fields)
+    publishing._on_save(Group, group, raw=True, update_fields=("name",), readable_fields=readable_fields)
+    with publishing.mute_changes():
+        publishing.publish_change(
+            group,
+            action="update",
+            update_fields=("name",),
+            readable_fields=readable_fields,
+        )
+
+    class SilentGroup(Group):
+        class Meta:
+            proxy = True
+            app_label = "auth"
+
+        def broadcasts_changes(self) -> bool:
+            return False
+
+    publishing.publish_change(
+        SilentGroup(id=8, name="hidden"),
+        action="update",
+        update_fields=("name",),
+        readable_fields=readable_fields,
+    )
+
+    assert resolutions == []
+    assert len(callbacks) == 3
+
+    publishing.publish_change(
+        group,
+        action="update",
+        update_fields=("name",),
+        readable_fields=readable_fields,
+    )
+
+    assert resolutions == ["resolved"]
+    assert len(callbacks) == 4
+
+
+def test_partial_update_payload_is_captured_before_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The commit callback retains values captured when the signal ran."""
+
+    callbacks: list[Any] = []
+    sent: list[ChangePayload] = []
+    monkeypatch.setattr(publishing.transaction, "on_commit", callbacks.append)
+    monkeypatch.setattr(publishing, "_send_change", lambda model, payload: sent.append(payload))
+    group = Group(id=9, name="before")
+
+    publishing.publish_change(
+        group,
+        action="update",
+        update_fields=("name",),
+        readable_fields=lambda: ("name",),
+    )
+    group.name = "after"
+    callbacks[0]()
+
+    assert sent[0].changed_values == {"name": "before"}
 
 
 def test_change_signal_receiver_sees_broadcast_payload(
@@ -305,15 +394,17 @@ def test_publish_change_robust_receivers_log_and_continue(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_graphql_ready_finalizes_schema_before_connecting_publishers(
+def test_graphql_ready_connects_publishers_without_building_until_partial_save(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """App ready builds final metadata before deriving publisher readable fields."""
+    """App ready wires publishers while the first partial save builds field metadata."""
 
     class ReadyPublished(models.Model):
         """Concrete model exposed as a changes-capable resource by a fake discovery."""
 
         name = models.CharField(max_length=40)
+        code = models.CharField(max_length=40, default="initial")
+        secret = models.CharField(max_length=40, default="hidden")
 
         class Meta:
             app_label = "auth"
@@ -322,16 +413,54 @@ def test_graphql_ready_finalizes_schema_before_connecting_publishers(
     class ReadyQuery:
         ready: bool = True
 
+    @strawberry_django.type(ReadyPublished)
+    class ReadyPublishedPublicType:
+        id: auto
+        name: auto = strawberry_django.field(name="display_name")
+
+    @strawberry_django.type(ReadyPublished)
+    class ReadyPublishedInternalType:
+        id: auto
+        code: auto = strawberry_django.field(name="reference_code")
+
+    public_resource = hasura_model_resource(
+        ReadyPublishedPublicType,
+        model=ReadyPublished,
+        name="ready_published_public",
+        filterable=("id", "name"),
+        sortable=("name",),
+        aggregatable=("id",),
+        public_id_field="id",
+        insert=False,
+        update=False,
+        delete=False,
+    )
+    internal_resource = hasura_model_resource(
+        ReadyPublishedInternalType,
+        model=ReadyPublished,
+        name="ready_published_internal",
+        filterable=("id", "code"),
+        sortable=("code",),
+        aggregatable=("id",),
+        public_id_field="id",
+        insert=False,
+        update=False,
+        delete=False,
+    )
+
     schemas = GraphQLSchemas(
         [
             SchemaAddon(
                 {
                     "public": {
-                        "query": (ReadyQuery,),
-                        "subscription": (
-                            changes(ReadyPublished, field="readyPublishedChanged"),
-                        ),
-                    }
+                        "subscription": (changes(ReadyPublished, field="readyPublishedChanged"),),
+                        "types": (ReadyPublishedPublicType, *public_resource.types),
+                        "query": (ReadyQuery, public_resource.query),
+                    },
+                    "internal": {
+                        "types": (ReadyPublishedInternalType, *internal_resource.types),
+                        "query": (internal_resource.query,),
+                    },
                 }
             )
         ]
@@ -356,8 +485,13 @@ def test_graphql_ready_finalizes_schema_before_connecting_publishers(
     )
     try:
         GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
-        assert tuple(schemas._builds) == ("public",)
-        ReadyPublished.objects.create(name="ready")
+        assert schemas._builds == {}
+        row = ReadyPublished.objects.create(name="ready")
+        assert schemas._builds == {}
+        row.name = "updated"
+        row.code = "second"
+        row.secret = "still hidden"
+        row.save(update_fields=("name", "code", "secret"))
     finally:
         publishing.disconnect_publishers(ReadyPublished)
         publishing.change_published.disconnect(
@@ -368,8 +502,11 @@ def test_graphql_ready_finalizes_schema_before_connecting_publishers(
             with connection.schema_editor() as editor_schema:
                 editor_schema.delete_model(ReadyPublished)
 
-    assert [payload.model for payload in payloads] == ["auth.ReadyPublished"]
-    assert [payload.action for payload in payloads] == ["create"]
+    assert [payload.model for payload in payloads] == ["auth.ReadyPublished"] * 2
+    assert [payload.action for payload in payloads] == ["create", "update"]
+    assert payloads[0].changed_values is None
+    assert payloads[1].changed_values == {"code": "second", "name": "updated"}
+    assert tuple(sorted(schemas._builds)) == ("internal", "public")
 
 
 def test_publisher_membership_discovery_does_not_build_or_require_field_registration(
@@ -489,18 +626,18 @@ def test_alias_imported_changes_declaration_connects_publisher(
 
         assert _receiver_count(post_save, "angee-changes-auth.AliasPublished-save") == 1
         assert schemas.change_publisher_models() == (AliasPublished,)
-        assert tuple(schemas._builds) == ("public",)
+        assert schemas._builds == {}
     finally:
         publishing.disconnect_publishers(AliasPublished)
         sys.modules.pop(f"{module_name}.schema", None)
         sys.modules.pop(module_name, None)
 
 
-def test_graphql_ready_imports_and_finalizes_before_later_addon_ready(
+def test_graphql_ready_discovers_declarations_before_later_ready_and_finalizes_on_demand(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """Schema declarations are complete before a later app's ready callback runs."""
+    """Declarations load at GraphQL ready while resource finalization waits for demand."""
 
     class LateReadyPublished(models.Model):
         name = models.CharField(max_length=40)
@@ -559,8 +696,9 @@ def test_graphql_ready_imports_and_finalizes_before_later_addon_ready(
         GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
 
         assert module.events == ["schema-import"]
-        assert tuple(schemas._builds) == ("public",)
+        assert schemas._builds == {}
         [resource] = schemas.resources("public")
+        assert tuple(schemas._builds) == ("public",)
         assert resource.roots.changes_name == "lateReadyPublishedChanged"
 
         addon.ready()
