@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BoardView } from "./BoardView";
@@ -23,11 +23,16 @@ const dndMocks = vi.hoisted(() => {
     pointerWithin: vi.fn((): unknown[] => []),
     rectIntersection: vi.fn((): unknown[] => []),
     setActivatorNodeRef: vi.fn(),
+    onDragPointerDown: vi.fn(),
+    onDragKeyDown: vi.fn(),
     useSensor: vi.fn((sensor: unknown, options?: unknown) => ({ sensor, options })),
     useSensors: vi.fn((...sensors: unknown[]) => sensors),
     useDraggable: vi.fn(() => ({
       attributes: { "data-draggable": "true" },
-      listeners: { onKeyDown: vi.fn() },
+      listeners: {
+        onPointerDown: (event: unknown) => dndMocks.onDragPointerDown(event),
+        onKeyDown: (event: unknown) => dndMocks.onDragKeyDown(event),
+      },
       setNodeRef: vi.fn(),
       setActivatorNodeRef: vi.fn((node) => dndMocks.setActivatorNodeRef(node)),
       transform: null,
@@ -35,7 +40,10 @@ const dndMocks = vi.hoisted(() => {
     })),
     useSortable: vi.fn(() => ({
       attributes: { "data-sortable": "true" },
-      listeners: { onKeyDown: vi.fn() },
+      listeners: {
+        onPointerDown: (event: unknown) => dndMocks.onDragPointerDown(event),
+        onKeyDown: (event: unknown) => dndMocks.onDragKeyDown(event),
+      },
       setNodeRef: vi.fn(),
       setActivatorNodeRef: vi.fn((node) => dndMocks.setActivatorNodeRef(node)),
       transform: null,
@@ -90,6 +98,8 @@ beforeEach(() => {
   dndMocks.pointerWithin.mockReturnValue([]);
   dndMocks.rectIntersection.mockReturnValue([]);
   dndMocks.setActivatorNodeRef.mockClear();
+  dndMocks.onDragPointerDown.mockClear();
+  dndMocks.onDragKeyDown.mockClear();
 });
 afterEach(() => cleanup());
 
@@ -266,6 +276,61 @@ describe("BoardView", () => {
     expect(dndMocks.contextProps?.collisionDetection?.({})).toBe(pointerHit);
     dndMocks.pointerWithin.mockReturnValueOnce([]);
     expect(dndMocks.contextProps?.collisionDetection?.({})).toBe(rectHit);
+  });
+
+  test("makes the whole card the drag activator, not the grip alone", () => {
+    renderBoard({
+      dragEnabled: true,
+      onCardMove: vi.fn(),
+      rowHref: () => "/records/1",
+    });
+
+    // dnd-kit hears the gesture through its listeners, and those must be on the
+    // card: with them on the grip alone the card body is a plain link, which the
+    // browser drags natively, so the card never moves and the drag looks dead.
+    const card = document.querySelector("article");
+    expect(card).toBeTruthy();
+    fireEvent.pointerDown(card as Element);
+    expect(dndMocks.onDragPointerDown).toHaveBeenCalledTimes(1);
+
+    // The a11y attributes stay on the grip. On the card they would make every
+    // card a focusable role=button wrapping a link and a button, and the card
+    // and the grip would then claim the same aria-describedby.
+    expect(card?.getAttribute("data-draggable")).toBe(null);
+    expect(document.querySelectorAll("[data-draggable='true']").length).toBe(1);
+    expect(
+      screen.getByRole("button", { name: "board.dragCard" }).getAttribute("data-draggable"),
+    ).toBe("true");
+
+    // The grip has no listeners of its own; its keydown reaches dnd-kit by
+    // bubbling to the card, which is what keeps keyboard drag working.
+    fireEvent.keyDown(screen.getByRole("button", { name: "board.dragCard" }), { code: "Space" });
+    expect(dndMocks.onDragKeyDown).toHaveBeenCalledTimes(1);
+
+    // A touch drag must not scroll the lane instead of moving the card.
+    expect(card?.className).toContain("touch-none");
+
+    // And the body link must not start a native drag that steals the gesture.
+    expect(card?.querySelector("a")?.getAttribute("draggable")).toBe("false");
+  });
+
+  test("makes a sortable card the drag activator too", () => {
+    renderBoard({
+      groups: [lane([{ id: "1", label: "First", sort_order: 1024 }])],
+      dragEnabled: true,
+      rankField: "sort_order",
+      onCardMove: vi.fn(),
+      rowHref: () => "/records/1",
+    });
+
+    const card = document.querySelector("article");
+    expect(card).toBeTruthy();
+    fireEvent.pointerDown(card as Element);
+    expect(dndMocks.onDragPointerDown).toHaveBeenCalledTimes(1);
+
+    expect(card?.getAttribute("data-sortable")).toBe(null);
+    expect(document.querySelectorAll("[data-sortable='true']").length).toBe(1);
+    expect(card?.querySelector("a")?.getAttribute("draggable")).toBe("false");
   });
 
   test("wires a card drag handle as the keyboard activator", () => {
