@@ -118,7 +118,7 @@ export function CycleBoardPage(): React.ReactElement {
             <Column field="title" />
             <Column field="estimate" header={t("common.estimate")} />
             <Column field="assignee" />
-            <Column field="priority" />
+            <Column field="priority" widget="priority" />
             <Column field="due_date" />
           </List>
           {form}

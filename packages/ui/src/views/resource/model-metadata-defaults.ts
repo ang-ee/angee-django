@@ -186,6 +186,7 @@ const ENUM_OPTION_WIDGETS = new Set([
   "statusbar",
   "statusBadge",
   "colorDot",
+  "priority",
 ]);
 
 /** Apply metadata-derived column labels and enum options without overriding props. */

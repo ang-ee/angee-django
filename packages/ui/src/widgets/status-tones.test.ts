@@ -32,6 +32,24 @@ describe("statusTone", () => {
     ).toBe("info");
   });
 
+  test("matches an override written in the backend's casing against a GraphQL enum read", () => {
+    // The row carries the enum member name; the author wrote the backend token.
+    // Without the normalized second pass the override is silently inert and the
+    // value falls through to the shared vocabulary -- which reads `open` as
+    // success, colouring an open task the same green as a done one.
+    const taskTones = { open: "info", done: "success", dropped: "neutral" } as const;
+
+    expect(statusTone("OPEN", taskTones)).toBe("info");
+    expect(statusTone("DONE", taskTones)).toBe("success");
+    expect(statusTone("DROPPED", taskTones)).toBe("neutral");
+    // The exact spelling still works, and still wins.
+    expect(statusTone("open", taskTones)).toBe("info");
+  });
+
+  test("keeps an exact override ahead of a differently-cased sibling", () => {
+    expect(statusTone("OPEN", { OPEN: "danger", open: "info" })).toBe("danger");
+  });
+
   test("keeps pairing lifecycle states on the shared vocabulary", () => {
     const pairingOverrides = {
       PAIRED: "success",

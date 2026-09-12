@@ -22,6 +22,7 @@ import {
   PARTICIPANT_MODEL,
   PROJECT_MODEL,
   TASK_MODEL,
+  TASK_STATUS_TONES,
 } from "../resources";
 import {
   useTaskFormDeclaration,
@@ -174,9 +175,9 @@ function ProjectTasksTab({ recordId }: RecordPanelContext): React.ReactElement {
         emptyContent={t("project.empty.tasks")}
       >
         <Column field="title" />
-        <Column field="status" widget="statusBadge" />
+        <Column field="status" widget="statusBadge" tone={TASK_STATUS_TONES} />
         <Column field="assignee" />
-        <Column field="priority" />
+        <Column field="priority" widget="priority" />
         <Column field="due_date" />
       </List>
       {form}

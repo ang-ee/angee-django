@@ -31,15 +31,23 @@ export const STATUS_TONES: ToneValueBuckets = {
     "draft", "paused", "review", "pending", "in_review",
     "provisioning", "deprovisioning", "starting", "connecting",
     "closed", "warning", "degraded", "waiting",
+    // A work-stage category that is explicitly asking for a human decision.
+    "triage",
     // Document lifecycle: awaiting money or an invoice — in-flight, needs attention.
     "not_paid", "partial", "to_invoice",
   ],
   danger: ["error", "failed", "denied", "lost", "down", "crashed"],
+  // Work-stage categories (`work.Stage.category`) read on the same axis as the
+  // statuses above: `started` is already in-flight blue, `completed` already
+  // green. `backlog` and `unstarted` are the not-yet-picked-up greys, `triage`
+  // the one that wants a human.
   info: ["started", "assigned"],
   neutral: [
     "archived", "deleted", "disabled", "disconnected", "rejected", "blocked",
     "stopped", "deprovisioned", "idle", "inactive", "offline", "unknown", "default",
     "scheduled", "canceled", "skipped",
+    // Work-stage categories that mean "not picked up yet" / "not real work".
+    "backlog", "unstarted", "duplicate",
     // Document lifecycle: cancelled (British spelling used by the ledger enums),
     // and "nothing to invoice" — an inert, no-action state.
     "cancelled", "nothing",
@@ -54,10 +62,15 @@ export interface StatusToneOptions {
 }
 
 /**
- * Resolve a status value's tone. The caller's explicit `<Column tone>` entry wins —
- * keyed on the value exactly as it reads (the same exact-case lookup the cells apply) —
+ * Resolve a status value's tone. The caller's explicit `<Column tone>` entry wins,
  * then the shared `STATUS_TONES` convention, else `brand`. Shared by the status widgets
  * and `StateTag` so a value colors the same wherever it renders.
+ *
+ * The override is matched exactly first, then on the {@link optionToken} — the same
+ * two-step {@link canonicalOptionValue} applies to options, and for the same reason: a
+ * GraphQL enum reads back as its member *name* (`OPEN`), while an author writing a tone
+ * map spells the backend's own token (`open`). Matching only exactly made the override
+ * silently inert for every enum field read over GraphQL.
  */
 export function statusTone(
   value: string | null | undefined,
@@ -68,6 +81,8 @@ export function statusTone(
   if (mapped) return mapped;
   const normalized = optionToken(value);
   if (!normalized) return options.emptyTone ?? "neutral";
+  const normalizedOverride = override?.[normalized];
+  if (normalizedOverride) return normalizedOverride;
   const tone = stateToneFromValue(normalized, STATUS_TONES);
   return tone === "brand" ? (options.unknownTone ?? "brand") : tone;
 }

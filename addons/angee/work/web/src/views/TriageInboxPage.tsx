@@ -79,7 +79,7 @@ export function TriageInboxPage(): React.ReactElement {
         >
           <Column field="work_key" header={t("common.key")} />
           <Column field="title" />
-          <Column field="priority" />
+          <Column field="priority" widget="priority" />
           <Column
             field="started_triage_at"
             header={t("triage.dwell")}
