@@ -13,6 +13,7 @@ export {
   AppRuntimeProvider,
   useAppRuntime,
   useWidget,
+  useDashboardRegistry,
   useFormOverride,
   useResourceRoute,
   useResourceRecordHref,
@@ -22,6 +23,7 @@ export {
   useRuntimeAuth,
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,
+  readRuntimeRouteShortcuts,
   useSlot,
   useModelSlot,
   usePreviews,
@@ -40,6 +42,9 @@ export {
   type RuntimeUserPreferencesPatch,
   type RuntimeUserPreferencesState,
   DEFAULT_LOGIN_PATH,
+  HOME_PATH_PREFERENCE_KEY,
+  ROUTE_SHORTCUTS_PREFERENCE_KEY,
+  type RuntimeRouteShortcut,
 } from "./runtime";
 export {
   RECORD_NAVIGATION_SEARCH_KEY,

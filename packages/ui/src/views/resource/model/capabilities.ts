@@ -1,7 +1,7 @@
 import { FILTER_OPERATORS, type FilterOperator } from "@angee/metadata";
 import { DEFAULT_PAGE_SIZE, normalisePageSize } from "../page-size";
 import type { ResourceViewInitialState } from "./filter";
-export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar"] as const;
+export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar", "dashboard"] as const;
 
 /** The calendar kind's window modes; `month` is the default period. */
 export const CALENDAR_VIEW_MODES = ["month", "week", "day"] as const;
@@ -53,6 +53,13 @@ export const RESOURCE_VIEW_KIND_CAPABILITIES: Record<
     filter: false,
     requiresSources: true,
   },
+  dashboard: {
+    grouping: false,
+    pagination: false,
+    columns: false,
+    filter: true,
+    requiresSources: true,
+  },
 };
 
 /** All applicable, for a surface (e.g. an in-memory rows list) that names no kind. */
@@ -78,11 +85,12 @@ export function resourceViewKindCapabilities(
  * The switcher's options derive from this — never a hardcoded array.
  */
 export function availableResourceViewKinds(
-  declared: { calendar?: boolean } = {},
+  declared: { calendar?: boolean; dashboard?: boolean } = {},
 ): readonly ResourceViewKind[] {
   return RESOURCE_VIEW_KINDS.filter((kind) => {
     if (!RESOURCE_VIEW_KIND_CAPABILITIES[kind].requiresSources) return true;
     if (kind === "calendar") return declared.calendar ?? false;
+    if (kind === "dashboard") return declared.dashboard ?? false;
     return false;
   });
 }

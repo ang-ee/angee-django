@@ -23,6 +23,30 @@
       "import": "./src/index.ts"
     },
     "./styles.css": "./src/styles/index.css",
+    "./dashboard": {
+      "types": "./src/dashboard/index.ts",
+      "import": "./src/dashboard/index.ts"
+    },
+    "./dashboard/headless": {
+      "types": "./src/dashboard/headless.ts",
+      "import": "./src/dashboard/headless.ts"
+    },
+    "./dashboard/layout": {
+      "types": "./src/dashboard/layout.ts",
+      "import": "./src/dashboard/layout.ts"
+    },
+    "./dashboard/charts": {
+      "types": "./src/dashboard/charts.tsx",
+      "import": "./src/dashboard/charts.tsx"
+    },
+    "./dashboard/surface": {
+      "types": "./src/dashboard/surface.tsx",
+      "import": "./src/dashboard/surface.tsx"
+    },
+    "./dashboard/kinds": {
+      "types": "./src/dashboard/kinds.tsx",
+      "import": "./src/dashboard/kinds.tsx"
+    },
     "./theme": {
       "types": "./src/theme/index.ts",
       "import": "./src/theme/index.ts"
@@ -279,6 +303,10 @@
       "types": "./src/views/index.ts",
       "import": "./src/views/index.ts"
     },
+    "./views/resource-operations": {
+      "types": "./src/views/resource/resource-operations.ts",
+      "import": "./src/views/resource/resource-operations.ts"
+    },
     "./views/model-metadata-defaults": {
       "types": "./src/views/resource/model-metadata-defaults.ts",
       "import": "./src/views/resource/model-metadata-defaults.ts"
@@ -370,6 +398,30 @@
         "default": "./dist/index.js"
       },
       "./styles.css": "./dist/styles/index.css",
+      "./dashboard": {
+        "types": "./dist/dashboard/index.d.ts",
+        "default": "./dist/dashboard/index.js"
+      },
+      "./dashboard/headless": {
+        "types": "./dist/dashboard/headless.d.ts",
+        "default": "./dist/dashboard/headless.js"
+      },
+      "./dashboard/layout": {
+        "types": "./dist/dashboard/layout.d.ts",
+        "default": "./dist/dashboard/layout.js"
+      },
+      "./dashboard/charts": {
+        "types": "./dist/dashboard/charts.d.ts",
+        "default": "./dist/dashboard/charts.js"
+      },
+      "./dashboard/surface": {
+        "types": "./dist/dashboard/surface.d.ts",
+        "default": "./dist/dashboard/surface.js"
+      },
+      "./dashboard/kinds": {
+        "types": "./dist/dashboard/kinds.d.ts",
+        "default": "./dist/dashboard/kinds.js"
+      },
       "./testing": {
         "types": "./dist/testing.d.ts",
         "default": "./dist/testing.js"
@@ -617,6 +669,10 @@
       "./views/index": {
         "types": "./dist/views/index.d.ts",
         "default": "./dist/views/index.js"
+      },
+      "./views/resource-operations": {
+        "types": "./dist/views/resource/resource-operations.d.ts",
+        "default": "./dist/views/resource/resource-operations.js"
       },
       "./views/model-metadata-defaults": {
         "types": "./dist/views/resource/model-metadata-defaults.d.ts",
