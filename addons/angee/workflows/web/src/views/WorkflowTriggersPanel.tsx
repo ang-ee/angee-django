@@ -3,7 +3,7 @@ import { useAuthoredQuery } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   Badge, Button, Collapsible, Column, EmptyState, ErrorBanner, errorMessage, Field, Form, Group, List,
-  LoadingPanel, ResourceList, REFINE_CREATE_ID, SegmentedControl, SlotOutlet, formatDateTime, registerForm,
+  JsonValueView, LoadingPanel, ResourceList, REFINE_CREATE_ID, SegmentedControl, SlotOutlet, formatDateTime, registerForm,
   TextLink, useImplConfigFields, useFormViewValues,
   useRouteHref, useSlot, useActionOutcomeMutation, useActionResultRun,
   type RecordToolbarContext, type RegisteredFormProps,
@@ -14,7 +14,6 @@ import {
   WorkflowLaunchDocument, WorkflowSchedulePreviewDocument, WorkflowTriggerAuthoringDocument,
 } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
-import { JsonBlock } from "./JsonBlock";
 import { WorkflowEventConditionEditor } from "./WorkflowEventConditionEditor";
 import { WORKFLOW_TRIGGER_FORM_FIELDS_SLOT } from "../slots";
 
@@ -228,7 +227,7 @@ function TriggerRawConfig({
       </Collapsible.Trigger>
       <Collapsible.Panel>
         <section aria-label={t("triggers.ruleJson")}>
-          <JsonBlock value={values.config} />
+          <JsonValueView value={values.config} />
         </section>
       </Collapsible.Panel>
     </Collapsible>

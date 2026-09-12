@@ -67,7 +67,7 @@ export {
   type RelationOption,
 } from "./RelationField";
 
-// The editor-heavy widgets (CodeMirror, react-markdown, react-json-view-lite)
+// The editor-heavy widgets (CodeMirror and react-markdown)
 // are code-split: the registry holds a stable lazy wrapper, and the real module
 // loads only when a field that uses it is first rendered — keeping those libs out
 // of the boot bundle.
@@ -75,6 +75,9 @@ const jsonWidget = lazyWidget(() => import("./json").then((m) => m.jsonWidget), 
   edit: true,
   cell: true,
 });
+/** Lazy shared JSON presentations for authored surfaces outside descriptor forms. */
+export const JsonValueView = jsonWidget.read;
+export const JsonEditor = jsonWidget.edit!;
 const markdownEditorWidget = lazyWidget(
   () => import("./markdown").then((m) => m.markdownEditorWidget),
   { edit: true, cell: true },

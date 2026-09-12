@@ -6,6 +6,7 @@ import {
   RelativeTime,
   canonicalOptionValue,
   mutationDialogValueCodecs,
+  statusTone,
   useActionOutcomeMutation,
   useEnumOptions,
   useRecordChromeContext,
@@ -61,14 +62,9 @@ export function PortfolioHealthSummary({
     AT_RISK: t("update.health.atRisk"),
     OFF_TRACK: t("update.health.offTrack"),
   } as const;
-  const tone = {
-    ON_TRACK: "success",
-    AT_RISK: "warning",
-    OFF_TRACK: "danger",
-  } as const;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Badge tone={normalized ? tone[normalized] : "neutral"} shape="pill">
+      <Badge tone={statusTone(normalized)} shape="pill">
         {normalized ? copy[normalized] : t("update.health.none")}
       </Badge>
       {typeof updatedAt === "string" || typeof updatedAt === "number" ? (

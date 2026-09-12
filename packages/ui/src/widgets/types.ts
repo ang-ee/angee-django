@@ -130,6 +130,8 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   onRowChange?: (patch: Record<string, unknown>) => void;
   /** Signal that the widget's current user interaction has completed. */
   onCommit?: () => void;
+  /** Report whether the current editor draft can be committed. */
+  onValidityChange?: (valid: boolean) => void;
   /** The widget's actual interactive control or trigger. */
   controlRef?: (target: WidgetFocusTarget | null) => void;
 }

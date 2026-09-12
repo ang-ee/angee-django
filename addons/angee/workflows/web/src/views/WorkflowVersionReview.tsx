@@ -21,6 +21,7 @@ import {
   errorMessage,
   ErrorBanner,
   GraphView,
+  JsonValueView,
   LoadingPanel,
   type GraphViewEdge,
   type GraphViewNode,
@@ -33,7 +34,6 @@ import {
   WorkflowLaunchDocument,
 } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
-import { JsonBlock } from "./JsonBlock";
 import { workflowNodeKind, workflowNodeStyles, type WorkflowGraphNodeKind } from "./graph-data";
 
 const WORKFLOW_MODEL = "workflows.Workflow";
@@ -156,8 +156,8 @@ export function WorkflowVersionReview({ draftId, sourceId, sourceVersion, onRest
                 <div className="grid min-w-0 gap-3">
                   <ComparisonGraph comparison={snapshot} change={change} />
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <section><h3 className="mb-1 text-xs font-semibold">{t("versions.before")}</h3><JsonBlock value={change?.before ?? null} /></section>
-                    <section><h3 className="mb-1 text-xs font-semibold">{t("versions.after")}</h3><JsonBlock value={change?.after ?? null} /></section>
+                    <section><h3 className="mb-1 text-xs font-semibold">{t("versions.before")}</h3><JsonValueView value={change?.before ?? null} /></section>
+                    <section><h3 className="mb-1 text-xs font-semibold">{t("versions.after")}</h3><JsonValueView value={change?.after ?? null} /></section>
                   </div>
                 </div>
               </div>

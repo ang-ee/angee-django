@@ -7,8 +7,8 @@ import type { WidgetDefinition, WidgetRenderProps } from "./types";
 type WidgetSlot = "read" | "edit" | "cell";
 
 /**
- * A `WidgetDefinition` whose heavy implementation (CodeMirror, react-markdown,
- * react-json-view-lite) is code-split out of the boot bundle. Each slot is a
+ * A `WidgetDefinition` whose heavy implementation (CodeMirror and react-markdown)
+ * is code-split out of the boot bundle. Each slot is a
  * STABLE plain function component, built once at module init, so render sites and
  * `isWidgetDefinition` see an ordinary widget; on first render it lazy-loads the
  * real widget module and shows a skeleton meanwhile, composing the shared

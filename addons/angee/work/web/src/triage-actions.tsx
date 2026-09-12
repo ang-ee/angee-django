@@ -15,6 +15,7 @@ import {
   type WidgetOption,
 } from "@angee/ui";
 import * as React from "react";
+import { TASK_MODEL } from "@angee/projects";
 
 import { AcceptTaskDocument } from "./documents";
 import { useWorkT } from "./i18n";
@@ -22,7 +23,6 @@ import { STAGE_MODEL } from "./resources";
 import { queueStageFilters } from "./stage-filters";
 import { isTaskInTriage, type WorkTaskRow } from "./task-work";
 
-const TASK_MODEL = "projects.Task";
 type AcceptTaskVariables = DocumentVariables<typeof AcceptTaskDocument>;
 
 /** The four authored triage verbs, with queue-safe relation pickers. */

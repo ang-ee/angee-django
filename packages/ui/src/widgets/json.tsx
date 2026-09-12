@@ -7,10 +7,8 @@ import {
 } from "react";
 import { json as jsonLanguage } from "@codemirror/lang-json";
 import { EditorView } from "@codemirror/view";
-import { JsonView, type Props as JsonViewProps } from "react-json-view-lite";
-
 import { cn } from "../lib/cn";
-import { Code } from "../ui/code";
+import { Code, CodeBlock } from "../ui/code";
 import { useCodeMirrorEditor } from "./codemirror-editor";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
@@ -40,6 +38,7 @@ function JsonEdit({
   field,
   readOnly,
   controlRef,
+  onValidityChange,
 }: WidgetRenderProps<JsonValue>): ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const formatted = formatJson(value);
@@ -61,11 +60,12 @@ function JsonEdit({
       setDraft(next);
       const parsed = parseJsonDraft(next);
       setValid(parsed.ok);
+      onValidityChange?.(parsed.ok);
       if (!parsed.ok) return;
       lastValue.current = formatJson(parsed.value);
       onChange?.(parsed.value);
     },
-    [onChange],
+    [onChange, onValidityChange],
   );
 
   useCodeMirrorEditor(hostRef, {
@@ -95,18 +95,11 @@ function JsonEdit({
 }
 
 function JsonRead({ value }: WidgetRenderProps<JsonValue>): ReactElement {
-  // A collapsible tree reads better than a wall of text — but only objects/arrays
-  // are trees; a scalar (or empty) falls back to the compact inline form.
-  if (value !== null && typeof value === "object") {
-    return (
-      <JsonView
-        data={value as Record<string, JsonValue> | readonly JsonValue[]}
-        style={JSON_VIEW_STYLES}
-        shouldExpandNode={(level) => level < 2}
-      />
-    );
-  }
-  return <JsonCell value={value} />;
+  return (
+    <CodeBlock wrap className="max-h-64 overflow-auto">
+      {formatJson(value)}
+    </CodeBlock>
+  );
 }
 
 function JsonCell({ value }: WidgetRenderProps<JsonValue>): ReactElement {
@@ -122,28 +115,6 @@ export const jsonWidget = {
   read: JsonRead,
   cell: JsonCell,
 } satisfies WidgetDefinition<JsonValue>;
-
-// Token-themed tree styling, so the viewer matches the app instead of importing
-// the library's stylesheet. Note the library's `ariaLables` key spelling.
-const JSON_VIEW_STYLES: NonNullable<JsonViewProps["style"]> = {
-  container: "font-mono text-12 leading-5 text-fg",
-  basicChildStyle: "ml-4",
-  label: "mr-1 text-fg",
-  clickableLabel: "mr-1 cursor-pointer text-fg",
-  nullValue: "text-fg-subtle",
-  undefinedValue: "text-fg-subtle",
-  numberValue: "text-info-text",
-  stringValue: "text-success-text",
-  booleanValue: "text-warning-text",
-  otherValue: "text-fg",
-  punctuation: "text-fg-muted",
-  expandIcon: "mr-1 cursor-pointer text-fg-muted after:content-['▸']",
-  collapseIcon: "mr-1 cursor-pointer text-fg-muted after:content-['▾']",
-  collapsedContent: "text-fg-subtle after:content-['…']",
-  childFieldsContainer: "",
-  ariaLables: { collapseJson: "Collapse", expandJson: "Expand" },
-  stringifyStringValues: false,
-};
 
 function parseJsonDraft(input: string): JsonParseResult {
   const trimmed = input.trim();

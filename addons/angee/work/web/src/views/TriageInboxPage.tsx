@@ -10,13 +10,12 @@ import {
   useRouteHref,
 } from "@angee/ui";
 import * as React from "react";
+import { TASK_MODEL } from "@angee/projects";
 
 import { useQueueContext } from "../context";
 import { useWorkT } from "../i18n";
 import { TriageDwell, type WorkTaskRow } from "../task-work";
 import { useTriageRowActions } from "../triage-actions";
-
-const TASK_MODEL = "projects.Task";
 
 /** Queue triage inbox, driven by lifecycle facts and the provisioned triage stage. */
 export function TriageInboxPage(): React.ReactElement {

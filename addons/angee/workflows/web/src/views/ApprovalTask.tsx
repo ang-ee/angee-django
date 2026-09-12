@@ -3,15 +3,14 @@ import * as React from "react";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
   Badge, Button, Collapsible, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
-  Glyph, LabeledDescriptorField, LazyBoundary, Textarea, TextLink, formSpecInitialValues,
+  Glyph, JsonEditor, JsonValueView, LabeledDescriptorField, LazyBoundary, TextLink, formSpecInitialValues,
   PageAside,
-  errorMessage, useDottedPathFieldErrors, useFormSpecFields, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
+  errorMessage, statusTone, useDottedPathFieldErrors, useFormSpecFields, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
   type DottedPathFieldErrorMap,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { DecideWorkflowDecisionDocument, type PendingWorkflowDecision } from "../documents.public";
 import { useWorkflowsT } from "../i18n";
-import { JsonBlock } from "./JsonBlock";
 
 const DECISION_MODEL = "workflows.Decision";
 type ApprovalVerdict = DocumentVariables<typeof DecideWorkflowDecisionDocument>["verdict"];
@@ -48,7 +47,7 @@ export function ApprovalTask({ approval, available = true, onBack, onResolved, r
               <h2 className="text-sm font-semibold text-fg">{approval.step_name || approval.action}</h2>
               <p className="mt-1 text-13 text-fg-muted">{approval.workflow_name || t("inbox.workflowFallback")}</p>
             </div>
-            <Badge tone="warning">{approval.verdict}</Badge>
+            <Badge tone={statusTone(approval.verdict)}>{approval.verdict}</Badge>
           </div>
         </div>
         {!available ? <ErrorBanner description={t("inbox.decisionUnavailable")} />
@@ -66,7 +65,7 @@ export function ApprovalTask({ approval, available = true, onBack, onResolved, r
             <div className="mb-2 text-xs text-fg-muted">
               {t("inbox.sourceMetadata")}: {approval.action} · {approval.priority}
             </div>
-            <JsonBlock value={approval.payload} />
+            <JsonValueView value={approval.payload} />
           </Collapsible.Panel>
         </Collapsible>
         <DecisionSourceLinks approval={approval} />
@@ -157,10 +156,10 @@ function JsonApprovalResolution({ approval, active, editable, onResolved, reconc
   approval: PendingWorkflowDecision; active: boolean; editable: boolean; onResolved: () => void; reconcile?: ReconcileApproval; onDirtyChange?: (dirty: boolean) => void;
 }): React.ReactElement {
   const t = useWorkflowsT();
-  const payloadId = React.useId();
-  const [payload, setPayload] = React.useState(() => JSON.stringify(active ? {} : approval.resolution ?? {}, null, 2));
+  const [payload, setPayload] = React.useState<unknown>(() => active ? {} : approval.resolution ?? {});
+  const [jsonValid, setJsonValid] = React.useState(true);
   React.useEffect(() => {
-    if (!active) setPayload(JSON.stringify(approval.resolution ?? {}, null, 2));
+    if (!active) setPayload(approval.resolution ?? {});
   }, [active, approval.resolution]);
   const validationErrors = useDottedPathFieldErrors();
   const [error, setError] = React.useState<string | null>(null);
@@ -168,32 +167,39 @@ function JsonApprovalResolution({ approval, active, editable, onResolved, reconc
   const validationError = validationErrors.formSummary;
   async function resolve(verdict: ApprovalVerdict): Promise<void> {
     setError(null); validationErrors.clear();
-    let parsed: unknown;
-    try { parsed = parseJsonPayload(payload, t("json.invalid")); }
-    catch (cause) { setError(errorMessage(cause, t("inbox.actionFailed"))); return; }
-    try { validationErrors.replace(await resolution.resolve(approval.id, verdict, parsed)); }
+    if (!jsonValid) return;
+    try { validationErrors.replace(await resolution.resolve(approval.id, verdict, payload)); }
     catch (cause) { setError(errorMessage(cause, t("inbox.actionFailed"))); }
   }
   return (
     <section className="space-y-3">
       <FieldRoot invalid={Boolean(error || validationError)}>
-        <FieldLabel htmlFor={payloadId}>{t("inbox.resolution")}</FieldLabel>
-        <Textarea id={payloadId} rows={8} value={payload} readOnly={!editable || resolution.fetching} invalid={Boolean(error || validationError)}
-          onChange={(event) => { validationErrors.clear(); onDirtyChange?.(true); setPayload(event.target.value); }} />
+        <FieldLabel>{t("inbox.resolution")}</FieldLabel>
+        <JsonEditor
+          value={payload}
+          field={{ label: t("inbox.resolution") }}
+          readOnly={!editable || resolution.fetching}
+          onValidityChange={setJsonValid}
+          onChange={(value) => {
+            validationErrors.clear();
+            onDirtyChange?.(true);
+            setPayload(value);
+          }}
+        />
         <FieldDescription>{t("json.label")}</FieldDescription>
       </FieldRoot>
       <ErrorBanner description={error ?? resolution.error?.message ?? validationError} />
-      {editable ? <ApprovalVerdictButtons fetching={resolution.fetching} onResolve={resolve} /> : null}
+      {editable ? <ApprovalVerdictButtons disabled={!jsonValid} fetching={resolution.fetching} onResolve={resolve} /> : null}
     </section>
   );
 }
 
-function ApprovalVerdictButtons({ fetching, onResolve }: { fetching: boolean; onResolve: (verdict: ApprovalVerdict) => void | Promise<void> }): React.ReactElement {
+function ApprovalVerdictButtons({ disabled = false, fetching, onResolve }: { disabled?: boolean; fetching: boolean; onResolve: (verdict: ApprovalVerdict) => void | Promise<void> }): React.ReactElement {
   const t = useWorkflowsT();
   return <div className="flex flex-wrap justify-end gap-2">
-    <Button type="button" variant="ghost" loading={fetching} onClick={() => void onResolve("ESCALATE")}><Glyph name="workflow-escalate" />{t("inbox.escalate")}</Button>
-    <Button type="button" variant="secondary" loading={fetching} onClick={() => void onResolve("REJECT")}><Glyph name="workflow-reject" />{t("inbox.reject")}</Button>
-    <Button type="button" variant="primary" loading={fetching} onClick={() => void onResolve("COMPLETE")}><Glyph name="workflow-approve" />{t("inbox.complete")}</Button>
+    <Button type="button" variant="ghost" disabled={disabled} loading={fetching} onClick={() => void onResolve("ESCALATE")}><Glyph name="workflow-escalate" />{t("inbox.escalate")}</Button>
+    <Button type="button" variant="secondary" disabled={disabled} loading={fetching} onClick={() => void onResolve("REJECT")}><Glyph name="workflow-reject" />{t("inbox.reject")}</Button>
+    <Button type="button" variant="primary" disabled={disabled} loading={fetching} onClick={() => void onResolve("COMPLETE")}><Glyph name="workflow-approve" />{t("inbox.complete")}</Button>
   </div>;
 }
 
@@ -261,11 +267,4 @@ function useApprovalResolver(onResolved: () => void, reconcile?: ReconcileApprov
     }
   }, [decide, onResolved, reconcile, t]);
   return { resolve, fetching: state.fetching || resolving, error: state.error };
-}
-
-function parseJsonPayload(value: string, invalidMessage: string): unknown {
-  const trimmed = value.trim();
-  if (!trimmed) return {};
-  try { return JSON.parse(trimmed) as unknown; }
-  catch (error) { throw new Error(error instanceof Error && error.message ? `${invalidMessage}: ${error.message}` : invalidMessage); }
 }
