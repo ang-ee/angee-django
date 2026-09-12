@@ -1,0 +1,6 @@
+[addon]
+name = "angee.theme_carbon"
+description = "A crisp, square-edged enterprise theme for Angee"
+keywords = ["theme", "appearance", "carbon"]
+category = "User interface"
+depends_on = []

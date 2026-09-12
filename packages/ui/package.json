@@ -47,6 +47,14 @@
       "types": "./src/dashboard/kinds.tsx",
       "import": "./src/dashboard/kinds.tsx"
     },
+    "./theme": {
+      "types": "./src/theme/index.ts",
+      "import": "./src/theme/index.ts"
+    },
+    "./theme-runtime": {
+      "types": "./src/theme/runtime.d.ts",
+      "import": "./src/theme/runtime.mjs"
+    },
     "./testing": {
       "types": "./src/testing.tsx",
       "import": "./src/testing.tsx"
@@ -751,7 +759,7 @@
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/views/calendar/calendar-surface.css dist/views/calendar/calendar-surface.css"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/theme/runtime.mjs dist/theme/runtime.mjs && cp src/theme/runtime.d.ts dist/theme/runtime.d.ts && cp src/views/calendar/calendar-surface.css dist/views/calendar/calendar-surface.css"
   },
   "dependencies": {
     "@angee/logo-react": "^0.2.1",

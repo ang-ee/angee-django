@@ -1,0 +1,6 @@
+[addon]
+name = "angee.appearance"
+description = "Personal theme and color-scheme settings"
+keywords = ["appearance", "theme", "settings"]
+category = "User interface"
+depends_on = ["angee.iam"]

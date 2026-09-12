@@ -57,4 +57,4 @@ export {
   type TopMenuTabsProps,
   type TopMenuTab,
 } from "./TopMenuTabs";
-export { UserMenu, type UserMenuProps } from "./UserMenu";
+export { USER_MENU_ITEMS_SLOT, UserMenu, type UserMenuProps } from "./UserMenu";

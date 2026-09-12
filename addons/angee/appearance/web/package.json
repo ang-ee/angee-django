@@ -1,0 +1,7 @@
+{
+  "name": "@angee/appearance", "version": "0.0.0", "private": true, "type": "module", "sideEffects": false,
+  "exports": { ".": "./src/index.tsx" }, "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "@angee/app": "workspace:*", "@angee/ui": "workspace:*", "lucide-react": "^1.21.0" },
+  "peerDependencies": { "react": "^19", "react-dom": "^19", "@tanstack/react-router": "^1" },
+  "devDependencies": { "typescript": "^6.0.3", "react": "^19.2.7", "react-dom": "^19.2.7", "@types/react": "^19.2.17", "@types/react-dom": "^19.2.3", "@tanstack/react-router": "^1.170.16" }
+}

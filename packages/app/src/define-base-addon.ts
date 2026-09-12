@@ -15,6 +15,7 @@ import type {
   AddonRoute,
 } from "./define-addon";
 import type { DashboardDefinition } from "@angee/ui/dashboard/headless";
+import type { ThemeContribution } from "@angee/ui/theme";
 
 /** A route that also carries the page component the chrome renders. */
 export interface BaseAddonRoute extends AddonRoute {
@@ -102,7 +103,7 @@ export function dashboardPageRoute(options: DashboardPageRouteOptions): BaseAddo
 
 /** An addon manifest whose routes carry their page components. */
 export interface BaseAddon
-  extends Omit<AddonManifest, "routes" | "menus" | "previews"> {
+  extends Omit<AddonManifest, "routes" | "menus" | "previews" | "themes"> {
   routes?: readonly BaseAddonRoute[];
   menus?: readonly BaseMenuItem[];
   /**
@@ -118,6 +119,8 @@ export interface BaseAddon
    * registers it alongside the schema-named providers.
    */
   dataProviders?: Readonly<Record<string, Required<RefineDataProvider>>>;
+  /** Browser presentation attached to canonical installed theme definitions. */
+  themes?: readonly ThemeContribution[];
 }
 
 /**

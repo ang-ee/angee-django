@@ -57,6 +57,10 @@ actually unique to your product.
   `ResourceShow`), rendered view modes (`ListView` / `FormView` / `BoardView` /
   …), field widgets bound by meaning, Tailwind-token theming, and per-addon
   i18n.
+- **Installed themes and Appearance** — theme addons contribute deterministic
+  light/dark token layers, scoped assets and bounded options. Hosts set a build
+  default; signed-in users select an installed theme and color scheme without
+  installing packages or rebuilding the app.
 - **Resources** — tiered, idempotent reference and seed data
   (`master` / `install` / `demo`) declared in `addon.toml` `[resources]`
   and applied by `manage.py resources load`.

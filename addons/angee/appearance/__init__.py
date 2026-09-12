@@ -1,0 +1,1 @@
+"""Personal appearance settings addon."""

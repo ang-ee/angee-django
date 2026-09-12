@@ -1,0 +1,9 @@
+[data-theme-id="example.paper"] body::after {
+  background: url("./paper-grain.svg") repeat;
+  content: "";
+  inset: 0;
+  opacity: 0.045;
+  pointer-events: none;
+  position: fixed;
+  z-index: 100;
+}

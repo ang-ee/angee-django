@@ -1,0 +1,6 @@
+[addon]
+name = "angee.theme_brand"
+description = "A bounded configurable brand theme for Angee"
+keywords = ["theme", "appearance", "brand"]
+category = "User interface"
+depends_on = []

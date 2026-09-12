@@ -4,7 +4,8 @@
      1. Primitive — raw color ramps. Never reference these from components;
         they exist so semantic tokens have a single source.
      2. Semantic — what components reference. Same names work in both themes.
-     3. Theme — light is default; dark overrides via [data-theme="dark"].
+     3. Color scheme — light is default; dark overrides via the canonical
+        [data-color-scheme="dark"] selector and its temporary legacy mirror.
 
    Discipline: every semantic token MUST reference a primitive via
    `var(--<primitive>)`. Raw hex / rgba in the semantic / theme layers is a
@@ -245,9 +246,9 @@
   /* -------------------------------------------------------------------------
      Type scale
      ------------------------------------------------------------------------- */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-               "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-family-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                      "Helvetica Neue", Arial, sans-serif;
+  --font-family-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   --fs-11: 11px;  --lh-11: 16px;
   --fs-12: 12px;  --lh-12: 16px;
@@ -295,6 +296,9 @@
   --topbar-h:      42px;
   --controlpanel-h:48px;
   --chatter-w:     332px;
+  --control-h-sm:  26px;
+  --control-h-md:  30px;
+  --control-h-lg:  36px;
 
   /* Motion */
   --dur-fast:  120ms;
@@ -310,6 +314,7 @@
    n-775, n-825, n-875, n-925, n-935, n-1000) so the primitive layer is
    still the single source of truth.
    ============================================================================ */
+[data-color-scheme="dark"],
 [data-theme="dark"] {
   --surface-canvas:    var(--n-950);
   --surface-sheet:     var(--n-850);

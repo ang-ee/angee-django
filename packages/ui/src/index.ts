@@ -4,6 +4,7 @@
 // renders builds on them.
 
 export * from "./lib";
+export * from "./theme";
 
 // The app-runtime registry + contribution contracts the binding owns: the
 // `AppRuntime` provider and its `useWidget`/`useSlot`/`usePreviews`/`useT`
