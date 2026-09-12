@@ -63,12 +63,14 @@ describe("projects addon manifest", () => {
 
     // Everything people set while creating, and nothing that belongs to the
     // record's long tail (ordering, recurrence, drop reason, release).
+    // No `stage`: it is queue-scoped and the picker is not, so the dialog would
+    // offer stages the server rejects at submit. Lane presets still carry it.
+    expect(names).not.toContain("stage");
     expect(names).toEqual([
       "title",
       "note",
       "project",
       "queue",
-      "stage",
       "assignee",
       "priority",
       "due_date",
