@@ -25,6 +25,7 @@ import {
   columnsWithMetadataDefaults,
   fieldsWithMetadataDefaults,
   relationFieldInfo,
+  relationFieldInfoForDescriptor,
   relationListFieldInfo,
 } from "./model-metadata-defaults";
 const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
@@ -339,17 +340,34 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
     ...relationResource("accounting.Scope", "scopes"),
     recordRepresentation: "name",
   });
+  const organization = canonicalModel({}, {
+    ...relationResource("parties.Organization", "organizations"),
+    canonicalLabel: "parties.Party",
+    recordRepresentation: "displayName",
+    roots: { list: "organizations", create: "insert_organizations_one" },
+  });
+  const party = canonicalModel({}, {
+    ...relationResource("parties.Party", "parties"),
+    recordRepresentation: "displayName",
+  });
   const schema = schemaFieldMetadataFromDataResources([
     tax.resource,
     productVariant.resource,
     unlistable.resource,
     scope.resource,
+    organization.resource,
+    party.resource,
   ]);
   const model = canonicalModel({
       product: {
         name: "product",
         kind: "relation",
         relationModelLabel: "catalog.ProductVariant",
+      },
+      party: {
+        name: "party",
+        kind: "relation",
+        relationModelLabel: "parties.Party",
       },
       taxes: {
         name: "taxes",
@@ -384,6 +402,35 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
     // An M2M is `kind: "list"`, so the to-one resolver ignores it (else it would
     // render a single picker over a many field).
     expect(relationFieldInfo("taxes", model, schema)).toBeNull();
+  });
+
+  test("narrows a base relation picker to a declared concrete resource", () => {
+    const info = relationFieldInfoForDescriptor(
+      { name: "party", relationResource: "parties.Organization" },
+      model,
+      schema,
+    );
+    expect(info).toEqual({
+      resource: "parties.Organization",
+      labelField: "displayName",
+      canCreate: true,
+    });
+  });
+
+  test("does not turn a scalar into a relation through a concrete resource override", () => {
+    expect(relationFieldInfoForDescriptor(
+      { name: "id", relationResource: "parties.Organization" },
+      model,
+      schema,
+    )).toBeNull();
+  });
+
+  test("rejects a concrete resource outside the relation's model hierarchy", () => {
+    expect(() => relationFieldInfoForDescriptor(
+      { name: "product", relationResource: "parties.Organization" },
+      model,
+      schema,
+    )).toThrow(/is not that model or one of its concrete subtypes/);
   });
 
   test("resolves an ID-scalar FK as a scalar-id relation picker, but not a bare id", () => {

@@ -64,6 +64,23 @@ class ResourceThing(AngeeDataModel):
         app_label = "tests"
 
 
+def resource_thing_country_choices() -> tuple[tuple[str, str], ...]:
+    """Lazy string choices exercising metadata without a GraphQL enum."""
+
+    return (("DE", "Germany"), ("NL", "Netherlands"))
+
+
+class ResourceChoiceThing(AngeeDataModel):
+    """Concrete test model carrying ordinary callable Django choices."""
+
+    sqid_prefix = "rct_"
+
+    country = models.CharField(max_length=2, choices=resource_thing_country_choices)
+
+    class Meta:
+        app_label = "tests"
+
+
 class ResourceParent(AngeeDataModel):
     """Concrete parent model used by relation group-axis tests."""
 
@@ -1260,6 +1277,31 @@ def test_data_resource_metadata_marks_computed_surface_enum_field() -> None:
 
     assert fields["mood"].kind == "enum"
     assert fields["mood"].scalar is None
+
+
+def test_data_resource_metadata_projects_string_field_choices_as_select_options() -> None:
+    """Django choices retain a String wire while supplying the selector vocabulary."""
+
+    @strawberry_django.type(ResourceChoiceThing)
+    class ResourceChoiceThingType(AngeeNode):
+        country: auto
+
+    resource = _finalize_data_resource(
+        model=ResourceChoiceThing,
+        roots=DataResourceRoots(list_name="choice_things"),
+        type_names=DataResourceTypeNames(node="ResourceChoiceThingType"),
+        capabilities=("list",),
+        node_type=ResourceChoiceThingType,
+    )
+    country = {field.name: field for field in resource.fields}["country"]
+
+    assert country.kind == "enum"
+    assert country.scalar is None
+    assert country.widget == "select"
+    assert tuple((value.value, value.description) for value in country.values) == (
+        ("DE", "Germany"),
+        ("NL", "Netherlands"),
+    )
 
 
 def test_data_resource_metadata_rejects_unsupported_surface_scalar() -> None:

@@ -32,8 +32,8 @@ describe("PartyAddresses", () => {
     expect(parsePageFields(form?.children)).toMatchObject([
       { name: "party", readOnly: true },
       { name: "label" },
-      { name: "street" },
-      { name: "extended" },
+      { name: "street", body: false },
+      { name: "extended", body: false },
       { name: "po_box" },
       { name: "city" },
       { name: "region" },

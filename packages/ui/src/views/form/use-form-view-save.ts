@@ -25,6 +25,7 @@ import { get, set, useForm, type FieldErrors, type UseFormReturn } from "react-h
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
+import { useToast } from "../../feedback";
 import { slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import {
@@ -179,6 +180,7 @@ export function useFormViewSave({
   onDiscarded,
   t,
 }: UseFormViewSaveProps): FormViewSaveSurface {
+  const toast = useToast();
   const refineResource = dataResource ? refineResourceName(dataResource) : "";
   const emptyValues = React.useMemo(
     () => emptyDraft(formFields, defaultValues),
@@ -250,6 +252,7 @@ export function useFormViewSave({
     dataProviderName: dataResource?.schemaName,
     meta: { fields: refineFields },
     invalidates: ["list", "many"],
+    successNotification: false,
     errorNotification: false,
   });
   const update = useUpdate<RowRecord, HttpError, FormValues>({
@@ -257,6 +260,7 @@ export function useFormViewSave({
     dataProviderName: dataResource?.schemaName,
     meta: { fields: refineFields },
     invalidates: ["list", "many", "detail"],
+    successNotification: false,
     errorNotification: false,
   });
   const linesResource = dataResource?.linesResource ?? null;
@@ -493,14 +497,17 @@ export function useFormViewSave({
       formIsDirtyRef.current = [...observedNames].some((name) => form.getFieldState(name).isDirty)
         || Boolean(linesField && form.getFieldState(linesField).isDirty);
       if (isCreate) manualSlugFieldsRef.current.clear();
-      if (options.notify) onSaved?.(accepted);
+      if (options.notify) {
+        toast.success({ title: t(isCreate ? "form.createSuccess" : "form.updateSuccess") });
+        onSaved?.(accepted);
+      }
       // Fetch canonical server values when the response omitted any selected field.
       if (options.refetchPartial !== false && !isCreate && (
         formFields.some((field) => !Object.hasOwn(saved, field.name))
         || (linesActive && linesField !== null && !Object.hasOwn(saved, linesField))
       )) reload();
     },
-    [acknowledgedSource, detailKey, form, formFields, isCreate, linesActive, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, rowsFromRecord, setValue, syncRecordValues],
+    [acknowledgedSource, detailKey, form, formFields, isCreate, linesActive, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, rowsFromRecord, setValue, syncRecordValues, t, toast],
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {

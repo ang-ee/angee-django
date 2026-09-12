@@ -26,7 +26,7 @@ import {
 } from "../page";
 import {
   fieldsWithMetadataDefaults,
-  relationFieldInfo,
+  relationFieldInfoForDescriptor,
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import type { RecordDeleteAction } from "./RecordActionBar";
@@ -389,7 +389,7 @@ export function useFormViewSurface({
     const map = new Map<string, RelationFieldInfo>();
     for (const field of formFields) {
       if (field.options) continue;
-      const info = relationFieldInfo(field.name, modelMetadata, schemaMetadata);
+      const info = relationFieldInfoForDescriptor(field, modelMetadata, schemaMetadata);
       if (info) map.set(field.name, info);
     }
     return map;

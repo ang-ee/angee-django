@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
@@ -8,6 +9,33 @@ import { defaultWidgets, type WidgetFocusTarget, type WidgetRenderProps } from "
 import { FieldDescriptorControl } from "./field-descriptor-control";
 
 describe("FieldDescriptorControl", () => {
+  test("keeps the fallback text control mounted while its value changes", () => {
+    function Harness() {
+      const [value, setValue] = useState("");
+      return (
+        <AppRuntimeProvider runtime={{ widgets: {} }}>
+          <FieldDescriptorControl
+            field={{ name: "city", label: "City" }}
+            value={value}
+            onChange={(next) => setValue(String(next ?? ""))}
+          />
+        </AppRuntimeProvider>
+      );
+    }
+
+    render(<Harness />);
+    const input = screen.getByRole("textbox", { name: "City" }) as HTMLInputElement;
+    input.focus();
+
+    fireEvent.change(input, { target: { value: "A" } });
+    expect(screen.getByRole("textbox", { name: "City" })).toBe(input);
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.change(input, { target: { value: "Am" } });
+    expect(input.value).toBe("Am");
+    expect(document.activeElement).toBe(input);
+  });
+
   test("passes the source row to a read widget", () => {
     render(
       <AppRuntimeProvider

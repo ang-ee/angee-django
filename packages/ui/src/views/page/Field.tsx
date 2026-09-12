@@ -15,6 +15,13 @@ export type PageFieldKind =
 
 export interface FieldDescriptor extends FieldPresentation {
   name: string;
+  /**
+   * Concrete list/create resource for a relation whose stored model is a base
+   * type. The field still reads and writes its declared relation id; only the
+   * picker is narrowed to this compatible subtype (for example Party ->
+   * Organization).
+   */
+  relationResource?: string;
   widget?: string;
   readOnly?: boolean;
   /** Require a value independently of generated model create metadata. */

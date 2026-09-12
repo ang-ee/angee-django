@@ -36,8 +36,8 @@ export function addressFields({
   return [
     includeParty ? <Field key="party" name="party" readOnly /> : null,
     <Field key="label" name={`${prefix}label`} kind="string" label={labels.label} title />,
-    <Field key="street" name={`${prefix}street`} kind="string" label={labels.street} widget="textarea" />,
-    <Field key="extended" name={`${prefix}extended`} kind="string" label={labels.extended} widget="textarea" />,
+    <Field key="street" name={`${prefix}street`} kind="string" label={labels.street} widget="textarea" body={false} />,
+    <Field key="extended" name={`${prefix}extended`} kind="string" label={labels.extended} widget="textarea" body={false} />,
     <Field key="po_box" name={`${prefix}po_box`} kind="string" label={labels.poBox} />,
     <Field key="city" name={`${prefix}city`} kind="string" label={labels.city} />,
     <Field key="region" name={`${prefix}region`} kind="string" label={labels.region} />,
