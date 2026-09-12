@@ -584,7 +584,7 @@ test("time filters validate native ISO clocks without losing offsets or precisio
   }
 });
 
-test("decimal predicates and specialized sorting preserve arbitrary wire precision", () => {
+test("decimal predicates and client text sorting preserve their intended ordering", () => {
   const query = ResourceQuery.forRows({ fields: { amount: { scalar: "Decimal" }, name: { scalar: "String" } } });
   const row = { amount: "9007199254740993.000000000000000001" };
   expect(query.matches(row, { amount: { exact: "9007199254740993.000000000000000002" } })).toBe(false);
@@ -599,7 +599,9 @@ test("decimal predicates and specialized sorting preserve arbitrary wire precisi
   expect(compare(row, { amount: "9007199254740993.000000000000000002" })).toBeLessThan(0);
   expect(compare({ amount: null }, { amount: "1" })).toBeGreaterThan(0);
   expect(compare({ amount: null }, { amount: null })).toBe(0);
-  expect(query.comparator("name")).toBeUndefined();
+  const compareName = query.comparator("name")!;
+  expect(compareName({ name: "P2" }, { name: "P10" })).toBeLessThan(0);
+  expect(compareName({ name: null }, { name: "P1" })).toBeGreaterThan(0);
 });
 
 test("compound presets replace their own fields and keep unrelated predicates", () => {

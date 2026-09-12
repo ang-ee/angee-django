@@ -1,41 +1,66 @@
-import { isValidElement, type ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+// @vitest-environment happy-dom
+
+import { render } from "@testing-library/react";
+import * as React from "react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  fields: [] as Array<Record<string, unknown>>,
+}));
+
+vi.mock("@angee/refine", () => ({
+  useAuthoredMutation: () => [vi.fn(), { fetching: false, error: null }],
+}));
+
+vi.mock("@angee/ui", () => ({
+  Action: () => null,
+  Field: (props: Record<string, unknown>) => {
+    mocks.fields.push(props);
+    return null;
+  },
+  Form: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  Group: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  recordActionId: () => null,
+  registerForm: (
+    resource: string,
+    Component: React.ComponentType<Record<string, unknown>>,
+  ) => ({ resource, Component }),
+  useAuthoredResourceMutation: () => [vi.fn(), { fetching: false, error: null }],
+  useRecordActionMutation: () => [vi.fn(), { fetching: false, error: null }],
+}));
+
+vi.mock("../i18n", () => ({
+  useIntegrateT: () => (key: string) => key,
+}));
 
 import { credentialCreateForm } from "./credential-form";
 
 interface FieldLike {
   name: string;
-  widget?: string;
   options?: ReadonlyArray<{ value: string; label: string }>;
   showWhen?: (values: Record<string, unknown>) => boolean;
 }
 
-/** The Field props declared by the credential form, keyed by field name. */
-function formFields(node: unknown): Map<string, FieldLike> {
-  const fragment = node as ReactElement<{ children: ReactElement<FieldLike>[] }>;
-  const children = fragment.props.children.filter(isValidElement);
-  return new Map(children.map((child) => [child.props.name, child.props]));
-}
-
 describe("credentialCreateForm", () => {
+  beforeEach(() => {
+    mocks.fields = [];
+  });
+
   test("offers static-token and ssh-key kinds and swaps the material field", () => {
-    const fields = formFields(credentialCreateForm);
+    const Component = credentialCreateForm.Component;
+    render(<Component resource={credentialCreateForm.resource} id={null} />);
+    const fields = new Map(
+      mocks.fields.map((field) => [field.name, field as unknown as FieldLike]),
+    );
 
     expect([...fields.keys()]).toEqual(["name", "kind", "apiKey", "privateKey"]);
-    // The kind discriminator offers only the admin-creatable kinds (OAuth arrives
-    // via the connect flow) with the lowercase write values the input expects.
     expect(fields.get("kind")?.options?.map((option) => option.value)).toEqual([
       "static_token",
       "ssh_key",
     ]);
-
-    // The material field follows the selected kind.
-    const apiKey = fields.get("apiKey");
-    expect(apiKey?.showWhen?.({ kind: "static_token" })).toBe(true);
-    expect(apiKey?.showWhen?.({ kind: "ssh_key" })).toBe(false);
-
-    const privateKey = fields.get("privateKey");
-    expect(privateKey?.showWhen?.({ kind: "ssh_key" })).toBe(true);
-    expect(privateKey?.showWhen?.({ kind: "static_token" })).toBe(false);
+    expect(fields.get("apiKey")?.showWhen?.({ kind: "static_token" })).toBe(true);
+    expect(fields.get("apiKey")?.showWhen?.({ kind: "ssh_key" })).toBe(false);
+    expect(fields.get("privateKey")?.showWhen?.({ kind: "ssh_key" })).toBe(true);
+    expect(fields.get("privateKey")?.showWhen?.({ kind: "static_token" })).toBe(false);
   });
 });

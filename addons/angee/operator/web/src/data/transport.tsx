@@ -4,6 +4,7 @@ import { Alert, EmptyState, LoadingPanel, errorMessage } from "@angee/ui";
 import {
   useAuthoredMutation,
   useAuthoredQuery,
+  useStableVariables,
   type DocumentData,
   type DocumentVariables,
 } from "@angee/refine";
@@ -182,7 +183,7 @@ export function OperatorTransportProvider({
   if (state.kind === "not-configured" || !daemonClient) {
     return (
       <EmptyState
-        icon="operator"
+        icon="terminal"
         title={t("transport.unavailable.title")}
         description={t("transport.unavailable.description")}
       />
@@ -218,23 +219,16 @@ export interface OperatorSnapshotResult {
 export function useOperatorSnapshot(
   sections: OperatorSnapshotSections = { overview: true },
 ): OperatorSnapshotResult {
-  // One signature over the requested panes keys the memo, so the variables
-  // object stays referentially stable while the same panes are requested.
-  const sectionsKey = SNAPSHOT_SECTIONS.map((section) =>
-    sections[section] ? "1" : "0",
-  ).join("");
-  const variables = useMemo<SnapshotVariables>(
-    () =>
-      // Complete by construction — SNAPSHOT_SECTIONS is pinned to every pane key,
-      // so the derived object carries every `WantVariable` the query requires.
-      Object.fromEntries(
-        SNAPSHOT_SECTIONS.map((section) => [
-          wantVariable(section),
-          sections[section] ?? false,
-        ]),
-      ) as SnapshotVariables,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sectionsKey],
+  // Complete by construction — SNAPSHOT_SECTIONS is pinned to every pane key,
+  // so the derived object carries every `WantVariable` the query requires. The
+  // shared structural owner keeps the query variables stable across renders.
+  const variables = useStableVariables(
+    Object.fromEntries(
+      SNAPSHOT_SECTIONS.map((section) => [
+        wantVariable(section),
+        sections[section] ?? false,
+      ]),
+    ) as SnapshotVariables,
   );
 
   // The one-shot query owns first paint: the daemon emits no snapshot on connect,

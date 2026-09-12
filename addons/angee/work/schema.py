@@ -291,6 +291,10 @@ _QUEUE_RESOURCE = hasura_model_resource(
         Queue,
         public_id_fields=("parent", "default_stage"),
     ),
+    # Queue catalogues are bounded configuration sets. Keep their presentation
+    # in the browser so identifier keys use the shared natural text comparator
+    # (P2 before P10) instead of database lexicographic ordering.
+    row_model="client",
 )
 
 _STAGE_RESOURCE = hasura_model_resource(

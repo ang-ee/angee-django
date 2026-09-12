@@ -4,8 +4,10 @@ import { EmptyState, LoadingPanel, useRouteHref, useRouteParam } from "@angee/ui
 import { useNavigate } from "@tanstack/react-router";
 
 import { PartyRecordRedirectDocument } from "./documents";
+import { usePartiesT } from "./i18n";
 
 export function PartyRecordRedirect(): React.ReactElement {
+  const t = usePartiesT();
   const id = useRouteParam("id") ?? "";
   const query = useAuthoredQuery(PartyRecordRedirectDocument, { id }, { models: ["parties.Party"], enabled: Boolean(id) });
   const navigate = useNavigate();
@@ -28,6 +30,6 @@ export function PartyRecordRedirect(): React.ReactElement {
       search: (current: Record<string, unknown>) => current,
     });
   }, [id, navigate, party, route, routeHref]);
-  if (query.isFetching) return <LoadingPanel message="Opening party…" />;
-  return <EmptyState icon="parties" title="Party record unavailable" />;
+  if (query.isFetching) return <LoadingPanel message={t("partyRedirect.loading")} />;
+  return <EmptyState icon="parties" title={t("partyRedirect.unavailable")} />;
 }

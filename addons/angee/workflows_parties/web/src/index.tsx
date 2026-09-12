@@ -2,7 +2,9 @@ import { defineBaseAddon } from "@angee/app";
 import { PARTIES_REVIEW_TOOLBAR_SLOT } from "@angee/parties";
 import {
   DialogBackdrop,
+  DialogBody,
   DialogContent,
+  DialogHeader,
   DialogPortal,
   DialogRoot,
   DialogTitle,
@@ -82,6 +84,7 @@ function PartyWorkflowActivity(): ReactElement {
 }
 
 export function SelectedPartyDecision(): ReactElement | null {
+  const t = useWorkflowsPartiesT();
   const record = useRecordChromeContext();
   const search = useRouteSearch();
   const navigate = useNavigate();
@@ -100,19 +103,19 @@ export function SelectedPartyDecision(): ReactElement | null {
     <DialogRoot open onOpenChange={(open) => { if (!open) clearDecision(); }}>
       <DialogPortal>
         <DialogBackdrop />
-        <DialogContent size="lg" className="h-[min(48rem,calc(100vh-2rem))] overflow-hidden p-0">
-          <div className="flex h-full min-h-0 flex-col">
-            <DialogTitle className="border-b border-border px-4 py-3">Review party details</DialogTitle>
-            <div className="min-h-0 flex-1">
-              <WorkflowApprovals
-                target={{ model: "parties.Party", id: record.recordId, tab }}
-                includeResolved
-                selectedTaskOnly
-                decisionId={decisionId}
-                onDecisionChange={(next) => { if (!next) clearDecision(); }}
-              />
-            </div>
-          </div>
+        <DialogContent size="lg" placement="center">
+          <DialogHeader className="border-b border-border pb-3">
+            <DialogTitle>{t("decision.reviewTitle")}</DialogTitle>
+          </DialogHeader>
+          <DialogBody className="p-0">
+            <WorkflowApprovals
+              target={{ model: "parties.Party", id: record.recordId, tab }}
+              includeResolved
+              selectedTaskOnly
+              decisionId={decisionId}
+              onDecisionChange={(next) => { if (!next) clearDecision(); }}
+            />
+          </DialogBody>
         </DialogContent>
       </DialogPortal>
     </DialogRoot>

@@ -2,6 +2,8 @@ import { createNamespaceT } from "@angee/ui";
 
 export const enPartiesMessages: Record<string, string> = {
   "common.yes": "Yes",
+  "partyRedirect.loading": "Opening party…",
+  "partyRedirect.unavailable": "Party record unavailable",
   "overview.metric.contacts": "People",
   "overview.metric.organizations": "Organizations",
   "overview.metric.unresolvedHandles": "Unresolved handles",

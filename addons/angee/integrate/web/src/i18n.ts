@@ -69,6 +69,14 @@ export const enIntegrateMessages: Record<string, string> = {
   "providers.connect.connected": "Account connected.",
 
   // Credentials page — form-section labels and actions.
+  "credentials.create.namePlaceholder": "e.g. GitHub PAT",
+  "credentials.create.kind": "Kind",
+  "credentials.create.kind.staticToken": "Static token",
+  "credentials.create.kind.sshKey": "SSH key",
+  "credentials.create.apiToken": "API token",
+  "credentials.create.apiTokenPlaceholder": "Paste the static token",
+  "credentials.create.privateKey": "Private key",
+  "credentials.create.privateKeyPlaceholder": "Paste the private key (PEM)",
   "credentials.group.health": "Health",
   "credentials.action.refresh": "Refresh token",
   "credentials.refresh.done": "Token refreshed.",
