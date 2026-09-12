@@ -103,6 +103,37 @@ function angeePackagesAt(cwd: string): AngeePackageSets {
   return { all, built, source };
 }
 
+const CODEMIRROR_FAMILY = /^(?:codemirror|@codemirror\/.+|@lezer\/.+)$/;
+
+// CodeMirror keeps its extension registry in module state, so every importer
+// has to reach the same module instance. `resolve.dedupe` pins one file on
+// disk, but the dependency optimizer can still inline that file into a
+// prebundled chunk (a language package, say) while the linked source's own
+// imports of the same module are served raw -- two instances, and an editor
+// that refuses its extensions. The family that source packages depend on is
+// therefore kept out of the optimizer entirely, read from their manifests so a
+// new CodeMirror dependency is covered without editing this list.
+function servedCodeMirrorFamily(cwd: string, servedPackages: readonly string[]): string[] {
+  const family = new Set<string>();
+  for (const name of servedPackages) {
+    try {
+      const packageRoot = realpathSync(join(cwd, "node_modules", name));
+      const packageManifest = JSON.parse(
+        readFileSync(join(packageRoot, "package.json"), "utf8"),
+      ) as { dependencies?: Record<string, string>; peerDependencies?: Record<string, string> };
+      for (const dependency of Object.keys({
+        ...packageManifest.dependencies,
+        ...packageManifest.peerDependencies,
+      })) {
+        if (CODEMIRROR_FAMILY.test(dependency)) family.add(dependency);
+      }
+    } catch {
+      // An absent package has no dependencies to keep together.
+    }
+  }
+  return [...family].sort();
+}
+
 // Generated/vendored trees that never feed the prebundle — skipped so an
 // unchanged source tree yields a stable signature (no needless re-optimize). Test
 // and build artefacts (coverage, the storybook static build, e2e output) churn on
@@ -259,6 +290,10 @@ export async function defineAngeeWebViteConfig({
   ...overrides
 }: AngeeWebViteConfig): Promise<UserConfig> {
   const angeePackages = angeePackagesAt(webRoot);
+  const codeMirrorFamily = servedCodeMirrorFamily(
+    webRoot,
+    prebundleAngeePackages ? angeePackages.source : angeePackages.all,
+  );
   const appearancePayload = await appearanceBuildPayload(gqlRuntimeDir, appearance);
   const base = defineConfig({
     root: webRoot,
@@ -298,8 +333,8 @@ export async function defineAngeeWebViteConfig({
     // entrypoints are application source: leave them in Vite's transform/HMR
     // pipeline so addon asset imports such as `?url` keep their native meaning.
     optimizeDeps: prebundleAngeePackages
-      ? { include: angeePackages.built, exclude: angeePackages.source }
-      : { exclude: angeePackages.all },
+      ? { include: angeePackages.built, exclude: [...angeePackages.source, ...codeMirrorFamily] }
+      : { exclude: [...angeePackages.all, ...codeMirrorFamily] },
     server: {
       host: true,
       ...(uiAllowedHosts ? { allowedHosts: uiAllowedHosts } : {}),
