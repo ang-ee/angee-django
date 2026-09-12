@@ -51,6 +51,14 @@ export function TasksPage(): React.ReactElement {
         <Column field="title" />
         <Column field="project.title" header={t("common.project")} />
         <Column field="status" header={t("common.status")} widget="statusBadge" />
+        {/* Stage and cycle are columns so bulk edit can offer Set stage and Set
+            cycle: #88 builds its editable set from the list's columns, and the
+            update root already accepts both. Without them the only way to plan
+            an existing task into a cycle is to create it on that cycle's board.
+            Labelled from the work addon's own field metadata rather than a
+            projects string, since projects does not own these fields. */}
+        <Column field="stage" />
+        <Column field="cycle" />
         <Column field="assignee" header={t("common.assignee")} />
         <Column field="priority" header={t("common.priority")} />
         <Column field="due_date" header={t("common.dueDate")} />
