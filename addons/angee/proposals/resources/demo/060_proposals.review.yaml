@@ -1,0 +1,38 @@
+_meta:
+  model: proposals.Review
+rows:
+  - xref: mvp_alice_admin
+    fields:
+      proposal: proposals.mvp_alice
+      reviewer: iam.user_admin
+      body: Clearest answer on the seams, and the only one that costs the addon split honestly. Timeframe looks tight around the capture work.
+      created_by: iam.user_admin
+      updated_by: iam.user_admin
+  - xref: mvp_alice_diego
+    fields:
+      proposal: proposals.mvp_alice
+      reviewer: proposals.user_diego
+      body: Architecture answer is convincing; the delivery order leaves comparison until last, which is the part the committee wants to see early.
+      created_by: proposals.user_diego
+      updated_by: proposals.user_diego
+  - xref: flat_cabanyal_alice
+    fields:
+      proposal: proposals.flat_cabanyal
+      reviewer: iam.user_alice
+      body: Best light of the three and the landlord answers quickly. The deposit is a month higher than the others.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: flat_cabanyal_erin
+    fields:
+      proposal: proposals.flat_cabanyal
+      reviewer: proposals.user_erin
+      body: Good building, but the lease starts two weeks after the move-out date we are working to.
+      created_by: proposals.user_erin
+      updated_by: proposals.user_erin
+  - xref: flat_russafa_alice
+    fields:
+      proposal: proposals.flat_russafa
+      reviewer: iam.user_alice
+      body: Cheaper and available immediately; the inner room gets no daylight, which matters for the desk.
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
