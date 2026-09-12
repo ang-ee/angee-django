@@ -17,7 +17,7 @@ import {
   type AppRuntime,
   type ChatterViewContext,
 } from "../runtime";
-import { Chatter, useChatterHasContent } from "./Chatter";
+import { Chatter, useChatterHasContent, useChatterRailStartsOpen } from "./Chatter";
 import { ChatterProvider, useChatterContent, type ChatterContent } from "./chatter-context";
 
 beforeAll(() => {
@@ -187,6 +187,97 @@ describe("useChatterHasContent", () => {
     ).toBe(true);
   });
 });
+
+describe("useChatterRailStartsOpen", () => {
+  test("opens the rail on a record whose model asked for it, at a width with room", async () => {
+    expect(await renderRailStartsOpen({ wide: true })).toBe(true);
+  });
+
+  test("leaves it collapsed where the rail would sit on top of the record", async () => {
+    // Narrow viewport: the pane would cover the record it is about.
+    expect(await renderRailStartsOpen({ wide: false })).toBe(false);
+  });
+
+  test("leaves it collapsed for a model that did not ask", async () => {
+    // The project record is read wide, across its tabs, and never declared this.
+    expect(await renderRailStartsOpen({ wide: true, expanded: ["projects.Project"] })).toBe(false);
+  });
+
+  test("leaves it collapsed on a view with no record", async () => {
+    expect(await renderRailStartsOpen({ wide: true, path: "/tasks", initialEntry: "/tasks" })).toBe(
+      false,
+    );
+  });
+});
+
+async function renderRailStartsOpen({
+  wide,
+  expanded = ["projects.Task"],
+  path = "/records/$id",
+  initialEntry = "/records/rec_1",
+}: {
+  wide: boolean;
+  expanded?: readonly string[];
+  path?: string;
+  initialEntry?: string;
+}): Promise<boolean> {
+  const original = window.matchMedia;
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches: wide,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }),
+  });
+  try {
+    const probed: { value?: boolean } = {};
+    function Probe(): null {
+      probed.value = useChatterRailStartsOpen();
+      return null;
+    }
+    const rootRoute = createRootRoute({ component: () => <Outlet /> });
+    const route = createRoute({
+      getParentRoute: () => rootRoute,
+      path,
+      component: () => (
+        <AppRuntimeProvider
+          runtime={{
+            icons: baseIcons,
+            chatterExpandedModels: expanded,
+            chatterRoutes: [
+              {
+                name: "tasks.record",
+                path: "/records/$id",
+                viewType: "record",
+                recordParam: "id",
+                modelLabel: "projects.Task",
+              },
+            ],
+          }}
+        >
+          <ChatterProvider>
+            <Probe />
+          </ChatterProvider>
+        </AppRuntimeProvider>
+      ),
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([route]),
+      history: createMemoryHistory({ initialEntries: [initialEntry] }),
+    });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(probed.value).not.toBeUndefined());
+    return probed.value as boolean;
+  } finally {
+    if (original) {
+      Object.defineProperty(window, "matchMedia", { configurable: true, value: original });
+    } else {
+      Reflect.deleteProperty(window, "matchMedia");
+    }
+  }
+}
 
 async function renderHasContent({
   path,

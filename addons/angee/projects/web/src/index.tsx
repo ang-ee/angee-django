@@ -94,6 +94,10 @@ const projects = defineBaseAddon({
   // The create form for a task, used wherever one is created; the record keeps
   // the tabbed form for its long tail.
   forms: { "projects.Task": taskCreateForm },
+  // A task is the unit people discuss, so its record opens with the rail out
+  // rather than as a strip nobody notices. Projects stay collapsed: that record
+  // is read wide, across its tabs.
+  chatterExpanded: ["projects.Task"],
   icons: {
     projects: Briefcase,
     "project-task": ListChecks,

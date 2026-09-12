@@ -75,6 +75,8 @@ export interface AddonManifest {
   i18n?: I18nResources;
   icons?: Readonly<Record<string, unknown>>;
   forms?: FormOverrideMap;
+  /** Models whose record pages open the chatter rail rather than collapsing it. */
+  chatterExpanded?: readonly string[];
   chatter?: readonly ChatterContribution[];
   slots?: readonly SlotContribution[];
   previews?: readonly PreviewContribution[];
@@ -105,6 +107,7 @@ export interface ComposedAddons {
   i18n: I18nResources;
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
+  chatterExpanded: readonly string[];
   chatter: readonly ChatterContribution[];
   slots: readonly SlotContribution[];
   previews: readonly PreviewContribution[];
@@ -218,6 +221,9 @@ export function composeAddons(
   const i18n: Record<string, Record<string, string>> = {};
   const icons: Record<string, unknown> = {};
   const forms: FormOverrideMap = {};
+  // A union, not a claim: two addons may both want a shared model's rail open,
+  // and neither owns it, so this does not go through `assertUnclaimed`.
+  const chatterExpanded = new Set<string>();
   const dataProviders: Record<string, unknown> = {};
   const previews: PreviewContribution[] = [];
   const routeNames: Record<string, true> = {};
@@ -276,6 +282,9 @@ export function composeAddons(
         }
       }
     }
+    for (const model of addon.chatterExpanded ?? []) {
+      chatterExpanded.add(canonicalizeModel(model));
+    }
     if (addon.dataProviders) {
       for (const [name, provider] of Object.entries(addon.dataProviders)) {
         assertUnclaimed(dataProviders, name, addon.id, "data provider");
@@ -306,6 +315,7 @@ export function composeAddons(
     i18n,
     icons,
     forms,
+    chatterExpanded: [...chatterExpanded],
     dataProviders,
     chatter: mergeChatterContributions(
       ...addons.map((addon) =>

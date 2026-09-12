@@ -9,6 +9,7 @@ import { Glyph } from "../chrome/Glyph";
 import { EmptyState } from "../fragments/EmptyState";
 import { useUiT, type UiMessageVars } from "../i18n";
 import { cn } from "../lib/cn";
+import { LARGE_VIEWPORT_QUERY, useMediaQuery } from "../lib/use-media-query";
 import {
   useAppRuntime,
   type ChatterContribution,
@@ -165,6 +166,26 @@ export function useChatterHasContent(): boolean {
   return (runtime.chatter ?? []).some((contribution) =>
     contributionMatches(contribution, viewContext),
   );
+}
+
+/**
+ * Whether this page's rail should start open instead of as a collapsed strip.
+ *
+ * Records are where the conversation is, but only some of them: a rail opened on
+ * every record would take a column away from pages built to be read wide. Which
+ * models want it is a domain fact, so addons declare it and this only asks.
+ *
+ * Narrow viewports always start collapsed -- the rail would otherwise sit on top
+ * of the record it is about.
+ */
+export function useChatterRailStartsOpen(): boolean {
+  const runtime = useAppRuntime();
+  const viewContext = useActiveChatterView(runtime.chatterRoutes ?? []);
+  const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
+  if (!largeViewport || viewContext.view.kind !== "record") return false;
+  const model =
+    viewContext.route?.canonicalLabel ?? viewContext.route?.modelLabel;
+  return model != null && (runtime.chatterExpandedModels ?? []).includes(model);
 }
 
 function contributionMatches(

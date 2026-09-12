@@ -255,6 +255,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     forms: composed.forms,
     chatter: composed.chatter,
     chatterRoutes: chatterRouteIndex(routes, modelLabelInventory),
+    chatterExpandedModels: composed.chatterExpanded,
     slots: composed.slots,
     recordSearchKeys: composed.recordSearchKeys,
     // Built-in renderers are universal (PreviewPane always includes them); the

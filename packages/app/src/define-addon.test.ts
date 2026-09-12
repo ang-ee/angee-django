@@ -321,3 +321,17 @@ describe("composeAddons", () => {
     );
   });
 });
+
+test("unions the models addons ask to open the chatter rail on, canonicalized", () => {
+  // Two addons may both want a shared model's rail open and neither owns it, so
+  // this must not behave like the single-owner registries around it.
+  const composed = composeAddons(
+    [
+      { id: "projects", chatterExpanded: ["projects.Task"] },
+      { id: "work", chatterExpanded: ["projects.Task", "work.Cycle"] },
+    ],
+    { canonicalModelLabel: (spelling) => spelling },
+  );
+
+  expect([...composed.chatterExpanded].sort()).toEqual(["projects.Task", "work.Cycle"]);
+});
