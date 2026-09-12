@@ -244,9 +244,11 @@ function RouteResourceViewProvider({
       // lane by the time this runs, so React cannot skip scheduling them.
       //
       // Read through a ref, not the closure. A failed transition does not
-      // navigate, so `search` and `queryState` do not change, so this callback
-      // is not rebuilt -- a closure copy would still say null and the next valid
-      // change would skip clearing a real error.
+      // navigate, so `search` and `queryState` hold still. Measured, the
+      // callback is rebuilt anyway -- `rowSelection` changes identity on every
+      // render -- so a closure read happens to be correct today. That is
+      // incidental, and nothing states it. The ref keeps the clear correct
+      // without depending on an unrelated dependency continuing to churn.
       if (failedTransitionRef.current !== null) setFailedTransition(null);
       void navigate({
         search: (current) => {
