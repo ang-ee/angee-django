@@ -238,11 +238,7 @@ test("an editable metadata relation drops a stale expanded option when its id ch
     </>,
   });
   const relation = await screen.findByRole("button", { name: /Parent/ });
-  // The label arrives from the selected record's own read, so the trigger can be
-  // on screen before it resolves. Asserting synchronously here raced about one
-  // run in four; the next assertion in this test already waits for the same
-  // reason.
-  await waitFor(() => expect(relation.textContent).toContain("note-a"));
+  expect(relation.textContent).toContain("note-a");
   fireEvent.click(screen.getByRole("button", { name: "Choose B" }));
   await waitFor(() => expect(relation.textContent).toContain("note-b"));
   fireEvent.click(screen.getByRole("button", { name: "Clear parent" }));
