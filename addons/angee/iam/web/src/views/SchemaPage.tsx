@@ -1,5 +1,5 @@
 import { useAuthoredQuery, type MessageVars } from "@angee/refine";
-import { Alert, Badge, Code, GraphView, InlineEmpty, PageAside, PrimaryPanePublisher, RailPanel, SearchInput, Spinner, TreeView, barVariants, cn, routeSearchParam, textRoleVariants, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+import { Alert, Badge, Code, GraphView, InlineEmpty, LoadingPanel, PageAside, PrimaryPanePublisher, RailPanel, SearchInput, TreeView, barVariants, cn, routeSearchParam, textRoleVariants, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useState, } from "react";
 
@@ -174,10 +174,7 @@ export function SchemaPage(): ReactElement {
     return (
       <>
         <PrimaryPanePublisher node={explorer} />
-        <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center gap-2 rounded-6 border border-border-subtle bg-sheet px-4 py-3")}>
-          <Spinner size="sm" />
-          {t("schema.loading")}
-        </div>
+        <LoadingPanel density="inline" message={t("schema.loading")} />
       </>
     );
   }

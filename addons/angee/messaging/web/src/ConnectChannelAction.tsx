@@ -8,6 +8,7 @@ import {
   Button,
   Glyph,
   MutationDialog,
+  optionalTranslation,
   type MutationDialogField,
   type MutationDialogParseValues,
   type MutationDialogValues,
@@ -192,9 +193,4 @@ function ConnectChannelDialog<
         onSubmit={onSubmit}
     />
   );
-}
-
-function optionalTranslation(t: MessagingT, key: string): string | undefined {
-  const translated = t(key);
-  return translated === key ? undefined : translated;
 }

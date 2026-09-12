@@ -1,7 +1,7 @@
 import { useMemo, type ReactElement } from "react";
 
 import {
-  Button, EmptyState, Glyph, Spinner, cn, formatDate as formatBaseDate, textRoleVariants, useResolvedWidget, type WidgetField } from "@angee/ui";
+  Button, EmptyState, Glyph, Skeleton, SkeletonStatus, cn, formatDate as formatBaseDate, textRoleVariants, useResolvedWidget, type WidgetField } from "@angee/ui";
 import { useKnowledgeT } from "../i18n";
 import type { KnowledgePageDetail } from "../data/documents";
 import { usePageEditor, type SaveStatus } from "../data/use-page-editor";
@@ -117,10 +117,9 @@ function SaveBadge({
   if (status === "idle") return null;
   if (status === "saving") {
     return (
-      <span className="inline-flex items-center gap-1 text-fg-muted">
-        <Spinner size="sm" />
-        {t("editor.saving")}
-      </span>
+      <SkeletonStatus label={t("editor.saving")} className="inline-flex min-w-16 items-center">
+        <Skeleton className="h-3 w-16" shape="text" />
+      </SkeletonStatus>
     );
   }
   if (status === "error") {

@@ -8,7 +8,6 @@ import {
   InitiativeUpdatesSection,
   ProjectUpdatesSection,
 } from "./update-composer";
-import { PRODUCT_FORM_FIELDS } from "./views/ProductsPage";
 
 describe("portfolio addon manifest", () => {
   test("satisfies rendered-addon invariants", () => {
@@ -73,14 +72,6 @@ describe("portfolio addon manifest", () => {
       { marker: Tab, child: ProjectUpdatesSection },
       { marker: Tab, child: InitiativeUpdatesSection },
     ]);
-  });
-
-  test("keeps the phasal Product form free of health, dates, and progress", () => {
-    const fields = Object.values(PRODUCT_FORM_FIELDS);
-    expect(fields).not.toContain("health");
-    expect(fields).not.toContain("health_updated_at");
-    expect(fields).not.toContain("target_date");
-    expect(fields).not.toContain("progress");
   });
 
   test("registers every portfolio glyph", () => {

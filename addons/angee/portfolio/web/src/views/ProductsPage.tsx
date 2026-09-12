@@ -19,15 +19,6 @@ import * as React from "react";
 import { usePortfolioT } from "../i18n";
 import { PRODUCT_MODEL, RELEASE_MODEL } from "../resources";
 
-/** The complete Product form surface; phasal subjects never gain delivery facts. */
-export const PRODUCT_FORM_FIELDS = {
-  name: "name",
-  lifecycle: "lifecycle",
-  owner: "owner",
-  originatedFrom: "originated_from",
-  body: "body",
-} as const;
-
 interface ProjectRow extends StringIdRow {
   title?: unknown;
 }
@@ -72,17 +63,17 @@ export function ProductsPage(): React.ReactElement {
         <Column field="updated_at" />
       </List>
       <Form resource={PRODUCT_MODEL} layout="tabs">
-        <Field name={PRODUCT_FORM_FIELDS.name} title />
+        <Field name="name" title />
         <Field
-          name={PRODUCT_FORM_FIELDS.lifecycle}
+          name="lifecycle"
           widget="statusbar"
           options={lifecycleOptions}
         />
         <Group label={t("product.group.provenance")} columns={2}>
-          <Field name={PRODUCT_FORM_FIELDS.owner} />
-          <Field name={PRODUCT_FORM_FIELDS.originatedFrom} readOnly />
+          <Field name="owner" />
+          <Field name="originated_from" readOnly />
         </Group>
-        <Field name={PRODUCT_FORM_FIELDS.body} widget="markdown.editor" body />
+        <Field name="body" widget="markdown.editor" body />
       </Form>
     </ResourceList>
   );

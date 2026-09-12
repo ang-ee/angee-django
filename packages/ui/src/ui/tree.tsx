@@ -11,10 +11,11 @@ import {
 } from "react";
 
 import { Glyph } from "../chrome/Glyph";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { toneGlyph, type Tone } from "../lib/tones";
 import { tv } from "../lib/variants";
-import { Spinner } from "./spinner";
+import { Skeleton } from "./skeleton";
 
 /**
  * Generic recursive tree primitive. Renders one flat row per node with
@@ -42,7 +43,7 @@ export interface TreeNode {
    * `Boolean(children?.length)` when omitted (eager trees).
    */
   hasChildren?: boolean;
-  /** Shows a spinner in place of the caret while its children load. */
+  /** Shows a skeleton in place of the caret while its children load. */
   loading?: boolean;
   /** Starts collapsed when true. */
   defaultCollapsed?: boolean;
@@ -357,6 +358,7 @@ function TreeRow({
   onNodeDrop: ((id: string, e: DragEvent<HTMLDivElement>) => void) | undefined;
   rowRef: (el: HTMLDivElement | null) => void;
 }): ReactNode {
+  const t = useUiT();
   const { node, depth, hasChildren, collapsed } = row;
   const loading = node.loading ?? false;
   // Depth-driven left padding so nested rows indent without wrapping.
@@ -405,11 +407,11 @@ function TreeRow({
         type="button"
         aria-label={
           loading
-            ? "Loading…"
+            ? t("loading.default")
             : hasChildren
               ? collapsed
-                ? "Expand"
-                : "Collapse"
+                ? t("tree.expand")
+                : t("tree.collapse")
               : undefined
         }
         aria-busy={loading || undefined}
@@ -425,7 +427,7 @@ function TreeRow({
         }}
       >
         {loading ? (
-          <Spinner size="sm" />
+          <Skeleton className="size-3.5 rounded-full" />
         ) : (
           <Glyph
             name="chevron-right"

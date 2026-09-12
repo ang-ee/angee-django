@@ -8,7 +8,7 @@ import {
   ErrorBanner,
   Glyph,
   Input,
-  Spinner,
+  LoadingPanel,
   cn,
   errorMessage,
   mutationDialogValueCodecs,
@@ -167,17 +167,7 @@ function LocationList({
 }): React.ReactElement {
   const t = useStorageIntegrateT();
   if (fetching && entries.length === 0) {
-    return (
-      <div
-        className={cn(
-          textRoleVariants({ role: "meta" }),
-          "flex items-center gap-2 px-1 py-3",
-        )}
-      >
-        <Spinner size="sm" />
-        {t("mount.browse.loading")}
-      </div>
-    );
+    return <LoadingPanel density="inline" message={t("mount.browse.loading")} />;
   }
   if (entries.length === 0) {
     return <ListHint>{t("mount.browse.empty")}</ListHint>;

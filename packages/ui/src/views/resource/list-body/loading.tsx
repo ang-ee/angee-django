@@ -2,26 +2,26 @@ import * as React from "react";
 import { Link } from "@tanstack/react-router";
 import { type Table as TableModel } from "@tanstack/react-table";
 import type { Row } from "@angee/metadata";
-import { Spinner } from "../../../ui/spinner";
 import { Glyph } from "../../../chrome/Glyph";
 import { EmptyState } from "../../../fragments/EmptyState";
 import { useUiT } from "../../../i18n";
 import { cn } from "../../../lib/cn";
 import { Button, buttonVariants, type ButtonVariant } from "../../../ui/button";
-import { Skeleton } from "../../../ui/skeleton";
+import { Skeleton, SkeletonStatus } from "../../../ui/skeleton";
 import { TableCell, TableRow } from "../../../ui/table";
 import { textRoleVariants } from "../../../ui/text";
 import type { ListEmptyAction, ListEmptyContent, ListEmptyState } from "../resource-view-types";
 import { alignOf } from "./cell-utils";
 import { ALIGN_CLASS } from "./types";
-/** The flush "Loading…" footer shown under a list layout while a page fetches. */
+/** The flush skeleton footer shown under retained rows while a page fetches. */
 export function ListLoadingFooter(): React.ReactElement {
   const t = useUiT();
   return (
-    <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center justify-center gap-2 border-t border-border px-3 py-4")}>
-      <Spinner size="sm" />
-      {t("list.loading")}
-    </div>
+    <SkeletonStatus label={t("list.loading")} className="grid grid-cols-[minmax(4rem,2fr)_minmax(3rem,1fr)_minmax(2rem,.5fr)] gap-5 border-t border-border px-3 py-4">
+      <Skeleton className="h-3 w-full" shape="text" />
+      <Skeleton className="h-3 w-4/5" shape="text" />
+      <Skeleton className="ml-auto h-3 w-2/3" shape="text" />
+    </SkeletonStatus>
   );
 }
 

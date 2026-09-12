@@ -1,5 +1,5 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { Alert, Button, Glyph, Spinner, errorMessage } from "@angee/ui";
+import { Alert, Button, Glyph, LoadingPanel, errorMessage } from "@angee/ui";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -44,16 +44,7 @@ export function OAuthLoginMethods(): ReactNode {
   }
 
   if (fetching && connections.length === 0) {
-    return (
-      <div
-        aria-live="polite"
-        className="flex items-center gap-3 rounded-6 border border-border-subtle bg-inset px-4 py-3 text-sm text-fg-muted"
-        role="status"
-      >
-        <Spinner size="sm" tone="brand" />
-        <span>{t("login.loadingOptions")}</span>
-      </div>
-    );
+    return <LoadingPanel density="inline" message={t("login.loadingOptions")} />;
   }
 
   if (queryError && connections.length === 0) {

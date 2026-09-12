@@ -12,7 +12,7 @@ import {
 } from "../../ui/field";
 import { FormGrid } from "../../ui/form-layout";
 import { SectionEyebrow } from "../../ui/section-eyebrow";
-import { Spinner } from "../../ui/spinner";
+import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { Tabs } from "../../ui/tabs";
 import { Collapsible } from "../../ui/collapsible";
 import { renderGlyph } from "../../chrome/Glyph";
@@ -442,10 +442,9 @@ function RecordSubtitle({
       {loading ? (
         <>
           {parts.length > 0 ? <span aria-hidden="true">/</span> : null}
-          <span className="inline-flex items-center gap-2">
-            <Spinner size="sm" />
-            {loadingLabel}
-          </span>
+          <SkeletonStatus label={loadingLabel} className="inline-flex min-w-20 items-center">
+            <Skeleton className="h-3 w-20" shape="text" />
+          </SkeletonStatus>
         </>
       ) : null}
     </div>

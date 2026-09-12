@@ -141,6 +141,8 @@ export const enUiMessages: Record<string, string> = {
   "numberField.increment": "Increase value",
   "numberField.decrement": "Decrease value",
   "loading.default": "Loading…",
+  "tree.expand": "Expand",
+  "tree.collapse": "Collapse",
   "explorer.emptyTitle": "No items",
   "explorer.emptyDescription": "Create a record to start browsing.",
   "list.loading": "Loading…",

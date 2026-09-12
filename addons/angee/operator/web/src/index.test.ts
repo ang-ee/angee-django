@@ -49,7 +49,7 @@ describe("operator addon manifest", () => {
     expect(operator.menus).toHaveLength(1);
     const menu = operator.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("operator");
-    expect(menu?.icon).toBe("operator");
+    expect(menu?.icon).toBe("terminal");
     expect(menu?.parentId).toBeUndefined();
     expect(menu?.group).toBe("platform");
     expect(menu?.route).toBe("operator.overview");
@@ -62,8 +62,8 @@ describe("operator addon manifest", () => {
     );
   });
 
-  test("declares its menu icon and i18n bundle", () => {
-    expect(operator.icons?.operator).toBeDefined();
+  test("declares its i18n bundle and logs-drawer glyph", () => {
+    expect(operator.icons?.["operator-logs"]).toBeDefined();
     expect(operator.i18n?.operator).toBeDefined();
   });
 });

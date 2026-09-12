@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { errorMessage } from "@angee/ui/feedback/index";
+import { Skeleton, SkeletonStatus, SkeletonText } from "@angee/ui/ui/skeleton";
 import { Alert } from "@angee/ui/ui/alert";
 import { Button } from "@angee/ui/ui/button";
-import { Spinner } from "@angee/ui/ui/spinner";
 import { safeRedirectPath } from "./safe-redirect";
 
 /**
@@ -110,19 +110,10 @@ export function OAuthCallback({
   if (state.kind === "pending") {
     return (
       <CallbackFrame>
-        <div className="flex items-center gap-3">
-          <Spinner size="md" tone="brand" />
-          <div>
-            <h1 className="text-base font-semibold text-fg">{copy.pendingTitle}</h1>
-            <p
-              aria-live="polite"
-              className="mt-1 text-sm text-fg-muted"
-              role="status"
-            >
-              {copy.pendingBody}
-            </p>
-          </div>
-        </div>
+        <SkeletonStatus label={`${copy.pendingTitle} ${copy.pendingBody}`} className="grid gap-3">
+          <Skeleton className="h-5 w-40" />
+          <SkeletonText lines={2} />
+        </SkeletonStatus>
       </CallbackFrame>
     );
   }
