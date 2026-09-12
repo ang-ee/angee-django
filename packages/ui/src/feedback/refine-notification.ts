@@ -35,7 +35,7 @@ export function useRefineNotificationProvider(): NotificationProvider {
         if (params.key) close(params.key);
         const id = toast({
           tone: REFINE_NOTIFICATION_TONE[params.type],
-          title: params.message,
+          title: sentenceCase(params.message),
           description: params.description,
           duration: durationFor(params),
           action: params.cancelMutation
@@ -51,6 +51,21 @@ export function useRefineNotificationProvider(): NotificationProvider {
     }),
     [close, t, toast],
   );
+}
+
+/**
+ * Capitalize a toast title's first letter.
+ *
+ * These titles are sentences built around a resource label, and a model label is
+ * lower case because that is its case mid-sentence: "Could not create task" is
+ * right, so "task created" comes out of the same label. The label cannot be
+ * capitalized to fix this without breaking the sentences it sits inside, so the
+ * sentence is capitalized where it is rendered instead.
+ */
+function sentenceCase(message: string): string {
+  const first = message.slice(0, 1);
+  const upper = first.toLocaleUpperCase();
+  return upper === first ? message : `${upper}${message.slice(1)}`;
 }
 
 function durationFor(params: OpenNotificationParams): number | undefined {

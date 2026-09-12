@@ -98,6 +98,7 @@ import {
 import {
   refineResourcesForSchemas,
   refineRouteResourceProjection,
+  resourceLabelI18nMessages,
   resourceRouteIndex,
 } from "./resource-projection";
 import { chatterRouteIndex } from "./chatter-routes";
@@ -236,7 +237,14 @@ export function createApp(input: CreateAppInput): AngeeApp {
 
   const defaultSchema = input.defaultSchema ?? "public";
   const subscriptionSchema = input.subscriptionSchema ?? "console";
-  const i18n = createAngeeI18nRuntime(mergeI18n(enUiBundle, composed.i18n));
+  // Addon translations win over the generated resource labels, which in turn
+  // win over the ui defaults.
+  const i18n = createAngeeI18nRuntime(
+    mergeI18n(
+      mergeI18n(enUiBundle, resourceLabelI18nMessages(schemas)),
+      composed.i18n,
+    ),
+  );
 
   // The static composition; the session fields (auth, logoutAction,
   // userPreferences) are layered in by RuntimeSessionProvider inside the frame.
