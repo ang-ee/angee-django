@@ -22,9 +22,11 @@ live in code docstrings.
 - Authored reads share in-flight requests across pane remounts when the data
   provider ignores cancellation. Providers that consume the signal keep native
   cancellation; explicit invalidation and live-connection catch-up remain intact.
-- Require django-zed-rebac 0.16.2 for lazy SQL authorization of acyclic,
+- Require django-zed-rebac 0.16.3 for lazy SQL authorization of acyclic,
   non-caveated permissions. Shared access and revocation retain the engine's
   semantics; recursive and caveated permissions keep its conservative fallback.
+  Grant expiry uses the application clock consistently; tuple-derived grants
+  for non-native identities use the queryset's database alias.
 
 ## Unreleased — upstream reuse
 
