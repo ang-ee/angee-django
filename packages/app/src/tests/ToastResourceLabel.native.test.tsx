@@ -20,8 +20,11 @@ afterEach(() => cleanup());
 // mutation and the rendered string is real: refine's own `useCreate` composes
 // the message, the app's i18n provider resolves it, and the app's notification
 // provider renders it.
-function fixture() {
-  const resource = testDataResource("projects.Project", { modelName: "Project" });
+function fixture(modelLabel = "projects.Project", modelName = "project") {
+  // `modelName` comes from Django's `model._meta.model_name`, which is lower
+  // case ("task", "project"). A fixture that capitalizes it tests a resource
+  // shape that cannot occur.
+  const resource = testDataResource(modelLabel, { modelName });
   const schemas = {
     console: { metadata: { angee: { resources: [resource] } } },
   };
@@ -80,6 +83,9 @@ test("names the model in the create toast instead of the resource identifier", a
   });
 
   await waitFor(() => expect(screen.getByText("Project created")).toBeTruthy());
+  // The label stays lower case, because that is its case inside a sentence
+  // ("Could not create project"); only the sentence is capitalized.
+  expect(screen.queryByText("project created")).toBeNull();
 
   // The two strings the demo script caught: refine's English default naming the
   // resource by its raw identifier, and its untranslated description key.
@@ -90,6 +96,24 @@ test("names the model in the create toast instead of the resource identifier", a
   // One line, not two: refine pairs a generic description with every success
   // toast, and an empty second line is worse than none.
   expect(document.body.textContent).toBe("Project created");
+
+  f.client.clear();
+});
+
+test("capitalizes the sentence on the board path too", async () => {
+  // The string the reviewer saw creating a task from the queue board: the label
+  // is the model's own lower-case name, so the sentence started lower case.
+  const f = fixture("projects.Task", "task");
+
+  await act(async () => {
+    f.create().mutate({
+      resource: refineResourceName(f.resource),
+      values: { title: "Draft signage" },
+    });
+  });
+
+  await waitFor(() => expect(screen.getByText("Task created")).toBeTruthy());
+  expect(screen.queryByText("task created")).toBeNull();
 
   f.client.clear();
 });
