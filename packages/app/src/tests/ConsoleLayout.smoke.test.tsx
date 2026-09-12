@@ -261,7 +261,7 @@ describe("ConsoleLayout", () => {
     document.documentElement.removeAttribute("data-theme");
   });
 
-  test("composes rail navigation, top chrome, breadcrumbs, content, and chatter", async () => {
+  test("composes rail navigation, top chrome, breadcrumbs, and content", async () => {
     renderInRouter(
       <ConsoleLayout>
         <section aria-label="Page body">Body content</section>
@@ -327,9 +327,14 @@ describe("ConsoleLayout", () => {
       .toBe("page");
 
     expect(screen.getByRole("main").textContent).toContain("Body content");
-    expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();
-    expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
+
+    // No record is selected and the page publishes no tabs of its own, so there
+    // is no chatter aside: its default tabs are all about a record, and an empty
+    // rail otherwise sits over the page -- over a board lane, it makes the cards
+    // underneath unreachable. The aside's own composition is covered by the
+    // published-tabs test below.
+    expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Chatter" })).toBeNull();
 
     fireEvent.click(railToggle);
     expect(await screen.findByRole("button", {
@@ -559,6 +564,9 @@ describe("ConsoleLayout", () => {
     );
     await screen.findByText("Body content");
 
+    // Published tabs merge over the defaults, so the aside composes in full here.
+    expect(screen.getByRole("complementary", { name: "Chatter" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "Activity 2" }));
     expect(screen.getByText("Revision one")).toBeTruthy();
   });
