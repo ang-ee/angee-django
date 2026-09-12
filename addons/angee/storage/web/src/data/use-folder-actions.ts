@@ -1,13 +1,13 @@
 import { resourceOperationTarget, type Row, } from "@angee/metadata";
 import {
-  useCreate, useInvalidate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
+  useCreate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
   refineFieldsFromPaths, } from "@angee/refine";
 import {
   deletePreviewDocumentForResource, useAngeeDeletePreview, useOperationDocuments, } from "@angee/refine";
 import {
   refineResourceName, } from "@angee/metadata";
-import { useBusyRun } from "@angee/ui";
+import { useBusyRun, useInvalidateDataResource } from "@angee/ui";
 import {
   useModelMetadata,
 } from "@angee/metadata";
@@ -67,7 +67,7 @@ export function useFolderActions(
   const deletePreview = useAngeeDeletePreview(deletePreviewTarget, {
     document: deletePreviewDocument,
   });
-  const invalidate = useInvalidate();
+  const invalidateDataResource = useInvalidateDataResource();
   const { busy, run } = useBusyRun(onChanged);
 
   return {
@@ -81,19 +81,14 @@ export function useFolderActions(
       run(async () => {
         requireFolderResource(resource);
         await updateFolder.mutateAsync({ id, values: { name } });
-        await invalidateFiles(invalidate, fileResource);
+        await invalidateFiles(invalidateDataResource, fileResource);
       }),
     remove: (id) =>
       run(async () => {
         requireFolderResource(resource);
         await deletePreview.mutate({ id, confirm: true });
-        await invalidate({
-          resource: refineResourceName(resource),
-          dataProviderName: resource.schemaName,
-          id,
-          invalidates: ["list", "many", "detail"],
-        });
-        await invalidateFiles(invalidate, fileResource);
+        await invalidateDataResource(resource, id);
+        await invalidateFiles(invalidateDataResource, fileResource);
       }),
   };
 }
@@ -112,15 +107,11 @@ function requireFolderResource(
 }
 
 async function invalidateFiles(
-  invalidate: ReturnType<typeof useInvalidate>,
+  invalidateDataResource: ReturnType<typeof useInvalidateDataResource>,
   resource: DataResourceMetadata | null,
 ): Promise<void> {
   if (!resource) {
     throw new Error(`Resource metadata for "${FILE_MODEL}" is not available.`);
   }
-  await invalidate({
-    resource: refineResourceName(resource),
-    dataProviderName: resource.schemaName,
-    invalidates: ["list", "many", "detail"],
-  });
+  await invalidateDataResource(resource);
 }

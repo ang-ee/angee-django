@@ -1,10 +1,10 @@
 import { resourceOperationTarget, type Row, } from "@angee/metadata";
 import {
-  useInvalidate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
+  useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
   deletePreviewDocumentForResource, useAngeeDeletePreview, useAuthoredMutation, useOperationDocuments, type UseAngeeDeletePreviewResult, } from "@angee/refine";
 import {
-  useBusyRun } from "@angee/ui";
+  useBusyRun, useInvalidateDataResource } from "@angee/ui";
 import {
   refineResourceName,
   useModelMetadata,
@@ -60,7 +60,7 @@ export function useFileActions(
     dataProviderName: resource?.schemaName,
     invalidates: ["list", "many", "detail"],
   });
-  const invalidate = useInvalidate();
+  const invalidateDataResource = useInvalidateDataResource();
   const { busy, run } = useBusyRun(onChanged);
 
   return {
@@ -69,7 +69,7 @@ export function useFileActions(
       run(async () => {
         await trashFile({
           deletePreview,
-          invalidate,
+          invalidateDataResource,
           resource,
           id,
         });
@@ -78,7 +78,7 @@ export function useFileActions(
       run(async () => {
         requireFileResource(resource);
         await restoreFile({ id });
-        await invalidateFileResource(invalidate, resource, id);
+        await invalidateDataResource(resource, id);
       }),
     move: (id, folder) =>
       run(async () => {
@@ -90,7 +90,7 @@ export function useFileActions(
         for (const id of ids) {
           await trashFile({
             deletePreview,
-            invalidate,
+            invalidateDataResource,
             resource,
             id,
           });
@@ -100,7 +100,7 @@ export function useFileActions(
       run(async () => {
         requireFileResource(resource);
         for (const id of ids) await restoreFile({ id });
-        await invalidateFileResource(invalidate, resource);
+        await invalidateDataResource(resource);
       }),
   };
 }
@@ -111,31 +111,18 @@ type RowRecord = BaseRecord & Row;
 
 async function trashFile({
   deletePreview,
-  invalidate,
+  invalidateDataResource,
   resource,
   id,
 }: {
   deletePreview: UseAngeeDeletePreviewResult;
-  invalidate: ReturnType<typeof useInvalidate>;
+  invalidateDataResource: ReturnType<typeof useInvalidateDataResource>;
   resource: DataResourceMetadata | null;
   id: string;
 }): Promise<void> {
   requireFileResource(resource);
   await deletePreview.mutate({ id, confirm: true });
-  await invalidateFileResource(invalidate, resource, id);
-}
-
-async function invalidateFileResource(
-  invalidate: ReturnType<typeof useInvalidate>,
-  resource: DataResourceMetadata,
-  id?: string,
-): Promise<void> {
-  await invalidate({
-    resource: refineResourceName(resource),
-    dataProviderName: resource.schemaName,
-    ...(id ? { id } : {}),
-    invalidates: ["list", "many", "detail"],
-  });
+  await invalidateDataResource(resource, id);
 }
 
 function requireFileResource(
