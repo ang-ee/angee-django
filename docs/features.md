@@ -74,7 +74,7 @@ actually unique to your product.
 - **Knowledge** — a server-backed, permissioned, Obsidian-shape knowledge base:
   pages, typed properties, wikilink/embed edges, canvases. "Index, don't grep" —
   every change becomes queryable rows. **Graph RAG** (vector + graph retrieval)
-  lands as a follow-up addon.
+  ships as the sibling `knowledge_graph_pgvector` addon.
 - **Integrate** — third-party systems: a vendor catalogue, accounts, stateless
   providers and stateful bridges, and signed inbound/outbound webhooks.
   **OAuth2 / OIDC** ships as the credential-source sibling and also powers SSO.
@@ -86,11 +86,14 @@ actually unique to your product.
   secrets.
 - **Connect** *(Planned)* — people and conversations: contacts and organisations +
   threads and messages across web, email, and agent channels (agents are
-  participants).
+  participants). Its foundations ship today as the `parties` and `messaging`
+  addons.
 - **Workflows** — durable runs, step journals, gates, decisions, triggers, and
   published lineages for permissioned human-in-the-loop automation.
-- **MCP** *(Planned)* — an agent tool surface generated from the framework's
-  persisted, REBAC-gated GraphQL operations.
+- **MCP** — an agent tool surface generated from the framework's persisted,
+  REBAC-gated GraphQL operations, served by the `mcp` addon: every tool is pinned to
+  the calling actor, and addons curate their writes in a conventional
+  `mcp_tools.py`.
 - **ARP** *(Planned)* — ERP re-cut as composable addons (invoicing, accounting,
   procurement, CRM, HR) on shared primitives `money`, `sequence`, and `uom`.
 
