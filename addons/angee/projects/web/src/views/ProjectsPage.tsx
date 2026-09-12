@@ -23,7 +23,11 @@ import {
   PROJECT_MODEL,
   TASK_MODEL,
 } from "../resources";
-import { useTaskRowActions, type TaskActionRow } from "../task-actions";
+import {
+  useTaskFormDeclaration,
+  useTaskRowActions,
+  type TaskActionRow,
+} from "../task-actions";
 
 /** Projects collection plus its one routed FormView record surface. */
 export function ProjectsPage(): React.ReactElement {
@@ -144,22 +148,39 @@ function ProjectTasksTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useProjectsT();
   const routeHref = useRouteHref();
   const rowActions = useTaskRowActions<TaskActionRow>();
+  const form = useTaskFormDeclaration();
+  const [creating, setCreating] = React.useState(false);
   return (
-    <List<TaskActionRow>
+    // The tab owns a create surface of its own: a project with no way to add a
+    // task to it sent you to the global Tasks page to pick the project back out
+    // of a relation picker. The project is already known here, so it is the
+    // create default rather than a field to fill in. Rows still deep-link to the
+    // task record through `rowHref`; only the create path is new.
+    <ResourceList<TaskActionRow>
       resource={TASK_MODEL}
       scope="local"
-      baseFilter={{ project: { exact: recordId } }}
-      order={{ sort_order: "ASC" }}
-      rowActions={rowActions}
-      rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
-      emptyContent={t("project.empty.tasks")}
+      placement="drawer"
+      creating={creating}
+      onSelect={(id) => setCreating(id === null)}
+      onClose={() => setCreating(false)}
+      createDefaults={{ project: recordId }}
     >
-      <Column field="title" />
-      <Column field="status" widget="statusBadge" />
-      <Column field="assignee" />
-      <Column field="priority" />
-      <Column field="due_date" />
-    </List>
+      <List<TaskActionRow>
+        resource={TASK_MODEL}
+        baseFilter={{ project: { exact: recordId } }}
+        order={{ sort_order: "ASC" }}
+        rowActions={rowActions}
+        rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
+        emptyContent={t("project.empty.tasks")}
+      >
+        <Column field="title" />
+        <Column field="status" widget="statusBadge" />
+        <Column field="assignee" />
+        <Column field="priority" />
+        <Column field="due_date" />
+      </List>
+      {form}
+    </ResourceList>
   );
 }
 
