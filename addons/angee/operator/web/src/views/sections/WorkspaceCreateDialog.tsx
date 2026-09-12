@@ -1,10 +1,8 @@
 import {
-  Button,
-  DialogForm,
-  ErrorBanner,
-  LabeledDescriptorField,
-  errorMessage,
+  MutationDialog,
   type MutationDialogField,
+  type MutationDialogValidationResult,
+  type MutationDialogValues,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
@@ -24,8 +22,6 @@ export interface WorkspaceCreateDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type FieldErrors = Readonly<Record<string, readonly string[]>>;
-
 /** Create a daemon workspace from one of the stack's workspace templates. */
 export function WorkspaceCreateDialog({
   open,
@@ -39,13 +35,6 @@ export function WorkspaceCreateDialog({
   const { refetch: refetchWorkspaces } = useOperatorSnapshot({ workspaces: true });
   const preflight = useWorkspacePreflight();
   const create = useWorkspaceCreate();
-  const [templateRef, setTemplateRef] = React.useState("");
-  const [name, setName] = React.useState("");
-  const [ttl, setTtl] = React.useState("");
-  const [inputs, setInputs] = React.useState<Record<string, unknown>>({});
-  const [fieldErrors, setFieldErrors] = React.useState<FieldErrors>({});
-  const [formError, setFormError] = React.useState<string | null>(null);
-  const [submitting, setSubmitting] = React.useState(false);
 
   const templates = React.useMemo(
     () =>
@@ -54,17 +43,12 @@ export function WorkspaceCreateDialog({
         .sort((left, right) => templateLabel(left).localeCompare(templateLabel(right))),
     [snapshot?.templates],
   );
-  const selectedTemplate =
-    templates.find((template) => template.ref === templateRef) ?? null;
-  const templateInputs = React.useMemo(
-    () =>
-      (selectedTemplate?.inputs ?? []).filter(
-        (input) => input.question && !input.generated,
-      ),
-    [selectedTemplate],
+  const inputNames = React.useMemo(
+    () => [...new Set(templates.flatMap((template) => editableTemplateInputs(template.inputs).map((input) => input.name)))],
+    [templates],
   );
-  const templateField = React.useMemo<MutationDialogField>(
-    () => ({
+  const fields = React.useMemo<readonly MutationDialogField[]>(() => [
+    {
       name: "template",
       label: t("workspaces.create.template"),
       widget: "select",
@@ -74,160 +58,70 @@ export function WorkspaceCreateDialog({
       })),
       placeholder: t("workspaces.create.templatePlaceholder"),
       required: true,
-    }),
-    [t, templates],
-  );
-  const nameField = React.useMemo<MutationDialogField>(
-    () => ({
+      prefill: (value) => templateInputPrefill(templates, inputNames, value),
+    },
+    {
       name: "name",
       label: t("workspaces.create.name"),
       description: t("workspaces.create.nameDescription"),
-    }),
-    [t],
-  );
-  const ttlField = React.useMemo<MutationDialogField>(
-    () => ({
+    },
+    {
       name: "ttl",
       label: t("workspaces.create.ttl"),
       description: t("workspaces.create.ttlDescription"),
-    }),
-    [t],
-  );
-  const busy = submitting || preflight.result.fetching || create.result.fetching;
+    },
+    ...inputNames.map((name): MutationDialogField => ({
+      name,
+      label: name,
+      showWhen: (values) => templateInputFor(templates, values.template, name) !== null,
+      resolve: (values) => {
+        const input = templateInputFor(templates, values.template, name);
+        return input ? templateInputField(input) : { name, label: name };
+      },
+    })),
+  ], [inputNames, t, templates]);
 
-  React.useEffect(() => {
-    if (!open) reset();
-    // The reset intentionally follows the dialog session boundary only. Template
-    // snapshot updates while open must not erase answers the user is entering.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  const validate = React.useCallback(async (
+    object: WorkspaceCreateInput,
+  ): Promise<MutationDialogValidationResult | null> => {
+    const checked = (await preflight.run({ input: object }))?.workspaceCreatePreflight;
+    if (!checked) throw new Error(t("workspaces.create.failed"));
+    if (checked.ok) return null;
+    return {
+      fieldErrors: preflightErrors(checked, t("workspaces.create.required")),
+      formError: t("workspaces.create.validationFailed"),
+    };
+  }, [preflight, t]);
 
-  function reset(): void {
-    setTemplateRef("");
-    setName("");
-    setTtl("");
-    setInputs({});
-    setFieldErrors({});
-    setFormError(null);
-    setSubmitting(false);
-  }
-
-  function selectTemplate(value: unknown): void {
-    const nextRef = typeof value === "string" ? value : "";
-    const template = templates.find((candidate) => candidate.ref === nextRef);
-    setTemplateRef(nextRef);
-    setInputs(initialTemplateInputs(template?.inputs ?? []));
-    setFieldErrors({});
-    setFormError(null);
-  }
-
-  function setInput(inputName: string, value: unknown): void {
-    setInputs((current) => ({ ...current, [inputName]: value }));
-    setFieldErrors((current) => withoutField(current, inputName));
-    setFormError(null);
-  }
-
-  async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (!templateRef || busy) return;
-    setSubmitting(true);
-    setFieldErrors({});
-    setFormError(null);
-    const object = workspaceCreateInput(templateRef, name, ttl, inputs);
-    try {
-      const checked = (await preflight.run({ input: object }))
-        ?.workspaceCreatePreflight;
-      if (!checked) throw new Error(t("workspaces.create.failed"));
-      if (!checked.ok) {
-        setFieldErrors(preflightErrors(checked, t("workspaces.create.required")));
-        setFormError(t("workspaces.create.validationFailed"));
-        return;
-      }
-      const workspace = (await create.run({ object }))?.insert_workspaces_one;
-      if (!workspace) throw new Error(t("workspaces.create.failed"));
-      // Pull the snapshot before navigating: the detail resolves by name from
-      // the workspaces pane, and navigating ahead of the refresh bounces the
-      // route back to the list.
-      await Promise.resolve(refetchWorkspaces()).catch(() => undefined);
-      onOpenChange(false);
-      void navigate({ to: workspaceDetailPath(workspace.name) });
-    } catch (cause) {
-      setFormError(errorMessage(cause, t("workspaces.create.failed")));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  const footer = (
-    <>
-      <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => onOpenChange(false)}>
-        {t("workspaces.create.cancel")}
-      </Button>
-      <Button
-        type="submit"
-        variant="primary"
-        size="sm"
-        disabled={!templateRef || busy}
-        loading={busy}
-        loadingText={t("workspaces.create.submitting")}
-      >
-        {t("workspaces.create.submit")}
-      </Button>
-    </>
-  );
+  const submit = React.useCallback(async (object: WorkspaceCreateInput) => {
+    const workspace = (await create.run({ object }))?.insert_workspaces_one;
+    if (!workspace) throw new Error(t("workspaces.create.failed"));
+    // Pull the snapshot before navigating: detail resolves by name from the
+    // workspaces pane and would otherwise bounce back to the list.
+    await Promise.resolve(refetchWorkspaces()).catch(() => undefined);
+    return workspace;
+  }, [create, refetchWorkspaces, t]);
 
   return (
-    <DialogForm
+    <MutationDialog
       open={open}
       onOpenChange={onOpenChange}
       title={t("workspaces.create.title")}
       description={t("workspaces.create.description")}
-      footer={footer}
-      onSubmit={(event) => void submit(event)}
+      fields={fields}
+      submitLabel={t("workspaces.create.submit")}
+      submittingLabel={t("workspaces.create.submitting")}
+      cancelLabel={t("workspaces.create.cancel")}
+      errorFallback={t("workspaces.create.failed")}
+      parseValues={(values) => workspaceCreateInput(templates, values)}
+      validate={validate}
+      onSubmit={submit}
+      onSubmitted={(workspace) => {
+        void navigate({ to: workspaceDetailPath(workspace.name) });
+      }}
       size="lg"
       placement="prompt"
-    >
-      <LabeledDescriptorField
-        field={templateField}
-        value={templateRef}
-        readOnly={busy}
-        messages={fieldErrors.template ?? []}
-        onChange={selectTemplate}
-      />
-      <LabeledDescriptorField
-        field={nameField}
-        value={name}
-        readOnly={busy}
-        messages={fieldErrors.name ?? []}
-        onChange={(value) => {
-          setName(typeof value === "string" ? value : "");
-          setFieldErrors((current) => withoutField(current, "name"));
-          setFormError(null);
-        }}
-      />
-      <LabeledDescriptorField
-        field={ttlField}
-        value={ttl}
-        readOnly={busy}
-        messages={fieldErrors.ttl ?? []}
-        onChange={(value) => {
-          setTtl(typeof value === "string" ? value : "");
-          setFieldErrors((current) => withoutField(current, "ttl"));
-          setFormError(null);
-        }}
-      />
-      {templateInputs.map((input) => (
-        <LabeledDescriptorField
-          key={input.name}
-          field={templateInputField(input)}
-          value={inputs[input.name]}
-          readOnly={busy}
-          messages={fieldErrors[input.name] ?? []}
-          onChange={(value) => setInput(input.name, value)}
-        />
-      ))}
-      <ErrorBanner description={formError} />
-    </DialogForm>
+    />
   );
 }
 
@@ -250,14 +144,37 @@ function templateInputField(input: TemplateInputDescriptor): MutationDialogField
   };
 }
 
-function initialTemplateInputs(
+function editableTemplateInputs(
   descriptors: readonly TemplateInputDescriptor[],
+): TemplateInputDescriptor[] {
+  return descriptors.filter((input) => input.question && !input.generated);
+}
+
+function templateInputFor(
+  templates: readonly TemplateDescriptor[],
+  templateRef: unknown,
+  name: string,
+): TemplateInputDescriptor | null {
+  if (typeof templateRef !== "string") return null;
+  const template = templates.find((candidate) => candidate.ref === templateRef);
+  return editableTemplateInputs(template?.inputs ?? []).find((input) => input.name === name) ?? null;
+}
+
+function templateInputPrefill(
+  templates: readonly TemplateDescriptor[],
+  inputNames: readonly string[],
+  templateRef: unknown,
 ): Record<string, unknown> {
-  return Object.fromEntries(
-    descriptors
-      .filter((input) => input.question && !input.generated)
-      .map((input) => [input.name, initialTemplateInput(input)]),
-  );
+  const cleared = Object.fromEntries(inputNames.map((name) => [name, undefined]));
+  if (typeof templateRef !== "string") return cleared;
+  const template = templates.find((candidate) => candidate.ref === templateRef);
+  return {
+    ...cleared,
+    ...Object.fromEntries(
+      editableTemplateInputs(template?.inputs ?? [])
+        .map((input) => [input.name, initialTemplateInput(input)]),
+    ),
+  };
 }
 
 function initialTemplateInput(input: TemplateInputDescriptor): unknown {
@@ -274,16 +191,19 @@ function initialTemplateInput(input: TemplateInputDescriptor): unknown {
 }
 
 function workspaceCreateInput(
-  template: string,
-  name: string,
-  ttl: string,
-  inputs: Readonly<Record<string, unknown>>,
+  templates: readonly TemplateDescriptor[],
+  values: MutationDialogValues,
 ): WorkspaceCreateInput {
+  const template = typeof values.template === "string" ? values.template : "";
+  const selected = templates.find((candidate) => candidate.ref === template);
+  const inputs = Object.fromEntries(
+    editableTemplateInputs(selected?.inputs ?? []).map((input) => [input.name, values[input.name]]),
+  );
   const suppliedInputs = Object.fromEntries(
     Object.entries(inputs).filter(([, value]) => value != null),
   );
-  const trimmedName = name.trim();
-  const trimmedTtl = ttl.trim();
+  const trimmedName = typeof values.name === "string" ? values.name.trim() : "";
+  const trimmedTtl = typeof values.ttl === "string" ? values.ttl.trim() : "";
   return {
     template,
     inputs: toAnswerList(suppliedInputs),
@@ -298,7 +218,7 @@ function preflightErrors(
     invalidInputs: ReadonlyArray<{ field: string; reason: string }>;
   },
   requiredMessage: string,
-): FieldErrors {
+): Readonly<Record<string, readonly string[]>> {
   const errors: Record<string, string[]> = {};
   for (const field of preflight.missingRequired) {
     errors[field] = [...(errors[field] ?? []), requiredMessage];
@@ -307,11 +227,4 @@ function preflightErrors(
     errors[failure.field] = [...(errors[failure.field] ?? []), failure.reason];
   }
   return errors;
-}
-
-function withoutField(errors: FieldErrors, name: string): FieldErrors {
-  if (!(name in errors)) return errors;
-  const next = { ...errors };
-  delete next[name];
-  return next;
 }

@@ -30,7 +30,7 @@ import { RelationPicker, type RelationCreateConfig } from "../relation/RelationP
 import { useRelationOptions } from "../relation/relation-options";
 import type { FieldDescriptor } from "../page";
 import { directDottedPathMessages } from "./validation-errors";
-import { fieldErrorMessages, resolveField } from "./form-view-model";
+import { fieldErrorMessages, isFieldVisible, resolveField } from "./form-view-model";
 import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
 
@@ -110,6 +110,12 @@ export type MutationDialogValues = Readonly<Record<string, unknown>>;
 export type MutationDialogParseValues<TValues> = (
   values: MutationDialogValues,
 ) => TValues;
+
+/** Server-side validation returned before a mutation dialog submits its values. */
+export interface MutationDialogValidationResult {
+  fieldErrors?: Readonly<Record<string, readonly string[]>>;
+  formError?: string;
+}
 
 /**
  * Shared scalar codecs for {@link MutationDialogParseValues} implementations.
@@ -203,6 +209,10 @@ export interface MutationDialogProps<
   errorFallback?: string;
   /** Decode raw control state before it crosses the authored-mutation boundary. */
   parseValues: MutationDialogParseValues<TValues>;
+  /** Optional authoritative validation step that can bind errors to declared fields. */
+  validate?: (
+    values: TValues,
+  ) => MutationDialogValidationResult | null | undefined | Promise<MutationDialogValidationResult | null | undefined>;
   onSubmit: (values: TValues) => TResult | Promise<TResult>;
   onSubmitted?: (result: TResult, values: TValues) => void;
   closeOnSubmit?: boolean;
@@ -245,6 +255,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   cancelLabel,
   errorFallback,
   parseValues,
+  validate,
   onSubmit,
   onSubmitted,
   closeOnSubmit = true,
@@ -261,10 +272,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     defaultValues: initialDialogValues(fields, initialValues),
     mode: "onChange",
     resolver: (formValues) => {
-      const resolved = fields.map((field) => ({
-        ...resolveField(field, formValues),
-        name: field.name,
-      } as MutationDialogField));
+      const resolved = visibleDialogFields(fields, formValues);
       const editable = resolved.filter((field) => !field.readOnly && !field.readOnlyWhen?.(formValues));
       const missing = editable.flatMap((field) => {
         if (isStructuredPresenceField(field)) {
@@ -292,10 +300,13 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     }
   }, [fields, form, initialValues, open]);
   const values = useWatch({ control: form.control });
+  const visibleFields = visibleDialogFields(fields, values);
   const submitting = form.formState.isSubmitting;
   const error = form.formState.errors.root?.server?.message ?? null;
   const fieldsReady = form.formState.isValid || (!form.formState.isDirty
-    && fields.every((field) => !field.required && !field.presenceRequired));
+    && visibleFields
+      .filter((field) => !field.readOnly && !field.readOnlyWhen?.(values))
+      .every((field) => !field.required && !field.presenceRequired));
   const ready = fieldsReady && (canSubmit?.(values) ?? true);
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -330,6 +341,8 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     form.clearErrors();
     try {
       const submittedValues = parseValues(collected);
+      const validation = await validate?.(submittedValues);
+      if (validation && applyDialogValidation(form, validation)) return;
       const result = await onSubmit(submittedValues);
       if (!mounted.current || session.current !== submittedSession) return;
       onSubmitted?.(result, submittedValues);
@@ -342,7 +355,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
         });
         // Root transport errors must not lock a valid form out of retrying.
         // Revalidate the fields while retaining the root error for display.
-        await form.trigger(fields.map((field) => field.name));
+        await form.trigger(visibleFields.map((field) => field.name));
       }
     } finally {
       if (session.current === submittedSession) submittingRef.current = false;
@@ -368,12 +381,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       placement={placement}
       trigger={trigger}
     >
-      {fields.map((declaredField) => {
-        const field = {
-          ...resolveField(declaredField, values),
-          name: declaredField.name,
-        } as MutationDialogField;
-        return (
+      {visibleFields.map((field) => (
           <Controller key={field.name} name={field.name} control={form.control}
             render={({ field: control, fieldState }) => (
               <LabeledDescriptorField
@@ -385,15 +393,56 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
                   field.objectTemplate || field.itemTemplate || "rowTemplate" in field ? field.name : undefined,
                 ) : []}
                 readOnly={field.readOnly || field.readOnlyWhen?.(values) || submitting}
-                onChange={control.onChange}
+                onChange={(next) => {
+                  form.clearErrors(field.name);
+                  control.onChange(next);
+                  const seeds = field.prefill?.(next);
+                  if (!seeds) return;
+                  for (const [name, seed] of Object.entries(seeds)) {
+                    form.clearErrors(name);
+                    form.setValue(name, seed, {
+                      shouldDirty: true,
+                      shouldTouch: true,
+                      shouldValidate: true,
+                    });
+                  }
+                }}
               />
             )}
           />
-        );
-      })}
+      ))}
       <ErrorBanner description={error} />
     </DialogForm>
   );
+}
+
+function visibleDialogFields(
+  fields: readonly MutationDialogField[],
+  values: Record<string, unknown>,
+): MutationDialogField[] {
+  return fields
+    .map((declared) => ({
+      ...resolveField(declared, values),
+      name: declared.name,
+    } as MutationDialogField))
+    .filter((field) => isFieldVisible(field, values));
+}
+
+function applyDialogValidation(
+  form: ReturnType<typeof useForm<Record<string, unknown>>>,
+  validation: MutationDialogValidationResult,
+): boolean {
+  let invalid = false;
+  for (const [name, messages] of Object.entries(validation.fieldErrors ?? {})) {
+    if (messages.length === 0) continue;
+    invalid = true;
+    form.setError(name, { type: "server", message: messages.join(", ") });
+  }
+  if (validation.formError) {
+    invalid = true;
+    form.setError("root.server", { type: "server", message: validation.formError });
+  }
+  return invalid;
 }
 
 function requiredDialogErrors(names: readonly string[], message: string): FieldErrors<Record<string, unknown>> {
