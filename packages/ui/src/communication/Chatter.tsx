@@ -9,7 +9,7 @@ import { Glyph } from "../chrome/Glyph";
 import { EmptyState } from "../fragments/EmptyState";
 import { useUiT, type UiMessageVars } from "../i18n";
 import { cn } from "../lib/cn";
-import { LARGE_VIEWPORT_QUERY, useMediaQuery } from "../lib/use-media-query";
+import { XL_VIEWPORT_QUERY, useMediaQuery } from "../lib/use-media-query";
 import {
   useAppRuntime,
   type ChatterContribution,
@@ -175,14 +175,16 @@ export function useChatterHasContent(): boolean {
  * every record would take a column away from pages built to be read wide. Which
  * models want it is a domain fact, so addons declare it and this only asks.
  *
- * Narrow viewports always start collapsed -- the rail would otherwise sit on top
- * of the record it is about.
+ * Gated on the same width as the properties column, not on `lg`: a record that
+ * opens both is three panes, and below `xl` they do not fit -- measured at 1024,
+ * the rail's own controls clipped 4-37px past the edge. Below it the rail stays
+ * a toggle rather than sitting on top of the record it is about.
  */
 export function useChatterRailStartsOpen(): boolean {
   const runtime = useAppRuntime();
   const viewContext = useActiveChatterView(runtime.chatterRoutes ?? []);
-  const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
-  if (!largeViewport || viewContext.view.kind !== "record") return false;
+  const roomForThreePanes = useMediaQuery(XL_VIEWPORT_QUERY);
+  if (!roomForThreePanes || viewContext.view.kind !== "record") return false;
   const model =
     viewContext.route?.canonicalLabel ?? viewContext.route?.modelLabel;
   return model != null && (runtime.chatterExpandedModels ?? []).includes(model);

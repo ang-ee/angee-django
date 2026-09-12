@@ -3,6 +3,13 @@ import { useCallback, useSyncExternalStore } from "react";
 /** Tailwind's `lg` boundary, owned here for JS-driven responsive behavior. */
 export const LARGE_VIEWPORT_QUERY = "(min-width: 64rem)";
 
+/**
+ * Tailwind's `xl` boundary. The width a record needs before it can carry a
+ * third pane: below it, nav plus a form plus an open rail do not fit, and the
+ * rail's own controls clip against the edge.
+ */
+export const XL_VIEWPORT_QUERY = "(min-width: 80rem)";
+
 /** Subscribe to one browser media query without mirroring it through effects. */
 export function useMediaQuery(query: string): boolean {
   const subscribe = useCallback(
