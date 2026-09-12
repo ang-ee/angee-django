@@ -38,6 +38,7 @@ export function RoadmapPage(): React.ReactElement {
       >
         <List<StringIdRow>
           resource={INITIATIVE_PROJECT_MODEL}
+          scope="local"
           defaultGroup={{ field: "initiative" }}
           order={{ sort_order: "ASC" }}
         >
