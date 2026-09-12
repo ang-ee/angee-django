@@ -8,6 +8,7 @@ import {
   type WidgetRenderProps,
   type WidgetFocusTarget,
 } from "../../widgets";
+import { textWidget } from "../../widgets/text";
 import {
   fieldWidgetId,
   type FieldDescriptor,
@@ -20,6 +21,21 @@ type DescriptorWidgetField = WidgetField & {
   itemTemplate?: FormSpecFieldDescriptor;
   minItems?: number;
   maxItems?: number;
+};
+
+function FallbackTextRead(props: WidgetRenderProps): React.ReactElement {
+  const Component = textWidget.read;
+  return <Component {...props} value={String(props.value ?? "")} />;
+}
+
+function FallbackTextEdit(props: WidgetRenderProps): React.ReactElement {
+  const Component = textWidget.edit;
+  return <Component {...props} value={String(props.value ?? "")} />;
+}
+
+const FALLBACK_TEXT_WIDGET: WidgetDefinition = {
+  read: FallbackTextRead,
+  edit: FallbackTextEdit,
 };
 
 export interface FieldDescriptorControlProps {
@@ -59,7 +75,8 @@ export function FieldDescriptorControl({
   controlProps,
   controlRef,
 }: FieldDescriptorControlProps): React.ReactElement {
-  const widget = useResolvedWidget(fieldWidgetId(field)) ?? fallbackWidget();
+  const widget = useResolvedWidget(fieldWidgetId(field))
+    ?? FALLBACK_TEXT_WIDGET;
   const Component = readOnly ? widget.read : (widget.edit ?? widget.read);
   const widgetField: DescriptorWidgetField = {
     name: field.name,
@@ -94,30 +111,4 @@ export function FieldDescriptorControl({
       controlRef={controlRef}
     />
   );
-}
-
-function fallbackWidget(): WidgetDefinition {
-  return {
-    read: ({ value }: WidgetRenderProps) => (
-      <span className="text-13 text-fg">{String(value ?? "")}</span>
-    ),
-    edit: ({
-      value,
-      onChange,
-      onCommit,
-      readOnly,
-      field,
-      controlRef,
-    }: WidgetRenderProps) => (
-      <input
-        {...field?.controlProps}
-        ref={controlRef}
-        className="h-9 w-full rounded-6 border border-border bg-sheet px-3 text-13 text-fg"
-        value={String(value ?? "")}
-        readOnly={readOnly}
-        onChange={(event) => onChange?.(event.currentTarget.value)}
-        onBlur={onCommit}
-      />
-    ),
-  };
 }
