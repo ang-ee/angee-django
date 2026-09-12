@@ -65,7 +65,7 @@ export interface AuthUser {
 
 export interface AuthState {
   user: AuthUser | null;
-  status: "anonymous" | "authenticated";
+  status: "resolving" | "anonymous" | "authenticated";
   hasRole: (role: string) => boolean;
 }
 
@@ -270,10 +270,9 @@ export function useRuntimeAuthState(): UseRuntimeAuthStateResult {
   const identity = useGetIdentity<AuthUser | null>({
     queryOptions: IDENTITY_QUERY_SETTINGS,
   });
-  const auth = useMemo(
-    () => authStateFromUser(identity.data ?? null),
-    [identity.data],
-  );
+  const auth = useMemo(() => identity.data === undefined && identity.isFetching
+    ? { user: null, status: "resolving", hasRole: () => false } satisfies AuthState
+    : authStateFromUser(identity.data ?? null), [identity.data, identity.isFetching]);
   return {
     auth,
     fetching: identity.isFetching,

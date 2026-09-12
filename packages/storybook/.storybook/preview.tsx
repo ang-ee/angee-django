@@ -4,12 +4,19 @@ import {
 import type {
   Decorator,
   Preview } from "@storybook/react-vite";
-import { withThemeByDataAttribute } from "@storybook/addon-themes";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import {
+  AppearanceProvider,
   AppRuntimeProvider,
+  defineThemeContribution,
   type AppRuntime,
   } from "@angee/ui";
+import { themes as auroraThemes } from "@angee/theme-aurora/themes";
+import { themes as brandThemes } from "@angee/theme-brand/themes";
+import { themes as carbonThemes } from "@angee/theme-carbon/themes";
+import { themes as midnightThemes } from "@angee/theme-midnight/themes";
+import { themes as stockThemes } from "@angee/theme-stock/themes";
+import { themes as warmRedThemes } from "@angee/theme-warm-red/themes";
 import {
   ActiveGraphQLSchemaProvider,
 } from "@angee/metadata";
@@ -31,6 +38,16 @@ import {
 } from "@tanstack/react-router";
 
 import "../src/storybook.css";
+import "@angee/theme-aurora/styles";
+
+const previewThemes = [
+  stockThemes[0],
+  carbonThemes[0],
+  auroraThemes[0],
+  midnightThemes[0],
+  warmRedThemes[0],
+  brandThemes[0],
+].map((definition) => defineThemeContribution({ definition }));
 
 // Stories read auth from the runtime (the ui-owned seam); no app-level auth
 // provider is mounted in the preview.
@@ -45,6 +62,7 @@ const previewRuntime = {
     status: "authenticated" as const,
     hasRole: () => true,
   },
+  themes: previewThemes,
 } satisfies Partial<AppRuntime>;
 
 const previewResources: ResourceProps[] = [
@@ -109,22 +127,35 @@ const withAngeeProviders: Decorator = (Story, context) => {
   const rootRoute = createRootRoute({
     component: () => (
       <AppRuntimeProvider runtime={previewRuntime}>
-        <Refine
-          dataProvider={previewDataProviders}
-          resources={resources}
-          routerProvider={tanStackRouterProvider}
-          options={{ syncWithLocation: false }}
+        <AppearanceProvider
+          host={{
+            themeId: typeof context.globals.themeId === "string"
+              ? context.globals.themeId
+              : "angee.stock",
+            colorScheme: context.globals.colorScheme === "dark"
+              ? "dark"
+              : context.globals.colorScheme === "light"
+                ? "light"
+                : "system",
+          }}
         >
-          <ActiveGraphQLSchemaProvider schema="public">
-            <ModelMetadataProvider>
-              <NuqsTestingAdapter>
-                <ToastProvider>
-                  <Outlet />
-                </ToastProvider>
-              </NuqsTestingAdapter>
-            </ModelMetadataProvider>
-          </ActiveGraphQLSchemaProvider>
-        </Refine>
+          <Refine
+            dataProvider={previewDataProviders}
+            resources={resources}
+            routerProvider={tanStackRouterProvider}
+            options={{ syncWithLocation: false }}
+          >
+            <ActiveGraphQLSchemaProvider schema="public">
+              <ModelMetadataProvider>
+                <NuqsTestingAdapter>
+                  <ToastProvider>
+                    <Outlet />
+                  </ToastProvider>
+                </NuqsTestingAdapter>
+              </ModelMetadataProvider>
+            </ActiveGraphQLSchemaProvider>
+          </Refine>
+        </AppearanceProvider>
       </AppRuntimeProvider>
     ),
   });
@@ -169,6 +200,39 @@ function previewMenuResource(
 }
 
 const preview: Preview = {
+  globalTypes: {
+    themeId: {
+      name: "Theme",
+      description: "Installed Angee theme",
+      defaultValue: "angee.stock",
+      toolbar: {
+        icon: "paintbrush",
+        items: [
+          { value: "angee.stock", title: "Stock" },
+          { value: "angee.carbon", title: "Carbon" },
+          { value: "angee.aurora", title: "Aurora" },
+          { value: "angee.midnight", title: "Midnight" },
+          { value: "angee.warm-red", title: "Warm Red" },
+          { value: "angee.brand", title: "Brand" },
+        ],
+        dynamicTitle: true,
+      },
+    },
+    colorScheme: {
+      name: "Color scheme",
+      description: "Light, dark, or device scheme",
+      defaultValue: "light",
+      toolbar: {
+        icon: "contrast",
+        items: [
+          { value: "light", title: "Light" },
+          { value: "dark", title: "Dark" },
+          { value: "system", title: "System" },
+        ],
+        dynamicTitle: true,
+      },
+    },
+  },
   parameters: {
     layout: "padded",
     backgrounds: { disable: true },
@@ -193,14 +257,7 @@ const preview: Preview = {
       },
     },
   },
-  decorators: [
-    withThemeByDataAttribute({
-      themes: { Light: "light", Dark: "dark" },
-      defaultTheme: "Light",
-      attributeName: "data-theme",
-    }),
-    withAngeeProviders,
-  ],
+  decorators: [withAngeeProviders],
 };
 
 export default preview;

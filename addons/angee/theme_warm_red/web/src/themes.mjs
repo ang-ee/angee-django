@@ -1,0 +1,6 @@
+import { defineTheme } from "@angee/ui/theme-runtime";
+export const themes = [defineTheme({ contractVersion: 1, id: "angee.warm-red", labelKey: "warmRed.label", descriptionKey: "warmRed.description", revision: 1, tokens: {
+  shared: { "--r-4": "5px", "--r-6": "7px", "--r-8": "9px", "--r-10": "12px", "--r-12": "15px" },
+  light: { "--surface-canvas": "#fff8f5", "--surface-sheet": "#ffffff", "--surface-sheet-2": "#fdefe9", "--surface-rail": "#351814", "--surface-rail-hi": "#5a2921", "--text-primary": "#321b18", "--text-secondary": "#6c4039", "--text-muted": "#8d655e", "--border-subtle": "#f1ddd7", "--border-default": "#dfbfb6", "--border-strong": "#c49285", "--brand": "#c24131", "--brand-hover": "#a63327", "--brand-active": "#7f251d", "--brand-soft": "#fee2dc", "--brand-soft-text": "#922f24", "--text-link": "#aa3529" },
+  dark: { "--surface-canvas": "#1c0e0c", "--surface-sheet": "#291411", "--surface-sheet-2": "#371b17", "--surface-rail": "#120806", "--surface-rail-hi": "#4b211b", "--text-primary": "#fff1ed", "--text-secondary": "#e4beb5", "--text-muted": "#b98e84", "--border-subtle": "#47231d", "--border-default": "#633128", "--border-strong": "#87473b", "--brand": "#ff8877", "--brand-hover": "#ffa79a", "--brand-active": "#ffc8bf", "--brand-soft": "#5a2018", "--brand-soft-text": "#ffc2b7", "--text-link": "#ff9c8d" },
+} })];

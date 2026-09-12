@@ -1,0 +1,29 @@
+export type ColorSchemePreference = "light" | "dark" | "system";
+export type ColorScheme = Exclude<ColorSchemePreference, "system">;
+export type ThemeTokenName =
+  | "--surface-canvas" | "--surface-sheet" | "--surface-sheet-2" | "--surface-rail" | "--surface-rail-hi"
+  | "--surface-popover" | "--surface-inset" | "--text-primary" | "--text-secondary" | "--text-muted"
+  | "--text-subtle" | "--text-inverse" | "--text-on-rail" | "--text-on-rail-mut" | "--text-on-rail-hi"
+  | "--text-on-brand" | "--text-link" | "--border-subtle" | "--border-default" | "--border-strong"
+  | "--border-focus" | "--border-on-rail" | "--brand" | "--brand-hover" | "--brand-active" | "--brand-soft"
+  | "--brand-soft-text" | "--accent" | "--accent-soft" | "--accent-soft-text" | "--success-soft" | "--success-text"
+  | "--warning-soft" | "--warning-text" | "--danger-soft" | "--danger-text" | "--info-soft" | "--info-text"
+  | "--ring" | "--ring-danger" | "--font-family-sans" | "--font-family-mono" | "--r-2" | "--r-4" | "--r-6" | "--r-8"
+  | "--r-10" | "--r-12" | "--r-full" | "--rail-w" | "--topbar-h" | "--controlpanel-h" | "--chatter-w"
+  | "--control-h-sm" | "--control-h-md" | "--control-h-lg";
+export type TokenLayer = Partial<Record<ThemeTokenName, string>>;
+export interface ThemeTokenLayers { shared: TokenLayer; light: TokenLayer; dark: TokenLayer }
+export interface ThemeOptionsEnvelope { version: number; value: unknown }
+export interface ThemeOptionsDefinition<TOptions> { version: number; defaults: TOptions; parse(value: unknown): TOptions; migrate?(value: unknown, fromVersion: number): TOptions; resolve(value: TOptions): Partial<ThemeTokenLayers> }
+export interface ThemeDefinition<TOptions = Record<string, never>> { contractVersion: 1; id: string; labelKey: string; descriptionKey: string; revision: number; tokens: ThemeTokenLayers; stylesheets?: readonly string[]; options?: ThemeOptionsDefinition<TOptions> }
+export interface ResolvedThemeOptions<TOptions = unknown> { version: number; value: TOptions; tokens: ThemeTokenLayers }
+export interface SerializableThemeMetadata { contractVersion: 1; id: string; labelKey: string; descriptionKey: string; revision: number; optionsVersion: number | null; optionDefaults: unknown }
+export const THEME_CONTRACT_VERSION: 1;
+export const THEME_ID_PATTERN: RegExp;
+export const THEME_TOKEN_NAMES: readonly ThemeTokenName[];
+export function defineTheme<TOptions>(definition: ThemeDefinition<TOptions>): ThemeDefinition<TOptions>;
+export function assertThemeDefinition(value: unknown): ThemeDefinition<unknown>;
+export function assertThemeCatalogue(definitions: readonly ThemeDefinition<unknown>[]): ThemeDefinition<unknown>[];
+export function resolveThemeOptions<TOptions>(definition: ThemeDefinition<TOptions>, envelope?: ThemeOptionsEnvelope | null): ResolvedThemeOptions<TOptions>;
+export function compileThemeCss(definitions: readonly ThemeDefinition<unknown>[]): string;
+export function serializableThemeMetadata(definition: ThemeDefinition<unknown>): SerializableThemeMetadata;

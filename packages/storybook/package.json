@@ -17,6 +17,12 @@
   "dependencies": {
     "@angee/refine": "workspace:*",
     "@angee/metadata": "workspace:*",
+    "@angee/theme-aurora": "workspace:*",
+    "@angee/theme-brand": "workspace:*",
+    "@angee/theme-carbon": "workspace:*",
+    "@angee/theme-midnight": "workspace:*",
+    "@angee/theme-stock": "workspace:*",
+    "@angee/theme-warm-red": "workspace:*",
     "@angee/ui": "workspace:*",
     "@refinedev/core": "^5.0.12",
     "nuqs": "^2.5.0",
@@ -25,7 +31,6 @@
     "react-hook-form": "^7.81.0"
   },
   "devDependencies": {
-    "@storybook/addon-themes": "^10.4.6",
     "@storybook/react-vite": "^10.4.6",
     "@tailwindcss/vite": "^4.3.1",
     "@tanstack/react-router": "^1.170.16",

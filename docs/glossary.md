@@ -217,6 +217,24 @@ before copying or forking a component.
 **Token** — a semantic styling value (Tailwind). Theme by overriding tokens rather
 than passing color props or one-off variants.
 
+**Theme** — a named visual implementation contributed by an installed addon.
+It may provide semantic token layers, bounded options, scoped CSS and bundled
+assets. Its stable ID is stored as an appearance preference.
+
+**Theme addon** — the ordinary Angee addon that distributes one or more themes.
+Installing it adds choices to the composed catalogue; installation does not
+activate a theme.
+
+**Appearance** — the effective presentation and the user or host settings that
+select it: a theme, a color-scheme preference and that theme's supported options.
+
+**Color scheme** — the light or dark rendering of a theme. A preference may be
+`light`, `dark` or `system`; the resolved DOM state is always `light` or `dark`.
+
+**Template** — a reusable scaffold or content/layout structure, such as a
+project template or dashboard template. A visual design selected at runtime is
+a theme rather than a template.
+
 **Rendered binding** — the single rendered (styled) Angee binding over Refine
 state, owned by `@angee/ui`.
 

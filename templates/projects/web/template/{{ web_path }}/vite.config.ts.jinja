@@ -12,4 +12,11 @@ import { defineAngeeWebViteConfig } from "@angee/app/vite";
 export default defineAngeeWebViteConfig({
   prebundleAngeePackages: true,
   gqlRuntimeDir: fileURLToPath(new URL("../runtime/gql/", import.meta.url)),
+  appearance: {
+    themeId: {% if appearance_theme_id %}"{{ appearance_theme_id }}"{% else %}null{% endif %},
+    colorScheme: "{{ appearance_color_scheme }}",
+{% if appearance_options %}
+    options: {{ appearance_options }},
+{% endif %}
+  },
 });

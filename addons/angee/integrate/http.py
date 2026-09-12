@@ -26,9 +26,12 @@ following stays safe.
 from __future__ import annotations
 
 import ssl
+import time
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any
+from urllib.parse import urljoin
 
 import httpcore
 import httpx
@@ -45,6 +48,44 @@ _DOWNLOAD_CHUNK_BYTES = 64 * 1024
 _SSL_CONTEXT = ssl.create_default_context()
 """One shared system-trust-store TLS context reused by every pinned transport, so the
 CA bundle is parsed once rather than on every outbound request."""
+
+
+@dataclass(frozen=True, slots=True)
+class OutboundBudget:
+    """Hard bounds for one redirecting, decoded outbound download."""
+
+    requests: int = 5
+    redirects: int = 4
+    bytes: int = 512 * 1024
+    deadline_seconds: float = 10.0
+
+    def __post_init__(self) -> None:
+        if self.requests < 1 or self.redirects < 0 or self.bytes < 1 or self.deadline_seconds <= 0:
+            raise ValueError("Outbound budget values must be positive (redirects may be zero).")
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadResult:
+    """Successful bounded download with the final validated response facts."""
+
+    content: bytes
+    final_url: str
+    content_type: str
+    status_code: int
+
+
+@dataclass(slots=True)
+class OutboundBudgetState:
+    """Mutable accounting shared by every download in one outbound operation."""
+
+    budget: OutboundBudget
+    started: float = field(default_factory=time.monotonic)
+    requests: int = 0
+    redirects: int = 0
+    bytes: int = 0
+
+    def remaining_seconds(self) -> float:
+        return self.budget.deadline_seconds - (time.monotonic() - self.started)
 
 
 class _PinnedBackend(httpcore.SyncBackend):
@@ -163,35 +204,95 @@ class HttpClient:
 
         if cap <= 0:
             return None
-        parse_http_url(url)
-        with httpx.Client(
-            transport=PinnedTransport(allow_private=allow_private),
-            timeout=timeout,
-        ) as client:
-            with client.stream(
-                "GET",
-                url,
-                headers=_without_host(headers),
-                follow_redirects=follow_redirects,
-            ) as response:
-                if not response.is_success:
-                    return None
-                try:
-                    content_length = int(response.headers.get("content-length") or 0)
-                except ValueError:
-                    content_length = 0
-                if content_length > cap:
-                    return None
-                chunks: list[bytes] = []
-                size = 0
-                for chunk in response.iter_bytes(
-                    chunk_size=min(_DOWNLOAD_CHUNK_BYTES, cap + 1),
-                ):
-                    size += len(chunk)
-                    if size > cap:
+        result = self.download_bounded(
+            url,
+            headers=headers,
+            allow_private=allow_private,
+            budget=OutboundBudget(
+                requests=6 if follow_redirects else 1,
+                redirects=5 if follow_redirects else 0,
+                bytes=cap,
+                deadline_seconds=float(timeout),
+            ),
+        )
+        return result.content if result is not None else None
+
+    def download_bounded(
+        self,
+        url: str,
+        *,
+        budget: OutboundBudget = OutboundBudget(),
+        budget_state: OutboundBudgetState | None = None,
+        max_bytes: int | None = None,
+        max_redirects: int | None = None,
+        headers: dict[str, str] | None = None,
+        allow_private: bool = False,
+    ) -> DownloadResult | None:
+        """Download decoded bytes within one explicit request/redirect/deadline budget.
+
+        Redirects are followed manually so every location re-enters URL parsing,
+        DNS validation and the pinned transport while request and hop counts remain
+        visible. ``iter_bytes`` enforces the cap after content decoding.
+        """
+
+        if max_bytes is not None and max_bytes < 1:
+            raise ValueError("max_bytes must be positive when provided.")
+        if max_redirects is not None and max_redirects < 0:
+            raise ValueError("max_redirects may not be negative.")
+        state = budget_state or OutboundBudgetState(budget)
+        if state.budget != budget:
+            raise ValueError("A shared outbound budget state must use the supplied budget.")
+        current = url
+        response_bytes = 0
+        response_redirects = 0
+        redirect_limit = budget.redirects if max_redirects is None else max_redirects
+        while True:
+            parse_http_url(current)
+            remaining = state.remaining_seconds()
+            if remaining <= 0 or state.requests >= budget.requests:
+                return None
+            state.requests += 1
+            with httpx.Client(
+                transport=PinnedTransport(allow_private=allow_private),
+                timeout=min(float(HTTP_TIMEOUT_SECONDS), remaining),
+            ) as client:
+                with client.stream(
+                    "GET",
+                    current,
+                    headers=_without_host(headers),
+                    follow_redirects=False,
+                ) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        location = response.headers.get("location")
+                        if not location or response_redirects >= redirect_limit or state.redirects >= budget.redirects:
+                            return None
+                        response_redirects += 1
+                        state.redirects += 1
+                        current = urljoin(str(response.url), location)
+                        continue
+                    if not response.is_success:
                         return None
-                    chunks.append(chunk)
-                return b"".join(chunks)
+                    chunks: list[bytes] = []
+                    remaining_bytes = budget.bytes - state.bytes
+                    if remaining_bytes <= 0:
+                        return None
+                    response_limit = min(remaining_bytes, max_bytes) if max_bytes is not None else remaining_bytes
+                    for chunk in response.iter_bytes(
+                        chunk_size=min(_DOWNLOAD_CHUNK_BYTES, response_limit + 1),
+                    ):
+                        if state.remaining_seconds() <= 0:
+                            return None
+                        response_bytes += len(chunk)
+                        state.bytes += len(chunk)
+                        if response_bytes > response_limit or state.bytes > budget.bytes:
+                            return None
+                        chunks.append(chunk)
+                    return DownloadResult(
+                        content=b"".join(chunks),
+                        final_url=str(response.url),
+                        content_type=response.headers.get("content-type", ""),
+                        status_code=response.status_code,
+                    )
 
     def post(
         self,

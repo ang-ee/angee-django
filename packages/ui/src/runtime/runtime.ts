@@ -24,6 +24,7 @@ import {
   createRouteHref,
   type RouteHref,
 } from "./route-href";
+import type { ThemeContribution } from "../theme";
 
 export const DEFAULT_LOGIN_PATH = "/login";
 
@@ -67,6 +68,8 @@ export interface AppRuntime {
   routeHref: RouteHref;
   /** App-owned sign-in destination shared by auth gates and chrome. */
   loginPath: string;
+  /** Installed theme catalogue composed from addon contributions. */
+  themes: readonly ThemeContribution[];
 }
 
 export interface RuntimeI18n {
@@ -92,7 +95,7 @@ export interface RuntimeAuthUser {
 
 export interface RuntimeAuthState {
   user: RuntimeAuthUser | null;
-  status: "anonymous" | "authenticated";
+  status: "resolving" | "anonymous" | "authenticated";
   hasRole: (role: string) => boolean;
 }
 
@@ -145,6 +148,7 @@ const EMPTY_RUNTIME: AppRuntime = {
   routesByResource: {},
   routeHref: createRouteHref([]),
   loginPath: DEFAULT_LOGIN_PATH,
+  themes: [],
 };
 
 const RuntimeContext = makeContext<AppRuntime>("AppRuntime");

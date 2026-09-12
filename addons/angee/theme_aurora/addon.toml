@@ -1,0 +1,6 @@
+[addon]
+name = "angee.theme_aurora"
+description = "A soft, luminous visual theme for Angee"
+keywords = ["theme", "appearance", "aurora"]
+category = "User interface"
+depends_on = []

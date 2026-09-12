@@ -100,6 +100,9 @@ _angee:
         addons_profile: "${inputs.addons_profile}"
         include_arp: "${inputs.include_arp}"
         framework_workspace: true
+        appearance_theme_id: "${inputs.appearance_theme_id}"
+        appearance_color_scheme: "${inputs.appearance_color_scheme}"
+        appearance_options: "${inputs.appearance_options}"
         # The rendered pyproject resolves django-angee editable from the same
         # slot the stack's processes run, so `uv run manage.py` works bare from
         # the stack root with no --project flag.
@@ -176,6 +179,25 @@ addons_profile:
     - base
     - full
   help: Addon roster for the host — base (consumer scaffold) or full (the whole platform composition incl. external bridges + in-tree examples).
+
+appearance_theme_id:
+  type: str
+  default: angee.stock
+  help: Stable ID of the installed host-default theme; empty selects the intrinsic base look.
+
+appearance_color_scheme:
+  type: str
+  default: system
+  choices:
+    - system
+    - light
+    - dark
+  help: Host-default color-scheme preference.
+
+appearance_options:
+  type: str
+  default: ""
+  help: Optional JSON object with `version` and `value` for the configured host theme; empty uses the theme defaults.
 
 # Stack source name for the src workspace's private work-state slot. Empty (the
 # default) renders no work-state wiring — a clean-machine stack must not depend

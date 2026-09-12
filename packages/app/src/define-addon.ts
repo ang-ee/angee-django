@@ -31,6 +31,10 @@ import type {
   WidgetMap,
 } from "@angee/ui/runtime";
 import { RECORD_SEARCH_KEYS, isModelScopedSlot } from "@angee/ui/runtime";
+import {
+  assertThemeDefinition,
+  type ThemeDefinition,
+} from "@angee/ui/theme";
 
 export type {
   ChatterContribution,
@@ -95,7 +99,13 @@ export interface AddonManifest {
    * endpoint (e.g. the operator daemon) under its own provider name.
    */
   dataProviders?: Readonly<Record<string, unknown>>;
+  /** Installed visual implementations. Theme ids are globally unique. */
+  themes?: readonly ThemeManifestContribution[];
 }
+
+export type ThemeManifestContribution =
+  | ThemeDefinition<unknown>
+  | { definition: ThemeDefinition<unknown> };
 
 /** The merged runtime an app composes from its addon manifests. */
 export interface ComposedAddons {
@@ -111,6 +121,7 @@ export interface ComposedAddons {
   recordSearchKeys: readonly string[];
   drawers: readonly DrawerContribution[];
   dataProviders: Readonly<Record<string, unknown>>;
+  themes: readonly ThemeManifestContribution[];
 }
 
 export interface ComposeAddonsOptions {
@@ -224,8 +235,19 @@ export function composeAddons(
   const menuIds: Record<string, true> = {};
   const previewIds: Record<string, true> = {};
   const recordSearchKeys: Record<string, true> = {};
+  const themes: ThemeManifestContribution[] = [];
+  const themeIds: Record<string, true> = {};
 
   for (const addon of addons) {
+    for (const contribution of addon.themes ?? []) {
+      const definition = "definition" in contribution
+        ? contribution.definition
+        : contribution;
+      assertThemeDefinition(definition);
+      assertUnclaimed(themeIds, definition.id, addon.id, "theme id");
+      themeIds[definition.id] = true;
+      themes.push(contribution);
+    }
     for (const key of addon.recordSearchKeys ?? []) {
       if (!key || RECORD_SEARCH_KEYS.includes(key)) {
         throw new Error(`Addon "${addon.id}" declares reserved or empty record search key "${key}".`);
@@ -324,6 +346,11 @@ export function composeAddons(
     drawers: mergeDrawerContributions(...addons.map((a) => a.drawers ?? [])),
     previews,
     recordSearchKeys: Object.keys(recordSearchKeys).sort(),
+    themes: themes.sort((left, right) => {
+      const leftId = "definition" in left ? left.definition.id : left.id;
+      const rightId = "definition" in right ? right.definition.id : right.id;
+      return leftId.localeCompare(rightId);
+    }),
   };
 }
 

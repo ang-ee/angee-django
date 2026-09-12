@@ -9,6 +9,22 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — theme addons and Appearance
+
+- Themes are ordinary addons with pure headless definitions, optional scoped
+  CSS/assets and bounded versioned options. The composer rejects duplicate IDs
+  and codegen emits a deterministic catalogue and theme stylesheet.
+- The host injects its validated appearance default before application code.
+  Signed-in users persist theme, color scheme and supported inputs in the IAM
+  preference document through one shared Appearance provider.
+- `data-color-scheme` and the color-scheme APIs are canonical. The old
+  `data-theme=light|dark` attribute and `lib/theme` exports remain compatibility
+  mirrors for one deprecation cycle and will be removed at the next breaking
+  release.
+- Existing projects must update their project template and run the normal
+  `angee build` plus web build so the explicit CSS entry, generated catalogue,
+  virtual host defaults and synchronous head bootstrap are present.
+
 ## Unreleased — Inbox query performance
 
 - Personal inbox feeds deduplicate only when text search introduces multiplying

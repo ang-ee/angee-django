@@ -30,8 +30,20 @@ ALLOWED_HOSTS:jsonenv: true
 {% endif %}
 INSTALLED_APPS:
   - angee.iam
+  # The stock theme is an ordinary addon. Appearance owns personal selection
+  # and settings while the renderer remains usable if either addon is removed.
+  - angee.theme_stock
+  - angee.appearance
   - angee.resources
 {% if addons_profile == "full" %}
+  # The full framework profile exercises the complete installed theme catalogue,
+  # configurable branding and its optional website-facts bridge.
+  - angee.theme_carbon
+  - angee.theme_aurora
+  - angee.theme_midnight
+  - angee.theme_warm_red
+  - angee.theme_brand
+  - angee.appearance_integrate
   - angee.integrate_iphone
 {% endif %}
   - angee.storage
@@ -109,6 +121,8 @@ INSTALLED_APPS:
   - angee.messaging_integrate_discord
   # Framework notes example, referenced in place from the monorepo examples tree.
   - example.notes
+  # Consumer-owned theme authoring example, with no privileged framework imports.
+  - example.theme
 {% endif %}
 
 ANGEE_ADDON_DIRS:
