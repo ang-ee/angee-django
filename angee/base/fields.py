@@ -14,7 +14,8 @@ row stores one finite binary64 rank; its model defines the surrounding context
 and must enforce ``UniqueConstraint(fields=(*context_fields, rank_field))``
 (``nulls_distinct=False`` when a context field is nullable). Append with
 ``get_append_rank(last_rank)`` and insert or move with
-``get_rank_between(previous_rank, next_rank)``. Ranks start and rebalance at
+``get_rank_between(previous_rank, next_rank)``; a saved row moved into a context
+where another row holds its rank is re-appended there. Ranks start and rebalance at
 ``1024.0`` intervals, a power-of-two spread whose midpoints stay exact until the
 available binary64 values are genuinely exhausted. ``FractionalRankExhausted``
 is the signal to enqueue the durable ``jobs.rebalance_fractional_ranks`` task
@@ -279,11 +280,28 @@ class FractionalRankField(models.FloatField):
             return
         super().validate(value, model_instance)
 
+    def clean(self, value: Any, model_instance: models.Model) -> float | None:
+        """Release a rank that a moved row carried into a context already holding it.
+
+        Validation runs before ``pre_save``, so returning the pending ``None`` keeps the
+        context's unique constraint from rejecting the move and lets ``pre_save``
+        append the row in its new context.
+        """
+
+        rank = super().clean(value, model_instance)
+        if rank is not None and self._carried_into_taken_rank(model_instance, rank):
+            return None
+        return rank
+
     def pre_save(self, model_instance: models.Model, add: bool) -> float:
-        """Honor an explicit rank or append within the model's unique context."""
+        """Honor an explicit rank or append within the model's unique context.
+
+        A row moved into another context without a new rank still holds its old one;
+        when another row there holds that rank, the moved row appends instead.
+        """
 
         value = super().pre_save(model_instance, add)
-        if value is not None:
+        if value is not None and not self._carried_into_taken_rank(model_instance, value):
             return cast(float, value)
         rank = self._append_rank_for_instance(model_instance)
         setattr(model_instance, self.attname, rank)
@@ -308,24 +326,52 @@ class FractionalRankField(models.FloatField):
         )
         return self.get_append_rank(previous)
 
+    def _carried_into_taken_rank(self, instance: models.Model, rank: float) -> bool:
+        """Return whether a saved row kept its stored rank into a context that holds it.
+
+        Inserts and explicitly changed ranks stay with the unique constraint, which
+        arbitrates concurrent writers; only a rank this write did not touch is released.
+        """
+
+        model = type(instance)
+        constraint = self._unique_context_constraint(model)
+        if instance._state.adding or constraint is None:
+            return False
+        context = {
+            context_field.attname: getattr(instance, context_field.attname)
+            for context_field in self._unique_context_fields(model)
+        }
+        database = router.db_for_write(model, instance=instance)
+        rows = system_queryset(model, using=database, lock=())
+        holders = rows.filter(**context, **{self.attname: rank}).exclude(pk=instance.pk)
+        if constraint.condition is not None:
+            holders = holders.filter(constraint.condition)
+        return holders.exists() and rows.filter(pk=instance.pk, **{self.attname: rank}).exists()
+
+    def _unique_context_constraint(self, model: type[models.Model]) -> models.UniqueConstraint | None:
+        """Return the one field-based unique constraint declaring this rank, if exactly one does."""
+
+        constraints = [
+            constraint
+            for constraint in model._meta.constraints
+            if isinstance(constraint, models.UniqueConstraint)
+            and self.name in constraint.fields
+        ]
+        return constraints[0] if len(constraints) == 1 else None
+
     def _unique_context_fields(
         self,
         model: type[models.Model],
     ) -> tuple[models.Field[Any, Any], ...]:
         """Resolve the one field-based unique context declaring this rank."""
 
-        contexts = [
-            tuple(name for name in constraint.fields if name != self.name)
-            for constraint in model._meta.constraints
-            if isinstance(constraint, models.UniqueConstraint)
-            and self.name in constraint.fields
-        ]
-        if len(contexts) != 1:
+        constraint = self._unique_context_constraint(model)
+        if constraint is None:
             raise ImproperlyConfigured(
                 f"{model._meta.label}.{self.name} must belong to exactly one "
                 "field-based UniqueConstraint so a missing rank can be allocated."
             )
-        return tuple(model._meta.get_field(name) for name in contexts[0])
+        return tuple(model._meta.get_field(name) for name in constraint.fields if name != self.name)
 
     def to_python(self, value: Any) -> float | None:
         """Coerce a rank and reject NaN or infinity at validation boundaries."""
