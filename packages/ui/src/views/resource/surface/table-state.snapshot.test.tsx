@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render } from "@testing-library/react";
-import * as React from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { useResourceRowsSnapshot } from "./table-state";
