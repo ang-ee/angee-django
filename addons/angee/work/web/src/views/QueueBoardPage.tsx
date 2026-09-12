@@ -46,7 +46,7 @@ export function QueueBoardPage(): React.ReactElement {
         title={t("board.title", { queue: name })}
         description={t("board.description")}
       />
-      <PageBody gutter="none" scroll="hidden">
+      <PageBody gutter="none" scroll="hidden" className="flex flex-col">
         {queue.error ? <ErrorBanner description={queue.error.message} /> : null}
         <TaskBoardSurface<WorkTaskRow> createDefaults={createDefaults}>
           <List<WorkTaskRow>

@@ -64,7 +64,7 @@ export function CycleBoardPage(): React.ReactElement {
           ) : null
         }
       />
-      <PageBody gutter="none" scroll="hidden">
+      <PageBody gutter="none" scroll="hidden" className="flex flex-col">
         {queue.error || cycle.error ? (
           <ErrorBanner description={(queue.error ?? cycle.error)?.message} />
         ) : null}
