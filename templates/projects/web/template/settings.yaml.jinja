@@ -30,14 +30,17 @@ ALLOWED_HOSTS:jsonenv: true
 {% endif %}
 INSTALLED_APPS:
   - angee.iam
-  # The stock theme is an ordinary addon. Appearance owns personal selection
-  # and settings while the renderer remains usable if either addon is removed.
+  # Default is the original blue application palette. Its stable theme id is
+  # `angee.stock`; Appearance owns personal selection and settings while the
+  # renderer remains usable if either addon is removed.
   - angee.theme_stock
   - angee.appearance
   - angee.resources
 {% if addons_profile == "full" %}
   # The full framework profile exercises the complete installed theme catalogue,
   # configurable branding and its optional website-facts bridge.
+  - angee.theme_angee
+  - angee.theme_fyltr
   - angee.theme_carbon
   - angee.theme_aurora
   - angee.theme_midnight

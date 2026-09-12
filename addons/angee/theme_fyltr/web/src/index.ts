@@ -1,13 +1,15 @@
 import { defineBaseAddon } from "@angee/app";
 import { defineThemeContribution } from "@angee/ui/theme";
+
 import { themes } from "./themes.mjs";
+
 export default defineBaseAddon({
-  id: "theme.stock",
+  id: "theme.fyltr",
   themes: [defineThemeContribution({ definition: themes[0] })],
   i18n: {
     themes: {
-      "stock.label": "Default",
-      "stock.description": "The original blue Angee application palette.",
+      "fyltr.label": "Fyltr",
+      "fyltr.description": "The fyltr.ai green identity on sovereign charcoal surfaces.",
     },
   },
 });
