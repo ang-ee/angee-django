@@ -127,6 +127,19 @@ class OcrEngine(ImplBase):
 
         raise NotImplementedError
 
+    def map_text_parts(
+        self,
+        parts: Sequence[DocumentPart],
+        schema: dict[str, Any],
+        *,
+        model: Any | None,
+        config: dict[str, Any],
+        timeout: float,
+    ) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], dict[str, Any]]:
+        """Map retained text evidence into a schema candidate with source claims."""
+
+        raise NotImplementedError
+
 
 class NoOcrEngine(OcrEngine):
     """Disabled provider: fails explicitly without fabricating evidence."""
