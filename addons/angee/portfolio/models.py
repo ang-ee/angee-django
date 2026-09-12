@@ -673,7 +673,7 @@ class ProjectPortfolio(models.Model):
         db_index=True,
     )
     priority = models.IntegerField(default=0, db_index=True)
-    sort_order = FractionalRankField(default=FractionalRankField.STEP)
+    sort_order = FractionalRankField()
 
     class Meta:
         """Abstract donor options folded into the concrete Project table."""
