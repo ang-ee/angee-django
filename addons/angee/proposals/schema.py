@@ -99,6 +99,39 @@ class ProposalRoundType(AuthoredRefMixin, AngeeNode):
         return _user_id(cast(Any, self).closed_by_id)
 
 
+@strawberry_django.type(Round)
+class ConsoleProposalRoundType(AuthoredRefMixin, AngeeNode):
+    """Console round projection with a label-bearing facilitator relation."""
+
+    name: auto
+    opening_policy: auto
+    status: auto
+    outcome: auto
+    last_call_at: auto
+    submission_deadline: auto
+    opened_at: auto
+    closed_at: auto
+    created_at: auto
+    updated_at: auto
+
+    task: TaskType | None = actor_scoped_to_one("task")
+    project: ProjectType | None = actor_scoped_to_one("project")
+    requester_party: PartyType | None = actor_scoped_to_one("requester_party")
+    facilitator: UserType | None = actor_scoped_to_one("facilitator")
+
+    @strawberry_django.field(only=["opened_by_id"])
+    def opened_by(self) -> strawberry.ID | None:
+        """Return the opening actor's public id."""
+
+        return _user_id(cast(Any, self).opened_by_id)
+
+    @strawberry_django.field(only=["closed_by_id"])
+    def closed_by(self) -> strawberry.ID | None:
+        """Return the closing actor's public id."""
+
+        return _user_id(cast(Any, self).closed_by_id)
+
+
 @strawberry_django.type(Topic)
 class ProposalTopicType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of one stable comparison topic."""
@@ -176,7 +209,7 @@ class ConsoleProposalType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
 
-    round: ProposalRoundType | None = actor_scoped_to_one("round")
+    round: ConsoleProposalRoundType | None = actor_scoped_to_one("round")
     party: PartyType | None = actor_scoped_to_one("party")
     source_message: MessageType | None = actor_scoped_to_one("source_message")
     track: ProjectType | None = actor_scoped_to_one("track")
@@ -223,6 +256,18 @@ class ProposalReviewType(AuthoredRefMixin, AngeeNode):
         """Return the reviewer's public id."""
 
         return _user_id(cast(Any, self).reviewer_id)
+
+
+@strawberry_django.type(Review)
+class ConsoleProposalReviewType(AuthoredRefMixin, AngeeNode):
+    """Console review projection with a label-bearing reviewer relation."""
+
+    body: auto
+    created_at: auto
+    updated_at: auto
+
+    proposal: ConsoleProposalType | None = actor_scoped_to_one("proposal")
+    reviewer: UserType | None = actor_scoped_to_one("reviewer")
 
 
 @strawberry.type
@@ -365,68 +410,75 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Proposal captured.", id=proposal.sqid)
 
 
-_ROUND_RESOURCE = hasura_model_resource(
-    ProposalRoundType,
-    model=Round,
-    name="proposal_rounds",
-    filterable=[
-        "id",
-        "task",
-        "project",
-        "name",
-        "facilitator",
-        "requester_party",
-        "opening_policy",
-        "status",
-        "outcome",
-        "last_call_at",
-        "submission_deadline",
-        "opened_at",
-        "opened_by",
-        "closed_at",
-        "closed_by",
-        "created_at",
-        "updated_at",
-    ],
-    sortable=[
-        "name",
-        "status",
-        "opening_policy",
-        "last_call_at",
-        "submission_deadline",
-        "opened_at",
-        "closed_at",
-        "created_at",
-        "updated_at",
-    ],
-    aggregatable=["id"],
-    groupable=["task", "project", "facilitator", "requester_party", "opening_policy", "status", "outcome"],
-    insertable=[
-        "task",
-        "project",
-        "name",
-        "facilitator",
-        "requester_party",
-        "opening_policy",
-        "status",
-        "last_call_at",
-        "submission_deadline",
-    ],
-    updatable=["name", "requester_party", "opening_policy", "last_call_at", "submission_deadline"],
-    field_id_decode={
-        "task": public_pk_decoder(Task),
-        "project": public_pk_decoder(Project),
-        "facilitator": public_pk_decoder(User),
-        "requester_party": public_pk_decoder(Party),
-        "opened_by": public_pk_decoder(User),
-        "closed_by": public_pk_decoder(User),
-    },
-    write_backend=AngeeHasuraWriteBackend(
-        Round,
-        public_id_fields=("task", "project", "facilitator", "requester_party"),
-        delete_guard=lambda instance: instance.deletion_error(),
-    ),
-)
+def _round_resource(node_type: type) -> Any:
+    """Build the same Round resource around one schema-specific node type."""
+
+    return hasura_model_resource(
+        node_type,
+        model=Round,
+        name="proposal_rounds",
+        filterable=[
+            "id",
+            "task",
+            "project",
+            "name",
+            "facilitator",
+            "requester_party",
+            "opening_policy",
+            "status",
+            "outcome",
+            "last_call_at",
+            "submission_deadline",
+            "opened_at",
+            "opened_by",
+            "closed_at",
+            "closed_by",
+            "created_at",
+            "updated_at",
+        ],
+        sortable=[
+            "name",
+            "status",
+            "opening_policy",
+            "last_call_at",
+            "submission_deadline",
+            "opened_at",
+            "closed_at",
+            "created_at",
+            "updated_at",
+        ],
+        aggregatable=["id"],
+        groupable=["task", "project", "facilitator", "requester_party", "opening_policy", "status", "outcome"],
+        insertable=[
+            "task",
+            "project",
+            "name",
+            "facilitator",
+            "requester_party",
+            "opening_policy",
+            "status",
+            "last_call_at",
+            "submission_deadline",
+        ],
+        updatable=["name", "requester_party", "opening_policy", "last_call_at", "submission_deadline"],
+        field_id_decode={
+            "task": public_pk_decoder(Task),
+            "project": public_pk_decoder(Project),
+            "facilitator": public_pk_decoder(User),
+            "requester_party": public_pk_decoder(Party),
+            "opened_by": public_pk_decoder(User),
+            "closed_by": public_pk_decoder(User),
+        },
+        write_backend=AngeeHasuraWriteBackend(
+            Round,
+            public_id_fields=("task", "project", "facilitator", "requester_party"),
+            delete_guard=lambda instance: instance.deletion_error(),
+        ),
+    )
+
+
+_PUBLIC_ROUND_RESOURCE = _round_resource(ProposalRoundType)
+_CONSOLE_ROUND_RESOURCE = _round_resource(ConsoleProposalRoundType)
 
 _TOPIC_RESOURCE = hasura_model_resource(
     ProposalTopicType,
@@ -535,62 +587,77 @@ _ANSWER_RESOURCE = hasura_model_resource(
     write_backend=AngeeHasuraWriteBackend(Answer, public_id_fields=("proposal", "topic")),
 )
 
-_REVIEW_RESOURCE = hasura_model_resource(
-    ProposalReviewType,
-    model=Review,
-    name="proposal_reviews",
-    filterable=["id", "proposal", "reviewer", "created_at", "updated_at"],
-    sortable=["reviewer", "proposal", "created_at", "updated_at"],
-    aggregatable=["id"],
-    groupable=["proposal", "reviewer"],
-    insertable=["proposal", "reviewer", "body"],
-    updatable=["body"],
-    field_id_decode={
-        "proposal": public_pk_decoder(Proposal),
-        "reviewer": public_pk_decoder(User),
-    },
-    write_backend=AngeeHasuraWriteBackend(Review, public_id_fields=("proposal", "reviewer")),
-)
+
+def _review_resource(node_type: type) -> Any:
+    """Build the same Review resource around one schema-specific node type."""
+
+    return hasura_model_resource(
+        node_type,
+        model=Review,
+        name="proposal_reviews",
+        filterable=["id", "proposal", "reviewer", "created_at", "updated_at"],
+        sortable=["reviewer", "proposal", "created_at", "updated_at"],
+        aggregatable=["id"],
+        groupable=["proposal", "reviewer"],
+        insertable=["proposal", "reviewer", "body"],
+        updatable=["body"],
+        field_id_decode={
+            "proposal": public_pk_decoder(Proposal),
+            "reviewer": public_pk_decoder(User),
+        },
+        write_backend=AngeeHasuraWriteBackend(Review, public_id_fields=("proposal", "reviewer")),
+    )
+
+
+_PUBLIC_REVIEW_RESOURCE = _review_resource(ProposalReviewType)
+_CONSOLE_REVIEW_RESOURCE = _review_resource(ConsoleProposalReviewType)
 
 _COMMON_RESOURCE_TYPES = [
-    *_ROUND_RESOURCE.types,
     *_TOPIC_RESOURCE.types,
     *_ANSWER_RESOURCE.types,
-    *_REVIEW_RESOURCE.types,
 ]
 
 
-def _proposals_schema_bucket(proposal_resource: Any, proposal_type: type) -> dict[str, Any]:
-    """Return the shared proposal surface with its schema-specific Proposal node."""
+def _proposals_schema_bucket(
+    proposal_resource: Any,
+    proposal_type: type,
+    round_resource: Any,
+    round_type: type,
+    review_resource: Any,
+    review_type: type,
+) -> dict[str, Any]:
+    """Return the shared proposal surface with its schema-specific Proposal, Round and Review nodes."""
 
     return {
         "query": [
-            _ROUND_RESOURCE.query,
+            round_resource.query,
             _TOPIC_RESOURCE.query,
             proposal_resource.query,
             _ANSWER_RESOURCE.query,
-            _REVIEW_RESOURCE.query,
+            review_resource.query,
         ],
         "mutation": [
             ProposalActionMutation,
-            _ROUND_RESOURCE.mutation,
+            round_resource.mutation,
             _TOPIC_RESOURCE.mutation,
             proposal_resource.mutation,
             _ANSWER_RESOURCE.mutation,
-            _REVIEW_RESOURCE.mutation,
+            review_resource.mutation,
         ],
         "types": [
-            ProposalRoundType,
+            round_type,
             ProposalTopicType,
             proposal_type,
             ProposalAnswerType,
-            ProposalReviewType,
+            review_type,
             ProjectType,
             TaskType,
             PartyType,
             MessageType,
             CurrencyType,
             *proposal_resource.types,
+            *round_resource.types,
+            *review_resource.types,
             *_COMMON_RESOURCE_TYPES,
         ],
     }
@@ -599,10 +666,18 @@ def _proposals_schema_bucket(proposal_resource: Any, proposal_type: type) -> dic
 _PUBLIC_PROPOSALS_SCHEMA_BUCKET = _proposals_schema_bucket(
     _PUBLIC_PROPOSAL_RESOURCE,
     ProposalType,
+    _PUBLIC_ROUND_RESOURCE,
+    ProposalRoundType,
+    _PUBLIC_REVIEW_RESOURCE,
+    ProposalReviewType,
 )
 _CONSOLE_PROPOSALS_SCHEMA_BUCKET = _proposals_schema_bucket(
     _CONSOLE_PROPOSAL_RESOURCE,
     ConsoleProposalType,
+    _CONSOLE_ROUND_RESOURCE,
+    ConsoleProposalRoundType,
+    _CONSOLE_REVIEW_RESOURCE,
+    ConsoleProposalReviewType,
 )
 _CONSOLE_PROPOSALS_SCHEMA_BUCKET["types"].append(UserType)
 
