@@ -74,7 +74,10 @@ export function WorkTaskCard({
 function CardFooter({ task }: { task: WorkTaskRow }): React.ReactElement | null {
   const t = useWorkT();
   const assignee = displayName(task.assignee);
-  const priority = presentText(task.priority);
+  // `NONE` is the absence of a priority, not a priority. Most seed cards carry
+  // it, so rendering it put the word "NONE" on nearly every card and drowned the
+  // few that say URGENT -- the opposite of what a priority is on a board for.
+  const priority = meaningfulPriority(task.priority);
   const due = presentText(task.due_date);
   if (!assignee && !priority && !due) return null;
   return (
@@ -98,6 +101,12 @@ function CardFooter({ task }: { task: WorkTaskRow }): React.ReactElement | null 
       ) : null}
     </div>
   );
+}
+
+/** The enum's "no priority" member, which is not worth a pill. */
+function meaningfulPriority(value: unknown): string {
+  const text = presentText(value);
+  return text.toUpperCase() === "NONE" ? "" : text;
 }
 
 /** A relation renders as its representation object; a bare id is not a name. */
