@@ -8,13 +8,31 @@ export type ThemeTokenName =
   | "--border-focus" | "--border-on-rail" | "--brand" | "--brand-hover" | "--brand-active" | "--brand-soft"
   | "--brand-soft-text" | "--accent" | "--accent-soft" | "--accent-soft-text" | "--success-soft" | "--success-text"
   | "--warning-soft" | "--warning-text" | "--danger-soft" | "--danger-text" | "--info-soft" | "--info-text"
-  | "--ring" | "--ring-danger" | "--font-family-sans" | "--font-family-mono" | "--r-2" | "--r-4" | "--r-6" | "--r-8"
+  | "--ring" | "--ring-danger" | "--font-family-sans" | "--font-family-mono" | "--elevation-xs" | "--elevation-sm"
+  | "--elevation-md" | "--elevation-lg" | "--elevation-popover" | "--r-2" | "--r-4" | "--r-6" | "--r-8"
   | "--r-10" | "--r-12" | "--r-full" | "--rail-w" | "--topbar-h" | "--controlpanel-h" | "--chatter-w"
   | "--control-h-sm" | "--control-h-md" | "--control-h-lg";
 export type TokenLayer = Partial<Record<ThemeTokenName, string>>;
 export interface ThemeTokenLayers { shared: TokenLayer; light: TokenLayer; dark: TokenLayer }
 export interface ThemeOptionsEnvelope { version: number; value: unknown }
 export interface ThemeOptionsDefinition<TOptions> { version: number; defaults: TOptions; parse(value: unknown): TOptions; migrate?(value: unknown, fromVersion: number): TOptions; resolve(value: TOptions): Partial<ThemeTokenLayers> }
+export type ThemeCustomizationFont = "theme" | "system" | "inter" | "humanist" | "industrial" | "editorial" | "mono";
+export type ThemeCustomizationRadius = "theme" | "square" | "compact" | "standard" | "soft" | "round";
+export type ThemeCustomizationDensity = "theme" | "compact" | "balanced" | "comfortable" | "spacious";
+export type ThemeCustomizationElevation = "theme" | "flat" | "subtle" | "soft" | "dramatic";
+export interface ThemeCustomization {
+  brand: string;
+  accent: string;
+  neutral: string;
+  font: ThemeCustomizationFont;
+  radius: ThemeCustomizationRadius;
+  density: ThemeCustomizationDensity;
+  elevation: ThemeCustomizationElevation;
+}
+export interface ThemeCustomizationConfiguration {
+  version?: number;
+  migrate?(value: unknown, fromVersion: number, defaults: ThemeCustomization): ThemeCustomization;
+}
 export interface ThemeDefinition<TOptions = Record<string, never>> { contractVersion: 1; id: string; labelKey: string; descriptionKey: string; revision: number; tokens: ThemeTokenLayers; stylesheets?: readonly string[]; options?: ThemeOptionsDefinition<TOptions> }
 export interface ResolvedThemeOptions<TOptions = unknown> { version: number; value: TOptions; tokens: ThemeTokenLayers }
 export interface SerializableThemeMetadata { contractVersion: 1; id: string; labelKey: string; descriptionKey: string; revision: number; optionsVersion: number | null; optionDefaults: unknown }
@@ -25,5 +43,7 @@ export function defineTheme<TOptions>(definition: ThemeDefinition<TOptions>): Th
 export function assertThemeDefinition(value: unknown): ThemeDefinition<unknown>;
 export function assertThemeCatalogue(definitions: readonly ThemeDefinition<unknown>[]): ThemeDefinition<unknown>[];
 export function resolveThemeOptions<TOptions>(definition: ThemeDefinition<TOptions>, envelope?: ThemeOptionsEnvelope | null): ResolvedThemeOptions<TOptions>;
+export function createThemeCustomizationOptions(defaults: ThemeCustomization, configuration?: ThemeCustomizationConfiguration): ThemeOptionsDefinition<ThemeCustomization>;
+export function parseThemeCustomization(value: unknown): ThemeCustomization;
 export function compileThemeCss(definitions: readonly ThemeDefinition<unknown>[]): string;
 export function serializableThemeMetadata(definition: ThemeDefinition<unknown>): SerializableThemeMetadata;

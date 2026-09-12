@@ -1,2 +1,2 @@
-import type { ThemeDefinition } from "@angee/ui/theme";
-export const themes: readonly [ThemeDefinition];
+import type { ThemeCustomization, ThemeDefinition } from "@angee/ui/theme";
+export const themes: readonly [ThemeDefinition<ThemeCustomization>];

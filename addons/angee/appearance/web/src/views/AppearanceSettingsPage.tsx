@@ -49,7 +49,7 @@ export function AppearanceSettingsPage(): ReactElement {
         {[HOST_VALUE, "system", "light", "dark"].map((value) => <RadioGroupItem disabled={readOnly} key={value} value={value} label={value === HOST_VALUE ? t("scheme.host") : t(`scheme.${value}`)} />)}
       </RadioGroupRoot>
     </SettingsSection>
-    {OptionsEditor ? <SettingsSection title={t("options.title")}>
+    {OptionsEditor ? <SettingsSection title={t("options.title")} description={t("options.description")}>
       <OptionsEditor definition={appearance.theme!.definition} value={draft} disabled={appearance.saving || readOnly} onChange={setDraft} />
       <div className="flex gap-2"><Button disabled={!draft || readOnly} loading={appearance.saving} onClick={() => draft && void appearance.setOptions(draft)}>{appearance.saving ? t("saving") : t("options.apply")}</Button><Button variant="ghost" disabled={readOnly} onClick={() => setDraft(appearance.preferences.options)}>{t("options.cancel")}</Button></div>
     </SettingsSection> : null}

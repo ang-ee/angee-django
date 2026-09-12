@@ -199,8 +199,15 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     }, "scheme");
   }, [update]);
   const setOptions = useCallback(async (options: ThemeOptionsEnvelope) => {
-    await update((current) => current.themeId ? { ...current, options } : current);
-  }, [update]);
+    await update((current) => {
+      const themeId = current.themeId ?? effectiveThemeId ?? undefined;
+      if (!themeId) throw new Error("Choose an installed theme before changing its options.");
+      const definition = catalogue.get(themeId)?.definition;
+      if (!definition?.options) throw new Error(`Theme ${JSON.stringify(themeId)} does not accept options.`);
+      const resolved = resolveThemeOptions(definition, options);
+      return { ...current, themeId, options: { version: resolved.version, value: resolved.value } };
+    });
+  }, [catalogue, effectiveThemeId, update]);
   const reset = useCallback(async () => update(() => undefined, "reset"), [update]);
 
   useEffect(() => {

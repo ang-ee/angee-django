@@ -1,3 +1,3 @@
-import type { ThemeDefinition } from "@angee/ui/theme";
-export interface BrandThemeOptions { brand: string; accent: string; radius: string }
+import type { ThemeCustomization, ThemeDefinition } from "@angee/ui/theme";
+export type BrandThemeOptions = ThemeCustomization;
 export const themes: readonly [ThemeDefinition<BrandThemeOptions>];
