@@ -102,7 +102,8 @@ export type ResourceViewProviderScope = "route" | "local";
 export interface ResourceViewScopeMountOptions {
   ambient: ResourceViewContextValue | null;
   resource?: string;
-  scope: "inherit" | "local";
+  /** Unset shares the ambient view for the same resource or an unbound owner. */
+  scope?: "inherit" | "local";
   initialState?: ResourceViewInitialState;
   isolated?: boolean;
   providerKey?: Key;
@@ -146,6 +147,20 @@ export function ResourceViewProvider({
   );
 }
 
+/**
+ * Whether an ambient view already owns the collection state this mount needs.
+ *
+ * A sort field, filter and group axis are all resource-specific: a Round sorts
+ * by `submission_deadline`, and its Topic panel cannot. A mount that declares
+ * another resource therefore cannot share the ambient owner's state. A mount
+ * that declares no resource means "inherit the page's", and an ambient that
+ * declares none owns whatever mounts under it, so both keep sharing.
+ */
+function ambientOwnsResource(ambient: ResourceViewContextValue, resource?: string): boolean {
+  if (resource === undefined || ambient.resource === undefined) return true;
+  return ambient.resource === resource;
+}
+
 /** Mount under an ambient view when allowed, otherwise create the one state owner. */
 export function withResourceViewScope({
   ambient,
@@ -156,13 +171,18 @@ export function withResourceViewScope({
   providerKey,
   children,
 }: ResourceViewScopeMountOptions): ReactElement {
-  if (!isolated && scope !== "local" && ambient) return children(ambient);
+  const mayInherit = !isolated && scope !== "local" && ambient !== null;
+  // An explicit `inherit` shares the ambient owner whatever it owns; that is the
+  // opt-in a nested list uses to follow its parent's paging and sorting.
+  if (mayInherit && (scope === "inherit" || ambientOwnsResource(ambient, resource))) {
+    return children(ambient);
+  }
   return (
     <ResourceViewProvider
       key={providerKey}
       initialState={initialState}
       resource={resource}
-      scope={isolated || scope === "local" ? "local" : "route"}
+      scope={isolated || mayInherit || scope === "local" ? "local" : "route"}
     >
       <ResourceViewScopeBound>{children}</ResourceViewScopeBound>
     </ResourceViewProvider>
@@ -226,7 +246,7 @@ function RouteResourceViewProvider({
       // Read through a ref, not the closure. A failed transition does not
       // navigate, so `search` and `queryState` do not change, so this callback
       // is not rebuilt -- a closure copy would still say null and the next valid
-      // change would skip clearing a real error, leaving it on screen forever.
+      // change would skip clearing a real error.
       if (failedTransitionRef.current !== null) setFailedTransition(null);
       void navigate({
         search: (current) => {
@@ -383,13 +403,26 @@ function useResourceViewContextValue({
     },
     [clearSelectedIds, updateState],
   );
+  // One clamp for both the no-op check and the write, so they cannot disagree
+  // about what a requested page index means.
+  const pageIndexFrom = (pageIndex: number): number =>
+    Math.max(0, Number.isFinite(pageIndex) ? Math.floor(pageIndex) : 0);
   const setPagination = useCallback<OnChangeFn<PaginationState>>(
     (updater) => {
+      const requested = functionalUpdate(updater, state.pagination);
+      // This state lives in the URL, so `updateState` navigates. A setter called
+      // with the page it is already on would navigate to the same search, render
+      // again, and re-run whatever effect called it -- which is how a board load
+      // reaches "Maximum update depth exceeded". Nothing changed means nothing to
+      // do, and React's own bail-out cannot help here because the write is a
+      // navigation rather than a `useState`.
       if (
-        functionalUpdate(updater, state.pagination).pageSize !==
-        state.pagination.pageSize
-      )
-        clearSelectedIds();
+        normalisePageSize(requested.pageSize) === state.pagination.pageSize &&
+        pageIndexFrom(requested.pageIndex) === state.pagination.pageIndex
+      ) {
+        return;
+      }
+      if (requested.pageSize !== state.pagination.pageSize) clearSelectedIds();
       updateState((current) => {
         const next = functionalUpdate(updater, current.pagination);
         const sizeChanged = next.pageSize !== current.pagination.pageSize;
@@ -397,14 +430,7 @@ function useResourceViewContextValue({
           ...current,
           ...(sizeChanged ? { rowSelection: {} } : {}),
           pagination: {
-            pageIndex: sizeChanged
-              ? 0
-              : Math.max(
-                  0,
-                  Number.isFinite(next.pageIndex)
-                    ? Math.floor(next.pageIndex)
-                    : 0,
-                ),
+            pageIndex: sizeChanged ? 0 : pageIndexFrom(next.pageIndex),
             pageSize: normalisePageSize(next.pageSize),
           },
         };
