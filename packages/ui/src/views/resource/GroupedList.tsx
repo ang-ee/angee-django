@@ -57,12 +57,17 @@ import {
 import type {
   GroupLabelContext,
   ListEmptyContent,
+  ResourceTableHeaderVisibility,
+  ResourceTableLayout,
 } from "./resource-view-types";
 
 import { GroupedScopePager } from "./GroupedScopePager";
 import { snapshotFromNav } from "./grouped-navigation";
 
 export interface GroupedListBodyProps<TRow extends Row> {
+  tableLayout?: ResourceTableLayout;
+  headerVisibility?: ResourceTableHeaderVisibility;
+  selectable?: boolean;
   renderGroupLabel?: (group: GroupLabelContext) => React.ReactNode;
   table: TableModel<TRow>;
   tableColumns: readonly ColumnDef<TRow>[];
@@ -92,6 +97,9 @@ export interface GroupedListBodyProps<TRow extends Row> {
 }
 
 export function GroupedListBody<TRow extends Row>({
+  tableLayout = "auto",
+  headerVisibility = "visible",
+  selectable = true,
   renderGroupLabel,
   table,
   visibleColumnCount,
@@ -141,8 +149,8 @@ export function GroupedListBody<TRow extends Row>({
         ref={tableScrollRef}
         className="resource-table-scroll min-h-0 min-w-0 overflow-auto overscroll-contain"
       >
-        <Table>
-          <TableHeader>
+        <Table className={tableLayout === "fixed" ? "table-fixed" : undefined}>
+          <TableHeader className={headerVisibility === "visually-hidden" ? "sr-only" : undefined}>
             {table.getHeaderGroups().map((group) => (
               <TableRow key={group.id}>
                 {/* Grouped mode omits page-level select-all; per-row selection still works. */}
@@ -165,6 +173,7 @@ export function GroupedListBody<TRow extends Row>({
             {fetching && listItems.length === 0 ? (
               <ListSkeletonRows
                 table={table}
+                selectable={selectable}
                 trailingColumn={hasRowActions}
                 loadingLabel={t("list.loading")}
               />
@@ -200,6 +209,7 @@ export function GroupedListBody<TRow extends Row>({
                       visibleColumns={visibleColumns}
                       measuresByColumn={measuresByColumn}
                       resourceView={resourceView}
+                      selectable={selectable}
                       interactive={interactive}
                       rowHref={rowHref}
                       renderRowActions={renderRowActions}
@@ -225,7 +235,7 @@ export function GroupedListBody<TRow extends Row>({
               table={table}
               measures={measures}
               aggregate={footerAggregate}
-              selectable
+              selectable={selectable}
               labelInSelectionColumn
               trailingColumn={hasRowActions}
             />
@@ -257,6 +267,7 @@ interface GroupedItemRowProps<TRow extends Row> {
   visibleColumns: readonly TableColumn<TRow, unknown>[];
   measuresByColumn: ReadonlyMap<string, GroupMeasure>;
   resourceView: ResourceViewContextValue;
+  selectable: boolean;
   interactive: boolean;
   rowHref?: (row: TRow, scope?: ListViewNavigationScope) => string;
   renderRowActions?: (row: TRow) => React.ReactNode;
@@ -278,6 +289,7 @@ function GroupedItemRow<TRow extends Row>({
   visibleColumns,
   measuresByColumn,
   resourceView,
+  selectable,
   interactive,
   rowHref,
   renderRowActions,
@@ -312,6 +324,7 @@ function GroupedItemRow<TRow extends Row>({
           row={item.row}
           selected={Boolean(resourceView.state.rowSelection[item.row.id])}
           onToggleSelected={resourceView.toggleSelectedId}
+          selectable={selectable}
           interactive={interactive}
           rowHref={rowHref ? (row) => rowHref(row, item.nav) : undefined}
           onRowClick={onRowClick}

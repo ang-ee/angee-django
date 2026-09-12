@@ -68,7 +68,9 @@ export function ResourceListFrame({
           "resource-list-frame flex min-w-0 flex-col bg-sheet",
           presentation === "embedded"
             ? "overflow-visible"
-            : "h-full min-h-0 overflow-hidden",
+            : presentation === "workspace"
+              ? "min-h-0 flex-1 overflow-hidden"
+              : "h-full min-h-0 overflow-hidden",
           className,
         )}
       >

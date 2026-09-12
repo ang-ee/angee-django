@@ -36,8 +36,12 @@ export interface WorkbenchProps {
   secondary?: React.ReactNode;
   /** Persistence id for the pane sizes. */
   autoSave?: string;
-  /** Primary pane default width, percent. */
-  primarySize?: number;
+  /** Primary pane default width. Numbers are percentages; strings carry explicit units. */
+  primarySize?: number | string;
+  /** Primary pane minimum width. Numbers are percentages; strings carry explicit units. */
+  primaryMinSize?: number | string;
+  /** Primary pane maximum width. Numbers are percentages; strings carry explicit units. */
+  primaryMaxSize?: number | string;
   /** Secondary pane default width, percent. */
   secondarySize?: number;
   /** Minimum content pane size, percent. */
@@ -76,7 +80,9 @@ export function Workbench({
   children,
   secondary,
   autoSave,
-  primarySize = 18,
+  primarySize = "300px",
+  primaryMinSize = "240px",
+  primaryMaxSize = "420px",
   secondarySize = 26,
   contentMinSize,
   secondaryMinSize = 16,
@@ -145,7 +151,8 @@ export function Workbench({
           <SplitPane
             id="primary"
             defaultSize={primarySize}
-            minSize={12}
+            minSize={primaryMinSize}
+            maxSize={primaryMaxSize}
             collapsible
             panelRef={primaryController.panelRef}
             onResize={primaryController.onResize}

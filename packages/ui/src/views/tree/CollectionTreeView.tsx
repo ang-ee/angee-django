@@ -21,6 +21,7 @@ import type { ListViewProps } from "../resource/resource-view-types";
 export interface CollectionTreeViewProps<TRow extends Row> extends Pick<
   ListViewProps<TRow>,
   | "resource"
+  | "presentation"
   | "columns"
   | "filterOptions"
   | "customFilterFields"
@@ -137,6 +138,7 @@ export function CollectionTreeView<TRow extends Row>(
   return (
     <ResourceListFrame
       toolbar={toolbar}
+      presentation={props.presentation}
       error={surface.list.error}
       onRetry={() => void surface.list.refetch()}
       summary={surface.list.summary}
@@ -144,6 +146,7 @@ export function CollectionTreeView<TRow extends Row>(
     >
       {surface.list.fetching && surface.rows.length === 0 ? <LoadingPanel /> : <TreeView
         key={queryKey}
+        className="resource-tree-scroll min-h-0 flex-1"
         rows={rows}
         rowKey={props.rowKey}
         parent={props.parent}

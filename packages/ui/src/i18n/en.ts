@@ -275,6 +275,7 @@ export const enUiMessages: Record<string, string> = {
   "chrome.switchToDarkTheme": "Switch to dark mode",
   "chrome.switchToLightTheme": "Switch to light mode",
   "chrome.primaryNav": "Primary navigation",
+  "chrome.primaryPane": "Primary panel",
   "chrome.expandAppRail": "Expand app navigation",
   "chrome.collapseAppRail": "Collapse app navigation",
   "chrome.collectionViews": "Collection views",

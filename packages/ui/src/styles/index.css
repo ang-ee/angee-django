@@ -464,6 +464,29 @@
   gap: 0.25rem;
 }
 
+/* An inline collection toolbar may live in a narrow explorer/drawer. Its
+   declared wrap mode lets whole control groups move instead of crushing their
+   labels or forcing the pane to scroll horizontally. */
+.resource-toolbar-wrap {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.resource-toolbar-wrap > .resource-toolbar-actions {
+  flex: 1 1 9rem;
+}
+
+.resource-toolbar-wrap > .resource-toolbar-query {
+  order: 3;
+  flex: 1 0 100%;
+}
+
+.resource-toolbar-wrap > .resource-toolbar-utilities {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
 @container (min-width: 52rem) {
   .resource-toolbar {
     grid-template-columns: auto minmax(12rem, 1fr) auto;
@@ -479,10 +502,15 @@
   }
 }
 
-.resource-list-frame[data-resource-presentation="page"],
-.resource-list-frame[data-resource-presentation="workspace"] {
+.resource-list-frame[data-resource-presentation="page"] {
   height: 100%;
   min-height: 0;
+  overflow: hidden;
+}
+
+.resource-list-frame[data-resource-presentation="workspace"] {
+  min-height: 0;
+  flex: 1 1 auto;
   overflow: hidden;
 }
 
@@ -504,7 +532,47 @@
   overflow-y: visible;
 }
 
-@container (min-width: 22rem) {
+/* Collection scrollbars stay quiet until the user approaches the active pane. */
+.resource-table-scroll,
+.resource-tree-scroll {
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
+}
+
+.resource-table-scroll:hover,
+.resource-table-scroll:focus-within,
+.resource-tree-scroll:hover,
+.resource-tree-scroll:focus-within {
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.resource-table-scroll::-webkit-scrollbar,
+.resource-tree-scroll::-webkit-scrollbar {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+.resource-table-scroll::-webkit-scrollbar-track,
+.resource-tree-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.resource-table-scroll::-webkit-scrollbar-thumb,
+.resource-tree-scroll::-webkit-scrollbar-thumb {
+  border: 0.1875rem solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  background-color: transparent;
+}
+
+.resource-table-scroll:hover::-webkit-scrollbar-thumb,
+.resource-table-scroll:focus-within::-webkit-scrollbar-thumb,
+.resource-tree-scroll:hover::-webkit-scrollbar-thumb,
+.resource-tree-scroll:focus-within::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+}
+
+@container (min-width: 32rem) {
   .chatter-tab-label {
     display: inline;
   }

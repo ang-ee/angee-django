@@ -96,9 +96,10 @@ export function InboxNavigatorPane({
           </Button>
         }
       />
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {lens === "circles" ? (
           <CollectionTreeView
+            presentation="workspace"
             resource="nexus.InboxNavigator"
             source={source}
             columns={columns}
@@ -119,6 +120,10 @@ export function InboxNavigatorPane({
           />
         ) : (
           <ListView
+            presentation="workspace"
+            tableLayout="fixed"
+            headerVisibility="visually-hidden"
+            selectable={false}
             resource="nexus.InboxNavigator"
             source={source}
             columns={columns}

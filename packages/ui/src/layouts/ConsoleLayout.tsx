@@ -7,6 +7,7 @@ import { DrawerRail } from "../chrome/DrawerRail";
 import { TopBar } from "../chrome/TopBar";
 import { Chatter } from "../communication/Chatter";
 import { ChatterProvider, useChatter } from "../communication/chatter-context";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import {
   LARGE_VIEWPORT_QUERY,
@@ -21,6 +22,8 @@ import { DrawerOverlay } from "./DrawerOverlay";
 import { PrimaryPaneProvider, usePrimaryPaneContent } from "./primary-pane-context";
 import { StatuslineProvider } from "./Statusline";
 import { Workbench } from "./Workbench";
+
+type PaneToggleController = Pick<CollapsiblePane, "collapsed" | "toggle">;
 
 export interface ConsoleLayoutProps {
   children: React.ReactNode;
@@ -38,7 +41,9 @@ export function ConsoleLayout({
   const [statusHost, setStatusHost] =
     React.useState<HTMLDivElement | null>(null);
   const [primaryController, setPrimaryController] =
-    React.useState<CollapsiblePane | null>(null);
+    React.useState<PaneToggleController | null>(null);
+  const [compactChatterController, setCompactChatterController] =
+    React.useState<PaneToggleController | null>(null);
   const [railWidth, setRailWidth] = React.useState<string | null>(null);
   const [navigationOpen, setNavigationOpen] = React.useState(false);
   const mobileViewport = useMediaQuery(MOBILE_VIEWPORT_QUERY);
@@ -50,7 +55,7 @@ export function ConsoleLayout({
     if (!mobileViewport) setNavigationOpen(false);
   }, [mobileViewport]);
   const handlePrimaryController = React.useCallback(
-    (controller: CollapsiblePane | null) => {
+    (controller: PaneToggleController | null) => {
       setPrimaryController((current) =>
         current === controller
         || (
@@ -90,16 +95,37 @@ export function ConsoleLayout({
                     className="area-topbar"
                     navigation={mobileViewport ? {
                       open: navigationOpen,
-                      toggle: () => setNavigationOpen((open) => !open),
+                      toggle: () => {
+                        if (primaryController && !primaryController.collapsed) {
+                          primaryController.toggle();
+                        }
+                        if (
+                          compactChatterController
+                          && !compactChatterController.collapsed
+                        ) {
+                          compactChatterController.toggle();
+                        }
+                        setNavigationOpen((open) => !open);
+                      },
                     } : undefined}
                     primaryPane={
                       primaryController
                         ? {
                             collapsed: primaryController.collapsed,
-                            toggle: primaryController.toggle,
+                            toggle: () => {
+                              setNavigationOpen(false);
+                              primaryController.toggle();
+                            },
                           }
                         : undefined
                     }
+                    chatterPane={compactChatterController ? {
+                      collapsed: compactChatterController.collapsed,
+                      toggle: () => {
+                        setNavigationOpen(false);
+                        compactChatterController.toggle();
+                      },
+                    } : undefined}
                     showChatterToggle={showChatter}
                     showUserMenu
                   />
@@ -107,6 +133,7 @@ export function ConsoleLayout({
                   <ConsoleWorkbench
                     showChatter={showChatter}
                     onPrimaryController={handlePrimaryController}
+                    onCompactChatterController={setCompactChatterController}
                   >
                     {children}
                   </ConsoleWorkbench>
@@ -162,31 +189,86 @@ export function ConsoleLayout({
 function ConsoleWorkbench({
   showChatter,
   onPrimaryController,
+  onCompactChatterController,
   children,
 }: {
   showChatter: boolean;
-  onPrimaryController: (controller: CollapsiblePane | null) => void;
+  onPrimaryController: (controller: PaneToggleController | null) => void;
+  onCompactChatterController: (controller: PaneToggleController | null) => void;
   children: React.ReactNode;
 }): React.ReactElement {
-  const {
-    collapsed: chatterCollapsed,
-    setCollapsed: setChatterCollapsed,
-    registerSecondaryController,
-  } = useChatter();
+  const t = useUiT();
+  const { registerSecondaryController } = useChatter();
   const { node: publishedPrimary } = usePrimaryPaneContent();
   const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
+  const [desktopPrimaryController, setDesktopPrimaryController] =
+    React.useState<CollapsiblePane | null>(null);
+  const [compactPrimaryOpen, setCompactPrimaryOpen] = React.useState(false);
+  const [compactChatterOpen, setCompactChatterOpen] = React.useState(false);
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
   const desktopChatter = showChatter && largeViewport;
+  const desktopPrimary = largeViewport ? publishedPrimary : null;
+  const compactPrimary = !largeViewport ? publishedPrimary : null;
+  const toggleCompactPrimary = React.useCallback(() => {
+    setCompactChatterOpen(false);
+    setCompactPrimaryOpen((open) => !open);
+  }, []);
+  const compactPrimaryController = React.useMemo<PaneToggleController>(
+    () => ({
+      collapsed: !compactPrimaryOpen,
+      toggle: toggleCompactPrimary,
+    }),
+    [compactPrimaryOpen, toggleCompactPrimary],
+  );
+  const effectivePrimaryController = publishedPrimary == null
+    ? null
+    : largeViewport
+      ? desktopPrimaryController
+      : compactPrimaryController;
+  const toggleCompactChatter = React.useCallback(() => {
+    setCompactPrimaryOpen(false);
+    setCompactChatterOpen((open) => !open);
+  }, []);
+  const compactChatterController = React.useMemo<PaneToggleController>(
+    () => ({
+      collapsed: !compactChatterOpen,
+      toggle: toggleCompactChatter,
+    }),
+    [compactChatterOpen, toggleCompactChatter],
+  );
+  React.useEffect(() => {
+    onPrimaryController(effectivePrimaryController);
+    return () => onPrimaryController(null);
+  }, [effectivePrimaryController, onPrimaryController]);
+  React.useEffect(() => {
+    setCompactPrimaryOpen(false);
+    setCompactChatterOpen(false);
+  }, [pathname, largeViewport]);
+  React.useEffect(() => {
+    const controller = showChatter && !largeViewport
+      ? compactChatterController
+      : null;
+    onCompactChatterController(controller);
+    return () => onCompactChatterController(null);
+  }, [
+    compactChatterController,
+    largeViewport,
+    onCompactChatterController,
+    showChatter,
+  ]);
   return (
     <>
       <Workbench
         className="area-content"
-        autoSave="console.workbench"
+        autoSave="console.workbench.v2"
         scrollMode="contained"
         secondaryDefaultCollapsed
         primary={
-          publishedPrimary != null ? (
+          desktopPrimary != null ? (
             <ControlBandProvider host={undefined}>
-              {publishedPrimary}
+              {desktopPrimary}
             </ControlBandProvider>
           ) : undefined
         }
@@ -195,14 +277,31 @@ function ConsoleWorkbench({
             <Chatter />
           </ControlBandProvider>
         ) : undefined}
-        onPrimaryController={onPrimaryController}
+        onPrimaryController={setDesktopPrimaryController}
         onSecondaryController={desktopChatter ? registerSecondaryController : undefined}
       >
         <main className="console-content-main">{children}</main>
       </Workbench>
       <Drawer.Root
-        open={showChatter && !largeViewport && !chatterCollapsed}
-        onOpenChange={(open) => setChatterCollapsed(!open)}
+        open={compactPrimary != null && compactPrimaryOpen}
+        onOpenChange={setCompactPrimaryOpen}
+      >
+        <Drawer.Portal>
+          <Drawer.Backdrop />
+          <Drawer.Content
+            side="left"
+            aria-label={t("chrome.primaryPane")}
+            className="w-[min(24rem,calc(100vw-1rem))] p-0"
+          >
+            <ControlBandProvider host={undefined}>
+              {compactPrimary}
+            </ControlBandProvider>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
+      <Drawer.Root
+        open={showChatter && !largeViewport && compactChatterOpen}
+        onOpenChange={setCompactChatterOpen}
       >
         <Drawer.Portal>
           <Drawer.Backdrop />

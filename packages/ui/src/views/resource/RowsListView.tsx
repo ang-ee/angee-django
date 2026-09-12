@@ -32,6 +32,8 @@ import { ResourceListFrame } from "./ResourceListFrame";
 import type {
   ListEmptyContent,
   ResourceCollectionPresentation,
+  ResourceTableHeaderVisibility,
+  ResourceTableLayout,
 } from "./resource-view-types";
 import { useResourceToolbarProps } from "./resource-toolbar-props";
 import {
@@ -64,6 +66,8 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   emptyContent?: ListEmptyContent;
   className?: string;
   presentation?: ResourceCollectionPresentation;
+  tableLayout?: ResourceTableLayout;
+  headerVisibility?: ResourceTableHeaderVisibility;
   selectable?: boolean;
   /** Controls rendered in the toolbar's leading slot, beside the filter. */
   toolbarActions?: React.ReactNode;
@@ -155,6 +159,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   emptyContent,
   className,
   presentation = "page",
+  tableLayout = "auto",
+  headerVisibility = "visible",
   selectable = false,
   toolbarActions,
   gallery,
@@ -272,6 +278,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
         />
       ) : (
         <FlatListBody
+          tableLayout={tableLayout}
+          headerVisibility={headerVisibility}
           columns={columns}
           table={surface.table}
           rowModels={surface.rowModels}

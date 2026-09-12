@@ -28,6 +28,10 @@ export interface TopBarProps {
     collapsed: boolean;
     toggle: () => void;
   };
+  chatterPane?: {
+    collapsed: boolean;
+    toggle: () => void;
+  };
   searchPlaceholder?: string;
   showChatterToggle?: boolean;
   showUserMenu?: boolean;
@@ -43,6 +47,7 @@ export function TopBar({
   onNotifications,
   navigation,
   primaryPane,
+  chatterPane,
   searchPlaceholder,
   showChatterToggle = false,
   showUserMenu = false,
@@ -80,7 +85,7 @@ export function TopBar({
         />
       ) : null}
       {trailing}
-      {showChatterToggle ? <ChatterToggleButton /> : null}
+      {showChatterToggle ? <ChatterToggleButton pane={chatterPane} /> : null}
     </header>
   );
 }
@@ -138,10 +143,15 @@ function PrimaryPaneToggleButton({
   );
 }
 
-function ChatterToggleButton(): ReactElement {
+function ChatterToggleButton({
+  pane,
+}: {
+  pane?: NonNullable<TopBarProps["chatterPane"]>;
+}): ReactElement {
   const t = useUiT();
   const { collapsed, toggleCollapsed } = useChatter();
-  const open = !collapsed;
+  const effectivePane = pane ?? { collapsed, toggle: toggleCollapsed };
+  const open = !effectivePane.collapsed;
   const label = open ? t("chrome.collapseChatter") : t("chrome.openChatter");
   return (
     <Tooltip label={label}>
@@ -153,7 +163,7 @@ function ChatterToggleButton(): ReactElement {
         aria-label={label}
         aria-pressed={open}
         aria-expanded={open}
-        onClick={toggleCollapsed}
+        onClick={effectivePane.toggle}
         className="text-on-rail-mut hover:bg-rail-hi hover:text-on-rail-hi"
       >
         <Glyph name="panel-right" />
