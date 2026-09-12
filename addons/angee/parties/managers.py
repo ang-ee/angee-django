@@ -105,27 +105,35 @@ class HandleQuerySet(AngeeQuerySet):
         """
 
         actor = self.actor() or current_actor()
-        party_model = apps.get_model("parties", "Party")
         handles = self.with_actor(actor).scoped() if actor is not None else self.none()
-        party_name = party_model.objects.filter(pk=OuterRef("party_id")).readable_scalar_subquery(
+        return handles.annotate(_sender_name=handles.sender_name_expression())
+
+    def sender_name_expression(self, prefix: str = "") -> Coalesce:
+        """Project the name rule onto an already-readable handle or handle join.
+
+        Callers authorize the handle population; the party fallback keeps its
+        own read gate. Prefix follows Django relation paths, including ``__``.
+        """
+
+        actor = self.actor() or current_actor()
+        party_model = apps.get_model("parties", "Party")
+        party_name = party_model.objects.filter(pk=OuterRef(f"{prefix}party_id")).readable_scalar_subquery(
             "display_name",
             actor=actor,
         )
-        return handles.annotate(
-            _sender_name=Coalesce(
-                NullIf(
-                    Case(
-                        When(party_link_confirmed=True, then=party_name),
-                        default=Value(None),
-                        output_field=TextField(),
-                    ),
-                    Value(""),
+        return Coalesce(
+            NullIf(
+                Case(
+                    When(**{f"{prefix}party_link_confirmed": True}, then=party_name),
+                    default=Value(None),
+                    output_field=TextField(),
                 ),
-                NullIf("display_name", Value("")),
-                "value",
                 Value(""),
-                output_field=TextField(),
             ),
+            NullIf(f"{prefix}display_name", Value("")),
+            f"{prefix}value",
+            Value(""),
+            output_field=TextField(),
         )
 
     def owned_by(self, user: Any) -> Self:

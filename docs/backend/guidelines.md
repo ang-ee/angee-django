@@ -556,6 +556,11 @@ data through REBAC, never a queryset bypass.
 
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
+- **Group counts add to root totals only for disjoint populations.** Reuse the
+  grouped scan with a window total when every record belongs to one bucket;
+  recipient fan-out and shared content require distinct root counts. Hydrate
+  labels after paging unless they determine group identity or sort order.
+
 - **`.values_list(...).distinct()` must clear the model's default ordering.**
   `Meta.ordering` columns silently join the DISTINCT projection, so a
   single-column `values_list("owner_id").distinct()` returns one row per
