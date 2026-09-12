@@ -73,3 +73,33 @@ rows:
       sub_sort_order: 12288.0
       created_by: iam.user_alice
       updated_by: iam.user_alice
+  - xref: eng_todo_water_signage
+    fields:
+      queue: work.eng
+      stage: work.eng_todo
+      project: projects.neighborhood_garden
+      title: Draft signage for the accessible water point
+      note: One sign at the path junction and one at the tap, in both languages.
+      assignee: iam.user_bob
+      priority: medium
+      estimate: 1.0
+      sort_order: 13312.0
+      sub_sort_order: 13312.0
+      created_by: iam.user_alice
+      updated_by: iam.user_bob
+  - xref: eng_done_cycle_report
+    fields:
+      queue: work.eng
+      stage: work.eng_done
+      cycle: work.eng_active
+      project: projects.neighborhood_garden
+      title: Publish the first cycle report
+      note: Summarize what the cycle closed and what rolled over, for the committee.
+      assignee: iam.user_bob
+      priority: low
+      estimate: 1.0
+      done_at: 2026-08-28T16:00:00Z
+      sort_order: 14336.0
+      sub_sort_order: 14336.0
+      created_by: iam.user_alice
+      updated_by: iam.user_bob
