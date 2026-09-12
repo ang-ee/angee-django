@@ -18,7 +18,7 @@ import type { ColumnDescriptor } from "../../page";
 import { alignOf, ariaSortForColumn, formatMeasure, groupMeasuresFromColumns, measureValue } from "./cell-utils";
 import { ListEmpty, ListSkeletonRows } from "./loading";
 import { renderListRow } from "./rows";
-import { ALIGN_CLASS, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, TABLE_SCROLL_STYLE } from "./types";
+import { ALIGN_CLASS, GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT } from "./types";
 import type { GroupMeasure, VisibleFieldOption } from "./types";
 import { useVirtualWindow, VirtualPaddingRow } from "./virtualization";
 export function SelectionBar({
@@ -134,8 +134,7 @@ export function FlatListBody<TRow extends Row>({
   return (
     <div
       ref={tableScrollRef}
-      className="overflow-auto"
-      style={TABLE_SCROLL_STYLE}
+      className="resource-table-scroll min-h-0 min-w-0 overflow-auto overscroll-contain"
     >
       <Table>
         <TableHeader>

@@ -29,7 +29,10 @@ import {
   type ListColumn,
 } from "./resource-view-list-body";
 import { ResourceListFrame } from "./ResourceListFrame";
-import type { ListEmptyContent } from "./resource-view-types";
+import type {
+  ListEmptyContent,
+  ResourceCollectionPresentation,
+} from "./resource-view-types";
 import { useResourceToolbarProps } from "./resource-toolbar-props";
 import {
   useResourceViewToolbarInputs,
@@ -60,6 +63,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   rowActions?: readonly RowActionDeclaration<TRow>[];
   emptyContent?: ListEmptyContent;
   className?: string;
+  presentation?: ResourceCollectionPresentation;
   selectable?: boolean;
   /** Controls rendered in the toolbar's leading slot, beside the filter. */
   toolbarActions?: React.ReactNode;
@@ -150,6 +154,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   rowActions,
   emptyContent,
   className,
+  presentation = "page",
   selectable = false,
   toolbarActions,
   gallery,
@@ -194,7 +199,17 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     groupStack: effectiveGroupStack,
   });
   const interactive = Boolean(onRowClick || rowHref);
-  const resolvedEmptyContent = emptyContent ?? t("list.empty");
+  const filtered = Object.keys(resourceView.state.filter).length > 0;
+  const resolvedEmptyContent = filtered
+    ? {
+        title: t("list.noMatchingRecords"),
+        description: t("list.noMatchingRecordsHint"),
+        action: {
+          label: t("resourceToolbar.clearQuery"),
+          onClick: resourceView.resetQuery,
+        },
+      }
+    : emptyContent ?? t("list.empty");
   const toolbar = useResourceToolbarProps({
     actions: toolbarActions,
     viewSwitcher: gallery ? (
@@ -221,6 +236,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   return (
     <ResourceListFrame
       className={className}
+      presentation={presentation}
       toolbar={toolbar}
       selection={
         selectable

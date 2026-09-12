@@ -432,6 +432,78 @@
   display: none;
 }
 
+.resource-toolbar {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.resource-toolbar-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.resource-toolbar-query {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+}
+
+.resource-toolbar-utilities {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+
+@container (min-width: 52rem) {
+  .resource-toolbar {
+    grid-template-columns: auto minmax(12rem, 1fr) auto;
+  }
+
+  .resource-toolbar-query {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .resource-toolbar-utilities {
+    grid-column: 3;
+  }
+}
+
+.resource-list-frame[data-resource-presentation="page"],
+.resource-list-frame[data-resource-presentation="workspace"] {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.resource-list-frame[data-resource-presentation="page"] > .resource-table-scroll,
+.resource-list-frame[data-resource-presentation="workspace"] > .resource-table-scroll,
+.resource-list-frame[data-resource-presentation="page"] > .resource-board-scroll,
+.resource-list-frame[data-resource-presentation="workspace"] > .resource-board-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.resource-list-frame[data-resource-presentation="embedded"] > .resource-table-scroll {
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.resource-list-frame[data-resource-presentation="embedded"] > .resource-board-scroll {
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
 @container (min-width: 22rem) {
   .chatter-tab-label {
     display: inline;

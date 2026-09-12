@@ -14,7 +14,7 @@ import { flattenLeaves } from "./cards";
 import { boardCollisionDetection, boardDragData, boardDropTarget } from "./dnd";
 import { BoardLane, BoardSkeleton, EMPTY_FOLD_OVERRIDES } from "./lanes";
 export const BOARD_SCROLL_SURFACE_CLASS =
-  "flex items-start gap-3 p-3";
+  "resource-board-scroll flex min-h-0 min-w-0 items-start gap-3 overflow-auto overscroll-contain p-3";
 export const BOARD_CARD_SHELL_CLASS =
   "block min-w-0 max-w-full rounded-8 text-left text-inherit outline-none focus-visible:focus-ring";
 

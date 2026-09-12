@@ -113,6 +113,7 @@ export interface ResourceListProps<TRow extends Row = Row> {
   /** Workbench geometry for split master-detail placement. */
   splitLayout?: ResourceListSplitLayout;
   /** List options forwarded to `ListView`. */
+  presentation?: ListViewProps<TRow>["presentation"];
   baseFilter?: ListViewProps<TRow>["baseFilter"];
   filterOptions?: ListViewProps<TRow>["filterOptions"];
   facets?: ListViewProps<TRow>["facets"];

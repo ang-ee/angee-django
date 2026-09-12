@@ -62,6 +62,7 @@ interface ListViewContentProps<TRow extends Row> {
   renderCard: ListViewProps<TRow>["renderCard"];
   emptyContent: ListEmptyContent;
   className: string | undefined;
+  presentation: ListViewProps<TRow>["presentation"];
 }
 
 export function ListViewContent<TRow extends Row = Row>({
@@ -102,6 +103,7 @@ export function ListViewContent<TRow extends Row = Row>({
   renderCard,
   emptyContent,
   className,
+  presentation,
 }: ListViewContentProps<TRow>): React.ReactElement {
   const t = useUiT();
   const flatMeasures = React.useMemo(
@@ -209,6 +211,7 @@ export function ListViewContent<TRow extends Row = Row>({
   return (
     <ResourceListFrame
       className={className}
+      presentation={presentation}
       toolbar={toolbar}
       selection={{
         count: surface.selectedIds.size,

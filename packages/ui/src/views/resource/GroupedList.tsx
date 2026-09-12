@@ -43,7 +43,6 @@ import {
   ListSkeletonRows,
   MeasureFooter,
   RecordRow,
-  TABLE_SCROLL_STYLE,
   VirtualPaddingRow,
   alignOf,
   estimateGroupedItemSize,
@@ -140,8 +139,7 @@ export function GroupedListBody<TRow extends Row>({
     <>
       <div
         ref={tableScrollRef}
-        className="overflow-auto"
-        style={TABLE_SCROLL_STYLE}
+        className="resource-table-scroll min-h-0 min-w-0 overflow-auto overscroll-contain"
       >
         <Table>
           <TableHeader>
