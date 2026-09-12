@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useDashboardT } from "./i18n";
 
 export interface DashboardSeriesPoint {
   key: string;
@@ -32,9 +33,10 @@ function formatNumber(value: number): string {
 }
 
 function AccessibleSeriesTable({ points }: { points: readonly DashboardSeriesPoint[] }): React.ReactElement {
+  const t = useDashboardT();
   return (
     <table className="sr-only">
-      <thead><tr><th>Category</th><th>Value</th></tr></thead>
+      <thead><tr><th>{t("widget.category")}</th><th>{t("widget.value")}</th></tr></thead>
       <tbody>
         {points.map((point) => (
           <tr key={point.key}><th>{point.label}</th><td>{formatNumber(point.value)}</td></tr>
@@ -47,16 +49,17 @@ function AccessibleSeriesTable({ points }: { points: readonly DashboardSeriesPoi
 export function DashboardBars({
   points,
   title,
-  emptyLabel = "No data",
+  emptyLabel,
 }: {
   points: readonly DashboardSeriesPoint[];
   title: string;
   emptyLabel?: string;
 }): React.ReactElement {
+  const t = useDashboardT();
   const values = finitePoints(points);
   const extent = values.reduce((max, point) => Math.max(max, Math.abs(point.value)), 0);
   if (values.length === 0 || extent === 0) {
-    return <p className="text-12 text-fg-muted">{emptyLabel}</p>;
+    return <p className="text-12 text-fg-muted">{emptyLabel ?? t("widget.noData")}</p>;
   }
   return (
     <figure aria-label={title} className="min-w-0">
@@ -95,25 +98,26 @@ export function DashboardDonut({
   points,
   title,
   totalLabel,
-  emptyLabel = "No data",
+  emptyLabel,
 }: {
   points: readonly DashboardSeriesPoint[];
   title: string;
   totalLabel?: string;
   emptyLabel?: string;
 }): React.ReactElement {
+  const t = useDashboardT();
   const values = finitePoints(points).filter((point) => point.value >= 0);
   const total = values.reduce((sum, point) => sum + point.value, 0);
   if (values.length === 0 || total <= 0) {
-    return <p className="text-12 text-fg-muted">{emptyLabel}</p>;
+    return <p className="text-12 text-fg-muted">{emptyLabel ?? t("widget.noData")}</p>;
   }
   let offset = 0;
   const radius = 72;
   const circumference = 2 * Math.PI * radius;
   return (
-    <figure aria-label={title} className="flex min-w-0 flex-wrap items-center gap-5">
+    <figure aria-label={title} className="grid h-full min-w-0 grid-cols-2 items-center gap-3">
       <figcaption className="sr-only">{title}</figcaption>
-      <svg viewBox="0 0 180 180" className="size-[168px] shrink-0" aria-hidden>
+      <svg viewBox="0 0 180 180" className="aspect-square w-full max-w-40 shrink-0" aria-hidden>
         <circle cx="90" cy="90" r={radius} fill="none" stroke="var(--chart-surface)" strokeWidth="24" />
         <g transform="rotate(-90 90 90)">
           {values.map((point, index) => {

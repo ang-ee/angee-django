@@ -114,12 +114,14 @@ export function resizeDashboardRect<T extends DashboardRect>(
 export function projectDashboardLayout(
   widgets: readonly WidgetSpec[],
   columns: number,
+  sourceColumns = columns,
 ): WidgetSpec[] {
+  const scale = columns / Math.max(1, sourceColumns);
   return packDashboardLayout(
     widgets.filter((widget) => !widget.isArchived).map((widget) => ({
       ...widget,
-      w: Math.min(widget.w, columns),
-      x: Math.min(widget.x, Math.max(0, columns - Math.min(widget.w, columns))),
+      w: Math.max(1, Math.min(Math.round(widget.w * scale), columns)),
+      x: Math.max(0, Math.min(Math.floor(widget.x * scale), columns - 1)),
     })),
     columns,
   );

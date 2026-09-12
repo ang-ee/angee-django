@@ -4,18 +4,27 @@ import {
   Button,
   Card,
   EmptyState,
+  ErrorBanner,
   Input,
+  LoadingPanel,
+  Page,
+  PageBody,
+  PageHeader,
+  PageToolbar,
+  Select,
   TextLink,
   useDashboardRegistry,
   useRouteHref,
 } from "@angee/ui";
 import type { DashboardRegistry, DashboardSummary, DashboardTarget } from "@angee/ui/dashboard/headless";
+import { useDashboardsT } from "./i18n";
 
 export function DashboardCataloguePage(): React.ReactElement {
+  const t = useDashboardsT();
   const registry = useDashboardRegistry();
   const store = registry.store;
   if (!store) {
-    return <EmptyState icon="dashboard" title="Dashboards unavailable" description="No dashboard persistence adapter is installed." />;
+    return <EmptyState icon="dashboard" title={t("catalogue.unavailable.title")} description={t("catalogue.unavailable.description")} />;
   }
   return <DashboardCatalogue store={store} registry={registry} />;
 }
@@ -34,6 +43,9 @@ function DashboardCatalogue({ store, registry }: {
   const [name, setName] = React.useState("");
   const [creating, setCreating] = React.useState(false);
   const [error, setError] = React.useState<Error | null>(null);
+  const [query, setQuery] = React.useState("");
+  const [sort, setSort] = React.useState<"name" | "scope">("name");
+  const t = useDashboardsT();
   const summaries = React.useMemo<readonly DashboardSummary[]>(() => {
     const merged = new Map(catalogue.summaries.map((summary) => [targetKey(summary.target), summary]));
     for (const definition of Object.values(registry.definitions)) {
@@ -58,6 +70,24 @@ function DashboardCatalogue({ store, registry }: {
     }
     return [...merged.values()].sort((left, right) => left.title.localeCompare(right.title));
   }, [catalogue.summaries, registry.definitions]);
+  const visibleSummaries = React.useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    return summaries
+      .filter((dashboard) => dashboard.available)
+      .filter((dashboard) =>
+        !needle
+        || dashboard.title.toLocaleLowerCase().includes(needle)
+        || dashboard.description?.toLocaleLowerCase().includes(needle)
+        || dashboard.resources.some((resource) => resource.toLocaleLowerCase().includes(needle)),
+      )
+      .sort((left, right) => {
+        if (sort === "scope") {
+          const scopeOrder = left.target.scope.localeCompare(right.target.scope);
+          if (scopeOrder !== 0) return scopeOrder;
+        }
+        return left.title.localeCompare(right.title);
+      });
+  }, [query, sort, summaries]);
 
   const create = async () => {
     if (!name.trim()) return;
@@ -77,21 +107,42 @@ function DashboardCatalogue({ store, registry }: {
   };
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-4">
-      <header className="flex flex-wrap items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-xl font-semibold text-fg">Dashboards</h1>
-          <p className="text-13 text-fg-muted">Personal dashboards and your customized addon and resource views.</p>
-        </div>
-        <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Dashboard name" aria-label="Dashboard name" className="w-56" />
-        <Button type="button" variant="primary" disabled={creating || !name.trim()} onClick={() => void create()}>
-          {creating ? "Creating…" : "Create dashboard"}
-        </Button>
-      </header>
-      {error || catalogue.error ? <p role="alert" className="text-13 text-danger-text">{(error ?? catalogue.error)?.message}</p> : null}
-      {catalogue.loading && summaries.length === 0 ? <p className="text-13 text-fg-muted">Loading dashboards…</p> : null}
+    <Page>
+      <PageHeader
+        title={t("catalogue.title")}
+        description={t("catalogue.description")}
+      />
+      <PageToolbar
+        start={(
+          <>
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("catalogue.name")} aria-label={t("catalogue.name")} className="min-w-40 flex-1 sm:w-56 sm:flex-none" />
+            <Button type="button" variant="primary" disabled={creating || !name.trim()} onClick={() => void create()}>
+              {creating ? t("common.creating") : t("common.create")}
+            </Button>
+          </>
+        )}
+        end={(
+          <>
+            <Input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("catalogue.search")} aria-label={t("catalogue.search")} className="min-w-40 flex-1 sm:w-56 sm:flex-none" />
+            <Select
+              value={sort}
+              aria-label={t("catalogue.sort")}
+              className="w-32"
+              options={[
+                { value: "name", label: t("catalogue.sort.name") },
+                { value: "scope", label: t("catalogue.sort.scope") },
+              ]}
+              onValueChange={(value) => setSort(value as "name" | "scope")}
+            />
+          </>
+        )}
+        className="flex-wrap"
+      />
+      <ErrorBanner description={(error ?? catalogue.error)?.message ?? null} />
+      <PageBody className="space-y-4">
+      {catalogue.loading && summaries.length === 0 ? <LoadingPanel message={t("common.loading")} /> : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {summaries.filter((dashboard) => dashboard.available).map((dashboard) => {
+        {visibleSummaries.map((dashboard) => {
           const href = dashboard.target.scope === "personal"
             ? routeHref("dashboards.detail", { id: dashboard.target.id })
             : dashboard.target.scope === "resource"
@@ -100,7 +151,7 @@ function DashboardCatalogue({ store, registry }: {
           return (
             <Card key={`${dashboard.target.scope}:${dashboard.id}`} className="flex min-h-32 flex-col gap-2 p-4">
               <TextLink href={href} variant="muted" className="text-15 font-semibold text-fg">{dashboard.title}</TextLink>
-              <p className="line-clamp-2 text-13 text-fg-muted">{dashboard.description || "No description"}</p>
+              <p className="line-clamp-2 text-13 text-fg-muted">{dashboard.description || t("common.noDescription")}</p>
               <div className="mt-auto flex flex-wrap gap-1 text-2xs text-fg-subtle">
                 <span>{dashboard.target.scope}</span>
                 {dashboard.resources.map((resource) => <span key={resource}>· {resource}</span>)}
@@ -109,9 +160,10 @@ function DashboardCatalogue({ store, registry }: {
           );
         })}
       </div>
-      {!catalogue.loading && summaries.length === 0 ? (
-        <EmptyState icon="dashboard" title="No dashboards yet" description="Create a personal dashboard, or customize a resource dashboard." />
+      {!catalogue.loading && visibleSummaries.length === 0 ? (
+        <EmptyState icon="dashboard" title={t("catalogue.empty.title")} description={t("catalogue.empty.description")} />
       ) : null}
-    </main>
+      </PageBody>
+    </Page>
   );
 }

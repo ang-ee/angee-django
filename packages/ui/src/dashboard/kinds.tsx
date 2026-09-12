@@ -1,23 +1,38 @@
 import * as React from "react";
 import { MetricTile } from "../fragments/MetricStrip";
+import { ErrorBanner } from "../fragments/ErrorBanner";
+import { InlineEmpty } from "../fragments/InlineEmpty";
+import { LoadingPanel } from "../fragments/LoadingPanel";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import type { DashboardWidgetKind, DashboardWidgetRenderProps } from "./headless";
 import { DashboardBars, DashboardDonut } from "./charts";
+import { useDashboardT } from "./i18n";
 
 function DataState({ data, children }: DashboardWidgetRenderProps & { children: React.ReactNode }): React.ReactElement {
-  if (data.error) return <p role="alert" className="text-12 text-danger-text">{data.error.message}</p>;
+  const t = useDashboardT();
+  if (data.error) return <ErrorBanner description={data.error.message} />;
   if (data.fetching && data.value == null && data.series.length === 0 && data.rows.length === 0) {
-    return <p className="text-12 text-fg-muted">Loading…</p>;
+    return <LoadingPanel density="inline" message={t("widget.loading")} />;
   }
   return <>{children}</>;
 }
 
 function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
+  const t = useDashboardT();
   const suffix = typeof props.spec.options.suffix === "string" ? props.spec.options.suffix : "";
   const value = props.data.value == null
     ? "—"
     : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(props.data.value)}${suffix}`;
-  return <DataState {...props}><MetricTile className="h-full" density="prominent" label={props.spec.title} value={value} /></DataState>;
+  return (
+    <DataState {...props}>
+      <MetricTile
+        className="h-full border-0 bg-transparent p-0 shadow-none [&>div:first-child]:mb-1"
+        density="prominent"
+        label={t("widget.value")}
+        value={value}
+      />
+    </DataState>
+  );
 }
 
 function BarWidget(props: DashboardWidgetRenderProps): React.ReactElement {
@@ -29,13 +44,14 @@ function DonutWidget(props: DashboardWidgetRenderProps): React.ReactElement {
 }
 
 function TableWidget(props: DashboardWidgetRenderProps): React.ReactElement {
+  const t = useDashboardT();
   const columns = React.useMemo(() => {
     const first = props.data.rows[0];
     return first ? Object.keys(first).filter((key) => key !== "id") : [];
   }, [props.data.rows]);
   return (
     <DataState {...props}>
-      {props.data.rows.length === 0 ? <p className="text-12 text-fg-muted">No rows</p> : (
+      {props.data.rows.length === 0 ? <InlineEmpty label={t("widget.noRows")} /> : (
         <Table density="compact">
           <TableHeader><TableRow>{columns.map((column) => <TableHead key={column}>{column.replaceAll("_", " ")}</TableHead>)}</TableRow></TableHeader>
           <TableBody>
@@ -50,7 +66,8 @@ function TableWidget(props: DashboardWidgetRenderProps): React.ReactElement {
 }
 
 function AuthoredWidget(props: DashboardWidgetRenderProps): React.ReactElement {
-  return <>{props.authored ?? <p className="text-12 text-fg-muted">The authored panel is unavailable.</p>}</>;
+  const t = useDashboardT();
+  return <>{props.authored ?? <InlineEmpty label={t("widget.authoredUnavailable")} />}</>;
 }
 
 function cellText(value: unknown): string {

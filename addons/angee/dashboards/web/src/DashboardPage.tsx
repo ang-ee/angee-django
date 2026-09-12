@@ -3,16 +3,23 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   Button,
   DashboardSurface,
+  DropdownMenu,
+  ErrorBanner,
+  Glyph,
   HOME_PATH_PREFERENCE_KEY,
   Input,
+  Page,
+  PageToolbar,
   readRuntimeRouteShortcuts,
   ROUTE_SHORTCUTS_PREFERENCE_KEY,
+  Select,
   useDashboardRegistry,
   useRouteParam,
   useRouteHref,
   useRuntimeUserPreferences,
 } from "@angee/ui";
 import type { DashboardTarget } from "@angee/ui/dashboard/headless";
+import { useDashboardsT } from "./i18n";
 
 export function PersonalDashboardPage(): React.ReactElement {
   const id = useRouteParam("id") ?? "";
@@ -43,6 +50,7 @@ function StoredDashboardPage({ target, store }: {
   const preferences = useRuntimeUserPreferences();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
+  const t = useDashboardsT();
   const state = binding.state;
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<Error | null>(null);
@@ -137,63 +145,107 @@ function StoredDashboardPage({ target, store }: {
   };
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-end gap-2 border-b border-border-subtle bg-sheet px-3 py-2">
-        {error ? <span role="alert" className="mr-auto text-12 text-danger-text">{error.message}</span> : null}
-        {target.scope === "personal" && state.status === "ready" && state.capabilities.canEdit ? (
-          <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => setEditingDetails((value) => !value)}>Details</Button>
-        ) : null}
-        {href && preferences.available ? (
-          <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => {
-            setPending(true);
-            setError(null);
-            void preferences.patchPreferences((current) => ({
-              ...current,
-              [HOME_PATH_PREFERENCE_KEY]: isHome ? null : href,
-            })).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
-          }}>{isHome ? "Unset home" : "Set as home"}</Button>
-        ) : null}
-        {href && preferences.available && state.status === "ready" ? (
-          <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => {
-            setPending(true);
-            setError(null);
-            void preferences.patchPreferences((current) => {
-              const shortcuts = readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId);
-              if (!pinned) shortcuts.push({ id: shortcutId, label: state.name, path: href, icon: "dashboard" });
-              return { ...current, [ROUTE_SHORTCUTS_PREFERENCE_KEY]: shortcuts };
-            }).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
-          }}>{pinned ? "Unpin" : "Pin"}</Button>
-        ) : null}
-        {state.status === "ready" ? <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => void duplicate()}>Duplicate</Button> : null}
-        {state.status === "ready" && state.capabilities.canShare ? (
-          <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => setSharing((value) => !value)}>Share</Button>
-        ) : null}
-        {state.status === "ready" && target.scope === "personal" && state.capabilities.canArchive ? (
-          <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => void archive()}>Archive</Button>
-        ) : null}
-      </div>
-      {editingDetails && target.scope === "personal" && state.status === "ready" && state.capabilities.canEdit ? (
-        <section className="flex flex-wrap items-center gap-2 border-b border-border-subtle bg-inset p-3" aria-label="Dashboard details">
-          <Input size="sm" value={dashboardName} onChange={(event) => setDashboardName(event.target.value)} aria-label="Dashboard name" placeholder="Dashboard name" className="w-64" />
-          <Input size="sm" value={dashboardDescription} onChange={(event) => setDashboardDescription(event.target.value)} aria-label="Dashboard description" placeholder="Description" className="min-w-72 flex-1" />
-          <Button type="button" variant="primary" size="sm" disabled={pending || !dashboardName.trim()} onClick={() => void saveDetails()}>Save details</Button>
-          <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => setEditingDetails(false)}>Cancel</Button>
+    <Page>
+      <DashboardSurface
+        target={target}
+        toolbar={(
+          <>
+            <PageToolbar
+              className="flex-wrap"
+              start={target.scope === "personal" && state.status === "ready" && state.capabilities.canEdit ? (
+                <Button type="button" variant="secondary" size="sm" disabled={pending} onClick={() => setEditingDetails((value) => !value)}>
+                  <Glyph name="pencil" />{t("common.details")}
+                </Button>
+              ) : null}
+              end={state.status === "ready" ? (
+                <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              render={(
+                <Button type="button" variant="ghost" size="sm" disabled={pending}>
+                  <Glyph name="more-horizontal" fallbackName="more-vertical" />
+                  {t("common.moreActions")}
+                </Button>
+              )}
+            />
+            <DropdownMenu.Portal>
+              <DropdownMenu.Positioner sideOffset={6} align="end">
+                <DropdownMenu.Content className="w-52">
+                  {href && preferences.available ? (
+                    <>
+                      <DropdownMenu.Item onClick={() => {
+                        setPending(true);
+                        setError(null);
+                        void preferences.patchPreferences((current) => {
+                          const shortcuts = readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId);
+                          if (!pinned) shortcuts.push({ id: shortcutId, label: state.name, path: href, icon: "dashboard" });
+                          return { ...current, [ROUTE_SHORTCUTS_PREFERENCE_KEY]: shortcuts };
+                        }).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
+                      }}>
+                        <Glyph name="star" />{pinned ? t("common.unpin") : t("common.pin")}
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item onClick={() => {
+                        setPending(true);
+                        setError(null);
+                        void preferences.patchPreferences((current) => ({
+                          ...current,
+                          [HOME_PATH_PREFERENCE_KEY]: isHome ? null : href,
+                        })).catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause)))).finally(() => setPending(false));
+                      }}>
+                        <Glyph name="home" />{isHome ? t("common.unsetHome") : t("common.setAsHome")}
+                      </DropdownMenu.Item>
+                    </>
+                  ) : null}
+                  <DropdownMenu.Item onClick={() => void duplicate()}>
+                    <Glyph name="copy" />{t("common.duplicate")}
+                  </DropdownMenu.Item>
+                  {state.capabilities.canShare ? (
+                    <DropdownMenu.Item onClick={() => setSharing((value) => !value)}>
+                      <Glyph name="share" />{t("common.share")}
+                    </DropdownMenu.Item>
+                  ) : null}
+                  {target.scope === "personal" && state.capabilities.canArchive ? (
+                    <>
+                      <DropdownMenu.Separator />
+                      <DropdownMenu.Item variant="danger" onClick={() => void archive()}>
+                        <Glyph name="archive" />{t("common.archive")}
+                      </DropdownMenu.Item>
+                    </>
+                  ) : null}
+                </DropdownMenu.Content>
+              </DropdownMenu.Positioner>
+            </DropdownMenu.Portal>
+                </DropdownMenu.Root>
+              ) : null}
+            />
+            <ErrorBanner description={error?.message ?? null} />
+            {editingDetails && target.scope === "personal" && state.status === "ready" && state.capabilities.canEdit ? (
+        <section
+          className="flex flex-wrap items-center gap-2 border-b border-border-subtle bg-inset p-3"
+          aria-label={t("details.label")}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setEditingDetails(false);
+          }}
+        >
+          <Input size="sm" value={dashboardName} onChange={(event) => setDashboardName(event.target.value)} aria-label={t("details.name")} placeholder={t("details.name")} className="min-w-40 flex-1 sm:w-64 sm:flex-none" />
+          <Input size="sm" value={dashboardDescription} onChange={(event) => setDashboardDescription(event.target.value)} aria-label={t("details.description")} placeholder={t("details.description")} className="min-w-40 flex-1" />
+          <Button type="button" variant="primary" size="sm" disabled={pending || !dashboardName.trim()} onClick={() => void saveDetails()}>{t("details.save")}</Button>
+          <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => setEditingDetails(false)}>{t("common.cancel")}</Button>
         </section>
-      ) : null}
-      {sharing && state.status === "ready" && state.capabilities.canShare ? (
-        <section className="flex flex-col gap-2 border-b border-border-subtle bg-inset p-3" aria-label="Dashboard sharing">
+            ) : null}
+            {sharing && state.status === "ready" && state.capabilities.canShare ? (
+        <section className="flex flex-col gap-2 border-b border-border-subtle bg-inset p-3" aria-label={t("sharing.label")}>
           <div className="flex flex-wrap items-center gap-2">
-            <select aria-label="Recipient type" value={subjectType} onChange={(event) => setSubjectType(event.target.value as "user" | "group")} className="h-8 rounded-6 border border-border bg-sheet px-2 text-12 text-fg">
-              <option value="user">User</option><option value="group">Group</option>
-            </select>
-            <Input size="sm" value={subjectId} onChange={(event) => setSubjectId(event.target.value)} placeholder={`${subjectType} public ID`} aria-label="Recipient public ID" className="w-64" />
-            <select aria-label="Dashboard role" value={shareRole} onChange={(event) => setShareRole(event.target.value as "viewer" | "editor")} className="h-8 rounded-6 border border-border bg-sheet px-2 text-12 text-fg">
-              <option value="viewer">Viewer</option><option value="editor">Editor</option>
-            </select>
-            <Button type="button" variant="primary" size="sm" disabled={pending || !subjectId.trim()} onClick={() => void grantShare()}>Add recipient</Button>
+            <Select size="sm" aria-label={t("sharing.recipientType")} value={subjectType} onValueChange={(value) => setSubjectType(value as "user" | "group")} className="w-32" options={[
+              { value: "user", label: t("sharing.user") }, { value: "group", label: t("sharing.group") },
+            ]} />
+            <Input size="sm" value={subjectId} onChange={(event) => setSubjectId(event.target.value)} placeholder={t("sharing.publicIdFor", { type: t(`sharing.${subjectType}`) })} aria-label={t("sharing.publicId")} className="min-w-40 flex-1 sm:w-64 sm:flex-none" />
+            <Select size="sm" aria-label={t("sharing.role")} value={shareRole} onValueChange={(value) => setShareRole(value as "viewer" | "editor")} className="w-32" options={[
+              { value: "viewer", label: t("sharing.viewer") }, { value: "editor", label: t("sharing.editor") },
+            ]} />
+            <Button type="button" variant="primary" size="sm" disabled={pending || !subjectId.trim()} onClick={() => void grantShare()}>{t("sharing.add")}</Button>
           </div>
-          {binding.sharesError ? <p role="alert" className="text-12 text-danger-text">{binding.sharesError.message}</p> : null}
-          {binding.sharesLoading ? <p className="text-12 text-fg-muted">Loading recipients…</p> : null}
+          <ErrorBanner description={binding.sharesError?.message ?? null} />
+          {binding.sharesLoading ? <p className="text-12 text-fg-muted">{t("sharing.loading")}</p> : null}
           {binding.shares.map((share) => (
             <div key={share.id} className="flex items-center gap-2 text-13 text-fg">
               <span className="min-w-0 flex-1 truncate">{share.label} · {share.subjectType} · {share.role}</span>
@@ -203,12 +255,14 @@ function StoredDashboardPage({ target, store }: {
                 void binding.revokeShare(state.persistedId, share)
                   .catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause))))
                   .finally(() => setPending(false));
-              }}>Remove</Button>
+              }}>{t("common.remove")}</Button>
             </div>
           ))}
         </section>
-      ) : null}
-      <DashboardSurface target={target} />
-    </main>
+            ) : null}
+          </>
+        )}
+      />
+    </Page>
   );
 }
