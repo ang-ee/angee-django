@@ -289,31 +289,96 @@ class FractionalRankField(models.FloatField):
         super().validate(value, model_instance)
 
     def clean(self, value: Any, model_instance: models.Model) -> float | None:
-        """Release a rank that a moved row carried into a context already holding it.
+        """Resolve a rank that the context's unique constraint would reject.
 
-        Validation runs before ``pre_save``, so returning the pending ``None`` keeps the
-        context's unique constraint from rejecting the move and lets ``pre_save``
-        append the row in its new context.
+        Validation runs before ``pre_save``, and every write from the browser
+        validates: the mutation roots call ``full_clean()``, whose
+        ``validate_constraints()`` checks the rank the instance holds. So a rank
+        this field means to move has to move here, or the write is rejected
+        before ``pre_save`` is ever reached.
+
+        A rank a moved row carried into a context already holding it becomes the
+        pending ``None`` that ``pre_save`` appends. A rank written explicitly that
+        another row holds is placed after that row, the same placement
+        ``pre_save`` makes; ``clean_fields()`` writes it back, so
+        ``validate_constraints()`` then sees a free rank.
         """
 
         rank = super().clean(value, model_instance)
-        if rank is not None and self._carried_into_taken_rank(model_instance, rank):
+        if rank is None:
+            return rank
+        if self._carried_into_taken_rank(model_instance, rank):
             return None
+        if self._rank_is_taken(model_instance, rank):
+            return self._rank_after_holder(model_instance, rank)
         return rank
 
     def pre_save(self, model_instance: models.Model, add: bool) -> float:
-        """Honor an explicit rank or append within the model's unique context.
+        """Honor an explicit rank or place it within the model's unique context.
 
         A row moved into another context without a new rank still holds its old one;
-        when another row there holds that rank, the moved row appends instead.
+        when another row there holds that rank, the moved row appends instead. An
+        explicitly written rank that another row already holds is placed immediately
+        after that row, because the writer asked for a position rather than an
+        identity: a board hands up a midpoint computed against the lane it dropped
+        into, while uniqueness spans the whole context, so the two disagree often.
         """
 
         value = super().pre_save(model_instance, add)
         if value is not None and not self._carried_into_taken_rank(model_instance, value):
-            return cast(float, value)
+            if not self._rank_is_taken(model_instance, value):
+                return cast(float, value)
+            rank = self._rank_after_holder(model_instance, cast(float, value))
+            setattr(model_instance, self.attname, rank)
+            return rank
         rank = self._append_rank_for_instance(model_instance)
         setattr(model_instance, self.attname, rank)
         return rank
+
+    def _rank_is_taken(self, instance: models.Model, rank: float) -> bool:
+        """Return whether another row in this instance's unique context holds ``rank``."""
+
+        model = type(instance)
+        constraint = self._unique_context_constraint(model)
+        if constraint is None:
+            return False
+        context = {
+            context_field.attname: getattr(instance, context_field.attname)
+            for context_field in self._unique_context_fields(model)
+        }
+        database = router.db_for_write(model, instance=instance)
+        holders = (
+            system_queryset(model, using=database, lock=())
+            .filter(**context, **{self.attname: rank})
+            .exclude(pk=instance.pk)
+        )
+        if constraint.condition is not None:
+            holders = holders.filter(constraint.condition)
+        return holders.exists()
+
+    def _rank_after_holder(self, instance: models.Model, rank: float) -> float:
+        """Return a rank between ``rank`` and the next one above it in this context.
+
+        With nothing above, this appends one clean step past the holder. Exhaustion
+        raises :class:`FractionalRankExhausted` from :meth:`get_rank_between`, which
+        is the caller's signal to rebalance rather than a silent reorder.
+        """
+
+        model = type(instance)
+        context = {
+            context_field.attname: getattr(instance, context_field.attname)
+            for context_field in self._unique_context_fields(model)
+        }
+        database = router.db_for_write(model, instance=instance)
+        following = (
+            system_queryset(model, using=database, lock=())
+            .filter(**context, **{f"{self.name}__gt": rank})
+            .exclude(pk=instance.pk)
+            .order_by(self.name)
+            .values_list(self.name, flat=True)
+            .first()
+        )
+        return self.get_rank_between(rank, following)
 
     def _append_rank_for_instance(self, instance: models.Model) -> float:
         """Return the next rank from an unscoped scan of the instance context."""
