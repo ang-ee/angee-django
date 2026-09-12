@@ -403,13 +403,20 @@
    rather than as a Tailwind arbitrary value because the grid template is a
    layout contract, and the record it serves already shares its row with a
    chatter rail: the column holds a fixed, readable width and the body takes
-   what is left, collapsing to one column when there is not room for both. */
+   what is left, collapsing to one column when there is not room for both.
+
+   The column turns on at 80rem, not at the `lg` 64rem where a two-pane record
+   would normally split. This record can be three panes: the chatter rail opens
+   beside it on the same models. Measured at 1024 with both showing, the form
+   body was left 224px and a control clipped. 80rem is the first width where all
+   three fit, so below it the properties stack under the body and the rail keeps
+   the room. */
 .form-sidebar-grid {
   display: grid;
   gap: 1.5rem;
 }
 
-@media (min-width: 60rem) {
+@media (min-width: 80rem) {
   .form-sidebar-grid {
     grid-template-columns: minmax(0, 1fr) 16rem;
     align-items: start;
