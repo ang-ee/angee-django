@@ -30,7 +30,7 @@ export function pageDragPayload(
 }
 
 /** Registry glyph for a page's kind. */
-export function pageIcon(kind: string): string {
+function pageIcon(kind: string): string {
   switch (kind) {
     case "folder":
       return "folder";

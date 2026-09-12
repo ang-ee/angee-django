@@ -20,7 +20,7 @@ export interface WorkCycleRow extends StringIdRow {
 }
 
 /** Authored cycle close/rollover descriptor; in-band next_cycle errors stay open. */
-export function useCloseCycleAction(): ActionDescriptor {
+function useCloseCycleAction(): ActionDescriptor {
   const t = useWorkT();
   const [close] = useActionOutcomeMutation<ActionFieldName>("close_work_cycle", {
     idArgument: "cycle",

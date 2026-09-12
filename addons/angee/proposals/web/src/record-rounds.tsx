@@ -37,7 +37,7 @@ function RecordRoundsSection({
 }
 
 /** The proposals-owned round pane contributed to project and task records. */
-export function RecordRoundsPane({
+function RecordRoundsPane({
   targetField,
   targetId,
 }: {

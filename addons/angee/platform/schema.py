@@ -319,6 +319,7 @@ _FIELD_RESOURCE = hasura_pydantic_resource(
         "addon",
     ],
     rows=_field_rows_for,
+    frontend_row_model="server",
 )
 
 

@@ -284,7 +284,15 @@ export async function defineAngeeWebViteConfig({
       // project's: an addon file otherwise walks up into the checkout's copy,
       // forking the React context (a second @tanstack/react-router made
       // useNavigate read a null RouterProvider context).
-      dedupe: ["react", "react-dom", "@tanstack/react-router"],
+      dedupe: [
+        "react",
+        "react-dom",
+        "@tanstack/react-router",
+        "codemirror",
+        "@codemirror/state",
+        "@codemirror/view",
+        "@codemirror/language",
+      ],
     },
     // Built package outputs are dependency bundles. Linked TypeScript package
     // entrypoints are application source: leave them in Vite's transform/HMR

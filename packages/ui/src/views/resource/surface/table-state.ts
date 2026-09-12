@@ -1,5 +1,6 @@
 import * as React from "react";
 import { type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { stableKey } from "@angee/refine";
 import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Table, type VisibilityState } from "@tanstack/react-table";
 import { queryForColumns } from "../resource-query";
 import { errorFromUnknown } from "../../../data/errors";
@@ -11,6 +12,7 @@ import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
 import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths } from "../resource-view-codecs";
 import type { ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
+import { useLatestRef } from "../../../lib/use-latest-ref";
 export function useResourceRowsSnapshot<TRow extends Row = Row>(
   list: ResourceRowsSnapshotSource,
   options: UseResourceRowsSnapshotOptions<TRow> = {},
@@ -53,10 +55,18 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
       navigationScope,
     ],
   );
+  // Collection consumers publish the snapshot back into parent state. Some
+  // table projections allocate an equivalent rows array after that parent
+  // render; depending on raw object identity turns the publication into an
+  // effect -> setState -> render loop. The query facts and row values are the
+  // snapshot identity, so retain one object until those facts actually change.
+  const snapshotKey = stableKey(snapshot);
+  const stableSnapshot = React.useMemo(() => snapshot, [snapshotKey]);
+  const onListStateChangeRef = useLatestRef(onListStateChange);
   React.useEffect(() => {
-    onListStateChange?.(snapshot);
-  }, [onListStateChange, snapshot]);
-  return snapshot;
+    onListStateChangeRef.current?.(stableSnapshot);
+  }, [onListStateChangeRef, stableSnapshot]);
+  return stableSnapshot;
 }
 
 export function listResultFromPageState<TRow extends Row>({
