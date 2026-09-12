@@ -45,11 +45,11 @@ export function CommandPalette({
         type="button"
         aria-label={t("chrome.openCommandPalette")}
         onClick={() => setOpen(true)}
-        className="flex h-7 w-search-w min-w-0 cursor-text items-center gap-2 rounded-6 border border-transparent bg-rail-hi pl-3 pr-2 text-left text-13 text-on-rail-mut outline-none transition-colors hover:border-border-on-rail hover:bg-rail-hover focus-visible:focus-ring [&_.glyph]:size-3.5"
+        className="flex size-7 min-w-0 cursor-text items-center justify-center gap-2 rounded-6 border border-transparent bg-rail-hi p-0 text-left text-13 text-on-rail-mut outline-none transition-colors hover:border-border-on-rail hover:bg-rail-hover focus-visible:focus-ring sm:h-7 sm:w-search-w sm:justify-start sm:pl-3 sm:pr-2 [&_.glyph]:size-3.5"
       >
         <Glyph name="search" />
-        <span className="min-w-0 flex-1 truncate">{triggerText}</span>
-        <kbd className="rounded-6 border border-kbd-on-rail-border bg-kbd-on-rail px-1.5 py-0.5 text-2xs font-medium text-on-rail-mut">
+        <span className="hidden min-w-0 flex-1 truncate sm:block">{triggerText}</span>
+        <kbd className="hidden rounded-6 border border-kbd-on-rail-border bg-kbd-on-rail px-1.5 py-0.5 text-2xs font-medium text-on-rail-mut sm:block">
           ⌘K
         </kbd>
       </button>

@@ -88,7 +88,7 @@ export function Chatter({
       className={cn(
         // A pane filler — the SplitPane supplies width, separator, border, and
         // background; Chatter just lays its tabs + composer out to fill it.
-        "flex h-full min-h-0 w-full flex-col overflow-hidden",
+        "chatter-pane flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden",
         className,
       )}
     >
@@ -109,15 +109,21 @@ export function Chatter({
         variant="card"
         className="flex min-h-0 flex-1 flex-col"
       >
-        <Tabs.List className="shrink-0 min-w-0 overflow-x-auto px-2 pt-2">
+        <Tabs.List className="grid shrink-0 min-w-0 grid-flow-col auto-cols-fr overflow-hidden px-2 pt-2">
           {resolvedTabs.map((tab) => (
             <Tabs.Tab
               key={tab.id}
               value={tab.id}
               icon={tab.icon ? <Glyph name={tab.icon} /> : undefined}
-              className="h-8 px-2 text-13 font-medium"
+              className="h-8 min-w-0 px-1 text-13 font-medium"
             >
-              {tab.label}
+              <span
+                className={cn(tab.icon && "chatter-tab-label")}
+                aria-hidden={tab.icon ? true : undefined}
+              >
+                {tab.label}
+              </span>
+              {tab.icon ? <span className="sr-only">{tab.label}</span> : null}
               {typeof tab.count === "number" ? (
                 <Tabs.Count>{tab.count}</Tabs.Count>
               ) : null}
@@ -128,7 +134,8 @@ export function Chatter({
           <Tabs.Panel key={tab.id} value={tab.id} className="min-h-0 flex-1">
             <ScrollArea
               className="h-full"
-              viewportClassName={cn("p-4", tab.panelClassName)}
+              viewportClassName={cn("overflow-x-hidden p-4", tab.panelClassName)}
+              contentClassName="min-w-0 max-w-full"
             >
               {tab.children}
             </ScrollArea>
@@ -136,7 +143,7 @@ export function Chatter({
         ))}
       </Tabs>
       {resolvedComposer ? (
-        <div className="shrink-0 border-t border-border-subtle p-3">
+        <div className="min-w-0 shrink-0 overflow-hidden border-t border-border-subtle p-3">
           {resolvedComposer}
         </div>
       ) : null}

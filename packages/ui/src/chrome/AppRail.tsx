@@ -32,6 +32,7 @@ import { useDndKitSensors } from "../lib/dnd";
 import { toneGlyph } from "../lib/tones";
 import { LARGE_VIEWPORT_QUERY, useMediaQuery } from "../lib/use-media-query";
 import { Button } from "../ui/button";
+import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip } from "../ui/tooltip";
 import { AppChooser } from "./AppChooser";
 import { AppRailTree, appRailTreeVariants } from "./AppRailTree";
@@ -60,6 +61,8 @@ export interface AppRailProps {
   menuItems?: readonly ChromeMenuItem[];
   /** Publishes the rail's current width so the shell grid can track it. */
   onWidthChange?: (width: string | null) => void;
+  /** Render as the full-width contents of the compact navigation drawer. */
+  presentation?: "rail" | "drawer";
 }
 
 export const APP_RAIL_COLLAPSED_WIDTH = "var(--spacing-rail-w)";
@@ -80,6 +83,7 @@ export function AppRail({
   className,
   menuItems,
   onWidthChange,
+  presentation = "rail",
 }: AppRailProps): ReactElement {
   const t = useUiT();
   const pathname = useRouterState({
@@ -97,7 +101,8 @@ export function AppRail({
     [runtimePreferences.preferences],
   );
   const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
-  const expanded = resolvedRailExpanded(
+  const drawerMode = presentation === "drawer";
+  const expanded = drawerMode || resolvedRailExpanded(
     railPreferences.expanded,
     largeViewport,
   );
@@ -139,16 +144,25 @@ export function AppRail({
     focusFooterToggle.current = true;
     toggleExpanded();
   }, [toggleExpanded]);
-  const onActiveToggle = largeViewport ? toggleFromActiveLink : undefined;
-  const width = expanded ? APP_RAIL_EXPANDED_WIDTH : APP_RAIL_COLLAPSED_WIDTH;
+  const onActiveToggle = largeViewport && !drawerMode
+    ? toggleFromActiveLink
+    : undefined;
+  const width = drawerMode
+    ? "100%"
+    : expanded ? APP_RAIL_EXPANDED_WIDTH : APP_RAIL_COLLAPSED_WIDTH;
   const navId = useId();
 
   // The width and the grid's --rail-current-w are one layout fact — publish
   // before paint so both land in the same frame.
   useLayoutEffect(() => {
-    onWidthChange?.(width);
-  }, [onWidthChange, width]);
-  useLayoutEffect(() => () => onWidthChange?.(null), [onWidthChange]);
+    if (!drawerMode) onWidthChange?.(width);
+  }, [drawerMode, onWidthChange, width]);
+  useLayoutEffect(
+    () => () => {
+      if (!drawerMode) onWidthChange?.(null);
+    },
+    [drawerMode, onWidthChange],
+  );
   useLayoutEffect(() => {
     if (!focusFooterToggle.current) return;
     focusFooterToggle.current = false;
@@ -185,63 +199,65 @@ export function AppRail({
         id={navId}
         aria-label={t("chrome.primaryNav")}
         data-rail-list="true"
-        className="min-h-0 w-full flex-1 overflow-y-auto overscroll-contain"
+        className="min-h-0 w-full flex-1"
       >
-        {expanded ? (
-          <AppRailTree
-            scope={place.scope}
-            roots={settingsActive ? place.roots : items}
-            activeRootId={place.activeRootId}
-            onActiveToggle={onActiveToggle}
-          />
-        ) : (
-          <SortableRail
-            items={items}
-            activeRootId={activeRootId}
-            defaultItemId={defaultItemId}
-            expanded={expanded}
-            pathname={pathname}
-            onActiveToggle={onActiveToggle}
-            onItemLongPress={handleItemLongPress}
-            onOrderChange={handleOrderChange}
-          />
-        )}
-        {!settingsActive && shortcuts.length ? (
-          <>
-            <div className={cn("my-2 h-px bg-border-on-rail", expanded ? "mx-2" : "mx-auto w-6")} aria-hidden="true" />
-            <div className="flex flex-col gap-1">
-              {shortcuts.map((shortcut) => (
-                <RuntimeShortcutItem
-                  key={shortcut.id}
-                  expanded={expanded}
-                  icon={shortcut.icon ?? "dashboard"}
-                  label={shortcut.label}
-                  pathname={pathname}
-                  to={shortcut.path}
-                />
-              ))}
-            </div>
-          </>
-        ) : null}
-        {settings ? (
-          <>
-            <div className={cn(
-              "my-2 h-px bg-border-on-rail",
-              expanded ? "mx-2" : "mx-auto w-6",
-            )} aria-hidden="true" />
-            <RailSettingsItem
-              active={settingsActive}
-              expanded={expanded}
-              icon={settings.icon}
-              label={t("chrome.settings")}
-              to={settings.target}
-              pathname={pathname}
+        <ScrollArea
+          className="h-full"
+          viewportClassName="overflow-x-hidden"
+          contentClassName="min-w-0 pb-2"
+        >
+          {expanded ? (
+            <AppRailTree
+              scope={place.scope}
+              roots={settingsActive ? place.roots : items}
+              activeRootId={place.activeRootId}
               onActiveToggle={onActiveToggle}
             />
-          </>
-        ) : null}
+          ) : (
+            <SortableRail
+              items={items}
+              activeRootId={activeRootId}
+              defaultItemId={defaultItemId}
+              expanded={expanded}
+              pathname={pathname}
+              onActiveToggle={onActiveToggle}
+              onItemLongPress={handleItemLongPress}
+              onOrderChange={handleOrderChange}
+            />
+          )}
+          {!settingsActive && shortcuts.length ? (
+            <>
+              <div className={cn("my-2 h-px bg-border-on-rail", expanded ? "mx-2" : "mx-auto w-6")} aria-hidden="true" />
+              <div className="flex flex-col gap-1">
+                {shortcuts.map((shortcut) => (
+                  <RuntimeShortcutItem
+                    key={shortcut.id}
+                    expanded={expanded}
+                    icon={shortcut.icon ?? "dashboard"}
+                    label={shortcut.label}
+                    pathname={pathname}
+                    to={shortcut.path}
+                  />
+                ))}
+              </div>
+            </>
+          ) : null}
+        </ScrollArea>
       </nav>
-      {largeViewport ? (
+      {settings ? (
+        <div className="shrink-0 border-t border-border-on-rail pt-2">
+          <RailSettingsItem
+            active={settingsActive}
+            expanded={expanded}
+            icon={settings.icon}
+            label={t("chrome.settings")}
+            to={settings.target}
+            pathname={pathname}
+            onActiveToggle={onActiveToggle}
+          />
+        </div>
+      ) : null}
+      {largeViewport && !drawerMode ? (
         <div
           className={cn(
             "flex shrink-0 border-t border-border-on-rail pt-2",

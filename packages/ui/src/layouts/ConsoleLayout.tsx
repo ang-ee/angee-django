@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useRouterState } from "@tanstack/react-router";
 
 import { AppRail } from "../chrome/AppRail";
 import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
@@ -7,7 +8,13 @@ import { TopBar } from "../chrome/TopBar";
 import { Chatter } from "../communication/Chatter";
 import { ChatterProvider, useChatter } from "../communication/chatter-context";
 import { cn } from "../lib/cn";
+import {
+  LARGE_VIEWPORT_QUERY,
+  MOBILE_VIEWPORT_QUERY,
+  useMediaQuery,
+} from "../lib/use-media-query";
 import type { CollapsiblePane } from "../page";
+import { Drawer } from "../ui/drawer";
 import { ControlBandProvider } from "./ControlBand";
 import { DrawerProvider } from "./drawer-context";
 import { DrawerOverlay } from "./DrawerOverlay";
@@ -33,6 +40,15 @@ export function ConsoleLayout({
   const [primaryController, setPrimaryController] =
     React.useState<CollapsiblePane | null>(null);
   const [railWidth, setRailWidth] = React.useState<string | null>(null);
+  const [navigationOpen, setNavigationOpen] = React.useState(false);
+  const mobileViewport = useMediaQuery(MOBILE_VIEWPORT_QUERY);
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+  React.useEffect(() => setNavigationOpen(false), [pathname]);
+  React.useEffect(() => {
+    if (!mobileViewport) setNavigationOpen(false);
+  }, [mobileViewport]);
   const handlePrimaryController = React.useCallback(
     (controller: CollapsiblePane | null) => {
       setPrimaryController((current) =>
@@ -50,26 +66,32 @@ export function ConsoleLayout({
     [],
   );
   return (
-    <ChatterProvider>
+    <ChatterProvider defaultCollapsed>
       <PrimaryPaneProvider>
         <DrawerProvider>
           <ControlBandProvider host={controlHost}>
             <StatuslineProvider host={statusHost}>
               <BreadcrumbLabelProvider>
                 <div
-                  // The CSS var() fallback owns the collapsed default; the
-                  // style entry exists only once the rail has published.
-                  style={railWidth
-                    ? { "--rail-current-w": railWidth } as React.CSSProperties
-                    : undefined}
+                  style={{
+                    "--rail-current-w": mobileViewport
+                      ? "0px"
+                      : railWidth ?? "var(--spacing-rail-w)",
+                  } as React.CSSProperties}
                   className={cn(
-                    "console-grid min-h-screen w-screen bg-canvas text-fg",
+                    "console-grid h-dvh min-h-0 w-full min-w-0 max-w-full overflow-hidden bg-canvas text-fg",
                     className,
                   )}
                 >
-                  <AppRail onWidthChange={setRailWidth} />
+                  {mobileViewport ? null : (
+                    <AppRail onWidthChange={setRailWidth} />
+                  )}
                   <TopBar
                     className="area-topbar"
+                    navigation={mobileViewport ? {
+                      open: navigationOpen,
+                      toggle: () => setNavigationOpen((open) => !open),
+                    } : undefined}
                     primaryPane={
                       primaryController
                         ? {
@@ -94,6 +116,21 @@ export function ConsoleLayout({
                     className="area-status console-statusline-host"
                   />
                 </div>
+                <Drawer.Root
+                  open={mobileViewport && navigationOpen}
+                  onOpenChange={setNavigationOpen}
+                >
+                  <Drawer.Portal>
+                    <Drawer.Backdrop />
+                    <Drawer.Content
+                      side="left"
+                      aria-label="Primary navigation"
+                      className="w-[min(20rem,calc(100vw-2rem))] border-0 bg-rail p-0"
+                    >
+                      <AppRail presentation="drawer" />
+                    </Drawer.Content>
+                  </Drawer.Portal>
+                </Drawer.Root>
                 {/* Drawers live at shell level (above the grid + router outlet) so
                     the open drawer's content mounts once and survives navigation.
                     Overlays render first, rails last, so a tab stays clickable to
@@ -131,31 +168,55 @@ function ConsoleWorkbench({
   onPrimaryController: (controller: CollapsiblePane | null) => void;
   children: React.ReactNode;
 }): React.ReactElement {
-  const { registerSecondaryController } = useChatter();
+  const {
+    collapsed: chatterCollapsed,
+    setCollapsed: setChatterCollapsed,
+    registerSecondaryController,
+  } = useChatter();
   const { node: publishedPrimary } = usePrimaryPaneContent();
+  const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
+  const desktopChatter = showChatter && largeViewport;
   return (
-    <Workbench
-      className="area-content"
-      autoSave="console.workbench"
-      scrollMode="browser"
-      secondaryDefaultCollapsed
-      primary={
-        publishedPrimary != null ? (
+    <>
+      <Workbench
+        className="area-content"
+        autoSave="console.workbench"
+        scrollMode="contained"
+        secondaryDefaultCollapsed
+        primary={
+          publishedPrimary != null ? (
+            <ControlBandProvider host={undefined}>
+              {publishedPrimary}
+            </ControlBandProvider>
+          ) : undefined
+        }
+        secondary={desktopChatter ? (
           <ControlBandProvider host={undefined}>
-            {publishedPrimary}
+            <Chatter />
           </ControlBandProvider>
-        ) : undefined
-      }
-      secondary={showChatter ? (
-        <ControlBandProvider host={undefined}>
-          <Chatter />
-        </ControlBandProvider>
-      ) : undefined}
-      onPrimaryController={onPrimaryController}
-      onSecondaryController={registerSecondaryController}
-    >
-      {/* The browser owns route scrolling; the statusline remains pinned chrome. */}
-      <main className="console-browser-scroll-main">{children}</main>
-    </Workbench>
+        ) : undefined}
+        onPrimaryController={onPrimaryController}
+        onSecondaryController={desktopChatter ? registerSecondaryController : undefined}
+      >
+        <main className="console-content-main">{children}</main>
+      </Workbench>
+      <Drawer.Root
+        open={showChatter && !largeViewport && !chatterCollapsed}
+        onOpenChange={(open) => setChatterCollapsed(!open)}
+      >
+        <Drawer.Portal>
+          <Drawer.Backdrop />
+          <Drawer.Content
+            side="right"
+            aria-label="Chatter"
+            className="w-[min(28rem,calc(100vw-1rem))] p-0"
+          >
+            <ControlBandProvider host={undefined}>
+              <Chatter />
+            </ControlBandProvider>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
+    </>
   );
 }

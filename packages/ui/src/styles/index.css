@@ -382,7 +382,7 @@
   grid-template-rows:
     var(--spacing-topbar-h)
     auto
-    1fr
+    minmax(0, 1fr)
     0;
   grid-template-areas:
     "rail topbar"
@@ -395,47 +395,6 @@
 @utility area-control { grid-area: control; }
 @utility area-content { grid-area: content; }
 @utility area-status  { grid-area: status; }
-
-.console-browser-scroll-main {
-  height: 100%;
-  min-height: 100%;
-  overflow: visible;
-  padding-bottom: 1.75rem;
-}
-
-.console-browser-scroll-main > * {
-  min-height: 100%;
-}
-
-/* Workspace records own an application-like bounded surface. The marker lives
-   on ResourceList's route wrapper, so forms in chatter or nested document
-   content cannot switch the console shell out of normal browser scrolling. */
-.console-grid:has(.console-browser-scroll-main > [data-record-presentation="workspace"]) {
-  height: 100dvh;
-  min-height: 0;
-  overflow: hidden;
-  grid-template-rows:
-    var(--spacing-topbar-h)
-    auto
-    minmax(0, 1fr)
-    0;
-}
-
-.console-grid:has(.console-browser-scroll-main > [data-record-presentation="workspace"]) .area-content,
-.console-grid:has(.console-browser-scroll-main > [data-record-presentation="workspace"]) .console-browser-scroll-main {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.console-grid:has(.console-browser-scroll-main > [data-record-presentation="workspace"]) .console-browser-scroll-main {
-  padding-bottom: 0;
-}
-
-.console-grid:has(.console-browser-scroll-main > [data-record-presentation="workspace"]) .console-browser-scroll-main > [data-record-presentation="workspace"] {
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
 
 .console-route-viewport { min-height: calc(100vh - var(--spacing-topbar-h)); }
 
@@ -453,14 +412,30 @@
 }
 
 .console-content-main {
-  /* Retained for older composed packages during rolling upgrades. */
+  height: 100%;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .console-content-main > * {
   height: 100%;
   min-height: 0;
+}
+
+.chatter-pane {
+  container-type: inline-size;
+}
+
+.chatter-tab-label {
+  display: none;
+}
+
+@container (min-width: 22rem) {
+  .chatter-tab-label {
+    display: inline;
+  }
 }
 
 @utility board-card-grid {
