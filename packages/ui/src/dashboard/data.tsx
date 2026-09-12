@@ -145,24 +145,30 @@ export function useDashboardWidgetData(
     enabled: wantsRows,
   });
 
-  const series = React.useMemo(() => {
+  const seriesResult = React.useMemo(() => {
     const axis = prepared.groups?.[0];
     const measure = prepared.measure;
-    if (!wantsSeries || !axis || !measure || grouped.totalCount > 500) return [];
-    const ranked = grouped.buckets
-      .map((bucket) => ({
-        key: String(axis.bucketIdentity(bucket)),
-        label: String(axis.bucketLabel(bucket) ?? "—"),
-        value: bucketValue(bucket, measure) ?? 0,
-      }))
-      .sort((left, right) => right.value - left.value || left.key.localeCompare(right.key));
-    const limit = Math.min(source.limit ?? 8, 20);
-    const visible = ranked.slice(0, limit);
-    if (spec.kind === "donut" && ranked.length > limit) {
-      const other = ranked.slice(limit).reduce((sum, point) => sum + point.value, 0);
-      if (other !== 0) visible.push({ key: "__other__", label: "Other", value: other });
+    if (!wantsSeries || !axis || !measure || grouped.totalCount > 500) {
+      return { series: [], error: null };
     }
-    return visible;
+    try {
+      const ranked = grouped.buckets
+        .map((bucket) => ({
+          key: String(axis.bucketIdentity(bucket)),
+          label: String(axis.bucketLabel(bucket) ?? "—"),
+          value: bucketValue(bucket, measure) ?? 0,
+        }))
+        .sort((left, right) => right.value - left.value || left.key.localeCompare(right.key));
+      const limit = Math.min(source.limit ?? 8, 20);
+      const visible = ranked.slice(0, limit);
+      if (spec.kind === "donut" && ranked.length > limit) {
+        const other = ranked.slice(limit).reduce((sum, point) => sum + point.value, 0);
+        if (other !== 0) visible.push({ key: "__other__", label: "Other", value: other });
+      }
+      return { series: visible, error: null };
+    } catch (cause) {
+      return { series: [], error: errorValue(cause) };
+    }
   }, [grouped.buckets, grouped.totalCount, prepared.groups, prepared.measure, source.limit, spec.kind, wantsSeries]);
 
   React.useEffect(() => {
@@ -182,7 +188,7 @@ export function useDashboardWidgetData(
   ) || null;
   return {
     value: wantsValue ? bucketValue(aggregate.aggregate, prepared.measure ?? COUNT_MEASURE) : null,
-    series,
+    series: seriesResult.series,
     rows: wantsRows ? (rows.result.data as readonly Record<string, unknown>[] ?? []) : [],
     fetching: Boolean(
       (wantsValue && aggregate.fetching)
@@ -190,6 +196,7 @@ export function useDashboardWidgetData(
       || (wantsRows && rows.query.isFetching),
     ),
     error: prepared.error
+      ?? seriesResult.error
       ?? (wantsSeries && grouped.totalCount > 500 ? new Error("This series exceeds the 500-bucket dashboard limit.") : null)
       ?? errorValue(aggregate.error ?? grouped.error ?? rows.query.error),
     live: refresh.mode === "live" && visible && Boolean(resource?.roots.changes),

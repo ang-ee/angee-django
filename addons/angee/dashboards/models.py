@@ -435,9 +435,10 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):
                 raise PermissionDenied("Scoped dashboards can only be edited by their owner.")
             if not current.with_actor(actor).has_access("write"):
                 raise PermissionDenied("You cannot edit this dashboard.")
+            widget_model = current._meta.get_field("widgets").related_model
             existing_widgets = {
                 widget.widget_key: widget
-                for widget in cast(Any, DashboardWidget).system_queryset(lock=("self",)).filter(dashboard=current)
+                for widget in widget_model.system_queryset(lock=("self",)).filter(dashboard=current)
             }
             changed = current.columns != canonical["columns"] or current.declaration_revision != declaration_revision
             dashboard_fields: list[str] = []
@@ -465,7 +466,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):
                     "is_archived": item["isArchived"],
                 }
                 if widget is None:
-                    widget = DashboardWidget(dashboard=current, widget_key=item["id"], **fields)
+                    widget = widget_model(dashboard=current, widget_key=item["id"], **fields)
                     widget.full_clean()
                     widget.sudo(reason="dashboards.widget.create").save()
                     changed = True

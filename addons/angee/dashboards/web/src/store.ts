@@ -219,7 +219,7 @@ function useCatalogue(): DashboardCatalogueBinding {
   const [complete, setComplete] = React.useState(false);
   const [collectionError, setCollectionError] = React.useState<Error | null>(null);
   const restarts = React.useRef(0);
-  const processedCursor = React.useRef<string | null>(null);
+  const processedPage = React.useRef<string | null>(null);
   const query = useAuthoredQuery(
     DashboardSummariesDocument,
     { cursor: request.cursor, version: request.version },
@@ -228,7 +228,7 @@ function useCatalogue(): DashboardCatalogueBinding {
   const createPersonal = useCreatePersonal();
   const restart = React.useCallback((manual = false) => {
     if (manual) restarts.current = 0;
-    processedCursor.current = null;
+    processedPage.current = null;
     setRows([]);
     setComplete(false);
     setCollectionError(null);
@@ -257,9 +257,9 @@ function useCatalogue(): DashboardCatalogueBinding {
       setComplete(true);
       return;
     }
-    const pageKey = request.cursor ?? "__first__";
-    if (processedCursor.current === pageKey) return;
-    processedCursor.current = pageKey;
+    const pageKey = `${request.cursor ?? "__first__"}:${page.version}`;
+    if (processedPage.current === pageKey) return;
+    processedPage.current = pageKey;
     setRows((current) => request.cursor ? [...current, ...page.items] : page.items);
     if (page.next_cursor) {
       setRequest({ cursor: page.next_cursor, version: page.version });

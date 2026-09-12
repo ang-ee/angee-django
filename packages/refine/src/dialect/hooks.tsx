@@ -72,7 +72,7 @@ export interface UseAngeeAggregateResult {
 
 export interface UseAngeeGroupByResult extends GroupByResult {
   fetching: boolean;
-  error: HttpError | null;
+  error: HttpError | Error | null;
   /** Timestamp of the most recent successful native query read. */
   updatedAt: number | null;
   refetch: () => void;
@@ -240,14 +240,19 @@ export function useAngeeGroupBy(
     queryOptions: { enabled: canQuery },
   });
   const data = run.query.data?.data ?? run.result.data;
-  const result =
-    request && data != null
-      ? extractGroupBy(data, request.root)
-      : EMPTY_GROUP_BY_RESULT;
+  let result = EMPTY_GROUP_BY_RESULT;
+  let decodeError: Error | null = null;
+  if (request && run.query.isSuccess) {
+    try {
+      result = extractGroupBy(data, request.root);
+    } catch (cause) {
+      decodeError = cause instanceof Error ? cause : new Error(String(cause));
+    }
+  }
   return {
     ...result,
     fetching: run.query.isFetching,
-    error: run.query.error,
+    error: run.query.error ?? decodeError,
     updatedAt: run.query.dataUpdatedAt || null,
     refetch: () => {
       void run.query.refetch();

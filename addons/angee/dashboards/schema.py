@@ -241,7 +241,7 @@ def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
         scope_key=row.scope_key,
         name=row.name,
         description=row.description,
-        owner=cast(strawberry.ID | None, user_public_id(row.owner)),
+        owner=cast(strawberry.ID | None, user_public_id(row.owner_id)),
         owner_label=user_display_label(row.owner_id, request=request_from_info(info)),
         revision=row.revision,
         is_archived=row.is_archived,

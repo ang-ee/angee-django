@@ -452,7 +452,10 @@ function AddWidgetButton({ snapshot, registry, pageScope, onAdd }: {
     const id = globalThis.crypto?.randomUUID?.() ?? `widget-${Date.now()}`;
     const shape = descriptor.shape;
     const firstAxis = metadata?.resource
-      ? Object.values(metadata.resource.query.axes).find((axis) => axis.server)
+      ? Object.values(metadata.resource.query.axes).find((axis) => {
+        const field = metadata.resource.query.fields[axis.field];
+        return axis.server && field?.kind !== "json" && field?.kind !== "list" && field?.kind !== "object";
+      })
       : undefined;
     if (shape === "series" && !firstAxis) return;
     const identityField = metadata?.resource.query.identity.field ?? "id";
@@ -474,7 +477,14 @@ function AddWidgetButton({ snapshot, registry, pageScope, onAdd }: {
             shape,
             source: {
               resource,
-              ...(shape === "series" && firstAxis ? { groups: [{ field: firstAxis.field }] } : {}),
+              ...(shape === "series" && firstAxis ? {
+                groups: [{
+                  field: firstAxis.field,
+                  ...(firstAxis.kind === "date" && firstAxis.extractions.some(({ name }) => name === "month")
+                    ? { granularity: "month" }
+                    : {}),
+                }],
+              } : {}),
               ...(shape === "rows" ? { fields: rowFields.length ? rowFields : [identityField], limit: 10 } : {}),
             },
           },
@@ -541,14 +551,30 @@ export function DashboardCollectionSurface({
       x: 0, y: 0, w: 3, h: 2,
       isArchived: false,
     };
-    const axes = Object.values(metadata.resource.query.axes).filter((axis) => axis.server).slice(0, 2);
+    const axes = Object.values(metadata.resource.query.axes).filter((axis) => {
+      const field = metadata.resource.query.fields[axis.field];
+      return axis.server && field?.kind !== "json" && field?.kind !== "list" && field?.kind !== "object";
+    }).slice(0, 2);
     const charts = axes.map<WidgetSpec>((axis, index) => ({
       schemaVersion: 1,
       id: `group-${axis.field}`,
       kind: "bar",
       kindVersion: 1,
       title: `By ${axis.field.replaceAll("_", " ")}`,
-      data: { shape: "series", source: { resource, groups: [{ field: axis.field }], measure: { op: "count" }, limit: 8 } },
+      data: {
+        shape: "series",
+        source: {
+          resource,
+          groups: [{
+            field: axis.field,
+            ...(axis.kind === "date" && axis.extractions.some(({ name }) => name === "month")
+              ? { granularity: "month" }
+              : {}),
+          }],
+          measure: { op: "count" },
+          limit: 8,
+        },
+      },
       options: {},
       x: 3 + index * 4, y: 0, w: 4, h: 4,
       isArchived: false,
