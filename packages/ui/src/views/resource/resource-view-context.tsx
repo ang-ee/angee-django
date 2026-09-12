@@ -1,12 +1,13 @@
 import {
   createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
   type Key,
   type ReactElement,
   type ReactNode,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
 } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState } from "@tanstack/react-table";
@@ -194,10 +195,12 @@ function RouteResourceViewProvider({
     () => resourceViewSearchToState(search, initialState, namespace),
     [search, initialState, namespace],
   );
+  const failedTransitionRef = useRef<unknown>(null);
   const [failedTransition, setFailedTransition] = useState<{
     search: unknown;
     error: Error;
   } | null>(null);
+  failedTransitionRef.current = failedTransition;
   const transitionError =
     failedTransition && failedTransition.search === search
       ? failedTransition.error
@@ -217,7 +220,14 @@ function RouteResourceViewProvider({
         setFailedTransition({ search, error: next.queryError });
         return;
       }
-      setFailedTransition(null);
+      // Same-value writes are not free here: the fiber usually has a pending
+      // lane by the time this runs, so React cannot skip scheduling them.
+      //
+      // Read through a ref, not the closure. A failed transition does not
+      // navigate, so `search` and `queryState` do not change, so this callback
+      // is not rebuilt -- a closure copy would still say null and the next valid
+      // change would skip clearing a real error, leaving it on screen forever.
+      if (failedTransitionRef.current !== null) setFailedTransition(null);
       void navigate({
         search: (current) => {
           const updated = functionalUpdate(
