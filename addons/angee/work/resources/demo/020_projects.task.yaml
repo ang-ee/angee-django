@@ -103,3 +103,68 @@ rows:
       sub_sort_order: 14336.0
       created_by: iam.user_alice
       updated_by: iam.user_bob
+  # Cycle 2 closed work and cycle 3's in-flight work. Without these the cycle
+  # that starts on the demo date is an empty board, which is the one screen the
+  # cycle story has. Ranks continue the existing ladder; uniqueness is
+  # project-scoped, so they must not collide with the rows above.
+  - xref: eng_cycle_two_path_survey
+    fields:
+      queue: work.eng
+      stage: work.eng_done
+      cycle: work.eng_cycle_two
+      project: projects.neighborhood_garden
+      title: Survey the path junction for the water point
+      note: Measured the turning area and the hose run before the tap was ordered.
+      assignee: iam.user_alice
+      priority: medium
+      estimate: 2.0
+      done_at: 2026-09-11T15:00:00Z
+      sort_order: 15360.0
+      sub_sort_order: 15360.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: eng_cycle_three_tap_install
+    fields:
+      queue: work.eng
+      stage: work.eng_in_progress
+      cycle: work.eng_cycle_three
+      project: projects.neighborhood_garden
+      title: Install the accessible water point
+      note: Fit the tap and the hard standing so a wheelchair can reach the tap.
+      assignee: iam.user_alice
+      priority: high
+      estimate: 5.0
+      sort_order: 16384.0
+      sub_sort_order: 16384.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: eng_cycle_three_bed_planting
+    fields:
+      queue: work.eng
+      stage: work.eng_todo
+      cycle: work.eng_cycle_three
+      project: projects.neighborhood_garden
+      title: Plant the raised beds with the autumn list
+      note: Two volunteer sessions, one per weekend, once the beds are filled.
+      assignee: iam.user_bob
+      priority: medium
+      estimate: 3.0
+      sort_order: 17408.0
+      sub_sort_order: 17408.0
+      created_by: iam.user_alice
+      updated_by: iam.user_bob
+  - xref: eng_cycle_three_signage_install
+    fields:
+      queue: work.eng
+      stage: work.eng_todo
+      cycle: work.eng_cycle_three
+      project: projects.neighborhood_garden
+      title: Mount the bilingual signage at the tap and the junction
+      note: Follows the signage draft; needs the tap fitted before the tap sign goes up.
+      assignee: iam.user_bob
+      priority: low
+      estimate: 1.0
+      sort_order: 18432.0
+      sub_sort_order: 18432.0
+      created_by: iam.user_alice
+      updated_by: iam.user_bob
