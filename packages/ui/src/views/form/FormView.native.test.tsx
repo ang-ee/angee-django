@@ -229,7 +229,7 @@ test("composed field validation participates in the native submit resolver", asy
 });
 
 test("an editable metadata relation drops a stale expanded option when its id changes", async () => {
-  await fixture({
+  const { getOne } = await fixture({
     publicView: true,
     relationValues: true,
     recordExtras: (context) => <>
@@ -238,6 +238,11 @@ test("an editable metadata relation drops a stale expanded option when its id ch
     </>,
   });
   const relation = await screen.findByRole("button", { name: /Parent/ });
+  // The label now comes from the selected record's own read, so wait for that
+  // read rather than for a clock: the trigger can be on screen before it fires.
+  await waitFor(() =>
+    expect(getOne).toHaveBeenCalledWith(expect.objectContaining({ id: "note-a" })),
+  );
   expect(relation.textContent).toContain("note-a");
   fireEvent.click(screen.getByRole("button", { name: "Choose B" }));
   await waitFor(() => expect(relation.textContent).toContain("note-b"));
