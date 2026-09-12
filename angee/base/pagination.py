@@ -1,4 +1,4 @@
-"""Django timestamp/primary-key ordering for bounded keyset reads."""
+"""Django paging expressions and signed timestamp/primary-key cuts."""
 
 from __future__ import annotations
 
@@ -11,6 +11,17 @@ from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+
+
+class WindowSum(models.Window):
+    """Sum grouped aggregates before pagination, using Django's window compiler.
+
+    Django's aggregate Sum rejects an aggregate input; this window sums the
+    completed groups instead. Callers must establish that their counts are
+    additive before using the result as a distinct population total.
+    """
+
+    template = "SUM(%(expression)s) OVER (%(window)s)"
 
 
 class InvalidKeysetCursor(ValueError):

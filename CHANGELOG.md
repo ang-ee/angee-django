@@ -14,6 +14,10 @@ live in code docstrings.
 - Personal inbox feeds deduplicate only when text search introduces multiplying
   joins. Group pages obtain their header count from a SQL window; distinct root
   totals remain exact when content or sender identities overlap.
+- Disjoint message and sender groups derive root totals from the same grouped
+  query. Navigator names reuse the authorized handle-name expression directly;
+  conversation titles load only for the returned page. Recipient and shared
+  content groups retain distinct totals across overlapping buckets.
 - Nexus result groups load previews on expansion through the native ListView.
   Source accounts project only eligible channel IDs; relation choices use bounded
   existence checks instead of scanning the full readable quote graph.

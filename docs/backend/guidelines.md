@@ -602,6 +602,10 @@ and current contracts before applying a historical example to a new deployment.
 
 ### Models, queries, and resources
 
+- **Group counts add to root totals only for disjoint populations.** Reuse the
+  grouped scan with a window total when every record belongs to one bucket;
+  recipient fan-out and shared content require distinct root counts. Hydrate
+  labels after paging unless they determine group identity or sort order.
 - **`.values_list(...).distinct()` must clear the model's default ordering.**
   `Meta.ordering` columns silently join the DISTINCT projection, so a
   single-column `values_list("owner_id").distinct()` returns one row per
@@ -636,6 +640,12 @@ and current contracts before applying a historical example to a new deployment.
 - **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
   Lifecycle side effects that must survive those paths belong on Django signals; Agent's
   service-user deactivation is a `post_delete` receiver for this reason.
+- **Business rules belong to Django owners, not database trigger functions.**
+  Cover instance, queryset, bulk, cascade and relation writes in the owning
+  models/managers/querysets, with explicit Django signals where relation writes
+  bypass those owners. Keep declarative constraints and portable row locks.
+  Raw SQL is not a supported business-write path. Retire existing triggers with
+  append-only migrations rather than rewriting materialized history.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.

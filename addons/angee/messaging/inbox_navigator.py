@@ -28,6 +28,7 @@ from django.db.models.functions import Coalesce, RowNumber
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
+from angee.base.pagination import WindowSum
 from angee.messaging.inbox import InboxCoverage, InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroup, InboxGroupPage, InboxGroups, InboxGroupScope
 
@@ -59,6 +60,12 @@ class InboxNavigatorOptions(BaseModel):
     include_sent: bool = False
     sort: str = "recent"
     link: str = ""
+
+    @property
+    def recipient_activity(self) -> bool:
+        """Whether one message can contribute multiple recipient identities."""
+
+        return self.lens != "groups" and (self.include_sent or self.lens in ("recipients", "circles"))
 
 
 class InboxNavigator(MessageInbox):
@@ -92,7 +99,7 @@ class InboxNavigator(MessageInbox):
                 handles = handles.exclude(party=identity, party_link_confirmed=True)
         party_ids = Subquery(self.parties.order_by().values("pk"))
         activity = self.coverage(self.coverage_input)
-        if self.options.include_sent or self.options.lens in ("recipients", "circles"):
+        if self.options.recipient_activity:
             activity = activity.annotate(
                 _recipient=FilteredRelation(
                     "participants",
@@ -278,14 +285,14 @@ class InboxNavigator(MessageInbox):
             raise ValueError("Unknown navigator lens.")
         is_group = self.options.lens == "groups"
         records = self.threads if is_group else self.handles
-        label_field = "title__text" if is_group else "_sender_name"
         activity = self.groups(scope.axis).scope(scope.value) if scope else self.activity()
+        message_count = Count("pk", distinct=self.options.recipient_activity)
         groups = (
             activity.scoped_for_aggregate()
             .order_by()
             .values("_identity")
             .annotate(
-                total=Count("pk", distinct=True),
+                total=message_count,
                 latest=Max("_order_at"),
                 first=Min("_order_at"),
                 handle_pk=Min("_candidate"),
@@ -294,10 +301,17 @@ class InboxNavigator(MessageInbox):
         order = {"recent": "-latest", "name": "_name", "count": "-total", "first": "first"}.get(self.options.sort)
         if order is None:
             raise ValueError("Unknown sender order.")
-        groups = groups.annotate(_name=Min(Subquery(records.filter(pk=OuterRef("_candidate")).values(label_field)[:1])))
+        name = F("thread__title__text") if is_group else self.handles.sender_name_expression("sender__")
+        if self.options.recipient_activity:
+            name = Case(
+                When(direction="inbound", then=name),
+                default=self.handles.sender_name_expression("_recipient__handle__"),
+            )
+        groups = groups.annotate(_name=Min(name), _group_count=Window(Count("*")))
+        if not self.options.recipient_activity:
+            groups = groups.annotate(_message_count=WindowSum(message_count))
         selected = list(
-            groups.annotate(_group_count=Window(Count("*")))
-            .order_by(order, "_name", "_identity")[InboxPage.window(page, size)]
+            groups.order_by(order, "_name", "_identity")[InboxPage.window(page, size)]
         )
         count = selected[0]["_group_count"] if selected else groups.count() if page > 1 else 0
         keys = [row["_identity"] for row in selected]
@@ -342,7 +356,9 @@ class InboxNavigator(MessageInbox):
                 for record in [selected_records[row["handle_pk"]]]
             ],
             count,
-            activity.order_by().values("pk").distinct().count(),
+            selected[0]["_message_count"]
+            if selected and not self.options.recipient_activity
+            else activity.order_by().values("pk").distinct().count(),
         )
 
 
