@@ -11,7 +11,7 @@ import {
   refineResourceName, } from "@angee/metadata";
 import {
   useModelMetadata, } from "@angee/metadata";
-import { textRoleVariants } from "@angee/ui";
+import { Skeleton, SkeletonStatus, textRoleVariants } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import { agentLifecycle, agentRuntime, stringField } from "./agent-record";
@@ -90,11 +90,19 @@ export function AgentProvisioning({
   return (
     <div className="flex flex-col gap-5">
       {!agent ? (
-        <p className={textRoleVariants({ role: "meta" })}>
-          {fetching
-            ? t("provisioning.loading")
-            : t("provisioning.saveFirst")}
-        </p>
+        fetching ? (
+          <SkeletonStatus
+            label={t("provisioning.loading")}
+            className="grid max-w-md gap-2"
+          >
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-3 w-full" />
+          </SkeletonStatus>
+        ) : (
+          <p className={textRoleVariants({ role: "meta" })}>
+            {t("provisioning.saveFirst")}
+          </p>
+        )
       ) : (
         <>
           {agent.last_error ? (
