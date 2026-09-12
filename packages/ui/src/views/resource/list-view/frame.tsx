@@ -28,6 +28,7 @@ import { ClientSurfaceBody, GroupedServerSurfaceBody, ServerSurfaceBody } from "
 import { ResourceQueryError } from "../ResourceQueryError";
 import { validateResourceViewState } from "../model/state";
 import { ErrorBanner } from "../../../fragments/ErrorBanner";
+import { DashboardCollectionSurface } from "../../../dashboard/surface";
 export function ListView<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
 ): React.ReactElement {
@@ -184,17 +185,18 @@ function ListViewBody<TRow extends Row = Row>({
   const laneSource = useValueStable(laneSourceInput);
   const rowActionSurface = useRowActionsSurface(rowActions);
   const resolvedEmptyContent = emptyContent ?? t("list.empty");
+  const discoveredMetadata = useModelMetadata(source ? "" : resource);
+  const modelMetadata = source ? null : discoveredMetadata;
   // The Calendar kind is offered only where the page declares occurrence sources;
   // the switcher's options derive from that (list + board always).
   const calendarAvailable = (calendar?.sources.length ?? 0) > 0;
+  const dashboardAvailable = !source && Boolean(modelMetadata?.resource?.roots.aggregate);
   const availableViews = React.useMemo(
     () =>
       declaredViews ??
-      availableResourceViewKinds({ calendar: calendarAvailable }),
-    [declaredViews, calendarAvailable],
+      availableResourceViewKinds({ calendar: calendarAvailable, dashboard: dashboardAvailable }),
+    [declaredViews, calendarAvailable, dashboardAvailable],
   );
-  const discoveredMetadata = useModelMetadata(source ? "" : resource);
-  const modelMetadata = source ? null : discoveredMetadata;
   const schemaMetadata = useSchemaFieldMetadata();
   const resolvedLaneSource =
     React.useMemo<ResolvedBoardLaneSource | null>(() => {
@@ -328,6 +330,7 @@ function ListViewBody<TRow extends Row = Row>({
       resourceView={resourceView}
       availableViews={availableViews}
       effectiveGroupStack={effectiveGroupStack}
+      effectiveFilter={mergedFilter}
       boardGroupingPinned={boardGroupingPinned}
       clientRowModel={clientRowModel}
       serverGroupedMode={serverGroupedMode}
@@ -356,6 +359,19 @@ function ListViewBody<TRow extends Row = Row>({
       className={className}
     />
   );
+  if (resourceView.state.view === "dashboard") {
+    if (!dashboardAvailable) {
+      return <ErrorBanner description="This resource does not expose the aggregate operations required by dashboards." />;
+    }
+    return (
+      <DashboardCollectionSurface
+        resource={resource}
+        filter={mergedFilter}
+        className={className}
+        onReturnToList={() => resourceView.setView("list")}
+      />
+    );
+  }
   // A client resource fetches once and pages in the browser; a server resource
   // queries Hasura per page; the calendar fetches a window over authored sources.
   // Each data path calls different hooks, so the choice is a component boundary

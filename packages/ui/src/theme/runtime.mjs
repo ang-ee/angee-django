@@ -12,7 +12,8 @@ export const THEME_TOKEN_NAMES = Object.freeze([
   "--accent-soft", "--accent-soft-text", "--success-soft", "--success-text",
   "--warning-soft", "--warning-text", "--danger-soft", "--danger-text",
   "--info-soft", "--info-text", "--ring", "--ring-danger", "--font-family-sans",
-  "--font-family-mono", "--r-2", "--r-4", "--r-6", "--r-8", "--r-10", "--r-12",
+  "--font-family-mono", "--elevation-xs", "--elevation-sm", "--elevation-md",
+  "--elevation-lg", "--elevation-popover", "--r-2", "--r-4", "--r-6", "--r-8", "--r-10", "--r-12",
   "--r-full", "--rail-w", "--topbar-h", "--controlpanel-h", "--chatter-w",
   "--control-h-sm", "--control-h-md", "--control-h-lg",
 ]);
@@ -93,6 +94,255 @@ export function serializableThemeMetadata(definition) {
     revision: definition.revision, optionsVersion: definition.options?.version ?? null,
     optionDefaults: definition.options?.defaults ?? null,
   };
+}
+
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const CUSTOMIZATION_KEYS = Object.freeze(["brand", "accent", "neutral", "font", "radius", "density", "elevation"]);
+const CUSTOMIZATION_KEY_SET = new Set(CUSTOMIZATION_KEYS);
+const FONT_STACKS = Object.freeze({
+  system: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  inter: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  humanist: '"Avenir Next", "Segoe UI", system-ui, sans-serif',
+  industrial: '"IBM Plex Sans", Arial, sans-serif',
+  editorial: 'Georgia, "Times New Roman", serif',
+  mono: '"JetBrains Mono", "SFMono-Regular", Consolas, monospace',
+});
+const RADIUS_TOKENS = Object.freeze({
+  square: ["0px", "0px", "0px", "0px", "0px", "0px"],
+  compact: ["1px", "2px", "4px", "6px", "8px", "10px"],
+  standard: ["2px", "4px", "6px", "8px", "10px", "12px"],
+  soft: ["4px", "6px", "8px", "10px", "12px", "14px"],
+  round: ["6px", "8px", "12px", "16px", "20px", "24px"],
+});
+const DENSITY_TOKENS = Object.freeze({
+  compact: ["24px", "28px", "34px"],
+  balanced: ["26px", "32px", "38px"],
+  comfortable: ["28px", "34px", "40px"],
+  spacious: ["30px", "38px", "44px"],
+});
+const ELEVATION_TOKENS = Object.freeze({
+  flat: {
+    light: ["none", "none", "0 0 0 1px #00000014", "0 0 0 1px #0000001f", "0 0 0 1px #00000029"],
+    dark: ["none", "none", "0 0 0 1px #ffffff1a", "0 0 0 1px #ffffff24", "0 0 0 1px #ffffff2e"],
+  },
+  subtle: {
+    light: ["0 1px 1px #0000000a", "0 1px 2px #0000000f", "0 4px 12px #00000014", "0 12px 32px #0000001f", "0 6px 16px #0000001a"],
+    dark: ["0 1px 1px #0000004d", "0 1px 2px #00000066", "0 4px 12px #00000070", "0 12px 32px #00000080", "0 6px 16px #00000073"],
+  },
+  soft: {
+    light: ["0 1px 2px #0000000a", "0 2px 5px #00000012", "0 8px 24px #0000001a", "0 20px 48px #00000024", "0 12px 32px #0000001f"],
+    dark: ["0 1px 2px #00000066", "0 2px 6px #00000073", "0 8px 24px #00000080", "0 20px 48px #00000094", "0 12px 32px #00000085"],
+  },
+  dramatic: {
+    light: ["0 2px 4px #00000012", "0 4px 10px #0000001a", "0 14px 36px #00000029", "0 28px 64px #00000038", "0 18px 44px #00000033"],
+    dark: ["0 2px 4px #00000073", "0 4px 10px #00000080", "0 14px 36px #00000099", "0 28px 64px #000000ad", "0 18px 44px #000000a3"],
+  },
+});
+const FONT_KEYS = new Set(["theme", ...Object.keys(FONT_STACKS)]);
+const RADIUS_KEYS = new Set(["theme", ...Object.keys(RADIUS_TOKENS)]);
+const DENSITY_KEYS = new Set(["theme", ...Object.keys(DENSITY_TOKENS)]);
+const ELEVATION_KEYS = new Set(["theme", ...Object.keys(ELEVATION_TOKENS)]);
+
+/**
+ * Build the bounded option contract shared by customizable theme addons.
+ * Defaults describe the authored base; equal values emit no overrides, so the
+ * base theme remains byte-for-byte authoritative until a user changes a field.
+ */
+export function createThemeCustomizationOptions(defaults, configuration = {}) {
+  const normalizedDefaults = parseThemeCustomization(defaults);
+  const version = configuration.version ?? 1;
+  if (!Number.isSafeInteger(version) || version < 1) throw new TypeError("Theme customization version must be a positive integer.");
+  if (configuration.migrate !== undefined && typeof configuration.migrate !== "function") throw new TypeError("Theme customization migrate must be a function.");
+  return {
+    version,
+    defaults: normalizedDefaults,
+    parse: parseThemeCustomization,
+    ...(configuration.migrate ? {
+      migrate(value, fromVersion) {
+        return parseThemeCustomization(configuration.migrate(value, fromVersion, normalizedDefaults));
+      },
+    } : {}),
+    resolve(value) {
+      return resolveThemeCustomization(parseThemeCustomization(value), normalizedDefaults);
+    },
+  };
+}
+
+export function parseThemeCustomization(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Theme customization must be an object.");
+  const keys = Object.keys(value);
+  if (keys.length !== CUSTOMIZATION_KEYS.length || keys.some((key) => !CUSTOMIZATION_KEY_SET.has(key))) {
+    throw new TypeError("Theme customization must contain only the complete supported design fields.");
+  }
+  const brand = normalizedHex(value.brand, "brand");
+  const accent = normalizedHex(value.accent, "accent");
+  const neutral = normalizedHex(value.neutral, "neutral");
+  if (!FONT_KEYS.has(value.font)) throw new TypeError("Theme customization font is unsupported.");
+  if (!RADIUS_KEYS.has(value.radius)) throw new TypeError("Theme customization radius is unsupported.");
+  if (!DENSITY_KEYS.has(value.density)) throw new TypeError("Theme customization density is unsupported.");
+  if (!ELEVATION_KEYS.has(value.elevation)) throw new TypeError("Theme customization elevation is unsupported.");
+  return { brand, accent, neutral, font: value.font, radius: value.radius, density: value.density, elevation: value.elevation };
+}
+
+function resolveThemeCustomization(value, defaults) {
+  const shared = {};
+  const light = {};
+  const dark = {};
+  if (value.brand !== defaults.brand) applyBrandPalette(value.brand, light, dark);
+  if (value.accent !== defaults.accent) applyAccentPalette(value.accent, light, dark);
+  if (value.neutral !== defaults.neutral) applyNeutralPalette(value.neutral, light, dark);
+  if (value.font !== defaults.font && value.font !== "theme") shared["--font-family-sans"] = FONT_STACKS[value.font];
+  if (value.radius !== defaults.radius && value.radius !== "theme") assignScale(shared, ["--r-2", "--r-4", "--r-6", "--r-8", "--r-10", "--r-12"], RADIUS_TOKENS[value.radius]);
+  if (value.density !== defaults.density && value.density !== "theme") assignScale(shared, ["--control-h-sm", "--control-h-md", "--control-h-lg"], DENSITY_TOKENS[value.density]);
+  if (value.elevation !== defaults.elevation && value.elevation !== "theme") {
+    const elevation = ELEVATION_TOKENS[value.elevation];
+    const names = ["--elevation-xs", "--elevation-sm", "--elevation-md", "--elevation-lg", "--elevation-popover"];
+    assignScale(light, names, elevation.light);
+    assignScale(dark, names, elevation.dark);
+  }
+  return { shared, light, dark };
+}
+
+function applyBrandPalette(color, light, dark) {
+  const lightSoft = mixHex(color, "#ffffff", 0.88);
+  const darkBrand = mixHex(color, "#ffffff", 0.16);
+  const darkSoft = mixHex(color, "#0b0f14", 0.76);
+  Object.assign(light, {
+    "--brand": color,
+    "--brand-hover": mixHex(color, "#000000", 0.14),
+    "--brand-active": mixHex(color, "#000000", 0.28),
+    "--brand-soft": lightSoft,
+    "--brand-soft-text": readableTintText(color, lightSoft),
+    "--text-on-brand": readableText(color),
+    "--text-link": readableTintText(color, "#ffffff"),
+    "--border-focus": color,
+    "--ring": `0 0 0 3px ${withAlpha(color, 0.30)}`,
+  });
+  Object.assign(dark, {
+    "--brand": darkBrand,
+    "--brand-hover": mixHex(color, "#ffffff", 0.30),
+    "--brand-active": mixHex(color, "#ffffff", 0.44),
+    "--brand-soft": darkSoft,
+    "--brand-soft-text": readableTintText(darkBrand, darkSoft),
+    "--text-on-brand": readableText(darkBrand),
+    "--text-link": readableTintText(darkBrand, "#11141a"),
+    "--border-focus": darkBrand,
+    "--ring": `0 0 0 3px ${withAlpha(darkBrand, 0.35)}`,
+  });
+}
+
+function applyAccentPalette(color, light, dark) {
+  const lightSoft = mixHex(color, "#ffffff", 0.88);
+  const darkAccent = mixHex(color, "#ffffff", 0.16);
+  const darkSoft = mixHex(color, "#0b0f14", 0.76);
+  Object.assign(light, {
+    "--accent": color,
+    "--accent-soft": lightSoft,
+    "--accent-soft-text": readableTintText(color, lightSoft),
+  });
+  Object.assign(dark, {
+    "--accent": darkAccent,
+    "--accent-soft": darkSoft,
+    "--accent-soft-text": readableTintText(darkAccent, darkSoft),
+  });
+}
+
+function applyNeutralPalette(color, light, dark) {
+  const lightRail = mixHex(color, "#000000", 0.82);
+  const darkRail = mixHex(color, "#000000", 0.90);
+  Object.assign(light, {
+    "--surface-canvas": mixHex(color, "#ffffff", 0.92),
+    "--surface-sheet": mixHex(color, "#ffffff", 0.98),
+    "--surface-sheet-2": mixHex(color, "#ffffff", 0.95),
+    "--surface-inset": mixHex(color, "#ffffff", 0.87),
+    "--surface-popover": mixHex(color, "#ffffff", 0.98),
+    "--surface-rail": lightRail,
+    "--surface-rail-hi": mixHex(color, "#000000", 0.68),
+    "--text-primary": mixHex(color, "#000000", 0.78),
+    "--text-secondary": mixHex(color, "#000000", 0.58),
+    "--text-muted": mixHex(color, "#000000", 0.30),
+    "--text-subtle": mixHex(color, "#ffffff", 0.24),
+    "--text-inverse": readableText(lightRail),
+    "--text-on-rail": readableTintText(mixHex(color, "#ffffff", 0.58), lightRail),
+    "--text-on-rail-mut": readableTintText(mixHex(color, "#ffffff", 0.34), lightRail),
+    "--text-on-rail-hi": readableText(lightRail),
+    "--border-subtle": mixHex(color, "#ffffff", 0.78),
+    "--border-default": mixHex(color, "#ffffff", 0.65),
+    "--border-strong": mixHex(color, "#ffffff", 0.38),
+    "--border-on-rail": mixHex(color, "#000000", 0.62),
+  });
+  Object.assign(dark, {
+    "--surface-canvas": mixHex(color, "#000000", 0.84),
+    "--surface-sheet": mixHex(color, "#000000", 0.76),
+    "--surface-sheet-2": mixHex(color, "#000000", 0.68),
+    "--surface-inset": mixHex(color, "#000000", 0.72),
+    "--surface-popover": mixHex(color, "#000000", 0.66),
+    "--surface-rail": darkRail,
+    "--surface-rail-hi": mixHex(color, "#000000", 0.66),
+    "--text-primary": mixHex(color, "#ffffff", 0.84),
+    "--text-secondary": mixHex(color, "#ffffff", 0.66),
+    "--text-muted": mixHex(color, "#ffffff", 0.46),
+    "--text-subtle": mixHex(color, "#ffffff", 0.30),
+    "--text-inverse": readableText(mixHex(color, "#ffffff", 0.84)),
+    "--text-on-rail": readableTintText(mixHex(color, "#ffffff", 0.72), darkRail),
+    "--text-on-rail-mut": readableTintText(mixHex(color, "#ffffff", 0.48), darkRail),
+    "--text-on-rail-hi": readableText(darkRail),
+    "--border-subtle": mixHex(color, "#000000", 0.60),
+    "--border-default": mixHex(color, "#000000", 0.42),
+    "--border-strong": mixHex(color, "#000000", 0.20),
+    "--border-on-rail": mixHex(color, "#000000", 0.64),
+  });
+}
+
+function normalizedHex(value, name) {
+  if (typeof value !== "string" || !HEX_COLOR.test(value)) throw new TypeError(`Theme customization ${name} must be a six-digit hex color.`);
+  return value.toLowerCase();
+}
+
+function assignScale(target, names, values) {
+  names.forEach((name, index) => { target[name] = values[index]; });
+}
+
+function channels(hex) {
+  return [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)].map((part) => Number.parseInt(part, 16));
+}
+
+function mixHex(from, to, toWeight) {
+  const left = channels(from);
+  const right = channels(to);
+  return `#${left.map((channel, index) => Math.round(channel * (1 - toWeight) + right[index] * toWeight).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function withAlpha(hex, opacity) {
+  return `${hex}${Math.round(opacity * 255).toString(16).padStart(2, "0")}`;
+}
+
+function relativeLuminance(hex) {
+  const values = channels(hex).map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return values[0] * 0.2126 + values[1] * 0.7152 + values[2] * 0.0722;
+}
+
+function contrastRatio(left, right) {
+  const first = relativeLuminance(left);
+  const second = relativeLuminance(right);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+function readableText(background) {
+  return contrastRatio("#11141a", background) >= contrastRatio("#ffffff", background) ? "#11141a" : "#ffffff";
+}
+
+function readableTintText(color, background) {
+  if (contrastRatio(color, background) >= 4.5) return color;
+  const target = readableText(background);
+  for (let step = 1; step <= 10; step += 1) {
+    const candidate = mixHex(color, target, step / 10);
+    if (contrastRatio(candidate, background) >= 4.5) return candidate;
+  }
+  return target;
 }
 
 function assertTokenLayer(layer, owner) {

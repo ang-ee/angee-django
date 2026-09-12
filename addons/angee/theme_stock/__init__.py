@@ -1,1 +1,1 @@
-"""Stock Angee theme addon."""
+"""Default Angee application theme addon."""

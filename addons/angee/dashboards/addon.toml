@@ -1,0 +1,8 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's project metadata and addon entry points.
+[addon]
+name = "angee.dashboards"
+description = "Composable resource, addon, and personal dashboards"
+keywords = ["dashboards", "analytics", "widgets"]
+category = "Data"
+depends_on = ["angee.iam", "angee.resources", "angee.graphql"]

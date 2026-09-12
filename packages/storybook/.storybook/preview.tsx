@@ -10,10 +10,12 @@ import {
   AppRuntimeProvider,
   defineThemeContribution,
   type AppRuntime,
-  } from "@angee/ui";
+} from "@angee/ui";
+import { themes as angeeThemes } from "@angee/theme-angee/themes";
 import { themes as auroraThemes } from "@angee/theme-aurora/themes";
 import { themes as brandThemes } from "@angee/theme-brand/themes";
 import { themes as carbonThemes } from "@angee/theme-carbon/themes";
+import { themes as fyltrThemes } from "@angee/theme-fyltr/themes";
 import { themes as midnightThemes } from "@angee/theme-midnight/themes";
 import { themes as stockThemes } from "@angee/theme-stock/themes";
 import { themes as warmRedThemes } from "@angee/theme-warm-red/themes";
@@ -42,6 +44,8 @@ import "@angee/theme-aurora/styles";
 
 const previewThemes = [
   stockThemes[0],
+  angeeThemes[0],
+  fyltrThemes[0],
   carbonThemes[0],
   auroraThemes[0],
   midnightThemes[0],

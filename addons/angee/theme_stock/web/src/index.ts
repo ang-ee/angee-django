@@ -1,8 +1,13 @@
 import { defineBaseAddon } from "@angee/app";
-import { defineThemeContribution } from "@angee/ui/theme";
+import { defineThemeContribution, ThemeCustomizationEditor } from "@angee/ui/theme";
 import { themes } from "./themes.mjs";
 export default defineBaseAddon({
   id: "theme.stock",
-  themes: [defineThemeContribution({ definition: themes[0] })],
-  i18n: { themes: { "stock.label": "Stock", "stock.description": "The familiar Angee interface." } },
+  themes: [defineThemeContribution({ definition: themes[0], optionsEditor: ThemeCustomizationEditor })],
+  i18n: {
+    themes: {
+      "stock.label": "Default",
+      "stock.description": "The original blue Angee design, ready to personalize.",
+    },
+  },
 });

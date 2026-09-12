@@ -12,6 +12,7 @@ export * from "./theme";
 // contracts the render surfaces consume. The binding owns the runtime it
 // consumes; `@angee/app` mounts the provider.
 export * from "./runtime";
+export * from "./dashboard";
 
 // Render leaves the primitives/chrome build on: the glyph renderer + icon
 // registry (and the brand/agent marks they resolve) and the base-namespace

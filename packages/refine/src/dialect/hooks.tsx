@@ -65,12 +65,16 @@ export interface UseAngeeAggregateResult {
   aggregate: AggregateBucket | null;
   fetching: boolean;
   error: HttpError | null;
+  /** Timestamp of the most recent successful native query read. */
+  updatedAt: number | null;
   refetch: () => void;
 }
 
 export interface UseAngeeGroupByResult extends GroupByResult {
   fetching: boolean;
-  error: HttpError | null;
+  error: HttpError | Error | null;
+  /** Timestamp of the most recent successful native query read. */
+  updatedAt: number | null;
   refetch: () => void;
 }
 
@@ -113,6 +117,7 @@ interface GroupByRequestBatchEntry {
   data: unknown;
   fetching: boolean;
   error: HttpError | null;
+  updatedAt: number | null;
   refetch: () => void;
 }
 
@@ -189,6 +194,8 @@ export function useAngeeAggregate(
   const { document, enabled = true, ...query } = options;
   const queryKey = stableKey(query);
   const canQuery = enabled && target !== null;
+  const models = useStableArray(target?.modelLabel ? [target.modelLabel] : []);
+  useAuthoredLiveInterest(canQuery, models);
   const request = useMemo(
     () => (target ? aggregateRequest(target, query, { document }) : null),
     [document, target, queryKey],
@@ -205,6 +212,7 @@ export function useAngeeAggregate(
     aggregate: request ? extractAggregate(data, request.root) : null,
     fetching: run.query.isFetching,
     error: run.query.error,
+    updatedAt: run.query.dataUpdatedAt || null,
     refetch: () => {
       void run.query.refetch();
     },
@@ -218,6 +226,8 @@ export function useAngeeGroupBy(
   const { document, enabled = true, ...query } = options;
   const queryKey = stableKey(query);
   const canQuery = enabled && target !== null;
+  const models = useStableArray(target?.modelLabel ? [target.modelLabel] : []);
+  useAuthoredLiveInterest(canQuery, models);
   const request = useMemo(
     () => (target ? groupByRequest(target, query, { document }) : null),
     [document, target, queryKey],
@@ -230,14 +240,20 @@ export function useAngeeGroupBy(
     queryOptions: { enabled: canQuery },
   });
   const data = run.query.data?.data ?? run.result.data;
-  const result =
-    request && data != null
-      ? extractGroupBy(data, request.root)
-      : EMPTY_GROUP_BY_RESULT;
+  let result = EMPTY_GROUP_BY_RESULT;
+  let decodeError: Error | null = null;
+  if (request && run.query.isSuccess) {
+    try {
+      result = extractGroupBy(data, request.root);
+    } catch (cause) {
+      decodeError = cause instanceof Error ? cause : new Error(String(cause));
+    }
+  }
   return {
     ...result,
     fetching: run.query.isFetching,
-    error: run.query.error,
+    error: run.query.error ?? decodeError,
+    updatedAt: run.query.dataUpdatedAt || null,
     refetch: () => {
       void run.query.refetch();
     },
@@ -345,6 +361,7 @@ function useGroupByRequestBatch(
               data: query?.data,
               fetching: query?.isFetching ?? false,
               error: (query?.error ?? null) as HttpError | null,
+              updatedAt: query?.dataUpdatedAt || null,
               refetch: () => {
                 void query?.refetch();
               },
@@ -379,6 +396,7 @@ export function useAngeeGroupByBatch(
               : extractGroupBy(entry.data, root)),
             fetching: entry.fetching,
             error: entry.error,
+            updatedAt: entry.updatedAt,
             refetch: entry.refetch,
           },
         ]),

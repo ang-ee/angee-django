@@ -1,6 +1,6 @@
 [addon]
 name = "angee.theme_stock"
-description = "The selectable stock Angee visual theme"
-keywords = ["theme", "appearance", "stock"]
+description = "The selectable default Angee application theme"
+keywords = ["theme", "appearance", "default"]
 category = "User interface"
 depends_on = []

@@ -126,6 +126,9 @@ importers:
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine
+      '@angee/theme-brand':
+        specifier: workspace:*
+        version: link:../../theme_brand/web
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
@@ -1292,6 +1295,34 @@ importers:
         specifier: ^4.1.9
         version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
 
+  addons/angee/theme_angee/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.16
+        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   addons/angee/theme_aurora/web:
     dependencies:
       '@angee/app':
@@ -1349,6 +1380,34 @@ importers:
         version: 6.0.3
 
   addons/angee/theme_carbon/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.16
+        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  addons/angee/theme_fyltr/web:
     dependencies:
       '@angee/app':
         specifier: workspace:*
@@ -1895,6 +1954,9 @@ importers:
       '@angee/refine':
         specifier: workspace:*
         version: link:../refine
+      '@angee/theme-angee':
+        specifier: workspace:*
+        version: link:../../addons/angee/theme_angee/web
       '@angee/theme-aurora':
         specifier: workspace:*
         version: link:../../addons/angee/theme_aurora/web
@@ -1904,6 +1966,9 @@ importers:
       '@angee/theme-carbon':
         specifier: workspace:*
         version: link:../../addons/angee/theme_carbon/web
+      '@angee/theme-fyltr':
+        specifier: workspace:*
+        version: link:../../addons/angee/theme_fyltr/web
       '@angee/theme-midnight':
         specifier: workspace:*
         version: link:../../addons/angee/theme_midnight/web
