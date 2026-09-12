@@ -7,7 +7,7 @@ rows:
       milestone: projects.plots_ready
       title: Map the garden plots
       note: Mark accessible paths and leave room for the shared compost area.
-      assignee: iam.user_alice
+      assignee: iam.user_admin
       priority: high
       due_date: 2026-09-12
       sort_order: 1024.0

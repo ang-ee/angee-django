@@ -131,7 +131,7 @@ rows:
       project: projects.neighborhood_garden
       title: Install the accessible water point
       note: Fit the tap and the hard standing so a wheelchair can reach the tap.
-      assignee: iam.user_alice
+      assignee: iam.user_admin
       priority: high
       estimate: 5.0
       sort_order: 16384.0
@@ -146,7 +146,7 @@ rows:
       project: projects.neighborhood_garden
       title: Plant the raised beds with the autumn list
       note: Two volunteer sessions, one per weekend, once the beds are filled.
-      assignee: iam.user_bob
+      assignee: iam.user_admin
       priority: medium
       estimate: 3.0
       sort_order: 17408.0

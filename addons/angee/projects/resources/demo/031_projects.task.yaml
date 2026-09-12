@@ -7,7 +7,7 @@ rows:
       parent: projects.opening_day
       title: Print plot and welcome signs
       note: Include the shared-tool rules and an accessible map.
-      assignee: iam.user_bob
+      assignee: iam.user_admin
       priority: medium
       due_date: 2026-11-27
       sort_order: 4096.0

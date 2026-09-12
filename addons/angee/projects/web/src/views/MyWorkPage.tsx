@@ -1,5 +1,7 @@
 import { ActivityAgendaList } from "@angee/messaging";
+import { Link } from "@tanstack/react-router";
 import {
+  Button,
   Column,
   List,
   PageBody,
@@ -42,7 +44,27 @@ export function MyWorkPage(): React.ReactElement {
             order={{ due_date: "ASC", sort_order: "ASC" }}
             rowActions={taskActions}
             rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
-            emptyContent={t("myWork.empty.tasks")}
+            emptyContent={{
+              icon: "my-work",
+              title: t("myWork.empty.tasks"),
+              description: t("myWork.empty.tasksDescription"),
+              // Two ways on rather than a dead end: the board is where work is
+              // picked up, the list is where it is found.
+              actions: (
+                <>
+                  <Button asChild variant="primary" size="sm">
+                    <Link to={routeHref("projects.board")}>
+                      {t("myWork.empty.openBoard")}
+                    </Link>
+                  </Button>
+                  <Button asChild variant="secondary" size="sm">
+                    <Link to={routeHref("projects.tasks")}>
+                      {t("myWork.empty.browseTasks")}
+                    </Link>
+                  </Button>
+                </>
+              ),
+            }}
           >
             <Column field="title" />
             <Column field="project.title" header={t("common.project")} />
