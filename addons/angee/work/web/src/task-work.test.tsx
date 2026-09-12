@@ -60,3 +60,25 @@ describe("board card footer", () => {
     expect(view.container.querySelectorAll("span[aria-label]").length).toBe(0);
   });
 });
+
+test("does not put NONE on a card as if it were a priority", () => {
+  // Most seed tasks have priority NONE; rendering it pills nearly every card and
+  // drowns the few that are actually URGENT.
+  const view = card({
+    id: "tsk_4",
+    work_key: "ENG-11",
+    title: "Unprioritised",
+    priority: "NONE",
+    assignee: { id: "usr_1", display_name: "Ada Lovelace" },
+  });
+
+  expect(screen.queryByText(/NONE/i)).toBeNull();
+  // The rest of the footer still renders, so this omits a part rather than the row.
+  expect(screen.getByLabelText("Ada Lovelace")).toBeTruthy();
+  expect(view.container.textContent).toContain("ENG-11");
+});
+
+test("still shows a real priority", () => {
+  card({ id: "tsk_5", work_key: "ENG-12", title: "Urgent", priority: "URGENT" });
+  expect(screen.getByText("URGENT")).toBeTruthy();
+});
