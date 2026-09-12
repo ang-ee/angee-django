@@ -4,7 +4,7 @@ import { AppRail } from "../chrome/AppRail";
 import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
 import { DrawerRail } from "../chrome/DrawerRail";
 import { TopBar } from "../chrome/TopBar";
-import { Chatter } from "../communication/Chatter";
+import { Chatter, useChatterHasContent } from "../communication/Chatter";
 import { ChatterProvider, useChatter } from "../communication/chatter-context";
 import { cn } from "../lib/cn";
 import type { CollapsiblePane } from "../page";
@@ -133,6 +133,9 @@ function ConsoleWorkbench({
 }): React.ReactElement {
   const { registerSecondaryController } = useChatter();
   const { node: publishedPrimary } = usePrimaryPaneContent();
+  // No record to discuss means no aside: an empty rail otherwise sits over the
+  // page, and on a board it covers a lane whose cards then cannot be grabbed.
+  const chatterHasContent = useChatterHasContent();
   return (
     <Workbench
       className="area-content"
@@ -146,7 +149,7 @@ function ConsoleWorkbench({
           </ControlBandProvider>
         ) : undefined
       }
-      secondary={showChatter ? (
+      secondary={showChatter && chatterHasContent ? (
         <ControlBandProvider host={undefined}>
           <Chatter />
         </ControlBandProvider>
