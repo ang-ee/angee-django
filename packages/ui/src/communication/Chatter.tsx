@@ -144,6 +144,29 @@ export function Chatter({
   );
 }
 
+/**
+ * Whether the chatter aside has anything to say about the active view.
+ *
+ * The default tabs are about a record -- "No comments yet", "No record
+ * selected" -- so on a view with nothing selected the aside is an empty rail
+ * sitting over the page. On a board it covers a lane, and a card underneath it
+ * cannot be grabbed at all. The pane's host asks this before mounting it, since
+ * a `Chatter` that renders nothing would still leave a pane holding its width.
+ *
+ * A page that publishes its own tabs or composer keeps its aside either way, as
+ * does a view an addon contributes to deliberately.
+ */
+export function useChatterHasContent(): boolean {
+  const runtime = useAppRuntime();
+  const { content } = useChatter();
+  const viewContext = useActiveChatterView(runtime.chatterRoutes ?? []);
+  if (viewContext.view.kind === "record") return true;
+  if ((content?.tabs?.length ?? 0) > 0 || content?.composer != null) return true;
+  return (runtime.chatter ?? []).some((contribution) =>
+    contributionMatches(contribution, viewContext),
+  );
+}
+
 function contributionMatches(
   contribution: ChatterContribution,
   context: ChatterViewContext,
