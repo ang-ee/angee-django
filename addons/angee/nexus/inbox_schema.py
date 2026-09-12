@@ -392,12 +392,7 @@ class NexusInboxQuery:
     def inbox_accounts(self) -> list[IntegrationType]:
         """Readable source accounts with eligible personal messages."""
 
-        inbox = Message.objects.all().explorer()
-        return (
-            inbox.collection("integrate", "Integration")
-            .filter(pk__in=inbox.messages.order_by().values("channel_id"))
-            .order_by("display_name", "pk")
-        )
+        return Message.objects.all().explorer().accounts()
 
     @strawberry.field
     def inbox_senders(

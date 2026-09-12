@@ -9,6 +9,17 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — Inbox query performance
+
+- Personal inbox feeds deduplicate only when text search introduces multiplying
+  joins. Group pages obtain their header count from a SQL window; distinct root
+  totals remain exact when content or sender identities overlap.
+- Nexus result groups load previews on expansion through the native ListView.
+  Source accounts use an indexed existence check for readable eligible messages.
+- Require django-zed-rebac 0.16.2 for lazy SQL authorization of acyclic,
+  non-caveated permissions. Shared access and revocation retain the engine's
+  semantics; recursive and caveated permissions keep its conservative fallback.
+
 ## Unreleased — upstream reuse
 
 - REBAC now owns schema introspection/rendering/extensions and scoped queryset

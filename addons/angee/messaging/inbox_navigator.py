@@ -295,8 +295,11 @@ class InboxNavigator(MessageInbox):
         if order is None:
             raise ValueError("Unknown sender order.")
         groups = groups.annotate(_name=Min(Subquery(records.filter(pk=OuterRef("_candidate")).values(label_field)[:1])))
-        count = groups.count()
-        selected = list(groups.order_by(order, "_name", "_identity")[InboxPage.window(page, size)])
+        selected = list(
+            groups.annotate(_group_count=Window(Count("*")))
+            .order_by(order, "_name", "_identity")[InboxPage.window(page, size)]
+        )
+        count = selected[0]["_group_count"] if selected else groups.count() if page > 1 else 0
         keys = [row["_identity"] for row in selected]
         previews = (
             activity.filter(_identity__in=keys)

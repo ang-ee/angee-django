@@ -825,9 +825,9 @@ def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_t
         if query["sql"].lstrip().upper().startswith("SELECT")
         and Workflow._meta.db_table in query["sql"]
     ]
-    # One REBAC identity projection and one annotated domain query, independent
-    # of the number of workflows returned; lineage fields add no per-row reads.
-    assert len(workflow_selects) == 2
+    # REBAC field ownership stays in the annotated domain query, independent of
+    # the number of workflows returned; lineage fields add no per-row reads.
+    assert len(workflow_selects) == 1
     assert hidden == []
 
 

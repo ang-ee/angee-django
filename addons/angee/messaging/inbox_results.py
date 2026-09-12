@@ -175,13 +175,14 @@ class InboxResults:
         activity = self.scoped(scope)
         order = "_order_at" if self.options.oldest else "-_order_at"
         if not self.is_content:
+            count = activity.count()
             return InboxPage(
                 [
                     InboxResultRow(f"message:{message.sqid}", message._order_at, 1, 0, message)
                     for message in activity.order_by(order, "pk")[InboxPage.window(page, size)]
                 ],
-                activity.count(),
-                activity.count(),
+                count,
+                count,
             )
         groups = (
             activity.scoped_for_aggregate()

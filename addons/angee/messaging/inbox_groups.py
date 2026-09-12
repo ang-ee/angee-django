@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from django.db.models import Case, Count, F, IntegerField, Max, Min, OuterRef, Subquery, TextField, Value, When
+from django.db.models import Case, Count, F, IntegerField, Max, Min, OuterRef, Subquery, TextField, Value, When, Window
 from django.db.models.functions import Coalesce
 from pydantic import BaseModel, ConfigDict
 
@@ -127,14 +127,16 @@ class InboxGroups:
                     output_field=IntegerField(),
                 ),
             )
-            count = groups.count()
             if self.timestamp:
                 groups = groups.annotate(_latest=Max(self.timestamp))
             order = (
                 ("_latest" if self.oldest else "-_latest", "_bucket")
                 if self.timestamp else ("_rank", "_label", "_bucket")
             )
-            selected = list(groups.order_by(*order)[window])
+            selected = list(groups.annotate(_group_count=Window(Count("*"))).order_by(*order)[window])
+            # An empty page has no window value; only out-of-range pages need
+            # the separate count. Empty first pages already prove zero groups.
+            count = selected[0]["_group_count"] if selected else groups.count() if page > 1 else 0
         public_ids = (
             {record.pk: str(record.sqid) for record in self.objects.filter(pk__in=[row["_bucket"] for row in selected])}
             if self.objects is not None
