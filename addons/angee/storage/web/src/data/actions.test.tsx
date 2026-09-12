@@ -57,7 +57,6 @@ vi.mock("@angee/refine", async (importOriginal) => {
       }),
       { error: null, fetching: false },
     ]),
-    useInvalidateAuthoredModels: () => vi.fn(),
   };
 });
 
@@ -183,18 +182,18 @@ describe("storage file/folder actions", () => {
     ]);
     expect(sdk.invalidations).toEqual([
       {
-        resource: "console:storage.File",
+        resource: "files",
         dataProviderName: "console",
         invalidates: ["list", "many", "detail"],
       },
       {
-        resource: "console:storage.Folder",
+        resource: "folders",
         dataProviderName: "console",
         id: "fld_1",
         invalidates: ["list", "many", "detail"],
       },
       {
-        resource: "console:storage.File",
+        resource: "files",
         dataProviderName: "console",
         invalidates: ["list", "many", "detail"],
       },
