@@ -77,6 +77,29 @@ export function relationFieldInfo(
 }
 
 /**
+ * Resolve the picker target for a declared form field. A compatible concrete
+ * resource may replace the relation's base resource, while the model field
+ * remains the authority that this is a to-one relation at all.
+ */
+export function relationFieldInfoForDescriptor(
+  descriptor: Pick<FieldDescriptor, "name" | "relationResource">,
+  modelMetadata: ModelMetadata | null,
+  schemaMetadata: SchemaFieldMetadata,
+): RelationFieldInfo | null {
+  const inferred = relationFieldInfo(descriptor.name, modelMetadata, schemaMetadata);
+  if (!inferred || !descriptor.relationResource) return inferred;
+  const concrete = modelMetadataForLabel(schemaMetadata, descriptor.relationResource);
+  const concreteBase = concrete?.resource.canonicalLabel ?? concrete?.resource.modelLabel;
+  if (concreteBase !== inferred.resource) {
+    throw new Error(
+      `Relation field "${descriptor.name}" targets "${inferred.resource}"; `
+      + `"${descriptor.relationResource}" is not that model or one of its concrete subtypes.`,
+    );
+  }
+  return relationFieldInfoForResource(descriptor.relationResource, concrete);
+}
+
+/**
  * The to-many analog of {@link relationFieldInfo}: an M2M child field
  * (`kind: "list"`) whose `relationModelLabel` resolved to a listable related
  * model. `EditableLines` renders it as a multi-select of related rows and

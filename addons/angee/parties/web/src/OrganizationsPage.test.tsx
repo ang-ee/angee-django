@@ -1,6 +1,5 @@
-import type { ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
-import { Field, pageChildren, pageElementProps, parsePageFields, type FormProps, type ResourceListProps } from "@angee/ui";
+import { Field, pageElementProps, parsePageFields, type FormProps, type ResourceListProps } from "@angee/ui";
 
 vi.mock("./i18n", () => ({ usePartiesT: () => (key: string) => key }));
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -8,15 +7,12 @@ vi.mock("@angee/ui", async (importOriginal) => {
   return { ...actual, useSlot: vi.fn(() => []) };
 });
 import { useSlot } from "@angee/ui";
-import { OrganizationsPage } from "./OrganizationsPage";
+import { OrganizationForm, OrganizationsPage } from "./OrganizationsPage";
 import { ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 
 function formFields() {
-  const page = OrganizationsPage();
-  const children = (page.props as { children?: ReactNode }).children;
-  const form = pageChildren(children)
-    .map((child) => pageElementProps<FormProps>(child, "form"))
-    .find((props): props is FormProps => Boolean(props));
+  const formView = OrganizationForm({ resource: "parties.Organization", id: null });
+  const form = pageElementProps<FormProps>(formView, "form");
   if (!form) throw new Error("Expected the native organization form");
   return parsePageFields(form.children).map((field) => field.name);
 }

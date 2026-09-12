@@ -229,6 +229,7 @@ export const enUiMessages: Record<string, string> = {
   "chrome.openChatter": "Open chatter",
   "form.create": "Create",
   "form.created": "created {value}",
+  "form.createSuccess": "Record created",
   "form.discard": "Discard",
   "form.fixHighlightedFields": "Please fix the highlighted fields.",
   "form.fixHighlightedFieldsNamed":
@@ -260,6 +261,7 @@ export const enUiMessages: Record<string, string> = {
   "form.unsavedLeaveTitle": "Unsaved changes - leave without saving?",
   "form.untitled": "Untitled",
   "form.updated": "updated {value}",
+  "form.updateSuccess": "Changes saved",
   "form.wordCount": "{count} words",
   "lines.add": "Add line",
   "lines.duplicate": "Duplicate line",
