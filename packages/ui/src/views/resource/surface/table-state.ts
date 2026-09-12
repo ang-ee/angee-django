@@ -1,4 +1,5 @@
 import * as React from "react";
+import { stableSerialize } from "@angee/refine";
 import { type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Table, type VisibilityState } from "@tanstack/react-table";
 import { queryForColumns } from "../resource-query";
@@ -53,9 +54,35 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
       navigationScope,
     ],
   );
+  // The effect keys on the snapshot's CONTENT, not on its identity. Keyed on
+  // identity it re-ran on every render -- the memo rebuilds when `rows` or the
+  // list object is new, and `onListStateChange` is itself rebuilt whenever one of
+  // its own dependencies churns -- so a board load ran this effect ~60 times for
+  // a list whose contents never changed. Each run called two setters, and React
+  // can only skip scheduling a same-value update while the fiber has no pending
+  // lane; once the first update lands, every later one is scheduled, renders,
+  // returns the same value, and still counts as a nested update. That is the
+  // "Maximum update depth exceeded" the board threw on load.
+  //
+  // Row identity is not content: rows are refetched objects, so the ids are what
+  // decide whether the consumer needs telling.
+  const snapshotKey = stableSerialize({
+    rowIds: rows.map((row) => (row as { id?: unknown }).id ?? null),
+    total: list.total,
+    page: list.page,
+    pageSize: list.pageSize,
+    pageCount: list.pageCount,
+    hasNext: list.hasNext,
+    hasPrev: list.hasPrev,
+    fetching: list.fetching,
+    error: list.error ? String(list.error.message ?? list.error) : null,
+    navigationScope: navigationScope ?? null,
+  });
+  const latest = React.useRef({ snapshot, onListStateChange });
+  latest.current = { snapshot, onListStateChange };
   React.useEffect(() => {
-    onListStateChange?.(snapshot);
-  }, [onListStateChange, snapshot]);
+    latest.current.onListStateChange?.(latest.current.snapshot);
+  }, [snapshotKey]);
   return snapshot;
 }
 
