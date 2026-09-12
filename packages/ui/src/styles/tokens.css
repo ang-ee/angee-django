@@ -166,6 +166,18 @@
   --pink-soft:         var(--pink-100);
   --pink-soft-text:    var(--pink-700);
 
+  /* Data-series roles. Identity is always reinforced by labels/legends. */
+  --chart-1:           var(--b-600);
+  --chart-2:           var(--t-600);
+  --chart-3:           var(--blue-700);
+  --chart-4:           var(--purple-700);
+  --chart-5:           var(--pink-700);
+  --chart-6:           var(--green-700);
+  --chart-7:           var(--amber-700);
+  --chart-8:           var(--red-700);
+  --chart-other:       var(--n-500);
+  --chart-surface:     var(--surface-sheet);
+
   /* ---------------------------------------------------------------------------
      Two-axis fill matrix (tone × variant). `soft` (above) and the brand/danger
      solids already exist; these complete the palette so lib/tones.ts can map
@@ -320,6 +332,17 @@
   --border-subtle:     var(--n-825);
   --border-default:    var(--n-775);
   --border-strong:     var(--n-680);
+
+  --chart-1:           var(--b-300);
+  --chart-2:           var(--t-300);
+  --chart-3:           var(--blue-300);
+  --chart-4:           var(--purple-300);
+  --chart-5:           var(--pink-300);
+  --chart-6:           var(--green-300);
+  --chart-7:           var(--amber-300);
+  --chart-8:           var(--red-300);
+  --chart-other:       var(--n-400);
+  --chart-surface:     var(--surface-sheet);
   --border-on-rail:    var(--n-935);
 
   --brand:             var(--b-400);

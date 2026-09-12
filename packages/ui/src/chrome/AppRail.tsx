@@ -52,6 +52,7 @@ import {
   type RailDropPlacement,
 } from "./app-rail-model";
 import { useAppRailPreferences } from "./app-rail-preferences";
+import { readRuntimeRouteShortcuts, useRuntimeUserPreferences } from "../runtime";
 
 export interface AppRailProps {
   className?: string;
@@ -90,6 +91,11 @@ export function AppRail({
     [menuItems, runtimeTree],
   );
   const { railPreferences, setRailPreferences } = useAppRailPreferences();
+  const runtimePreferences = useRuntimeUserPreferences();
+  const shortcuts = useMemo(
+    () => readRuntimeRouteShortcuts(runtimePreferences.preferences),
+    [runtimePreferences.preferences],
+  );
   const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
   const expanded = resolvedRailExpanded(
     railPreferences.expanded,
@@ -200,6 +206,23 @@ export function AppRail({
             onOrderChange={handleOrderChange}
           />
         )}
+        {!settingsActive && shortcuts.length ? (
+          <>
+            <div className={cn("my-2 h-px bg-border-on-rail", expanded ? "mx-2" : "mx-auto w-6")} aria-hidden="true" />
+            <div className="flex flex-col gap-1">
+              {shortcuts.map((shortcut) => (
+                <RuntimeShortcutItem
+                  key={shortcut.id}
+                  expanded={expanded}
+                  icon={shortcut.icon ?? "dashboard"}
+                  label={shortcut.label}
+                  pathname={pathname}
+                  to={shortcut.path}
+                />
+              ))}
+            </div>
+          </>
+        ) : null}
         {settings ? (
           <>
             <div className={cn(
@@ -235,6 +258,29 @@ export function AppRail({
       ) : null}
     </aside>
   );
+}
+
+function RuntimeShortcutItem({ expanded, icon, label, pathname, to }: {
+  expanded: boolean;
+  icon: string;
+  label: string;
+  pathname: string;
+  to: string;
+}): ReactElement {
+  const active = pathname === to;
+  const link = (
+    <Link
+      to={to}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      data-active={active}
+      className={cn(expanded ? appRailTreeVariants().link() : cn(RAIL_BUTTON, active && RAIL_BUTTON_ACTIVE))}
+    >
+      <Glyph name={icon} fallbackName="dashboard" size={16} aria-hidden="true" />
+      {expanded ? <span className="min-w-0 flex-1 truncate">{label}</span> : null}
+    </Link>
+  );
+  return <div className={cn("flex w-full", expanded ? "px-2" : "justify-center")}>{expanded ? link : <Tooltip label={label} side="right">{link}</Tooltip>}</div>;
 }
 
 function RailExpansionToggle({

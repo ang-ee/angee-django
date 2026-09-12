@@ -311,6 +311,14 @@ export {
 } from "./relation/relation-options";
 export * from "./resource/resource-view-model";
 export * from "./resource/resource-view-context";
+export {
+  RESOURCE_VIEW_ACTIONS_SLOT,
+  ResourceViewActions,
+  resourceViewActionsSlot,
+  useResourceViewActionContext,
+  useResourceViewActions,
+  type ResourceViewActionContext,
+} from "./resource/resource-view-actions";
 export type { StringIdRow } from "./resource/resource-view-surface";
 export {
   Action,

@@ -52,6 +52,7 @@ import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import {
   AppRuntimeProvider,
   DEFAULT_LOGIN_PATH,
+  HOME_PATH_PREFERENCE_KEY,
   UnknownRouteError,
   createRouteHref,
   type AppRuntime,
@@ -109,10 +110,12 @@ import {
 } from "./route-tree";
 
 export {
+  dashboardPageRoute,
   defineBaseAddon,
   resourcePageRoutes,
   type BaseAddon,
   type BaseAddonRoute,
+  type DashboardPageRouteOptions,
   type ResourcePageRoutesOptions,
   type RefineLayoutChromeProps,
   type RefineLayoutConfig,
@@ -253,6 +256,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     // runtime carries only addon-contributed providers.
     previews: composed.previews,
     drawers: composed.drawers,
+    dashboards: composed.dashboards,
     routesByResource,
     routeHref,
     loginPath,
@@ -569,6 +573,10 @@ function HomeRedirect({ fallback }: { fallback: string }): ReactNode {
   const menuTree = useChromeMenuTree();
   const { preferences } = useUserPreferences();
   const target = useMemo(() => {
+    const preferredPath = preferences[HOME_PATH_PREFERENCE_KEY];
+    if (typeof preferredPath === "string" && preferredPath.startsWith("/")) {
+      return preferredPath;
+    }
     const defaultItemId = readAppRailPreferences(preferences).defaultItemId;
     if (!defaultItemId) return fallback;
     const item = menuTree
