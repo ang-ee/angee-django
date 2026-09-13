@@ -1,7 +1,6 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enDashboardsMessages: Record<string, string> = {
-  "common.actions": "More dashboard actions",
   "common.archive": "Archive",
   "common.cancel": "Cancel",
   "common.create": "Create dashboard",
@@ -17,7 +16,6 @@ export const enDashboardsMessages: Record<string, string> = {
   "common.setAsHome": "Set as home",
   "common.unpin": "Unpin",
   "common.unsetHome": "Unset home",
-  "common.setHome": "Set as home",
   "catalogue.description": "Personal dashboards and your customized addon and resource views.",
   "catalogue.empty.description": "Create a personal dashboard, or customize a resource dashboard.",
   "catalogue.empty.title": "No dashboards yet",
@@ -55,7 +53,6 @@ export const enDashboardsMessages: Record<string, string> = {
   "sharing.publicIdFor": "{type} public ID",
   "sharing.recipientType": "Recipient type",
   "sharing.role": "Dashboard role",
-  "sharing.subjectType": "Recipient type",
   "sharing.user": "User",
   "sharing.viewer": "Viewer",
 };

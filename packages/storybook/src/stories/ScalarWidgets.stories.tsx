@@ -48,14 +48,6 @@ type OwnerCellStoryValue =
     }
   | null;
 
-type JsonWidgetValue =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly JsonWidgetValue[]
-  | { readonly [key: string]: JsonWidgetValue };
-
 type NumericWidgetValue = number | string | null;
 
 const meta = {
@@ -129,7 +121,7 @@ export const EditAndRead: Story = {
               initialValue="2026-06-16"
               field={{ label: "Due date" }}
             />
-            <WidgetExample<JsonWidgetValue>
+            <WidgetExample
               kind="json"
               widget={defaultWidgets.json}
               initialValue={{

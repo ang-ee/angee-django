@@ -9,7 +9,6 @@ import {
 import type {
   WorkflowGraphEdge,
   WorkflowGraphStep,
-  WorkflowRunStepRun,
 } from "../documents.console";
 
 export type WorkflowGraphNodeKind =

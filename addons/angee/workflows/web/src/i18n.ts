@@ -380,7 +380,6 @@ export const enWorkflowsMessages: Record<string, string> = {
   "inbox.sourceExecution": "Execution {id}",
   "inbox.sourceAttempt": "Attempt {id}",
   "json.label": "JSON",
-  "json.invalid": "Invalid JSON",
 };
 
 export const useWorkflowsT = createNamespaceT("workflows", enWorkflowsMessages);
