@@ -84,7 +84,8 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   ) => React.ReactNode;
   /** Make each row/card draggable by returning its dnd payload, or `null`. */
   draggableRow?: (row: TRow) => DndPayload | null;
-  /** Keep local resource-view state inside another data view; unset or `"inherit"` shares it. */
+  /** Override collection-state ownership. Embedded collections default to local;
+   * page/workspace collections default to inherited/route state. */
   scope?: "inherit" | "local";
 }
 

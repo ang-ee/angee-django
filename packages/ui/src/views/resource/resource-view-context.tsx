@@ -103,8 +103,6 @@ export type ResourceViewProviderScope = "route" | "local";
 export interface ResourceViewScopeMountOptions {
   ambient: ResourceViewContextValue | null;
   resource?: string;
-  /** Unset shares the ambient view for the same resource or an unbound owner;
-   * `"inherit"` shares any ambient, `"local"` keeps state local. */
   scope?: "inherit" | "local";
   /** Embedded collections own local state unless the caller explicitly opts in
    * to an ambient or route-owned view. */
@@ -152,20 +150,6 @@ export function ResourceViewProvider({
   );
 }
 
-/**
- * Whether an ambient view already owns the collection state this mount needs.
- *
- * A sort field, filter and group axis are all resource-specific: a Round sorts
- * by `submission_deadline`, and its Topic panel cannot. A mount that declares
- * another resource therefore cannot share the ambient owner's state. A mount
- * that declares no resource means "inherit the page's", and an ambient that
- * declares none owns whatever mounts under it, so both keep sharing.
- */
-function ambientOwnsResource(ambient: ResourceViewContextValue, resource?: string): boolean {
-  if (resource === undefined || ambient.resource === undefined) return true;
-  return ambient.resource === resource;
-}
-
 /** Mount under an ambient view when allowed, otherwise create the one state owner. */
 export function withResourceViewScope({
   ambient,
@@ -177,22 +161,14 @@ export function withResourceViewScope({
   providerKey,
   children,
 }: ResourceViewScopeMountOptions): ReactElement {
-  // `presentation="embedded"` (or an explicit `scope="local"`) keeps state local;
-  // otherwise an unset scope may inherit an ambient view.
   const resolvedScope = scope ?? (presentation === "embedded" ? "local" : "inherit");
-  const mayInherit = !isolated && resolvedScope !== "local" && ambient !== null;
-  // An explicit `inherit` shares the ambient owner whatever it owns; an unset scope
-  // shares only a same-resource (or unbound) ambient, since sort/filter/group axes
-  // are resource-specific.
-  if (mayInherit && (scope === "inherit" || ambientOwnsResource(ambient, resource))) {
-    return children(ambient);
-  }
+  if (!isolated && resolvedScope !== "local" && ambient) return children(ambient);
   return (
     <ResourceViewProvider
       key={providerKey}
       initialState={initialState}
       resource={resource}
-      scope={isolated || mayInherit || resolvedScope === "local" ? "local" : "route"}
+      scope={isolated || resolvedScope === "local" ? "local" : "route"}
     >
       <ResourceViewScopeBound>{children}</ResourceViewScopeBound>
     </ResourceViewProvider>
