@@ -32,6 +32,7 @@ vi.mock("@angee/refine", async () => {
 vi.mock("@angee/ui", async () => {
   const actual = await vi.importActual<typeof import("@angee/ui")>("@angee/ui");
   return {
+    formViewRecordActionsSlot: actual.formViewRecordActionsSlot,
     Avatar: ({ initials }: { initials?: string }) => <span>{initials}</span>,
     Column: ({ field }: { field: string }) => {
       pageMocks.columnFields.push(field);
