@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { get, set } from "react-hook-form";
 import {
-  publicIdLabel,
   relationModelLabelForField,
   rowPublicId,
   rowValueAtPath,
@@ -20,6 +19,7 @@ import {
   isRelationIdField,
   type FieldDescriptor,
   type GroupDescriptor,
+  type GroupPlacement,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
@@ -58,6 +58,7 @@ export interface FormSectionModel {
   columns?: number;
   collapsible?: boolean;
   defaultOpen?: boolean;
+  placement?: GroupPlacement;
   fields: readonly FieldDescriptor[];
   render?: () => ReactNode;
   sequence?: number;
@@ -89,6 +90,7 @@ export function formSections(
         columns: group.columns,
         collapsible: group.collapsible,
         defaultOpen: group.defaultOpen,
+        placement: group.placement,
         fields: group.fields,
         sequence: sequences[index],
         order: index,
@@ -99,6 +101,13 @@ export function formSections(
   if (ungrouped.length > 0) sections.unshift({ key: "fields", fields: ungrouped });
   return sections;
 }
+
+/**
+ * How a form arranges its sections. `sidebar` keeps the tabbed body and adds a
+ * standing properties column beside it, for records whose state is checked far
+ * more often than their long tail is read.
+ */
+export type FormViewLayout = "stacked" | "tabs" | "sidebar";
 
 /** Classify fields rendered in record chrome versus the section grid/body. */
 export function formViewFieldLayout(
@@ -567,8 +576,11 @@ export function recordSubtitleParts(
   t: UiTranslate,
 ): ReactNode[] {
   const parts: ReactNode[] = [];
-  const recordId = presentValue(record?.id) ?? presentValue(id);
-  if (recordId !== undefined) parts.push(recordIdLabel(String(recordId)));
+  // No internal id here. The record header led with the sqid -- `tsk_2KY5XM6f`
+  // -- which names the row for the database and tells the reader nothing; a
+  // record's human key (`ENG-8`) is what identifies it, and that is shown where
+  // it exists, on cards, the list's Key column and triage. Until the subtitle
+  // vocabulary can name a key field, no identifier here beats the wrong one.
   if (record) {
     const created = fieldValue(record, fields?.created);
     const updated = fieldValue(record, fields?.updated);
@@ -596,15 +608,6 @@ function presentValue(value: unknown): unknown | undefined {
   if (value == null) return undefined;
   if (typeof value === "string" && value.trim() === "") return undefined;
   return value;
-}
-
-function recordIdLabel(value: string): string {
-  return publicIdLabel(value) ?? shortRecordId(value);
-}
-
-function shortRecordId(value: string): string {
-  const text = value.trim();
-  return text.length <= 12 ? text : text.slice(0, 8);
 }
 
 function formatRecordDate(value: unknown): string {

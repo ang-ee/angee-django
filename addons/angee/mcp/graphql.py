@@ -22,7 +22,7 @@ Boundary conventions (the agent surface differs from the GraphQL wire):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -160,6 +160,16 @@ level (the GraphQL ``id`` field). Deeper nesting fails fast at compile time.
 """
 
 
+ACTION_RESULT = ("ok", "message", "id")
+"""Projection of an ``angee.graphql.actions.ActionResult`` for curated action tools."""
+
+DEFAULT_QUERY_LIMIT = 25
+"""Rows a list tool returns when the caller omits its limit."""
+
+MAX_QUERY_LIMIT = 50
+"""Most rows a list tool returns, whatever limit the caller asks for."""
+
+
 @dataclass(frozen=True)
 class GraphQLTool:
     """Declaration of one MCP tool backed by a GraphQL operation.
@@ -179,10 +189,11 @@ class GraphQLTool:
     (e.g. ``confirm`` on a delete), and ``requires_user_actor`` rejects non-user
     MCP actors before execution for operations whose write attribution is a user FK.
     ``search_fields`` adds one optional text query mapped into a Hasura ``where``
-    ``_or`` over the named string fields. ``default_limit`` and ``max_limit`` keep
-    generated collection tools bounded even when the caller omits or overstates
-    ``limit_arg``. ``tags`` carries registration-owned classification such as the
-    generated-resource-reader bundle marker.
+    ``_or`` over the named string fields. ``default_limit`` and ``max_limit`` bound a
+    list tool when the caller omits or overstates ``limit_arg``; a spec that leaves
+    them unset takes :data:`DEFAULT_QUERY_LIMIT` and :data:`MAX_QUERY_LIMIT`. ``tags``
+    carries registration-owned classification such as the generated-resource-reader
+    bundle marker.
     """
 
     operation: str
@@ -356,6 +367,10 @@ class _CompiledTool(Tool):
 def _compile(spec: GraphQLTool) -> _CompiledTool:
     """Introspect the schema bucket and build the runnable tool for ``spec``."""
 
+    if spec.limit_arg:
+        max_limit = MAX_QUERY_LIMIT if spec.max_limit is None else spec.max_limit
+        default_limit = min(DEFAULT_QUERY_LIMIT, max_limit) if spec.default_limit is None else spec.default_limit
+        spec = replace(spec, default_limit=default_limit, max_limit=max_limit)
     gc = GraphQLSchemas.from_discovery().graphql_schema(spec.schema)
     op_type, field = _root_field(gc, spec.operation)
     node, is_list, list_result_field = _return_node(field.type)

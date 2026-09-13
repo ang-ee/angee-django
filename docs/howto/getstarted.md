@@ -131,10 +131,10 @@ Concretely, today:
   and the base addons: GraphQL via strawberry-django, relationship-based
   authorization (REBAC), aggregates, tiered resources, history/revisions, and
   the React frontend (layouts, list/board/form views).
-- **Being lifted in now.** The higher-level addons — agents, integrations,
-  knowledge, storage, and communications. They already run in the team's other
-  platforms; the work in flight is reconstructing and open-sourcing them here,
-  addon by addon.
+- **Also landed.** The higher-level addons — agents, integrations, knowledge,
+  storage, and communications — and a project-management suite built on them.
+- **Still in flight.** ARP, the ERP re-cut. The [feature list](../features.md)
+  marks what is planned versus shipped.
 
 This is the whole point of the framework — and why it is **technical investment,
 not technical debt**. Every component and its permissions are tested end to end,

@@ -9,6 +9,7 @@ import { Glyph } from "../chrome/Glyph";
 import { EmptyState } from "../fragments/EmptyState";
 import { useUiT, type UiMessageVars } from "../i18n";
 import { cn } from "../lib/cn";
+import { XL_VIEWPORT_QUERY, useMediaQuery } from "../lib/use-media-query";
 import {
   useAppRuntime,
   type ChatterContribution,
@@ -149,6 +150,51 @@ export function Chatter({
       ) : null}
     </aside>
   );
+}
+
+/**
+ * Whether the chatter aside has anything to say about the active view.
+ *
+ * The default tabs are about a record -- "No comments yet", "No record
+ * selected" -- so on a view with nothing selected the aside is an empty rail
+ * sitting over the page. On a board it covers a lane, and a card underneath it
+ * cannot be grabbed at all. The pane's host asks this before mounting it, since
+ * a `Chatter` that renders nothing would still leave a pane holding its width.
+ *
+ * A page that publishes its own tabs or composer keeps its aside either way, as
+ * does a view an addon contributes to deliberately.
+ */
+export function useChatterHasContent(): boolean {
+  const runtime = useAppRuntime();
+  const { content } = useChatter();
+  const viewContext = useActiveChatterView(runtime.chatterRoutes ?? []);
+  if (viewContext.view.kind === "record") return true;
+  if ((content?.tabs?.length ?? 0) > 0 || content?.composer != null) return true;
+  return (runtime.chatter ?? []).some((contribution) =>
+    contributionMatches(contribution, viewContext),
+  );
+}
+
+/**
+ * Whether this page's rail should start open instead of as a collapsed strip.
+ *
+ * Records are where the conversation is, but only some of them: a rail opened on
+ * every record would take a column away from pages built to be read wide. Which
+ * models want it is a domain fact, so addons declare it and this only asks.
+ *
+ * Gated on the same width as the properties column, not on `lg`: a record that
+ * opens both is three panes, and below `xl` they do not fit -- measured at 1024,
+ * the rail's own controls clipped 4-37px past the edge. Below it the rail stays
+ * a toggle rather than sitting on top of the record it is about.
+ */
+export function useChatterRailStartsOpen(): boolean {
+  const runtime = useAppRuntime();
+  const viewContext = useActiveChatterView(runtime.chatterRoutes ?? []);
+  const roomForThreePanes = useMediaQuery(XL_VIEWPORT_QUERY);
+  if (!roomForThreePanes || viewContext.view.kind !== "record") return false;
+  const model =
+    viewContext.route?.canonicalLabel ?? viewContext.route?.modelLabel;
+  return model != null && (runtime.chatterExpandedModels ?? []).includes(model);
 }
 
 function contributionMatches(

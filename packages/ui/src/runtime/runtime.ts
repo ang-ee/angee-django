@@ -93,6 +93,12 @@ export interface AppRuntime {
   forms: FormOverrideMap;
   chatter: readonly ChatterContribution[];
   chatterRoutes: readonly ChatterRoute[];
+  /**
+   * Canonical model labels whose record pages open the chatter rail instead of
+   * leaving it as a collapsed strip. A domain fact, so addons declare it: the
+   * layout only asks whether the active record's model is listed.
+   */
+  chatterExpandedModels: readonly string[];
   slots: readonly SlotContribution[];
   /** Addon-owned detail search keys cleared by routed record navigation. */
   recordSearchKeys: readonly string[];
@@ -179,6 +185,7 @@ const EMPTY_RUNTIME: AppRuntime = {
   forms: {},
   chatter: [],
   chatterRoutes: [],
+  chatterExpandedModels: [],
   slots: [],
   recordSearchKeys: [],
   previews: [],

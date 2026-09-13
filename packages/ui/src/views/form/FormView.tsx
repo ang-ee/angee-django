@@ -7,6 +7,8 @@ import { renderGlyph } from "../../chrome/Glyph";
 import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
 import { cn } from "../../lib/cn";
 import { SlotOutlet } from "../../lib/slot-outlet";
+import { EmptyState } from "../../fragments/EmptyState";
+import { ErrorPanel } from "../../fragments/ErrorPanel";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import {
   RecordChromeProvider,
@@ -30,6 +32,7 @@ import {
   FormViewOverview,
   FormViewRecordHeader,
 } from "./form-view-body";
+import type { FormViewLayout } from "./form-view-model";
 
 export {
   acknowledgeFormSubmit,
@@ -72,7 +75,7 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   /** Non-form content rendered after the overview fields for both create and edit. */
   formExtras?: (context: RecordToolbarContext) => React.ReactNode;
   /** Group presentation; ungrouped/title/body/status placement is unchanged. */
-  layout?: "stacked" | "tabs";
+  layout?: FormViewLayout;
   /** Record chrome density and height behavior. */
   recordPresentation?: RecordPresentation;
   /** Initial saved-record tab; invalid or unavailable ids fall back to Overview. */
@@ -161,6 +164,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     formReadOnly,
     formIsDirty,
     displayRecord,
+    recordMissing,
+    readFailure,
     saveError,
     declaredActions,
     recordChrome,
@@ -181,6 +186,13 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
+  // `sidebar` moves the status display and the lifecycle verbs onto the
+  // properties column, so the header drops its strip and the action bar keeps
+  // only what was not marked for the column.
+  const statusOnColumn = layout === "sidebar";
+  const barActions = statusOnColumn
+    ? declaredActions.filter((action) => action.placement !== "properties")
+    : declaredActions;
   const overview = <FormViewOverview surface={surface} layout={layout} />;
   const overviewLabel = overviewTab?.label ?? t("form.tabOverview");
   const orderedTabs = overviewTab?.position === "last"
@@ -250,10 +262,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             </Button>
           </div>
         ) : null}
-        {!readOnly && (declaredActions.length > 0 || visibleDeleteAction !== undefined) ? (
+        {!readOnly && (barActions.length > 0 || visibleDeleteAction !== undefined) ? (
           <RecordActionBar
             record={displayRecord ?? null}
-            actions={declaredActions}
+            actions={barActions}
             applyPatch={applyPatch}
             reload={reload}
             deleteAction={visibleDeleteAction}
@@ -277,6 +289,29 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     </ControlBand>
   );
 
+  // A read that failed is retryable and says so; the form must not stand in for
+  // a record nobody has read yet.
+  if (readFailure) {
+    return <ErrorPanel error={readFailure} onRetry={reload} />;
+  }
+  // An id that resolves to nothing is not an empty record: rendering the form
+  // would offer a save that has nothing to save onto.
+  if (recordMissing) {
+    return (
+      <EmptyState
+        fill
+        icon="search"
+        title={t("form.notFoundTitle")}
+        description={t("form.notFoundDescription")}
+        actions={
+          <Button type="button" variant="secondary" size="sm" onClick={reload}>
+            {t("form.notFoundRetry")}
+          </Button>
+        }
+      />
+    );
+  }
+
   const formElement = (
     <form
       className={cn("min-h-full bg-sheet", className)}
@@ -295,7 +330,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             : "pb-12",
         )}
       >
-        <FormViewRecordHeader surface={surface} title={formTitle} />
+        <FormViewRecordHeader surface={surface} hideStatus={statusOnColumn} title={formTitle} />
         <ErrorBanner description={saveError} title={t("form.saveFailed")} />
         {tabbed ? (
           <>
@@ -345,7 +380,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} />
+            <FormViewRecordHeader surface={surface} compact hideStatus={statusOnColumn} title={formTitle} />
             <ErrorBanner description={saveError} title={t("form.saveFailed")} />
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (

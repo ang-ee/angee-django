@@ -5,6 +5,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
 
 import { enProjectsMessages } from "./i18n";
+import { taskCreateForm } from "./views/task-create-form";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 
 export {
@@ -50,8 +51,13 @@ const projectsRoutes: readonly BaseAddonRoute[] = [
 const projectsMenu: readonly BaseMenuItem[] = [
   {
     id: "projects",
+    // The group header targets the projects list. Without a route of its own it
+    // fell through to its first child, so "Projects" the header went to My Work
+    // while "Projects" the child went to the list -- two entries with one name,
+    // lighting up for different pages.
     label: "Projects",
     icon: "projects",
+    route: "projects.projects",
     children: [
       {
         id: "projects.my-work",
@@ -61,7 +67,7 @@ const projectsMenu: readonly BaseMenuItem[] = [
       },
       {
         id: "projects.projects",
-        label: "Projects",
+        label: "All projects",
         icon: "projects",
         route: "projects.projects",
       },
@@ -86,6 +92,13 @@ const projects = defineBaseAddon({
   routes: projectsRoutes,
   menus: projectsMenu,
   i18n: { projects: enProjectsMessages },
+  // The create form for a task, used wherever one is created; the record keeps
+  // the tabbed form for its long tail.
+  forms: { "projects.Task": taskCreateForm },
+  // A task is the unit people discuss, so its record opens with the rail out
+  // rather than as a strip nobody notices. Projects stay collapsed: that record
+  // is read wide, across its tabs.
+  chatterExpanded: ["projects.Task"],
   icons: {
     projects: Briefcase,
     "project-task": ListChecks,

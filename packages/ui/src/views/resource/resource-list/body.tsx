@@ -156,10 +156,20 @@ export function ResourceListBody<TRow extends Row = Row>({
 
   const handleSaved = React.useCallback(
     (row: Row) => {
+      // Creating from a board leaves you on the board: the new card appears in
+      // its lane on its own, and selecting the created record instead takes a
+      // page whose `onSelect` routes -- a board page usually -- off the board
+      // entirely, so the card you just made is the one thing you cannot see.
+      // A record surface that stays put (a list's drawer) keeps opening the new
+      // record, which is where continuing to edit it belongs.
+      if (resolvedCreating && resourceView.state.view === "board") {
+        handleCloseRecord?.();
+        return;
+      }
       const id = rowPublicId(row);
       if (id !== null) handleSelectRecord?.(id);
     },
-    [handleSelectRecord],
+    [handleCloseRecord, handleSelectRecord, resolvedCreating, resourceView.state.view],
   );
   const handleCreateRecord = React.useCallback(() => {
     handleSelectRecord?.(null);

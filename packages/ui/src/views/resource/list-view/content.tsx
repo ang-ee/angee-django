@@ -17,6 +17,7 @@ import { createLabelForResource, mergeFilterFields, mergeFilterOptions, resolveT
 import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
+import { BulkEditMenu } from "../BulkEditMenu";
 import { useBulkDelete } from "../useBulkDelete";
 import { requireDataResource, useAggregateOperation } from "../resource-operations";
 import { useResourceToolbarProps } from "../resource-toolbar-props";
@@ -150,6 +151,16 @@ export function ListViewContent<TRow extends Row = Row>({
     surface.selectedIds,
     resourceView.clearSelectedIds,
   );
+  // A rank orders rows within one context; one value can't rank a whole selection.
+  const bulkEditColumns = React.useMemo(
+    () => resolvedColumns.filter((column) => !isBoardRankField(modelMetadata?.fields[column.field])),
+    [modelMetadata, resolvedColumns],
+  );
+  const { setRowSelection } = resourceView;
+  const narrowSelection = React.useCallback(
+    (ids: readonly string[]) => setRowSelection(Object.fromEntries(ids.map((id) => [id, true]))),
+    [setRowSelection],
+  );
   const cardActionContext = React.useMemo(
     () => ({ refresh: surface.list.refetch }),
     [surface.list.refetch],
@@ -208,6 +219,21 @@ export function ListViewContent<TRow extends Row = Row>({
     pagerMaxPageSize: clientRowModel ? undefined : MAX_PAGE_SIZE,
   });
 
+  const selectionActions =
+    surface.selectedIds.size === 0
+      ? undefined
+      : bulkActions
+        ? bulkActions(surface.selectedIds, resourceView.clearSelectedIds)
+        : (
+          <BulkEditMenu
+            resource={resource}
+            columns={bulkEditColumns}
+            selectedIds={surface.selectedIds}
+            onSucceeded={resourceView.clearSelectedIds}
+            onNarrowSelection={narrowSelection}
+          />
+        );
+
   return (
     <ResourceListFrame
       className={className}
@@ -221,10 +247,7 @@ export function ListViewContent<TRow extends Row = Row>({
             ? bulkDelete.deleteInitiate
             : undefined,
         deletePending: !bulkActions && bulkDelete.isPending,
-        actions:
-          bulkActions && surface.selectedIds.size > 0
-            ? bulkActions(surface.selectedIds, resourceView.clearSelectedIds)
-            : undefined,
+        actions: selectionActions,
       }}
       error={surface.list.error}
       onRetry={() => void surface.list.refetch()}

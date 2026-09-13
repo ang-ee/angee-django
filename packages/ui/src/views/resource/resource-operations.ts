@@ -10,6 +10,7 @@ import {
 } from "@angee/metadata";
 import {
   maybeOperationDocument,
+  useInvalidateAuthoredModels,
   useAngeeDeletePreview,
   useOperationDocuments,
   type CustomGraphQLOperationTarget,
@@ -17,6 +18,7 @@ import {
   type OperationDocumentKind,
   type UseAngeeDeletePreviewResult,
 } from "@angee/refine";
+import * as React from "react";
 
 export interface ResourceOperation {
   target: CustomGraphQLOperationTarget | null;
@@ -70,6 +72,37 @@ export function useGroupOperation(
   resource: DataResourceMetadata | null,
 ): ResourceOperation {
   return useResourceOperation(resource, "groups", "groups");
+}
+
+/**
+ * Refresh everything that reads one data resource after a write to it.
+ *
+ * Two reads answer to two different keys, and a caller that writes one by hand
+ * reliably forgets the other. `useInvalidate` builds its query key from the
+ * resource string verbatim -- it never resolves a name through the registry --
+ * so a keyed read only refreshes when handed `refineResourceIdentifier`, the
+ * same string `useAngeeListBatch` registers under. Aggregates, facets and
+ * grouped reads are custom queries carrying no resource key at all, and answer
+ * only to their registered model interest.
+ */
+export function useInvalidateDataResource(): (
+  resource: DataResourceMetadata,
+  id?: string,
+) => Promise<void> {
+  const invalidate = useInvalidate();
+  const invalidateAuthoredModels = useInvalidateAuthoredModels();
+  return React.useCallback(
+    async (resource: DataResourceMetadata, id?: string) => {
+      invalidateAuthoredModels([resource.modelLabel]);
+      await invalidate({
+        resource: refineResourceIdentifier(resource),
+        dataProviderName: resource.schemaName,
+        ...(id ? { id } : {}),
+        invalidates: ["list", "many", "detail"],
+      });
+    },
+    [invalidate, invalidateAuthoredModels],
+  );
 }
 
 export function useDeletePreviewOperation(

@@ -371,3 +371,4 @@ export type {
   TabDescriptor,
   TabProps,
 } from "./page";
+export { useInvalidateDataResource } from "./resource/resource-operations";

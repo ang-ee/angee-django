@@ -80,7 +80,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   ) => React.ReactNode;
   /** Make each row/card draggable by returning its dnd payload, or `null`. */
   draggableRow?: (row: TRow) => DndPayload | null;
-  /** Use local resource-view state even when rendered inside another data view. */
+  /** Keep local resource-view state inside another data view; unset or `"inherit"` shares it. */
   scope?: "inherit" | "local";
 }
 
@@ -98,7 +98,6 @@ export function RowsListView<TRow extends StringIdRow = StringIdRow>(
   props: RowsListViewProps<TRow>,
 ): React.ReactElement {
   const resourceView = useResourceViewMaybe();
-  const scope = props.scope ?? "inherit";
   const initialState = React.useMemo(
     () => ({
       pageSize: props.pageSize,
@@ -107,7 +106,7 @@ export function RowsListView<TRow extends StringIdRow = StringIdRow>(
   );
   return withResourceViewScope({
     ambient: resourceView,
-    scope,
+    scope: props.scope,
     initialState,
     children: (scopedResourceView) => (
       <ValidatedRowsListView {...props} resourceView={scopedResourceView} />

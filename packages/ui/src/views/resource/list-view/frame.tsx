@@ -41,7 +41,6 @@ function ListViewFrame<TRow extends Row = Row>(
   const resourceView = useResourceViewMaybe();
   const metadata = useModelMetadata(props.source ? "" : props.resource);
   const modelMetadata = props.source ? null : metadata;
-  const scope = props.scope ?? "inherit";
   const initial = React.useMemo(() => {
     try {
       return {
@@ -64,7 +63,7 @@ function ListViewFrame<TRow extends Row = Row>(
   return withResourceViewScope({
     ambient: resourceView,
     resource: props.source ? undefined : props.resource,
-    scope,
+    scope: props.scope,
     initialState: initial.state,
     children: (scopedResourceView) => (
       <ValidatedListViewBody {...props} resourceView={scopedResourceView} />

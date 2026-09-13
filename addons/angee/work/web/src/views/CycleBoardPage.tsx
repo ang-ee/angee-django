@@ -26,6 +26,27 @@ export function CycleBoardPage(): React.ReactElement {
   const queueFacts = queue.data?.work_queues_by_pk;
   const cycleFacts = cycle.data?.work_cycles_by_pk;
   const title = cycleFacts?.name ?? id;
+  // Memoized, not inline: these are identity-compared downstream, so a fresh
+  // object on every render re-runs the collection surface's effects and its
+  // grouped-scope work for a board that has not changed.
+  const createDefaults = React.useMemo(
+    () => ({ queue: queueId, cycle: id }),
+    [queueId, id],
+  );
+  const baseFilter = React.useMemo(
+    () => ({ queue: { exact: queueId }, cycle: { exact: id } }),
+    [queueId, id],
+  );
+  const laneSource = React.useMemo(
+    () => ({
+      field: "stage",
+      rankField: "sort_order",
+      filters: queueStageFilters(queueId),
+      sorters: [{ field: "position", order: "asc" as const }],
+    }),
+    [queueId],
+  );
+
   return (
     <Page>
       <PageHeader
@@ -43,27 +64,19 @@ export function CycleBoardPage(): React.ReactElement {
           ) : null
         }
       />
-      <PageBody gutter="none" scroll="hidden">
+      <PageBody gutter="none" scroll="hidden" className="flex flex-col">
         {queue.error || cycle.error ? (
           <ErrorBanner description={(queue.error ?? cycle.error)?.message} />
         ) : null}
-        <TaskBoardSurface<WorkTaskRow> createDefaults={{ queue: queueId, cycle: id }}>
+        <TaskBoardSurface<WorkTaskRow> createDefaults={createDefaults}>
           <List<WorkTaskRow>
             resource={TASK_MODEL}
             defaultView="board"
             // System-staged rows never render: lane filters exclude
             // triage/duplicate — `stage` is an ID comparison on the wire.
-            baseFilter={{
-              queue: { exact: queueId },
-              cycle: { exact: id },
-            }}
+            baseFilter={baseFilter}
             order={{ sort_order: "ASC" }}
-            laneSource={{
-              field: "stage",
-              rankField: "sort_order",
-              filters: queueStageFilters(queueId),
-              sorters: [{ field: "position", order: "asc" }],
-            }}
+            laneSource={laneSource}
             renderCard={(task) => (
               <WorkTaskCard task={task} estimateScale={queueFacts?.estimate_scale} />
             )}
@@ -76,7 +89,8 @@ export function CycleBoardPage(): React.ReactElement {
             <Column field="work_key" header={t("common.key")} />
             <Column field="title" />
             <Column field="estimate" header={t("common.estimate")} />
-            <Column field="priority" />
+            <Column field="assignee" />
+            <Column field="priority" widget="priority" />
             <Column field="due_date" />
           </List>
         </TaskBoardSurface>

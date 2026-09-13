@@ -194,6 +194,10 @@ export function useAngeeAggregate(
   const { document, enabled = true, ...query } = options;
   const queryKey = stableKey(query);
   const canQuery = enabled && target !== null;
+  // Register the read against its model so a write that moves rows refetches the
+  // footer total, exactly as the grouped reads do: a custom query carries no
+  // resource key, so refine's list/many/detail invalidation can never reach it.
+  // The same array drives the live interest, so it is declared once.
   const models = useStableArray(target?.modelLabel ? [target.modelLabel] : []);
   useAuthoredLiveInterest(canQuery, models);
   const request = useMemo(
@@ -205,7 +209,7 @@ export function useAngeeAggregate(
     method: "post",
     dataProviderName: request?.dataProviderName,
     meta: request?.meta,
-    queryOptions: { enabled: canQuery },
+    queryOptions: { enabled: canQuery, meta: authoredQueryMeta(models) },
   });
   const data = run.query.data?.data ?? run.result.data;
   return {

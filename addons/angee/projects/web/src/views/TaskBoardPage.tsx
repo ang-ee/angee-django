@@ -16,15 +16,24 @@ import {
 export function TaskBoardPage(): React.ReactElement {
   const t = useProjectsT();
   const rowActions = useTaskRowActions<TaskActionRow>();
+  // Memoized, not inline: these are identity-compared downstream, so a fresh
+  // object on every render re-runs the collection surface's effects and its
+  // grouped-scope work for a board that has not changed.
+  const baseFilter = React.useMemo(() => ({ status: { exact: "OPEN" } }), []);
+  const order = React.useMemo(() => ({ sort_order: "ASC" as const }), []);
+  const laneSource = React.useMemo(
+    () => ({ field: "assignee", rankField: "sort_order" }),
+    [],
+  );
 
   return (
     <TaskBoardSurface<TaskActionRow>>
       <List<TaskActionRow>
         resource={TASK_MODEL}
         defaultView="board"
-        baseFilter={{ status: { exact: "OPEN" } }}
-        order={{ sort_order: "ASC" }}
-        laneSource={{ field: "assignee", rankField: "sort_order" }}
+        baseFilter={baseFilter}
+        order={order}
+        laneSource={laneSource}
         rowActions={rowActions}
         emptyContent={{
           icon: "task-board",
@@ -34,7 +43,7 @@ export function TaskBoardPage(): React.ReactElement {
       >
         <Column field="title" />
         <Column field="project.title" header={t("common.project")} />
-        <Column field="priority" header={t("common.priority")} />
+        <Column field="priority" header={t("common.priority")} widget="priority" />
         <Column field="due_date" header={t("common.dueDate")} />
       </List>
     </TaskBoardSurface>

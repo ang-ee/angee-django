@@ -39,7 +39,12 @@ export function TaskBoardSurface<TRow extends TaskActionRow>({
   );
 
   return (
+    // Every task board is a whole page: the list frame sizes itself to its
+    // parent's height, so the wrapper has to carry one. Without it the frame
+    // falls back to its content -- lanes stop short on a small cycle, and on a
+    // long queue a lane's add row sits below the page with no scroller to reach it.
     <ResourceList<TRow>
+      className="h-full min-h-0"
       resource={TASK_MODEL}
       placement="drawer"
       creating={creating}

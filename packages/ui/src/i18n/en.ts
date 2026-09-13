@@ -6,6 +6,20 @@ export const enUiMessages: Record<string, string> = {
   "search.placeholder": "Search…",
   "toast.dismiss": "Dismiss notification",
   "toast.cancel": "Cancel",
+  // refine's mutation notifications. Without these its own English defaults
+  // show through, and those name the resource by its raw identifier.
+  // `{resource}` is the label from `resourceLabelI18nMessages`.
+  "notifications.createSuccess": "{resource} created",
+  "notifications.editSuccess": "{resource} saved",
+  "notifications.deleteSuccess": "{resource} deleted",
+  "notifications.createError": "Could not create {resource}",
+  "notifications.editError": "Could not save {resource}",
+  "notifications.deleteError": "Could not delete {resource}",
+  "notifications.error": "Something went wrong",
+  // The generic description refine pairs with every success toast. Empty
+  // because the title already says what happened; the toast owner drops a
+  // blank description rather than printing a second, emptier line.
+  "notifications.success": "",
   "modal.confirm": "Confirm",
   "modal.cancel": "Cancel",
   "modal.done": "Done",
@@ -58,6 +72,10 @@ export const enUiMessages: Record<string, string> = {
   "dialog.close": "Close",
   "dialog.cancel": "Cancel",
   "error.generic": "Something went wrong.",
+  "appError.title": "Something went wrong",
+  "appError.description":
+    "This page could not be displayed. Trying again often clears it.",
+  "appError.retry": "Try again",
   "query.reset": "Reset filters, sorting and grouping",
   "alert.dismiss": "Dismiss",
   "chip.remove": "Remove {label}",
@@ -138,6 +156,11 @@ export const enUiMessages: Record<string, string> = {
   "selection.selected": "selected",
   "selection.countSelected": "{count} selected",
   "selection.delete": "Delete",
+  "selection.edit": "Edit",
+  "bulkEdit.set": "Set {field}",
+  "bulkEdit.updated": "{count} updated",
+  "bulkEdit.partial": "{updated} of {count} updated. {reason}",
+  "bulkEdit.failed": "Update failed.",
   "numberField.increment": "Increase value",
   "numberField.decrement": "Decrease value",
   "loading.default": "Loading…",
@@ -292,6 +315,10 @@ export const enUiMessages: Record<string, string> = {
   "form.genericSaveError": "Could not save record.",
   "form.leave": "Leave",
   "form.loading": "Loading…",
+  "form.notFoundTitle": "Record not found",
+  "form.notFoundDescription":
+    "This record does not exist, or you do not have access to it. It may have been deleted, or the address may be wrong.",
+  "form.notFoundRetry": "Try again",
   "form.value.notSet": "Not set",
   "form.value.leftEmpty": "Left empty",
   "form.value.useDefault": "Use default",

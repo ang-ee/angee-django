@@ -67,3 +67,55 @@ test.each(["catalog.Entry", "catalog.Other", undefined])("inherits an existing p
   expect(captured.get("catalog.Entry")!.state.pagination.pageSize).toBe(7);
   expect(captured.get("catalog.Entry")!.state.sorting).toEqual([{ id: "updated_at", desc: true }]);
 });
+
+test("a nested list of another resource does not inherit the record's collection state", () => {
+  // The shape of a record tab: a Round page owns the route's state and sorts by
+  // `submission_deadline`; its Topic panel declares no scope. A sort field is
+  // resource-specific, so inheriting hands the panel a field Topic cannot sort
+  // and its query dies. An explicit `inherit` still shares — see the test above.
+  render(
+    <ResourceViewProvider
+      resource="catalog.Catalog"
+      scope="local"
+      initialState={{ pageSize: 7, sorting: [{ id: "updated_at", desc: true }] }}
+    >
+      <ResourceList resource="catalog.Other" columns={[]} order={{ min_qty: "asc" }} />
+    </ResourceViewProvider>,
+  );
+
+  const nested = captured.get("catalog.Other")!;
+  expect(nested.resource).toBe("catalog.Other");
+  expect(nested.state.sorting).toEqual([{ id: "min_qty", desc: false }]);
+  expect(nested.state.pagination.pageSize).not.toBe(7);
+  expect(router.navigate).not.toHaveBeenCalled();
+});
+
+test("a nested list of the same resource still inherits the ambient view state by default", () => {
+  render(
+    <ResourceViewProvider
+      resource="catalog.Catalog"
+      scope="local"
+      initialState={{ pageSize: 7, sorting: [{ id: "updated_at", desc: true }] }}
+    >
+      <ResourceList resource="catalog.Catalog" columns={[]} order={{ name: "asc" }} />
+    </ResourceViewProvider>,
+  );
+
+  const nested = captured.get("catalog.Catalog")!;
+  expect(nested.state.pagination.pageSize).toBe(7);
+  expect(nested.state.sorting).toEqual([{ id: "updated_at", desc: true }]);
+});
+
+test("a named list under a provider bound to no resource inherits it by default", () => {
+  // An owner bound to no resource is still shared: `GroupedSurface.native.test.tsx`
+  // relies on a named list taking an unbound ambient view's state, invalid sort included.
+  render(
+    <ResourceViewProvider scope="local" initialState={{ pageSize: 7, sorting: [{ id: "updated_at", desc: true }] }}>
+      <ResourceList resource="catalog.Entry" columns={[]} order={{ min_qty: "asc" }} />
+    </ResourceViewProvider>,
+  );
+
+  const nested = captured.get("catalog.Entry")!;
+  expect(nested.state.pagination.pageSize).toBe(7);
+  expect(nested.state.sorting).toEqual([{ id: "updated_at", desc: true }]);
+});

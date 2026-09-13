@@ -4,7 +4,7 @@ rows:
   - xref: mvp_bakeoff
     fields:
       project: proposals.competitive_mvp
-      name: Neighborhood services MVP bake-off
+      name: Pipeline tooling bake-off
       facilitator: iam.user_admin
       requester_party: proposals.neighborhood_committee
       opening_policy: answers
@@ -16,7 +16,7 @@ rows:
   - xref: valencia_flat_hunt
     fields:
       project: proposals.flat_hunt
-      name: Valencia flat offer comparison
+      name: Go-live sequencing review
       facilitator: iam.user_alice
       opening_policy: facilitator_only
       status: collecting

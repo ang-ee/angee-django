@@ -5,6 +5,7 @@ import type { CrudFilter } from "@refinedev/core";
 
 import type { PromptOptions } from "../../feedback";
 import type { FieldDescriptor } from "./Field";
+import type { GroupPlacement } from "./Group";
 import { PAGE_ELEMENT_SLOT } from "./types";
 
 export interface ActionConfirm {
@@ -151,6 +152,14 @@ export interface ActionProps extends ActionBinding {
    * predicate is hidden until a record is open.
    */
   visibleWhen?: (record: Row) => boolean;
+  /**
+   * Put this action on the record's properties column instead of its action bar,
+   * under `layout="sidebar"`. For the verbs that move the record through its
+   * lifecycle, which belong beside the state they change rather than inside a
+   * menu. Ignored by every other layout, and an addon marks its own verbs
+   * because only it knows which of them are lifecycle.
+   */
+  placement?: GroupPlacement;
 }
 
 /** The parsed form of an `<Action>` — identical to its props. */

@@ -1,9 +1,8 @@
 import { useAuthoredMutation } from "@angee/refine";
-import { refineResourceName, useModelMetadata } from "@angee/metadata";
-import { useInvalidate } from "@refinedev/core";
+import { useModelMetadata } from "@angee/metadata";
 import { useCallback, useRef, useState } from "react";
 
-import { errorMessage } from "@angee/ui";
+import { errorMessage, useInvalidateDataResource } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";
@@ -76,7 +75,7 @@ export function useStorageUpload(
   const [beginUpload] = useAuthoredMutation(StorageFileUploadBegin);
   const [finalizeUpload] = useAuthoredMutation(StorageFileUploadFinalize);
   const fileResource = useModelMetadata(FILE_MODEL)?.resource ?? null;
-  const invalidate = useInvalidate();
+  const invalidateDataResource = useInvalidateDataResource();
   const [tasks, setTasks] = useState<readonly UploadTask[]>([]);
   const sources = useRef(new Map<string, { file: File; target: UploadTarget; completionContext?: unknown }>());
 
@@ -176,16 +175,12 @@ export function useStorageUpload(
           .map((result) => (result.status === "fulfilled" ? result.value : null))
           .filter((file): file is UploadedFile => file !== null);
         if (uploaded.length > 0 && fileResource) {
-          await invalidate({
-            resource: refineResourceName(fileResource),
-            dataProviderName: fileResource.schemaName,
-            invalidates: ["list", "many", "detail"],
-          });
+          await invalidateDataResource(fileResource);
         }
         onUploaded?.(uploaded, completionContext);
       });
     },
-    [fileResource, invalidate, onUploaded, runOne],
+    [fileResource, invalidateDataResource, onUploaded, runOne],
   );
 
   const retry = useCallback((taskId: string): void => {
@@ -195,15 +190,11 @@ export function useStorageUpload(
     void runOne(taskId, source.file, source.target).then(async (uploaded) => {
       if (!uploaded) return;
       if (fileResource) {
-        await invalidate({
-          resource: refineResourceName(fileResource),
-          dataProviderName: fileResource.schemaName,
-          invalidates: ["list", "many", "detail"],
-        });
+        await invalidateDataResource(fileResource);
       }
       onUploaded?.([uploaded], source.completionContext);
     });
-  }, [fileResource, invalidate, onUploaded, patch, runOne]);
+  }, [fileResource, invalidateDataResource, onUploaded, patch, runOne]);
 
   const clearFinished = useCallback(() => {
     const finishedIds = new Set(tasks.filter((task) => FINISHED.has(task.status)).map((task) => task.id));

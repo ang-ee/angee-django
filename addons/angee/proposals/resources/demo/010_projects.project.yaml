@@ -3,8 +3,8 @@ _meta:
 rows:
   - xref: competitive_mvp
     fields:
-      title: Neighborhood services MVP bake-off
-      body: Compare three independent delivery approaches before choosing a build track.
+      title: Deal flow
+      body: Sourcing through close in one pipeline, with the diligence trail attached.
       status: open
       lead: iam.user_admin
       start_date: 2026-09-01
@@ -15,8 +15,8 @@ rows:
       updated_by: iam.user_admin
   - xref: flat_hunt
     fields:
-      title: Find a long-term flat in Valencia
-      body: Compare direct landlord offers against one consistent set of requirements.
+      title: Communications hub
+      body: Every inbox, channel and calendar in one place, with identities unified.
       status: open
       lead: iam.user_alice
       start_date: 2026-09-01
