@@ -6,6 +6,20 @@ export const enUiMessages: Record<string, string> = {
   "search.placeholder": "Search…",
   "toast.dismiss": "Dismiss notification",
   "toast.cancel": "Cancel",
+  // refine's mutation notifications. Without these its own English defaults
+  // show through, and those name the resource by its raw identifier.
+  // `{resource}` is the label from `resourceLabelI18nMessages`.
+  "notifications.createSuccess": "{resource} created",
+  "notifications.editSuccess": "{resource} saved",
+  "notifications.deleteSuccess": "{resource} deleted",
+  "notifications.createError": "Could not create {resource}",
+  "notifications.editError": "Could not save {resource}",
+  "notifications.deleteError": "Could not delete {resource}",
+  "notifications.error": "Something went wrong",
+  // The generic description refine pairs with every success toast. Empty
+  // because the title already says what happened; the toast owner drops a
+  // blank description rather than printing a second, emptier line.
+  "notifications.success": "",
   "modal.confirm": "Confirm",
   "modal.cancel": "Cancel",
   "modal.done": "Done",
