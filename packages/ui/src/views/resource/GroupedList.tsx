@@ -150,6 +150,13 @@ export function GroupedListBody<TRow extends Row>({
         className="resource-table-scroll min-h-0 min-w-0 overflow-auto overscroll-contain"
       >
         <Table className={tableLayout === "fixed" ? "table-fixed" : undefined}>
+          <colgroup>
+            <col className="w-8" />
+            {visibleColumns.map((column) => (
+              <col key={column.id} />
+            ))}
+            {hasRowActions ? <col /> : null}
+          </colgroup>
           <TableHeader className={headerVisibility === "visually-hidden" ? "sr-only" : undefined}>
             {table.getHeaderGroups().map((group) => (
               <TableRow key={group.id}>
