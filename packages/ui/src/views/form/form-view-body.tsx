@@ -304,7 +304,7 @@ export function FormViewOverview({
             <aside className="grid min-w-0 gap-4">
               {statusField ? (
                 <div className="grid gap-1.5">
-                  <SectionEyebrow as="h3">{statusField.label ?? t("form.status")}</SectionEyebrow>
+                  <SectionEyebrow as="h3">{statusField.label}</SectionEyebrow>
                   <Controller
                     control={form.control}
                     name={statusField.name}
