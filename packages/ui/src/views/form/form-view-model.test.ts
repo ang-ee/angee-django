@@ -240,10 +240,7 @@ describe("recordSubtitleParts", () => {
   const t = ((key: string, vars?: Record<string, unknown>) =>
     `${key}:${String(vars?.value ?? "")}`) as never;
 
-  test("never puts an internal id in the record header", () => {
-    // The header led with the sqid, which names the row for the database and
-    // tells the reader nothing. A record's human key is what identifies it, and
-    // it is shown where it exists -- cards, the list's Key column, triage.
+  test("puts the public id label first in the record header", () => {
     const parts = recordSubtitleParts(
       { id: "tsk_2KY5XM6f", created_at: "2026-09-01T10:00:00Z" },
       "tsk_2KY5XM6f",
@@ -251,9 +248,9 @@ describe("recordSubtitleParts", () => {
       t,
     );
 
-    expect(parts.join(" ")).not.toContain("tsk_2KY5XM6f");
-    expect(parts).toHaveLength(1);
-    expect(String(parts[0])).toContain("form.created");
+    expect(parts[0]).toBe("tsk_2KY5XM6f");
+    expect(parts).toHaveLength(2);
+    expect(String(parts[1])).toContain("form.created");
   });
 
   test("still carries the facts the subtitle vocabulary names", () => {
@@ -263,16 +260,21 @@ describe("recordSubtitleParts", () => {
       { created: "created_at", updated: "updated_at", wordCount: null },
       t,
     );
-    expect(parts).toHaveLength(2);
+    expect(parts).toHaveLength(3);
   });
 
-  test("a record with no subtitle facts has no subtitle at all", () => {
+  test("a record with no other subtitle facts still shows its public id", () => {
     const parts = recordSubtitleParts(
       { id: "tsk_1" },
       "tsk_1",
       { created: null, updated: null, wordCount: null },
       t,
     );
-    expect(parts).toEqual([]);
+    expect(parts).toEqual(["tsk_1"]);
+  });
+
+  test("uses the requested id when the record has no public id", () => {
+    expect(recordSubtitleParts(null, "tsk_2KY5XM6f_public", null, t))
+      .toEqual(["tsk_2KY5XM6f_public"]);
   });
 });

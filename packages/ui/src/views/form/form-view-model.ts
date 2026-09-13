@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { get, set } from "react-hook-form";
 import {
+  publicIdLabel,
   relationModelLabelForField,
   rowPublicId,
   rowValueAtPath,
@@ -585,11 +586,8 @@ export function recordSubtitleParts(
   t: UiTranslate,
 ): ReactNode[] {
   const parts: ReactNode[] = [];
-  // No internal id here. The record header led with the sqid -- `tsk_2KY5XM6f`
-  // -- which names the row for the database and tells the reader nothing; a
-  // record's human key (`ENG-8`) is what identifies it, and that is shown where
-  // it exists, on cards, the list's Key column and triage. Until the subtitle
-  // vocabulary can name a key field, no identifier here beats the wrong one.
+  const recordId = presentValue(record?.id) ?? presentValue(id);
+  if (recordId !== undefined) parts.push(publicIdLabel(String(recordId)));
   if (record) {
     const created = fieldValue(record, fields?.created);
     const updated = fieldValue(record, fields?.updated);

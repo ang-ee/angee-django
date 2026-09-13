@@ -32,23 +32,15 @@ export const STATUS_TONES: ToneValueBuckets = {
     "provisioning", "deprovisioning", "starting", "connecting",
     "closed", "warning", "degraded", "waiting", "wait", "suspend",
     "at_risk", "escalated",
-    // A work-stage category that is explicitly asking for a human decision.
-    "triage",
     // Document lifecycle: awaiting money or an invoice — in-flight, needs attention.
     "not_paid", "partial", "to_invoice",
   ],
   danger: ["error", "failed", "denied", "lost", "down", "crashed", "off_track"],
-  // Work-stage categories (`work.Stage.category`) read on the same axis as the
-  // statuses above: `started` is already in-flight blue, `completed` already
-  // green. `backlog` and `unstarted` are the not-yet-picked-up greys, `triage`
-  // the one that wants a human.
   info: ["started", "assigned"],
   neutral: [
     "archived", "deleted", "disabled", "disconnected", "rejected", "blocked",
     "stopped", "deprovisioned", "idle", "inactive", "offline", "unknown", "default",
     "scheduled", "canceled", "skipped",
-    // Work-stage categories that mean "not picked up yet" / "not real work".
-    "backlog", "unstarted", "duplicate",
     // Document lifecycle: cancelled (British spelling used by the ledger enums),
     // and "nothing to invoice" — an inert, no-action state.
     "cancelled", "nothing",

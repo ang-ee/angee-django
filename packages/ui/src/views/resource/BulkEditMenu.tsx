@@ -21,6 +21,7 @@ import { SelectionBar } from "../../ui/selection-bar";
 import { ActionFormDialog } from "../form/ActionFormDialog";
 import type { ActionArg, ActionDescriptor, ColumnDescriptor } from "../page";
 import { fieldsWithMetadataDefaults, relationFieldInfo } from "./model-metadata-defaults";
+import { useInvalidateDataResource } from "./resource-operations";
 
 export interface BulkEditMenuProps<TRow extends Row> {
   resource: string;
@@ -37,7 +38,8 @@ export interface BulkEditMenuProps<TRow extends Row> {
  * Generic bulk edit for a list selection: a menu of the visible columns the
  * resource's update root accepts. Each opens the shared typed-args action form for
  * that one field, then patches every selected row through the resource's `update`
- * root, one row at a time as bulk delete does. When any row is rejected the form
+ * root. The dialect exposes only `update_<resource>_by_pk`, so each row needs its
+ * own update call. When any row is rejected the form
  * stays open with the first failure and the selection narrows to the rejected rows,
  * so the next submit retries only those.
  */
@@ -61,11 +63,12 @@ export function BulkEditMenu<TRow extends Row>({
   const update = useUpdate<BaseRecord, HttpError, Record<string, unknown>>({
     resource: refineResource ?? "__angee_disabled__",
     dataProviderName: dataResource?.schemaName,
-    invalidates: ["list", "many", "detail"],
+    invalidates: [],
     successNotification: false,
     errorNotification: false,
   });
   const { mutateAsync } = update;
+  const invalidateDataResource = useInvalidateDataResource();
   const [formAction, setFormAction] = React.useState<ActionDescriptor | null>(null);
   const selectedIdList = React.useMemo(() => [...selectedIds], [selectedIds]);
   const latestSelectedIds = useLatestRef(selectedIdList);
@@ -81,6 +84,7 @@ export function BulkEditMenu<TRow extends Row>({
           const results = await Promise.allSettled(
             ids.map((id) => mutateAsync({ id, values: { [arg.name]: value } })),
           );
+          if (dataResource) await invalidateDataResource(dataResource);
           const failedIds = ids.filter((_, index) => results[index]?.status === "rejected");
           if (failedIds.length === 0) return { ok: true, message: t("bulkEdit.updated", { count: ids.length }) };
           const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -95,7 +99,7 @@ export function BulkEditMenu<TRow extends Row>({
           };
         },
       })),
-    [columns, latestSelectedIds, metadata, mutateAsync, onNarrowSelection, schemaMetadata, t],
+    [columns, dataResource, invalidateDataResource, latestSelectedIds, metadata, mutateAsync, onNarrowSelection, schemaMetadata, t],
   );
   if (editAccess.data?.can === false || actions.length === 0) return null;
 

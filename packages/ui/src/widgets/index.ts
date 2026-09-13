@@ -15,7 +15,6 @@ import { progressBarWidget } from "./progressBar";
 import { emailWidget, passwordWidget, phoneWidget, urlWidget } from "./scalarText";
 import { selectionWidget, selectWidget } from "./select";
 import { slugWidget } from "./slug";
-import { priorityWidget } from "./priority";
 import { statusBadgeWidget } from "./statusBadge";
 import { statusbarWidget } from "./statusbar";
 import { booleanToggleWidget, switchWidget } from "./switch";
@@ -41,7 +40,8 @@ export type {
   WidgetRenderProps,
   WidgetFocusTarget,
 } from "./types";
-export { canonicalOptionValue, optionToken, relationValueId } from "./types";
+export { canonicalOptionValue, optionLabel, optionToken, relationValueId } from "./types";
+export { StatusSelectEdit } from "./statusSelectEdit";
 export { widgetLabel } from "./label";
 export { slugify } from "./slug";
 export { STATUS_TONES, statusTone, type StatusToneOptions } from "./status-tones";
@@ -123,7 +123,6 @@ export const defaultWidgets = {
   json: jsonWidget,
   datetime: datetimeWidget,
   combobox: comboboxWidget,
-  priority: priorityWidget,
   statusBadge: statusBadgeWidget,
   progressBar: progressBarWidget,
   statusbar: statusbarWidget,

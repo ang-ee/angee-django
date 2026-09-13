@@ -4,6 +4,7 @@ import * as React from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   ModelMetadataProvider,
+  refineResourceIdentifier,
   ResourceQuery,
   schemaFieldMetadataFromDataResources,
 } from "@angee/metadata";
@@ -36,6 +37,9 @@ const harness = vi.hoisted(() => ({
   ],
   can: true,
   update: vi.fn(),
+  updateOptions: vi.fn(),
+  invalidate: vi.fn(async () => undefined),
+  invalidateAuthoredModels: vi.fn(),
 }));
 
 vi.mock("@refinedev/core", async (importOriginal) => {
@@ -50,14 +54,17 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       };
     },
     useCan: () => ({ data: { can: harness.can }, isLoading: false, error: null }),
-    useInvalidate: () => vi.fn(async () => undefined),
+    useInvalidate: () => harness.invalidate,
     // Alex's explorer work made the relation widget read through `useOne`
     // (`views/relation/relation-options.ts`); stub it as `ActionFormDialog.test.tsx` does.
     useOne: () => ({
       result: undefined,
       query: { isFetching: false, error: null },
     }),
-    useUpdate: () => ({ mutate: vi.fn(), mutateAsync: harness.update }),
+    useUpdate: (options: unknown) => {
+      harness.updateOptions(options);
+      return { mutate: vi.fn(), mutateAsync: harness.update };
+    },
   };
 });
 
@@ -65,6 +72,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
+    useInvalidateAuthoredModels: () => harness.invalidateAuthoredModels,
     useAngeeAggregate: () => ({
       aggregate: { key: null, count: harness.rows.length },
       fetching: false,
@@ -98,6 +106,9 @@ describe("ListView bulk edit", () => {
     harness.can = true;
     harness.update.mockReset();
     harness.update.mockResolvedValue({ data: {} });
+    harness.updateOptions.mockClear();
+    harness.invalidate.mockClear();
+    harness.invalidateAuthoredModels.mockClear();
   });
 
   afterEach(() => cleanup());
@@ -117,6 +128,16 @@ describe("ListView bulk edit", () => {
     expect(harness.update).toHaveBeenCalledWith({ id: "row-a", values: { name: "Renamed" } });
     expect(harness.update).toHaveBeenCalledWith({ id: "row-b", values: { name: "Renamed" } });
     expect(await screen.findByText("2 updated")).toBeTruthy();
+    expect(harness.updateOptions).toHaveBeenCalledWith(expect.objectContaining({
+      resource: "test_rows",
+      invalidates: [],
+    }));
+    expect(harness.invalidateAuthoredModels).toHaveBeenCalledExactlyOnceWith(["test.Row"]);
+    expect(harness.invalidate).toHaveBeenCalledExactlyOnceWith({
+      resource: refineResourceIdentifier(TEST_METADATA.labels["test.Row"]!.resource),
+      dataProviderName: "console",
+      invalidates: ["list", "many", "detail"],
+    });
   });
 
   test("edits a relation column through its relation", async () => {
@@ -147,6 +168,12 @@ describe("ListView bulk edit", () => {
 
     expect(await within(dialog).findByText("1 of 2 updated. row-b is locked")).toBeTruthy();
     expect(await screen.findByText("1 selected")).toBeTruthy();
+    expect(harness.invalidateAuthoredModels).toHaveBeenCalledExactlyOnceWith(["test.Row"]);
+    expect(harness.invalidate).toHaveBeenCalledExactlyOnceWith({
+      resource: refineResourceIdentifier(TEST_METADATA.labels["test.Row"]!.resource),
+      dataProviderName: "console",
+      invalidates: ["list", "many", "detail"],
+    });
 
     harness.update.mockReset();
     harness.update.mockResolvedValue({ data: {} });

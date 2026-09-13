@@ -203,15 +203,6 @@ function formFieldDescriptor(field: ModelFieldMetadata): FieldDescriptor {
   return widget ? { name: field.name, widget } : { name: field.name };
 }
 
-const ENUM_OPTION_WIDGETS = new Set([
-  "select",
-  "selection",
-  "statusbar",
-  "statusBadge",
-  "colorDot",
-  "priority",
-]);
-
 /** Apply metadata-derived column labels and enum options without overriding props. */
 export function columnsWithMetadataDefaults<TRow extends object>(
   columns: readonly ColumnDescriptor<TRow>[],
@@ -256,7 +247,6 @@ export function columnsWithMetadataDefaults<TRow extends object>(
         ? { currencyField: field.currencyField }
         : {}),
       ...(column.options === undefined &&
-      isEnumOptionWidget(column.widget) &&
       options.length > 0
         ? { options }
         : {}),
@@ -288,7 +278,6 @@ export function fieldsWithMetadataDefaults(
         ? { currencyField: fieldMetadata.currencyField }
         : {}),
       ...(field.options === undefined &&
-      isEnumOptionWidget(widget ?? field.kind) &&
       options.length > 0
         ? { options }
         : {}),
@@ -324,8 +313,4 @@ export function enumOptions(
       label: enumValueLabel(value),
     })) ?? []
   );
-}
-
-function isEnumOptionWidget(widget: string | undefined): boolean {
-  return widget !== undefined && ENUM_OPTION_WIDGETS.has(widget);
 }

@@ -12,6 +12,7 @@ import {
   MenuTree,
   type ChromeMenuNode,
 } from "@angee/ui/chrome/menu-tree";
+import { titleCase } from "@angee/ui/lib/titleCase";
 import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
 
 import type { BaseAddonRoute } from "./define-base-addon";
@@ -258,20 +259,8 @@ export function resourceLabelI18nMessages(
   for (const schema of Object.values(schemas)) {
     for (const resource of dataResourcesFromAngeeSchemaMetadata(schema.metadata)) {
       const identifier = refineResourceIdentifier(resource);
-      messages[`${identifier}.${identifier}`] = humanizeModelName(resource.modelName);
+      messages[`${identifier}.${identifier}`] = titleCase(resource.modelName).toLowerCase();
     }
   }
   return { ui: messages };
-}
-
-/** `WorkItem` -> `Work item`, matching how refine humanizes a model name. */
-function humanizeModelName(modelName: string): string {
-  const spaced = modelName
-    .replace(/([a-z\d])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .trim();
-  if (!spaced) return modelName;
-  const [first, ...rest] = spaced.split(" ");
-  return [first, ...rest.map((word) => word.toLowerCase())].join(" ");
 }

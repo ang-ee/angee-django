@@ -134,7 +134,7 @@ export interface FormViewSaveSurface {
   /** The read settled and resolved no record: the id names nothing readable. */
   recordMissing: boolean;
   /** The read settled having failed. Distinct from `recordMissing`: retryable. */
-  readFailure: Error | null;
+  readFailure: HttpError | null;
   formReadOnly: boolean;
   formIsDirty: boolean;
   pending: boolean;
@@ -246,25 +246,20 @@ export function useFormViewSave({
     : read.result ?? null;
   const displayRecord = record;
   const loading = acknowledgedSource?.loading ?? read.query.isFetching;
-  // Without this the shell of a record that does not exist renders as an empty
-  // editable form, offering a save with nothing to save onto.
-  //
-  // Two settled outcomes, reported separately so the caller can say which
-  // happened. A read that *failed* never reaches `isError` here: the provider
-  // throws a generic "Request failed.", react-query reads that as a network
-  // fault under `networkMode: "online"` and parks the retry, leaving the query
-  // `pending`/`paused` for good. `failureCount` is what records that an attempt
-  // was made and lost; `isFetching` stays false while it is parked.
   const readSettled =
-    !isCreate && acknowledgedSource === undefined && Boolean(id) && !read.query.isFetching;
-  const readFailure: Error | null = !readSettled
+    acknowledgedSource === undefined && !isCreate && Boolean(id);
+  // A retry parked by the online manager after a lost attempt is a failure the
+  // reader can act on (retry), not a form to edit; `failureReason` is that
+  // attempt's error. A read paused before any attempt stays pending.
+  const readFailure = !readSettled
     ? null
-    : (read.query.error as Error | null)
-      ?? (read.query.failureCount > 0
-        ? ((read.query.failureReason as Error | null) ?? new Error("Request failed."))
-        : null);
+    : read.query.isError
+      ? read.query.error
+      : read.query.isPaused
+        ? read.query.failureReason
+        : null;
   const recordMissing =
-    readSettled && readFailure === null && read.query.isSuccess && record === null;
+    readSettled && read.query.isSuccess && record === null;
   const reload = React.useCallback(() => {
     if (acknowledgedSource !== undefined) {
       acknowledgedSource.reload?.();
