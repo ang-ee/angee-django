@@ -3,7 +3,7 @@ _meta:
 rows:
   - xref: neighborhood_garden
     fields:
-      title: Investor demo launch
+      title: Angee rollout
       body: Every tool and data stream the family office runs, sequenced into Angee for go-live.
       status: open
       lead: iam.user_alice
