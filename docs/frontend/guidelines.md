@@ -473,7 +473,11 @@ Hard-won traps — the wise learn from others' mistakes
   local by contract. Routed and page/workspace collections inherit their ambient
   state or own the unnamespaced route query; a page with multiple route-backed
   collections must give each an explicit state owner rather than sharing those
-  keys.
+  keys. A nested list with an unset `scope` shares the ambient resource-view
+  state only when that owner is for its own resource or is bound to no resource,
+  since sort fields, filters and group axes are resource-specific; pass
+  `scope="inherit"` to follow any ambient owner, or `scope="local"` to keep a
+  same-resource list apart.
 - **Generated documents are an explicit prerequisite for addon checks.** Neither
   root nor package typecheck/test scripts regenerate them automatically. After a
   schema change, refresh the host's SDL and codegen before checking consumers;

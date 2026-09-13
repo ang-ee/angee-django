@@ -10,7 +10,7 @@ import {
 import * as React from "react";
 
 import { useProjectsT } from "../i18n";
-import { TASK_MODEL } from "../resources";
+import { TASK_MODEL, TASK_STATUS_TONES } from "../resources";
 import {
   useTaskFormDeclaration,
   useTaskRowActions,
@@ -50,9 +50,17 @@ export function TasksPage(): React.ReactElement {
         <Facet field="assignee" label={t("common.assignee")} />
         <Column field="title" />
         <Column field="project.title" header={t("common.project")} />
-        <Column field="status" header={t("common.status")} widget="statusBadge" />
+        <Column field="status" header={t("common.status")} widget="statusBadge" tone={TASK_STATUS_TONES} />
+        {/* Stage and cycle are columns so bulk edit can offer Set stage and Set
+            cycle: #88 builds its editable set from the list's columns, and the
+            update root already accepts both. Without them the only way to plan
+            an existing task into a cycle is to create it on that cycle's board.
+            Labelled from the work addon's own field metadata rather than a
+            projects string, since projects does not own these fields. */}
+        <Column field="stage" />
+        <Column field="cycle" />
         <Column field="assignee" header={t("common.assignee")} />
-        <Column field="priority" header={t("common.priority")} />
+        <Column field="priority" header={t("common.priority")} widget="priority" />
         <Column field="due_date" header={t("common.dueDate")} />
         <Column field="sort_order" header={t("common.order")} />
       </List>
@@ -76,9 +84,9 @@ function TaskSubtasksTab({ recordId }: RecordPanelContext): React.ReactElement {
       emptyContent={t("task.empty.subtasks")}
     >
       <Column field="title" />
-      <Column field="status" widget="statusBadge" />
+      <Column field="status" widget="statusBadge" tone={TASK_STATUS_TONES} />
       <Column field="assignee" />
-      <Column field="priority" />
+      <Column field="priority" widget="priority" />
       <Column field="due_date" />
       <Column field="sub_sort_order" header={t("common.subtaskOrder")} />
     </List>

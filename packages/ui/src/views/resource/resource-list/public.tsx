@@ -65,8 +65,7 @@ export interface RecordSmartButtonDescriptor {
 export interface ResourceListProps<TRow extends Row = Row> {
   /** Refine/Angee resource id, e.g. `"notes.Note"`, shared by list and form. */
   resource: string;
-  /** Override collection-state ownership. Embedded collections default to local;
-   * routed and other page collections default to inherited/route state. */
+  /** Share an ambient resource view: unset for the same resource or an unbound owner, `"inherit"` for any, `"local"` never. */
   scope?: "inherit" | "local";
   /** Columns for the list. Omit when declaring a `List` child. */
   columns?: readonly ListColumn<TRow>[];

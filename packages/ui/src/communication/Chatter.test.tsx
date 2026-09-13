@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -17,8 +17,8 @@ import {
   type AppRuntime,
   type ChatterViewContext,
 } from "../runtime";
-import { Chatter } from "./Chatter";
-import { ChatterProvider } from "./chatter-context";
+import { Chatter, useChatterHasContent, useChatterRailStartsOpen } from "./Chatter";
+import { ChatterProvider, useChatterContent, type ChatterContent } from "./chatter-context";
 
 beforeAll(() => {
   Element.prototype.getAnimations ??= () => [];
@@ -141,6 +141,186 @@ function useCommentsCount(
   if (context.route?.modelLabel !== "notes.Note") return undefined;
   if (context.view.kind !== "record") return undefined;
   return context.view.sqid === "rec_1" ? 7 : undefined;
+}
+
+describe("useChatterHasContent", () => {
+  test("has nothing to show on a view with no record selected", async () => {
+    // The board defect: the aside's default tabs are about a record, so with
+    // nothing selected the rail is empty and sits over the page -- on a board it
+    // covers a lane, and the cards under it cannot be grabbed at all.
+    expect(await renderHasContent({ path: "/queues/$queueId/board" })).toBe(false);
+    cleanup();
+    expect(await renderHasContent({ path: "/tasks" })).toBe(false);
+  });
+
+  test("has something to show once a record is selected", async () => {
+    expect(
+      await renderHasContent({
+        path: "/records/$id",
+        initialEntry: "/records/rec_1",
+        runtime: {
+          chatterRoutes: [
+            { name: "notes.record", path: "/records/$id", viewType: "record", recordParam: "id" },
+          ],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  test("keeps an aside a page or an addon asked for", async () => {
+    // A view an addon contributes to deliberately, and a page that publishes its
+    // own tabs, both keep their aside with no record in sight.
+    expect(
+      await renderHasContent({
+        path: "/tasks",
+        runtime: {
+          chatter: [{ id: "agents", label: "Agents", render: () => <span>Agents</span> }],
+        },
+      }),
+    ).toBe(true);
+    cleanup();
+    expect(
+      await renderHasContent({
+        path: "/tasks",
+        content: { tabs: [{ id: "details", label: "Details", children: <span>Details</span> }] },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("useChatterRailStartsOpen", () => {
+  test("opens the rail on a record whose model asked for it, at a width with room", async () => {
+    expect(await renderRailStartsOpen({ wide: true })).toBe(true);
+  });
+
+  test("leaves it collapsed where the rail would sit on top of the record", async () => {
+    // Narrow viewport: the pane would cover the record it is about.
+    expect(await renderRailStartsOpen({ wide: false })).toBe(false);
+  });
+
+  test("leaves it collapsed for a model that did not ask", async () => {
+    // The project record is read wide, across its tabs, and never declared this.
+    expect(await renderRailStartsOpen({ wide: true, expanded: ["projects.Project"] })).toBe(false);
+  });
+
+  test("leaves it collapsed on a view with no record", async () => {
+    expect(await renderRailStartsOpen({ wide: true, path: "/tasks", initialEntry: "/tasks" })).toBe(
+      false,
+    );
+  });
+});
+
+async function renderRailStartsOpen({
+  wide,
+  expanded = ["projects.Task"],
+  path = "/records/$id",
+  initialEntry = "/records/rec_1",
+}: {
+  wide: boolean;
+  expanded?: readonly string[];
+  path?: string;
+  initialEntry?: string;
+}): Promise<boolean> {
+  const original = window.matchMedia;
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches: wide,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }),
+  });
+  try {
+    const probed: { value?: boolean } = {};
+    function Probe(): null {
+      probed.value = useChatterRailStartsOpen();
+      return null;
+    }
+    const rootRoute = createRootRoute({ component: () => <Outlet /> });
+    const route = createRoute({
+      getParentRoute: () => rootRoute,
+      path,
+      component: () => (
+        <AppRuntimeProvider
+          runtime={{
+            icons: baseIcons,
+            chatterExpandedModels: expanded,
+            chatterRoutes: [
+              {
+                name: "tasks.record",
+                path: "/records/$id",
+                viewType: "record",
+                recordParam: "id",
+                modelLabel: "projects.Task",
+              },
+            ],
+          }}
+        >
+          <ChatterProvider>
+            <Probe />
+          </ChatterProvider>
+        </AppRuntimeProvider>
+      ),
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([route]),
+      history: createMemoryHistory({ initialEntries: [initialEntry] }),
+    });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(probed.value).not.toBeUndefined());
+    return probed.value as boolean;
+  } finally {
+    if (original) {
+      Object.defineProperty(window, "matchMedia", { configurable: true, value: original });
+    } else {
+      Reflect.deleteProperty(window, "matchMedia");
+    }
+  }
+}
+
+async function renderHasContent({
+  path,
+  initialEntry,
+  runtime = {},
+  content,
+}: {
+  path: string;
+  initialEntry?: string;
+  runtime?: Partial<AppRuntime>;
+  content?: ChatterContent;
+}): Promise<boolean> {
+  const probed: { value?: boolean } = {};
+  function Probe(): null {
+    probed.value = useChatterHasContent();
+    return null;
+  }
+  function Publisher(): null {
+    useChatterContent(content ?? null);
+    return null;
+  }
+  const rootRoute = createRootRoute({ component: () => <Outlet /> });
+  const route = createRoute({
+    getParentRoute: () => rootRoute,
+    path,
+    component: () => (
+      <AppRuntimeProvider runtime={{ icons: baseIcons, ...runtime }}>
+        <ChatterProvider>
+          {content ? <Publisher /> : null}
+          <Probe />
+        </ChatterProvider>
+      </AppRuntimeProvider>
+    ),
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([route]),
+    history: createMemoryHistory({
+      initialEntries: [initialEntry ?? path.replace(/\$[^/]+/g, "x")],
+    }),
+  });
+  render(<RouterProvider router={router} />);
+  await waitFor(() => expect(probed.value).not.toBeUndefined());
+  return probed.value as boolean;
 }
 
 function renderChatter(runtime: Partial<AppRuntime>): void {

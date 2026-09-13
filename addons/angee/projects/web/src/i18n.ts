@@ -22,7 +22,7 @@ export const enProjectsMessages: Record<string, string> = {
   "project.action.complete": "Complete",
   "project.action.drop": "Drop",
   "task.group.placement": "Placement",
-  "task.group.assignment": "Assignment",
+  "task.group.properties": "Properties",
   "task.group.ordering": "Ordering",
   "task.tabs.subtasks": "Subtasks",
   "task.empty.subtasks": "No subtasks yet.",
@@ -40,6 +40,10 @@ export const enProjectsMessages: Record<string, string> = {
   "myWork.description": "Your open tasks and scheduled record activities in one place.",
   "myWork.activitiesHint": "Overdue activities and activities due in the next 30 days.",
   "myWork.empty.tasks": "No open tasks are assigned to you.",
+  "myWork.empty.tasksDescription":
+    "My Work gathers the open tasks assigned to you and the record activities due soon. Pick up work from the board, or browse every task.",
+  "myWork.empty.openBoard": "Open the task board",
+  "myWork.empty.browseTasks": "Browse all tasks",
 };
 
 export const useProjectsT = createNamespaceT("projects", enProjectsMessages);

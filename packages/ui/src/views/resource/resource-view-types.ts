@@ -192,7 +192,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   emptyContent?: ListEmptyContent;
   /** Class name applied to the collection renderer root. */
   className?: string;
-  /** Override collection-state ownership. Embedded collections default to local
-   * state; page/workspace collections inherit an ambient view or own route state. */
+  /** Resource-view state inside another data view: unset shares the ambient view
+   * for the same resource or an unbound owner, `"inherit"` shares any ambient view,
+   * and `"local"` keeps a local, not URL-synced state. A displaced unset list is
+   * local too; with no ambient view a list owns the route's state. */
   scope?: "inherit" | "local";
 }

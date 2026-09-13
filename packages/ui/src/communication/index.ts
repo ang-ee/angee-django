@@ -1,4 +1,4 @@
-export { Chatter, type ChatterProps } from "./Chatter";
+export { Chatter, useChatterHasContent, type ChatterProps } from "./Chatter";
 export { RevisionsTab, type RevisionsTabProps } from "./RevisionsTab";
 export {
   ChatterProvider,

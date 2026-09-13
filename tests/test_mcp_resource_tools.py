@@ -37,10 +37,8 @@ from angee.data.metadata import (
     DataResourceTypeNames,
 )
 from angee.graphql.schema import GraphQLSchemas
-from angee.mcp.graphql import _CompiledTool, register_graphql_tools
+from angee.mcp.graphql import DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT, _CompiledTool, register_graphql_tools
 from angee.mcp.resource_tools import (
-    DEFAULT_QUERY_LIMIT,
-    MAX_QUERY_LIMIT,
     RESOURCE_READER_TOOL_TAG,
     check_resource_tool_specs,
     register_resource_tools,

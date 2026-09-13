@@ -4,8 +4,8 @@ rows:
   - xref: plots_ready
     fields:
       project: projects.neighborhood_garden
-      name: Plots ready
-      description: Beds are marked, assigned, and ready for planting.
+      name: Inboxes live
+      description: Every channel flows into Angee and nothing is read anywhere else.
       target_date: 2026-10-15
       sort_order: 1024.0
       created_by: iam.user_alice

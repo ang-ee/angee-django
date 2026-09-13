@@ -405,3 +405,38 @@ function favoritesPreferences(
 function legacyStorageKey(resource: string): string {
   return `angee:resource-view:${resource}:favorites`;
 }
+
+describe("pagination setters", () => {
+  test("a page setter that changes nothing does not re-render", () => {
+    // This state lives in the URL, so a setter call is a navigation. An effect
+    // that calls `setPage` with the page it is already on -- the grouped surface
+    // does, clamping the page to the page count -- would otherwise navigate,
+    // render, and re-run itself: five "Maximum update depth exceeded" errors on
+    // one board load.
+    let renders = 0;
+    let value: ResourceViewContextValue | undefined;
+    function Counter(): null {
+      renders += 1;
+      value = useResourceView();
+      return null;
+    }
+    render(
+      <ResourceViewProvider scope="local">
+        <Counter />
+      </ResourceViewProvider>,
+    );
+
+    const settled = renders;
+    const page = (value?.state.pagination.pageIndex ?? 0) + 1;
+
+    act(() => value?.setPage(page));
+    expect(renders).toBe(settled);
+    act(() => value?.setPageSize(value.state.pagination.pageSize));
+    expect(renders).toBe(settled);
+
+    // A real change still goes through, so the bail-out is not just inertness.
+    act(() => value?.setPage(page + 1));
+    expect(renders).toBeGreaterThan(settled);
+    expect(value?.state.pagination.pageIndex).toBe(page);
+  });
+});

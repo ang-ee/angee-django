@@ -1,0 +1,19 @@
+_meta:
+  model: spaces.Membership
+rows:
+  - xref: eng_alice_owner
+    fields:
+      group: work.eng
+      party: work.person_alice
+      role: owner
+      is_confirmed: true
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: eng_bob_member
+    fields:
+      group: work.eng
+      party: work.person_bob
+      role: member
+      is_confirmed: true
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

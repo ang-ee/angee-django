@@ -41,6 +41,8 @@ import {
 import "../src/storybook.css";
 import "@angee/theme-aurora/styles";
 
+// One contribution per theme: the definitions carry different option types,
+// so a single mapped call cannot infer one for all of them.
 const previewThemes = [
   defineThemeContribution({ definition: stockThemes[0] }),
   defineThemeContribution({ definition: angeeThemes[0] }),

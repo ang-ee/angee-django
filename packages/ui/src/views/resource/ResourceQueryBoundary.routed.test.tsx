@@ -104,3 +104,40 @@ test.each(["server", "client"] as const)("list and board group choices follow th
   if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
   expect(Boolean(screen.queryByRole("button", { name: "Title" }))).toBe(rowModel === "client");
 });
+
+// A consumer that touches nothing but the context, so a failure and its clear
+// are not entangled with anything ListView does.
+function bareFixture() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  clients.push(client);
+  let view!: ResourceViewContextValue;
+  function Records() {
+    view = useResourceView();
+    return null;
+  }
+  const root = createRootRoute();
+  const route = createRoute({ getParentRoute: () => root, path: "/", component: () =>
+    <ResourceViewProvider resource={resource.modelLabel}><Records /></ResourceViewProvider> });
+  const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+    <RouterProvider router={router} />
+  </ModelMetadataProvider>);
+  return { get view() { return view; }, router };
+}
+
+test("the next valid update clears the failure the previous one left behind", async () => {
+  const f = bareFixture();
+  await waitFor(() => expect(f.view).toBeTruthy());
+
+  // A failed transition does not navigate: the search keeps its identity, which
+  // is what makes the error visible at all.
+  const favorite = resourceViewFavoritesFromUnknown([{ id: "old", label: "Old search", filter: { title: { sqid: "legacy" } } }])[0]!;
+  act(() => f.view.applyFavorite(favorite));
+  expect(f.view.state.queryError).toBeInstanceOf(Error);
+  expect(f.router.state.location.search).toEqual({});
+
+  // The next valid update must clear it. It lands on the same search, so the
+  // identity survives and a failure left uncleared would stay on screen.
+  act(() => f.view.setFilter({}));
+  await waitFor(() => expect(f.view.state.queryError).toBeFalsy());
+});

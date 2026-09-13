@@ -5,8 +5,32 @@ rows:
     fields:
       queue: work.eng
       number: 1
-      name: Active engineering cycle
+      name: Connect the core stack
       starts_on: 2026-08-17
       ends_on: 2026-08-30
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  # Cycles 2 and 3 exist on any stack where cycle 1 was closed: the cadence
+  # generates the next windows on close, unnamed and empty. Seeding them with
+  # the dates the cadence already computes (two-week windows following cycle 1)
+  # means `adopt` links those rows rather than creating a fifth, and gives them
+  # names and work so the cycle story has a screen to stand on. Cycle 4 is left
+  # to the cadence.
+  - xref: eng_cycle_two
+    fields:
+      queue: work.eng
+      number: 2
+      name: Deal flow and data room
+      starts_on: 2026-08-31
+      ends_on: 2026-09-13
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: eng_cycle_three
+    fields:
+      queue: work.eng
+      number: 3
+      name: Reporting and go-live
+      starts_on: 2026-09-14
+      ends_on: 2026-09-27
       created_by: iam.user_alice
       updated_by: iam.user_alice

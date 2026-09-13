@@ -1,0 +1,74 @@
+# Plain tasks for the two workstream projects this addon owns. No queue, stage
+# or cycle: those xrefs belong to the work addon, which proposals does not
+# depend on, and a task does not need them to read as a checklist.
+_meta:
+  model: projects.Task
+rows:
+  - xref: deal_score_pipeline
+    fields:
+      project: proposals.competitive_mvp
+      title: Score the current inbound pipeline
+      note: Rank what is live by fit and stage so the next IC has a short list.
+      assignee: iam.user_alice
+      priority: high
+      due_date: 2026-09-25
+      sort_order: 1024.0
+      sub_sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: deal_dd_template
+    fields:
+      project: proposals.competitive_mvp
+      title: Stand up the diligence data-room template
+      note: One folder shape and request list, reused per deal.
+      assignee: iam.user_bob
+      priority: medium
+      sort_order: 2048.0
+      sub_sort_order: 2048.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: deal_next_ic
+    fields:
+      project: proposals.competitive_mvp
+      title: Schedule the next investment committee
+      note: Date, pre-read deadline, and who presents each item.
+      assignee: iam.user_bob
+      priority: low
+      sort_order: 3072.0
+      sub_sort_order: 3072.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: comms_shared_mailbox
+    fields:
+      project: proposals.flat_hunt
+      title: Fold the shared mailbox into Angee
+      note: The family office address, with history, so replies thread in one place.
+      assignee: iam.user_alice
+      priority: high
+      due_date: 2026-09-22
+      sort_order: 1024.0
+      sub_sort_order: 1024.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: comms_slack_deal_channel
+    fields:
+      project: proposals.flat_hunt
+      title: Connect the Slack deal channel
+      note: Deal chatter lands on the deal record instead of scrolling away.
+      assignee: iam.user_bob
+      priority: medium
+      sort_order: 2048.0
+      sub_sort_order: 2048.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
+  - xref: comms_lp_contacts
+    fields:
+      project: proposals.flat_hunt
+      title: Import the LP contact list
+      note: Investors and advisers matched to the identities already in Angee.
+      assignee: iam.user_alice
+      priority: medium
+      sort_order: 3072.0
+      sub_sort_order: 3072.0
+      created_by: iam.user_alice
+      updated_by: iam.user_alice

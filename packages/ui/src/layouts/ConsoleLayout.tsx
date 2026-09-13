@@ -5,7 +5,11 @@ import { AppRail } from "../chrome/AppRail";
 import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
 import { DrawerRail } from "../chrome/DrawerRail";
 import { TopBar } from "../chrome/TopBar";
-import { Chatter } from "../communication/Chatter";
+import {
+  Chatter,
+  useChatterHasContent,
+  useChatterRailStartsOpen,
+} from "../communication/Chatter";
 import { ChatterProvider, useChatter } from "../communication/chatter-context";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -215,6 +219,12 @@ function ConsoleWorkbench({
   const t = useUiT();
   const { registerSecondaryController } = useChatter();
   const { node: publishedPrimary } = usePrimaryPaneContent();
+  // No record to discuss means no aside: an empty rail otherwise sits over the
+  // page, and on a board it covers a lane whose cards then cannot be grabbed.
+  const chatterHasContent = useChatterHasContent();
+  // A record whose addon asked for an open rail starts with one, at widths that
+  // have room for it; everything else keeps the collapsed strip.
+  const chatterStartsOpen = useChatterRailStartsOpen();
   const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
   const [desktopPrimaryController, setDesktopPrimaryController] =
     React.useState<CollapsiblePane | null>(null);
@@ -277,9 +287,15 @@ function ConsoleWorkbench({
     <>
       <Workbench
         className="area-content"
-        autoSave="console.workbench.v2"
+        // Two buckets, because the saved size is the pane's only memory and it is
+        // shared across routes: with one key, opening the rail on a task record
+        // would leave it open over every other page until someone closed it, and
+        // the default below would never be reached again on any of them. The v2
+        // suffix carries main's cache-bust that retired the pre-split saved sizes.
+        autoSave={chatterStartsOpen ? "console.workbench.chatter.v2" : "console.workbench.v2"}
         scrollMode="contained"
-        secondaryDefaultCollapsed
+        secondarySize={30}
+        secondaryDefaultCollapsed={!chatterStartsOpen}
         primary={
           desktopPrimary != null ? (
             <ControlBandProvider host={undefined}>
@@ -287,7 +303,7 @@ function ConsoleWorkbench({
             </ControlBandProvider>
           ) : undefined
         }
-        secondary={desktopChatter ? (
+        secondary={desktopChatter && chatterHasContent ? (
           <ControlBandProvider host={undefined}>
             <Chatter />
           </ControlBandProvider>

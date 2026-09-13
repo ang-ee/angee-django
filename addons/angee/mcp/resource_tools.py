@@ -29,8 +29,6 @@ from mcp.types import ToolAnnotations
 RESOURCE_SCHEMA = "console"
 """Schema bucket used by the session UI for messaging, knowledge, and notes."""
 
-DEFAULT_QUERY_LIMIT = 25
-MAX_QUERY_LIMIT = 50
 MAX_SUMMARY_FIELDS = 8
 
 RESOURCE_READER_TOOL_TAG = "angee:resource_reader"
@@ -110,8 +108,6 @@ def resource_tool_specs(
                     limit_arg="limit",
                     args=("offset",),
                     search_fields=search_fields,
-                    default_limit=DEFAULT_QUERY_LIMIT,
-                    max_limit=MAX_QUERY_LIMIT,
                     tags=frozenset({RESOURCE_READER_TOOL_TAG}),
                 ),
                 GraphQLTool(

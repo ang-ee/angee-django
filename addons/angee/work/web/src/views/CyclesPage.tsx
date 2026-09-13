@@ -8,6 +8,7 @@ import {
   useRouteParam,
   useRouteHref,
 } from "@angee/ui";
+import { Outlet, useChildMatches } from "@tanstack/react-router";
 import * as React from "react";
 
 import { useQueueContext } from "../context";
@@ -23,6 +24,14 @@ export function CyclesPage(): React.ReactElement {
   const queue = useQueueContext(queueId);
   const name = queue.data?.work_queues_by_pk?.name ?? queueId;
   const actions = useCycleRowActions<WorkCycleRow>();
+  // The cycle board is a record route under this one, and it carries its own
+  // component rather than being rendered by this page the way a `ResourceList`
+  // renders a routed record. A record route must have a parent, so the parent
+  // has to stand aside for it: without this the router matched the board and
+  // rendered this list instead, and opening a cycle looked like it did nothing.
+  const childMatches = useChildMatches();
+
+  if (childMatches.length > 0) return <Outlet />;
 
   return (
     <Page>

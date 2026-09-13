@@ -9,7 +9,6 @@ import {
 } from "@angee/metadata";
 import { useAngeeResourceSave } from "@angee/refine";
 import {
-  useInvalidate,
   useOne,
   useCreate,
   useUpdate,
@@ -46,7 +45,10 @@ import {
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
-import { useSaveOperation } from "../resource/resource-operations";
+import {
+  useInvalidateDataResource,
+  useSaveOperation,
+} from "../resource/resource-operations";
 import { validationErrorsFromError, serverErrorsFromForm } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 
@@ -129,6 +131,10 @@ export interface FormViewSaveSurface {
   form: FormViewForm;
   displayRecord: Row | null;
   loading: boolean;
+  /** The read settled and resolved no record: the id names nothing readable. */
+  recordMissing: boolean;
+  /** The read settled having failed. Distinct from `recordMissing`: retryable. */
+  readFailure: Error | null;
   formReadOnly: boolean;
   formIsDirty: boolean;
   pending: boolean;
@@ -240,6 +246,25 @@ export function useFormViewSave({
     : read.result ?? null;
   const displayRecord = record;
   const loading = acknowledgedSource?.loading ?? read.query.isFetching;
+  // Without this the shell of a record that does not exist renders as an empty
+  // editable form, offering a save with nothing to save onto.
+  //
+  // Two settled outcomes, reported separately so the caller can say which
+  // happened. A read that *failed* never reaches `isError` here: the provider
+  // throws a generic "Request failed.", react-query reads that as a network
+  // fault under `networkMode: "online"` and parks the retry, leaving the query
+  // `pending`/`paused` for good. `failureCount` is what records that an attempt
+  // was made and lost; `isFetching` stays false while it is parked.
+  const readSettled =
+    !isCreate && acknowledgedSource === undefined && Boolean(id) && !read.query.isFetching;
+  const readFailure: Error | null = !readSettled
+    ? null
+    : (read.query.error as Error | null)
+      ?? (read.query.failureCount > 0
+        ? ((read.query.failureReason as Error | null) ?? new Error("Request failed."))
+        : null);
+  const recordMissing =
+    readSettled && readFailure === null && read.query.isSuccess && record === null;
   const reload = React.useCallback(() => {
     if (acknowledgedSource !== undefined) {
       acknowledgedSource.reload?.();
@@ -273,7 +298,6 @@ export function useFormViewSave({
   const resourceSave = useAngeeResourceSave(saveOperation.target, {
     document: saveOperation.document,
   });
-  const invalidate = useInvalidate();
   const linesActive =
     linesConfig !== null &&
     linesField !== null &&
@@ -299,15 +323,11 @@ export function useFormViewSave({
         : null,
     [linesActive, linesConfig, linesField],
   );
+  const invalidateDataResource = useInvalidateDataResource();
   const invalidateResource = React.useCallback(async () => {
     if (!dataResource) return;
-    await invalidate({
-      resource: refineResourceName(dataResource),
-      dataProviderName: dataResource.schemaName,
-      id: id ?? undefined,
-      invalidates: ["list", "many", "detail"],
-    });
-  }, [dataResource, id, invalidate]);
+    await invalidateDataResource(dataResource, id ?? undefined);
+  }, [dataResource, id, invalidateDataResource]);
 
   const values = React.useMemo(() => {
     if (acknowledgedSource !== undefined) {
@@ -723,6 +743,8 @@ export function useFormViewSave({
     form,
     displayRecord,
     loading,
+    recordMissing,
+    readFailure,
     formReadOnly,
     formIsDirty,
     pending,

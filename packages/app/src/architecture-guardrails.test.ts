@@ -127,6 +127,21 @@ const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
   },
   {
     namespace: "ui",
+    owner: "@refinedev/core mutation notifications",
+    prefix: "notifications.",
+    values: [
+      "createSuccess",
+      "editSuccess",
+      "deleteSuccess",
+      "createError",
+      "editError",
+      "deleteError",
+      "error",
+      "success",
+    ],
+  },
+  {
+    namespace: "ui",
     owner: "@angee/app login hero variants",
     prefix: "auth.hero.",
     values: ["intent", "agentNative", "composable"],
