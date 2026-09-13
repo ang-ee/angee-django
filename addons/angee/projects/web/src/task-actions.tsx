@@ -113,7 +113,7 @@ export function useTaskFormDeclaration(): React.ReactElement {
       <Group label={t("task.group.properties")} columns={1} placement="properties">
         <Field name="assignee" />
         <Field name="delegate" />
-        <Field name="priority" widget="priority" options={priorityOptions} />
+        <Field name="priority" widget="angee.projects.priority" options={priorityOptions} />
         <Field name="due_date" />
         <Field name="recurrence" />
       </Group>

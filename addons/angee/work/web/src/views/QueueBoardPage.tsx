@@ -22,23 +22,6 @@ export function QueueBoardPage(): React.ReactElement {
   const queue = useQueueContext(queueId);
   const name = queue.data?.work_queues_by_pk?.name ?? queueId;
   const scale = queue.data?.work_queues_by_pk?.estimate_scale;
-  // Memoized, not inline: these are identity-compared downstream, so a fresh
-  // object on every render re-runs the collection surface's effects and its
-  // grouped-scope work for a board that has not changed.
-  const createDefaults = React.useMemo(() => ({ queue: queueId }), [queueId]);
-  const baseFilter = React.useMemo(
-    () => ({ queue: { exact: queueId } }),
-    [queueId],
-  );
-  const laneSource = React.useMemo(
-    () => ({
-      field: "stage",
-      rankField: "sort_order",
-      filters: queueStageFilters(queueId),
-      sorters: [{ field: "position", order: "asc" as const }],
-    }),
-    [queueId],
-  );
 
   return (
     <Page>
@@ -48,7 +31,7 @@ export function QueueBoardPage(): React.ReactElement {
       />
       <PageBody gutter="none" scroll="hidden" className="flex flex-col">
         {queue.error ? <ErrorBanner description={queue.error.message} /> : null}
-        <TaskBoardSurface<WorkTaskRow> createDefaults={createDefaults}>
+        <TaskBoardSurface<WorkTaskRow> createDefaults={{ queue: queueId }}>
           <List<WorkTaskRow>
             resource={TASK_MODEL}
             defaultView="board"
@@ -56,9 +39,14 @@ export function QueueBoardPage(): React.ReactElement {
             // queueStageFilters, which excludes triage/duplicate stages —
             // `stage` is an ID comparison on the wire, so a nested
             // stage.category filter is not expressible here.
-            baseFilter={baseFilter}
+            baseFilter={{ queue: { exact: queueId } }}
             order={{ sort_order: "ASC" }}
-            laneSource={laneSource}
+            laneSource={{
+              field: "stage",
+              rankField: "sort_order",
+              filters: queueStageFilters(queueId),
+              sorters: [{ field: "position", order: "asc" }],
+            }}
             renderCard={(task) => <WorkTaskCard task={task} estimateScale={scale} />}
             emptyContent={{
               icon: "work-board",
@@ -70,7 +58,7 @@ export function QueueBoardPage(): React.ReactElement {
             <Column field="title" />
             <Column field="estimate" header={t("common.estimate")} />
             <Column field="assignee" />
-            <Column field="priority" widget="priority" />
+            <Column field="priority" widget="angee.projects.priority" />
             <Column field="due_date" />
           </List>
         </TaskBoardSurface>

@@ -192,6 +192,15 @@ history uses native Query pages with domain-owned
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/
   `useSlot` read the composed `AppRuntime`; menu declarations project into refine
   resources and chrome renders refine `useMenu`.
+- **A widget that carries addon vocabulary is registered by that addon**, under
+  the qualified key `namespace.addon.widget` (`angee.projects.priority`), through
+  `widgets:` on its manifest; pages name it with `widget="<key>"`, and its
+  `cell`/`read`/`edit` compose `@angee/ui` primitives (`StatusSelectEdit`,
+  `optionLabel`, `Glyph`). `@angee/ui` keeps only vocabulary-free widgets and
+  the shared status convention; a rank scale, stage category, or other product
+  enum never enters `defaultWidgets` or `STATUS_TONES`. Metadata attaches enum
+  `options` to any widget on an enum field, so an addon widget needs no core
+  allowlist entry.
 - **A resource registry key is the emitted canonical `modelLabel`** (for example
   `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
   lowercase spelling only because `createApp` canonicalizes it fail-fast against

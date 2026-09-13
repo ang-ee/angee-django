@@ -1,4 +1,20 @@
-import { Group, Field, RelativeTime, type StringIdRow } from "@angee/ui";
+import {
+  relationRepresentationForPath,
+  rowValueAtPath,
+  useModelMetadata,
+  useSchemaFieldMetadata,
+} from "@angee/metadata";
+import { TASK_MODEL } from "@angee/projects";
+import {
+  Avatar,
+  Group,
+  Field,
+  RelativeTime,
+  avatarInitials,
+  useEnumOptions,
+  useResolvedWidget,
+  type StringIdRow,
+} from "@angee/ui";
 import * as React from "react";
 
 import { estimateLabel } from "./estimates";
@@ -81,36 +97,37 @@ export function WorkTaskCard({
   );
 }
 
-/**
- * Who, how urgent, by when -- the three facts a board is read for, and the three
- * the card did not carry. They were on the list all along, so the board was the
- * one view of a task that could not answer "is this mine and is it late?".
- *
- * Each part renders only when the row has it, so a card never shows an empty
- * slot, and the footer disappears entirely for a task with none of the three.
- */
-function CardFooter({ task }: { task: WorkTaskRow }): React.ReactElement | null {
+/** Compose the assignee, priority and due date; hide an empty footer. */
+function CardFooter({ task }: { task: WorkTaskRow }): React.ReactElement {
   const t = useWorkT();
-  const assignee = displayName(task.assignee);
-  // `NONE` is the absence of a priority, not a priority. Most seed cards carry
-  // it, so rendering it put the word "NONE" on nearly every card and drowned the
-  // few that say URGENT -- the opposite of what a priority is on a board for.
-  const priority = meaningfulPriority(task.priority);
+  const taskModel = useModelMetadata(TASK_MODEL);
+  const schemaMetadata = useSchemaFieldMetadata();
+  // The board rows carry the assignee representation because the boards declare
+  // `<Column field="assignee" />`; the card reads the same metadata-owned path.
+  const representation = taskModel
+    ? relationRepresentationForPath("assignee", taskModel, schemaMetadata)
+    : null;
+  const assignee = representation
+    ? presentText(rowValueAtPath(task, representation.displayPath))
+    : "";
+  const PriorityCell = useResolvedWidget("angee.projects.priority")?.cell;
+  // The same option labels the list cells read; an enum reads back as its
+  // upper-case member name, so the options are cased to match.
+  const priorityOptions = useEnumOptions(TASK_MODEL, "priority", { casing: "upper" });
   const due = presentText(task.due_date);
-  if (!assignee && !priority && !due) return null;
   return (
-    <div className="flex items-center gap-2 text-xs text-fg-muted">
+    <div className="flex items-center gap-2 text-xs text-fg-muted empty:hidden">
       {assignee ? (
-        <span
-          className="grid size-5 shrink-0 place-content-center rounded-full bg-inset text-[10px] font-semibold text-fg-subtle"
+        <Avatar
+          size="sm"
+          role="img"
+          initials={avatarInitials(assignee)}
           title={assignee}
           aria-label={assignee}
-        >
-          {initials(assignee)}
-        </span>
+        />
       ) : null}
-      {priority ? (
-        <span className="truncate rounded-6 bg-inset px-1.5 py-0.5">{priority}</span>
+      {PriorityCell ? (
+        <PriorityCell value={task.priority} row={task} field={{ name: "priority", options: priorityOptions }} />
       ) : null}
       {due ? (
         <span className="ml-auto shrink-0 tabular-nums">
@@ -121,31 +138,10 @@ function CardFooter({ task }: { task: WorkTaskRow }): React.ReactElement | null 
   );
 }
 
-/** The enum's "no priority" member, which is not worth a pill. */
-function meaningfulPriority(value: unknown): string {
-  const text = presentText(value);
-  return text.toUpperCase() === "NONE" ? "" : text;
-}
-
-/** A relation renders as its representation object; a bare id is not a name. */
-function displayName(value: unknown): string {
-  if (value == null || typeof value !== "object") return "";
-  const record = value as Record<string, unknown>;
-  return presentText(record.display_name ?? record.name ?? record.title);
-}
-
 function presentText(value: unknown): string {
   return typeof value === "string" || typeof value === "number"
     ? String(value).trim()
     : "";
-}
-
-function initials(name: string): string {
-  const words = name.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return "";
-  const first = words[0]?.[0] ?? "";
-  const last = words.length > 1 ? (words.at(-1)?.[0] ?? "") : "";
-  return `${first}${last}`.toUpperCase();
 }
 
 export function TriageDwell({ value }: { value: unknown }): React.ReactElement {

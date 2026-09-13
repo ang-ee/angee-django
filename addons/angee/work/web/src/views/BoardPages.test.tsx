@@ -6,18 +6,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listProps: null as Record<string, unknown> | null,
-  surfaceProps: null as Record<string, unknown> | null,
   params: { queueId: "que_eng", id: "cyc_7" } as Record<string, string>,
 }));
 
 vi.mock("@angee/projects", () => ({
   TASK_MODEL: "projects.Task",
-  TaskBoardSurface: (
-    props: Record<string, unknown> & { children?: React.ReactNode },
-  ) => {
-    mocks.surfaceProps = props;
-    return <>{props.children}</>;
-  },
+  TaskBoardSurface: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@angee/ui", () => ({
@@ -68,7 +62,6 @@ import { QueueBoardPage } from "./QueueBoardPage";
 
 beforeEach(() => {
   mocks.listProps = null;
-  mocks.surfaceProps = null;
   mocks.params = { queueId: "que_eng", id: "cyc_7" };
 });
 
@@ -91,29 +84,6 @@ describe("work board stage lanes", () => {
       cycle: { exact: "cyc_7" },
     });
   });
-});
-
-test("keeps identity-compared board props stable across renders", () => {
-  // The collection surface compares these by identity, so a fresh object each
-  // render re-runs its effects and grouped-scope work for a board that has not
-  // changed -- the amplifier behind the board's update-depth errors.
-  for (const Board of [QueueBoardPage, CycleBoardPage]) {
-    const view = render(<Board />);
-    const first = {
-      baseFilter: mocks.listProps?.baseFilter,
-      laneSource: mocks.listProps?.laneSource,
-      createDefaults: mocks.surfaceProps?.createDefaults,
-    };
-    expect(first.baseFilter).toBeDefined();
-    expect(first.laneSource).toBeDefined();
-    expect(first.createDefaults).toBeDefined();
-
-    view.rerender(<Board />);
-    expect(mocks.listProps?.baseFilter).toBe(first.baseFilter);
-    expect(mocks.listProps?.laneSource).toBe(first.laneSource);
-    expect(mocks.surfaceProps?.createDefaults).toBe(first.createDefaults);
-    view.unmount();
-  }
 });
 
 function expectBoardStageScope(

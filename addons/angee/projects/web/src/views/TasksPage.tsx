@@ -60,7 +60,7 @@ export function TasksPage(): React.ReactElement {
         <Column field="stage" />
         <Column field="cycle" />
         <Column field="assignee" header={t("common.assignee")} />
-        <Column field="priority" header={t("common.priority")} widget="priority" />
+        <Column field="priority" header={t("common.priority")} widget="angee.projects.priority" />
         <Column field="due_date" header={t("common.dueDate")} />
         <Column field="sort_order" header={t("common.order")} />
       </List>
@@ -86,7 +86,7 @@ function TaskSubtasksTab({ recordId }: RecordPanelContext): React.ReactElement {
       <Column field="title" />
       <Column field="status" widget="statusBadge" tone={TASK_STATUS_TONES} />
       <Column field="assignee" />
-      <Column field="priority" widget="priority" />
+      <Column field="priority" widget="angee.projects.priority" />
       <Column field="due_date" />
       <Column field="sub_sort_order" header={t("common.subtaskOrder")} />
     </List>

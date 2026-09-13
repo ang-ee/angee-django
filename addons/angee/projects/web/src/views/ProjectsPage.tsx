@@ -177,7 +177,7 @@ function ProjectTasksTab({ recordId }: RecordPanelContext): React.ReactElement {
         <Column field="title" />
         <Column field="status" widget="statusBadge" tone={TASK_STATUS_TONES} />
         <Column field="assignee" />
-        <Column field="priority" widget="priority" />
+        <Column field="priority" widget="angee.projects.priority" />
         <Column field="due_date" />
       </List>
       {form}

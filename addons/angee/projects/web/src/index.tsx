@@ -7,6 +7,7 @@ import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
 import { enProjectsMessages } from "./i18n";
 import { taskCreateForm } from "./views/task-create-form";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
+import { priorityWidget } from "./widgets/priority";
 
 export {
   MILESTONE_MODEL,
@@ -92,6 +93,7 @@ const projects = defineBaseAddon({
   routes: projectsRoutes,
   menus: projectsMenu,
   i18n: { projects: enProjectsMessages },
+  widgets: { "angee.projects.priority": priorityWidget },
   // The create form for a task, used wherever one is created; the record keeps
   // the tabbed form for its long tail.
   forms: { "projects.Task": taskCreateForm },

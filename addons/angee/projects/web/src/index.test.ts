@@ -1,6 +1,6 @@
 import * as React from "react";
 import { expectValidBaseAddon } from "@angee/app/testing";
-import { createRouteHref } from "@angee/ui";
+import { createRouteHref, isWidgetDefinition } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import projects, { PROJECT_MODEL, TASK_MODEL } from "./index";
@@ -8,6 +8,10 @@ import projects, { PROJECT_MODEL, TASK_MODEL } from "./index";
 describe("projects addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
     expect(() => expectValidBaseAddon(projects)).not.toThrow();
+  });
+
+  test("registers the qualified task priority widget", () => {
+    expect(isWidgetDefinition(projects.widgets?.["angee.projects.priority"])).toBe(true);
   });
 
   test("declares collection owners, record children, and projection pages", () => {

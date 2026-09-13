@@ -40,7 +40,6 @@ export function RoadmapPage(): React.ReactElement {
         <List<StringIdRow>
           resource={INITIATIVE_PROJECT_MODEL}
           presentation="embedded"
-          scope="local"
           defaultGroup={{ field: "initiative" }}
           order={{ sort_order: "ASC" }}
         >
