@@ -41,7 +41,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredMutation: uploadMocks.useAuthoredMutation,
-    useInvalidateAuthoredModels: () => vi.fn(),
 }));
 
 import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";
@@ -116,7 +115,7 @@ describe("useStorageUpload", () => {
       { id: "fil_ready", filename: "note.txt" },
     ], undefined);
     expect(uploadMocks.invalidate).toHaveBeenCalledWith({
-      resource: "console:storage.File",
+      resource: "files",
       dataProviderName: "console",
       invalidates: ["list", "many", "detail"],
     });
