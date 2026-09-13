@@ -6,14 +6,12 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from angee.base import actors as actor_module
-from angee.base.actors import actor_user_id
 from django.core.management import call_command
 from django.db import connection
-from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import SubjectRef, app_settings, system_context
+from rebac import system_context, to_subject_ref
 
+from angee.base.actors import actor_user_id
 from tests.conftest import IAM_CONNECTION_TEST_MODELS, INTEGRATE_TEST_MODELS, POSTS_TEST_MODELS, _clear_model_tables
 from tests.conftest import _create_missing_tables as _create_tables
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, User
@@ -21,12 +19,6 @@ from tests.test_integrate_vcs import VCS_TEST_MODELS
 from tests.test_messaging import MESSAGING_TEST_MODELS
 from tests.test_parties_graphql import PARTIES_TEST_MODELS
 from tests.test_spaces import SPACES_TEST_MODELS
-
-
-def _test_actor_user_resolver(subject_id: str) -> str | None:
-    """Resolver used by the base registry unit test."""
-
-    return {"agent-1": "42"}.get(subject_id)
 
 
 @pytest.fixture()
@@ -52,8 +44,8 @@ def agents_console_tables(transactional_db: Any) -> Iterator[None]:
         _clear_model_tables(models)
 
 
-def test_agent_principal_subject_is_its_own_rebac_subject(agents_console_tables: None) -> None:
-    """An agent acts as ``agents/agent:<sqid>``, not as its owner."""
+def test_agent_principal_subject_is_its_service_user(agents_console_tables: None) -> None:
+    """An agent acts as its linked non-login user, not as its owner."""
 
     owner = User.objects.create_user(username="principal-owner", email="principal@example.com")
     with system_context(reason="test.agent.principal_subject"):
@@ -61,54 +53,9 @@ def test_agent_principal_subject_is_its_own_rebac_subject(agents_console_tables:
 
     subject = agent.principal_subject()
 
-    assert subject == SubjectRef.of("agents/agent", str(agent.sqid))
-    assert actor_user_id(subject) is None
-
-
-def test_actor_user_id_non_user_without_resolver_fails_safe(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Base does not import any resolver when a non-user actor has no configured mapping."""
-
-    def forbidden_import(path: str) -> object:
-        raise AssertionError(f"resolver import should not run for {path}")
-
-    monkeypatch.setattr(actor_module, "import_string", forbidden_import, raising=False)
-
-    with override_settings(ANGEE_ACTOR_USER_RESOLVERS={}):
-        assert actor_user_id(SubjectRef.of("agents/agent", "agent-1")) is None
-
-
-def test_is_user_actor_checks_authorization_species() -> None:
-    """Base owns the REBAC user-species predicate, distinct from attribution."""
-
-    from angee.base.actors import is_user_actor
-
-    assert is_user_actor(SubjectRef.of(app_settings.REBAC_USER_TYPE, "usr_123"))
-    assert not is_user_actor(SubjectRef.of(app_settings.REBAC_USER_TYPE, ""))
-    assert not is_user_actor(SubjectRef.of("agents/agent", "agt_123"))
-    assert not is_user_actor(None)
-
-
-def test_actor_user_id_uses_configured_non_user_resolver() -> None:
-    """A settings-keyed resolver can map a non-user subject to a user FK."""
-
-    with override_settings(
-        ANGEE_ACTOR_USER_RESOLVERS={"agents/agent": "tests.test_principals._test_actor_user_resolver"}
-    ):
-        assert actor_user_id(SubjectRef.of("agents/agent", "agent-1")) == "42"
-        assert actor_user_id(SubjectRef.of("agents/agent", "unknown")) is None
-
-
-def test_agent_actor_resolver_returns_linked_service_user(agents_console_tables: None) -> None:
-    """The agents addon resolves an agent subject to its service user without REBAC scoping."""
-
-    owner = User.objects.create_user(username="principal-owner-resolver", email="principal-resolver@example.com")
-    with system_context(reason="test.agent.actor_resolver"):
-        agent = Agent.objects.create(name="Resolver Agent", owner=owner)
-
-    with override_settings(
-        ANGEE_ACTOR_USER_RESOLVERS={"agents/agent": "angee.agents.actor_resolvers.agent_user_id"}
-    ):
-        assert actor_user_id(agent.principal_subject()) == agent.user_id
+    assert subject == to_subject_ref(agent.user)
+    assert subject != to_subject_ref(owner)
+    assert actor_user_id(subject) == agent.user_id
 
 
 def test_agent_create_materializes_service_user(agents_console_tables: None) -> None:

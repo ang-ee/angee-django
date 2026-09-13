@@ -1,10 +1,11 @@
 // Authorization schema for the agents addon.
 // @rebac_package: agents
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 5
 
 definition agents/agent {
     relation owner: auth/user // rebac:field=owner
+    relation actor: auth/user // rebac:field=user
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
@@ -19,7 +20,7 @@ definition agents/agent {
 // another, and the const-backed admin arm keeps platform administrators
 // effective members without per-role tuples.
 definition agents/toolrole {
-    relation member: agents/agent | auth/user | auth/group#member | angee/role:admin#member
+    relation member: auth/user | auth/group#member | angee/role:admin#member
     relation includes: agents/toolrole#effective_member
     relation admin: angee/role // rebac:const=admin
 
@@ -46,7 +47,7 @@ definition agents/toolrole {
 // tests/extcontrib is the mechanical fragment recipe. V1 builds no scoped
 // grant or scope relation.
 definition agents/tool_grant {
-    relation grantee: agents/agent | agents/toolrole#effective_member | auth/group#agent_member
+    relation grantee: auth/user | auth/group#member | agents/toolrole#effective_member
     relation approver: auth/user
     relation admin: angee/role // rebac:const=admin
 
@@ -96,7 +97,7 @@ definition agents/mcp_server {
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = agent + admin->member
+    permission read = agent->actor + admin->member
     permission write = admin->member
     permission delete = admin->member
 }
@@ -117,8 +118,8 @@ definition agents/session {
     relation admin: angee/role // rebac:const=admin
 
     permission create = agent->write + admin->member
-    permission read = owner + admin->member
-    permission write = owner + admin->member
+    permission read = owner + agent->actor + admin->member
+    permission write = owner + agent->actor + admin->member
     permission delete = owner + admin->member
 }
 

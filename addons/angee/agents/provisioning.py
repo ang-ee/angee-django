@@ -12,7 +12,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from angee.base.transitions import TransitionNotAllowed
 from django.apps import apps
 from django.conf import settings
 from django.utils.module_loading import import_string
@@ -20,6 +19,7 @@ from rebac import system_context
 
 from angee.agents.grants import grant_resource_reader_role
 from angee.agents.models import AgentLifecycle
+from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.ids import PublicID
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound
@@ -60,6 +60,8 @@ def provision_agent(id: PublicID) -> ActionResult:
         reason="agents.graphql.provision_agent",
         select_related=_PROVISION_CHAIN,
     ) as agent:
+        if agent.user_id is None:
+            type(agent).objects.sync_service_user(agent)
         if agent.runtime_backend.runs_in_process:
             if not agent.inference_credential_ready():
                 return ActionResult(
@@ -127,6 +129,8 @@ def reprovision_agent(id: PublicID) -> ActionResult:
         reason="agents.graphql.reprovision_agent",
         select_related=_PROVISION_CHAIN,
     ) as agent:
+        if agent.user_id is None:
+            type(agent).objects.sync_service_user(agent)
         workspace = agent.workspace
         service = agent.service
         if not workspace:

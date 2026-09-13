@@ -26,7 +26,7 @@ from pydantic import JsonValue
 from rebac import SubjectRef, actor_context, system_context
 from rebac.actors import to_subject_ref
 
-from angee.base.actors import actor_user_id, is_user_actor
+from angee.base.actors import actor_user_id
 from angee.workflows.attempts import RecoveryCapability, RecoveryMode
 from angee.workflows.steps import DecisionSpec, StepEffect, StepImpl, StepOutcome, StepResult, positive_int
 
@@ -381,7 +381,7 @@ def _identity_selection_authority(proposal: Mapping[str, Any], *, run: Any) -> S
         actor = SubjectRef.parse(decision.resolved_by)
     except (TypeError, ValueError) as error:
         raise ValidationError({"selection_decision_id": "Selection Decision requires a human resolver."}) from error
-    if not is_user_actor(actor) or actor_user_id(actor) is None:
+    if actor_user_id(actor) is None:
         raise ValidationError({"selection_decision_id": "Selection Decision requires a human resolver."})
     return actor
 

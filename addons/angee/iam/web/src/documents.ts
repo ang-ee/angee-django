@@ -7,6 +7,14 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 import type { DocumentVariables } from "@angee/refine";
 
+export const RecordAccessDocument = graphql(`
+  query RecordAccess($targetType: String!, $targetIds: [ID!]!) {
+    record_access(target_type: $targetType, target_ids: $targetIds) {
+      target_id relation subject subject_type label
+    }
+  }
+`);
+
 export const IamOverview = graphql(`
   query IamOverview($peekLimit: Int = 6) {
     iam_roles(limit: 1000, order_by: [{ namespace: asc }, { role_id: asc }]) {

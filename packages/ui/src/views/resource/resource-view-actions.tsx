@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { SlotOutlet } from "../../lib/slot-outlet";
 import { makeContext, useSlot, type SlotContribution } from "../../runtime";
+import { useRecordChromeContextMaybe, type RecordChromeContext } from "./record-chrome-context";
 import type { ResourceViewFilter } from "./resource-view-model";
 
 export const RESOURCE_VIEW_ACTIONS_SLOT = "resource-view.actions";
@@ -11,6 +12,10 @@ export interface ResourceViewActionContext {
   filter?: ResourceViewFilter;
   fields: readonly string[];
   refresh: () => void;
+  /** Public ids selected by the collection owner. */
+  selectedIds?: ReadonlySet<string>;
+  /** Saved record enclosing this collection; nested actions target it. */
+  record?: RecordChromeContext | null;
 }
 
 const ResourceViewActionContextBinding = makeContext<ResourceViewActionContext>(
@@ -42,9 +47,10 @@ export function ResourceViewActions({
   value: ResourceViewActionContext;
 }): React.ReactElement | null {
   const entries = useResourceViewActions(value.resource);
+  const record = useRecordChromeContextMaybe();
   if (entries.length === 0) return null;
   return (
-    <ResourceViewActionContextBinding.Provider value={value}>
+    <ResourceViewActionContextBinding.Provider value={{ ...value, record }}>
       <SlotOutlet entries={entries} />
     </ResourceViewActionContextBinding.Provider>
   );

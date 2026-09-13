@@ -10,3 +10,11 @@ class ProjectsConfig(AppConfig):
 
     default = True
     name = "angee.projects"
+
+    def ready(self) -> None:
+        """Wire projects-owned container binding mirrors."""
+
+        super().ready()
+        from angee.projects import signals
+
+        signals.connect()

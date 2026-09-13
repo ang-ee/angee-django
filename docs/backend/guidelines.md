@@ -375,16 +375,44 @@ This project runs **fail-closed**: `REBAC_STRICT_MODE=True` and
 `REBAC_SUPERUSER_BYPASS=False`, so every actor — superusers included — reaches
 data through REBAC, never a queryset bypass.
 
-- **One attribution vocabulary (the layered-principal rule).** Any column that
-  answers "who did this" — audit stamps, history users, revision authors — is an
-  FK to `AUTH_USER_MODEL`, never a species-specific FK and never a string
-  subject column. At the database layer, `user = service account = actor =
-  principal`: one table represents every principal, person or service (`kind`
-  lives on the row). Above that layer the words diverge on purpose — the REBAC
-  *actor* keeps its species (`agents/agent` is never collapsed into a user for
-  permission evaluation); attribution converges through `actor_user_id` and the
+- **One user identity for authorization and attribution.** Every person and
+  agent acts as its own `AUTH_USER_MODEL` row. An agent's `kind=service` account
+  is selected by `Agent.principal_subject()`; permissions and audit stamps use
+  that same user. The agent's reach is its grants, independent of its owner's
+  reach. Service users satisfy `authenticated` and `auth/user:*` like other
+  users. `actor_user_id` converts public subject ids to FK ids without a
   subject-type resolver registry. See the glossary's Principal/Actor/Service
   account entries.
+- **Container inheritance belongs to the resource and scope owners.** A
+  resource's FK relations and arrows live in its own Zed definition. A scope
+  contributes additional relations and arrows through its own
+  `permissions.extends.zed`; its binding writer mirrors the persisted evidence
+  and reconciles edits and deletion. See
+  [project bindings](../../addons/angee/projects/access.py). Binding a resource
+  widens access to its contents, so the binding owner must authorize both ends.
+- **Declare direct sharing once.** Models declare `rebac_grantable`; the
+  [record-access API](../../addons/angee/graphql/sharing.py) dispatches bulk
+  grants and revocations through the model's checked methods. Addons do not
+  define private share mutations. Metadata projects the grant surface and the
+  subject resource's canonical identity field; public display ids are not
+  necessarily REBAC subject ids.
+- **Recipient discovery follows identity read policy.** IAM's user resource
+  includes readable people and service users; human-only membership pickers
+  use its people collection. IAM declares a native Django proxy for the
+  existing auth-group table so REBAC can resolve and scope group subjects.
+  Members can discover their groups; platform admins can discover all groups.
+  IAM's write backends retain the admin mutation gates.
+- **Custom scoped roles are groups.** A named role is an `auth/group#member`
+  granted relations on a scope. Runtime data chooses memberships and grants;
+  schema remains the only source of new permission arms.
+- **Upgrade the stored evidence with the schema.** When upgrading from agents
+  schema revision 4 or installing project container inheritance, compose and
+  apply the generated migrations first, then sync the new REBAC schema. Run
+  `uv run manage.py resync_tool_grants` to migrate retired agent memberships
+  and `uv run manage.py resync_project_access` to reconcile existing project
+  bindings. Run these through the stack host described in
+  [Checks](../checks.md#composition-and-schema); each command delegates to its
+  addon owner and is idempotent.
 - **Visibility and access are REBAC-native, always.** Put relations and
   permission arms on the model's zed and let the store scope reads; never stand
   authorization up with a Python provider, `visible_to` projection, or queryset

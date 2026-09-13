@@ -27,7 +27,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import reversion
-from angee.base.actors import actor_user_id, is_user_actor
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
@@ -46,6 +45,7 @@ from pydantic import BaseModel
 from rebac import current_actor, system_context
 from strawberry.utils.str_converters import to_camel_case, to_snake_case
 
+from angee.base.actors import actor_user_id
 from angee.graphql.schema import GraphQLSchemas
 from mcp.types import ToolAnnotations
 
@@ -176,8 +176,7 @@ class GraphQLTool:
     arguments straight through as top-level tool inputs (scalars, enums, or lists
     thereof — for operations whose inputs are bare arguments rather than one input
     object), ``fixed`` injects constant GraphQL arguments the agent never sees
-    (e.g. ``confirm`` on a delete), and ``requires_user_actor`` rejects non-user
-    MCP actors before execution for operations whose write attribution is a user FK.
+    (e.g. ``confirm`` on a delete).
     ``search_fields`` adds one optional text query mapped into a Hasura ``where``
     ``_or`` over the named string fields. ``default_limit`` and ``max_limit`` keep
     generated collection tools bounded even when the caller omits or overstates
@@ -195,7 +194,6 @@ class GraphQLTool:
     limit_arg: str | None = None
     args: tuple[str, ...] = ()
     fixed: dict[str, Any] = field(default_factory=dict)
-    requires_user_actor: bool = False
     search_fields: tuple[str, ...] = ()
     default_limit: int | None = None
     max_limit: int | None = None
@@ -289,7 +287,6 @@ class _CompiledTool(Tool):
     limit_arg: str | None = None
     limit_wire_arg: str | None = None
     fixed: dict[str, Any] = {}
-    requires_user_actor: bool = False
     search_fields: tuple[str, ...] = ()
     default_limit: int | None = None
     max_limit: int | None = None
@@ -297,8 +294,6 @@ class _CompiledTool(Tool):
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         """Execute the operation and return the projected payload as structured content."""
 
-        if self.requires_user_actor and not is_user_actor(current_actor()):
-            raise ToolError("This operation requires a user actor.")
         data = await execute_under_actor(self.schema_name, self.document, self._variables(arguments))
         payload = data.get(self.payload_field)
         if self.is_list:
@@ -397,7 +392,6 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
         limit_arg=spec.limit_arg,
         limit_wire_arg=limit_wire_arg,
         fixed=spec.fixed,
-        requires_user_actor=spec.requires_user_actor,
         search_fields=spec.search_fields,
         default_limit=spec.default_limit,
         max_limit=spec.max_limit,

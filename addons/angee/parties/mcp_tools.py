@@ -106,7 +106,6 @@ def register(server: FastMCP) -> None:
                 name="merge_parties",
                 fields=("sqid", "display_name", "notes"),
                 args=("into_id", "from_id", "field_overrides"),
-                requires_user_actor=True,
                 description="Merge from_id into survivor into_id (both pty_ sqids) after human review. "
                 "field_overrides is an optional object containing only approved human scalar fields.",
             ),

@@ -8,6 +8,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -27,6 +28,7 @@ from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
+from angee.projects.access import bind, unbind
 from angee.storage.schema import FolderType
 
 Project = apps.get_model("projects", "Project")
@@ -35,6 +37,7 @@ Task = apps.get_model("projects", "Task")
 TaskRelation = apps.get_model("projects", "TaskRelation")
 Participant = apps.get_model("projects", "Participant")
 Link = apps.get_model("projects", "Link")
+ProjectBinding = apps.get_model("projects", "ProjectBinding")
 ThreadActivity = apps.get_model("messaging", "ThreadActivity")
 Folder = apps.get_model("storage", "Folder")
 Party = apps.get_model("parties", "Party")
@@ -121,6 +124,14 @@ class ProjectLinkTargetInput:
     """A project or task record that may own an external link."""
 
     model_label: str = strawberry.field(name="model_label")
+    record_id: PublicID = strawberry.field(name="record_id")
+
+
+@strawberry.input
+class ProjectResourceTargetInput:
+    """A REBAC resource address accepted by project container bindings."""
+
+    resource_type: str = strawberry.field(name="resource_type")
     record_id: PublicID = strawberry.field(name="record_id")
 
 
@@ -318,6 +329,27 @@ class ProjectLinkType(AuthoredRefMixin, AngeeNode):
         return cast(strawberry.ID, cast(Any, self).record_public_id)
 
 
+@strawberry_django.type(ProjectBinding)
+class ProjectBindingType(AuthoredRefMixin, AngeeNode):
+    """GraphQL projection of one explicit project container binding."""
+
+    created_at: auto
+    updated_at: auto
+    project: ProjectType | None = actor_scoped_to_one("project")
+
+    @strawberry.field
+    def target_type(self) -> str:
+        """Return the bound target's REBAC resource type."""
+
+        return cast(Any, self).record_ref.resource_type
+
+    @strawberry.field
+    def target_id(self) -> strawberry.ID:
+        """Return the target's stable public id."""
+
+        return cast(strawberry.ID, cast(Any, self).record_public_id)
+
+
 @strawberry.type
 class ProjectTaskActionMutation:
     """Row-authorized lifecycle and maturation actions."""
@@ -433,6 +465,42 @@ class ProjectTaskActionMutation:
             metadata=cast(dict[str, Any] | None, metadata),
         )
         return ActionResult(ok=True, message="Link attached.", id=link.sqid)
+
+    @strawberry.mutation
+    @action_guard("Bind project resource failed.")
+    def bind_project_resource(
+        self,
+        info: strawberry.Info,
+        project_id: PublicID,
+        target: ProjectResourceTargetInput,
+    ) -> ActionResult:
+        """Bind one writable resource to a shareable project."""
+
+        project = authorized_action_target(info, Project, project_id, "share")
+        target_model = model_for_resource_type(target.resource_type)
+        if target_model is None:
+            raise ValueError(f"Unknown resource type {target.resource_type!r}.")
+        target_record = authorized_action_target(info, target_model, target.record_id, "write")
+        binding = bind(project=project, target=target_record)
+        return ActionResult(ok=True, message="Resource bound to project.", id=binding.sqid)
+
+    @strawberry.mutation
+    @action_guard("Unbind project resource failed.")
+    def unbind_project_resource(
+        self,
+        info: strawberry.Info,
+        project_id: PublicID,
+        target: ProjectResourceTargetInput,
+    ) -> ActionResult:
+        """Remove one explicit resource binding from a shareable project."""
+
+        project = authorized_action_target(info, Project, project_id, "share")
+        target_model = model_for_resource_type(target.resource_type)
+        if target_model is None:
+            raise ValueError(f"Unknown resource type {target.resource_type!r}.")
+        target_record = authorized_action_target(info, target_model, target.record_id, "write")
+        unbind(project=project, target=target_record)
+        return ActionResult(ok=True, message="Resource unbound from project.", id=project.sqid)
 
 
 def _project_resource(node_type: type) -> Any:
@@ -708,11 +776,25 @@ _LINK_RESOURCE = hasura_model_resource(
     write_backend=AngeeHasuraWriteBackend(Link),
 )
 
+_BINDING_RESOURCE = hasura_model_resource(
+    ProjectBindingType,
+    model=ProjectBinding,
+    name="project_bindings",
+    filterable=["id", "project", "created_at", "updated_at"],
+    sortable=["project", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["project"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+
 _COMMON_RESOURCE_TYPES = [
     *_MILESTONE_RESOURCE.types,
     *_TASK_RELATION_RESOURCE.types,
     *_PARTICIPANT_RESOURCE.types,
     *_LINK_RESOURCE.types,
+    *_BINDING_RESOURCE.types,
 ]
 
 
@@ -732,6 +814,7 @@ def _projects_schema_bucket(
             _TASK_RELATION_RESOURCE.query,
             _PARTICIPANT_RESOURCE.query,
             _LINK_RESOURCE.query,
+            _BINDING_RESOURCE.query,
             revisions(project_type),
         ],
         "mutation": [
@@ -742,6 +825,7 @@ def _projects_schema_bucket(
             _TASK_RELATION_RESOURCE.mutation,
             _PARTICIPANT_RESOURCE.mutation,
             _LINK_RESOURCE.mutation,
+            _BINDING_RESOURCE.mutation,
         ],
         "types": [
             project_type,
@@ -750,6 +834,7 @@ def _projects_schema_bucket(
             TaskRelationType,
             ProjectParticipantType,
             ProjectLinkType,
+            ProjectBindingType,
             *project_resource.types,
             *task_resource.types,
             *_COMMON_RESOURCE_TYPES,

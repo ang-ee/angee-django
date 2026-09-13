@@ -218,7 +218,7 @@ def test_render_round_trips_a_real_backed_schema() -> None:
     assert {p.name for p in roundtripped.permissions} == {p.name for p in original.permissions}
 
 
-def test_agents_tool_grants_accept_agent_and_role_subjects() -> None:
+def test_agents_tool_grants_accept_user_group_and_role_subjects() -> None:
     """Tool use is granted on pure grant objects, not on MCP catalogue rows."""
 
     source = Path(apps.get_app_config("agents").path) / "permissions.zed"
@@ -230,15 +230,21 @@ def test_agents_tool_grants_accept_agent_and_role_subjects() -> None:
         ("agents/agent", "", "")
     }
 
+    agent = schema.get_definition("agents/agent")
+    actor = next(relation for relation in agent.relations if relation.name == "actor")
+    assert {(subject.type, subject.id, subject.relation) for subject in actor.allowed_subjects} == {
+        ("auth/user", "", "")
+    }
+
     tool = schema.get_definition("agents/mcp_tool")
     assert "agent" not in {relation.name for relation in tool.relations}
 
     grant = schema.get_definition("agents/tool_grant")
     grantee = next(relation for relation in grant.relations if relation.name == "grantee")
     assert {(subject.type, subject.id, subject.relation) for subject in grantee.allowed_subjects} == {
-        ("agents/agent", "", ""),
+        ("auth/user", "", ""),
         ("agents/toolrole", "", "effective_member"),
-        ("auth/group", "", "agent_member"),
+        ("auth/group", "", "member"),
     }
     use = next(permission for permission in grant.permissions if permission.name == "use")
     assert "grantee" in _render_expr_names(use)

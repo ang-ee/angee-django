@@ -49,7 +49,6 @@ def register(server: FastMCP) -> None:
                 name="create_note",
                 fields=_DETAIL,
                 flatten="object",
-                requires_user_actor=True,
                 description="Create a note owned by the user caller and return it.",
             ),
             GraphQLTool(

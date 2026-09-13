@@ -5,6 +5,7 @@ collected. Register this connected model graph from conftest, before Django
 creates the test database, without depending on a test module's import order.
 """
 
+from angee.messaging.models import Channel as AbstractChannel
 from angee.messaging.models import Fragment as AbstractFragment
 from angee.messaging.models import Message as AbstractMessage
 from angee.messaging.models import MessageSubtype as AbstractMessageSubtype
@@ -14,6 +15,7 @@ from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
 from angee.posts.models import MessagePublic, ThreadPublic
+from angee.projects.models import ThreadProjects
 from angee.spaces.models import ThreadSpace
 from tests import spaces_models  # noqa: F401 -- register Thread's group relation target
 from tests.integrate_models import Integration
@@ -85,7 +87,18 @@ class Fragment(AbstractFragment):
         db_table = "test_messaging_fragment"
 
 
-class Thread(ThreadSpace, ThreadPublic, AbstractThread):
+class Channel(AbstractChannel, Integration):
+    """Concrete Integration child used to verify channel-owned message access."""
+
+    class Meta(AbstractChannel.Meta):
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_channel"
+        rebac_resource_type = "messaging/channel"
+        rebac_id_attr = "sqid"
+
+
+class Thread(ThreadProjects, ThreadSpace, ThreadPublic, AbstractThread):
     """Concrete thread used by messaging tests.
 
     Folds spaces' group pointer and posts' public-post payload onto the one table,

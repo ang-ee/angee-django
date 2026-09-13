@@ -26,7 +26,6 @@ from django.core.exceptions import FieldDoesNotExist
 from django.core.management import call_command
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.signals import post_save
-from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     PermissionDenied,
@@ -1749,10 +1748,7 @@ def test_agent_activity_completion_posts_system_message_with_service_user(
 
     monkeypatch.setattr(Message.objects, "post_to_thread", spy_post_to_thread)
 
-    with (
-        override_settings(ANGEE_ACTOR_USER_RESOLVERS={"agents/agent": "angee.agents.actor_resolvers.agent_user_id"}),
-        actor_context(agent.principal_subject()),
-    ):
+    with actor_context(agent.principal_subject()):
         ticket.activity_feedback(activity, feedback="Handled by agent.")
 
     message = Message._base_manager.get()

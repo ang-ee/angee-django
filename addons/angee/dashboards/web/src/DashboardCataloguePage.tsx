@@ -65,7 +65,7 @@ function DashboardCatalogue({ store, registry }: {
         revision: 0,
         customized: false,
         available: true,
-        capabilities: { canEdit: true, canReset: false, canShare: false, canArchive: false },
+        capabilities: { canEdit: true, canReset: false, canArchive: false },
       });
     }
     return [...merged.values()].sort((left, right) => left.title.localeCompare(right.title));

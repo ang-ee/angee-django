@@ -4,18 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import reversion
 from asgiref.sync import async_to_sync, sync_to_async
-from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
-from django.core.management import call_command
 from django.db import connection, models, transaction
-from django.test import override_settings
 from fastmcp import Context, FastMCP
 from fastmcp.tools import Tool, ToolResult
 from mcp.types import ToolAnnotations
@@ -34,11 +30,10 @@ from pydantic_ai.toolsets._tool_search import parse_discovered_tools
 from pydantic_ai.toolsets.function import FunctionToolset
 from pydantic_ai.usage import RunUsage
 from pydantic_core import to_jsonable_python
-from rebac import ObjectRef, RelationshipTuple, SubjectRef, actor_context, system_context, to_subject_ref
+from rebac import ObjectRef, RelationshipTuple, SubjectRef, actor_context, system_context
 from rebac.backends import backend
-from rebac.models import PermissionAuditEvent
+from rebac.models import active_relationship_model
 from rebac.relationships import write_relationships
-from reversion.models import Version
 
 from angee.agents import grants as grants_module
 from angee.agents import provisioning
@@ -61,8 +56,6 @@ from angee.agents_runtime_pydantic.toolsets import (
     _assert_in_process_compatible,
 )
 from angee.base.mixins import AuditMixin
-from angee.compose.permissions import apply_schema_paths, extension_source_map, merged_schema_relpath
-from angee.fs import write_atomic
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 from tests.conftest import _clear_model_tables
@@ -105,35 +98,6 @@ def agent_tooling_tables(agents_console_tables: None) -> Any:
                 schema_editor.delete_model(AgentToolWriteProbe)
 
 
-@pytest.fixture()
-def agent_group_schema(tmp_path: Path) -> Any:
-    """Apply the real build-time extension seam for agent membership in IAM groups."""
-
-    app_configs = list(apps.get_app_configs())
-    source_map = extension_source_map(app_configs)
-    runtime_dir = tmp_path / "runtime"
-    for relpath, source in source_map.items():
-        write_atomic(runtime_dir / relpath, source)
-    changed = {
-        config.name: (config, getattr(config, "rebac_schema", None), hasattr(config, "rebac_schema"))
-        for config in app_configs
-        if merged_schema_relpath(config.name) in source_map
-    }
-    apply_schema_paths(app_configs, runtime_dir, sources=source_map)
-    # Plain sync respects the package manager's no_update guard and will not
-    # overwrite the already-synced base definition with the folded one.
-    call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
-    try:
-        yield
-    finally:
-        for config, original, existed in changed.values():
-            if existed:
-                config.rebac_schema = original
-            elif hasattr(config, "rebac_schema"):
-                delattr(config, "rebac_schema")
-        call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
-
-
 def _registered_server(*functions: tuple[Any, bool]) -> FastMCP:
     """Return a FastMCP registry whose functions declare read/write posture."""
 
@@ -164,7 +128,7 @@ def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.Mo
         return frozenset({"mcp_one.read_sessions"})
 
     monkeypatch.setattr(toolsets_module, "_accessible_tool_grant_ids", accessible)
-    agent = SubjectRef.of("agents/agent", "one")
+    agent = SubjectRef.of("auth/user", "one")
     access = ToolGrantAccess(agent)
 
     async def read_twice() -> tuple[frozenset[str], frozenset[str]]:
@@ -176,11 +140,11 @@ def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.Mo
 
 
 @pytest.mark.django_db(transaction=True)
-def test_native_tool_grants_split_read_and_write_actors_and_regate(
+def test_native_tool_grants_run_as_agent_service_user_and_regate(
     agent_tooling_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """M2M grants advertise live tools; reads impersonate owner and writes attribute agent."""
+    """M2M grants advertise live tools and every call runs as the agent's user."""
 
     del agent_tooling_tables
     owner = User.objects.create_user(username="native-tool-owner")
@@ -189,7 +153,7 @@ def test_native_tool_grants_split_read_and_write_actors_and_regate(
         agent = Agent.objects.create(name="Native Tool Agent", owner=owner)
         session = AgentSession.objects.create(agent=agent, owner=owner, title="current")
         owner_extra = AgentSession.objects.create(agent=agent, owner=owner, title="owner extra")
-        AgentSession.objects.create(agent=agent, owner=other, title="other")
+        other_session = AgentSession.objects.create(agent=agent, owner=other, title="other")
         server_row = MCPServer.objects.create(name="native", config={"builtin": "angee"})
 
     async def read_sessions() -> list[str]:
@@ -214,7 +178,11 @@ def test_native_tool_grants_split_read_and_write_actors_and_regate(
     assert async_to_sync(native.get_tools)(_native_context()) == {}
 
     with actor_context(agent.principal_subject()):
-        assert list(AgentSession.objects.values_list("sqid", flat=True)) == []
+        assert set(AgentSession.objects.values_list("sqid", flat=True)) == {
+            session.sqid,
+            owner_extra.sqid,
+            other_session.sqid,
+        }
 
     with system_context(reason="test native tool grants"):
         agent.mcp_tools.add(read_row, write_row)
@@ -224,21 +192,20 @@ def test_native_tool_grants_split_read_and_write_actors_and_regate(
     assert set(advertised) == {"read_sessions", "write_probe"}
     assert all(tool.tool_def.defer_loading for tool in advertised.values())
 
-    owner_rows = async_to_sync(native.call_tool)(
+    agent_rows = async_to_sync(native.call_tool)(
         "read_sessions",
         {},
         _native_context(),
         advertised["read_sessions"],
     )
-    assert set(owner_rows) == {str(session.sqid), str(owner_extra.sqid)}
+    assert set(agent_rows) == {str(session.sqid), str(owner_extra.sqid), str(other_session.sqid)}
 
-    with override_settings(ANGEE_ACTOR_USER_RESOLVERS={"agents/agent": "angee.agents.actor_resolvers.agent_user_id"}):
-        written = async_to_sync(native.call_tool)(
-            "write_probe",
-            {"label": "agent-authored"},
-            _native_context(),
-            advertised["write_probe"],
-        )
+    written = async_to_sync(native.call_tool)(
+        "write_probe",
+        {"label": "agent-authored"},
+        _native_context(),
+        advertised["write_probe"],
+    )
     assert written == {"created_by_id": agent.user_id}
     assert written["created_by_id"] != owner.pk
 
@@ -256,11 +223,10 @@ def test_native_tool_grants_split_read_and_write_actors_and_regate(
 @pytest.mark.django_db(transaction=True)
 def test_toolrole_and_group_grantee_paths(
     agent_tooling_tables: None,
-    agent_group_schema: None,
 ) -> None:
-    """Advertisement resolves toolrole and group arms under the agent principal."""
+    """Advertisement resolves toolrole and group arms under the service user."""
 
-    del agent_tooling_tables, agent_group_schema
+    del agent_tooling_tables
     owner = User.objects.create_user(username="tool-bundle-owner")
     with system_context(reason="test tool bundle setup"):
         agent = Agent.objects.create(name="Tool Bundle Agent", owner=owner)
@@ -281,13 +247,13 @@ def test_toolrole_and_group_grantee_paths(
                 ),
                 RelationshipTuple(
                     resource=ObjectRef("auth/group", "research"),
-                    relation="agent_member",
+                    relation="member",
                     subject=agent.principal_subject(),
                 ),
                 RelationshipTuple(
                     resource=group_ref,
                     relation="grantee",
-                    subject=SubjectRef.of("auth/group", "research", "agent_member"),
+                    subject=SubjectRef.of("auth/group", "research", "member"),
                 ),
             ]
         )
@@ -391,6 +357,62 @@ def test_resync_delete_and_rewrite_are_atomic(
     ).allowed
 
 
+@pytest.mark.django_db(transaction=True)
+def test_resync_migrates_toolrole_and_group_memberships_to_service_user(
+    agent_tooling_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one-shot resync preserves memberships while retiring agent subjects."""
+
+    del agent_tooling_tables
+    owner = User.objects.create_user(username="membership-resync-owner")
+    with system_context(reason="test membership resync setup"):
+        agent = Agent.objects.create(name="Membership Resync", owner=owner)
+        relationships = active_relationship_model().objects
+        relationships.create(
+            resource_type="agents/toolrole",
+            resource_id="reviewers",
+            relation="member",
+            subject_type="agents/agent",
+            subject_id=str(agent.sqid),
+            optional_subject_relation="",
+        )
+        relationships.create(
+            resource_type="auth/group",
+            resource_id="research",
+            relation="agent_member",
+            subject_type="agents/agent",
+            subject_id=str(agent.sqid),
+            optional_subject_relation="",
+        )
+        relationships.create(
+            resource_type="agents/tool_grant",
+            resource_id="legacy.group_tool",
+            relation="grantee",
+            subject_type="auth/group",
+            subject_id="research",
+            optional_subject_relation="agent_member",
+        )
+    monkeypatch.setattr(grants_module, "sync_builtin_tool_catalogue", lambda: 0)
+
+    assert resync_tool_grants() == 0
+
+    subject = agent.principal_subject()
+    rows = active_relationship_model().objects.filter(subject_type=subject.subject_type, subject_id=subject.subject_id)
+    assert rows.filter(resource_type="agents/toolrole", resource_id="reviewers", relation="member").exists()
+    assert rows.filter(resource_type="auth/group", resource_id="research", relation="member").exists()
+    assert active_relationship_model().objects.filter(
+        resource_type="agents/tool_grant",
+        resource_id="legacy.group_tool",
+        relation="grantee",
+        subject_type="auth/group",
+        subject_id="research",
+        optional_subject_relation="member",
+    ).exists()
+    assert not active_relationship_model().objects.filter(subject_type="agents/agent").exists()
+    assert not active_relationship_model().objects.filter(optional_subject_relation="agent_member").exists()
+
+
 def test_universal_admin_grant_does_not_enumerate_tableless_anchor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -406,7 +428,7 @@ def test_universal_admin_grant_does_not_enumerate_tableless_anchor(
             raise AssertionError("table-less tool grants must not be enumerated")
 
     monkeypatch.setattr(toolsets_module, "backend", lambda: UniversalBackend())
-    assert _accessible_tool_grant_ids(SubjectRef.of("agents/agent", "admin-agent")) is None
+    assert _accessible_tool_grant_ids(SubjectRef.of("auth/user", "admin-agent")) is None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -619,76 +641,6 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
     )
     with pytest.raises(Exception, match="request-scoped FastMCP Context"):
         _assert_in_process_compatible(request_tool)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_impersonated_read_post_call_guard_flags_revision_and_rebac_writes(
-    agent_tooling_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Persistent evidence survives thread hops and fails misdeclared read calls."""
-
-    del agent_tooling_tables
-    owner = User.objects.create_user(username="read-guard-owner")
-    with system_context(reason="test read guard setup"):
-        agent = Agent.objects.create(name="Read Guard", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=owner)
-        server = MCPServer.objects.create(name="read-guard-server", config={"builtin": "angee"})
-
-    def revision_write() -> str:
-        with reversion.create_revision():
-            AgentToolWriteProbe.objects.create(label="revision violation")
-            reversion.set_user(owner)
-        return "should not escape"
-
-    def relationship_write() -> str:
-        write_relationships(
-            [
-                RelationshipTuple(
-                    resource=ObjectRef("agents/toolrole", "read-guard-side-effect"),
-                    relation="member",
-                    subject=agent.principal_subject(),
-                )
-            ]
-        )
-        return "should not escape"
-
-    registry = _registered_server((revision_write, True), (relationship_write, True))
-    monkeypatch.setattr(toolsets_module, "mcp_server", lambda: registry)
-    with system_context(reason="test read guard grants"):
-        rows = [
-            MCPTool.objects.create(server=server, name=name)
-            for name in ("revision_write", "relationship_write")
-        ]
-        agent.mcp_tools.add(*rows)
-
-    native = AngeeToolset(
-        session,
-        ToolGrantAccess(agent.principal_subject()),
-        str(server.sqid),
-    )
-    advertised = async_to_sync(native.get_tools)(_native_context())
-    with pytest.raises(ModelRetry, match="read-only tool attempted"):
-        async_to_sync(native.call_tool)(
-            "revision_write",
-            {},
-            _native_context(),
-            advertised["revision_write"],
-        )
-    assert Version.objects.filter(revision__user=owner).exists()
-
-    with pytest.raises(ModelRetry, match="read-only tool attempted"):
-        async_to_sync(native.call_tool)(
-            "relationship_write",
-            {},
-            _native_context(),
-            advertised["relationship_write"],
-        )
-    owner_ref = to_subject_ref(owner)
-    assert PermissionAuditEvent.objects.filter(
-        actor_subject_type=owner_ref.subject_type,
-        actor_subject_id=owner_ref.subject_id,
-    ).exists()
 
 
 @pytest.mark.django_db(transaction=True)

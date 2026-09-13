@@ -409,10 +409,16 @@ history uses native Query pages with domain-owned
   A native input pairs `FieldLabel htmlFor` with the control `id`; a button-trigger
   control (a `Select`) labels via `FieldLabel nativeLabel={false} render={<span/>}`
   + the control's `aria-labelledby`.
-- Base exposes seams for product chrome; it does not hardcode product affordances.
-  Record-level chrome (star/share/follow) is host-contributed into
-  `FORM_VIEW_RECORD_CHROME_SLOT` via the manifest `slots:`; render contributions
-  with the shared `SlotOutlet`.
+- **Share is shared record chrome.** IAM contributes the generic
+  [ManageAccessDialog](../../packages/ui/src/views/access/ManageAccessDialog.tsx)
+  through `FORM_VIEW_RECORD_CHROME_SLOT` and the existing
+  `RESOURCE_VIEW_ACTIONS_SLOT`. Models declare `rebac_grantable`; pages inherit
+  Share from their resource metadata. Saved custom record surfaces compose
+  `RecordChrome`, as forms do. List actions use the enclosing saved record when
+  present, otherwise the collection owner's selected ids. Subject pickers read
+  the resource's declared `subjectField`; never construct a subject from a
+  public display id. The shared package owns presentation, and IAM owns the
+  generated GraphQL document adapter.
 - Never poll for data freshness. Live updates ride GraphQL subscriptions through
   refine's live provider and react-query invalidation, not a `setInterval`
   refetch loop. Opt a model into live cross-actor refresh by declaring

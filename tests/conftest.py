@@ -50,6 +50,7 @@ from angee.posts.models import Feed as AbstractFeed
 from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
+from angee.projects.models import DriveProjects, FolderProjects
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
@@ -463,7 +464,7 @@ class Backend(AbstractStorageBackend):
         rebac_id_attr = "sqid"
 
 
-class Drive(AbstractDrive):
+class Drive(DriveProjects, AbstractDrive):
     """Concrete storage drive used by source-addon tests."""
 
     class Meta(AbstractDrive.Meta):
@@ -476,7 +477,7 @@ class Drive(AbstractDrive):
         rebac_id_attr = "sqid"
 
 
-class Folder(AbstractFolder):
+class Folder(FolderProjects, AbstractFolder):
     """Concrete storage folder used by source-addon tests."""
 
     class Meta(AbstractFolder.Meta):
@@ -547,6 +548,9 @@ class StorageRole(AbstractStorageRole):
 
 STORAGE_TEST_MODELS = (Backend, Drive, Folder, MimeType, File, FileAttachment)
 """Concrete storage models created on demand by storage test fixtures."""
+
+# Register the projects concretes only after their storage FK targets above.
+from tests.projects_models import PROJECT_TEST_MODELS  # noqa: E402, F401
 
 
 def make_mount(

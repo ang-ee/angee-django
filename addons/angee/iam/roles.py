@@ -147,13 +147,13 @@ class OverviewInfo:
             role_rows = IAMRoleRow.from_relationships(permission_hub_role_rows(limit=None))
             grant_rows = permission_hub_grant_rows(limit=None)
             privileged_rows = _privileged_grant_rows(grant_rows)
-            people = get_user_model()._default_manager.all().people()
-            unassigned_queryset = people.without_direct_roles(
+            users = get_user_model()._default_manager.all()
+            unassigned_queryset = users.without_direct_roles(
                 grant_rows,
                 schema_role_resource_types(),
-            ).ordered_people()
+            ).ordered_users()
             return cls(
-                user_count=people.count(),
+                user_count=users.count(),
                 role_count=len(role_rows),
                 grant_count=grant_rows.count(),
                 relationship_count=relationship_rows(limit=None).count(),
