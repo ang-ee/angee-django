@@ -80,7 +80,7 @@ test("declared local fields support aliases and text search beside a virtual ren
   render(<ToastProvider><ResourceViewProvider scope="local" initialState={{ filter: { title: { iContains: "absent" } } }}>
     <Records />
   </ResourceViewProvider></ToastProvider>);
-  expect(screen.getByText("No matching rows")).toBeTruthy();
+  expect(screen.getByText("No matching records")).toBeTruthy();
   expect(screen.queryByRole("alert")).toBeNull();
   act(() => view.setFilter({ status: { exact: "clean" } }));
   expect(screen.getByText("Alpha")).toBeTruthy();

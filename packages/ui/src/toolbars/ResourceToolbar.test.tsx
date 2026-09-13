@@ -104,7 +104,7 @@ describe("ResourceToolbar list-kind regression", () => {
   test("opts into wrapping for narrow containers", () => {
     renderToolbar({ wrap: true });
     expect(screen.getByLabelText("Data controls").className).toContain(
-      "flex-wrap",
+      "resource-toolbar-wrap",
     );
   });
   test("keeps filter, pager, and the list/board switcher; no view controls", () => {

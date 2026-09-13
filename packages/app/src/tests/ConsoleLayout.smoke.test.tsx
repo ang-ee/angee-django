@@ -283,11 +283,11 @@ describe("ConsoleLayout", () => {
       .toBeTruthy();
     expect(within(rail).getByRole("link", { name: "All notes" })).toBeTruthy();
 
-    // The rail is one scrolling list: domains, separator, then Settings.
-    const settingsLink = within(rail).getByRole("link", { name: "Settings" });
-    expect(settingsLink.closest('[data-rail-list="true"]')).toBe(rail);
-    expect(rail.className).toContain("overflow-y-auto");
-    expect(rail.querySelector(".overflow-y-auto")).toBeNull();
+    // The rail list scrolls domains and shortcuts; Settings stays pinned below it.
+    const railAside = rail.closest("aside")!;
+    const settingsLink = within(railAside).getByRole("link", { name: "Settings" });
+    expect(settingsLink.closest('[data-rail-list="true"]')).toBeNull();
+    expect(notesLink.closest(".overscroll-contain")?.closest('[data-rail-list="true"]')).toBe(rail);
     expect(rail.querySelector("[data-rail-zone]")).toBeNull();
     expect(
       notesLink.compareDocumentPosition(settingsLink)
@@ -336,7 +336,7 @@ describe("ConsoleLayout", () => {
       name: "Expand app navigation",
     })).toBeTruthy();
     expect(within(rail).queryByRole("link", { name: "All notes" })).toBeNull();
-    expect(within(rail).getByRole("link", { name: "Settings" })).toBeTruthy();
+    expect(within(rail.closest("aside")!).getByRole("link", { name: "Settings" })).toBeTruthy();
 
     // A second click on the already-active app icon re-expands the rail.
     fireEvent.click(within(rail).getByRole("link", { name: "Notes" }));
@@ -360,7 +360,8 @@ describe("ConsoleLayout", () => {
     expect(within(rail).getByRole("button", { name: "Collapse Admin" })
       .getAttribute("aria-expanded")).toBe("true");
     expect(within(rail).getByRole("link", { name: "Overview" })).toBeTruthy();
-    expect(within(rail).getAllByRole("link", { name: "Settings" })).toHaveLength(2);
+    expect(within(rail).getAllByRole("link", { name: "Settings" })).toHaveLength(1);
+    expect(within(rail.closest("aside")!).getAllByRole("link", { name: "Settings" })).toHaveLength(2);
 
     fireEvent.click(screen.getByRole("button", { name: "Switch app" }));
     const chooser = await screen.findByRole("dialog", { name: "Switch app" });
@@ -476,7 +477,7 @@ describe("ConsoleLayout", () => {
     );
     await screen.findByText("Tall body");
 
-    expect(screen.getByRole("main").className).toBe("console-browser-scroll-main");
+    expect(screen.getByRole("main").className).toBe("console-content-main");
     expect(container.querySelector(".area-content")?.className).toContain("h-full");
     const statusHost = container.querySelector(".area-status");
     expect(statusHost?.className).toContain("console-statusline-host");

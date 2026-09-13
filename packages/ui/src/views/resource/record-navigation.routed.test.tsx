@@ -64,7 +64,7 @@ test("copied record links restore native query navigation, page edges preserve t
   fireEvent.click(screen.getByRole("button", { name: "Next record" }));
   await waitFor(() => expect(screen.getByTestId("record").textContent).toBe("c"));
   expect(f.router.state.location.search).toMatchObject({ group: "updated_at:month", page: "3", keep: "external" });
-  expect(f.getList.mock.calls.at(-1)?.[0]).toMatchObject({ pagination: { currentPage: 2, pageSize: 2 }, sorters: [], filters: [], meta: { gqlVariables: { where: { title: { _ilike: "%draft%" }, updated_at: { _gte: "2026-09-01", _lt: "2026-10-01" } }, order_by: { updated_at: "desc" } } } });
+  expect(f.getList.mock.calls.at(-1)?.[0]).toMatchObject({ pagination: { currentPage: 2, pageSize: 2 }, sorters: [], filters: [], meta: { gqlVariables: { where: { _and: [{ title: { _ilike: "%draft%" } }, { updated_at: { _gte: "2026-09-01", _lt: "2026-10-01" } }] }, order_by: { updated_at: "desc" } } } });
   await act(async () => { fireEvent.click(screen.getByText("Close")); });
   await waitFor(() => expect(f.router.state.location.pathname).toBe("/notes"));
   expect(f.router.state.location.search).toEqual({ group: "updated_at:month", page: "3", keep: "external" });

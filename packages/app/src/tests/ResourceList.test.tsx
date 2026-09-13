@@ -2170,9 +2170,12 @@ describe("ResourceList", () => {
     });
     // A custom text filter defaults to case-sensitive `contains` so it coexists
     // with the free-text search box's `iContains` on the same field; the chip
-    // labels that distinction.
+    // labels that distinction. The open editor lists the same filter, so read
+    // the toolbar's chip.
     expect(
-      await screen.findByText("Title contains (case-sensitive) Fir"),
+      await within(screen.getByLabelText("Data controls")).findByText(
+        "Title contains (case-sensitive) Fir",
+      ),
     ).toBeTruthy();
   });
 
@@ -2275,9 +2278,8 @@ describe("ResourceList", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Month" }));
 
-    await waitFor(() =>
-      expect(screen.getByText("Updated At · Month")).toBeTruthy(),
-    );
+    // A granularity adds a group level; a compact toolbar shows only the first
+    // level's chip, so the stack is read from the persisted search below.
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Groups 1-2 / 4 groups" }),
@@ -2335,8 +2337,9 @@ describe("ResourceList", () => {
   });
 
   test("lets the seeded default group granularity be changed", async () => {
+    const onUrlUpdate = vi.fn();
     render(
-      <TestUrlState>
+      <TestUrlState onUrlUpdate={onUrlUpdate}>
         <ResourceList
           resource="notes.Note"
           columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
@@ -2357,9 +2360,11 @@ describe("ResourceList", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Month" }));
 
-    await waitFor(() =>
-      expect(screen.getByText("Updated At · Month")).toBeTruthy(),
-    );
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("group")).toBe("updatedAt:day");
+      expect(latest?.searchParams.get("then")).toBe("updatedAt:month");
+    });
   });
 });
 

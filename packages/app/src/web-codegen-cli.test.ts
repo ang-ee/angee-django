@@ -38,6 +38,12 @@ describe("angee-web-codegen", () => {
       const entryDir = join(web, "node_modules", pkg, "src");
       await mkdir(entryDir, { recursive: true });
       await writeFile(join(entryDir, `index${extension}`), "export default {};\n");
+      // Theme discovery reads each addon package's manifest to find a `./themes`
+      // export; an installed package always has one, so the scaffold does too.
+      await writeFile(
+        join(web, "node_modules", pkg, "package.json"),
+        JSON.stringify({ name: pkg, version: "0.0.0" }),
+      );
     }
     await writeFile(
       join(manifestDir, "manifest.json"),
@@ -73,6 +79,10 @@ describe("angee-web-codegen", () => {
     await mkdir(web, { recursive: true });
     await mkdir(join(addon, "src"), { recursive: true });
     await writeFile(join(addon, "src", "index.tsx"), "export default {};\n");
+    await writeFile(
+      join(addon, "package.json"),
+      JSON.stringify({ name: "@demo/addon", version: "0.0.0" }),
+    );
     await writeFile(
       join(addon, "src", "documents.demo.ts"),
       "export const Demo = /* GraphQL */ `query Demo { ping }`;\n",

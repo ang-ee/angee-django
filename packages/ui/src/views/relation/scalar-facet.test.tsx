@@ -94,8 +94,10 @@ describe("useScalarFacets", () => {
           valueKey: "source",
           pageSize: 200,
           where: {
-            title: { _ilike: "%release%" },
-            status: { _eq: "DRAFT" },
+            _and: [
+              { status: { _eq: "DRAFT" } },
+              { title: { _ilike: "%release%" } },
+            ],
           },
         },
       ],
