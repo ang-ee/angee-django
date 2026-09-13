@@ -39,7 +39,7 @@ function JsonEdit({
   readOnly,
   controlRef,
   onValidityChange,
-}: WidgetRenderProps<JsonValue>): ReactElement {
+}: WidgetRenderProps): ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const formatted = formatJson(value);
   // The text last reflected to/from the parent; lets an external value update
@@ -94,7 +94,7 @@ function JsonEdit({
   );
 }
 
-function JsonRead({ value }: WidgetRenderProps<JsonValue>): ReactElement {
+function JsonRead({ value }: WidgetRenderProps): ReactElement {
   return (
     <CodeBlock wrap className="max-h-64 overflow-auto">
       {formatJson(value)}
@@ -102,7 +102,7 @@ function JsonRead({ value }: WidgetRenderProps<JsonValue>): ReactElement {
   );
 }
 
-function JsonCell({ value }: WidgetRenderProps<JsonValue>): ReactElement {
+function JsonCell({ value }: WidgetRenderProps): ReactElement {
   return (
     <Code box="inset" truncate className="max-w-full">
       {compactJson(value)}
@@ -114,7 +114,7 @@ export const jsonWidget = {
   edit: JsonEdit,
   read: JsonRead,
   cell: JsonCell,
-} satisfies WidgetDefinition<JsonValue>;
+} satisfies WidgetDefinition;
 
 function parseJsonDraft(input: string): JsonParseResult {
   const trimmed = input.trim();
@@ -126,12 +126,12 @@ function parseJsonDraft(input: string): JsonParseResult {
   }
 }
 
-function formatJson(value: JsonValue | undefined): string {
+function formatJson(value: unknown): string {
   if (value === undefined) return "";
   return JSON.stringify(value, null, 2) ?? "";
 }
 
-function compactJson(value: JsonValue | undefined): string {
+function compactJson(value: unknown): string {
   if (value === undefined) return "";
   return JSON.stringify(value) ?? "";
 }

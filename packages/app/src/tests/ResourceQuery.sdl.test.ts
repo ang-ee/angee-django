@@ -58,7 +58,7 @@ for (const [backend, resource] of Object.entries(fixture.resources)) {
       expect(() => query.toWhere({ state: { exact: "open" } })).toThrow(/declared enum/);
       expect(query.toWhere({ choice: { exact: "open" } })).toEqual({ choice: { _eq: "open" } });
       expect(query.toWhere({ active: { exact: false }, count: { exact: 0 } }))
-        .toEqual({ active: { _eq: false }, count: { _eq: 0 } });
+        .toEqual({ _and: [{ active: { _eq: false } }, { count: { _eq: 0 } }] });
     });
 
     test.each([-(2 ** 31), 2 ** 31 - 1])("GraphQL Int boundary %s coerces", (value) => {

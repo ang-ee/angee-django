@@ -93,5 +93,5 @@ test("generated native record routes return through Breadcrumb to the same group
   expect(f.lifecycle).toEqual({ mounts: 1, unmounts: 0 });
   await screen.findByText("51-100 / 292");
   expect(f.getList.mock.calls.at(-1)?.[0].pagination).toMatchObject({ currentPage: 2, pageSize: 50 });
-  expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toMatchObject({ title: { _ilike: "%Note%" } });
+  expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toMatchObject({ _and: expect.arrayContaining([{ title: { _ilike: "%Note%" } }]) });
 });

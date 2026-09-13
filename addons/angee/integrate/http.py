@@ -165,6 +165,15 @@ class PinnedTransport(httpx.HTTPTransport):
         pool._network_backend = _PinnedBackend(allow_private=allow_private)
 
 
+def _declared_length(response: httpx.Response) -> int:
+    """Return the declared Content-Length, or 0 when it is absent or malformed."""
+
+    try:
+        return int(response.headers.get("content-length") or 0)
+    except ValueError:
+        return 0
+
+
 class HttpClient:
     """A reusable SSRF-pinned outbound HTTP client over httpx.
 
@@ -277,6 +286,8 @@ class HttpClient:
                     if remaining_bytes <= 0:
                         return None
                     response_limit = min(remaining_bytes, max_bytes) if max_bytes is not None else remaining_bytes
+                    if _declared_length(response) > response_limit:
+                        return None
                     for chunk in response.iter_bytes(
                         chunk_size=min(_DOWNLOAD_CHUNK_BYTES, response_limit + 1),
                     ):

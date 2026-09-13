@@ -16,7 +16,8 @@ const pageMocks = vi.hoisted(() => ({
   ],
 }));
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/ui")>()),
   registerForm: (resource: string, Component: React.ComponentType<Record<string, unknown>>) => ({ resource, Component }),
   Action: ({ label, run }: { label: string; run?: () => void }) => (
     <button type="button" onClick={() => run?.()}>

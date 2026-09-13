@@ -18,6 +18,12 @@ vi.mock("@angee/ui", () => ({
   useRecordChromeContext: () => ({ record: null, recordId: "" }),
 }));
 
+// Only the model name is needed; importing the addon itself would evaluate its
+// whole entry point against the partial @angee/ui mock above.
+vi.mock("@angee/projects", () => ({
+  TASK_MODEL: "projects.Task",
+}));
+
 vi.mock("./i18n", () => ({
   useWorkT: () => (key: string) => key,
 }));

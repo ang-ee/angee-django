@@ -18,7 +18,6 @@ vi.mock("@tanstack/react-router", () => ({
       mocks.capability = String(options.search({}).capability ?? "");
     } else mocks.navigate(options);
   },
-  useSearch: () => ({ capability: mocks.capability }),
 }));
 vi.mock("@angee/ui", () => ({
   Button: ({ children, onClick, disabled }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean }) => <button disabled={disabled} onClick={onClick}>{children}</button>,
@@ -31,6 +30,7 @@ vi.mock("@angee/ui", () => ({
   useResourceRecordHrefLookup: () => () => undefined,
   useResourceRoute: (resource: string) => resource === "messaging.Channel" ? "/messages/channels" : undefined,
   useRouteHref: () => () => "/integrate/add",
+  useRouteSearch: () => ({ capability: mocks.capability }),
 }));
 vi.mock("../i18n", () => ({ useIntegrateT: () => (key: string) => key }));
 

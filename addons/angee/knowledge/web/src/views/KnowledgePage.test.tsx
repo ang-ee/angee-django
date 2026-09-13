@@ -214,6 +214,10 @@ describe("KnowledgePage explorer wiring", () => {
     expect(rootPickerValue()).toBe("vault-b");
     expect(treeAttribute("data-row-ids")).toBe("page-b");
     expect(treeAttribute("data-selected")).toBe("page-b");
+    // A direct link opens the page read-first; editing is an explicit step.
+    expect(screen.getByRole("heading", { name: "Page B" })).toBeTruthy();
+    expect(screen.queryByTestId("page-editor")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(screen.getByTestId("page-editor").getAttribute("data-page-id")).toBe(
       "page-b",
     );
