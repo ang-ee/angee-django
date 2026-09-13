@@ -262,7 +262,6 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         abstract = True
         ordering = ("status", "submission_deadline", "sqid")
         rebac_resource_type = "proposals/round"
-        rebac_id_attr = "sqid"
         constraints = (
             models.CheckConstraint(
                 condition=(
@@ -541,7 +540,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
     def _mark_cancelled(self) -> None:
         """Record cancellation as terminal closure without an award outcome."""
 
-        self.outcome = None
+        cast(Any, self).outcome = None
         self.closed_at = timezone.now()
         self.closed_by_id = _receipt_user_id(self.facilitator_id)
         self.allow_immutable_save("closed_at", "closed_by_id")
@@ -606,7 +605,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
             return []
         recipients = self._responder_users(
             proposals,
-            states={ProposalState.SUBMITTED},
+            states={str(ProposalState.SUBMITTED)},
         )
         return [
             _relationship(proposal, "reader", user)
@@ -671,7 +670,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
             return
         recipients = self._responder_users(
             proposals,
-            states={ProposalState.SUBMITTED},
+            states={str(ProposalState.SUBMITTED)},
         )
         tracked = [
             proposal
@@ -748,7 +747,6 @@ class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("round", "sort_order", "sqid")
         rebac_resource_type = "proposals/topic"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 models.F("round"),
@@ -1131,7 +1129,6 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("round", "state", "sqid")
         rebac_resource_type = "proposals/proposal"
-        rebac_id_attr = "sqid"
         constraints = (
             models.CheckConstraint(
                 condition=models.Q(responder__isnull=False) | models.Q(party__isnull=False),
@@ -1537,11 +1534,11 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         """Return proposal states whose responders may receive a published track."""
 
         return {
-            ProposalState.SUBMITTED,
-            ProposalState.ACCEPTED,
-            ProposalState.PARTIALLY_ACCEPTED,
-            ProposalState.DECLINED,
-            ProposalState.WITHDRAWN,
+            str(ProposalState.SUBMITTED),
+            str(ProposalState.ACCEPTED),
+            str(ProposalState.PARTIALLY_ACCEPTED),
+            str(ProposalState.DECLINED),
+            str(ProposalState.WITHDRAWN),
         }
 
     def _track_is_published(self, proposals: list[models.Model]) -> bool:
@@ -1716,7 +1713,6 @@ class Answer(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("topic", "proposal", "sqid")
         rebac_resource_type = "proposals/answer"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("proposal", "topic"),
@@ -1766,7 +1762,6 @@ class Review(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("reviewer", "proposal", "sqid")
         rebac_resource_type = "proposals/review"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("proposal", "reviewer"),

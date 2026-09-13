@@ -1,6 +1,9 @@
+import type { ReactElement } from "react";
 import type { Row } from "@angee/metadata";
 
-import { makeContext } from "../../runtime";
+import { makeContext, useSlot } from "../../runtime";
+import { SlotOutlet } from "../../lib/slot-outlet";
+import { FORM_VIEW_RECORD_CHROME_SLOT } from "../form/form-view-slots";
 
 /**
  * The record a `formViewRecordActionsSlot(...)` or `FORM_VIEW_RECORD_CHROME_SLOT`
@@ -37,3 +40,16 @@ export const RecordChromeProvider = binding.Provider;
  * contribution always renders inside one of `FormView`'s record toolbar slots.
  */
 export const useRecordChromeContext = binding.use;
+
+/** Read an enclosing saved record from a nested collection, when present. */
+export const useRecordChromeContextMaybe = binding.useMaybe;
+
+/** Shared outlet for saved forms and custom record surfaces. */
+export function RecordChrome({ value }: { value: RecordChromeContext }): ReactElement {
+  const entries = useSlot(FORM_VIEW_RECORD_CHROME_SLOT);
+  return (
+    <RecordChromeProvider value={value}>
+      <SlotOutlet entries={entries} />
+    </RecordChromeProvider>
+  );
+}

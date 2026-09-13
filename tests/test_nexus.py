@@ -56,7 +56,6 @@ class Tie(AbstractTie):
         app_label = "nexus"
         db_table = "test_nexus_tie"
         rebac_resource_type = "nexus/tie"
-        rebac_id_attr = "sqid"
 
 
 class Cadence(AbstractCadence):
@@ -69,7 +68,6 @@ class Cadence(AbstractCadence):
         app_label = "nexus"
         db_table = "test_nexus_cadence"
         rebac_resource_type = "nexus/cadence"
-        rebac_id_attr = "sqid"
 
 
 nexus_schema = __import__("angee.nexus.schema", fromlist=["schemas"])

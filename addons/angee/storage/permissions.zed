@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -12,10 +12,10 @@
 // without a seeded role grant.
 definition storage/role {
     relation member:   auth/user | auth/group#member | angee/role:admin#member
-    relation includes: storage/role#effective_member
+    relation includes: storage/role
     relation admin:    angee/role // rebac:const=admin
 
-    permission effective_member = member + includes + admin->member
+    permission effective_member = member + includes->effective_member + admin->member
 }
 
 // Backend rows are infrastructure: they carry backend credentials config and
@@ -26,9 +26,7 @@ definition storage/backend {
     // Const-backed role reach (the framework canon): `manager->effective_member`
     // resolves any effective member of storage_admin tuple-free — no per-object
     // `manager` tuple, so it also satisfies the id-less create check the same way
-    // `admin->member` does. (The reserved pinned-id userset shape
-    // `storage/role:storage_admin#effective_member` would need a per-row tuple
-    // nobody writes and the local evaluator never synthesizes — see F-g.)
+    // `admin->member` does.
     relation manager: storage/role // rebac:const=storage_admin
 
     permission create = admin->member + manager->effective_member

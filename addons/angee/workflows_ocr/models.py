@@ -54,7 +54,6 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         abstract = True
         ordering = ("lineage_key", "-revision")
         rebac_resource_type = "workflows_ocr/extraction"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("lineage_key", "revision"), name="uniq_ocr_extraction_revision"),
         )
@@ -90,7 +89,6 @@ class ExtractionSource(SqidMixin, AngeeModel):
         abstract = True
         ordering = ("position",)
         rebac_resource_type = "workflows_ocr/extraction_source"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("extraction", "position"), name="uniq_ocr_source_position"),
             models.CheckConstraint(
@@ -140,7 +138,6 @@ class ExtractionPage(SqidMixin, AngeeModel):
         abstract = True
         ordering = ("position",)
         rebac_resource_type = "workflows_ocr/extraction_page"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("extraction", "position"), name="uniq_ocr_page_position"),
             models.UniqueConstraint(fields=("source", "source_page"), name="uniq_ocr_source_page"),
@@ -181,7 +178,6 @@ class ExtractionPart(SqidMixin, AngeeModel):
         abstract = True
         ordering = ("position",)
         rebac_resource_type = "workflows_ocr/extraction_part"
-        rebac_id_attr = "sqid"
         constraints = (models.UniqueConstraint(fields=("extraction", "position"), name="uniq_ocr_part_position"),)
 
     def save(self, *args: Any, **kwargs: Any) -> None:

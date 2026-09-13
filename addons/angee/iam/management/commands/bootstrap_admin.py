@@ -9,12 +9,11 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
-from rebac import app_settings, system_context
-from rebac.roles import grant as rebac_grant
+from rebac import system_context
 
 
 class Command(BaseCommand):
-    """Ensure the configured first admin exists and holds the platform-admin role."""
+    """Ensure the configured first admin exists."""
 
     help = "Ensure a first platform admin user exists."
 
@@ -71,10 +70,6 @@ class Command(BaseCommand):
                 update_fields = _promote_existing_admin(user, email=email, password=password)
                 if update_fields:
                     user.save(update_fields=sorted(update_fields))
-
-            role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
-            if role:
-                rebac_grant(actor=user, role=role)
 
         action = "created" if created else "ensured"
         self.stdout.write(self.style.SUCCESS(f"bootstrap admin: {action} '{username}'"))

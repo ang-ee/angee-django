@@ -24,15 +24,15 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
-from angee.base.numeric import quantize
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.utils import timezone
 
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
+from angee.base.numeric import quantize
 from angee.money.rounding import RoundingMode, rounding_constant
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
@@ -92,7 +92,6 @@ class Currency(ArchiveMixin, AngeeDataModel):
         abstract = True
         ordering = ("code",)
         rebac_resource_type = "money/currency"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the ISO-4217 code for Django displays."""
@@ -189,7 +188,6 @@ class CurrencyRate(AngeeDataModel):
         abstract = True
         ordering = ("currency", "-date")
         rebac_resource_type = "money/rate"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("currency", "date"),

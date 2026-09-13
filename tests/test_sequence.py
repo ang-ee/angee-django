@@ -32,7 +32,6 @@ class Sequence(AbstractSequence):
         app_label = "sequence"
         db_table = "test_sequence_sequence"
         rebac_resource_type = "sequence/sequence"
-        rebac_id_attr = "sqid"
 
 
 class SequenceCounter(AbstractSequenceCounter):

@@ -420,7 +420,7 @@ _MCP_TOOL_RESOURCE = hasura_model_resource(
     aggregatable=["id"],
     groupable=["server", "server__name", "enabled", "updated_at"],
     insertable=["server", "name", "description", "input_schema", "enabled", "requires_approval"],
-    updatable=["name", "description", "input_schema", "enabled", "requires_approval"],
+    updatable=["description", "input_schema", "enabled", "requires_approval"],
     field_id_decode={"server": public_pk_decoder(MCPServer)},
     write_backend=AngeeHasuraWriteBackend(MCPTool, public_id_fields=("server",)),
 )

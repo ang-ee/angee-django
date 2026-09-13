@@ -70,6 +70,7 @@ def test_iam_model_backend_uses_named_session_lookup(monkeypatch: pytest.MonkeyP
     class User:
         is_active = True
         kind = "person"
+        is_person = True
 
     class Manager:
         def get_for_session(self, user_id: object) -> object:
@@ -113,6 +114,7 @@ def test_iam_model_backend_rejects_non_person_session_user(monkeypatch: pytest.M
     class User:
         is_active = True
         kind = "service"
+        is_person = False
 
     class Manager:
         def get_for_session(self, user_id: object) -> object:

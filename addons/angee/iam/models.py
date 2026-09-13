@@ -15,19 +15,23 @@ from typing import Any, Self, cast
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import UnicodeUsernameValidator
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, transaction
-from django.db.models import Exists, OuterRef, Q, Subquery, TextField
+from django.db.models import Exists, OuterRef, Q, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
-from rebac import app_settings, current_actor, subject_id_attr, system_context
-from rebac.models import active_relationship_model
+from rebac import SubjectRef, current_actor, resolve_subjects, system_context
+from rebac.memberships import grant as grant_membership
+from rebac.memberships import revoke as revoke_membership
 from rebac.permissions_mixin import RebacPermissionsMixin
-from rebac.roles import ROLE_RELATION, grant, revoke
+from rebac.resources import model_resource_type
+from rebac.roles import ROLE_RELATION
 
 from angee.base.fields import StateField
-from angee.base.identity import instance_from_public_id
+from angee.base.identity import canonical_subject_ref, instance_from_public_id
 from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
+from angee.iam.identity import user_label
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 """Default page size for member-facing people surfaces."""
@@ -35,9 +39,76 @@ VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 VISIBLE_PEOPLE_MAX_LIMIT = 100
 """Upper bound a people-surface caller's ``limit`` is clamped to."""
 
+IAMKind = role_anchor("iam/kind", name="IAMKind")
+
+
+class Group(SqidMixin, AngeeModel):
+    """Named IAM principal set materialized into composed runtimes."""
+
+    runtime = True
+    sqid_prefix = "grp_"
+
+    name = models.CharField(max_length=150, unique=True)
+    description = models.TextField(blank=True, default="")
+
+    class Meta:
+        """Native group identity and default membership subject set."""
+
+        abstract = True
+        rebac_resource_type = "auth/group"
+        rebac_id_attr = "pk"
+        rebac_subject_relation = "member"
+
+    def __str__(self) -> str:
+        """Return the group name used by subject-label resolution."""
+
+        return self.name
+
+    @staticmethod
+    def member_subject(value: str, *, require_existing: bool = True) -> SubjectRef:
+        """Validate one canonical user subject accepted by group membership."""
+
+        subject = canonical_subject_ref(value)
+        if subject.subject_type != "auth/user" or subject.optional_relation:
+            raise ValueError("Group members must use canonical 'auth/user:<id>' subjects.")
+        if require_existing and subject not in resolve_subjects((subject,)):
+            raise ValueError(f"Group member {value!r} was not found.")
+        return subject
+
+    def add_member(
+        self,
+        subject: str,
+        *,
+        caveat_name: str = "",
+        caveat_context: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Grant one existing user direct membership in this group."""
+
+        if not self.has_access("write"):
+            raise PermissionDenied("Write access to the IAM group is required.")
+        grant_membership(
+            subject=self.member_subject(subject),
+            container=self,
+            caveat_name=caveat_name,
+            caveat_context=caveat_context,
+        )
+
+    def remove_member(self, subject: str, *, caveat_name: str = "") -> bool:
+        """Revoke an exact direct membership, allowing a stale user subject."""
+
+        if not self.has_access("write"):
+            raise PermissionDenied("Write access to the IAM group is required.")
+        return bool(
+            revoke_membership(
+                subject=self.member_subject(subject, require_existing=False),
+                container=self,
+                caveat_name=caveat_name,
+            )
+        )
+
 
 class UserKind(models.TextChoices):
-    """Species of IAM principal stored in the swappable user table."""
+    """Kind of IAM principal stored in the swappable user table."""
 
     PERSON = "person", "Person"
     SERVICE = "service", "Service"
@@ -56,8 +127,8 @@ class UserQuerySet(AngeeQuerySet[Any]):
 
         return cast(Self, self.people().filter(is_active=True))
 
-    def search_people(self, search: str) -> Self:
-        """Filter people by the fields exposed by the IAM picker."""
+    def search_users(self, search: str) -> Self:
+        """Filter users by the fields exposed by IAM identity pickers."""
 
         term = search.strip()
         if not term:
@@ -72,7 +143,7 @@ class UserQuerySet(AngeeQuerySet[Any]):
             ),
         )
 
-    def ordered_people(self) -> Self:
+    def ordered_users(self) -> Self:
         """Apply deterministic ordering using the swappable user's native fields."""
 
         concrete_fields = {field.name for field in self.model._meta.fields}
@@ -86,29 +157,18 @@ class UserQuerySet(AngeeQuerySet[Any]):
         return cast(Self, self.order_by(*(fields or ["pk"])))
 
     def without_direct_roles(self, grant_rows: Any, role_resource_types: set[str]) -> Self:
-        """Return people without direct role memberships in the installed schema."""
+        """Return users without direct role memberships in the installed schema."""
 
-        attribute = subject_id_attr(self.model)
-        subject_lookup = self.model._meta.pk.name if attribute == "pk" and self.model._meta.pk else attribute
-        if subject_lookup == "sqid":
-            subject_ids = tuple(
-                dict.fromkeys(
-                    str(subject_id)
-                    for subject_id in grant_rows.values_list("subject_id", flat=True)
-                    if subject_id
-                )
-            )
-            assigned_user_pks = self.model._default_manager.filter(sqid__in=subject_ids).values("pk")
-            return cast(Self, self.exclude(pk__in=Subquery(assigned_user_pks)))
-
-        users = self.annotate(_iam_subject_id=Cast(subject_lookup, output_field=TextField()))
-        assigned = active_relationship_model().objects.filter(
+        user_grants = grant_rows.filter(
             resource_type__in=role_resource_types,
             relation=ROLE_RELATION,
-            subject_type=app_settings.REBAC_USER_TYPE,
-            subject_id=OuterRef("_iam_subject_id"),
+            subject_type=model_resource_type(self.model),
             optional_subject_relation="",
         )
+        pk = self.model._meta.pk
+        subject_lookup = pk.name if pk is not None else "pk"
+        users = self.annotate(_iam_subject_id=Cast(subject_lookup, output_field=TextField()))
+        assigned = user_grants.filter(subject_id=OuterRef("_iam_subject_id"))
         return cast(Self, users.annotate(_iam_has_role=Exists(assigned)).filter(_iam_has_role=False))
 
 
@@ -198,7 +258,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         """Return actor-readable active people after search, ordering, and cap."""
 
         bounded = max(1, min(int(limit), VISIBLE_PEOPLE_MAX_LIMIT))
-        queryset = self.with_actor(actor).active_people().search_people(search).ordered_people()
+        queryset = self.with_actor(actor).active_people().search_users(search).ordered_users()
         return list(queryset[:bounded])
 
     def visible_person_from_public_id(self, actor: Any, public_id: str) -> Any | None:
@@ -206,13 +266,29 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
 
         return instance_from_public_id(self.model, str(public_id), queryset=self.with_actor(actor).active_people())
 
+    def active_person_for_subject(self, subject: SubjectRef) -> Any | None:
+        """Resolve an accountable human actor from a concrete canonical subject."""
+
+        if (
+            subject.subject_type != model_resource_type(self.model)
+            or subject.optional_relation
+            or subject.subject_id in {"", "*"}
+        ):
+            return None
+        try:
+            return self.system_context(reason="iam.subject.active_person").active_people().filter(
+                pk=subject.subject_id
+            ).first()
+        except (TypeError, ValueError, ValidationError):
+            return None
+
 
 class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:
-    they exist so audit and revision FKs can point at every actor species without
-    widening password/OIDC login surfaces.
+    the same row owns authorization, audit stamps, and revision authorship
+    without widening password/OIDC login surfaces.
     """
 
     runtime = True
@@ -241,6 +317,12 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
     USERNAME_FIELD = "username"
     REQUIRED_FIELDS = ("email",)
 
+    @property
+    def is_person(self) -> bool:
+        """Whether this principal represents a human, independently of activity."""
+
+        return self.kind == UserKind.PERSON
+
     class Meta:
         """Django model options for the IAM user source."""
 
@@ -255,7 +337,7 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
         self.email = type(self).objects.normalize_email(self.email)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the user and mirror superuser status to the admin role."""
+        """Persist identity while keeping service principals passwordless."""
 
         update_fields = kwargs.get("update_fields")
         update_field_names = None
@@ -266,17 +348,7 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
             if update_field_names is not None:
                 update_field_names.add("password")
                 kwargs["update_fields"] = update_field_names
-        sync_admin_role = update_field_names is None or "is_superuser" in update_field_names
         super().save(*args, **kwargs)
-        if not sync_admin_role:
-            return
-        role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
-        if not role:
-            return
-        if self.is_superuser:
-            grant(actor=self, role=role)
-        else:
-            revoke(actor=self, role=role)
 
     def update_preferences(self, preferences: Mapping[str, Any]) -> None:
         """Replace this user's private UI preference object."""
@@ -286,6 +358,11 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
         with system_context(reason="iam.preferences.update"), transaction.atomic():
             self.preferences = dict(preferences)
             self.save(update_fields=["preferences"])
+
+    def __str__(self) -> str:
+        """Use IAM's human label for person and service-user references alike."""
+
+        return user_label(self)
 
     def get_full_name(self) -> str:
         """Return first and last name joined with a space."""

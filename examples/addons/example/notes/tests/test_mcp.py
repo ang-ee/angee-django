@@ -273,13 +273,15 @@ class AgentNotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
 
         self._run_scenario(self._agent_write_attribution_scenario())
 
-    def test_agent_bearer_reaches_tools_but_notes_create_is_denied(self) -> None:
-        """Agent MCP identity reaches tool bodies but the product create gate stays user-only."""
+    def test_agent_bearer_reaches_real_notes_create_as_service_user(self) -> None:
+        """The real notes tool creates under the authenticated agent service user."""
 
-        self._run_scenario(self._agent_denial_scenario())
-        with system_context(reason="test-agent-mcp-no-orphan"):
-            self.assertEqual(Note.objects.count(), self.note_count)
-            self.assertFalse(Note.objects.filter(title="Agent orphan").exists())
+        self._run_scenario(self._agent_real_tools_scenario())
+        with system_context(reason="test-agent-mcp-service-owner"):
+            note = Note.objects.get(title="Agent note")
+            self.assertEqual(Note.objects.count(), self.note_count + 1)
+            self.assertEqual(note.created_by_id, self.agent_user_id)
+            self.assertEqual(note.updated_by_id, self.agent_user_id)
 
     async def _agent_write_attribution_scenario(self) -> None:
         """Run a test-only create tool that proves agent attribution can work."""
@@ -315,7 +317,7 @@ class AgentNotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
             note = Note.objects.get(sqid=sqid)
         return note.created_by_id, note.updated_by_id
 
-    async def _agent_denial_scenario(self) -> None:
+    async def _agent_real_tools_scenario(self) -> None:
         """Run the real transport with the real agents verifier."""
 
         app = mcp_app()
@@ -331,12 +333,8 @@ class AgentNotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
             self.assertTrue(knowledge_read.get("isError"), knowledge_read)
             self.assertIn("no matching record", _tool_error_text(knowledge_read).lower())
 
-            created = await self._rpc(
-                "tools/call",
-                {
-                    "name": "create_note",
-                    "arguments": {"title": "Agent orphan", "body": "no owner", "tags": []},
-                },
+            created = await self._tool(
+                "create_note",
+                {"title": "Agent note", "body": "service owner", "tags": []},
             )
-            self.assertTrue(created.get("isError"), created)
-            self.assertIn("user actor", _tool_error_text(created).lower())
+            self.assertEqual(created["title"], "Agent note")

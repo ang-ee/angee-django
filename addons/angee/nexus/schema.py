@@ -10,7 +10,7 @@ from django.apps import apps
 from rebac import current_actor
 from strawberry import auto
 
-from angee.base.actors import actor_user_id, is_user_actor
+from angee.base.actors import actor_user_id
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import require_instance_for_id
 from angee.graphql.node import AngeeNode
@@ -29,10 +29,7 @@ Message = apps.get_model("messaging", "Message")
 def _viewer_user_id() -> Any | None:
     """Return the authenticated REBAC actor's user id."""
 
-    actor = current_actor()
-    if not is_user_actor(actor):
-        return None
-    return actor_user_id(actor)
+    return actor_user_id(current_actor())
 
 
 @strawberry_django.type(Tie)

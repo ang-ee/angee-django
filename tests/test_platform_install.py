@@ -29,8 +29,7 @@ from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory
 from hatch_angee import AddonManifest
-from rebac import app_settings, system_context
-from rebac.roles import grant
+from rebac import system_context, to_object_ref
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.platform import models as platform_models
@@ -109,6 +108,8 @@ def test_install_appends_the_root_and_reflects_pending(
         row = Addon.objects.get(name=_AVAILABLE_ADDON)
     assert row.pending is True
     assert str(row.state) == Addon.State.DISABLED  # not composed until the next boot
+    assert to_object_ref(row).resource_id == str(row.pk)
+    assert Addon.legacy_rebac_id_lookup(row.name) == {"name": row.name}
 
 
 def test_install_is_idempotent_for_an_already_listed_root(
@@ -321,5 +322,4 @@ def _platform_admin(username: str) -> Any:
     """Create a superuser holding the platform-admin role tuple."""
 
     admin = User.objects.create_superuser(username=username, email=f"{username}@example.com", password="admin")
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin

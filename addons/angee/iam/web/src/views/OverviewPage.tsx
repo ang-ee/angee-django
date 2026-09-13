@@ -1,22 +1,19 @@
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { useMemo, type ReactElement, } from "react";
+import { useMemo, type ReactElement } from "react";
+import { useAuthoredQuery } from "@angee/refine";
 
 import {
-  Button, DashboardView, InlineEmpty, Metric, MiniCard, MutationDialog, SurfacePanel, mutationDialogValueCodecs, textRoleVariants, titleCase, type MutationDialogField } from "@angee/ui";
+  Button, DashboardView, InlineEmpty, Metric, MiniCard, MutationDialog, RowsListView, SurfacePanel, mutationDialogValueCodecs, textRoleVariants, titleCase, useAuthoredResourceMutation, type MutationDialogField } from "@angee/ui";
 
 import {
   IamGrantRole,
   IamOverview,
-  IamRevokeRole,
-  IamUsers,
-  type IAMGrant,
+  IAM_ROLE_MUTATION_INVALIDATES,
   type IAMOverviewVariables,
-  type IAMUsersVariables,
 } from "../documents";
-import { userLabel } from "../identity-labels";
 import { grantRows } from "../identity-rows";
-import { IAM_LIST_LIMIT } from "../list-config";
 import { useIamT } from "../i18n";
+import { SubjectControl } from "../SubjectControl";
+import { useRoleGrantActions, useRoleGrantColumns } from "../role-grants";
 
 const PEEK_LIMIT = 6;
 
@@ -32,20 +29,13 @@ export function OverviewPage(): ReactElement {
     () => ({ peekLimit: PEEK_LIMIT }),
     [],
   );
-  const listVars = useMemo<IAMUsersVariables>(
-    () => ({ offset: 0, limit: IAM_LIST_LIMIT }),
-    [],
-  );
-  const overview = useAuthoredQuery(IamOverview, overviewVars);
-  const usersQuery = useAuthoredQuery(IamUsers, listVars);
-  const [grantRole] = useAuthoredMutation(IamGrantRole);
+  const overview = useAuthoredQuery(IamOverview, overviewVars, { models: IAM_ROLE_MUTATION_INVALIDATES });
+  const [grantRole] = useAuthoredResourceMutation(IamGrantRole, { invalidateModels: IAM_ROLE_MUTATION_INVALIDATES });
+  const grantColumns = useRoleGrantColumns();
+  const grantActions = useRoleGrantActions();
 
   const overviewFacts = overview.data?.iam_overview;
-  const roles = overview.data?.iam_roles ?? [];
-  const users = useMemo(
-    () => [...(usersQuery.data?.users ?? [])],
-    [usersQuery.data],
-  );
+  const roles = useMemo(() => overview.data?.iam_roles ?? [], [overview.data]);
   const privileged = useMemo(
     () => grantRows(overviewFacts?.privileged_grants ?? []),
     [overviewFacts],
@@ -58,38 +48,22 @@ export function OverviewPage(): ReactElement {
 
   const roleOptions = useMemo(
     () =>
-      roles.map((role) => ({
+      roles.filter((role) => role.grantable).map((role) => ({
         value: role.id,
         label: `${role.namespace} / ${role.label}`,
       })),
     [roles],
   );
-  const principalOptions = useMemo(
-    () => users.map((user) => ({ value: user.id, label: userLabel(user) })),
-    [users],
-  );
-  const userTotalCount = usersQuery.data?.users_aggregate.aggregate?.count ?? 0;
-  const usersTruncated = userTotalCount > IAM_LIST_LIMIT;
   const privilegedTotal = overviewFacts?.privileged_grant_count ?? privileged.length;
   const unassignedTotal = overviewFacts?.unassigned_user_count ?? unassigned.length;
 
   const grantFields = useMemo<readonly MutationDialogField[]>(() => [
     {
-      name: "principal_id",
-      label: t("overview.grant.principal"),
-      widget: "select",
-      options: principalOptions,
-      placeholder: usersQuery.isFetching
-        ? t("overview.grant.loadingUsers")
-        : t("overview.grant.selectUser"),
-      description: usersTruncated
-        ? t("overview.grant.truncated", {
-          shown: IAM_LIST_LIMIT.toLocaleString(),
-          total: userTotalCount.toLocaleString(),
-        })
-        : undefined,
+      name: "subject",
+      label: t("overview.grant.subject"),
+      control: (props) => <SubjectControl {...props} />,
+      controlLabelMode: "group",
       required: true,
-      readOnly: usersQuery.isFetching || principalOptions.length === 0,
     },
     {
       name: "role",
@@ -100,7 +74,7 @@ export function OverviewPage(): ReactElement {
       required: true,
       readOnly: roleOptions.length === 0,
     },
-  ], [principalOptions, roleOptions, t, userTotalCount, usersQuery.isFetching, usersTruncated]);
+  ], [roleOptions, t]);
 
   const loading = overview.isFetching;
 
@@ -122,7 +96,7 @@ export function OverviewPage(): ReactElement {
                   <Button
                     type="button"
                     variant="primary"
-                    disabled={usersQuery.isFetching || principalOptions.length === 0 || roleOptions.length === 0}
+                    disabled={roleOptions.length === 0}
                   >
                     {t("overview.grant.submit")}
                   </Button>
@@ -134,15 +108,12 @@ export function OverviewPage(): ReactElement {
                 submitLabel={t("overview.grant.submit")}
                 errorFallback={t("overview.grant.error")}
                 parseValues={(values) => ({
-                  principal_id: mutationDialogValueCodecs.requiredString(values.principal_id, "principal_id"),
+                  subject: mutationDialogValueCodecs.requiredString(values.subject, "subject"),
                   role: mutationDialogValueCodecs.requiredString(values.role, "role"),
                 })}
                 onSubmit={async (values) => {
                   const result = await grantRole(values);
                   if (result?.grant_role === false) throw new Error(t("overview.grant.error"));
-                }}
-                onSubmitted={() => {
-                  void overview.refetch();
                 }}
               />
             </div>
@@ -152,16 +123,16 @@ export function OverviewPage(): ReactElement {
             title={t("overview.privileged.title")}
             summary={t("overview.privileged.summary", { count: privilegedTotal.toLocaleString() })}
           >
-            <div className="divide-y divide-border-subtle">
-              {privileged.map((grant) => (
-                <PrivilegedGrantRow key={`${grant.principal_ref}:${grant.role}`} grant={grant} onRevoked={() => {
-                  overview.refetch();
-                }} />
-              ))}
-              {privileged.length === 0 ? (
-                <div className="p-4"><InlineEmpty label={t("overview.privileged.empty")} /></div>
-              ) : null}
-            </div>
+            <RowsListView
+              rows={privileged}
+              columns={grantColumns}
+              rowActions={grantActions}
+              fetching={overview.isFetching}
+              error={overview.error}
+              selectable={false}
+              emptyContent={t("overview.privileged.empty")}
+              scope="local"
+            />
           </SurfacePanel>
         </div>
 
@@ -209,34 +180,5 @@ export function OverviewPage(): ReactElement {
         </div>
       </div>
     </DashboardView>
-  );
-}
-
-function PrivilegedGrantRow({
-  grant,
-  onRevoked,
-}: {
-  grant: IAMGrant;
-  onRevoked: () => void;
-}): ReactElement {
-  const t = useIamT();
-  const [revoke, state] = useAuthoredMutation(IamRevokeRole);
-  return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3">
-      <div className="min-w-0">
-        <div className="truncate text-13 font-medium text-fg">{grant.principal_label}</div>
-        <div className={textRoleVariants({ role: "caption", truncate: true })}>{titleCase(grant.namespace)} · {grant.role_name}</div>
-      </div>
-      <Button
-        variant="danger"
-        size="sm"
-        pending={state.fetching}
-        onClick={() => {
-          void revoke({ principal_id: grant.principal_id, role: grant.role }).then(onRevoked);
-        }}
-      >
-        {t("revoke")}
-      </Button>
-    </div>
   );
 }

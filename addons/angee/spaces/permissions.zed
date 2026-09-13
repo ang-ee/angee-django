@@ -1,7 +1,7 @@
 // Authorization schema for the spaces addon.
 // @rebac_package: spaces
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 definition spaces/group {
     relation creator: auth/user // rebac:field=created_by
@@ -9,14 +9,18 @@ definition spaces/group {
     relation moderator: auth/user
     relation member: auth/user | auth/group#member
     relation viewer: auth/user | auth/group#member
+    relation roster_owner: auth/user // rebac:field={"path":"memberships__party__person__user","filters":{"memberships__is_confirmed":true,"memberships__is_dismissed":false,"memberships__role":"owner"}}
+    relation roster_moderator: auth/user // rebac:field={"path":"memberships__party__person__user","filters":{"memberships__is_confirmed":true,"memberships__is_dismissed":false,"memberships__role":"moderator"}}
+    relation roster_member: auth/user // rebac:field={"path":"memberships__party__person__user","filters":{"memberships__is_confirmed":true,"memberships__is_dismissed":false,"memberships__role":"member"}}
+    relation roster_viewer: auth/user // rebac:field={"path":"memberships__party__person__user","filters":{"memberships__is_confirmed":true,"memberships__is_dismissed":false,"memberships__role":"viewer"}}
     relation reader: auth/user | auth/user:*
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = creator + viewer + member + moderator + owner + reader + admin->member
-    permission post   = member + moderator + owner + admin->member
-    permission write  = creator + moderator + owner + admin->member
-    permission delete = creator + owner + admin->member
+    permission read   = creator + viewer + roster_viewer + member + roster_member + moderator + roster_moderator + owner + roster_owner + reader + admin->member
+    permission post   = member + roster_member + moderator + roster_moderator + owner + roster_owner + admin->member
+    permission write  = creator + moderator + roster_moderator + owner + roster_owner + admin->member
+    permission delete = creator + owner + roster_owner + admin->member
 }
 
 definition spaces/membership {

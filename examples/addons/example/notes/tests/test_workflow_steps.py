@@ -11,8 +11,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import TransactionTestCase
-from rebac import app_settings, system_context
-from rebac.roles import grant
+from rebac import system_context
 
 from angee.workflows import engine
 from angee.workflows.attempts import RecoveryMode
@@ -211,7 +210,9 @@ class NoteWorkflowStepTests(TransactionTestCase):
     def test_demo_graph_executes_validation_approval_and_publication(self) -> None:
         call_command("resources", "load", include_demo=True, allow_non_dev=True, verbosity=0)
         with system_context(reason="note workflow engine setup"):
-            grant(actor=self.owner, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
+            self.owner.is_superuser = True
+            self.owner.is_staff = True
+            self.owner.save(update_fields=["is_superuser", "is_staff"])
             note = Note.objects.create(
                 title="Engine release",
                 body="Approved through the executable graph.",

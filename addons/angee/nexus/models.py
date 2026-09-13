@@ -24,15 +24,15 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from angee.base.actors import actor_user_id, is_user_actor
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeModel
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import current_actor
 
+from angee.base.actors import actor_user_id
+from angee.base.mixins import SqidMixin
+from angee.base.models import AngeeModel
 from angee.nexus.managers import CadenceManager, TieManager
 
 
@@ -70,7 +70,6 @@ class Tie(SqidMixin, AngeeModel):
         abstract = True
         ordering = ("-gravity", "sqid")
         rebac_resource_type = "nexus/tie"
-        rebac_id_attr = "sqid"
         constraints = (
             models.CheckConstraint(
                 condition=models.Q(party_a__lt=models.F("party_b")),
@@ -176,7 +175,6 @@ class Cadence(SqidMixin, AngeeModel):
         abstract = True
         ordering = ("touch_due_at", "sqid")
         rebac_resource_type = "nexus/cadence"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("user", "party"),
@@ -224,10 +222,9 @@ class Cadence(SqidMixin, AngeeModel):
         contributions = dict(super().apply_create_defaults())
         if self.user_id is not None:
             return contributions
-        actor = current_actor()
-        if not is_user_actor(actor):
+        user_id = actor_user_id(current_actor())
+        if user_id is None:
             raise ValidationError({"user": "An authenticated user is required."})
-        user_id = actor_user_id(actor)
         user_model = type(self)._meta.get_field("user").related_model
         user = user_model._base_manager.filter(pk=user_id).first()
         if user is None:

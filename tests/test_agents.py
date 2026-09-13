@@ -63,7 +63,6 @@ class Skill(AbstractSkill):
         app_label = "agents"
         db_table = "test_agents_skill"
         rebac_resource_type = "agents/skill"
-        rebac_id_attr = "sqid"
 
 
 class InferenceProvider(AbstractInferenceProvider, Integration):
@@ -76,7 +75,6 @@ class InferenceProvider(AbstractInferenceProvider, Integration):
         app_label = "agents"
         db_table = "test_agents_inference_provider"
         rebac_resource_type = "agents/inference_provider"
-        rebac_id_attr = "sqid"
 
 
 class InferenceModel(AbstractInferenceModel):
@@ -89,7 +87,6 @@ class InferenceModel(AbstractInferenceModel):
         app_label = "agents"
         db_table = "test_agents_inference_model"
         rebac_resource_type = "agents/inference_model"
-        rebac_id_attr = "sqid"
 
 
 AGENTS_TEST_MODELS = (Skill, InferenceProvider, InferenceModel)

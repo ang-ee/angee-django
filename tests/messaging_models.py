@@ -5,6 +5,7 @@ collected. Register this connected model graph from conftest, before Django
 creates the test database, without depending on a test module's import order.
 """
 
+from angee.messaging.models import Channel as AbstractChannel
 from angee.messaging.models import Fragment as AbstractFragment
 from angee.messaging.models import Message as AbstractMessage
 from angee.messaging.models import MessageSubtype as AbstractMessageSubtype
@@ -14,6 +15,7 @@ from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
 from angee.posts.models import MessagePublic, ThreadPublic
+from angee.projects.models import ThreadProjects
 from angee.spaces.models import ThreadSpace
 from tests import spaces_models  # noqa: F401 -- register Thread's group relation target
 from tests.integrate_models import Integration
@@ -29,7 +31,6 @@ class Directory(AbstractDirectory, Integration):
         app_label = "parties"
         db_table = "test_parties_directory"
         rebac_resource_type = "parties/directory"
-        rebac_id_attr = "sqid"
 
 
 class Folder(AbstractContactFolder):
@@ -42,7 +43,6 @@ class Folder(AbstractContactFolder):
         app_label = "parties"
         db_table = "test_parties_folder"
         rebac_resource_type = "parties/folder"
-        rebac_id_attr = "sqid"
 
 
 class Party(AbstractParty):
@@ -55,7 +55,6 @@ class Party(AbstractParty):
         app_label = "parties"
         db_table = "test_parties_party"
         rebac_resource_type = "parties/party"
-        rebac_id_attr = "sqid"
 
 
 class Handle(AbstractHandle):
@@ -68,7 +67,6 @@ class Handle(AbstractHandle):
         app_label = "parties"
         db_table = "test_parties_handle"
         rebac_resource_type = "parties/handle"
-        rebac_id_attr = "sqid"
 
 
 class Fragment(AbstractFragment):
@@ -85,7 +83,17 @@ class Fragment(AbstractFragment):
         db_table = "test_messaging_fragment"
 
 
-class Thread(ThreadSpace, ThreadPublic, AbstractThread):
+class Channel(AbstractChannel, Integration):
+    """Concrete Integration child used to verify channel-owned message access."""
+
+    class Meta(AbstractChannel.Meta):
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_channel"
+        rebac_resource_type = "messaging/channel"
+
+
+class Thread(ThreadProjects, ThreadSpace, ThreadPublic, AbstractThread):
     """Concrete thread used by messaging tests.
 
     Folds spaces' group pointer and posts' public-post payload onto the one table,
@@ -99,7 +107,6 @@ class Thread(ThreadSpace, ThreadPublic, AbstractThread):
         app_label = "messaging"
         db_table = "test_messaging_thread"
         rebac_resource_type = "messaging/thread"
-        rebac_id_attr = "sqid"
 
 
 class MessageSubtype(AbstractMessageSubtype):
@@ -128,4 +135,3 @@ class Message(MessagePublic, AbstractMessage):
         app_label = "messaging"
         db_table = "test_messaging_message"
         rebac_resource_type = "messaging/message"
-        rebac_id_attr = "sqid"

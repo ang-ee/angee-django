@@ -18,7 +18,7 @@ Messaging's canonical attachment manager.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -238,6 +238,9 @@ class Need(AuditMixin, AngeeDataModel):
     runtime = True
     sqid_prefix = "ned_"
 
+    if TYPE_CHECKING:
+        project_id: Any | None
+
     party = models.ForeignKey(
         "parties.Party",
         null=True,
@@ -288,7 +291,6 @@ class Need(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("-importance", "-created_at", "sqid")
         rebac_resource_type = "intake/need"
-        rebac_id_attr = "sqid"
         constraints = (
             models.CheckConstraint(
                 condition=(

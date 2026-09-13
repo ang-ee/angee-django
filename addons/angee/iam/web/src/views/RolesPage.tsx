@@ -1,35 +1,26 @@
-import { type ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
+import { Code, ListView, type ListColumn } from "@angee/ui";
 
-import {
-  Code, ListView, type ListColumn } from "@angee/ui";
-
-// The `iam.Role` Hasura resource row (`hasura_pydantic_resource`,
-// `addons/angee/iam/schema.py`): roles deduped from active role-relationship
-// tuples, fetched + grouped client-side by ListView's client row model.
-interface RoleResourceRow extends Record<string, unknown> {
-  id: string;
-  namespace: string;
-  label: string;
-}
-
-const roleColumns: readonly ListColumn<RoleResourceRow>[] = [
-  {
-    field: "namespace",
-    render: (row) => <Code truncate>{row.namespace}</Code>,
-  },
-  {
-    field: "label",
-    render: (row) => <span className="font-medium text-fg">{row.label}</span>,
-  },
-];
+import type { IAMRole } from "../documents";
+import { useIamT } from "../i18n";
 
 export function RolesPage(): ReactElement {
-  return (
-    <ListView<RoleResourceRow>
-      resource="iam.Role"
-      columns={roleColumns}
-      defaultGroup={{ field: "namespace" }}
-      pageSize={50}
-    />
-  );
+  const t = useIamT();
+  const columns = useMemo<readonly ListColumn<IAMRole>[]>(() => [
+    { field: "namespace", render: (row) => <Code truncate>{row.namespace}</Code> },
+    { field: "label" },
+    {
+      field: "declared",
+      header: t("roles.declaration"),
+      render: (row) => row.grantable
+        ? t("roles.declared")
+        : row.declared ? t("roles.derived") : t("roles.legacy"),
+    },
+  ], [t]);
+  return <ListView<IAMRole>
+    resource="iam.Role"
+    columns={columns}
+    defaultGroup={{ field: "namespace" }}
+    pageSize={50}
+  />;
 }

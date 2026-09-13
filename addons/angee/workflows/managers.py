@@ -13,18 +13,19 @@ from datetime import datetime, timedelta
 from typing import Any, Self, cast
 
 from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.core.validators import validate_slug
 from django.db import DEFAULT_DB_ALIAS, OperationalError, connections, models, transaction
 from django.utils import timezone
 from pydantic_core import PydanticSerializationError
-from rebac import RelationshipTuple, SubjectRef, actor_context, current_actor, system_context, write_relationships
+from rebac import RelationshipTuple, actor_context, current_actor, system_context, write_relationships
 from rebac.actors import NoActorResolvedError, to_subject_ref
 from rebac.resources import to_object_ref
 
-from angee.base.actors import actor_user_id, is_user_actor
-from angee.base.identity import instance_from_public_id, public_id_for
+from angee.base.actors import actor_user_id
+from angee.base.identity import canonical_subject_ref, instance_from_public_id, public_id_for
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
@@ -3735,9 +3736,9 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             try:
                 validate_slug(declaration.action)
                 for subject in (*declaration.assignees, *declaration.escalation):
-                    SubjectRef.parse(subject)
+                    canonical_subject_ref(subject)
                 if declaration.requester:
-                    SubjectRef.parse(declaration.requester)
+                    canonical_subject_ref(declaration.requester)
             except (TypeError, ValueError, ValidationError) as error:
                 raise ValidationError({"decisions": "Decision declarations are invalid."}) from error
         if not isinstance(result.artifacts_present, bool):
@@ -4574,9 +4575,9 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         prepared = tuple(
             (
                 spec,
-                tuple(SubjectRef.parse(subject) for subject in spec.assignees),
-                SubjectRef.parse(spec.requester) if spec.requester else None,
-                tuple(SubjectRef.parse(subject) for subject in spec.escalation),
+                tuple(canonical_subject_ref(subject) for subject in spec.assignees),
+                canonical_subject_ref(spec.requester) if spec.requester else None,
+                tuple(canonical_subject_ref(subject) for subject in spec.escalation),
                 self._validated_target(
                     spec,
                     actor=self._target_actor(spec, step_run=step_run)
@@ -4671,10 +4672,10 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 "target": "Decision target authority is not a prior completed Decision in this run."
             })
         try:
-            subject = SubjectRef.parse(prior.resolved_by)
+            subject = canonical_subject_ref(prior.resolved_by)
         except (TypeError, ValueError) as error:
             raise ValidationError({"target": "Decision target authority requires a human resolver."}) from error
-        if not is_user_actor(subject) or actor_user_id(subject) is None:
+        if get_user_model().objects.active_person_for_subject(subject) is None:
             raise ValidationError({"target": "Decision target authority requires a human resolver."})
         return subject
 

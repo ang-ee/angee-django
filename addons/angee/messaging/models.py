@@ -98,9 +98,9 @@ def _owner_user_id(instance: models.Model) -> Any | None:
 def _user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
     """Return the REBAC subject ref for a user instance or a bare user id.
 
-    The user model owns its subject identity (its ``rebac_id_attr`` sqid, not the raw
-    pk), so a bare ``user_id`` is loaded and resolved through :func:`to_subject_ref`
-    rather than assembling an ``auth/user:<pk>`` ref by hand.
+    The user model owns its subject identity, so a bare ``user_id`` is loaded and
+    resolved through :func:`to_subject_ref` rather than assembling an authorization
+    ref by hand.
     """
 
     if user is not None:
@@ -899,7 +899,6 @@ class Channel(Bridge):
 
         abstract = True
         rebac_resource_type = "messaging/channel"
-        rebac_id_attr = "sqid"
 
     @property
     def backend(self) -> ChannelBackend:
@@ -1385,7 +1384,6 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
         # the live conversations (Postgres puts NULLS FIRST on a bare DESC).
         ordering = (models.F("last_message_at").desc(nulls_last=True), "sqid")
         rebac_resource_type = "messaging/thread"
-        rebac_id_attr = "sqid"
         constraints = (
             # The digest, not the unbounded value, is what the btree carries; the
             # planner proves `external_id = '<value>'` implies the partial predicate.
@@ -1483,7 +1481,6 @@ class ThreadAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         abstract = True
         ordering = ("-created_at", "sqid")
         rebac_resource_type = "messaging/thread_attachment"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("content_type", "object_id"),
@@ -1577,7 +1574,6 @@ class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("user_id", "sqid")
         rebac_resource_type = "messaging/thread_follower"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("thread", "user"),
@@ -1677,7 +1673,6 @@ class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("status", "due_date", "sqid")
         rebac_resource_type = "messaging/thread_activity"
-        rebac_id_attr = "sqid"
         indexes = (
             models.Index(fields=("thread", "status", "due_date")),
             models.Index(fields=("attachment", "status", "due_date")),
@@ -1927,7 +1922,6 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-sent_at", "sqid")
         rebac_resource_type = "messaging/message"
-        rebac_id_attr = "sqid"
         constraints = (
             # Channel-scoped idempotency over a fixed digest: the ingest manager
             # looks rows up through the same MD5 expression so this index serves
@@ -2283,7 +2277,6 @@ class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-created_at", "sqid")
         rebac_resource_type = "messaging/thread_notification"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("message", "user"),
@@ -2340,7 +2333,6 @@ class TrackingValue(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("message", "position", "sqid")
         rebac_resource_type = "messaging/tracking_value"
-        rebac_id_attr = "sqid"
         indexes = (
             models.Index(fields=("message", "position")),
             models.Index(fields=("field_name",)),
@@ -2507,7 +2499,6 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("message", "position", "sqid")
         rebac_resource_type = "messaging/part"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("message",),
@@ -2577,7 +2568,6 @@ class MessageEdge(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         rebac_resource_type = "messaging/message_edge"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("src", "dst", "kind"),
@@ -2642,7 +2632,6 @@ class Participant(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("role", "sqid")
         rebac_resource_type = "messaging/participant"
-        rebac_id_attr = "sqid"
         constraints = (
             # One row per envelope fact; the write path dedupes a repeated
             # address, the constraint keeps a concurrent rebuild honest.
@@ -2701,7 +2690,6 @@ class Reaction(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         rebac_resource_type = "messaging/reaction"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("message", "handle", "reaction"),
@@ -2761,7 +2749,6 @@ class MessageStar(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-created_at", "sqid")
         rebac_resource_type = "messaging/message_star"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("message", "user"),

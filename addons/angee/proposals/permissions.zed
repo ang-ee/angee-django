@@ -1,7 +1,7 @@
 // Authorization schema for sealed proposal rounds.
 // @rebac_package: proposals
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition proposals/round {
     relation task:        projects/task    // rebac:field=task
@@ -10,12 +10,15 @@ definition proposals/round {
     relation reader:      auth/user
     relation evaluator:   auth/user
     relation requester:   auth/user
+    relation person:      iam/kind // rebac:const=person
 
+    permission facilitate = facilitator & person->active_member
+    permission evaluate = evaluator & person->active_member
     permission create = task->write + project->write
-    permission read   = facilitator + reader + evaluator + requester
-    permission write  = facilitator
-    permission share  = facilitator
-    permission delete = facilitator
+    permission read   = facilitate + reader + evaluate + requester
+    permission write  = facilitate
+    permission share  = facilitate
+    permission delete = facilitate
 }
 
 definition proposals/topic {
@@ -33,22 +36,22 @@ definition proposals/proposal {
     relation editor:    auth/user
     relation reader:    auth/user
 
-    permission create   = round->facilitator
-    permission read     = responder + reader + round->facilitator + round->evaluator + round->requester
-    permission write    = editor + round->facilitator
-    permission evaluate = round->evaluator + round->facilitator
-    permission publish  = responder + round->facilitator
-    permission withdraw = responder + round->facilitator
-    permission delete   = editor + round->facilitator
+    permission create   = round->facilitate
+    permission read     = responder + reader + round->facilitate + round->evaluate + round->requester
+    permission write    = editor + round->facilitate
+    permission evaluate = round->evaluate + round->facilitate
+    permission publish  = responder + round->facilitate
+    permission withdraw = responder + round->facilitate
+    permission delete   = editor + round->facilitate
 
-    permission read__cost            = responder + round->facilitator + round->evaluator + round->requester
-    permission read__currency        = responder + round->facilitator + round->evaluator + round->requester
-    permission read__staffing        = responder + round->facilitator + round->evaluator + round->requester
-    permission read__confidence      = responder + round->facilitator + round->evaluator + round->requester
-    permission read__timeframe_start = responder + round->facilitator + round->evaluator + round->requester
-    permission read__timeframe_end   = responder + round->facilitator + round->evaluator + round->requester
-    permission read__valid_until     = responder + round->facilitator + round->evaluator + round->requester
-    permission read__source_message  = responder + round->facilitator + round->evaluator + round->requester
+    permission read__cost            = responder + round->facilitate + round->evaluate + round->requester
+    permission read__currency        = responder + round->facilitate + round->evaluate + round->requester
+    permission read__staffing        = responder + round->facilitate + round->evaluate + round->requester
+    permission read__confidence      = responder + round->facilitate + round->evaluate + round->requester
+    permission read__timeframe_start = responder + round->facilitate + round->evaluate + round->requester
+    permission read__timeframe_end   = responder + round->facilitate + round->evaluate + round->requester
+    permission read__valid_until     = responder + round->facilitate + round->evaluate + round->requester
+    permission read__source_message  = responder + round->facilitate + round->evaluate + round->requester
 }
 
 definition proposals/answer {
@@ -63,9 +66,10 @@ definition proposals/answer {
 definition proposals/review {
     relation proposal: proposals/proposal // rebac:field=proposal
     relation reviewer: auth/user          // rebac:field=reviewer
+    relation person: iam/kind // rebac:const=person
 
     permission create = reviewer & proposal->evaluate
     permission read   = reviewer + proposal->evaluate
-    permission write  = reviewer
-    permission delete = reviewer
+    permission write  = reviewer & person->active_member
+    permission delete = reviewer & person->active_member
 }

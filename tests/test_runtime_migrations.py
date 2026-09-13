@@ -10,11 +10,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, migrations, models
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.state import ModelState, ProjectState
 
+from angee.agents.runtime_migrations.live_tool_backing import (
+    Migration as LiveToolMigration,
+)
+from angee.agents.runtime_migrations.live_tool_backing import applies as live_tool_applies
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.compose.migrations import RuntimeMigrations
@@ -24,12 +29,72 @@ from angee.integrate_vcs.runtime_migrations.adopt_vcs_permission_schema import (
     adopt_vcs_permission_schema,
 )
 from angee.integrate_vcs.runtime_migrations.delete_integrate_vcs_state import applies as vcs_delete_applies
+from angee.spaces.runtime_migrations.live_relation_backing import (
+    Migration as LiveSpacesMigration,
+)
+from angee.spaces.runtime_migrations.live_relation_backing import applies as live_spaces_applies
 from tests.conftest import make_addon, write_addon_manifest
 
 
 def _write_module(path: Path, text: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def test_live_tool_backing_targets_only_complete_historical_state() -> None:
+    """The tool cutover applies once and rejects a partially-added identity."""
+
+    current = ProjectState.from_apps(apps)
+    assert live_tool_applies(current) is False
+
+    historical = current.clone()
+    historical.models[("agents", "mcptool")].fields.pop("grant_id")
+    assert live_tool_applies(historical) is True
+    migrated = LiveToolMigration("probe", "agents").mutate_state(historical.clone())
+    grant_id = migrated.models[("agents", "mcptool")].fields["grant_id"]
+    assert grant_id.unique and not grant_id.null
+    assert live_tool_applies(migrated) is False
+
+    partial = current.clone()
+    partial.models[("agents", "mcptool")].fields["grant_id"] = models.CharField(
+        max_length=260,
+        null=True,
+    )
+    with pytest.raises(ImproperlyConfigured, match="partial MCPTool"):
+        live_tool_applies(partial)
+
+
+def test_live_spaces_backing_waits_for_thread_groups_and_applies_once() -> None:
+    """The spaces cutover follows the thread M2M transition and removes its snapshot."""
+
+    current = ProjectState.from_apps(apps)
+    assert live_spaces_applies(current) is False
+
+    historical = current.clone()
+    historical.models[("spaces", "membership")].fields["granted_user"] = models.ForeignKey(
+        "iam.User",
+        null=True,
+        on_delete=models.SET_NULL,
+    )
+    assert live_spaces_applies(historical) is True
+    migrated = LiveSpacesMigration("probe", "spaces").mutate_state(historical.clone())
+    assert "granted_user" not in migrated.models[("spaces", "membership")].fields
+    assert live_spaces_applies(migrated) is False
+
+    waiting = historical.clone()
+    thread = waiting.models[("messaging", "thread")]
+    groups = thread.fields.pop("groups")
+    thread.fields["group"] = models.ForeignKey(
+        groups.remote_field.model,
+        null=True,
+        on_delete=models.SET_NULL,
+    )
+    assert live_spaces_applies(waiting) is False
+
+    malformed = historical.clone()
+    malformed.models[("spaces", "membership")].fields.pop("role")
+    with pytest.raises(ImproperlyConfigured, match="partial Membership"):
+        live_spaces_applies(malformed)
 
 
 def test_vcs_state_delete_waits_for_non_moved_integrate_consumer() -> None:

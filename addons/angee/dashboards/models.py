@@ -5,14 +5,15 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
+
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 
 DASHBOARD_SCHEMA_VERSION = 1
 MAX_COLUMNS = 24
@@ -146,7 +147,7 @@ def canonical_dashboard_snapshot(value: Any) -> dict[str, Any]:
     return {"schemaVersion": DASHBOARD_SCHEMA_VERSION, "columns": columns, "widgets": canonical}
 
 
-def _invalid_query(path: str, message: str) -> None:
+def _invalid_query(path: str, message: str) -> NoReturn:
     raise ValidationError({"snapshot": f"{path}: {message}"})
 
 
@@ -227,9 +228,10 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
         if unknown_source_keys:
             _invalid_query(f"{path}.source", f"unknown keys: {', '.join(sorted(unknown_source_keys))}")
         resource_name = source["resource"]
-        resource = resources.get(resource_name) or resources.get(resource_name.casefold())
-        if resource is None:
+        matched_resource = resources.get(resource_name) or resources.get(resource_name.casefold())
+        if matched_resource is None:
             _invalid_query(f"{path}.source.resource", f'unknown console resource "{resource_name}"')
+        resource = matched_resource
 
         shape = data["shape"]
         if shape == "value" and resource.roots.aggregate_name is None:
@@ -331,7 +333,7 @@ class DashboardQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
     """Archive scopes layered over actor-scoped dashboard reads."""
 
 
-class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):
+class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: ignore[misc]
     """The sole snapshot write owner, including CAS and child diffs."""
 
     def for_target(self, owner: Any, scope: str, scope_key: str | None) -> Any | None:
@@ -535,7 +537,6 @@ class Dashboard(ArchiveMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "dashboards/dashboard"
-        rebac_id_attr = "sqid"
         constraints = (
             models.CheckConstraint(
                 condition=(
@@ -607,7 +608,6 @@ class DashboardWidget(ArchiveMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("sequence", "sqid")
         rebac_resource_type = "dashboards/widget"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("dashboard", "widget_key"), name="dashboard_widget_key"),
             models.UniqueConstraint(

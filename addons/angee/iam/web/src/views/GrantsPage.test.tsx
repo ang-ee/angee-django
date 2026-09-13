@@ -46,7 +46,7 @@ describe("IAM grants page", () => {
       headerVisuallyHidden?: boolean;
     }>;
     expect(columns.map((column) => column.field)).toEqual([
-      "principal_label",
+      "subject_label",
       "role",
       "namespace",
     ]);
@@ -63,9 +63,11 @@ describe("IAM grants page", () => {
     }>;
     const row = {
       id: "grant-a",
-      principal_id: "usr_1",
-      principal_ref: "auth/user:1",
-      principal_label: "Alice",
+      subject_id: "1",
+      subject_type: "auth/user",
+      subject: "auth/user:1",
+      subject_relation: "",
+      subject_label: "Alice",
       role: "angee/role:writer",
       role_name: "Writer",
       namespace: "angee",
@@ -74,14 +76,14 @@ describe("IAM grants page", () => {
     expect(revoke?.document).toBe(IamRevokeRole);
     expect(revoke).toMatchObject({ kind: "authored" });
     expect(revoke?.variables(row)).toEqual({
-      principal_id: "usr_1",
+      subject: "auth/user:1",
       role: "angee/role:writer",
       caveat_name: "business-hours",
     });
     expect(revoke?.succeeded({ revoke_role: true })).toBe(true);
     expect(revoke?.succeeded({ revoke_role: false })).toBe(false);
     expect(revoke?.succeeded(undefined)).toBe(false);
-    expect(revoke?.invalidateModels).toEqual(["iam.Grant", "iam.Relationship"]);
+    expect(revoke?.invalidateModels).toEqual(["iam.Grant", "iam.Relationship", "iam.Group", "iam.Role"]);
     expect(revoke?.pendingPolicy).toBe("active-row");
     expect(revoke?.confirm.body(row)).toContain("Alice");
   });

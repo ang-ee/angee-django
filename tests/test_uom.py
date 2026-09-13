@@ -31,7 +31,6 @@ class UomCategory(AbstractUomCategory):
         app_label = "uom"
         db_table = "test_uom_category"
         rebac_resource_type = "uom/category"
-        rebac_id_attr = "sqid"
 
 
 class Uom(AbstractUom):
@@ -44,7 +43,6 @@ class Uom(AbstractUom):
         app_label = "uom"
         db_table = "test_uom_uom"
         rebac_resource_type = "uom/uom"
-        rebac_id_attr = "sqid"
 
 
 UOM_TEST_MODELS = (UomCategory, Uom)

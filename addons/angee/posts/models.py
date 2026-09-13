@@ -84,7 +84,6 @@ class Feed(Bridge):
         abstract = True
         ordering = ("-updated_at",)
         rebac_resource_type = "posts/feed"
-        rebac_id_attr = "sqid"
 
     @property
     def backend(self) -> FeedBackend:
@@ -144,7 +143,6 @@ class FeedFollow(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-started_at", "sqid")
         rebac_resource_type = "posts/feed_follow"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("feed", "handle"),
@@ -189,7 +187,6 @@ class PostMetrics(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         rebac_resource_type = "posts/post_metrics"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return a readable metrics label for Django displays."""
@@ -229,7 +226,6 @@ class Quota(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-period_start", "sqid")
         rebac_resource_type = "posts/quota"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("integration", "period_start"),

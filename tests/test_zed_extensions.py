@@ -218,8 +218,8 @@ def test_render_round_trips_a_real_backed_schema() -> None:
     assert {p.name for p in roundtripped.permissions} == {p.name for p in original.permissions}
 
 
-def test_agents_tool_grants_accept_agent_and_role_subjects() -> None:
-    """Tool use is granted on pure grant objects, not on MCP catalogue rows."""
+def test_agents_tool_grants_accept_user_group_and_role_subjects() -> None:
+    """Catalogue-backed tool grants accept live selections and independent subjects."""
 
     source = Path(apps.get_app_config("agents").path) / "permissions.zed"
     schema = parse_zed(source.read_text(encoding="utf-8"))
@@ -230,18 +230,26 @@ def test_agents_tool_grants_accept_agent_and_role_subjects() -> None:
         ("agents/agent", "", "")
     }
 
-    tool = schema.get_definition("agents/mcp_tool")
-    assert "agent" not in {relation.name for relation in tool.relations}
+    agent = schema.get_definition("agents/agent")
+    actor = next(relation for relation in agent.relations if relation.name == "actor")
+    assert {(subject.type, subject.id, subject.relation) for subject in actor.allowed_subjects} == {
+        ("auth/user", "", "")
+    }
 
     grant = schema.get_definition("agents/tool_grant")
+    assert "selected_agent" in {relation.name for relation in grant.relations}
+    assert 'rebac:field={"path":"agents__user"}' in source.read_text(encoding="utf-8")
     grantee = next(relation for relation in grant.relations if relation.name == "grantee")
     assert {(subject.type, subject.id, subject.relation) for subject in grantee.allowed_subjects} == {
-        ("agents/agent", "", ""),
-        ("agents/toolrole", "", "effective_member"),
-        ("auth/group", "", "agent_member"),
+        ("auth/user", "", ""),
+        ("auth/group", "", "member"),
+    }
+    role = next(relation for relation in grant.relations if relation.name == "role")
+    assert {(subject.type, subject.id, subject.relation) for subject in role.allowed_subjects} == {
+        ("agents/toolrole", "", ""),
     }
     use = next(permission for permission in grant.permissions if permission.name == "use")
-    assert "grantee" in _render_expr_names(use)
+    assert {"grantee", "role"} <= _render_expr_names(use)
 
 
 # ---------- full wiring: emit + repoint + sync + resolve ----------

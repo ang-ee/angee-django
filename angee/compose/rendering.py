@@ -8,6 +8,7 @@ Django constructs fields, managers and descriptors when those classes are loaded
 from __future__ import annotations
 
 from django.db import models
+from rebac.mixins import REBAC_META_OPTIONS
 
 from angee.base.mixins import RevisionMixin
 from angee.base.models import CATALOGUE_TIERS
@@ -49,7 +50,7 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
                 + ", ".join(f"*{alias}._meta.constraints" for alias in constraints)
                 + "]"
             )
-        for option in ("rebac_resource_type", "rebac_id_attr", "rebac_default_action"):
+        for option in REBAC_META_OPTIONS:
             value = getattr(source._meta, option, None)
             if value is not None:
                 meta_lines.append(f"        {option} = {value!r}")

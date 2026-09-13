@@ -7,6 +7,17 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 import type { DocumentVariables } from "@angee/refine";
 
+export const RecordAccessDocument = graphql(`
+  query RecordAccess($targetType: String!, $targetIds: [ID!]!) {
+    record_access(target_type: $targetType, target_ids: $targetIds) {
+      target_id relation subject subject_type label
+    }
+    record_access_options(target_type: $targetType, target_ids: $targetIds) {
+      relation permission
+    }
+  }
+`);
+
 export const IamOverview = graphql(`
   query IamOverview($peekLimit: Int = 6) {
     iam_roles(limit: 1000, order_by: [{ namespace: asc }, { role_id: asc }]) {
@@ -14,6 +25,8 @@ export const IamOverview = graphql(`
       role_id
       namespace
       label
+      declared
+      grantable
     }
     iam_overview(peek_limit: $peekLimit) {
       user_count
@@ -28,13 +41,16 @@ export const IamOverview = graphql(`
         grant_count
       }
       privileged_grants {
-        principal_id
-        principal_type
-        principal_ref
-        principal_label
+        id
+        subject_id
+        subject_type
+        subject
+        subject_relation
+        subject_label
         role
         role_name
         namespace
+        caveat_name
       }
       unassigned_users {
         id
@@ -110,21 +126,48 @@ export const IamRebacSchema = graphql(`
 
 // Role writes change both computed REBAC resource projections; keep the blast
 // radius beside the verbs that own it.
-export const IAM_ROLE_MUTATION_INVALIDATES = ["iam.Grant", "iam.Relationship"] as const;
+export const IAM_ROLE_MUTATION_INVALIDATES = ["iam.Grant", "iam.Relationship", "iam.Group", "iam.Role"] as const;
 
 export const IamRevokeRole = graphql(`
-  mutation IamRevokeRole($principal_id: String!, $role: String!, $caveat_name: String! = "") {
-    revoke_role(principal_id: $principal_id, role: $role, caveat_name: $caveat_name)
+  mutation IamRevokeRole($subject: String!, $role: String!, $caveat_name: String! = "") {
+    revoke_role(subject: $subject, role: $role, caveat_name: $caveat_name)
   }
 `);
 
 export const IamGrantRole = graphql(`
-  mutation IamGrantRole($principal_id: String!, $role: String!) {
-    grant_role(principal_id: $principal_id, role: $role)
+  mutation IamGrantRole($subject: String!, $role: String!) {
+    grant_role(subject: $subject, role: $role)
   }
 `);
 
+export const IamGroupAccess = graphql(`
+  query IamGroupAccess($id: ID!) {
+    groups_by_pk(id: $id) {
+      id
+      members { id subject subject_type subject_id label caveat_name }
+      bindings { id resource resource_type resource_id relation caveat_name target_model target_id }
+    }
+  }
+`);
+
+export const IamAddGroupMember = graphql(`
+  mutation IamAddGroupMember($group_id: ID!, $subject: String!, $caveat_name: String! = "") {
+    add_group_member(group_id: $group_id, subject: $subject, caveat_name: $caveat_name)
+  }
+`);
+
+export const IamRemoveGroupMember = graphql(`
+  mutation IamRemoveGroupMember($group_id: ID!, $subject: String!, $caveat_name: String! = "") {
+    remove_group_member(group_id: $group_id, subject: $subject, caveat_name: $caveat_name)
+  }
+`);
+
+export const IAM_GROUP_MUTATION_INVALIDATES = ["iam.Group", "iam.Grant", "iam.Relationship", "iam.User"] as const;
+export type IAMGroupMember = NonNullable<DocumentType<typeof IamGroupAccess>["groups_by_pk"]>["members"][number];
+export type IAMGroupBinding = NonNullable<DocumentType<typeof IamGroupAccess>["groups_by_pk"]>["bindings"][number];
+
 export type IAMOverviewVariables = DocumentVariables<typeof IamOverview>;
+export type IAMRole = DocumentType<typeof IamOverview>["iam_roles"][number];
 
 export type IAMUsersVariables = DocumentVariables<typeof IamUsers>;
 
@@ -133,7 +176,7 @@ export type IAMAssignmentSubjectsVariables = DocumentVariables<typeof IamAssignm
 export type IAMAssignmentSubjectsData = DocumentType<typeof IamAssignmentSubjects>;
 
 /** One privileged-grant row, derived from the `IamOverview` selection. The
- * backend `IAMGrantType` computes the full row (`principal_ref`, `role_name`,
+ * backend `IAMGrantType` computes the full row (`subject`, `role_name`,
  * `namespace`) via the same helpers as the `iam.Grant` Hasura resource, so the
  * client no longer re-derives any of them. The Grants page reads that resource
  * directly; this type only backs the overview's privileged-grant peek. */

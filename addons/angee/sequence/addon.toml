@@ -4,3 +4,8 @@ description = "Gapless, period-resetting document numbering drawn under a row lo
 keywords = ["sequence", "numbering", "counter"]
 category = "Foundation"
 depends_on = ["angee.iam", "angee.graphql"]
+
+[[migrations]]
+name = "role_subject_relations"
+app_label = "sequence"
+module = "runtime_migrations.role_subject_relations"

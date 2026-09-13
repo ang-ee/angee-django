@@ -31,7 +31,7 @@ from rebac.resources import to_object_ref
 from rebac.types import RelationshipTuple
 
 from angee.base.actors import actor_user_id
-from angee.base.identity import instance_from_public_id
+from angee.base.identity import canonical_subject_ref, instance_from_public_id
 from angee.base.scoping import read_scoped_queryset
 from angee.jobs.enqueue import enqueue_task
 from angee.workflows.attempts import (
@@ -927,7 +927,7 @@ def _subject_ref(subject: str | SubjectRef) -> SubjectRef:
 
     if isinstance(subject, SubjectRef):
         return subject
-    return SubjectRef.parse(str(subject))
+    return canonical_subject_ref(str(subject))
 
 
 def _actor_ref(actor: Any) -> SubjectRef:

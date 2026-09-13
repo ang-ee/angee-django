@@ -53,7 +53,6 @@ class Note(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, 
         abstract = True
         ordering = ("-updated_at", "title", "sqid")
         rebac_resource_type = "notes/note"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the note title for Django displays."""

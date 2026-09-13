@@ -179,6 +179,7 @@ export function ListViewContent<TRow extends Row = Row>({
       value={{
         resource: modelMetadata?.resource.modelLabel ?? resource,
         filter: effectiveFilter,
+        selectedIds: surface.selectedIds,
         fields: resolvedColumns.flatMap((column) => column.field ? [column.field] : []),
         refresh: () => void surface.list.refetch(),
       }}

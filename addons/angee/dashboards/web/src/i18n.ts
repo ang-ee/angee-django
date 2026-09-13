@@ -13,7 +13,6 @@ export const enDashboardsMessages: Record<string, string> = {
   "common.noDescription": "No description",
   "common.pin": "Pin",
   "common.remove": "Remove",
-  "common.share": "Share",
   "common.setAsHome": "Set as home",
   "common.unpin": "Unpin",
   "common.unsetHome": "Unset home",
@@ -46,18 +45,6 @@ export const enDashboardsMessages: Record<string, string> = {
   "diagnostics.unavailable.description": "Dashboard diagnostics require platform administration access.",
   "diagnostics.unavailable.title": "Diagnostics unavailable",
   "diagnostics.widgetKinds": "Widget kinds",
-  "sharing.add": "Add recipient",
-  "sharing.editor": "Editor",
-  "sharing.group": "Group",
-  "sharing.label": "Dashboard sharing",
-  "sharing.loading": "Loading recipients…",
-  "sharing.publicId": "Recipient public ID",
-  "sharing.publicIdFor": "{type} public ID",
-  "sharing.recipientType": "Recipient type",
-  "sharing.role": "Dashboard role",
-  "sharing.subjectType": "Recipient type",
-  "sharing.user": "User",
-  "sharing.viewer": "Viewer",
 };
 
 export const useDashboardsT = createNamespaceT(

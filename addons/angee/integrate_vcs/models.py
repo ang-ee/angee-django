@@ -63,7 +63,6 @@ class VcsBridge(Bridge):
         db_table = "integrate_vcsbridge"
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate_vcs/vcs_bridge"
-        rebac_id_attr = "sqid"
 
     @property
     def backend(self) -> VCSBackend:
@@ -265,7 +264,6 @@ class Repository(SqidMixin, AuditMixin, AngeeModel):
         db_table = "integrate_repository"
         ordering = ("org", "name")
         rebac_resource_type = "integrate_vcs/repository"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("vcs_bridge", "name"),
@@ -309,7 +307,6 @@ class Source(SqidMixin, AuditMixin, AngeeModel):
         db_table = "integrate_source"
         ordering = ("kind", "path")
         rebac_resource_type = "integrate_vcs/source"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return a kind-qualified source label."""
@@ -424,7 +421,6 @@ class Template(SqidMixin, AuditMixin, AngeeModel):
         db_table = "integrate_template"
         ordering = ("kind", "name")
         rebac_resource_type = "integrate_vcs/template"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("source", "path"),

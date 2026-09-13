@@ -324,11 +324,11 @@ def test_ancestor_object_refs_fans_out_every_rebac_ancestor(record_ref_tables: N
 
     # Every identity shares the row's REBAC id; only the type varies down the chain.
     assert ancestor_object_refs(child) == (
-        ObjectRef(model_resource_type(MtiChild), child.sqid),
-        ObjectRef(model_resource_type(MtiParent), child.sqid),
+        ObjectRef(model_resource_type(MtiChild), str(child.pk)),
+        ObjectRef(model_resource_type(MtiParent), str(child.pk)),
     )
     # A row with no typed ancestor yields exactly its own identity.
-    assert ancestor_object_refs(parent) == (ObjectRef(model_resource_type(MtiParent), parent.sqid),)
+    assert ancestor_object_refs(parent) == (ObjectRef(model_resource_type(MtiParent), str(parent.pk)),)
 
 
 def test_ancestor_object_refs_fails_fast_at_the_call_on_an_untyped_row(record_ref_tables: None) -> None:

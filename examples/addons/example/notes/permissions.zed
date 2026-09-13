@@ -15,9 +15,8 @@ definition notes/note {
     // admin-at-a-scope covers every resource under it.
     relation admin: angee/role // rebac:const=admin
 
-    // Any signed-in principal may create through normal app surfaces; the notes MCP
-    // create declaration adds `requires_user_actor` because this row's owner relation
-    // is the created_by user FK and non-user agent actors cannot stamp it.
+    // Any signed-in principal may create through normal app surfaces; agents act as
+    // their service users, so the created_by user FK uses the ambient actor directly.
     permission create = authenticated
     permission read   = owner + editor + reader + admin->member
     permission write  = owner + editor + admin->member

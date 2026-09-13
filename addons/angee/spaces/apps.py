@@ -10,12 +10,3 @@ class SpacesConfig(AppConfig):
 
     default = True
     name = "angee.spaces"
-
-    def ready(self) -> None:
-        """Wire spaces-owned lifecycle receivers after app population."""
-
-        super().ready()
-        # App population phase 1 imports AppConfig before the models exist; defer.
-        from angee.spaces import signals
-
-        signals.connect()

@@ -78,7 +78,6 @@ class Mount(Bridge):
         abstract = True
         ordering = ("-updated_at",)
         rebac_resource_type = "storage_integrate/mount"
-        rebac_id_attr = "sqid"
 
     @property
     def backend(self) -> MountBackend:

@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import reversion
 from django.apps import apps
 from django.db import connection, models
-from rebac import MissingActorError, RebacMixin, system_context
+from rebac import MissingActorError, RebacMixin, SubjectRef, system_context
 
 from angee.base.identity import (
+    canonical_subject_ref,
     instance_from_public_id,
     public_data_id_field,
     public_id_for,
     public_id_of,
+    public_subject_ref,
 )
 from angee.base.mixins import RevisionMixin
 from angee.base.models import (
@@ -90,6 +94,52 @@ def test_angee_data_model_carries_the_public_data_identity_contract() -> None:
     field = public_data_id_field(PublicIdThing)
     assert field is not None
     assert field.name == "sqid"
+
+
+def test_system_check_enforces_pk_rebac_identity_only_for_table_backed_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Managed model identities are PKs while synthetic anchors retain named ids."""
+
+    monkeypatch.setattr(PublicIdThing._meta, "rebac_id_attr", "sqid")
+    assert [error.id for error in PublicIdThing._check_rebac_pk_identity()] == ["angee.E018"]
+    monkeypatch.setattr(PublicIdThing._meta, "pk", SimpleNamespace(name="parent", attname="parent_id"))
+    monkeypatch.setattr(PublicIdThing._meta, "rebac_id_attr", "parent")
+    assert [error.id for error in PublicIdThing._check_rebac_pk_identity()] == ["angee.E018"]
+    monkeypatch.setattr(PublicIdThing._meta, "rebac_id_attr", "parent_id")
+    assert PublicIdThing._check_rebac_pk_identity() == []
+    monkeypatch.setattr(PublicIdThing._meta, "managed", False)
+    assert PublicIdThing._check_rebac_pk_identity() == []
+
+
+def test_legacy_rebac_lookup_delegates_to_the_public_identity_owner() -> None:
+    """The one-shot upgrade hook decodes old sqids through the model field."""
+
+    public_id = PublicIdThing.public_id_from_pk(42)
+    assert PublicIdThing.legacy_rebac_id_lookup(public_id) == {"sqid": public_id}
+
+
+def test_subject_identity_converts_only_at_the_public_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Model subjects store PKs while transport subjects retain opaque public ids."""
+
+    canonical = SubjectRef.of("tests/public-id-thing", "42")
+    public = public_subject_ref(canonical)
+
+    assert public.subject_id == PublicIdThing.public_id_from_pk(42)
+    assert canonical_subject_ref(str(public)) == canonical
+
+    # The declared field remains the owner without Angee's convenience method.
+    monkeypatch.setattr(PublicIdThing, "public_id_from_pk", None)
+    assert public_subject_ref(canonical) == public
+
+    with pytest.raises(ValueError, match="invalid public id"):
+        canonical_subject_ref("tests/public-id-thing:not-a-public-id")
+
+    monkeypatch.setattr(PublicIdThing._meta, "managed", False)
+    assert canonical_subject_ref(str(public)) == public
+    assert public_subject_ref(canonical) == canonical
 
 
 @pytest.mark.django_db(transaction=True)

@@ -47,7 +47,6 @@ class GroupLabel(AngeeDataModel):
         abstract = False
         app_label = "tests"
         rebac_resource_type = "tests/group_label"
-        rebac_id_attr = "sqid"
 
 
 class GroupMiddle(AngeeDataModel):
@@ -64,7 +63,6 @@ class GroupMiddle(AngeeDataModel):
         abstract = False
         app_label = "tests"
         rebac_resource_type = "tests/group_middle"
-        rebac_id_attr = "sqid"
 
 
 class PlainGroupLabel(models.Model):
@@ -111,7 +109,6 @@ class GroupParent(AngeeDataModel):
         abstract = False
         app_label = "tests"
         rebac_resource_type = "tests/group_parent"
-        rebac_id_attr = "sqid"
 
 
 @strawberry_django.type(GroupParent)

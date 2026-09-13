@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from types import SimpleNamespace
 from typing import Any
 
 from angee.iam.management.commands import bootstrap_admin
@@ -13,8 +12,7 @@ def test_bootstrap_admin_creates_platform_admin(monkeypatch: Any) -> None:
     """A fresh local stack gets one loginable platform admin."""
 
     manager = _Manager()
-    grants: list[tuple[Any, str]] = []
-    _patch_command_owners(monkeypatch, manager, grants)
+    _patch_command_owners(monkeypatch, manager)
 
     bootstrap_admin.Command().handle(username="root", email="root@example.com", password="first-secret")
 
@@ -27,7 +25,6 @@ def test_bootstrap_admin_creates_platform_admin(monkeypatch: Any) -> None:
     assert user.is_staff is True
     assert user.is_superuser is True
     assert user.password == "first-secret"
-    assert grants == [(user, "angee/role:admin")]
 
 
 def test_bootstrap_admin_promotes_existing_user_without_resetting_password(monkeypatch: Any) -> None:
@@ -36,8 +33,7 @@ def test_bootstrap_admin_promotes_existing_user_without_resetting_password(monke
     existing = _User(username="admin", email="", password="kept-secret")
     existing.is_active = False
     manager = _Manager(existing)
-    grants: list[tuple[Any, str]] = []
-    _patch_command_owners(monkeypatch, manager, grants)
+    _patch_command_owners(monkeypatch, manager)
 
     bootstrap_admin.Command().handle(username=None, email=None, password="generated-secret")
 
@@ -47,18 +43,15 @@ def test_bootstrap_admin_promotes_existing_user_without_resetting_password(monke
     assert existing.is_superuser is True
     assert existing.password == "kept-secret"
     assert existing.saved_update_fields == ["email", "is_active", "is_staff", "is_superuser"]
-    assert grants == [(existing, "angee/role:admin")]
 
 
-def _patch_command_owners(monkeypatch: Any, manager: "_Manager", grants: list[tuple[Any, str]]) -> None:
+def _patch_command_owners(monkeypatch: Any, manager: "_Manager") -> None:
     """Patch framework owners so the command can be tested without a database."""
 
     _User._default_manager = manager
     monkeypatch.setattr(bootstrap_admin, "get_user_model", lambda: _User)
     monkeypatch.setattr(bootstrap_admin.transaction, "atomic", nullcontext)
     monkeypatch.setattr(bootstrap_admin, "system_context", lambda *, reason: nullcontext())
-    monkeypatch.setattr(bootstrap_admin, "app_settings", SimpleNamespace(REBAC_UNIVERSAL_ADMIN_ROLE="angee/role:admin"))
-    monkeypatch.setattr(bootstrap_admin, "rebac_grant", lambda actor, role: grants.append((actor, role)))
 
 
 class _MissingUser(Exception):

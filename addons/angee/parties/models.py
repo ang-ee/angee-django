@@ -133,7 +133,6 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/party"
-        rebac_id_attr = "sqid"
         constraints = (
             # The directory-sync idempotency key: one party per source UID per
             # folder, so re-sync updates the same row instead of duplicating.
@@ -314,7 +313,6 @@ class Person(models.Model, metaclass=RebacModelBase):
         abstract = True
         ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/person"
-        rebac_id_attr = "sqid"
 
 
 class MergeVeto(SqidMixin, AuditMixin, AngeeModel):
@@ -342,7 +340,6 @@ class MergeVeto(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("party_a", "party_b", "sqid")
         rebac_resource_type = "parties/merge_veto"
-        rebac_id_attr = "sqid"
         constraints = (
             models.CheckConstraint(
                 condition=models.Q(party_a__lt=models.F("party_b")),
@@ -394,7 +391,6 @@ class Organization(models.Model, metaclass=RebacModelBase):
         abstract = True
         ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/organization"
-        rebac_id_attr = "sqid"
 
 
 class Handle(SqidMixin, AuditMixin, AngeeModel):
@@ -479,7 +475,6 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("platform", "value", "sqid")
         rebac_resource_type = "parties/handle"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("platform", "value"),
@@ -613,7 +608,6 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-is_confirmed", "-confidence", "sqid")
         rebac_resource_type = "parties/party_handle"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("party", "handle"),
@@ -841,7 +835,6 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("party", "label", "sqid")
         rebac_resource_type = "parties/address"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("party",),
@@ -903,7 +896,6 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "parties/folder"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("directory", "source_href"),
@@ -956,7 +948,6 @@ class Circle(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("position", "name", "sqid")
         rebac_resource_type = "parties/circle"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the circle name for Django displays."""
@@ -994,7 +985,6 @@ class CircleMember(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("circle", "sqid")
         rebac_resource_type = "parties/circle_member"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("circle", "party"),
@@ -1080,7 +1070,6 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("slug",)
         rebac_resource_type = "parties/relationship_kind"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the kind's forward label for Django displays."""
@@ -1221,7 +1210,6 @@ class Relationship(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("party", "sqid")
         rebac_resource_type = "parties/relationship"
-        rebac_id_attr = "sqid"
         constraints = (
             # One row per tracked pair per kind; free-text counterparties are
             # unconstrained (two untracked "Cousin" rows are legitimate).
@@ -1302,7 +1290,6 @@ class Directory(Bridge):
         abstract = True
         ordering = ("-updated_at",)
         rebac_resource_type = "parties/directory"
-        rebac_id_attr = "sqid"
 
     @property
     def backend(self) -> DirectoryBackend:

@@ -17,8 +17,7 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import DataError, connection
 from django.utils import timezone
-from rebac import app_settings, system_context
-from rebac.roles import grant
+from rebac import system_context
 
 from angee.integrate.models import IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.storage_integrate.connect import create_local_folder_mount
@@ -802,7 +801,6 @@ def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
     """The console exposes enum connect/list/sync while retaining admin action gates."""
 
     admin = mount_env.owner
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     root = mount_env.tmp_path / "graphql"
     root.mkdir()
     schema = addon_schema(storage_integrate_schema.schemas, "console")

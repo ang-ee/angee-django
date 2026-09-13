@@ -206,6 +206,14 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
         SimpleNamespace(input=delegated, run=run, step=SimpleNamespace(config={})), now=timezone.now(),
     )
     assert delegated_review.decisions[0].target_authority_decision_id == str(decision.sqid)
+    with system_context(reason="fixture selection resolver becomes a service principal"):
+        User.objects.filter(pk=operator.pk).update(kind="service")
+    with pytest.raises(ValidationError, match="requires a human resolver"):
+        IdentityReviewStepImpl().run(
+            SimpleNamespace(input=delegated, run=run, step=SimpleNamespace(config={})), now=timezone.now(),
+        )
+    with system_context(reason="restore selection resolver as a person"):
+        User.objects.filter(pk=operator.pk).update(kind="person")
     with system_context(reason="test mismatched selection party"):
         other_party = Party._base_manager.create(display_name="Other Supplier", created_by=operator)
     with pytest.raises(ValidationError, match="chose a different Party"):

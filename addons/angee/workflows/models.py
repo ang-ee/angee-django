@@ -195,7 +195,6 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("name", "version")
         rebac_resource_type = "workflows/workflow"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("key",),
@@ -691,7 +690,6 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("workflow", "key")
         rebac_resource_type = "workflows/step"
-        rebac_id_attr = "sqid"
         constraints = (models.UniqueConstraint(fields=("workflow", "key"), name="uniq_workflows_step_key"),)
 
     def __str__(self) -> str:
@@ -860,7 +858,6 @@ class Edge(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("workflow", "source", "target", "condition")
         rebac_resource_type = "workflows/edge"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("source", "target", "condition"), name="uniq_workflows_edge_condition"),
         )
@@ -1035,7 +1032,6 @@ class Trigger(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("workflow", "kind", "created_at")
         rebac_resource_type = "workflows/trigger"
-        rebac_id_attr = "sqid"
         indexes = (
             models.Index(
                 fields=("event_model_label",),
@@ -1394,7 +1390,6 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         abstract = True
         ordering = ("-created_at", "sqid")
         rebac_resource_type = "workflows/run"
-        rebac_id_attr = "sqid"
         constraints = (
             models.CheckConstraint(
                 condition=(
@@ -1848,7 +1843,6 @@ class WorkflowRecoveryEvidence(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("run_id", "step_id", "map_index")
         rebac_resource_type = "workflows/recovery_evidence"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("run", "step", "map_index"), name="uniq_wre_run_step_slot"),
         )
@@ -1956,7 +1950,6 @@ class StepRun(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("created_at", "sqid")
         rebac_resource_type = "workflows/step_run"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("run", "step", "map_index"), name="uniq_workflows_step_run_map"),
             models.CheckConstraint(
@@ -2307,7 +2300,6 @@ class StepAttempt(AuditMixin, AngeeDataModel):
         base_manager_name = "system_objects"
         ordering = ("step_run_id", "ordinal")
         rebac_resource_type = "workflows/step_attempt"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("step_run", "ordinal"), name="uniq_workflows_step_attempt_ordinal"),
             models.UniqueConstraint(fields=("lease_token",), name="uniq_workflows_step_attempt_lease"),
@@ -2457,7 +2449,6 @@ class StepArtifact(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("attempt_id", "declaration_index")
         rebac_resource_type = "workflows/step_artifact"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(fields=("attempt", "declaration_index"), name="uniq_war_attempt_index"),
         )
@@ -2525,7 +2516,6 @@ class Decision(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("step_run", "priority", "declaration_index", "created_at", "sqid")
         rebac_resource_type = "workflows/decision"
-        rebac_id_attr = "sqid"
         indexes = (
             models.Index(fields=("step_run", "verdict", "priority"), name="idx_wdc_step_verdict"),
             models.Index(fields=("target_model", "target_id"), name="idx_wdc_target"),

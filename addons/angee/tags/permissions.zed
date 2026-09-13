@@ -1,7 +1,7 @@
 // Authorization schema for the tags addon.
 // @rebac_package: tags
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 // Roles-as-namespace anchor, mirroring money/sequence/role: `includes` lets one
 // tags role imply another, and resources gate on `effective_member` so granted +
@@ -10,10 +10,10 @@
 // tuple — the same universal-admin path the resource types below use.
 definition tags/role {
     relation member:   auth/user | auth/group#member | angee/role:admin#member
-    relation includes: tags/role#effective_member
+    relation includes: tags/role
     relation admin:    angee/role // rebac:const=admin
 
-    permission effective_member = member + includes + admin->member
+    permission effective_member = member + includes->effective_member + admin->member
 }
 
 // A base tag is shared vocabulary. `shared` is a wildcard-subject relation: a

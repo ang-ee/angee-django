@@ -18,7 +18,7 @@ from rebac import actor_context
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.identity import public_data_id_field
+from angee.base.identity import canonical_subject_ref, public_data_id_field, public_subject_ref
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset
 from angee.graphql.actions import (
@@ -1036,9 +1036,39 @@ class WorkflowArtifactTarget:
         return cls(model=model_label, id=cast(PublicID, target_id), tab=tab or None)
 
 
+def _public_subject_value(value: str) -> str:
+    """Project a stored subject through the public identity boundary."""
+
+    if not value:
+        return ""
+    try:
+        return str(public_subject_ref(canonical_subject_ref(value)))
+    except (TypeError, ValueError):
+        return value
+
+
 @strawberry.type
 class DecisionTargetFields:
     """Shared authorized target projection for the public and admin decision surfaces."""
+
+    @strawberry_django.field(only=["resolved_by"])
+    def resolved_by(self) -> str:
+        """Return the resolver identity in its public transport form."""
+
+        value = str(cast(Any, self).resolved_by or "")
+        return _public_subject_value(value)
+
+    @strawberry_django.field(only=["declaration_index", "suspension_attempt__result_decisions"])
+    def assignees(self) -> list[str]:
+        """Return frozen recipient subjects in their public transport form."""
+
+        decision = cast(Any, self)
+        if decision.declaration_index is None or decision.suspension_attempt_id is None:
+            return []
+        declarations = deserialize_decision_specs(decision.suspension_attempt.result_decisions)
+        if decision.declaration_index >= len(declarations):
+            return []
+        return [_public_subject_value(value) for value in declarations[decision.declaration_index].assignees]
 
     @strawberry_django.field(only=["target_model", "target_id", "target_tab"])
     def target_reference(self, info: strawberry.Info) -> WorkflowArtifactTarget | None:
@@ -1092,7 +1122,6 @@ class DecisionType(DecisionTargetFields, AngeeNode):
     payload: JSON
     verdict: auto
     resolution: JSON
-    resolved_by: auto
     attempts: auto
     max_attempts: auto
     expires_at: auto
@@ -1101,18 +1130,6 @@ class DecisionType(DecisionTargetFields, AngeeNode):
     updated_at: auto
 
     decision_schema: JSON | None = _decision_schema_field()
-
-    @strawberry_django.field(only=["declaration_index", "suspension_attempt__result_decisions"])
-    def assignees(self) -> list[str]:
-        """Return the frozen recipient subjects declared for this retained Decision."""
-
-        decision = cast(Any, self)
-        if decision.declaration_index is None or decision.suspension_attempt_id is None:
-            return []
-        declarations = deserialize_decision_specs(decision.suspension_attempt.result_decisions)
-        if decision.declaration_index >= len(declarations):
-            return []
-        return list(declarations[decision.declaration_index].assignees)
 
     @strawberry_django.field(only=["step_run_id"])
     def step_run(self, info: strawberry.Info) -> StepRunType | None:
@@ -1134,7 +1151,6 @@ class PublicDecisionType(DecisionTargetFields, AngeeNode):
     payload: JSON
     verdict: auto
     resolution: JSON
-    resolved_by: auto
     attempts: auto
     max_attempts: auto
     expires_at: auto

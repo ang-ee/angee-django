@@ -14,8 +14,9 @@ and ``rebac sync`` loads its definitions.
 
 from __future__ import annotations
 
-from angee.base.models import AngeeDataModel
 from django.db import models
+
+from angee.base.models import AngeeDataModel
 
 
 class MtiParent(AngeeDataModel):
@@ -32,7 +33,6 @@ class MtiParent(AngeeDataModel):
         app_label = "mtidemo"
         db_table = "test_mtidemo_parent"
         rebac_resource_type = "mtidemo/parent"
-        rebac_id_attr = "sqid"
 
 
 class MtiChild(MtiParent):
@@ -46,7 +46,6 @@ class MtiChild(MtiParent):
         app_label = "mtidemo"
         db_table = "test_mtidemo_child"
         rebac_resource_type = "mtidemo/child"
-        rebac_id_attr = "sqid"
 
 
 class MtiChildProxy(MtiChild):

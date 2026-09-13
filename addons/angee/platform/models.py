@@ -26,14 +26,14 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from angee.addons import addon_manifest, available_addons, resolve_manifest_roots
-from angee.base.fields import StateField
-from angee.base.models import AngeeManager, AngeeModel
 from django.conf import settings
 from django.db import DatabaseError, models, router, transaction
 from hatch_angee import AddonManifest
 from rebac import system_context
 
+from angee.addons import addon_manifest, available_addons, resolve_manifest_roots
+from angee.base.fields import StateField
+from angee.base.models import AngeeManager, AngeeModel
 from angee.platform import composed
 from angee.platform.installer import (
     AddonInstaller,
@@ -354,12 +354,13 @@ class AddonManager(AngeeManager):
                     "model_labels": rollup.model_labels,
                 }
             else:  # available but not enabled — a complete row, every count zeroed.
+                available_ref = available[name]
                 facts[name] = {
                     "label": name.rsplit(".", 1)[-1],
                     "namespace": name.split(".")[0],
-                    "description": ref.manifest.description,
-                    "keywords": list(ref.manifest.keywords),
-                    "category": ref.manifest.category or "",
+                    "description": available_ref.manifest.description,
+                    "keywords": list(available_ref.manifest.keywords),
+                    "category": available_ref.manifest.category or "",
                     "kind": Addon.Kind.REQUIRED,
                     "source": source,
                     "state": Addon.State.DISABLED,
@@ -477,12 +478,17 @@ class Addon(AngeeModel):
         abstract = True
         ordering = ("name",)
         rebac_resource_type = "platform/addon"
-        rebac_id_attr = "name"
 
     def __str__(self) -> str:
         """Return the addon name for Django displays."""
 
         return self.name
+
+    @classmethod
+    def legacy_rebac_id_lookup(cls, value: str) -> dict[str, Any]:
+        """Resolve the retired addon-name authorization identity."""
+
+        return {"name": value}
 
     @property
     def disable_block_reason(self) -> str:

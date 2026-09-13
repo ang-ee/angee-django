@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 13
+// @rebac_schema_revision: 16
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -22,12 +22,25 @@ definition iam/directory {
     relation reader: auth/user | auth/user:*
 }
 
+// Kind and activity are live user facts, including bulk-created/updated rows.
+definition iam/kind {
+    relation member: auth/user // rebac:attribute={"field":"kind"}
+    relation active_member: auth/user // rebac:attribute={"field":"kind","filters":{"is_active":true}}
+}
+
 definition auth/group {
     relation member: auth/user
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = member + admin->member
+    permission write = admin->member
+    permission delete = admin->member
 }
 
 definition angee/role {
-    relation member: auth/user | auth/group#member
+    // Admin authority has one owner: the active user's is_superuser field.
+    relation member: auth/user // rebac:attribute={"field":"is_superuser","resource":"admin","value":true,"filters":{"is_active":true}}
 
     permission effective_member = member
 }

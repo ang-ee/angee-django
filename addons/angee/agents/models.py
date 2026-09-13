@@ -21,24 +21,21 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import models, transaction
-from django.db.models.signals import class_prepared, m2m_changed, post_delete
+from django.db.models.signals import class_prepared, post_delete
 from django.utils import timezone
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
-from rebac import RelationshipTuple, SubjectRef, system_context, to_object_ref
+from rebac import SubjectRef, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
-from rebac.relationships import delete_relationships, write_relationships
-from rebac.types import RelationshipFilter
 
 from angee.agents.backends import InferenceBackend
-from angee.agents.grants import revoke_tool_grant, write_tool_grant
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, role_anchor
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
 
 
@@ -79,10 +76,6 @@ class MCPTransport(models.TextChoices):
 
 BUILTIN_MCP_ANGEE = "angee"
 """``MCPServer.config["builtin"]`` value for this process's built-in Angee MCP server."""
-
-
-ToolGrant = role_anchor("agents/tool_grant", name="ToolGrant")
-"""Table-less REBAC type anchor for pure-tuple tool grants."""
 
 
 ToolRole = role_anchor("agents/toolrole", name="ToolRole")
@@ -185,7 +178,6 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         abstract = True
         ordering = ("name",)
         rebac_resource_type = "agents/inference_provider"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the provider's display label."""
@@ -290,7 +282,6 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("provider", "name")
         rebac_resource_type = "agents/inference_model"
-        rebac_id_attr = "sqid"
         constraints = (models.UniqueConstraint(fields=("provider", "name"), name="uniq_agents_inference_model_name"),)
 
     def __str__(self) -> str:
@@ -389,7 +380,6 @@ class Skill(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("name", "path")
         rebac_resource_type = "agents/skill"
-        rebac_id_attr = "sqid"
         constraints = (models.UniqueConstraint(fields=("source", "path"), name="uniq_agents_skill_path"),)
 
     def __str__(self) -> str:
@@ -438,7 +428,6 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("name",)
         rebac_resource_type = "agents/mcp_server"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the server's name."""
@@ -557,6 +546,43 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
         return sqid, digest
 
 
+class MCPToolQuerySet(AngeeQuerySet):
+    """QuerySet preserving the immutable server-qualified tool identity."""
+
+    def update(self, **kwargs: Any) -> int:
+        """Reject bulk edits that bypass the canonical grant-id owner."""
+
+        if {"server", "server_id", "name", "grant_id"} & kwargs.keys():
+            raise ValueError("MCP tool server and name are immutable; replace the tool instead.")
+        return super().update(**kwargs)
+
+    def bulk_update(
+        self,
+        objs: Any,
+        fields: Any,
+        batch_size: int | None = None,
+    ) -> int:
+        """Reject bulk identity edits and delegate all other updates."""
+
+        if {"server", "server_id", "name", "grant_id"} & set(fields):
+            raise ValueError("MCP tool server and name are immutable; replace the tool instead.")
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+
+class MCPToolManager(AngeeManager.from_queryset(MCPToolQuerySet)):  # type: ignore[misc]
+    """Manager carrying MCP tool identity invariants through bulk APIs."""
+
+    def bulk_create(self, objs: Any, **kwargs: Any) -> Any:
+        """Populate canonical ids for Django's save-bypassing bulk insert."""
+
+        if {"server", "server_id", "name", "grant_id"} & set(kwargs.get("update_fields") or ()):
+            raise ValueError("MCP tool server and name are immutable; replace the tool instead.")
+        objs = list(objs)
+        for tool in objs:
+            tool.grant_id = tool.make_grant_id(str(tool.server.sqid), tool.name)
+        return super().bulk_create(objs, **kwargs)
+
+
 class MCPTool(SqidMixin, AuditMixin, AngeeModel):
     """One tool an MCP server exposes; agents select the tools they may call."""
 
@@ -565,27 +591,58 @@ class MCPTool(SqidMixin, AuditMixin, AngeeModel):
     sqid_prefix = "mct_"
     server = models.ForeignKey("agents.MCPServer", on_delete=models.CASCADE, related_name="tools")
     name = models.CharField(max_length=200)
+    grant_id = models.CharField(max_length=260, unique=True, editable=False)
+    """Stable server-qualified REBAC identity shared with runtime authorization."""
     description = models.TextField(blank=True)
     input_schema = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=True)
     requires_approval = models.BooleanField(default=False)
     """Whether invoking this tool must suspend for an owner decision."""
 
-    objects = AngeeManager()
+    objects = MCPToolManager()
 
     class Meta:
         """Django model options for MCP tools."""
 
         abstract = True
         ordering = ("server", "name")
-        rebac_resource_type = "agents/mcp_tool"
-        rebac_id_attr = "sqid"
+        rebac_resource_type = "agents/tool_grant"
         constraints = (models.UniqueConstraint(fields=("server", "name"), name="uniq_agents_mcp_tool_name"),)
 
     def __str__(self) -> str:
         """Return the tool's name."""
 
         return self.name
+
+    @classmethod
+    def legacy_rebac_id_lookup(cls, value: str) -> dict[str, Any]:
+        """Resolve the retired server-qualified authorization identity."""
+
+        return {"grant_id": value}
+
+    @staticmethod
+    def make_grant_id(server_sqid: str, tool_name: str) -> str:
+        """Return the canonical server-qualified identity for a tool."""
+
+        server = str(server_sqid).strip()
+        name = str(tool_name).strip()
+        if not server or not name:
+            raise ValueError("Tool grant server ids and names must not be empty.")
+        return f"{server}.{name}"
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Set the grant identity once and prevent identity-changing edits."""
+
+        expected = self.make_grant_id(str(self.server.sqid), self.name)
+        if not self._state.adding:
+            persisted = type(self)._base_manager.only("server_id", "name", "grant_id").get(pk=self.pk)
+            if (persisted.server_id, persisted.name) != (self.server_id, self.name):
+                raise ValueError("MCP tool server and name are immutable; replace the tool instead.")
+        self.grant_id = expected
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            kwargs["update_fields"] = tuple(dict.fromkeys((*update_fields, "grant_id")))
+        super().save(*args, **kwargs)
 
 
 class AgentManager(AngeeManager):
@@ -665,7 +722,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.PROTECT,
         related_name="agent",
     )
-    """Non-login service user used for audit/revision attribution by this agent."""
+    """Non-login user that authenticates, authorizes, and attributes this agent's actions."""
     instructions = models.TextField(blank=True)
     """The agent's system instructions, rendered into AGENTS.md/CLAUDE.md."""
     model = models.ForeignKey(
@@ -755,7 +812,6 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-updated_at",)
         rebac_resource_type = "agents/agent"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the agent's name."""
@@ -781,14 +837,15 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
                 type(self).objects.sync_service_user(self)
 
     def principal_subject(self) -> SubjectRef:
-        """Return this agent's own REBAC subject identity for actions it performs.
+        """Return the service user's REBAC subject for actions this agent performs.
 
         This is distinct from :attr:`owner`: the owner manages the agent definition,
-        while the agent subject represents the running agent as an actor.
+        while the linked non-login user represents the running agent as an actor.
         """
 
-        ref = to_object_ref(self)
-        return SubjectRef.of(ref.resource_type, ref.resource_id)
+        if self.user_id is None:
+            raise ValueError("Agent has no service user and cannot act.")
+        return to_subject_ref(self.user)
 
     @property
     def runtime_backend(self) -> AgentRuntime:
@@ -1253,7 +1310,6 @@ class AgentSession(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-updated_at", "sqid")
         rebac_resource_type = "agents/session"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the session title or its agent name."""
@@ -1358,7 +1414,6 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("session", "index")
         rebac_resource_type = "agents/turn"
-        rebac_id_attr = "sqid"
         constraints = (models.UniqueConstraint(fields=("session", "index"), name="uniq_agents_turn_session_index"),)
 
     @transition(
@@ -1418,149 +1473,6 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
         """Cancel this turn without deleting its audit trail."""
 
 
-_MCP_AGENT_RELATION = "agent"
-
-
-def _write_agent_mcp_relation(resource: models.Model, agent: Agent) -> None:
-    """Grant one selected agent access to one selected MCP resource."""
-
-    write_relationships(
-        [
-            RelationshipTuple(
-                resource=to_object_ref(resource),
-                relation=_MCP_AGENT_RELATION,
-                subject=agent.principal_subject(),
-            )
-        ]
-    )
-
-
-def _delete_agent_mcp_relation(resource: models.Model, agent: Agent) -> None:
-    """Revoke one selected agent's access to one selected MCP resource."""
-
-    resource_ref = to_object_ref(resource)
-    subject = agent.principal_subject()
-    delete_relationships(
-        RelationshipFilter(
-            resource_type=resource_ref.resource_type,
-            resource_id=resource_ref.resource_id,
-            relation=_MCP_AGENT_RELATION,
-            subject_type=subject.subject_type,
-            subject_id=subject.subject_id,
-        )
-    )
-
-
-def _sync_agent_mcp_selection(
-    *,
-    instance: models.Model,
-    action: str,
-    reverse: bool,
-    model: type[models.Model],
-    pk_set: set[Any] | None,
-    field_name: str,
-) -> None:
-    """Mirror one Agent↔MCP M2M edit into the non-field REBAC relation."""
-
-    pairs = _agent_mcp_selection_pairs(
-        instance=instance,
-        action=action,
-        reverse=reverse,
-        model=model,
-        pk_set=pk_set,
-        field_name=field_name,
-    )
-    if not pairs:
-        return
-
-    def reconcile() -> None:
-        for resource, agent in pairs:
-            if action == "post_add":
-                _write_agent_mcp_relation(resource, cast(Agent, agent))
-            else:
-                _delete_agent_mcp_relation(resource, cast(Agent, agent))
-
-    transaction.on_commit(reconcile)
-
-
-def _agent_mcp_selection_pairs(
-    *,
-    instance: models.Model,
-    action: str,
-    reverse: bool,
-    model: type[models.Model],
-    pk_set: set[Any] | None,
-    field_name: str,
-) -> list[tuple[models.Model, Agent]]:
-    """Return the selected MCP resource/agent pairs affected by one M2M signal."""
-
-    if action not in {"post_add", "post_remove", "pre_clear"}:
-        return []
-    if action == "pre_clear":
-        if reverse:
-            return [(instance, cast(Agent, agent)) for agent in getattr(instance, "agents").all()]
-        return [(resource, cast(Agent, instance)) for resource in getattr(instance, field_name).all()]
-    if reverse:
-        return [(instance, cast(Agent, agent)) for agent in model._base_manager.filter(pk__in=pk_set or ())]
-    return [(resource, cast(Agent, instance)) for resource in model._base_manager.filter(pk__in=pk_set or ())]
-
-
-def _sync_agent_mcp_servers(
-    sender: type[models.Model],
-    instance: models.Model,
-    action: str,
-    reverse: bool,
-    model: type[models.Model],
-    pk_set: set[Any] | None,
-    **kwargs: Any,
-) -> None:
-    """Mirror Agent.mcp_servers changes into ``agents/mcp_server#agent`` tuples."""
-
-    del sender, kwargs
-    _sync_agent_mcp_selection(
-        instance=instance,
-        action=action,
-        reverse=reverse,
-        model=model,
-        pk_set=pk_set,
-        field_name="mcp_servers",
-    )
-
-
-def _sync_agent_mcp_tools(
-    sender: type[models.Model],
-    instance: models.Model,
-    action: str,
-    reverse: bool,
-    model: type[models.Model],
-    pk_set: set[Any] | None,
-    **kwargs: Any,
-) -> None:
-    """Mirror Agent.mcp_tools changes into ``agents/tool_grant#grantee`` tuples."""
-
-    del sender, kwargs
-    pairs = _agent_mcp_selection_pairs(
-        instance=instance,
-        action=action,
-        reverse=reverse,
-        model=model,
-        pk_set=pk_set,
-        field_name="mcp_tools",
-    )
-    if not pairs:
-        return
-
-    def reconcile() -> None:
-        for tool, agent in pairs:
-            server_sqid = str(cast(MCPTool, tool).server.sqid)
-            if action == "post_add":
-                write_tool_grant(server_sqid, str(tool.name), agent.principal_subject())
-            else:
-                revoke_tool_grant(server_sqid, str(tool.name), agent.principal_subject())
-
-    transaction.on_commit(reconcile)
-
-
 def _deactivate_agent_service_user(
     sender: type[models.Model],
     instance: models.Model,
@@ -1573,8 +1485,8 @@ def _deactivate_agent_service_user(
     type(instance).objects.deactivate_service_user(instance, using=using)
 
 
-def _connect_agent_mcp_reconcile(sender: type[models.Model], **kwargs: Any) -> None:
-    """Connect concrete Agent signal handlers."""
+def _connect_agent_lifecycle(sender: type[models.Model], **kwargs: Any) -> None:
+    """Connect concrete Agent lifecycle handlers."""
 
     del kwargs
     try:
@@ -1583,16 +1495,6 @@ def _connect_agent_mcp_reconcile(sender: type[models.Model], **kwargs: Any) -> N
         return
     if not is_agent or sender._meta.abstract:
         return
-    m2m_changed.connect(
-        _sync_agent_mcp_servers,
-        sender=getattr(sender, "mcp_servers").through,
-        dispatch_uid=f"angee.agents.{sender._meta.label_lower}.mcp_servers.rebac",
-    )
-    m2m_changed.connect(
-        _sync_agent_mcp_tools,
-        sender=getattr(sender, "mcp_tools").through,
-        dispatch_uid=f"angee.agents.{sender._meta.label_lower}.mcp_tools.rebac",
-    )
     post_delete.connect(
         _deactivate_agent_service_user,
         sender=sender,
@@ -1601,6 +1503,6 @@ def _connect_agent_mcp_reconcile(sender: type[models.Model], **kwargs: Any) -> N
 
 
 class_prepared.connect(
-    _connect_agent_mcp_reconcile,
-    dispatch_uid="angee.agents.agent_mcp_reconcile.class_prepared",
+    _connect_agent_lifecycle,
+    dispatch_uid="angee.agents.agent_lifecycle.class_prepared",
 )

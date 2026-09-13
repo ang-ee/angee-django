@@ -26,8 +26,7 @@ from django.db import connection
 from django.db.models.signals import post_save
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
-from rebac import app_settings, system_context
-from rebac.roles import grant
+from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate import queue as integrate_queue
@@ -1453,7 +1452,6 @@ def _platform_admin(username: str) -> Any:
         email=f"{username}@example.com",
         password="admin",
     )
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin
 
 

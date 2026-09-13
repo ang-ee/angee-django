@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
-from rebac import actor_context, app_settings, system_context
-from rebac.roles import grant
+from rebac import actor_context, system_context
 
 from angee.workflows.definitions import (
     DefinitionEdit,
@@ -290,7 +289,6 @@ def test_command_honors_actor_scoping_and_snapshot_reads_immutable_versions(work
     del workflow_tables
     admin = User.objects.create_superuser(username="definition-admin", email="definition@example.com")
     outsider = User.objects.create_user(username="definition-outsider")
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     workflow, entry, _tail, _edge = _draft()
 
     with actor_context(outsider), pytest.raises(ObjectDoesNotExist):

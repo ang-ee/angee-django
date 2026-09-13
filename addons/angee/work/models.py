@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -245,7 +245,6 @@ class Queue(models.Model, metaclass=RebacModelBase):
         abstract = True
         ordering = ("key",)
         rebac_resource_type = "work/queue"
-        rebac_id_attr = "sqid"
 
     def clean(self) -> None:
         """Normalize the queue key and validate its explicit default stage."""
@@ -350,13 +349,12 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
     )
     category = StateField(choices_enum=StageCategory, default=StageCategory.UNSTARTED)
 
-    class Meta(StagePrimitive.Meta):
+    class Meta:
         """Django model options for queue stages."""
 
         abstract = True
         ordering = ("queue", "position", "sqid")
         rebac_resource_type = "work/stage"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("queue", "name"),
@@ -543,7 +541,6 @@ class Cycle(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("queue", "number", "sqid")
         rebac_resource_type = "work/cycle"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("queue", "number"),
@@ -680,6 +677,13 @@ class TaskWork(StagedModelMixin):
     extends = "projects.Task"
     runtime = False
     stage_container_field_name = "queue"
+
+    if TYPE_CHECKING:
+        queue_id: Any | None
+        stage_id: Any | None
+        cycle_id: Any | None
+        snoozed_by_id: Any | None
+        dropped_at: datetime | None
 
     work_stage_projection = True
     hasura_readable_fields = (

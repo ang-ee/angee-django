@@ -7,14 +7,12 @@ import {
 
 import {
   useModelSlot,
-  useSlot,
   type ModelSlotTarget,
   type SlotContribution,
 } from "../../runtime";
 import { optionToken } from "../../widgets/types";
 import type { RecordChromeContext } from "../resource/record-chrome-context";
 import {
-  FORM_VIEW_RECORD_CHROME_SLOT,
   formViewRecordActionsSlot,
 } from "./form-view-slots";
 
@@ -28,7 +26,6 @@ export interface UseFormViewRecordChromeProps {
 }
 
 export interface FormViewRecordChromeSurface {
-  recordChrome: readonly SlotContribution[];
   recordChromeContext: RecordChromeContext | null;
   recordActions: readonly SlotContribution[];
 }
@@ -42,7 +39,6 @@ export function useFormViewRecordChrome({
   isCreate,
   record,
 }: UseFormViewRecordChromeProps): FormViewRecordChromeSurface {
-  const recordChrome = useSlot(FORM_VIEW_RECORD_CHROME_SLOT);
   const recordChromeContext = React.useMemo<RecordChromeContext | null>(
     () =>
       isCreate || id == null || dataResource === null
@@ -76,5 +72,5 @@ export function useFormViewRecordChrome({
     );
   }, [recordActionEntries]);
 
-  return { recordChrome, recordChromeContext, recordActions };
+  return { recordChromeContext, recordActions };
 }

@@ -16,7 +16,6 @@ class Group(AbstractGroup):
         app_label = "spaces"
         db_table = "test_spaces_group"
         rebac_resource_type = "spaces/group"
-        rebac_id_attr = "sqid"
 
 
 class Membership(AbstractMembership):
@@ -29,4 +28,3 @@ class Membership(AbstractMembership):
         app_label = "spaces"
         db_table = "test_spaces_membership"
         rebac_resource_type = "spaces/membership"
-        rebac_id_attr = "sqid"

@@ -40,16 +40,6 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from angee.base.identity import instance_from_public_id
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeModel,
-    AngeeQuerySet,
-    role_anchor,
-)
-from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models, transaction
@@ -63,6 +53,17 @@ from rebac import (
 )
 from rebac.resources import model_for_resource_type
 from rebac.types import RelationshipFilter
+
+from angee.base.identity import instance_from_public_id
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeModel,
+    AngeeQuerySet,
+    role_anchor,
+)
+from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
 
 SHARED_READER_RELATION = "shared"
 """The wildcard-subject relation that opens a shared tag to everyone."""
@@ -105,7 +106,6 @@ class Tag(ArchiveMixin, AngeeDataModel):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "tags/tag"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the tag name for Django displays."""
@@ -315,7 +315,6 @@ class TagAssignment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         abstract = True
         ordering = ("-created_at", "sqid")
         rebac_resource_type = "tags/tag_assignment"
-        rebac_id_attr = "sqid"
         indexes = (models.Index(fields=("content_type", "object_id")),)
         constraints = (
             models.UniqueConstraint(

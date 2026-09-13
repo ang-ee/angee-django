@@ -14,7 +14,6 @@ from django.core import checks, signing
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models
 from django.db.models.functions import Coalesce
-from django.db.models.signals import class_prepared, post_delete
 from rebac import (
     RebacMixin,
     RelationshipTuple,
@@ -22,7 +21,6 @@ from rebac import (
     check_new,
     current_actor,
     delete_relationship,
-    delete_relationships,
     to_object_ref,
     write_relationships,
 )
@@ -30,8 +28,7 @@ from rebac.actors import to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
-from rebac.resources import model_resource_type
-from rebac.types import RelationshipFilter
+from rebac.resources import model_resource_type, resource_id_attr
 
 from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
@@ -40,45 +37,6 @@ from angee.base.permissions import effective_rebac_definition
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
-
-def _delete_rebac_resource_relationships(sender: Any, instance: Any, **kwargs: Any) -> None:
-    """Delete resource- and subject-side tuples after a concrete REBAC row is deleted."""
-
-    del kwargs
-    if not isinstance(instance, RebacMixin) or not model_resource_type(sender):
-        return
-    resource = to_object_ref(instance)
-    delete_relationships(
-        RelationshipFilter(
-            resource_type=resource.resource_type,
-            resource_id=resource.resource_id,
-        )
-    )
-    delete_relationships(
-        RelationshipFilter(
-            subject_type=resource.resource_type,
-            subject_id=resource.resource_id,
-        )
-    )
-
-
-def _bind_rebac_resource_relationship_gc(sender: type[models.Model], **kwargs: Any) -> None:
-    """Bind tuple cleanup only to concrete models that inherit ``RebacMixin``."""
-
-    del kwargs
-    if sender._meta.abstract or not issubclass(sender, RebacMixin):
-        return
-    post_delete.connect(
-        _delete_rebac_resource_relationships,
-        sender=sender,
-        dispatch_uid=f"angee.base.rebac_resource_relationship_gc.{sender._meta.label_lower}",
-    )
-
-
-class_prepared.connect(
-    _bind_rebac_resource_relationship_gc,
-    dispatch_uid="angee.base.bind_rebac_resource_relationship_gc",
-)
 
 CATALOGUE_TIERS = ("master", "install", "demo")
 """Resource tiers a catalogue model may declare.
@@ -540,6 +498,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         errors = super().check(**kwargs)
         errors.extend(cls._check_catalogue_tier())
+        errors.extend(cls._check_rebac_pk_identity())
         errors.extend(cls._check_rebac_grantable())
         return errors
 
@@ -569,6 +528,25 @@ class AngeeModel(TimestampMixin, RebacMixin):
                 f"got default {default_tier!r} and tiers {tiers!r}.",
                 obj=cls,
                 id="angee.E014",
+            )
+        ]
+
+    @classmethod
+    def _check_rebac_pk_identity(cls) -> list[checks.CheckMessage]:
+        """Require table-backed Angee REBAC resources to use their primary key."""
+
+        if not cls._meta.managed or model_resource_type(cls) is None:
+            return []
+        pk = cls._meta.pk
+        pk_attname = pk.attname if pk is not None else "pk"
+        if resource_id_attr(cls) in {"pk", pk_attname}:
+            return []
+        return [
+            checks.Error(
+                f"{cls._meta.label} must use its primary key as its REBAC identity; "
+                f"got {resource_id_attr(cls)!r}.",
+                obj=cls,
+                id="angee.E018",
             )
         ]
 
@@ -609,7 +587,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
                 errors.append(
                     checks.Error(
                         f"{cls._meta.label}.rebac_grantable relation {relation_name!r} "
-                        f"must store direct tuples, not use {relation.backing.kind!r} backing.",
+                        "must store direct tuples; backed relations cannot be granted.",
                         obj=cls,
                         id="angee.E016",
                     )
@@ -712,6 +690,12 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Return the Django lookup for this model's public identifier."""
 
         return {cls._meta.pk.name: value}
+
+    @classmethod
+    def legacy_rebac_id_lookup(cls, value: str) -> dict[str, Any]:
+        """Return the upgrade-only lookup for this model's former public REBAC id."""
+
+        return cls.public_id_lookup(value)
 
     @classmethod
     def public_id_from_pk(cls, value: Any) -> str:

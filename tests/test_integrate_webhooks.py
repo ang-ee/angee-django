@@ -40,7 +40,6 @@ class DispatchBridge(Bridge, AngeeModel):
         app_label = "tests"
         db_table = "test_integrate_webhook_dispatch_bridge"
         rebac_resource_type = "tests/webhook_dispatch_bridge"
-        rebac_id_attr = "sqid"
 
     def sync(self) -> None:
         """No-op sync implementation for the fixture."""

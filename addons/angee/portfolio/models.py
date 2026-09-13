@@ -199,7 +199,6 @@ class Product(WorkspaceVisibleMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("lifecycle", "name", "sqid")
         rebac_resource_type = "portfolio/product"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("originated_from",),
@@ -256,7 +255,6 @@ class Initiative(WorkspaceVisibleMixin, HierarchyMixin, AuditMixin, AngeeDataMod
         abstract = True
         ordering = ("parent_id", "sort_order", "name", "sqid")
         rebac_resource_type = "portfolio/initiative"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("parent", "sort_order"),
@@ -344,7 +342,6 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
         abstract = True
         ordering = ("initiative_id", "sort_order", "sqid")
         rebac_resource_type = "portfolio/initiative_project"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("initiative", "project"),
@@ -506,7 +503,6 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         abstract = True
         ordering = ("-updated_at", "-created_at", "sqid")
         rebac_resource_type = "portfolio/update"
-        rebac_id_attr = "sqid"
         indexes = (models.Index(fields=("content_type", "object_id", "updated_at")),)
 
     def clean(self) -> None:
@@ -615,7 +611,6 @@ class Release(WorkspaceVisibleMixin, AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("product_id", "-shipped_on", "target_date", "name", "sqid")
         rebac_resource_type = "portfolio/release"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("product", "name"),

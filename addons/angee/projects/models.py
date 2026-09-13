@@ -25,15 +25,41 @@ from rebac import (
 
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin
-from angee.base.models import AngeeDataModel, AngeeManager
-from angee.base.refs import RecordRefMixin, canonical_record_target
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.refs import RecordRefMixin, canonical_record_model, canonical_record_target
 from angee.base.scoping import bind_actor
 from angee.messaging.models import ThreadedModelMixin
 from angee.scheduling.fields import RecurrenceField
 
 
-class ProjectManager(AngeeManager):
+class ProjectQuerySet(AngeeQuerySet[Any]):
+    """Project collection writes that preserve folder access mirrors."""
+
+    def update(self, **kwargs: Any) -> int:
+        """Reject folder changes that bypass instance lifecycle reconciliation."""
+
+        if {"folder", "folder_id"}.intersection(kwargs):
+            raise ValueError("Project.folder must be updated through instance save().")
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs: Any, fields: Any, **kwargs: Any) -> int:
+        """Reject bulk folder edits that bypass instance lifecycle reconciliation."""
+
+        if {"folder", "folder_id"}.intersection(fields):
+            raise ValueError("Project.folder must be updated through instance save().")
+        return super().bulk_update(objs, fields, **kwargs)
+
+
+class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: ignore[misc]
     """Own the idempotent Task-to-Project maturation write."""
+
+    def bulk_create(self, objs: Any, **kwargs: Any) -> Any:
+        """Reject a write path that cannot mirror Project.folder safely."""
+
+        objs = tuple(objs)
+        if any(project.folder_id is not None for project in objs):
+            raise ValueError("Projects with folders must be saved individually so access is reconciled.")
+        return super().bulk_create(objs, **kwargs)
 
     def from_task(self, task: models.Model) -> models.Model:
         """Return the one project promoted from ``task``, creating it if needed."""
@@ -210,6 +236,49 @@ class LinkManager(AngeeManager):
         return apps.get_model(normalized_label)
 
 
+class ProjectBindingManager(AngeeManager):
+    """Own creation and removal of explicit project-container evidence."""
+
+    def bulk_create(self, objs: Any, **kwargs: Any) -> Any:
+        """Keep bulk writes from bypassing canonicalization and tuple reconciliation."""
+
+        del objs, kwargs
+        raise ValueError("Project bindings must be created through bind().")
+
+    def bulk_update(self, objs: Any, fields: Any, **kwargs: Any) -> Any:
+        """Keep bulk edits from bypassing binding-key reconciliation."""
+
+        del objs, fields, kwargs
+        raise ValueError("Project bindings must be replaced through unbind() and bind().")
+
+
+class ProjectBindingQuerySet(AngeeQuerySet[Any]):
+    """Explicit binding collection with fail-fast key mutation rules."""
+
+    def update(self, **kwargs: Any) -> int:
+        """Reject key edits that cannot preserve old and new tuple evidence."""
+
+        if {"project", "project_id", "content_type", "content_type_id", "object_id"}.intersection(kwargs):
+            raise ValueError("Project bindings must be replaced through unbind() and bind().")
+        return super().update(**kwargs)
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        """Require canonical unbind authority for every explicit bulk deletion."""
+
+        from angee.projects.access import require_binding_access
+
+        project_model = apps.get_model("projects", "Project")
+        for binding in self.select_related("content_type"):
+            project = project_model.objects.filter(pk=binding.project_id).first()
+            if project is None:
+                raise PermissionDenied("Share access to the binding project is required for deletion.")
+            target = binding.target
+            if target is None:
+                raise ValidationError({"target": "A live project binding target is required for deletion."})
+            require_binding_access(project=project, target=target)
+        return super().delete()
+
+
 class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, AngeeDataModel):
     """A bounded endeavor whose access is owned by direct ReBAC grants."""
 
@@ -283,7 +352,6 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
         abstract = True
         ordering = ("status", "target_date", "title", "sqid")
         rebac_resource_type = "projects/project"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("converted_from",),
@@ -296,32 +364,58 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
 
         return self.title
 
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Require target authority before a folder edit can widen project access."""
+
+        update_fields = kwargs.get("update_fields")
+        folder_is_written = update_fields is None or bool({"folder", "folder_id"}.intersection(update_fields))
+        previous_folder_id = None
+        if not self._state.adding and folder_is_written:
+            previous_folder_id = type(self)._base_manager.filter(pk=self.pk).values_list("folder_id", flat=True).first()
+            self._projects_previous_folder_id = previous_folder_id
+        else:
+            self.__dict__.pop("_projects_previous_folder_id", None)
+        folder_changed = folder_is_written and (self._state.adding or previous_folder_id != self.folder_id)
+        if folder_changed:
+            from angee.projects.access import require_binding_access, require_target_binding_access
+
+            if self._state.adding and self.folder_id is not None:
+                require_target_binding_access(self.folder)
+            elif not self._state.adding:
+                folder_model = apps.get_model("storage", "Folder")
+                if previous_folder_id is not None:
+                    previous_folder = folder_model._base_manager.get(pk=previous_folder_id)
+                    require_binding_access(project=self, target=previous_folder)
+                if self.folder_id is not None:
+                    require_binding_access(project=self, target=self.folder)
+        super().save(*args, **kwargs)
+
     def pause(self) -> Project:
         """Pause this project, idempotently."""
 
-        return self._set_status(self.ProjectStatus.PAUSED)
+        return self._set_status(str(self.ProjectStatus.PAUSED))
 
     def resume(self) -> Project:
         """Return this project to open work, idempotently."""
 
-        return self._set_status(self.ProjectStatus.OPEN)
+        return self._set_status(str(self.ProjectStatus.OPEN))
 
     def complete(self) -> Project:
         """Complete this project, idempotently."""
 
-        return self._set_status(self.ProjectStatus.DONE)
+        return self._set_status(str(self.ProjectStatus.DONE))
 
     def drop(self) -> Project:
         """Drop this project, idempotently."""
 
-        return self._set_status(self.ProjectStatus.DROPPED)
+        return self._set_status(str(self.ProjectStatus.DROPPED))
 
-    def _set_status(self, status: ProjectStatus) -> Project:
+    def _set_status(self, status: str) -> Project:
         """Persist one lifecycle target while preserving exact replay no-ops."""
 
         if self.status == status:
             return self
-        self.status = status
+        cast(Any, self).status = status
         self.save(update_fields=("status", "updated_at"))
         return self
 
@@ -348,7 +442,6 @@ class Milestone(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("project", "sort_order", "sqid")
         rebac_resource_type = "projects/milestone"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("project", "sort_order"),
@@ -463,7 +556,6 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         abstract = True
         ordering = ("project", "sort_order", "sub_sort_order", "sqid")
         rebac_resource_type = "projects/task"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("project", "sort_order"),
@@ -511,9 +603,9 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
         if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
             return self
-        self.status = self.TaskStatus.DONE
+        cast(Any, self).status = str(self.TaskStatus.DONE)
         self.done_at = self.done_at or timezone.now()
-        self.dropped_reason = None
+        cast(Any, self).dropped_reason = None
         self.dropped_at = None
         self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
         return self
@@ -527,8 +619,8 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
             raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
         if self.status == self.TaskStatus.DROPPED and self.dropped_reason == reason_member and self.dropped_at:
             return self
-        self.status = self.TaskStatus.DROPPED
-        self.dropped_reason = reason_member
+        cast(Any, self).status = str(self.TaskStatus.DROPPED)
+        cast(Any, self).dropped_reason = str(reason_member)
         self.dropped_at = self.dropped_at or timezone.now()
         self.done_at = None
         self.save(update_fields=("status", "dropped_reason", "dropped_at", "done_at", "updated_at"))
@@ -544,9 +636,9 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
             and self.dropped_at is None
         ):
             return self
-        self.status = self.TaskStatus.OPEN
+        cast(Any, self).status = str(self.TaskStatus.OPEN)
         self.done_at = None
-        self.dropped_reason = None
+        cast(Any, self).dropped_reason = None
         self.dropped_at = None
         self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
         return self
@@ -637,7 +729,6 @@ class TaskRelation(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("task", "related_task", "sqid")
         rebac_resource_type = "projects/task_relation"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("task", "related_task"),
@@ -667,14 +758,16 @@ class TaskRelation(AuditMixin, AngeeDataModel):
     def _canonicalize_symmetric_pair(self) -> bool:
         """Order symmetric relation endpoints by primary key."""
 
+        task_id = cast(Any, self).task_id
+        related_task_id = cast(Any, self).related_task_id
         if (
             self.kind not in self.SYMMETRIC_KINDS
-            or self.task_id is None
-            or self.related_task_id is None
-            or self.task_id < self.related_task_id
+            or task_id is None
+            or related_task_id is None
+            or task_id < related_task_id
         ):
             return False
-        self.task_id, self.related_task_id = self.related_task_id, self.task_id
+        cast(Any, self).task_id, cast(Any, self).related_task_id = related_task_id, task_id
         return True
 
     @property
@@ -724,7 +817,6 @@ class Participant(AuditMixin, AngeeDataModel):
         abstract = True
         ordering = ("project", "kind", "sqid")
         rebac_resource_type = "projects/participant"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("project", "party"),
@@ -736,6 +828,124 @@ class Participant(AuditMixin, AngeeDataModel):
         """Return a readable involvement label."""
 
         return f"{self.party_id} in {self.project_id}"
+
+
+class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
+    """One explicit projects-owned statement that a resource belongs to a project."""
+
+    runtime = True
+    sqid_prefix = "pbd_"
+    allowed_target_models = frozenset(
+        {
+            "messaging.channel",
+            "messaging.thread",
+            "storage.drive",
+            "storage.folder",
+        }
+    )
+    """Concrete input models accepted before MTI target canonicalization."""
+
+    project = models.ForeignKey(
+        "projects.Project",
+        on_delete=models.CASCADE,
+        related_name="resource_bindings",
+    )
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
+    object_id = models.PositiveBigIntegerField()
+    target = GenericForeignKey("content_type", "object_id")
+
+    objects = ProjectBindingManager.from_queryset(ProjectBindingQuerySet)()
+
+    class Meta:
+        """Django model options for explicit project resource bindings."""
+
+        abstract = True
+        ordering = ("project", "content_type", "object_id", "sqid")
+        rebac_resource_type = "projects/project_binding"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("project", "content_type", "object_id"),
+                name="uq_projects_binding_project_target",
+            ),
+        )
+        indexes = (models.Index(fields=("content_type", "object_id")),)
+
+    @classmethod
+    def validate_target(cls, target: models.Model) -> None:
+        """Reject resources outside the single projects-owned binding declaration."""
+
+        target_label = target._meta.label_lower
+        for allowed_label in cls.allowed_target_models:
+            allowed_model = apps.get_model(allowed_label)
+            canonical_model = canonical_record_model(allowed_model)
+            if target_label == allowed_label:
+                return
+            if (
+                target_label == canonical_model._meta.label_lower
+                and allowed_model._base_manager.filter(pk=target.pk).exists()
+            ):
+                return
+        raise ValidationError(
+            {"target": "Project bindings may target only drives, folders, messaging channels, or threads."}
+        )
+
+    def clean(self) -> None:
+        """Require a live allowed target."""
+
+        super().clean()
+        if self.target is None:
+            raise ValidationError({"target": "A project binding target is required."})
+        self.validate_target(self.target)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Canonicalize every persisted target through the projects binding owner."""
+
+        target = self.target
+        if target is None:
+            raise ValidationError({"target": "A project binding target is required."})
+        self.validate_target(target)
+        key_fields = {"project", "project_id", "content_type", "content_type_id", "object_id"}
+        update_fields = kwargs.get("update_fields")
+        key_is_written = update_fields is None or bool(key_fields.intersection(update_fields))
+        canonical = canonical_record_target(target)
+        if key_is_written:
+            from angee.projects.access import require_binding_access
+
+            if not self._state.adding:
+                previous = type(self)._base_manager.filter(pk=self.pk).values_list(
+                    "project_id", "content_type_id", "object_id"
+                ).first()
+                current = (self.project_id, canonical.content_type.pk, canonical.object_id)
+                if previous is not None and previous != current:
+                    previous_project_id, previous_content_type_id, previous_object_id = previous
+                    previous_project = apps.get_model("projects", "Project").objects.filter(
+                        pk=previous_project_id
+                    ).first()
+                    if previous_project is None:
+                        raise PermissionDenied("Share access to the previous binding project is required.")
+                    previous_content_type = ContentType.objects.get_for_id(previous_content_type_id)
+                    previous_target = previous_content_type.get_object_for_this_type(pk=previous_object_id)
+                    require_binding_access(project=previous_project, target=previous_target)
+            require_binding_access(project=self.project, target=target)
+        self.content_type = canonical.content_type
+        self.object_id = canonical.object_id
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Require canonical unbind authority for direct instance deletion."""
+
+        from angee.projects.access import require_binding_access
+
+        target = self.target
+        if target is None:
+            raise ValidationError({"target": "A live project binding target is required for deletion."})
+        require_binding_access(project=self.project, target=target)
+        return super().delete(*args, **kwargs)
+
+    def __str__(self) -> str:
+        """Return a readable project-to-resource binding label."""
+
+        return f"{self.project_id} -> {self.content_type_id}:{self.object_id}"
 
 
 class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
@@ -759,7 +969,6 @@ class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
         abstract = True
         ordering = ("-updated_at", "url", "sqid")
         rebac_resource_type = "projects/link"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("content_type", "object_id", "url"),
@@ -798,3 +1007,52 @@ class ThreadActivityProjects(models.Model):
 
         task_model = apps.get_model("projects", "Task")
         return task_model.objects.from_activity(self)
+
+
+class ProjectBindingsMixin(models.Model):
+    """Projects-owned reverse collection for canonical generic bindings."""
+
+    project_bindings = GenericRelation(
+        "projects.ProjectBinding",
+        content_type_field="content_type",
+        object_id_field="object_id",
+    )
+
+    class Meta:
+        abstract = True
+
+
+class FolderProjects(ProjectBindingsMixin):
+    """Compose project binding collection onto storage folders."""
+
+    extends = "storage.Folder"
+
+    class Meta:
+        abstract = True
+
+
+class DriveProjects(ProjectBindingsMixin):
+    """Projects-owned reverse collection for storage-drive bindings."""
+
+    extends = "storage.Drive"
+
+    class Meta:
+        abstract = True
+
+
+class IntegrationProjects(ProjectBindingsMixin):
+    """Projects-owned reverse collection for canonical messaging-channel bindings."""
+
+    extends = "integrate.Integration"
+
+    class Meta:
+        abstract = True
+
+
+class ThreadProjects(ProjectBindingsMixin):
+    """Projects-owned reverse collection for messaging-thread bindings."""
+
+    extends = "messaging.Thread"
+
+    class Meta:
+        abstract = True

@@ -12,16 +12,14 @@ from typing import Any
 import pytest
 import strawberry
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from rebac import SubjectRef, actor_context, app_settings, system_context
+from rebac import actor_context, system_context, to_subject_ref
 from rebac.errors import MissingActorError
 from rebac.errors import PermissionDenied as RebacPermissionDenied
-from rebac.roles import grant
 
 from angee.base.models import AngeeDataModel, AngeeModel
 from angee.graphql.events import ChangePayload
@@ -31,6 +29,7 @@ from angee.integrate.models import Bridge
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import HandlerStep, StepResult
 from tests.conftest import SchemaAddon, execute_schema, result_data
+from tests.iam_models import Group
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
     Edge,
@@ -83,7 +82,6 @@ class SecuredTriggerSubject(AngeeDataModel):
         app_label = "chatterdemo"
         db_table = "test_workflows_secured_trigger_subject"
         rebac_resource_type = "chatterdemo/doc"
-        rebac_id_attr = "sqid"
 
 
 class UnpublishedTriggerSubject(models.Model):
@@ -130,7 +128,7 @@ def workflow_trigger_tables(
     """Create trigger-specific concrete tables and sync workflow REBAC."""
 
     del transactional_db, executable_handler
-    models = (*WORKFLOW_RUNTIME_MODELS, *TRIGGER_TEST_MODELS)
+    models = (Group, *WORKFLOW_RUNTIME_MODELS, *TRIGGER_TEST_MODELS)
     workflow_triggers = importlib.import_module("angee.workflows.triggers")
     schemas = GraphQLSchemas(
         [
@@ -1181,26 +1179,24 @@ def test_workflow_head_shares_reach_publications_and_versions_reject_direct_mana
     admin = _platform_admin("workflow-share-admin")
     reader = User.objects.create_user(username="workflow-share-reader")
     group_reader = User.objects.create_user(username="workflow-share-group-reader")
-    group = Group.objects.create(name="workflow-share-group")
-    group.user_set.add(group_reader)
     with actor_context(admin):
+        group = Group.objects.create(name="workflow-share-group")
+        group.add_member(str(to_subject_ref(group_reader)))
         head = Workflow.objects.create(name="Shared workflow")
         Step.objects.create(workflow=head, key="start", name="Start", is_entry=True)
         published = head.publish()
         head.grant_record_access("viewer", reader)
-        head.grant_record_access("viewer", SubjectRef.of("auth/group", str(group.pk), "member"))
+        head.grant_record_access("viewer", group)
 
     assert Workflow.objects.with_actor(reader).filter(pk=published.pk).exists()
     assert Workflow.objects.with_actor(group_reader).filter(pk=published.pk).exists()
 
-    from angee.graphql.sharing import _require_shareable_head
-
-    with pytest.raises(ValueError, match="lineage head"):
-        _require_shareable_head(published)
+    with pytest.raises(ValidationError, match="lineage head"):
+        published.validate_record_access_target()
 
     with actor_context(admin):
         head.revoke_record_access("viewer", reader)
-        head.revoke_record_access("viewer", SubjectRef.of("auth/group", str(group.pk), "member"))
+        head.revoke_record_access("viewer", group)
     assert not Workflow.objects.with_actor(reader).filter(pk=published.pk).exists()
     assert not Workflow.objects.with_actor(group_reader).filter(pk=published.pk).exists()
 
@@ -1469,5 +1465,4 @@ def _platform_admin(username: str) -> Any:
     """Create a superuser holding the platform-admin role tuple."""
 
     admin = User.objects.create_superuser(username=username, email=f"{username}@example.com", password="admin")
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin

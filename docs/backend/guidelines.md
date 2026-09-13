@@ -245,8 +245,8 @@ Use these owners instead of maintaining another contract in an addon:
 - REBAC is structural and owned by `django-zed-rebac`. Addons declare
   `permissions.zed` beside the owning app. Permission sync is the library's
   own `manage.py rebac sync`. Use the library's
-  field-backed relations (`// rebac:field=...`) when a relationship is already
-  represented by a Django FK or one-to-one field. See the REBAC section below for
+  live ORM-backed relations when a relationship is already represented by a
+  Django field, path, or membership table. See the REBAC section below for
   this project's fail-closed posture and its traps.
 - For a vendor-backed capability, keep catalogue models pure metadata, model the
   connection shape at the row that stores its fields, and put the provider
@@ -375,16 +375,120 @@ This project runs **fail-closed**: `REBAC_STRICT_MODE=True` and
 `REBAC_SUPERUSER_BYPASS=False`, so every actor — superusers included — reaches
 data through REBAC, never a queryset bypass.
 
-- **One attribution vocabulary (the layered-principal rule).** Any column that
-  answers "who did this" — audit stamps, history users, revision authors — is an
-  FK to `AUTH_USER_MODEL`, never a species-specific FK and never a string
-  subject column. At the database layer, `user = service account = actor =
-  principal`: one table represents every principal, person or service (`kind`
-  lives on the row). Above that layer the words diverge on purpose — the REBAC
-  *actor* keeps its species (`agents/agent` is never collapsed into a user for
-  permission evaluation); attribution converges through `actor_user_id` and the
-  subject-type resolver registry. See the glossary's Principal/Actor/Service
+- **One user identity for authorization and attribution.** Every person and
+  agent acts as its own `AUTH_USER_MODEL` row. An agent's `kind=service` account
+  is selected by `Agent.principal_subject()`; permissions and audit stamps use
+  that same user. The agent's reach is its grants, independent of its owner's
+  reach. Service users satisfy `authenticated` and `auth/user:*` like other
+  users. `actor_user_id` converts the canonical PK subject ID to its FK type
+  without a database lookup. See the glossary's Principal/Actor/Service
   account entries.
+- **Model-backed authorization IDs are primary keys.** Use the native
+  `to_object_ref(instance)` and `to_subject_ref(instance)` APIs; Angee models
+  retain the library's `pk` identity default. Sqids are public representations
+  owned by the model's public-ID field, not alternate authorization identities.
+  Transport subject strings pass through
+  [the public identity boundary](../../angee/base/identity.py) before reaching
+  REBAC, and outputs encode the PK there. Tableless role anchors keep named IDs.
+  Changing a public prefix or codec must never change grants.
+- **Container inheritance belongs to the resource and scope owners.** A
+  resource's FK relations and arrows live in its own Zed definition. A scope
+  contributes additional relations and arrows through its own
+  `permissions.extends.zed`; its binding writer mirrors the persisted evidence
+  and reconciles edits and deletion. See
+  [project bindings](../../addons/angee/projects/access.py). Binding a resource
+  widens access to its contents, so the binding owner must authorize both ends.
+- **Declare direct sharing once.** Models declare `rebac_grantable`; the
+  [record-access API](../../addons/angee/graphql/sharing.py) dispatches bulk
+  grants and revocations through the model's checked methods. Addons do not
+  define private share mutations. Metadata projects the grant surface and the
+  subject resource's public identity field; the API converts selected public
+  subjects to canonical PK references before validating and writing grants.
+- **Recipient discovery follows identity read policy.** IAM's user resource
+  includes readable people and service users; human-only membership pickers
+  use its people collection. IAM owns the group model and declares its native
+  default subject relation as `member`; `to_subject_ref(group)` supplies the
+  canonical subject set. Group membership accepts people and service users.
+  Members can discover their groups and inspect their membership and bindings;
+  platform admins can discover all groups. Group mutations enforce the group's
+  write permission.
+- **Roles are schema; groups are data.** Addons declare named role anchors and
+  their reach. The hub derives its role catalogue from native schema
+  introspection, including roles with no members. An IAM group with bindings
+  is a dynamic composite role: grant its `auth/group#member` set relations on
+  records and membership in declared roles. Runtime data chooses memberships
+  and grants; schema remains the only source of new permission arms.
+- **Relations constrain stored subjects; permissions compute their reach.** A
+  role hierarchy stores a plain role subject (`relation includes: <ns>/role`)
+  and expands it with `includes->effective_member`. Likewise, a resource stores
+  a role relation, optionally restricted to a fixed role ID
+  (`relation manager: <ns>/role:<id>`), and arrows through `effective_member`;
+  never name a permission such as `#effective_member` in a relation's allowed
+  subject types. Usersets backed by relations, such as `auth/group#member`,
+  remain valid stored subjects.
+- **Migrate permission-subject grants before syncing the replacement schema.**
+  Upgrades from the permission-userset schemas must materialize and apply the
+  addon-owned `role_subject_relations` migrations before `rebac sync` or tool
+  catalogue reconciliation. IAM owns role hierarchy edges; agents owns tool
+  bundles; money, sequence and UOM own their stored manager grants. These
+  transitions preserve IDs and grant conditions in both relationship stores.
+  A collision with different conditions requires an explicit resolution;
+  do not discard either grant or flatten effective membership into direct members.
+  See the [IAM transition](../../addons/angee/iam/runtime_migrations/role_subject_relations.py)
+  and [agent transition](../../addons/angee/agents/runtime_migrations/role_subject_relations.py).
+- **Migrate stored identities before resuming authorization traffic.** Stop
+  application writers before applying the addon migrations, then run the stack
+  host's `manage.py migrate_rebac_ids` to preview the one-time sqid-to-PK
+  transition, then `manage.py migrate_rebac_ids --apply`, before `rebac sync`
+  and catalogue reconciliation. The
+  [migration owner](../../angee/base/identity_migration.py) checks both physical
+  stores, validates model and registry evidence, and applies one transaction.
+  It preserves conditions and the newest transaction stamp when identical
+  grants converge; ambiguous IDs or conflicting conditions stop the upgrade.
+  The plan holds all stored relationships in memory and resolves distinct
+  references against their owning models, so budget the maintenance window
+  from the preview on the actual database. Historical audit records keep their
+  original representation. Downgrading application code alone does not reverse
+  this data transition.
+  Before `migrate`, inspect already-materialized migration copies: accepted
+  historical source digests preserve applied history, but do not repair an old
+  copied body that has not run. Handle verified unapplied copies under the
+  [migration policy](#migrations-and-runtime); never rewrite applied copies.
+- **Membership has one store and one writer.** Use `rebac.memberships` for
+  direct memberships in groups and role containers. IAM's model and hub own
+  authorization and subject-existence policy; the library owns tuple
+  validation, persistence and exact caveat revocation. Do not add Django group
+  M2Ms or synchronize `auth.Permission`, `Group.permissions`, or
+  `user_permissions`. IAM owns its group table; the contrib auth group and
+  permission tables remain unused after the PK-preserving adoption migration.
+- **Django login and permission backends are separate contracts.** IAM's
+  authentication backend checks credentials and reloads active people. Its
+  inherited permission methods grant nothing; it does not query Django
+  permission tables. The native REBAC permissions mixin delegates to installed
+  authorization backends without its own superuser shortcut. An additional
+  backend may grant codenames through normal Django chaining, so removing the
+  REBAC backend alone is not a global fail-closed guarantee.
+- **Read derived facts from their owner.** Native live ORM backing exposes
+  user kind/activity, active superuser authority, roster roles and selected
+  tools without tuple mirrors. `User.is_superuser` is the sole source of
+  `angee/role:admin#member`; the hub displays this role as read-only.
+  Bulk inserts and updates therefore take effect without a reconciliation
+  command. Human-only workflow completion and proposal evaluation intersect
+  authority with `iam/kind:person#active_member`, including admin authority;
+  ordinary read/share grants and service requesters remain valid.
+- **Upgrade the stored evidence with the schema.** When upgrading from agents
+  schema revision 4 or installing project container inheritance, compose and
+  apply the generated migrations first, then sync the new REBAC schema. Run
+  `uv run manage.py resync_tool_grants` to migrate retired agent memberships
+  and `uv run manage.py resync_project_access` to reconcile existing project
+  bindings. Run these through the stack host described in
+  [Checks](../checks.md#composition-and-schema); each command delegates to its
+  addon owner and is idempotent.
+  The live-backing migrations remove uncaveated tuples evidenced by the old
+  roster and selection mirrors while preserving unrelated grants. Identical
+  manual grants cannot be distinguished from those mirrors and are removed.
+  The admin migration stops on grants not explained by superuser fields, so
+  unexpected legacy authority must be resolved before cutover.
 - **Visibility and access are REBAC-native, always.** Put relations and
   permission arms on the model's zed and let the store scope reads; never stand
   authorization up with a Python provider, `visible_to` projection, or queryset
@@ -417,10 +521,11 @@ data through REBAC, never a queryset bypass.
   const-backed relation to the role namespace and arrows through
   `effective_member`: `relation manager: storage/role // rebac:const=storage_admin`
   with `permission … = manager->effective_member` (mirror of `admin->member`).
-  Never a pinned-id userset allowed subject
-  (`storage/role:storage_admin#effective_member`): nobody writes the per-row tuple
-  it needs and the local backend never synthesises one — the subject-set walk
-  scans relations only, so a permission-typed `#effective_member` userset denies.
+  A stored, per-resource relationship may instead restrict its allowed subject
+  to a fixed plain role (`relation manager: storage/role:storage_admin`) and
+  arrow through `manager->effective_member`; this retains the tuple and any
+  caveat. Appending the computed `#effective_member` permission to that allowed
+  subject is invalid.
   The const *target* role namespace needs its own `definition` + `managed=False`
   anchor model (like the resource's const admin), because a **non-member** check
   walks the arrow into `<ns>/role#admin`; without the anchor that const cannot
@@ -450,10 +555,9 @@ data through REBAC, never a queryset bypass.
   additive extension. **Editing a framework/base-addon `permissions.zed` to name
   a domain role (`accountant`, `salesperson`, …) is a bug** — the vocabulary
   belongs in the consumer addon that owns the concern.
-- There is no `rebac_roles` command — grant roles with `rebac.roles.grant`. A
-  superuser created without a real `save()` (bulk_create, loaddata, or skipped as
-  unchanged) is never in `angee/role:admin#member`, so const-admin reach fails
-  until re-granted.
+- There is no `rebac_roles` command. Grant writable role memberships through
+  `rebac.memberships`; change derived membership at its model field. Bulk-created
+  and bulk-updated active superusers have const-admin reach immediately.
 - Never `select_related` a REBAC-guarded relation into an actor-scoped queryset —
   it fails live ("loaded N rows outside actor scope") while passing unit tests.
   Resolve the field elevated by FK id under `system_context`, and verify by

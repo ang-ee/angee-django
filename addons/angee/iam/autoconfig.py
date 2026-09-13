@@ -22,7 +22,6 @@ SETTINGS = {
     ],
     "AUTHENTICATION_BACKENDS:append": [
         "axes.backends.AxesStandaloneBackend",
-        "rebac.backends.auth.RebacBackend",
         "angee.iam.auth.ModelBackend",
     ],
 }

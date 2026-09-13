@@ -10,6 +10,8 @@ export { defineAngeeSchemaMetadata } from "./artifact-schema.js";
 export type {
   AngeeSchemaMetadata,
   DataResourceAggregateMeasureMetadata,
+  DataResourceSubjectType,
+  DataResourceGrantableRelation,
   DataResourceFieldMetadata,
   DataResourceLinesMetadata,
   DataResourceMetadata,

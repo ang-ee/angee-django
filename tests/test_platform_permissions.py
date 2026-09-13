@@ -330,8 +330,8 @@ def test_reconcile_directly_purges_stale_relations_from_active_store(
         subject_id="old-reader",
     )
     unrelated_tuple = relationship_model.objects.create(
-        resource_type="angee/role",
-        resource_id="admin",
+        resource_type="knowledge/role",
+        resource_id="vault_viewer",
         relation="member",
         subject_type="auth/user",
         subject_id="kept-reader",

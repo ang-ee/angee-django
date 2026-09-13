@@ -1,0 +1,33 @@
+// Project-owned container access contributed to upstream resource definitions.
+// @rebac_package: projects
+// @rebac_schema_revision: 1
+
+definition storage/drive {
+    relation project: projects/project
+
+    permission read = project->read
+    permission write = project->write
+}
+
+definition storage/folder {
+    relation project: projects/project
+
+    permission read = project->read
+    permission write = project->write
+}
+
+// Messaging Thread.channel and Message.channel are field-backed references to
+// the Integration MTI parent, so a concrete Channel binding must meet them here.
+definition integrate/integration {
+    relation project: projects/project
+
+    permission read = project->read
+    permission write = project->write
+}
+
+definition messaging/thread {
+    relation project: projects/project
+
+    permission read = project->read
+    permission write = project->write
+}

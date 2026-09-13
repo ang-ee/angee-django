@@ -12,14 +12,24 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory, override_settings
-from rebac import ObjectRef, app_settings, system_context
+from rebac import (
+    ObjectRef,
+    RelationshipTuple,
+    resolve_subjects,
+    system_context,
+    to_object_ref,
+    write_relationships,
+)
 from rebac.actors import to_subject_ref
 from rebac.models import active_relationship_model
+from rebac.resources import model_for_resource_type
 from rebac.roles import ROLE_RELATION, grant
 
+from angee.graphql.data.metadata import _grantable_relations
 from tests.conftest import IAM_CONNECTION_TEST_MODELS, _clear_model_tables, addon_schema, execute_schema
 from tests.conftest import _create_missing_tables as _create_connection_tables
 from tests.conftest import result_data as _data
+from tests.projects_models import Project
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -37,11 +47,6 @@ def test_permission_hub_queries_are_admin_only(
     grant(actor=target, role="angee/role:auditor")
     console_schema = _schema("console")
     queries = [
-        """
-        query {
-          users(limit: 10) { username }
-        }
-        """,
         """
         query {
           roles { id namespace label }
@@ -77,11 +82,19 @@ def test_permission_hub_queries_are_admin_only(
         allowed = _execute(console_schema, query, user=admin)
         assert allowed.errors is None
 
+    User.objects.filter(pk=plain.pk).update(is_superuser=True)
+    plain.refresh_from_db()
+    assert _execute(console_schema, queries[0], user=plain).errors is None
 
-def test_users_resource_lists_people_not_service_accounts(
+    User.objects.filter(pk=plain.pk).update(is_active=False)
+    plain.refresh_from_db()
+    assert _execute(console_schema, queries[0], user=plain).errors is not None
+
+
+def test_users_resource_includes_service_accounts(
     iam_permission_hub_tables: None,
 ) -> None:
-    """The console users catalogue is a people picker/list, not an attribution dump."""
+    """The identity catalogue includes service users so access grants can select agents."""
 
     admin = _platform_admin("hub-people-admin")
     User.objects.create_user(username="hub-person", email="hub-person@example.com")
@@ -107,7 +120,7 @@ def test_users_resource_lists_people_not_service_accounts(
     )
 
     assert {"username": "hub-person", "kind": "PERSON"} in data["users"]
-    assert all(row["username"] != "hub-service" for row in data["users"])
+    assert {"username": "hub-service", "kind": "SERVICE"} in data["users"]
 
 
 def test_rebac_relationships_resource_is_admin_scoped(
@@ -229,7 +242,7 @@ def test_roles_query_excludes_role_types_missing_from_rebac_schema(
         username="hub-role-filter-target",
         email="target@example.com",
     )
-    grant(actor=target, role="angee/role:admin")
+    grant(actor=target, role="angee/role:auditor")
     subject_ref = to_subject_ref(target)
     with system_context(reason="test orphaned role tuple"):
         active_relationship_model().objects.create(
@@ -264,9 +277,66 @@ def test_roles_query_excludes_role_types_missing_from_rebac_schema(
     assert {"id": "admin", "namespace": "angee", "label": "Admin"} in roles
     assert {"id": "note_admin", "namespace": "notes", "label": "Note Admin"} not in roles
     assert {f"{role['namespace']}/role" for role in roles} <= schema_role_types
-    assert "angee/role:admin" in {grant["role"] for grant in grants}
+    assert "angee/role:auditor" in {grant["role"] for grant in grants}
     assert "notes/role:note_admin" not in {grant["role"] for grant in grants}
     assert {grant["role"].split(":", 1)[0] for grant in grants} <= schema_role_types
+
+
+def test_roles_include_declared_empty_and_tuple_only_legacy_rows(
+    iam_permission_hub_tables: None,
+) -> None:
+    """Schema names are grantable while retained tuple-only role ids stay visible."""
+
+    admin = _platform_admin("hub-role-catalogue-admin")
+    target = User.objects.create_user(username="hub-role-catalogue-target")
+    subject = to_subject_ref(target)
+    with system_context(reason="test tuple-only legacy role"):
+        active_relationship_model().objects.create(
+            resource_type="angee/role",
+            resource_id="retired_operator",
+            relation=ROLE_RELATION,
+            subject_type=subject.subject_type,
+            subject_id=subject.subject_id,
+            optional_subject_relation=subject.optional_relation,
+            caveat_name="",
+            caveat_context=None,
+        )
+
+    rows = _data(
+        _execute(
+            _schema("console"),
+            "query { iam_roles(limit: 1000) { id declared grantable } }",
+            user=admin,
+        )
+    )["iam_roles"]
+
+    assert {
+        "id": "knowledge/role:vault_viewer",
+        "declared": True,
+        "grantable": True,
+    } in rows
+    assert {
+        "id": "angee/role:retired_operator",
+        "declared": False,
+        "grantable": False,
+    } in rows
+    admin_role = next(row for row in rows if row["id"] == "angee/role:admin")
+    assert admin_role == {
+        "id": "angee/role:admin",
+        "declared": True,
+        "grantable": False,
+    }
+    rejected = _execute(
+        _schema("console"),
+        """
+        mutation($subject: String!) {
+          grant_role(subject: $subject, role: "angee/role:retired_operator")
+        }
+        """,
+        {"subject": str(subject)},
+        user=admin,
+    )
+    assert rejected.errors is not None
 
 
 def test_grants_query_labels_principals_by_display_name(
@@ -285,22 +355,22 @@ def test_grants_query_labels_principals_by_display_name(
         username="hub-label-plain",
         email="plain@example.com",
     )
-    grant(actor=named, role="angee/role:admin")
-    grant(actor=plain, role="angee/role:admin")
+    grant(actor=named, role="angee/role:auditor")
+    grant(actor=plain, role="angee/role:auditor")
 
     data = _data(
         _execute(
             _schema("console"),
             """
             query {
-              iam_grants(limit: 50) { principal_id principal_label }
+              iam_grants(limit: 50) { subject_id subject_label }
             }
             """,
             user=admin,
         )
     )
     labels = {
-        row["principal_id"]: row["principal_label"]
+        row["subject_id"]: row["subject_label"]
         for row in data["iam_grants"]
     }
     assert labels[str(named.sqid)] == "Named Owner"
@@ -318,13 +388,18 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
             username=f"hub-overview-target-{index:03d}",
             email=f"target-{index:03d}@example.com",
         )
+    User.objects.create_user(
+        username="zz-hub-overview-service",
+        kind="service",
+    )
     targets = list(
         User.objects.sudo(reason="test.iam.overview.targets")
         .filter(username__startswith="hub-overview-target-")
         .order_by("username")
     )
     grant(actor=targets[0], role="angee/role:auditor")
-    grant(actor=targets[-1], role="angee/role:admin")
+    grant(actor=targets[-1], role="angee/role:auditor")
+    User.objects.filter(pk=targets[-1].pk).update(is_superuser=True)
 
     data = _data(
         _execute(
@@ -352,8 +427,8 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
                   grant_count
                 }
                 privileged_grants {
-                  principal_id
-                  principal_label
+                  subject_id
+                  subject_label
                   role
                 }
                 unassigned_users {
@@ -369,20 +444,17 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
     overview = data["iam_overview"]
     assert len(data["users"]) == 1
     assert len(data["iam_grants"]) == 1
-    assert data["users_aggregate"]["aggregate"]["count"] == 506
-    assert data["iam_grants_aggregate"]["aggregate"]["count"] == 3
-    assert overview["user_count"] == 506
-    assert overview["role_count"] == 2
-    assert overview["grant_count"] == 3
-    assert overview["relationship_count"] == 3
-    assert overview["privileged_grant_count"] == 2
-    assert overview["unassigned_user_count"] == 503
-    assert overview["namespaces"] == [
-        {"namespace": "angee", "role_count": 2, "grant_count": 3},
-    ]
-    assert {row["role"] for row in overview["privileged_grants"]} == {
-        "angee/role:admin",
-    }
+    assert data["users_aggregate"]["aggregate"]["count"] == 507
+    assert data["iam_grants_aggregate"]["aggregate"]["count"] == 2
+    assert overview["user_count"] == 507
+    assert overview["role_count"] == len(iam_roles.permission_hub_roles(limit=None))
+    assert overview["grant_count"] == 2
+    assert overview["relationship_count"] == 2
+    assert overview["privileged_grant_count"] == 0
+    assert overview["unassigned_user_count"] == 505
+    angee_namespace = next(row for row in overview["namespaces"] if row["namespace"] == "angee")
+    assert angee_namespace["grant_count"] == 2
+    assert overview["privileged_grants"] == []
     assert [row["username"] for row in overview["unassigned_users"]] == [
         "hub-overview-target-001",
         "hub-overview-target-002",
@@ -425,9 +497,9 @@ def test_iam_overview_privileged_grants_on_registry_relationship_storage(
             )
         )["iam_overview"]
 
-    assert overview["grant_count"] == 2
-    assert overview["privileged_grant_count"] == 1
-    assert {row["role"] for row in overview["privileged_grants"]} == {"angee/role:admin"}
+    assert overview["grant_count"] == 1
+    assert overview["privileged_grant_count"] == 0
+    assert overview["privileged_grants"] == []
 
 
 def test_permission_hub_mutations_are_admin_only(
@@ -440,18 +512,18 @@ def test_permission_hub_mutations_are_admin_only(
     target = User.objects.create_user(username="hub-mutate-target", email="target@example.com")
     console_schema = _schema("console")
     grant_mutation = """
-        mutation Grant($principalId: String!, $role: String!) {
-          grant_role(principal_id: $principalId, role: $role)
+        mutation Grant($subject: String!, $role: String!) {
+          grant_role(subject: $subject, role: $role)
         }
     """
     revoke_mutation = """
-        mutation Revoke($principalId: String!, $role: String!) {
-          revoke_role(principal_id: $principalId, role: $role)
+        mutation Revoke($subject: String!, $role: String!) {
+          revoke_role(subject: $subject, role: $role)
         }
     """
     variables = {
-        "principalId": str(target.pk),
-        "role": "angee/role:console_operator",
+        "subject": f"auth/user:{target.sqid}",
+        "role": "knowledge/role:vault_viewer",
     }
 
     denied_grant = _execute(console_schema, grant_mutation, variables, user=plain)
@@ -459,6 +531,13 @@ def test_permission_hub_mutations_are_admin_only(
 
     granted = _data(_execute(console_schema, grant_mutation, variables, user=admin))
     assert granted["grant_role"] is True
+    stored = active_relationship_model().objects.get(
+        resource_type="knowledge/role",
+        resource_id="vault_viewer",
+        relation=ROLE_RELATION,
+        subject_type="auth/user",
+    )
+    assert stored.subject_id == str(target.pk)
 
     denied_revoke = _execute(console_schema, revoke_mutation, variables, user=plain)
     assert denied_revoke.errors is not None
@@ -476,16 +555,16 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
     target = User.objects.create_user(username="hub-write-target", email="target@example.com")
     console_schema = _schema("console")
     variables = {
-        "principalId": str(target.pk),
-        "role": "angee/role:tuple_writer",
+        "subject": str(to_subject_ref(target)),
+        "role": "knowledge/role:vault_viewer",
     }
 
     granted = _data(
         _execute(
             console_schema,
             """
-            mutation Grant($principalId: String!, $role: String!) {
-              grant_role(principal_id: $principalId, role: $role)
+            mutation Grant($subject: String!, $role: String!) {
+              grant_role(subject: $subject, role: $role)
             }
             """,
             variables,
@@ -500,8 +579,8 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
         _execute(
             console_schema,
             """
-            mutation Revoke($principalId: String!, $role: String!) {
-              revoke_role(principal_id: $principalId, role: $role)
+            mutation Revoke($subject: String!, $role: String!) {
+              revoke_role(subject: $subject, role: $role)
             }
             """,
             variables,
@@ -513,10 +592,10 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
     assert not _role_membership_exists(target, variables["role"])
 
 
-def test_grant_role_accepts_user_public_id(
+def test_grant_role_accepts_canonical_user_subject(
     iam_permission_hub_tables: None,
 ) -> None:
-    """The grant mutation accepts the public id exposed by UserType.id."""
+    """The grant mutation accepts the canonical subject exposed by UserType."""
 
     admin = _platform_admin("hub-relay-admin")
     target = User.objects.create_user(
@@ -524,18 +603,17 @@ def test_grant_role_accepts_user_public_id(
         email="target@example.com",
     )
     console_schema = _schema("console")
-    node_id = str(getattr(target, "sqid", target.pk))
     variables = {
-        "principalId": node_id,
-        "role": "angee/role:relay_writer",
+        "subject": str(to_subject_ref(target)),
+        "role": "knowledge/role:vault_viewer",
     }
 
     granted = _data(
         _execute(
             console_schema,
             """
-            mutation Grant($principalId: String!, $role: String!) {
-              grant_role(principal_id: $principalId, role: $role)
+            mutation Grant($subject: String!, $role: String!) {
+              grant_role(subject: $subject, role: $role)
             }
             """,
             variables,
@@ -550,8 +628,8 @@ def test_grant_role_accepts_user_public_id(
         _execute(
             console_schema,
             """
-            mutation Revoke($principalId: String!, $role: String!) {
-              revoke_role(principal_id: $principalId, role: $role)
+            mutation Revoke($subject: String!, $role: String!) {
+              revoke_role(subject: $subject, role: $role)
             }
             """,
             variables,
@@ -563,7 +641,7 @@ def test_grant_role_accepts_user_public_id(
     assert not _role_membership_exists(target, variables["role"])
 
 
-def test_grant_role_rejects_encoded_relay_id(
+def test_grant_role_rejects_noncanonical_subject(
     iam_permission_hub_tables: None,
 ) -> None:
     """Encoded Relay IDs are not accepted as public principal IDs."""
@@ -578,12 +656,12 @@ def test_grant_role_rejects_encoded_relay_id(
     result = _execute(
         console_schema,
         """
-        mutation Grant($principalId: String!, $role: String!) {
-          grant_role(principal_id: $principalId, role: $role)
+        mutation Grant($subject: String!, $role: String!) {
+          grant_role(subject: $subject, role: $role)
         }
         """,
         {
-            "principalId": f"OAuthClientType:{getattr(target, 'sqid', target.pk)}",
+            "subject": f"OAuthClientType:{getattr(target, 'sqid', target.pk)}",
             "role": role,
         },
         user=admin,
@@ -607,11 +685,11 @@ def test_revoke_role_returns_false_for_missing_membership(
         _execute(
             console_schema,
             """
-            mutation Revoke($principalId: String!, $role: String!) {
-              revoke_role(principal_id: $principalId, role: $role)
+            mutation Revoke($subject: String!, $role: String!) {
+              revoke_role(subject: $subject, role: $role)
             }
             """,
-            {"principalId": str(target.pk), "role": role},
+            {"subject": str(to_subject_ref(target)), "role": role},
             user=admin,
         )
     )
@@ -650,12 +728,12 @@ def test_caveated_grants_have_distinct_identity_and_revoke_exact_selected_tuple(
             _execute(
                 _schema("console"),
                 """
-                query { iam_grants(limit: 50) { id principal_id role caveat_name } }
+                query { iam_grants(limit: 50) { id subject_id role caveat_name } }
                 """,
                 user=admin,
             )
         )["iam_grants"]
-        selected = [row for row in listed if row["principal_id"] == str(target.sqid) and row["role"] == role]
+        selected = [row for row in listed if row["subject_id"] == str(target.sqid) and row["role"] == role]
         assert {row["caveat_name"] for row in selected} == {"", "business_hours", "trusted_network"}
         assert len({row["id"] for row in selected}) == 3
         uncaveated = next(row for row in selected if row["caveat_name"] == "")
@@ -665,11 +743,11 @@ def test_caveated_grants_have_distinct_identity_and_revoke_exact_selected_tuple(
             _execute(
                 _schema("console"),
                 """
-                mutation Revoke($principalId: String!, $role: String!, $caveat: String!) {
-                  revoke_role(principal_id: $principalId, role: $role, caveat_name: $caveat)
+                mutation Revoke($subject: String!, $role: String!, $caveat: String!) {
+                  revoke_role(subject: $subject, role: $role, caveat_name: $caveat)
                 }
                 """,
-                {"principalId": str(target.sqid), "role": role, "caveat": "business_hours"},
+                {"subject": str(subject), "role": role, "caveat": "business_hours"},
                 user=admin,
             )
         )
@@ -719,6 +797,175 @@ def test_role_refs_are_current_user_only(
     assert "role_refs" not in _type_block(public_sdl, "UserType")
 
 
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_group_members_and_bindings_preserve_canonical_tuple_identity(
+    iam_permission_hub_tables: None,
+    storage: str,
+) -> None:
+    """Group detail projects direct members and group-set bindings in both stores."""
+
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+        admin = _platform_admin(f"group-detail-{storage}-admin")
+        member = User.objects.create_user(username=f"group-detail-{storage}-member")
+        with system_context(reason="test group detail setup"):
+            group = iam_schema.Group.objects.create(name=f"Reviewers {storage}")
+        subject = f"auth/user:{member.sqid}"
+        schema = _schema("console")
+
+        added = _data(
+            _execute(
+                schema,
+                """
+                mutation($group: ID!, $subject: String!) {
+                  add_group_member(group_id: $group, subject: $subject)
+                }
+                """,
+                {"group": group.sqid, "subject": subject},
+                user=admin,
+            )
+        )
+        assert added["add_group_member"] is True
+        group_subject = to_subject_ref(group)
+        with system_context(reason="test group role binding"):
+            active_relationship_model().objects.bulk_create([
+                active_relationship_model()(
+                    resource_type="angee/role",
+                    resource_id="auditor",
+                    relation=ROLE_RELATION,
+                    subject_type=group_subject.subject_type,
+                    subject_id=group_subject.subject_id,
+                    optional_subject_relation=group_subject.optional_relation,
+                    caveat_name="",
+                    caveat_context=None,
+                ),
+                active_relationship_model()(
+                    resource_type="platform/explorer",
+                    resource_id="catalogue",
+                    relation="read",
+                    subject_type=group_subject.subject_type,
+                    subject_id=group_subject.subject_id,
+                    optional_subject_relation=group_subject.optional_relation,
+                    caveat_name="",
+                    caveat_context=None,
+                ),
+            ])
+
+        detail = _data(
+            _execute(
+                schema,
+                """
+                query($group: String!) {
+                  groups_by_pk(id: $group) {
+                    id
+                    assignment_subject
+                    members { id subject subject_type subject_id label caveat_name }
+                    bindings {
+                      id resource resource_type resource_id relation caveat_name
+                      target_model target_id
+                    }
+                  }
+                }
+                """,
+                {"group": group.sqid},
+                user=admin,
+            )
+        )["groups_by_pk"]
+        assert detail["assignment_subject"] == f"auth/group:{group.sqid}#member"
+        assert detail["members"][0]["subject"] == subject
+        assert detail["members"][0]["subject_id"] == str(member.sqid)
+        assert detail["members"][0]["label"] == member.username
+        binding = next(row for row in detail["bindings"] if row["resource"] == "angee/role:auditor")
+        assert binding["target_model"] == "iam.Role"
+        assert binding["target_id"] == "angee/role:auditor"
+        anchor = next(row for row in detail["bindings"] if row["resource"] == "platform/explorer:catalogue")
+        assert anchor["target_model"] is None
+        assert anchor["target_id"] is None
+
+        removed = _data(
+            _execute(
+                schema,
+                """
+                mutation($group: ID!, $subject: String!) {
+                  remove_group_member(group_id: $group, subject: $subject)
+                }
+                """,
+                {"group": group.sqid, "subject": subject},
+                user=admin,
+            )
+        )
+        assert removed["remove_group_member"] is True
+
+
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_recipient_resources_follow_user_and_group_read_permissions(
+    iam_permission_hub_tables: None,
+    storage: str,
+) -> None:
+    """A non-admin sharer discovers readable service users and its member groups."""
+
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+        actor = User.objects.create_user(username=f"recipient-{storage}")
+        service = User.objects.create_user(
+            username=f"recipient-service-{storage}", kind="service", first_name="Research agent",
+        )
+        hidden = User.objects.create_user(username=f"recipient-hidden-{storage}")
+        with system_context(reason="test recipient group setup"):
+            group = iam_schema.Group.objects.create(name=f"Project reviewers {storage}")
+            hidden_group = iam_schema.Group.objects.create(name=f"Other reviewers {storage}")
+        with system_context(reason="test.iam.recipient.grants"):
+            write_relationships([
+                RelationshipTuple(
+                    resource=to_object_ref(service), relation="directory_reader", subject=to_subject_ref(actor),
+                ),
+                RelationshipTuple(
+                    resource=to_object_ref(group), relation="member", subject=to_subject_ref(actor),
+                ),
+            ])
+        schema = _schema("console")
+        metadata = {item.model_label: item for item in schema.angee_resources}
+        user_subject_field = metadata["iam.User"].subject_field
+        group_subject_field = metadata["iam.Group"].subject_field
+        assert user_subject_field and group_subject_field
+        assert metadata["iam.Group"].resource_type == "auth/group"
+        assert model_for_resource_type("auth/group") is iam_schema.Group
+        grantable = _grantable_relations(
+            Project, {item.model: item for item in schema.angee_resources if item.model is not None},
+        )
+        reader = next(item for item in grantable if item.relation == "reader")
+        assert {(subject.type, subject.relation, subject.resource) for subject in reader.subjects} == {
+            ("auth/user", None, "iam.User"),
+            ("auth/group", "member", "iam.Group"),
+        }
+        group_id = group.sqid
+        query = f"""
+            query {{
+              users(limit: 50) {{ id username first_name {user_subject_field} }}
+              groups(limit: 50) {{ id name {group_subject_field} }}
+            }}
+        """
+        data = _data(_execute(schema, query, user=actor))
+        assert data["users"] == [{
+            "id": service.sqid,
+            "username": service.username,
+            "first_name": "Research agent",
+            user_subject_field: f"auth/user:{service.sqid}",
+        }]
+        assert data["groups"] == [{
+            "id": group_id,
+            "name": group.name,
+            group_subject_field: f"auth/group:{group.sqid}#member",
+        }]
+        assert to_subject_ref(group).subject_id == str(group.pk)
+        assert to_subject_ref(group).subject_id != group_id
+        assert str(resolve_subjects([to_subject_ref(group)])[to_subject_ref(group)]) == group.name
+        assert _execute(schema, query).errors is not None
+
+        admin = _platform_admin(f"recipient-admin-{storage}")
+        all_data = _data(_execute(schema, query, user=admin))
+        assert hidden.username in {row["username"] for row in all_data["users"]}
+        assert hidden_group.name in {row["name"] for row in all_data["groups"]}
+
+
 @pytest.fixture()
 def iam_permission_hub_tables(transactional_db: Any) -> Iterator[None]:
     """Create concrete source-addon tables and sync REBAC schema."""
@@ -737,14 +984,13 @@ def iam_permission_hub_tables(transactional_db: Any) -> Iterator[None]:
 
 
 def _platform_admin(username: str) -> Any:
-    """Create a superuser with the platform-admin role tuple present."""
+    """Create a superuser whose live IAM attribute grants platform administration."""
 
     admin = User.objects.create_superuser(
         username=username,
         email=f"{username}@example.com",
         password="admin",
     )
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin
 
 

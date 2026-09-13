@@ -131,7 +131,6 @@ export interface DashboardDefinition {
 export interface DashboardCapabilities {
   canEdit: boolean;
   canReset: boolean;
-  canShare: boolean;
   canArchive: boolean;
 }
 
@@ -181,27 +180,14 @@ export interface DashboardSummary {
   capabilities: DashboardCapabilities;
 }
 
-export interface DashboardShare {
-  id: string;
-  subjectType: "user" | "group";
-  subjectId: string;
-  role: "viewer" | "editor";
-  label: string;
-}
-
 export interface DashboardStoreBinding {
   state: DashboardLoadState;
-  shares: readonly DashboardShare[];
-  sharesLoading: boolean;
-  sharesError: Error | null;
   reload: () => Promise<void>;
   save: (command: DashboardSaveCommand) => Promise<DashboardSaveResult>;
   reset: (target: DashboardTarget, persistedId: string, expectedRevision: number) => Promise<void>;
   createPersonal: (input: { name: string; description?: string; clientCreationKey: string }) => Promise<DashboardSaveResult>;
   duplicate: (target: DashboardTarget, input: { name: string; clientCreationKey: string }) => Promise<DashboardSaveResult>;
   archive: (id: string, expectedRevision: number, archived: boolean) => Promise<DashboardSaveResult>;
-  grantShare: (id: string, input: Omit<DashboardShare, "id" | "label">) => Promise<void>;
-  revokeShare: (id: string, share: DashboardShare) => Promise<void>;
 }
 
 export interface DashboardCatalogueBinding {

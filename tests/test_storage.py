@@ -17,7 +17,7 @@ from django.core.exceptions import SuspiciousFileOperation
 from django.core.management import call_command
 from django.db import connection, models
 from django.db.models.signals import post_save
-from rebac import actor_context, app_settings, system_context
+from rebac import actor_context, system_context
 from rebac.actors import to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.roles import grant
@@ -580,7 +580,6 @@ def test_create_drive_gates_on_the_rebac_create_rule(drive: Any) -> None:
         email="create-admin@example.com",
         password="admin",
     )
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     stranger = get_user_model().objects.create_user(username="storage-create-bob", email="create-bob@example.com")
 
     with actor_context(admin):
@@ -647,7 +646,6 @@ def test_create_drive_graphql_surface_is_de_elevated(drive: Any) -> None:
         email="gql-create-admin@example.com",
         password="admin",
     )
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
 
     created = result_data(
         execute_schema(

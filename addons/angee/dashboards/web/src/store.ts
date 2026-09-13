@@ -8,7 +8,6 @@ import {
   type DashboardLoadState,
   type DashboardSaveCommand,
   type DashboardSaveResult,
-  type DashboardShare,
   type DashboardStore,
   type DashboardSummary,
   type DashboardTarget,
@@ -19,11 +18,8 @@ import {
   CreatePersonalDashboardDocument,
   DashboardDocument,
   DashboardSummariesDocument,
-  DashboardSharesDocument,
   DuplicateDashboardDocument,
-  GrantDashboardShareDocument,
   ResetDashboardDocument,
-  RevokeDashboardShareDocument,
   SaveDashboardDocument,
 } from "./documents.console";
 
@@ -49,7 +45,6 @@ function capabilities(payload: FullPayload): DashboardCapabilities {
   return {
     canEdit: Boolean(payload.can_edit),
     canReset: Boolean(payload.can_reset),
-    canShare: Boolean(payload.can_share),
     canArchive: Boolean(payload.can_archive),
   };
 }
@@ -125,34 +120,14 @@ function useDashboard(target: DashboardTarget) {
   const variables = React.useMemo(() => ({ target: targetInput(target) }), [target]);
   const query = useAuthoredQuery(DashboardDocument, variables, { models: DASHBOARD_MODELS });
   const loadedState = loadState(query.data?.dashboard, query.isFetching, query.error);
-  const personalId = target.scope === "personal" ? target.id : "";
-  const sharesQuery = useAuthoredQuery(
-    DashboardSharesDocument,
-    { id: personalId },
-    { enabled: loadedState.status === "ready" && loadedState.capabilities.canShare },
-  );
   const [saveMutation] = useAuthoredMutation(SaveDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const [resetMutation] = useAuthoredMutation(ResetDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const [duplicateMutation] = useAuthoredMutation(DuplicateDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const [archiveMutation] = useAuthoredMutation(ArchiveDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
-  const [grantShareMutation] = useAuthoredMutation(GrantDashboardShareDocument, { invalidateModels: DASHBOARD_MODELS });
-  const [revokeShareMutation] = useAuthoredMutation(RevokeDashboardShareDocument, { invalidateModels: DASHBOARD_MODELS });
   const createPersonal = useCreatePersonal();
-
-  const shares = React.useMemo<readonly DashboardShare[]>(() =>
-    (sharesQuery.data?.dashboard_shares ?? []).map((share) => ({
-      id: `${share.subject_type}:${share.subject_id}:${share.role}`,
-      subjectType: share.subject_type === "GROUP" ? "group" : "user",
-      subjectId: share.subject_id,
-      role: share.role === "EDITOR" ? "editor" : "viewer",
-      label: share.label,
-    })), [sharesQuery.data]);
 
   return {
     state: loadedState,
-    shares,
-    sharesLoading: sharesQuery.isFetching,
-    sharesError: sharesQuery.error,
     reload: React.useCallback(async () => { await query.refetch(); }, [query.refetch]),
     save: React.useCallback(async (command: DashboardSaveCommand) => {
       const result = await saveMutation({
@@ -184,24 +159,7 @@ function useDashboard(target: DashboardTarget) {
       const result = await archiveMutation({ id, expectedRevision, archived });
       return saveResult(result?.set_personal_dashboard_archived);
     }, [archiveMutation]),
-    grantShare: React.useCallback(async (id: string, input: Omit<DashboardShare, "id" | "label">) => {
-      await grantShareMutation({
-        id,
-        subjectType: input.subjectType === "group" ? "GROUP" : "USER",
-        subjectId: input.subjectId,
-        role: input.role === "editor" ? "EDITOR" : "VIEWER",
-      });
-      await sharesQuery.refetch();
-    }, [grantShareMutation, sharesQuery.refetch]),
-    revokeShare: React.useCallback(async (id: string, share: DashboardShare) => {
-      await revokeShareMutation({
-        id,
-        subjectType: share.subjectType === "group" ? "GROUP" : "USER",
-        subjectId: share.subjectId,
-        role: share.role === "editor" ? "EDITOR" : "VIEWER",
-      });
-      await sharesQuery.refetch();
-    }, [revokeShareMutation, sharesQuery.refetch]),
+
   };
 }
 
@@ -282,7 +240,6 @@ function useCatalogue(): DashboardCatalogueBinding {
       capabilities: {
         canEdit: row.can_edit,
         canReset: row.scope !== "PERSONAL" && row.can_edit,
-        canShare: row.can_share,
         canArchive: row.can_archive,
       },
     })), [rows]);

@@ -13,12 +13,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import app_settings, current_actor, is_anonymous_actor, to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
+
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 
 SCOPE_MEMBER_RELATION = "direct_member"
 """Direct membership relation on the local ``scopedemo/scope`` test resource."""
@@ -77,7 +78,6 @@ class Scope(AngeeDataModel):
         app_label = "scopedemo"
         db_table = "test_scopedemo_scope"
         rebac_resource_type = "scopedemo/scope"
-        rebac_id_attr = "sqid"
 
 
 class ScopeScopedMixin(models.Model):
@@ -144,4 +144,3 @@ class ScopedDoc(ScopeScopedMixin, AngeeDataModel):
         app_label = "scopedemo"
         db_table = "test_scopedemo_doc"
         rebac_resource_type = "scopedemo/doc"
-        rebac_id_attr = "sqid"

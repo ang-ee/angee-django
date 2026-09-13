@@ -13,6 +13,17 @@ name = "vcs_models_cutover"
 app_label = "agents"
 module = "runtime_migrations.vcs_models_cutover"
 
+[[migrations]]
+name = "live_tool_backing"
+app_label = "agents"
+module = "runtime_migrations.live_tool_backing"
+compatible_source_sha256 = ["b061c4d07be484f5e1bda84d90a4b9ef5f536bcc3338b28ec7bf5f3654d43117"]
+
+[[migrations]]
+name = "role_subject_relations"
+app_label = "agents"
+module = "runtime_migrations.role_subject_relations"
+
 [resources]
 demo = [
   { path = "resources/demo/010_integrate.credential.yaml", depends_on = "iam:resources/demo/010_iam.user.yaml", adopt = ["user", "name"] },

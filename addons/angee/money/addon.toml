@@ -5,6 +5,11 @@ keywords = ["money", "currency", "exchange-rate", "iso-4217"]
 category = "Foundation"
 depends_on = ["angee.iam", "angee.resources", "angee.graphql"]
 
+[[migrations]]
+name = "role_subject_relations"
+app_label = "money"
+module = "runtime_migrations.role_subject_relations"
+
 [resources]
 master = [{ path = "resources/master/010_money.currency.yaml", adopt = "code" }]
 demo = [

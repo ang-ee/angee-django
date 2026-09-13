@@ -12,7 +12,8 @@ Reference resolution composes the two owners, never re-deriving either:
 * a **literal REBAC ref** — a const anchor / role membership / typed wildcard —
   is written with a slash-form type token (``<ns>/type:<id>[#relation]``, e.g.
   ``angee/role:admin``, ``products/role:products_manager#member``,
-  ``auth/user:*``) and is parsed verbatim by :mod:`rebac.types`;
+  ``auth/user:*``). Subject literals cross a transport boundary, so model-backed
+  public ids are normalized through :func:`angee.base.identity.canonical_subject_ref`;
 * a **row xref** — anything else (the loader's ``<addon>.<xref>`` form, e.g.
   ``iam.alice``) — resolves through the resource ledger
   (:func:`angee.resources.widgets.resolve_xref`) to the loaded row, whose own
@@ -41,6 +42,7 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
+from angee.base.identity import canonical_subject_ref
 from angee.base.refs import ancestor_object_refs
 from angee.resources.entries import GrantGroup, GrantRow
 from angee.resources.exceptions import ResourceLoadError
@@ -137,7 +139,7 @@ def _resolve_subject(
     if value == "*":
         return anonymous_actor()
     if _is_literal_ref(value):
-        return SubjectRef.parse(value)
+        return canonical_subject_ref(value)
     return to_subject_ref(_resolve_row(row, value, ledger_model, addon_aliases))
 
 

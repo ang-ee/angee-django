@@ -5,6 +5,11 @@ keywords = ["uom", "units", "measure", "conversion"]
 category = "Foundation"
 depends_on = ["angee.iam", "angee.resources", "angee.graphql"]
 
+[[migrations]]
+name = "role_subject_relations"
+app_label = "uom"
+module = "runtime_migrations.role_subject_relations"
+
 [resources]
 master = [
   "resources/master/010_uom.uomcategory.yaml",

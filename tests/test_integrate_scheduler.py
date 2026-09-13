@@ -42,7 +42,6 @@ class SchedulerBridge(Bridge, Integration):
         app_label = "integrate"
         db_table = "test_integrate_scheduler_bridge"
         rebac_resource_type = "tests/scheduler_bridge"
-        rebac_id_attr = "sqid"
 
     def sync(self) -> int:
         """Pretend to synchronize vendor rows and persist a cursor."""

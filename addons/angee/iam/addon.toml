@@ -10,6 +10,23 @@ dependencies = [
   "django-axes>=8.0",
 ]
 
+[[migrations]]
+name = "adopt_auth_groups"
+app_label = "iam"
+module = "runtime_migrations.adopt_auth_groups"
+compatible_source_sha256 = ["01f6342a3a78aa98ee14f11e0a69169355ac4965ed5ffaf2f11049f8e80f5459"]
+
+[[migrations]]
+name = "live_admin_backing"
+app_label = "iam"
+module = "runtime_migrations.live_admin_backing"
+compatible_source_sha256 = ["313faf785709c00d403203384fc2b4c80d292a04b75343f86fa66ec5c8051287"]
+
+[[migrations]]
+name = "role_subject_relations"
+app_label = "iam"
+module = "runtime_migrations.role_subject_relations"
+
 [resources]
 demo = [
   { path = "resources/demo/010_iam.user.yaml", adopt = "username" },

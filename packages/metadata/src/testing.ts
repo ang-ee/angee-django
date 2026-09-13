@@ -32,6 +32,8 @@ export function testDataResource(
     typeNames: { node: `${segment}Type`, ...typeNames },
     capabilities: ["list", "detail", "create", "update", "delete"],
     fields: [],
+    grantable: [],
+    subjectField: null,
     query: testResourceQuery(),
     aggregateFields: [],
     ...rest,

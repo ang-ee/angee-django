@@ -8,16 +8,6 @@ import { createNamespaceT } from "@angee/ui";
 export const enIamMessages: Record<string, string> = {
   // Shared action labels.
   "revoke": "Revoke",
-  "recordAccess.unavailable": "Access settings are unavailable for this record.",
-  "recordAccess.description": "Manage direct access to {target}. Inherited access is controlled by its owner.",
-  "recordAccess.grant": "Grant access",
-  "recordAccess.recipient": "Person or group",
-  "recordAccess.role": "Access role",
-  "recordAccess.chooseRecipient": "Choose a person or group.",
-  "recordAccess.failed": "Access could not be granted.",
-  "recordAccess.recipientsUnavailable": "People and groups could not be loaded.",
-  "recordAccess.revokeTitle": "Revoke access",
-  "recordAccess.revokeBody": "Remove {role} access for {recipient} on {target}?",
 
   // Typed assignment subjects shared by workflow and approval controls.
   "assignmentSubjects.users": "Users",
@@ -64,22 +54,17 @@ export const enIamMessages: Record<string, string> = {
   "overview.metric.relationships": "Relationships",
   "overview.metric.privileged": "Privileged",
   "overview.metric.privilegedDetail": "admin-tier grants",
-  "overview.metric.unassigned": "Unassigned",
+  "overview.metric.unassigned": "No direct role",
   "overview.metric.unassignedDetail": "no direct roles",
 
   // Overview dashboard — grant composer.
   "overview.grant.title": "Grant access",
   "overview.grant.summary": "Direct role binding for a user or group.",
-  "overview.grant.principal": "Principal",
+  "overview.grant.subject": "Recipient",
   "overview.grant.role": "Role",
-  "overview.grant.loadingUsers": "Loading users",
-  "overview.grant.selectUser": "Select user",
   "overview.grant.selectRole": "Select role",
-  "overview.grant.truncated": "Showing first {shown} of {total} users.",
   "overview.grant.submit": "Grant",
   "overview.grant.failedTitle": "Role was not granted",
-  "overview.grant.chooseBoth":
-    "Choose a principal and role before granting access.",
   "overview.grant.error": "Could not grant role.",
 
   // Overview dashboard — peek panels.
@@ -92,21 +77,45 @@ export const enIamMessages: Record<string, string> = {
   "overview.namespaces.roleCount_other": "{count} roles",
   "overview.namespaces.grantCount": "{count} grants",
   "overview.namespaces.empty": "No roles defined.",
-  "overview.unassigned.title": "Unassigned principals",
-  "overview.unassigned.summary": "{count} without direct roles",
-  "overview.unassigned.empty": "Every principal has a role.",
+  "overview.unassigned.title": "Users without direct roles",
+  "overview.unassigned.summary": "{count} users; access through groups and record grants may still apply.",
+  "overview.unassigned.empty": "Every user has a direct role.",
 
   // OIDC sign-in providers page — form-section labels and the discover action.
 
   // Grants page.
-  "grants.column.principal": "Principal",
+  "grants.column.subject": "Recipient",
   "grants.column.role": "Role",
   "grants.column.namespace": "Namespace",
   "grants.revoke.title": "Revoke role?",
-  "grants.revoke.body": "Revoke {role} from {principal}?",
+  "grants.revoke.body": "Revoke {role} from {subject}?",
   "grants.revoke.cancel": "Keep role",
   "grants.revoke.error": "Could not revoke role.",
   "grants.revoke.failedTitle": "Role was not revoked",
+
+  "subject.type": "Recipient type",
+  "subject.user": "User or service",
+  "subject.group": "Group",
+  "group.members": "Members",
+  "group.bindings": "Bindings",
+  "group.member": "Member",
+  "group.subject": "Subject",
+  "group.resource": "Resource",
+  "group.relation": "Relation",
+  "group.caveat": "Condition",
+  "group.add": "Add member",
+  "group.addError": "Could not add member.",
+  "group.membersDescription": "People and service users inherit the group's bindings.",
+  "group.remove": "Remove member",
+  "group.removeTitle": "Remove group member?",
+  "group.removeDescription": "Remove {name} from this group? Independent grants will remain.",
+  "group.removeError": "Could not remove member.",
+  "group.noMembers": "This group has no members.",
+  "group.noBindings": "No direct bindings. Grant this group a record relation through Share or a role through the Permissions Hub.",
+  "roles.declaration": "Declaration",
+  "roles.declared": "Schema",
+  "roles.derived": "Derived (read-only)",
+  "roles.legacy": "Legacy grant",
 
   // Relationships page.
   "relationships.column.resourceRef": "Resource Ref",

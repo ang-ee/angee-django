@@ -1,10 +1,11 @@
 // Authorization schema for the agents addon.
 // @rebac_package: agents
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 7
 
 definition agents/agent {
     relation owner: auth/user // rebac:field=owner
+    relation actor: auth/user // rebac:field=user
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
@@ -19,43 +20,34 @@ definition agents/agent {
 // another, and the const-backed admin arm keeps platform administrators
 // effective members without per-role tuples.
 definition agents/toolrole {
-    relation member: agents/agent | auth/user | auth/group#member | angee/role:admin#member
-    relation includes: agents/toolrole#effective_member
+    relation member: auth/user | auth/group#member | angee/role:admin#member
+    relation includes: agents/toolrole
     relation admin: angee/role // rebac:const=admin
 
-    permission effective_member = member + includes + admin->member
+    permission effective_member = member + includes->effective_member + admin->member
 }
 
-// A tool grant is a pure tuple object whose id is
-// `<mcp-server-sqid>.<FastMCP-tool-name>`. There is no grant row:
-// Agent.mcp_tools mirrors direct selections into `grantee`, while role/group
-// bundles write the same relation through the Permissions Hub. Server
-// qualification keeps same-named tools on different servers independently
-// grantable and revocable.
-// Advertisement and execution intentionally check `use` only. `use_approved`
-// is a separate standing-approval arm for a later consumer; the current
-// requires_approval flag still drives the per-call workflow Decision flow.
-//
-// NEXT — scoped grants stay additive and consumer-owned. A downstream addon
-// adds e.g. `vault_grantee` and `scope_vault` to this definition from its own
-// permissions.extends.zed, then unions
-// `vault_grantee & scope_vault->read` into `use`. It stores two tuples on
-// `agents/tool_grant:<server-sqid>.<tool>.<vault-sqid>` (`#vault_grantee` and `#scope_vault`)
-// and the runtime checks that scoped id. The scoped object deliberately has no
-// base `grantee` tuple, so the unscoped arm below cannot bypass the scope.
-// tests/extcontrib is the mechanical fragment recipe. V1 builds no scoped
-// grant or scope relation.
+// A tool grant is identified by the MCPTool catalogue row's primary key.
+// The public server/tool-name pair resolves that row at the API boundary.
+// Agent selections resolve live through `selected_agent`; independent direct
+// and group grants remain tuple-backed in `grantee`, while bundles use `role`.
+// Advertisement and execution check `use`. `use_approved` is a separate
+// standing-approval arm; requires_approval still drives per-call Decisions.
 definition agents/tool_grant {
-    relation grantee: agents/agent | agents/toolrole#effective_member | auth/group#agent_member
+    relation server: agents/mcp_server // rebac:field=server
+    relation selected_agent: auth/user // rebac:field={"path":"agents__user"}
+    relation grantee: auth/user | auth/group#member
+    relation role: agents/toolrole
     relation approver: auth/user
     relation admin: angee/role // rebac:const=admin
+    relation person: iam/kind // rebac:const=person
 
-    // `grantee->effective_member` is redundant in SpiceDB userset semantics,
-    // but makes the locked LocalBackend evaluate the allowed
-    // toolrole#effective_member subject set (its direct-relation walker only
-    // recurses into relations, while effective_member is a permission).
-    permission use = grantee + grantee->effective_member + admin->member
-    permission use_approved = (grantee & approver) + admin->member
+    permission create = admin->member
+    permission read = server->read + admin->member
+    permission write = server->write + admin->member
+    permission delete = server->write + admin->member
+    permission use = selected_agent + grantee + role->effective_member + admin->member
+    permission use_approved = (((grantee + role->effective_member) & approver) + admin->member) & person->active_member
 }
 
 definition agents/inference_provider {
@@ -91,24 +83,14 @@ definition agents/skill {
 }
 
 definition agents/mcp_server {
-    // Non-field relation mirrored from Agent.mcp_servers by agents.models m2m_changed.
     relation agent: agents/agent
+    relation selected_agent: agents/agent // rebac:field=agents
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = agent + admin->member
+    permission read = agent->actor + selected_agent->actor + admin->member
     permission write = admin->member
     permission delete = admin->member
-}
-
-definition agents/mcp_tool {
-    relation server: agents/mcp_server // rebac:field=server
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = admin->member
-    permission read = server->read + admin->member
-    permission write = server->write + admin->member
-    permission delete = server->write + admin->member
 }
 
 definition agents/session {
@@ -117,8 +99,8 @@ definition agents/session {
     relation admin: angee/role // rebac:const=admin
 
     permission create = agent->write + admin->member
-    permission read = owner + admin->member
-    permission write = owner + admin->member
+    permission read = owner + agent->actor + admin->member
+    permission write = owner + agent->actor + admin->member
     permission delete = owner + admin->member
 }
 

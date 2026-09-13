@@ -23,9 +23,8 @@ from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
-from rebac import actor_context, app_settings, system_context, to_object_ref, to_subject_ref
+from rebac import actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
-from rebac.roles import grant
 
 from angee.base.identity import (
     instance_from_public_id,
@@ -657,7 +656,6 @@ def test_oauth_client_crud_are_admin_only(
         email="admin@example.com",
         password="admin",
     )
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     console_schema = _schema("console")
     create_oauth_client = """
         mutation CreateOAuthClient {
@@ -1220,7 +1218,6 @@ def test_console_external_accounts_render_provider_projection(
         email="ea-list-admin@example.com",
         password="x",
     )
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     oauth_client = _oauth_client("listco", display_name="ListCo prod")
     ExternalAccount.objects.link(oauth_client, "list-sub", owner=admin, email="u@example.com")
 
@@ -1425,9 +1422,8 @@ def test_public_user_change_subscription_only_yields_the_actor(
 ) -> None:
     """The self feed is stricter than row read and exposes only projected values."""
 
-    actor = User.objects.create_user(username="preference-actor")
+    actor = User.objects.create_superuser(username="preference-actor")
     other = User.objects.create_user(username="preference-other")
-    grant(actor=actor, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     actor_ref = to_subject_ref(actor)
     assert (
         backend()
@@ -1489,18 +1485,18 @@ def test_public_user_change_subscription_only_yields_the_actor(
 def test_iam_group_public_identity_is_sqid_addressable() -> None:
     """The IAM auth-group data surface satisfies the public identity contract."""
 
-    group = iam_schema.Group.objects.create(name="Operators")
-    group_id = iam_schema.GROUP_PUBLIC_IDENTITY.public_id_from_pk(group.pk)
+    with system_context(reason="test.iam.group.identity"):
+        group = iam_schema.Group.objects.create(name="Operators")
+    group_id = group.sqid
 
-    assert public_data_id_field(iam_schema.Group) is None
-    assert public_id_of(group) == str(group.pk)
+    assert public_data_id_field(iam_schema.Group).name == "sqid"
+    assert public_id_of(group) == group_id
     assert group_id.startswith("grp_")
-    assert public_id_for(iam_schema.Group, group.pk, public_identity=iam_schema.GROUP_PUBLIC_IDENTITY) == group_id
+    assert public_id_for(iam_schema.Group, group.pk) == group_id
     assert (
         instance_from_public_id(
             iam_schema.Group,
             group_id,
-            public_identity=iam_schema.GROUP_PUBLIC_IDENTITY,
         ).pk
         == group.pk
     )
@@ -1510,8 +1506,9 @@ def test_iam_group_public_identity_is_sqid_addressable() -> None:
 def test_iam_group_hasura_resource_uses_public_identity_sqids() -> None:
     """The IAM auth-group catalogue surfaces list and detail rows by public sqids."""
 
-    group = iam_schema.Group.objects.create(name="Operators")
-    group_id = iam_schema.GROUP_PUBLIC_IDENTITY.public_id_from_pk(group.pk)
+    with system_context(reason="test.iam.group.resource"):
+        group = iam_schema.Group.objects.create(name="Operators")
+    group_id = group.sqid
     call_command("rebac", "sync", verbosity=0)
     admin = _platform_admin("auth-catalogue-admin")
     console_schema = _schema("console")
@@ -1935,7 +1932,6 @@ def _platform_admin(username: str) -> Any:
         email=f"{username}@example.com",
         password="admin",
     )
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin
 
 

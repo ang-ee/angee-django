@@ -5,20 +5,26 @@ from __future__ import annotations
 from typing import Any
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.backends import BaseBackend
 from django.contrib.auth.backends import ModelBackend as DjangoModelBackend
-
-from angee.iam.models import UserKind
 
 
 def can_authenticate_user(user: Any) -> bool:
     """Return whether ``user`` is a login-capable human principal."""
 
-    is_active = getattr(user, "is_active", True)
-    return is_active and str(getattr(user, "kind", None)) == str(UserKind.PERSON)
+    return bool(user.is_active and user.is_person)
 
 
-class ModelBackend(DjangoModelBackend):
-    """Password backend whose session reload uses IAM's named bypass."""
+class ModelBackend(BaseBackend):
+    """Django password authentication with IAM session loading and no codename grants.
+
+    Django owns credential verification, timing protection and password upgrades.
+    Its permission-neutral base owns the optional permission API; IAM's access
+    checks use REBAC actions directly.
+    """
+
+    authenticate = DjangoModelBackend.authenticate
+    aauthenticate = DjangoModelBackend.aauthenticate
 
     def user_can_authenticate(self, user: Any) -> bool:
         """Return whether ``user`` may authenticate through IAM login surfaces."""

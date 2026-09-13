@@ -28,7 +28,6 @@ class Currency(AbstractCurrency):
         app_label = "money"
         db_table = "test_money_currency"
         rebac_resource_type = "money/currency"
-        rebac_id_attr = "sqid"
 
 
 class CurrencyRate(AbstractCurrencyRate):
@@ -41,7 +40,6 @@ class CurrencyRate(AbstractCurrencyRate):
         app_label = "money"
         db_table = "test_money_rate"
         rebac_resource_type = "money/rate"
-        rebac_id_attr = "sqid"
 
 
 MONEY_TEST_MODELS = (Currency, CurrencyRate)

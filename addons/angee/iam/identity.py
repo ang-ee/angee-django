@@ -15,7 +15,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db.models import Q, QuerySet
 from django.http import HttpRequest
-from rebac import subject_id_attr, system_context
+from rebac import system_context
 
 from angee.base.identity import instance_from_public_id, public_id_for
 
@@ -153,14 +153,12 @@ def user_principal(principal_id: str) -> Any:
 
     user_model = get_user_model()
     lookups: list[dict[str, Any]] = []
-    attribute = subject_id_attr(user_model)
-    lookups.append({attribute: principal_id})
-    public_lookup = getattr(user_model, "public_id_lookup", None)
-    if callable(public_lookup):
-        lookups.append(public_lookup(principal_id))
     pk = user_model._meta.pk
     if pk is not None:
         lookups.append({pk.name: principal_id})
+    public_lookup = getattr(user_model, "public_id_lookup", None)
+    if callable(public_lookup):
+        lookups.append(public_lookup(principal_id))
 
     tried: set[tuple[tuple[str, Any], ...]] = set()
     with system_context(reason="iam.identity.principal"):

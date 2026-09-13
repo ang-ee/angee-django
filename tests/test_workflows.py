@@ -13,8 +13,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils.text import slugify
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
-from rebac import app_settings, system_context
-from rebac.roles import grant
+from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows.attempts import JsonPresence
@@ -120,7 +119,6 @@ def _platform_admin(username: str) -> Any:
     """Create a superuser holding the platform-admin role tuple."""
 
     admin = User.objects.create_superuser(username=username, email=f"{username}@example.com", password="admin")
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin
 
 

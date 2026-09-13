@@ -50,6 +50,7 @@ from angee.posts.models import Feed as AbstractFeed
 from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
+from angee.projects.models import DriveProjects, FolderProjects
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
@@ -60,6 +61,7 @@ from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 from tests import messaging_models  # noqa: F401 -- register the managed posts FK targets before database setup
+from tests.iam_models import Group as IAMGroup
 from tests.integrate_models import Integration
 
 pytest_plugins = ("tests.workflows",)
@@ -80,7 +82,6 @@ class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):
         app_label = "integrate"
         db_table = "test_integrate_oauth_client"
         rebac_resource_type = "integrate/oauth_client"
-        rebac_id_attr = "sqid"
 
 
 class ExternalAccount(AbstractExternalAccount):
@@ -93,7 +94,6 @@ class ExternalAccount(AbstractExternalAccount):
         app_label = "integrate"
         db_table = "test_integrate_external_account"
         rebac_resource_type = "integrate/external_account"
-        rebac_id_attr = "sqid"
 
 
 class Credential(AbstractCredential):
@@ -106,7 +106,6 @@ class Credential(AbstractCredential):
         app_label = "integrate"
         db_table = "test_integrate_credential"
         rebac_resource_type = "integrate/credential"
-        rebac_id_attr = "sqid"
 
 
 class Vendor(AbstractVendor):
@@ -119,7 +118,6 @@ class Vendor(AbstractVendor):
         app_label = "integrate"
         db_table = "test_integrate_vendor"
         rebac_resource_type = "integrate/vendor"
-        rebac_id_attr = "sqid"
 
 
 class WebhookSubscription(AbstractWebhookSubscription):
@@ -132,7 +130,6 @@ class WebhookSubscription(AbstractWebhookSubscription):
         app_label = "integrate"
         db_table = "test_integrate_webhook_subscription"
         rebac_resource_type = "integrate/webhook_subscription"
-        rebac_id_attr = "sqid"
 
 
 class Vault(AbstractVault):
@@ -145,7 +142,6 @@ class Vault(AbstractVault):
         app_label = "knowledge"
         db_table = "test_knowledge_vault"
         rebac_resource_type = "knowledge/vault"
-        rebac_id_attr = "sqid"
 
 
 class Page(AbstractPage):
@@ -158,7 +154,6 @@ class Page(AbstractPage):
         app_label = "knowledge"
         db_table = "test_knowledge_page"
         rebac_resource_type = "knowledge/page"
-        rebac_id_attr = "sqid"
 
 
 @reversion.register(fields=("body",))
@@ -176,10 +171,9 @@ class MarkdownPage(AbstractMarkdownPage):
         app_label = "knowledge"
         db_table = "test_knowledge_markdown_page"
         rebac_resource_type = "knowledge/markdown_page"
-        rebac_id_attr = "sqid"
 
 
-IAM_CONNECTION_TEST_MODELS = (OAuthClient, ExternalAccount, Credential)
+IAM_CONNECTION_TEST_MODELS = (IAMGroup, OAuthClient, ExternalAccount, Credential)
 """Concrete integration connection models created on demand by connection test fixtures."""
 
 INTEGRATE_TEST_MODELS = (Vendor, Integration)
@@ -202,7 +196,6 @@ class VcsBridge(AbstractVcsBridge, Integration):
         app_label = "integrate_vcs"
         db_table = "test_integrate_vcs_bridge"
         rebac_resource_type = "integrate_vcs/vcs_bridge"
-        rebac_id_attr = "sqid"
 
 
 class Mount(AbstractMount, Integration):
@@ -221,7 +214,6 @@ class Mount(AbstractMount, Integration):
         app_label = "storage_integrate"
         db_table = "test_storage_integrate_mount"
         rebac_resource_type = "storage_integrate/mount"
-        rebac_id_attr = "sqid"
 
 
 class Repository(AbstractRepository):
@@ -234,7 +226,6 @@ class Repository(AbstractRepository):
         app_label = "integrate_vcs"
         db_table = "test_integrate_repository"
         rebac_resource_type = "integrate_vcs/repository"
-        rebac_id_attr = "sqid"
 
 
 class Source(AbstractSource):
@@ -247,7 +238,6 @@ class Source(AbstractSource):
         app_label = "integrate_vcs"
         db_table = "test_integrate_source"
         rebac_resource_type = "integrate_vcs/source"
-        rebac_id_attr = "sqid"
 
 
 class Template(AbstractTemplate):
@@ -262,7 +252,6 @@ class Template(AbstractTemplate):
         app_label = "integrate_vcs"
         db_table = "test_integrate_template"
         rebac_resource_type = "integrate_vcs/template"
-        rebac_id_attr = "sqid"
 
 
 VCS_TEST_MODELS = (VcsBridge, Repository, Source, Template)
@@ -430,7 +419,6 @@ class Link(AbstractLink):
         app_label = "knowledge"
         db_table = "test_knowledge_link"
         rebac_resource_type = "knowledge/link"
-        rebac_id_attr = "sqid"
 
 
 class RecordBinding(AbstractRecordBinding):
@@ -443,7 +431,6 @@ class RecordBinding(AbstractRecordBinding):
         app_label = "knowledge"
         db_table = "test_knowledge_record_binding"
         rebac_resource_type = "knowledge/record_binding"
-        rebac_id_attr = "sqid"
 
 
 KNOWLEDGE_TEST_MODELS = (Vault, Page, MarkdownPage, Link, RecordBinding, Vault.history.model, Page.history.model)
@@ -460,10 +447,9 @@ class Backend(AbstractStorageBackend):
         app_label = "storage"
         db_table = "test_storage_backend"
         rebac_resource_type = "storage/backend"
-        rebac_id_attr = "sqid"
 
 
-class Drive(AbstractDrive):
+class Drive(DriveProjects, AbstractDrive):
     """Concrete storage drive used by source-addon tests."""
 
     class Meta(AbstractDrive.Meta):
@@ -473,10 +459,9 @@ class Drive(AbstractDrive):
         app_label = "storage"
         db_table = "test_storage_drive"
         rebac_resource_type = "storage/drive"
-        rebac_id_attr = "sqid"
 
 
-class Folder(AbstractFolder):
+class Folder(FolderProjects, AbstractFolder):
     """Concrete storage folder used by source-addon tests."""
 
     class Meta(AbstractFolder.Meta):
@@ -486,7 +471,6 @@ class Folder(AbstractFolder):
         app_label = "storage"
         db_table = "test_storage_folder"
         rebac_resource_type = "storage/folder"
-        rebac_id_attr = "sqid"
 
 
 class MimeType(AbstractMimeType):
@@ -510,7 +494,6 @@ class File(AbstractFile):
         app_label = "storage"
         db_table = "test_storage_file"
         rebac_resource_type = "storage/file"
-        rebac_id_attr = "sqid"
 
 
 class FileAttachment(AbstractFileAttachment):
@@ -523,7 +506,6 @@ class FileAttachment(AbstractFileAttachment):
         app_label = "storage"
         db_table = "test_storage_file_attachment"
         rebac_resource_type = "storage/file_attachment"
-        rebac_id_attr = "sqid"
 
 
 class StorageRole(AbstractStorageRole):
@@ -547,6 +529,9 @@ class StorageRole(AbstractStorageRole):
 
 STORAGE_TEST_MODELS = (Backend, Drive, Folder, MimeType, File, FileAttachment)
 """Concrete storage models created on demand by storage test fixtures."""
+
+# Register the projects concretes only after their storage FK targets above.
+from tests.projects_models import PROJECT_TEST_MODELS  # noqa: E402, F401
 
 
 def make_mount(
@@ -592,7 +577,6 @@ class Addon(AbstractCatalogProvenance, AbstractAddon):
         app_label = "platform"
         db_table = "test_platform_addon"
         rebac_resource_type = "platform/addon"
-        rebac_id_attr = "name"
 
 
 class PlatformExplorer(AbstractPlatformExplorer):
@@ -645,7 +629,6 @@ class Feed(AbstractFeed, Integration):
         app_label = "posts"
         db_table = "test_posts_feed"
         rebac_resource_type = "posts/feed"
-        rebac_id_attr = "sqid"
 
 
 class FeedFollow(AbstractFeedFollow):
@@ -658,7 +641,6 @@ class FeedFollow(AbstractFeedFollow):
         app_label = "posts"
         db_table = "test_posts_feed_follow"
         rebac_resource_type = "posts/feed_follow"
-        rebac_id_attr = "sqid"
 
 
 class PostMetrics(AbstractPostMetrics):
@@ -671,7 +653,6 @@ class PostMetrics(AbstractPostMetrics):
         app_label = "posts"
         db_table = "test_posts_post_metrics"
         rebac_resource_type = "posts/post_metrics"
-        rebac_id_attr = "sqid"
 
 
 class Quota(AbstractQuota):
@@ -684,7 +665,6 @@ class Quota(AbstractQuota):
         app_label = "posts"
         db_table = "test_posts_quota"
         rebac_resource_type = "posts/quota"
-        rebac_id_attr = "sqid"
 
 
 POSTS_TEST_MODELS = (Feed, FeedFollow, PostMetrics, Quota)

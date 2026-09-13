@@ -18,17 +18,14 @@ from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
     actor_context,
-    app_settings,
     system_context,
     to_object_ref,
     to_subject_ref,
     write_relationships,
 )
-from rebac.roles import grant
 
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.messaging.models import Channel as AbstractChannel
 from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
@@ -50,21 +47,8 @@ from tests.conftest import (
     File as StorageFile,
 )
 from tests.conftest import result_data as _data
+from tests.messaging_models import Channel
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
-
-_ChannelMeta = getattr(AbstractChannel, "Meta", object)
-
-
-class Channel(AbstractChannel, Integration):
-    """Concrete message channel used to import the messaging schema."""
-
-    class Meta(_ChannelMeta):
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_channel"
-        rebac_resource_type = "messaging/channel"
-        rebac_id_attr = "sqid"
-
 
 messaging_schema = importlib.import_module("angee.messaging.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -3077,7 +3061,6 @@ def _platform_admin(username: str) -> Any:
     """Create a superuser holding the universal admin role."""
 
     admin = User.objects.create_superuser(username=username, email=f"{username}@example.com", password="admin")
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin
 
 

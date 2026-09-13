@@ -91,6 +91,8 @@ interface DynamicI18nKeyFamily {
 }
 
 const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
+  frameworkCriticalExport("ManageAccessDialog", "@angee/ui", "src/views/access/ManageAccessDialog.tsx"),
+  frameworkCriticalExport("RecordChrome", "@angee/ui", "src/views/resource/record-chrome-context.tsx"),
   frameworkCriticalExport("collectionQuery", "@angee/ui", "src/views/resource/collection-source.ts"),
   frameworkCriticalExport("CollectionTreeView", "@angee/ui", "src/views/tree/CollectionTreeView.tsx"),
   frameworkCriticalExport("RelationFieldWidget", "@angee/ui", "src/views/relation/RelationFieldWidget.tsx"),

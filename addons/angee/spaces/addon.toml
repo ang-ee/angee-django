@@ -11,3 +11,9 @@ depends_on = ["angee.iam", "angee.parties", "angee.messaging"]
 name = "thread_groups"
 app_label = "messaging"
 module = "runtime_migrations.thread_groups"
+
+[[migrations]]
+name = "live_relation_backing"
+app_label = "spaces"
+module = "runtime_migrations.live_relation_backing"
+compatible_source_sha256 = ["cc15fb91914f6832a6c8de6a4f9bdb14a6a95d5a7407568823d58d58fe59c17b"]

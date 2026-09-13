@@ -10,6 +10,7 @@ import { cn } from "../../lib/cn";
 import { SlotOutlet } from "../../lib/slot-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import {
+  RecordChrome,
   RecordChromeProvider,
 } from "../resource/record-chrome-context";
 import { RecordActionBar } from "./RecordActionBar";
@@ -168,7 +169,6 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     displayRecord,
     saveError,
     declaredActions,
-    recordChrome,
     recordChromeContext,
     recordActions,
     recordPanelContext,
@@ -280,9 +280,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
       <div className="min-w-2 flex-1" />
       <div className="flex min-w-max shrink-0 items-center gap-2">
         {recordChromeContext ? (
-          <RecordChromeProvider value={recordChromeContext}>
-            <SlotOutlet entries={recordChrome} />
-          </RecordChromeProvider>
+          <RecordChrome value={recordChromeContext} />
         ) : null}
         {toolbar}
       </div>

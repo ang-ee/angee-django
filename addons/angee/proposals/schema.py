@@ -9,6 +9,7 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.db import models
 from strawberry import auto
 
 from angee.graphql.actions import (
@@ -52,10 +53,10 @@ def _user_id(value: Any | None) -> strawberry.ID | None:
     return cast("strawberry.ID | None", optional_public_id(user_public_id(value)))
 
 
-def _permission_target(model: type, value: PublicID, permission: str, reason: str) -> Any:
+def _permission_target(model: type[models.Model], value: PublicID, permission: str, reason: str) -> Any:
     """Resolve a non-write lifecycle target and enforce its explicit permission."""
 
-    target = resolve_action_target(model, value, reason=reason)
+    target: Any = resolve_action_target(model, value, reason=reason)
     if not target.has_access(permission):
         raise ValidationError(f"You are not allowed to {permission} this {model._meta.verbose_name}.")
     return target

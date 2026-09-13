@@ -50,7 +50,6 @@ class ChatterDoc(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
         app_label = "chatterdemo"
         db_table = "test_chatterdemo_doc"
         rebac_resource_type = "chatterdemo/doc"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the document title for the thread's title fragment."""

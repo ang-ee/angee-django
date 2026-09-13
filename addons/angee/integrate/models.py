@@ -321,7 +321,6 @@ class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("slug", "environment")
         rebac_resource_type = "integrate/oauth_client"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("slug", "environment"),
@@ -679,7 +678,6 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/external_account"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("oauth_client", "external_id"),
@@ -1082,7 +1080,6 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/credential"
-        rebac_id_attr = "sqid"
         constraints = (
             # OAuth identity: one credential per (user, provider). NULLs are
             # distinct in SQL unique, so provider-less kinds need their own arm.
@@ -1351,7 +1348,6 @@ class Vendor(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("slug",)
         rebac_resource_type = "integrate/vendor"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the display label used by Django surfaces."""
@@ -1741,7 +1737,6 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/integration"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return a stable vendor-qualified integration label."""
@@ -2643,7 +2638,6 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
 
         abstract = True
         rebac_resource_type = "integrate/webhook_subscription"
-        rebac_id_attr = "sqid"
 
     _delivery_update_fields = (
         "consecutive_failures",

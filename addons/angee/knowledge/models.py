@@ -16,11 +16,6 @@ import re
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
-from angee.base.identity import public_id_for
-from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
-from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -39,6 +34,10 @@ from rebac import (
 from rebac.backends import backend as rebac_backend
 from rebac.resources import model_resource_type
 
+from angee.base.impl import ImplClassField
+from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
+from angee.base.models import AngeeManager, AngeeModel
+from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target
 from angee.knowledge.retrieval import RetrievalBackend
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
@@ -140,7 +139,6 @@ class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "knowledge/vault"
-        rebac_id_attr = "sqid"
         constraints = (models.UniqueConstraint(fields=("owner", "name"), name="uniq_knowledge_vault_owner_name"),)
 
     def __str__(self) -> str:
@@ -248,7 +246,6 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         abstract = True
         ordering = ("title", "sqid")
         rebac_resource_type = "knowledge/page"
-        rebac_id_attr = "sqid"
         constraints = (models.UniqueConstraint(fields=("vault", "title"), name="uniq_knowledge_page_vault_title"),)
 
     def __str__(self) -> str:
@@ -542,7 +539,6 @@ class RecordBinding(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         abstract = True
         ordering = ("role", "sqid")
         rebac_resource_type = "knowledge/record_binding"
-        rebac_id_attr = "sqid"
         constraints = (
             models.CheckConstraint(
                 condition=(
@@ -590,7 +586,7 @@ def _canonical_object_ref(content_type: ContentType, object_id: Any) -> ObjectRe
     resource_type = None if model is None else model_resource_type(model)
     if model is None or resource_type is None:
         raise ValidationError("Knowledge bindings require a REBAC-typed target.")
-    return ObjectRef(resource_type, public_id_for(model, object_id))
+    return ObjectRef(resource_type, str(object_id))
 
 
 def _object_ids_by_content_type(pairs: list[tuple[int, Any]]) -> dict[int, set[Any]]:
@@ -770,7 +766,6 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
 
         abstract = True
         rebac_resource_type = "knowledge/markdown_page"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the owning page id for Django displays."""
@@ -1064,7 +1059,6 @@ class Link(SqidMixin, AngeeModel):
         abstract = True
         ordering = ("target_text", "sqid")
         rebac_resource_type = "knowledge/link"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the link target text for Django displays."""

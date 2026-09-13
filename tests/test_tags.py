@@ -13,7 +13,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from angee.base.identity import public_id_for
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import IntegrityError, connection, models, transaction
@@ -24,6 +23,7 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
+from angee.base.identity import public_id_for
 from angee.tags.models import _NEVER_LOADED
 from angee.tags.models import Tag as AbstractTag
 from angee.tags.models import TagAssignment as AbstractTagAssignment
@@ -43,7 +43,6 @@ class Tag(AbstractTag):
         app_label = "tags"
         db_table = "test_tags_tag"
         rebac_resource_type = "tags/tag"
-        rebac_id_attr = "sqid"
 
 
 class TagAssignment(AbstractTagAssignment):
@@ -56,7 +55,6 @@ class TagAssignment(AbstractTagAssignment):
         app_label = "tags"
         db_table = "test_tags_assignment"
         rebac_resource_type = "tags/tag_assignment"
-        rebac_id_attr = "sqid"
 
 
 class ScopeFlagTag(AbstractTag):
@@ -72,7 +70,6 @@ class ScopeFlagTag(AbstractTag):
         app_label = "tags"
         db_table = "test_tags_scope_flag_tag"
         rebac_resource_type = "tags/tag"
-        rebac_id_attr = "sqid"
 
     @property
     def is_shared_scope(self) -> bool:
@@ -133,7 +130,7 @@ def _shared_reader_exists(tag: Any) -> bool:
     relationship_model = active_relationship_model()
     return relationship_model.objects.filter(
         resource_type="tags/tag",
-        resource_id=tag.sqid,
+        resource_id=str(tag.pk),
         relation="shared",
         subject_type="auth/user",
         subject_id="*",
@@ -224,7 +221,7 @@ def test_deleting_a_shared_tag_removes_its_wildcard_tuple(tags_tables: None) -> 
     del tags_tables
     with system_context(reason="tags delete relationship cleanup"):
         tag = ScopeFlagTag.objects.create(name="Temporary")
-        resource_id = tag.sqid
+        resource_id = str(tag.pk)
         assert _shared_reader_exists(tag)
         tag.delete()
 

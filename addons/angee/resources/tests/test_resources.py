@@ -2043,7 +2043,7 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
         grants_dir = tmp_path / "grants"
         grants_dir.mkdir()
         (grants_dir / "010_demo.yaml").write_text(
-            '- resource: "angee/role:admin"\n'
+            '- resource: "storage/role:storage_admin"\n'
             '  relation: "member"\n'
             '  subject: "resource_addon.alice"\n'
             '- resource: "storage/drive:demo-drive"\n'
@@ -2070,8 +2070,8 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
         alice_subject = to_subject_ref(alice)
         with system_context(reason="grant load assertions"):
             assert relationship_model._default_manager.filter(
-                resource_type="angee/role",
-                resource_id="admin",
+                resource_type="storage/role",
+                resource_id="storage_admin",
                 relation="member",
                 subject_type=alice_subject.subject_type,
                 subject_id=alice_subject.subject_id,

@@ -22,7 +22,7 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
-from angee.base.actors import actor_user_id, is_user_actor
+from angee.base.actors import actor_user_id
 
 
 class InboxCoverage(BaseModel):
@@ -146,7 +146,7 @@ class MessageInbox:
 
     def __init__(self, queryset: Any) -> None:
         self.actor = queryset.actor() or current_actor()
-        self.user_id = actor_user_id(self.actor) if is_user_actor(self.actor) else None
+        self.user_id = actor_user_id(self.actor)
         self.messages = (
             queryset.inbox()
             .filter(status__in=("synced", "edited", "sent"))

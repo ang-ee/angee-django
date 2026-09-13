@@ -31,7 +31,6 @@ class ScopedAggregateRecord(AngeeDataModel):
         abstract = False
         app_label = "tests"
         rebac_resource_type = "tests/scoped_aggregate_record"
-        rebac_id_attr = "sqid"
 
 
 @pytest.mark.django_db(transaction=True)

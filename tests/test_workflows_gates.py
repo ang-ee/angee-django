@@ -15,8 +15,8 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import PermissionDenied, app_settings, system_context, to_subject_ref
 from rebac.models import active_relationship_model
-from rebac.roles import grant
 
+from angee.base.identity import public_subject_ref
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
@@ -67,9 +67,9 @@ def test_suspend_result_creates_decision_rows_and_relationship_tuples(
             resume_state={"phase": "awaiting-review"},
             decisions=[
                 DecisionSpec(
-                    assignees=(str(to_subject_ref(assignee)),),
-                    requester=str(to_subject_ref(requester)),
-                    escalation=(str(to_subject_ref(escalated)),),
+                    assignees=(str(public_subject_ref(to_subject_ref(assignee))),),
+                    requester=str(public_subject_ref(to_subject_ref(requester))),
+                    escalation=(str(public_subject_ref(to_subject_ref(escalated))),),
                     action="complete-review",
                     payload={"title": "Review"},
                     max_attempts=3,
@@ -759,6 +759,22 @@ def test_public_schema_decision_projection_excludes_step_run_journal(
     assert "StepRunType" not in sdl
 
 
+@pytest.mark.django_db(transaction=True)
+def test_decision_subject_egress_uses_public_ids(workflow_gate_tables: None) -> None:
+    """Decision actor fields hide canonical PKs while retaining audit sentinels."""
+
+    del workflow_gate_tables
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    assignee = User.objects.create_user(username="wdc-subject-egress")
+    canonical = to_subject_ref(assignee)
+    public = public_subject_ref(canonical)
+
+    assert workflows_schema._public_subject_value(str(canonical)) == str(public)
+    assert workflows_schema._public_subject_value(str(public)) == str(public)
+    assert workflows_schema._public_subject_value("") == ""
+    assert workflows_schema._public_subject_value("workflows/timer:expire") == "workflows/timer:expire"
+
+
 def test_decision_schema_is_exposed_narrowly_on_public_and_console_decisions(
     workflow_gate_tables: None,
     no_workflow_queue: None,
@@ -1346,7 +1362,7 @@ def _relationship_subjects(decision: Any, relation: str) -> set[str]:
     with system_context(reason="test workflows relationship read"):
         rows = Relationship.objects.filter(
             resource_type="workflows/decision",
-            resource_id=str(decision.sqid),
+            resource_id=str(decision.pk),
             relation=relation,
         ).order_by_subject()
     return {
@@ -1365,7 +1381,6 @@ def _user_for_subject(decision: Any, relation: str) -> Any:
 
 def _platform_admin(username: str) -> Any:
     admin = User.objects.create_superuser(username=username, email=f"{username}@example.com", password="admin")
-    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin
 
 

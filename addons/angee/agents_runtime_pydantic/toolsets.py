@@ -18,7 +18,6 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.core.exceptions import ImproperlyConfigured
-from django.db.models import Max
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import Tool as FastMCPTool
@@ -37,12 +36,15 @@ from pydantic_ai.toolsets import (
 )
 from pydantic_ai.toolsets.wrapper import WrapperToolset
 from pydantic_core import SchemaValidator, core_schema
-from rebac import PermissionDenied, SubjectRef, actor_context, to_subject_ref
+from rebac import PermissionDenied, SubjectRef, actor_context
 from rebac.backends import backend
-from rebac.models import PermissionAuditEvent
-from reversion.models import Version
 
-from angee.agents.grants import TOOL_GRANT_RESOURCE_TYPE, builtin_mcp_server, tool_grant_ref
+from angee.agents.grants import (
+    TOOL_GRANT_RESOURCE_TYPE,
+    builtin_mcp_server,
+    tool_grant_ids,
+    tool_grant_ref,
+)
 from angee.agents.models import BUILTIN_MCP_ANGEE
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.server import mcp_server
@@ -66,10 +68,10 @@ class ToolGrantAccess:
     """Share one advertisement lookup and fresh per-call checks across toolsets."""
 
     agent: SubjectRef
-    _granted_task: asyncio.Task[frozenset[str] | None] | None = field(default=None, init=False, repr=False)
+    _granted_task: asyncio.Task[frozenset[str]] | None = field(default=None, init=False, repr=False)
 
-    async def granted_ids(self) -> frozenset[str] | None:
-        """Return accessible qualified ids, or ``None`` for a universal admin grant."""
+    async def granted_ids(self) -> frozenset[str]:
+        """Return the accessible server-qualified tool ids."""
 
         if self._granted_task is None:
             self._granted_task = asyncio.create_task(
@@ -94,7 +96,6 @@ class _AngeeToolsetTool(ToolsetTool[Any]):
     """pydantic-ai definition paired with its registered FastMCP implementation."""
 
     registered_tool: FastMCPTool
-    writes: bool
 
 
 @dataclass
@@ -120,10 +121,15 @@ class AngeeToolset(AbstractToolset[Any]):
             server_sqid = await sync_to_async(lambda: str(builtin_mcp_server().sqid), thread_sensitive=True)()
         server = await sync_to_async(mcp_server, thread_sensitive=True)()
         tools: dict[str, ToolsetTool[Any]] = {}
-        for registered in sorted(await server.list_tools(), key=lambda item: item.name):
+        registered_tools = sorted(await server.list_tools(), key=lambda item: item.name)
+        grant_ids = await sync_to_async(tool_grant_ids, thread_sensitive=True)(
+            server_sqid,
+            tuple(tool.name for tool in registered_tools),
+        )
+        for registered in registered_tools:
             name = registered.name
-            grant_id = tool_grant_ref(server_sqid, name).resource_id
-            if granted is not None and grant_id not in granted:
+            grant_id = grant_ids.get(name)
+            if grant_id not in granted:
                 continue
             _assert_in_process_compatible(registered)
             annotations = registered.annotations
@@ -143,7 +149,6 @@ class AngeeToolset(AbstractToolset[Any]):
                 max_retries=ctx.max_retries,
                 args_validator=_TOOL_ARGS_VALIDATOR,
                 registered_tool=registered,
-                writes=_tool_writes(registered),
             )
         return tools
 
@@ -154,7 +159,7 @@ class AngeeToolset(AbstractToolset[Any]):
         ctx: Any,
         tool: ToolsetTool[Any],
     ) -> Any:
-        """Re-gate, select the execution actor, run directly, and bound the result."""
+        """Re-gate, run as the agent's service user, and bound the result."""
 
         del ctx
         if not isinstance(tool, _AngeeToolsetTool):
@@ -168,17 +173,10 @@ class AngeeToolset(AbstractToolset[Any]):
         except PermissionDenied as error:
             raise ModelRetry("You no longer have permission to use this tool.") from error
 
-        actor = self.access.agent if tool.writes else to_subject_ref(self.session.owner)
-        evidence = None
-        if not tool.writes:
-            evidence = await sync_to_async(_write_evidence_cursor, thread_sensitive=True)(
-                actor,
-                self.session.owner.pk,
-            )
         call_error: ModelRetry | None = None
         result: ToolResult | None = None
         try:
-            with actor_context(actor):
+            with actor_context(self.access.agent):
                 result = await tool.registered_tool.run(tool_args)
         except ValidationError as error:
             call_error = ModelRetry("Invalid tool arguments. Check the tool schema and try again.")
@@ -189,12 +187,6 @@ class AngeeToolset(AbstractToolset[Any]):
         except Exception as error:
             call_error = ModelRetry("The tool could not be completed.")
             call_error.__cause__ = error
-        if evidence is not None and await sync_to_async(_has_write_evidence, thread_sensitive=True)(
-            evidence,
-            actor,
-            self.session.owner.pk,
-        ):
-            raise ModelRetry("A read-only tool attempted to modify persistent state.")
         if call_error is not None:
             raise call_error
         assert result is not None
@@ -213,12 +205,14 @@ class ToolGrantToolset(WrapperToolset[Any]):
 
         granted = await self.access.granted_ids()
         tools = await self.wrapped.get_tools(ctx)
-        if granted is None:
-            return tools
+        grant_ids = await sync_to_async(tool_grant_ids, thread_sensitive=True)(
+            self.server_sqid,
+            tools,
+        )
         return {
             name: tool
             for name, tool in tools.items()
-            if tool_grant_ref(self.server_sqid, name).resource_id in granted
+            if grant_ids.get(name) in granted
         }
 
     async def call_tool(
@@ -279,28 +273,11 @@ def toolsets_for_session(session: Any) -> list[Any]:
     return toolsets
 
 
-def _accessible_tool_grant_ids(agent: SubjectRef) -> frozenset[str] | None:
-    """Read qualified grant ids without enumerating a table-less universal arm.
+def _accessible_tool_grant_ids(agent: SubjectRef) -> frozenset[str]:
+    """Return accessible ids from the canonical MCP tool catalogue."""
 
-    The const-admin permission grants every pure-tuple anchor, which has no Django
-    table to enumerate. ``grants_all`` detects that structural case first; ``None``
-    is the internal universal sentinel consumed by registry/catalogue intersections.
-    """
-
-    access_backend = backend()
-    # ``grants_all`` is a LocalBackend capability, not part of the Backend
-    # base: the structural universal-arm detection exists precisely because
-    # the local backend cannot enumerate a table-less anchor. Backends with
-    # native lookup (SpiceDB) enumerate through ``accessible`` directly.
-    grants_all = getattr(access_backend, "grants_all", None)
-    if callable(grants_all) and grants_all(
-        subject=agent,
-        action="use",
-        resource_type=TOOL_GRANT_RESOURCE_TYPE,
-    ):
-        return None
     return frozenset(
-        access_backend.accessible(
+        backend().accessible(
             subject=agent,
             action="use",
             resource_type=TOOL_GRANT_RESOURCE_TYPE,
@@ -331,7 +308,21 @@ def _assert_in_process_compatible(tool: FastMCPTool) -> None:
     operation type; other builtins declare it through ``readOnlyHint``.
     """
 
-    _tool_writes(tool)
+    annotations = tool.annotations
+    if isinstance(tool, _CompiledTool):
+        if tool.op_type not in {"query", "mutation"}:
+            raise ImproperlyConfigured(
+                f"GraphQL MCP tool {tool.name!r} has invalid operation type {tool.op_type!r}."
+            )
+        if annotations is None or annotations.readOnlyHint is not (tool.op_type == "query"):
+            raise ImproperlyConfigured(
+                f"GraphQL MCP tool {tool.name!r} readOnlyHint disagrees with its {tool.op_type} operation."
+            )
+    elif annotations is None or annotations.readOnlyHint is None:
+        raise ImproperlyConfigured(
+            f"Non-GraphQL built-in MCP tool {tool.name!r} must explicitly declare "
+            "ToolAnnotations.readOnlyHint."
+        )
     if not isinstance(tool, FunctionTool):
         return
     signature = inspect.signature(tool.fn)
@@ -345,63 +336,6 @@ def _assert_in_process_compatible(tool: FastMCPTool) -> None:
     code = getattr(target, "__code__", None)
     if code is not None and "get_access_token" in code.co_names:
         raise ImproperlyConfigured(f"Built-in MCP tool {tool.name!r} calls request-scoped get_access_token().")
-
-
-def _tool_writes(tool: FastMCPTool) -> bool:
-    """Return actor posture from GraphQL structure or an explicit builtin declaration."""
-
-    annotations = tool.annotations
-    if isinstance(tool, _CompiledTool):
-        if tool.op_type not in {"query", "mutation"}:
-            raise ImproperlyConfigured(
-                f"GraphQL MCP tool {tool.name!r} has invalid operation type {tool.op_type!r}."
-            )
-        structurally_read_only = tool.op_type == "query"
-        if annotations is None or annotations.readOnlyHint is not structurally_read_only:
-            raise ImproperlyConfigured(
-                f"GraphQL MCP tool {tool.name!r} readOnlyHint disagrees with its {tool.op_type} operation."
-            )
-        return not structurally_read_only
-    if annotations is None or annotations.readOnlyHint is None:
-        raise ImproperlyConfigured(
-            f"Non-GraphQL built-in MCP tool {tool.name!r} must explicitly declare "
-            "ToolAnnotations.readOnlyHint."
-        )
-    return annotations.readOnlyHint is False
-
-
-@dataclass(frozen=True, slots=True)
-class _WriteEvidenceCursor:
-    """Persistent audit high-water marks bracketing one impersonated tool call."""
-
-    version_pk: int
-    rebac_audit_pk: int
-
-
-def _write_evidence_cursor(actor: SubjectRef, user_pk: Any) -> _WriteEvidenceCursor:
-    """Snapshot owner-attributed revision and REBAC audit rows before a read call."""
-
-    version_pk = Version.objects.filter(revision__user_id=user_pk).aggregate(value=Max("pk"))["value"] or 0
-    audit_pk = (
-        PermissionAuditEvent.objects.filter(
-            actor_subject_type=actor.subject_type,
-            actor_subject_id=actor.subject_id,
-        ).aggregate(value=Max("pk"))["value"]
-        or 0
-    )
-    return _WriteEvidenceCursor(version_pk=int(version_pk), rebac_audit_pk=int(audit_pk))
-
-
-def _has_write_evidence(cursor: _WriteEvidenceCursor, actor: SubjectRef, user_pk: Any) -> bool:
-    """Return whether the impersonated actor acquired persistent write evidence."""
-
-    return Version.objects.filter(revision__user_id=user_pk, pk__gt=cursor.version_pk).exists() or (
-        PermissionAuditEvent.objects.filter(
-            actor_subject_type=actor.subject_type,
-            actor_subject_id=actor.subject_id,
-            pk__gt=cursor.rebac_audit_pk,
-        ).exists()
-    )
 
 
 def _tool_result_value(result: ToolResult) -> Any:

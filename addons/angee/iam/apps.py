@@ -10,12 +10,3 @@ class IAMConfig(AppConfig):
 
     default = True
     name = "angee.iam"
-
-    def ready(self) -> None:
-        """Wire IAM-owned REBAC relationships after app population."""
-
-        super().ready()
-        # App population phase 1 imports AppConfig before IAM cleanup wiring is ready.
-        from angee.iam import signals
-
-        signals.connect()

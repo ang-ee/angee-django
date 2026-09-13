@@ -36,7 +36,6 @@ class Workflow(AbstractWorkflow):
         app_label = "workflows"
         db_table = "test_workflows_workflow"
         rebac_resource_type = "workflows/workflow"
-        rebac_id_attr = "sqid"
 
 
 class Step(AbstractStep):
@@ -47,7 +46,6 @@ class Step(AbstractStep):
         app_label = "workflows"
         db_table = "test_workflows_step"
         rebac_resource_type = "workflows/step"
-        rebac_id_attr = "sqid"
 
 
 class Edge(AbstractEdge):
@@ -58,7 +56,6 @@ class Edge(AbstractEdge):
         app_label = "workflows"
         db_table = "test_workflows_edge"
         rebac_resource_type = "workflows/edge"
-        rebac_id_attr = "sqid"
 
 
 class Trigger(AbstractTrigger):
@@ -69,7 +66,6 @@ class Trigger(AbstractTrigger):
         app_label = "workflows"
         db_table = "test_workflows_trigger"
         rebac_resource_type = "workflows/trigger"
-        rebac_id_attr = "sqid"
 
 
 class WorkflowRun(workflow_models.WorkflowRun):
@@ -80,7 +76,6 @@ class WorkflowRun(workflow_models.WorkflowRun):
         app_label = "workflows"
         db_table = "test_workflows_workflow_run"
         rebac_resource_type = "workflows/run"
-        rebac_id_attr = "sqid"
 
 
 class StepRun(workflow_models.StepRun):
@@ -91,7 +86,6 @@ class StepRun(workflow_models.StepRun):
         app_label = "workflows"
         db_table = "test_workflows_step_run"
         rebac_resource_type = "workflows/step_run"
-        rebac_id_attr = "sqid"
 
 
 class StepAttempt(workflow_models.StepAttempt):
@@ -102,7 +96,6 @@ class StepAttempt(workflow_models.StepAttempt):
         app_label = "workflows"
         db_table = "test_workflows_step_attempt"
         rebac_resource_type = "workflows/step_attempt"
-        rebac_id_attr = "sqid"
 
 
 class StepArtifact(workflow_models.StepArtifact):
@@ -140,7 +133,6 @@ class Decision(workflow_models.Decision):
         app_label = "workflows"
         db_table = "test_workflows_decision"
         rebac_resource_type = "workflows/decision"
-        rebac_id_attr = "sqid"
 
 
 class WorkflowDispatch(workflow_models.WorkflowDispatch):

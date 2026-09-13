@@ -92,12 +92,9 @@ class NotesAuthorizationTests(TransactionTestCase):
     def test_platform_admin_reaches_all_notes(self) -> None:
         with system_context(reason="test"):
             total = Note.objects.count()
-        relationship_model = active_relationship_model()
-
         # as_user(admin) is NOT bracketed in sudo, so reach is purely
-        # relationship-based: the const-backed admin relation points every note
-        # at angee/role:admin, and admin->member resolves the superuser's
-        # membership (mirrored by the IAM user save hook).
+        # schema-based: the const-backed admin relation points every note at
+        # angee/role:admin, whose live member relation reads is_superuser.
         admin_notes = Note.objects.as_user(self.admin)
 
         self.assertEqual(admin_notes.count(), total)
@@ -105,12 +102,10 @@ class NotesAuthorizationTests(TransactionTestCase):
             {note.created_by_id for note in admin_notes},
             {self.admin.pk, self.alice.pk, self.bob.pk},
         )
-        # One role membership powers it — not a grant per note.
-        self.assertTrue(
+        relationship_model = active_relationship_model()
+        self.assertFalse(
             relationship_model.objects.filter(
-                resource_type="angee/role",
-                resource_id="admin",
-                relation="member",
+                resource_type="angee/role", resource_id="admin", relation="member"
             ).exists()
         )
         # The admin relation is synthetic (const-backed): the note table holds

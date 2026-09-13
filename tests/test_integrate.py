@@ -21,7 +21,6 @@ class ConcreteBridge(Bridge, Integration):
         app_label = "tests"
         db_table = "test_integrate_bridge"
         rebac_resource_type = "tests/bridge"
-        rebac_id_attr = "sqid"
 
 
 def test_integrate_bases_are_abstract() -> None:

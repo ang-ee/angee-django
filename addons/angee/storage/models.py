@@ -35,12 +35,6 @@ from pathlib import Path
 from typing import Any, BinaryIO, ClassVar, NoReturn, cast
 from urllib.parse import urlencode
 
-from angee.base.actors import actor_user_id
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
-from angee.base.refs import RecordRefMixin, canonical_record_target
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -70,6 +64,12 @@ from rebac import (
 from rebac.backends import backend as rebac_backend
 from rebac.managers import RebacManager
 
+from angee.base.actors import actor_user_id
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
+from angee.base.refs import RecordRefMixin, canonical_record_target
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -149,7 +149,6 @@ class Backend(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
         abstract = True
         ordering = ("slug",)
         rebac_resource_type = "storage/backend"
-        rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
         """Return the operator-facing backend label."""
@@ -228,7 +227,6 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
         abstract = True
         ordering = ("slug",)
         rebac_resource_type = "storage/drive"
-        rebac_id_attr = "sqid"
         constraints = (
             # Two drives on one backend must not share a key space — purge in
             # one drive could delete bytes a row in the other references.
@@ -466,7 +464,6 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "storage/folder"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("drive", "parent", "name"),
@@ -1187,7 +1184,6 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
         ordering = ("-updated_at", "filename", "sqid")
         rebac_resource_type = "storage/file"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("drive", "content_hash"),
@@ -1607,7 +1603,6 @@ class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         abstract = True
         ordering = ("-created_at", "sqid")
         rebac_resource_type = "storage/file_attachment"
-        rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("file", "content_type", "object_id"),
