@@ -3,11 +3,11 @@ _meta:
 rows:
   - xref: eng
     fields:
-      name: Onboarding
-      slug: onboarding
-      description: Bringing the family office's tools and data streams into Angee.
+      name: Engineering
+      slug: engineering
+      description: Engineering delivery and maintenance work.
       visibility: private
-      key: ONB
+      key: ENG
       triage_enabled: true
       cycles_enabled: true
       cycle_weeks: 2
