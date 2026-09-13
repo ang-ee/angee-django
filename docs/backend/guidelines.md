@@ -240,6 +240,11 @@ Use these owners instead of maintaining another contract in an addon:
   `jobs.rebalance_fractional_ranks`, never guess an epsilon or reuse a rank.
   Rebalance context keys are model *field names*, not attnames —
   `{"project": pk}`, never `{"project_id": pk}`.
+  Adding a rank column to a populated table is a four-step migration: add it
+  nullable, backfill per context through `_base_manager` (rows-present proof,
+  see the migration policy below), alter it to `NOT NULL`, then add the unique
+  constraint. The field provides no database default, and its `has_default()`
+  suppresses the `makemigrations` one-off-default prompt.
 - `runtime/`, generated schemas, migrations, and codegen stubs are output.
   Change the source, not the artifact.
 - REBAC is structural and owned by `django-zed-rebac`. Addons declare

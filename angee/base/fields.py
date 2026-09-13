@@ -14,18 +14,17 @@ row stores one finite binary64 rank; its model defines the surrounding context
 and must enforce ``UniqueConstraint(fields=(*context_fields, rank_field))``
 (``nulls_distinct=False`` when a context field is nullable). Append with
 ``get_append_rank(last_rank)`` and insert or move with
-``get_rank_between(previous_rank, next_rank)``; a saved row moved into a context
-where another row holds its rank is re-appended there. Ranks start and rebalance at
-``1024.0`` intervals, a power-of-two spread whose midpoints stay exact until the
-available binary64 values are genuinely exhausted. ``FractionalRankExhausted``
-is the signal to enqueue the durable ``jobs.rebalance_fractional_ranks`` task
-with the concrete model label, exact context values, and rank-field name; callers
-must not guess an epsilon or silently reuse a rank. Rebalance rewrites only that
-context under one transaction, preserves its visible ``(rank, pk)`` order, and
-is idempotent. Allocation is optimistic: the contextual unique constraint
-arbitrates concurrent writers, and a losing writer rereads its neighbors before
-retrying. Rows that predate a rank column take ``1024.0`` from its database
-default; new rows still allocate their contextual rank on save.
+``get_rank_between(previous_rank, next_rank)``; validation releases a saved row's
+unchanged rank when another row in its new context holds it, so save re-appends
+it. Ranks start and rebalance at ``1024.0`` intervals, a power-of-two spread
+whose midpoints stay exact until the available binary64 values are genuinely
+exhausted. ``FractionalRankExhausted`` is the signal to enqueue the durable
+``jobs.rebalance_fractional_ranks`` task with the concrete model label, exact
+context values, and rank-field name; callers must not guess an epsilon or
+silently reuse a rank. Rebalance rewrites only that context under one
+transaction, preserves its visible ``(rank, pk)`` order, and is idempotent.
+Allocation is optimistic: the contextual unique constraint arbitrates concurrent
+writers, and a losing writer rereads its neighbors before retrying.
 """
 
 from __future__ import annotations
@@ -245,7 +244,8 @@ class FractionalRankField(models.FloatField):
     The field owns rank arithmetic and transactional rebalance. The consumer
     model owns the context columns and their database uniqueness constraint;
     the field cannot infer whether a list is scoped by a lane, parent, project,
-    or another domain fact.
+    or another domain fact. Validated writes are placed in ``clean()``;
+    unvalidated writes are arbitrated by the unique constraint.
     """
 
     STEP = 1024.0
@@ -253,16 +253,9 @@ class FractionalRankField(models.FloatField):
     angee_widget = "float"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Default ranks to indexed, and seed rows that predate the column.
-
-        Ordered contexts query by rank. Schema backfill copies existing rows
-        without a model instance, so ``pre_save`` never allocates for them; the
-        database default seeds them instead, and ``get_default`` still defers
-        new rows to ``pre_save``.
-        """
+        """Default ranks to indexed because ordered contexts query by them."""
 
         kwargs.setdefault("db_index", True)
-        kwargs.setdefault("db_default", self.STEP)
         super().__init__(*args, **kwargs)
 
     def has_default(self) -> bool:
@@ -299,62 +292,45 @@ class FractionalRankField(models.FloatField):
 
         A rank a moved row carried into a context already holding it becomes the
         pending ``None`` that ``pre_save`` appends. A rank written explicitly that
-        another row holds is placed after that row, the same placement
-        ``pre_save`` makes; ``clean_fields()`` writes it back, so
-        ``validate_constraints()`` then sees a free rank.
+        another row holds is placed after that row; ``clean_fields()`` writes it
+        back, so ``validate_constraints()`` then sees a free rank.
         """
 
-        rank = super().clean(value, model_instance)
-        if rank is None:
-            return rank
-        if self._carried_into_taken_rank(model_instance, rank):
-            return None
-        if self._rank_is_taken(model_instance, rank):
-            return self._rank_after_holder(model_instance, rank)
-        return rank
+        return self._resolve_rank(model_instance, super().clean(value, model_instance))
 
     def pre_save(self, model_instance: models.Model, add: bool) -> float:
-        """Honor an explicit rank or place it within the model's unique context.
-
-        A row moved into another context without a new rank still holds its old one;
-        when another row there holds that rank, the moved row appends instead. An
-        explicitly written rank that another row already holds is placed immediately
-        after that row, because the writer asked for a position rather than an
-        identity: a board hands up a midpoint computed against the lane it dropped
-        into, while uniqueness spans the whole context, so the two disagree often.
-        """
+        """Honor an explicit rank or append within the model's unique context."""
 
         value = super().pre_save(model_instance, add)
-        if value is not None and not self._carried_into_taken_rank(model_instance, value):
-            if not self._rank_is_taken(model_instance, value):
-                return cast(float, value)
-            rank = self._rank_after_holder(model_instance, cast(float, value))
-            setattr(model_instance, self.attname, rank)
-            return rank
+        if value is not None:
+            return cast(float, value)
         rank = self._append_rank_for_instance(model_instance)
         setattr(model_instance, self.attname, rank)
         return rank
 
-    def _rank_is_taken(self, instance: models.Model, rank: float) -> bool:
-        """Return whether another row in this instance's unique context holds ``rank``."""
+    def _resolve_rank(self, instance: models.Model, rank: float | None) -> float | None:
+        """Keep free ranks, release carried collisions, and place explicit collisions."""
 
+        if rank is None:
+            return None
         model = type(instance)
         constraint = self._unique_context_constraint(model)
         if constraint is None:
-            return False
+            return rank
         context = {
             context_field.attname: getattr(instance, context_field.attname)
             for context_field in self._unique_context_fields(model)
         }
         database = router.db_for_write(model, instance=instance)
-        holders = (
-            system_queryset(model, using=database, lock=())
-            .filter(**context, **{self.attname: rank})
-            .exclude(pk=instance.pk)
-        )
+        rows = system_queryset(model, using=database, lock=())
+        holders = rows.filter(**context, **{self.attname: rank}).exclude(pk=instance.pk)
         if constraint.condition is not None:
             holders = holders.filter(constraint.condition)
-        return holders.exists()
+        if not holders.exists():
+            return rank
+        if not instance._state.adding and rows.filter(pk=instance.pk, **{self.attname: rank}).exists():
+            return None
+        return self._rank_after_holder(instance, rank)
 
     def _rank_after_holder(self, instance: models.Model, rank: float) -> float:
         """Return a rank between ``rank`` and the next one above it in this context.
@@ -398,28 +374,6 @@ class FractionalRankField(models.FloatField):
             .first()
         )
         return self.get_append_rank(previous)
-
-    def _carried_into_taken_rank(self, instance: models.Model, rank: float) -> bool:
-        """Return whether a saved row kept its stored rank into a context that holds it.
-
-        Inserts and explicitly changed ranks stay with the unique constraint, which
-        arbitrates concurrent writers; only a rank this write did not touch is released.
-        """
-
-        model = type(instance)
-        constraint = self._unique_context_constraint(model)
-        if instance._state.adding or constraint is None:
-            return False
-        context = {
-            context_field.attname: getattr(instance, context_field.attname)
-            for context_field in self._unique_context_fields(model)
-        }
-        database = router.db_for_write(model, instance=instance)
-        rows = system_queryset(model, using=database, lock=())
-        holders = rows.filter(**context, **{self.attname: rank}).exclude(pk=instance.pk)
-        if constraint.condition is not None:
-            holders = holders.filter(constraint.condition)
-        return holders.exists() and rows.filter(pk=instance.pk, **{self.attname: rank}).exists()
 
     def _unique_context_constraint(self, model: type[models.Model]) -> models.UniqueConstraint | None:
         """Return the one field-based unique constraint declaring this rank, if exactly one does."""

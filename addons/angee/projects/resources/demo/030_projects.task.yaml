@@ -4,6 +4,7 @@ rows:
   - xref: map_plots
     fields:
       project: projects.neighborhood_garden
+      milestone: projects.plots_ready
       title: Map the family office's current tool stack
       note: Every system in use today, who owns it, and what it would take to move.
       assignee: iam.user_admin
