@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from "react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 import {
   Alert,
   Button,
@@ -13,7 +13,7 @@ import {
   useSlot,
   useT,
 } from "@angee/ui";
-import { parseThemeCustomization, resolveThemeOptions, type ColorScheme, type ThemeContribution, type ThemeCustomizationLogo, type ThemeOptionsEnvelope } from "@angee/ui/theme";
+import { parseThemeCustomization, resolveThemeOptions, type ColorScheme, type ThemeContribution, type ThemeCustomizationLogo, type ThemeOptionsEnvelope, type ThemeTokenName } from "@angee/ui/theme";
 import { APPEARANCE_TOOLS_SLOT } from "../index";
 import { useAppearanceT } from "../i18n";
 
@@ -87,7 +87,7 @@ function ThemeScheme({ theme, scheme, options }: { theme: ThemeContribution; sch
     try { return resolveThemeOptions(theme.definition, options); }
     catch { return resolveThemeOptions(theme.definition); }
   }, [options, theme]);
-  const tokens = { ...resolved.tokens.shared, ...resolved.tokens[scheme] } as CSSProperties;
+  const tokens: Partial<Record<ThemeTokenName, string>> = { ...resolved.tokens.shared, ...resolved.tokens[scheme] };
   let logo: ThemeCustomizationLogo | undefined;
   try { logo = parseThemeCustomization(resolved.value).logo; }
   catch { logo = undefined; }
