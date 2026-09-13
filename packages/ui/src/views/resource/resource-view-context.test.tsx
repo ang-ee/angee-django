@@ -407,36 +407,36 @@ function legacyStorageKey(resource: string): string {
 }
 
 describe("pagination setters", () => {
-  test("a page setter that changes nothing does not re-render", () => {
-    // This state lives in the URL, so a setter call is a navigation. An effect
-    // that calls `setPage` with the page it is already on -- the grouped surface
-    // does, clamping the page to the page count -- would otherwise navigate,
-    // render, and re-run itself: five "Maximum update depth exceeded" errors on
-    // one board load.
-    let renders = 0;
+  test("re-setting the current page leaves view state untouched; a real change applies", () => {
+    // A no-op setter must not churn view state. This state is a navigation in
+    // route scope, so a `setPage` called with the page it is already on -- the
+    // grouped surface does, clamping to the page count -- would otherwise write
+    // a same-value navigation, re-render, and re-run its effect into "Maximum
+    // update depth exceeded" on board load. Asserting the state is left
+    // referentially unchanged captures that contract as an outcome: consumers
+    // memoized on `state` do not re-run, without pinning a render count.
     let value: ResourceViewContextValue | undefined;
-    function Counter(): null {
-      renders += 1;
+    function Capture(): null {
       value = useResourceView();
       return null;
     }
     render(
       <ResourceViewProvider scope="local">
-        <Counter />
+        <Capture />
       </ResourceViewProvider>,
     );
 
-    const settled = renders;
-    const page = (value?.state.pagination.pageIndex ?? 0) + 1;
+    const before = value!.state;
+    const page = value!.state.pagination.pageIndex + 1;
 
-    act(() => value?.setPage(page));
-    expect(renders).toBe(settled);
-    act(() => value?.setPageSize(value.state.pagination.pageSize));
-    expect(renders).toBe(settled);
+    act(() => value!.setPage(page));
+    expect(value!.state).toBe(before);
+    act(() => value!.setPageSize(value!.state.pagination.pageSize));
+    expect(value!.state).toBe(before);
 
     // A real change still goes through, so the bail-out is not just inertness.
-    act(() => value?.setPage(page + 1));
-    expect(renders).toBeGreaterThan(settled);
-    expect(value?.state.pagination.pageIndex).toBe(page);
+    act(() => value!.setPage(page + 1));
+    expect(value!.state).not.toBe(before);
+    expect(value!.state.pagination.pageIndex).toBe(page);
   });
 });
