@@ -58,7 +58,7 @@ function card(task: WorkTaskRow, labelPath = "assignee.display_name") {
   });
   return render(
     <ModelMetadataProvider metadata={metadata}>
-      <AppRuntimeProvider runtime={{ widgets: projects.widgets, icons: baseIcons }}>
+      <AppRuntimeProvider runtime={{ widgets: projects.widgets, icons: { ...baseIcons, ...projects.icons } }}>
         <WorkTaskCard task={task} estimateScale={undefined} />
       </AppRuntimeProvider>
     </ModelMetadataProvider>,

@@ -2,7 +2,15 @@ import type { BaseAddonRoute } from "@angee/app";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import type { BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
+import {
+  Briefcase,
+  ClipboardCheck,
+  Kanban,
+  ListChecks,
+  SignalHigh,
+  SignalLow,
+  SignalMedium,
+} from "lucide-react";
 
 import { enProjectsMessages } from "./i18n";
 import { taskCreateForm } from "./views/task-create-form";
@@ -106,6 +114,11 @@ const projects = defineBaseAddon({
     "project-task": ListChecks,
     "task-board": Kanban,
     "my-work": ClipboardCheck,
+    // The priority widget's ascending-bar scale; the addon owns its own domain
+    // glyphs rather than seeding them into base (`chrome/icon-registry.ts`).
+    "signal-high": SignalHigh,
+    "signal-medium": SignalMedium,
+    "signal-low": SignalLow,
   },
 });
 

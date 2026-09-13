@@ -14,6 +14,14 @@ describe("projects addon manifest", () => {
     expect(isWidgetDefinition(projects.widgets?.["angee.projects.priority"])).toBe(true);
   });
 
+  test("contributes the priority scale glyphs the widget renders", () => {
+    // The signal-bar glyphs carry projects vocabulary, so the addon registers
+    // them through `icons:` rather than seeding base `chrome/icon-registry.ts`.
+    for (const name of ["signal-high", "signal-medium", "signal-low"]) {
+      expect(projects.icons?.[name]).toBeDefined();
+    }
+  });
+
   test("declares collection owners, record children, and projection pages", () => {
     expect((projects.routes ?? []).map((route) => route.name)).toEqual([
       "projects.my-work",
