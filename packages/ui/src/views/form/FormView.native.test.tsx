@@ -3,11 +3,12 @@
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Refine, type DataProvider } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver, onlineManager } from "@tanstack/react-query";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useForm } from "react-hook-form";
 import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
+import { createAngeeHasuraDataProvider } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
@@ -57,7 +58,7 @@ const resource = testDataResource("notes.Note", {
 });
 const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).labels["notes.Note"]!;
 const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; onlineManager.setOnline(true); });
 
 test("a domain controlled value uses FormView interaction ownership and remounts by full name", () => {
   const start = vi.fn(); const commit = vi.fn();
@@ -122,6 +123,8 @@ async function fixture(options: {
   acknowledgedSource?: FormViewAcknowledgedSource;
   boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[];
   publicView?: boolean;
+  readProvider?: DataProvider;
+  queryClient?: QueryClient;
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
   recordTabs?: readonly RecordTabDescriptor[];
@@ -141,23 +144,23 @@ async function fixture(options: {
       : {}),
   };
   const onSaved = vi.fn();
-  const getOne = vi.fn(async () => ({ data: record }));
+  const getOne = vi.fn(options.readProvider?.getOne ?? (async () => ({ data: record })));
   const update = vi.fn(async ({ variables }: { variables?: unknown }) => {
     record = { ...record, ...(variables as Row) };
     return { data: record };
   });
   const provider = { getApiUrl: () => "test://notes", getOne, update, create: update, getList: vi.fn(async () => ({ data: [], total: 0 })), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const client = options.queryClient ?? new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   clients.push(client);
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   let surface!: FormViewSaveSurface;
   const id = options.id === undefined ? "note-1" : options.id;
-  function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
+  function Probe({ recordId, mountedFields, viewFields, boundFields, acknowledgedSource }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[]; acknowledgedSource?: FormViewAcknowledgedSource }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
       dataResource: resource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
       submit: options.submit, readOnlyWhen: options.readOnlyWhen, onSaved, t: (key) => key,
-      acknowledgedSource: options.acknowledgedSource,
+      acknowledgedSource,
       onFieldInteractionStart: options.onFieldInteractionStart,
       onFieldInteractionCommit: options.onFieldInteractionCommit,
     });
@@ -167,7 +170,7 @@ async function fixture(options: {
       <BoundDescriptorField key={index} form={surface} resource="notes.Note" {...bound} />
     ))}</>;
   }
-  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
+  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields, acknowledgedSource = options.acknowledgedSource }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[]; acknowledgedSource?: FormViewAcknowledgedSource }) {
     return <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
       <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
         {options.publicView ? (
@@ -177,7 +180,7 @@ async function fixture(options: {
             fields={viewFields}
             groups={options.groups}
             title={options.title}
-            acknowledgedSource={options.acknowledgedSource}
+            acknowledgedSource={acknowledgedSource}
             submit={options.submit}
             onFieldInteractionStart={options.onFieldInteractionStart}
             onFieldInteractionCommit={options.onFieldInteractionCommit}
@@ -187,13 +190,13 @@ async function fixture(options: {
             defaultRecordTab={options.recordTabs ? "activity" : undefined}
           />
         ) : (
-          <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} boundFields={boundFields} />
+          <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} boundFields={boundFields} acknowledgedSource={acknowledgedSource} />
         )}
       </AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider>
     </Refine>;
   }
   const view = render(<Tree />);
-  if (!options.publicView && id !== null && options.acknowledgedSource?.values !== null) {
+  if (!options.publicView && !options.readProvider && id !== null && options.acknowledgedSource?.values !== null) {
     await waitFor(() => expect(surface?.form.getValues("title")).toBe("First"));
   }
   return { surface: () => surface, onSaved, getOne, update, client, setRecord: (next: Row) => { record = next; }, rerender: (props: Parameters<typeof Tree>[0]) => view.rerender(<Tree {...props} />) };
@@ -229,7 +232,7 @@ test("composed field validation participates in the native submit resolver", asy
 });
 
 test("an editable metadata relation drops a stale expanded option when its id changes", async () => {
-  await fixture({
+  const { getOne } = await fixture({
     publicView: true,
     relationValues: true,
     recordExtras: (context) => <>
@@ -238,6 +241,11 @@ test("an editable metadata relation drops a stale expanded option when its id ch
     </>,
   });
   const relation = await screen.findByRole("button", { name: /Parent/ });
+  // The label now comes from the selected record's own read, so wait for that
+  // read rather than for a clock: the trigger can be on screen before it fires.
+  await waitFor(() =>
+    expect(getOne).toHaveBeenCalledWith(expect.objectContaining({ id: "note-a" })),
+  );
   expect(relation.textContent).toContain("note-a");
   fireEvent.click(screen.getByRole("button", { name: "Choose B" }));
   await waitFor(() => expect(relation.textContent).toContain("note-b"));
@@ -900,4 +908,100 @@ test("native bound widgets delimit text, discrete, structured and presence inter
   expect(commits).toHaveBeenCalledWith("settings.optional");
   expect(starts).not.toHaveBeenCalledWith("settings.locked");
   expect(commits).not.toHaveBeenCalledWith("settings.locked");
+});
+
+
+function failingReadProvider(fetch: typeof globalThis.fetch = async () => {
+  throw new TypeError("Network request failed");
+}) {
+  return createAngeeHasuraDataProvider({
+    url: "https://example.invalid/graphql",
+    auth: (request) => request,
+    fetch,
+  });
+}
+
+test("useFormViewSave settles a real provider error under Query retry defaults", async () => {
+  // Retry count is the fact under test, not the backoff delay.
+  const f = await fixture({ readProvider: failingReadProvider(), queryClient: new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } }) });
+  await waitFor(() => expect(f.surface().readFailure?.message).toBe("Request failed."));
+  const queries = f.client.getQueryCache().findAll({ type: "active" });
+  expect(queries).toHaveLength(1);
+  const read = new QueryObserver(f.client, { queryKey: queries[0]!.queryKey });
+  expect(read.getCurrentResult().isError).toBe(true);
+  expect(read.getCurrentResult().error).toBe(f.surface().readFailure);
+  expect(f.getOne).toHaveBeenCalledTimes(4);
+  expect(f.surface().recordMissing).toBe(false);
+});
+
+test("useFormViewSave reports a retry parked offline after a lost attempt as a failure", async () => {
+  const f = await fixture({
+    queryClient: new QueryClient(),
+    readProvider: failingReadProvider(async () => {
+      onlineManager.setOnline(false);
+      throw new TypeError("Network request failed");
+    }),
+  });
+  await waitFor(() => expect(f.client.getQueryCache().getAll()[0]?.state.fetchStatus).toBe("paused"), { timeout: 3_000 });
+  expect(f.getOne).toHaveBeenCalledOnce();
+  // The reader must not be offered an editable empty form for a record nobody
+  // has read: the parked attempt's error is the retryable failure.
+  expect(f.surface().readFailure?.message).toBe("Request failed.");
+  expect(f.surface().recordMissing).toBe(false);
+});
+
+test("useFormViewSave hides a cached query error while an acknowledged source owns the record", async () => {
+  const f = await fixture({ readProvider: failingReadProvider() });
+  await waitFor(() => expect(f.surface().readFailure?.message).toBe("Request failed."));
+  const reads = f.getOne.mock.calls.length;
+  const record = { id: "note-1", title: "Acknowledged" };
+  f.rerender({ acknowledgedSource: { record, values: record } });
+  expect(f.surface().displayRecord).toEqual(record);
+  expect(f.surface().readFailure).toBeNull();
+  expect(f.surface().recordMissing).toBe(false);
+  expect(f.client.getQueryCache().getAll()[0]?.state.status).toBe("error");
+  expect(f.getOne).toHaveBeenCalledTimes(reads);
+});
+
+test("a record read that fails reports it and offers a retry, not an empty form", async () => {
+  let fails = true;
+  const f = await fixture({ publicView: true, readProvider: failingReadProvider(async () => {
+    if (fails) throw new TypeError("Network request failed");
+    return new Response(JSON.stringify({ data: { [resource.roots.detail!]: { id: "note-1", title: "Recovered" } } }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }) });
+  expect(await screen.findByText("Something went wrong")).toBeTruthy();
+  expect(screen.getByText("Request failed.")).toBeTruthy();
+  // The editable shell must be gone: it would offer a save onto a record nobody
+  // has read.
+  expect(screen.queryByLabelText("title")).toBeNull();
+
+  // Retry re-reads rather than making the user reload the page.
+  const reads = f.getOne.mock.calls.length;
+  fails = false;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(f.getOne.mock.calls.length).toBeGreaterThan(reads));
+  expect(await screen.findByDisplayValue("Recovered")).toBeTruthy();
+  expect(screen.queryByText("Something went wrong")).toBeNull();
+});
+
+test("an id that reads back with no record shows a not-found panel", async () => {
+  await fixture({ publicView: true, readProvider: createAngeeHasuraDataProvider({
+    url: "https://example.invalid/graphql",
+    auth: (request) => request,
+    fetch: async () => new Response(JSON.stringify({ data: { [resource.roots.detail!]: null } }), {
+      headers: { "Content-Type": "application/json" },
+    }),
+  }) });
+  expect(await screen.findByText("Record not found")).toBeTruthy();
+  expect(screen.queryByLabelText("title")).toBeNull();
+  expect(screen.queryByText("Something went wrong")).toBeNull();
+});
+
+test("a record that reads back normally still renders its form", async () => {
+  await fixture({ publicView: true });
+  expect(await screen.findByDisplayValue("First")).toBeTruthy();
+  expect(screen.queryByText("Record not found")).toBeNull();
+  expect(screen.queryByText("Something went wrong")).toBeNull();
 });

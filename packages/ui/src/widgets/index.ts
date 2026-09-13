@@ -40,7 +40,8 @@ export type {
   WidgetRenderProps,
   WidgetFocusTarget,
 } from "./types";
-export { canonicalOptionValue, optionToken, relationValueId } from "./types";
+export { canonicalOptionValue, optionLabel, optionToken, relationValueId } from "./types";
+export { StatusSelectEdit } from "./statusSelectEdit";
 export { widgetLabel } from "./label";
 export { slugify } from "./slug";
 export { STATUS_TONES, statusTone, type StatusToneOptions } from "./status-tones";

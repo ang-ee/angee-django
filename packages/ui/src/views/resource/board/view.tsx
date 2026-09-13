@@ -13,8 +13,18 @@ import { boardMoveForDrop } from "../board-ordering";
 import { flattenLeaves } from "./cards";
 import { boardCollisionDetection, boardDragData, boardDropTarget } from "./dnd";
 import { BoardLane, BoardSkeleton, EMPTY_FOLD_OVERRIDES } from "./lanes";
+// `items-stretch` is what makes a whole column a drop target. The lane's
+// droppable node is its frame, so under `items-start` the frame ended where its
+// last card did and the space below it belonged to nobody: a drop into an empty
+// column, or below the cards of a short one, did nothing at all. Stretched, every
+// lane is as tall as the tallest, so that space is inside the lane -- which is
+// where a card dropped there was always meant to go.
+//
+// The height comes from the row's own content, never from the viewport: the board
+// does not give itself a height, because the browser owns board overflow rather
+// than an internal scrollbar (asserted in `BoardView.test.tsx`).
 export const BOARD_SCROLL_SURFACE_CLASS =
-  "resource-board-scroll flex min-h-0 min-w-0 items-start gap-3 overflow-auto overscroll-contain p-3";
+  "resource-board-scroll flex min-h-0 min-w-0 items-stretch gap-3 overflow-auto overscroll-contain p-3";
 export const BOARD_CARD_SHELL_CLASS =
   "block min-w-0 max-w-full rounded-8 text-left text-inherit outline-none focus-visible:focus-ring";
 

@@ -1,15 +1,18 @@
 import {
   dataResourcesFromAngeeSchemaMetadata,
+  refineResourceIdentifier,
   refineResourcesFromDataResources,
   refineRoutePathForTanStack,
   type AngeeSchemaMetadata,
   type RefineResourceMetadata,
 } from "@angee/metadata";
+import type { I18nResources } from "@angee/refine";
 import type { ResourceProps } from "@refinedev/core";
 import {
   MenuTree,
   type ChromeMenuNode,
 } from "@angee/ui/chrome/menu-tree";
+import { titleCase } from "@angee/ui/lib/titleCase";
 import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
 
 import type { BaseAddonRoute } from "./define-base-addon";
@@ -237,4 +240,27 @@ function breadcrumbTrailFromMenuTrail(
     items.push(item);
   }
   return items;
+}
+
+/**
+ * The resource labels refine reads when it names a record in a message.
+ *
+ * refine translates `<identifier>.<identifier>` to label a resource and falls
+ * back to `textTransformers.singular(identifier)` — which on an Angee identifier
+ * is the raw `console:projects.Project`, and that is what reached the create
+ * toast. Registering the model's humanized name under refine's own key fixes
+ * every message that names a resource, without overriding the transformers that
+ * unrelated strings go through.
+ */
+export function resourceLabelI18nMessages(
+  schemas: Readonly<Record<string, SchemaWithMetadata>>,
+): I18nResources {
+  const messages: Record<string, string> = {};
+  for (const schema of Object.values(schemas)) {
+    for (const resource of dataResourcesFromAngeeSchemaMetadata(schema.metadata)) {
+      const identifier = refineResourceIdentifier(resource);
+      messages[`${identifier}.${identifier}`] = titleCase(resource.modelName).toLowerCase();
+    }
+  }
+  return { ui: messages };
 }

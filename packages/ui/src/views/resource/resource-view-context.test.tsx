@@ -405,3 +405,38 @@ function favoritesPreferences(
 function legacyStorageKey(resource: string): string {
   return `angee:resource-view:${resource}:favorites`;
 }
+
+describe("pagination setters", () => {
+  test("re-setting the current page leaves view state untouched; a real change applies", () => {
+    // A no-op setter must not churn view state. This state is a navigation in
+    // route scope, so a `setPage` called with the page it is already on -- the
+    // grouped surface does, clamping to the page count -- would otherwise write
+    // a same-value navigation, re-render, and re-run its effect into "Maximum
+    // update depth exceeded" on board load. Asserting the state is left
+    // referentially unchanged captures that contract as an outcome: consumers
+    // memoized on `state` do not re-run, without pinning a render count.
+    let value: ResourceViewContextValue | undefined;
+    function Capture(): null {
+      value = useResourceView();
+      return null;
+    }
+    render(
+      <ResourceViewProvider scope="local">
+        <Capture />
+      </ResourceViewProvider>,
+    );
+
+    const before = value!.state;
+    const page = value!.state.pagination.pageIndex + 1;
+
+    act(() => value!.setPage(page));
+    expect(value!.state).toBe(before);
+    act(() => value!.setPageSize(value!.state.pagination.pageSize));
+    expect(value!.state).toBe(before);
+
+    // A real change still goes through, so the bail-out is not just inertness.
+    act(() => value!.setPage(page + 1));
+    expect(value!.state).not.toBe(before);
+    expect(value!.state.pagination.pageIndex).toBe(page);
+  });
+});

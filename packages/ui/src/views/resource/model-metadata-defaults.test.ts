@@ -31,6 +31,7 @@ import {
 const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
 import { requestedFieldPaths } from "./resource-view-codecs";
 import type { ColumnDescriptor, FieldDescriptor } from "../page";
+import { fieldWidgetId } from "../page/Field";
 
 const STATUS_VALUES = [{ value: "DRAFT", description: "Draft" }, { value: "IN_REVIEW" }, { value: "ACTIVE" }];
 const dateAxis = (field: string) => testQueryAxis(field, {
@@ -164,6 +165,43 @@ describe("resource metadata defaults", () => {
     expect(resolved[3]?.widget).toBe("tagInput"); // string list → tag input
     expect(resolved[4]?.widget).toBe("many2one"); // relation → picker
     expect(resolved[5]?.widget).toBe("booleanBadge"); // explicit widget is preserved
+  });
+
+  test("attaches enum options to addon widgets without changing widget inheritance", () => {
+    const metadata = canonicalModel({
+      status: {
+        name: "status",
+        kind: "enum",
+        widget: "example.notes.status",
+        values: STATUS_VALUES,
+      },
+    }, testDataResource("notes.Note"));
+    const explicitOptions = [{ value: "CUSTOM", label: "Custom" }];
+    const resolvedColumns = columnsWithMetadataDefaults<Row>([
+      { field: "status" },
+      { field: "status", widget: "example.notes.badge" },
+      { field: "status", widget: "example.notes.badge", options: explicitOptions },
+    ], metadata);
+    expect(resolvedColumns.map((column) => column.widget)).toEqual([
+      "example.notes.status", "example.notes.badge", "example.notes.badge",
+    ]);
+    const resolvedFields = fieldsWithMetadataDefaults([
+      { name: "status" },
+      { name: "status", widget: "example.notes.badge", kind: "selection" },
+      { name: "status", kind: "selection" },
+      { name: "status", kind: "selection", options: explicitOptions },
+      { name: "status", widget: "example.notes.badge", options: explicitOptions },
+    ], metadata);
+    expect(resolvedFields.map(fieldWidgetId)).toEqual([
+      "example.notes.status", "example.notes.badge", "example.notes.status",
+      "selection", "example.notes.badge",
+    ]);
+    expect(resolvedFields.map((field) => field.options)).toEqual([
+      STATUS_OPTIONS, STATUS_OPTIONS, STATUS_OPTIONS, explicitOptions, explicitOptions,
+    ]);
+    expect(resolvedColumns.map((column) => column.options)).toEqual([
+      STATUS_OPTIONS, STATUS_OPTIONS, explicitOptions,
+    ]);
   });
 
   test("derives list filter fields, enum filter chips, and group options", () => {
@@ -498,6 +536,7 @@ describe("money currencyField plumbing", () => {
       NOTE_METADATA,
     );
     expect(resolved[0]?.widget).toBeUndefined();
+    expect(resolved[0]?.options).toEqual(STATUS_OPTIONS);
     expect(resolved[1]?.widget).toBeUndefined();
   });
 

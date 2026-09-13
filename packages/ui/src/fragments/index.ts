@@ -13,6 +13,7 @@ export {
   type EmptyStateProps,
 } from "./EmptyState";
 export { ErrorBanner, type ErrorBannerProps } from "./ErrorBanner";
+export { ErrorPanel, type ErrorPanelProps } from "./ErrorPanel";
 export {
   InfoRow,
   infoRowVariants,

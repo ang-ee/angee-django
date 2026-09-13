@@ -69,22 +69,35 @@ export function useListRecordNavigation<TRow extends Row>({
   const current = useResourceListQuery({ resource: model?.resource, scope: navigationScope, fields: idFields, enabled: Boolean(recordId) });
   const target = useResourceListQuery({ resource: model?.resource, scope: pending?.scope ?? null, fields: idFields, enabled: Boolean(recordId && pending?.recordId === recordId && pending.binding === binding && pending.sourceScope === scopeIdentity) });
 
+  // Deciding INSIDE a setter is not enough. React only skips scheduling a
+  // same-value update while the fiber has no pending lane; once one update has
+  // landed on this component, every later `setX(prev => prev)` is scheduled,
+  // renders, returns the same value, and still counts as a nested update. So the
+  // comparison happens here, before the setter is called at all.
+  const latestState = React.useRef({ captured, local });
+  latestState.current = { captured, local };
+
   const onListStateChange = React.useCallback((state: ResourceListSnapshot<TRow>) => {
+    const { captured: lastCaptured, local: lastLocal } = latestState.current;
     if (state.navigationScope) {
-      setLocal(null);
+      if (lastLocal !== null) setLocal(null);
       scopeRef.current = { binding, scope: state.navigationScope };
       // A mounted drawer's collection cannot replace the record's independent page.
-      if (!recordId) setCaptured((previous) => previous?.binding === binding && stableSerialize(previous.scope) === stableSerialize(state.navigationScope) ? previous : { binding, scope: state.navigationScope! });
+      const sameScope = lastCaptured?.binding === binding
+        && stableSerialize(lastCaptured.scope) === stableSerialize(state.navigationScope);
+      if (!recordId && !sameScope) {
+        setCaptured({ binding, scope: state.navigationScope });
+      }
     } else {
       scopeRef.current = null;
-      if (!recordId) setCaptured((previous) => previous?.scope ? { binding, scope: null } : previous);
-      setLocal((previous) => {
-        const snapshot = previous?.binding === binding && state.fetching && !state.rows.some((row) => readId(row) === recordId)
-          && previous.snapshot.rows.some((row) => readId(row) === recordId)
-          ? { ...previous.snapshot, fetching: true }
-          : state;
-        return previous?.binding === binding && stableSerialize(previous.snapshot) === stableSerialize(snapshot) ? previous : { binding, snapshot };
-      });
+      if (!recordId && lastCaptured?.scope) setCaptured({ binding, scope: null });
+      const snapshot = lastLocal?.binding === binding && state.fetching && !state.rows.some((row) => readId(row) === recordId)
+        && lastLocal.snapshot.rows.some((row) => readId(row) === recordId)
+        ? { ...lastLocal.snapshot, fetching: true }
+        : state;
+      const sameSnapshot = lastLocal?.binding === binding
+        && stableSerialize(lastLocal.snapshot) === stableSerialize(snapshot);
+      if (!sameSnapshot) setLocal({ binding, snapshot });
     }
     if (selectFirstRecord && !state.fetching) {
       const selectedStillExists = recordId

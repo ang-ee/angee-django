@@ -1588,6 +1588,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
       '@angee/projects':
         specifier: workspace:*
         version: link:../../projects/web

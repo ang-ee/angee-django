@@ -26,6 +26,7 @@ export function CycleBoardPage(): React.ReactElement {
   const queueFacts = queue.data?.work_queues_by_pk;
   const cycleFacts = cycle.data?.work_cycles_by_pk;
   const title = cycleFacts?.name ?? id;
+
   return (
     <Page>
       <PageHeader
@@ -43,7 +44,7 @@ export function CycleBoardPage(): React.ReactElement {
           ) : null
         }
       />
-      <PageBody gutter="none" scroll="hidden">
+      <PageBody gutter="none" scroll="hidden" className="flex flex-col">
         {queue.error || cycle.error ? (
           <ErrorBanner description={(queue.error ?? cycle.error)?.message} />
         ) : null}
@@ -53,10 +54,7 @@ export function CycleBoardPage(): React.ReactElement {
             defaultView="board"
             // System-staged rows never render: lane filters exclude
             // triage/duplicate — `stage` is an ID comparison on the wire.
-            baseFilter={{
-              queue: { exact: queueId },
-              cycle: { exact: id },
-            }}
+            baseFilter={{ queue: { exact: queueId }, cycle: { exact: id } }}
             order={{ sort_order: "ASC" }}
             laneSource={{
               field: "stage",
@@ -76,7 +74,8 @@ export function CycleBoardPage(): React.ReactElement {
             <Column field="work_key" header={t("common.key")} />
             <Column field="title" />
             <Column field="estimate" header={t("common.estimate")} />
-            <Column field="priority" />
+            <Column field="assignee" />
+            <Column field="priority" widget="angee.projects.priority" />
             <Column field="due_date" />
           </List>
         </TaskBoardSurface>

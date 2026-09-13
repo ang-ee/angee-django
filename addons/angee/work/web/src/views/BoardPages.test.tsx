@@ -10,7 +10,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@angee/projects", () => ({
-  useTaskFormDeclaration: () => null,
+  TASK_MODEL: "projects.Task",
+  TaskBoardSurface: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@angee/ui", () => ({
@@ -23,14 +24,7 @@ vi.mock("@angee/ui", () => ({
   Page: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   PageBody: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   PageHeader: () => null,
-  ResourceList: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-  useRouteHref: () => () => "/projects/tasks/task",
   useRouteParam: (name: string) => mocks.params[name],
-}));
-
-vi.mock("@tanstack/react-router", () => ({
-  useNavigate: () => vi.fn(),
-  useParams: () => mocks.params,
 }));
 
 vi.mock("../context", () => ({

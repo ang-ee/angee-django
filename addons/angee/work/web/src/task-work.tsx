@@ -1,4 +1,20 @@
-import { Group, Field, RelativeTime, type StringIdRow } from "@angee/ui";
+import {
+  relationRepresentationForPath,
+  rowValueAtPath,
+  useModelMetadata,
+  useSchemaFieldMetadata,
+} from "@angee/metadata";
+import { TASK_MODEL } from "@angee/projects";
+import {
+  Avatar,
+  Group,
+  Field,
+  RelativeTime,
+  avatarInitials,
+  useEnumOptions,
+  useResolvedWidget,
+  type StringIdRow,
+} from "@angee/ui";
 import * as React from "react";
 
 import { estimateLabel } from "./estimates";
@@ -8,6 +24,9 @@ export interface WorkTaskRow extends StringIdRow {
   title?: unknown;
   work_key?: unknown;
   estimate?: unknown;
+  priority?: unknown;
+  due_date?: unknown;
+  assignee?: unknown;
   queue?: unknown;
   stage?: unknown;
   cycle?: unknown;
@@ -20,13 +39,31 @@ function WorkSectionLabel(): React.ReactElement {
   return <>{t("task.group.work")}</>;
 }
 
-/** Work-owned donor fields contributed into the projects-owned task FormView. */
+function WorkDetailSectionLabel(): React.ReactElement {
+  const t = useWorkT();
+  return <>{t("task.group.workDetail")}</>;
+}
+
+/**
+ * Work-owned donor fields contributed into the projects-owned task FormView.
+ *
+ * Split by how often they are read, not by who owns them. Where a task sits in
+ * the flow -- its queue, stage, cycle and size -- is checked on every visit, so
+ * it goes in the standing properties column beside status; the identifiers and
+ * triage timestamps are a long tail and stay in the body. A host form on any
+ * other layout ignores the placement and renders both as ordinary sections.
+ */
 export const taskWorkFormSection = (
-  <Group label={<WorkSectionLabel />} columns={2}>
+  <Group label={<WorkSectionLabel />} columns={1} placement="properties">
     <Field name="queue" readOnly />
     <Field name="stage" readOnly />
     <Field name="cycle" readOnly />
     <Field name="estimate" />
+  </Group>
+);
+
+export const taskWorkDetailSection = (
+  <Group label={<WorkDetailSectionLabel />} columns={2}>
     <Field name="number" readOnly />
     <Field name="snoozed_until" readOnly />
     <Field name="snoozed_by" readOnly />
@@ -55,8 +92,56 @@ export function WorkTaskCard({
         {estimate ? <span className="tabular-nums">{estimate}</span> : null}
       </div>
       <span className="text-sm font-medium text-fg">{title}</span>
+      <CardFooter task={task} />
     </div>
   );
+}
+
+/** Compose the assignee, priority and due date; hide an empty footer. */
+function CardFooter({ task }: { task: WorkTaskRow }): React.ReactElement {
+  const t = useWorkT();
+  const taskModel = useModelMetadata(TASK_MODEL);
+  const schemaMetadata = useSchemaFieldMetadata();
+  // The board rows carry the assignee representation because the boards declare
+  // `<Column field="assignee" />`; the card reads the same metadata-owned path.
+  const representation = taskModel
+    ? relationRepresentationForPath("assignee", taskModel, schemaMetadata)
+    : null;
+  const assignee = representation
+    ? presentText(rowValueAtPath(task, representation.displayPath))
+    : "";
+  const PriorityCell = useResolvedWidget("angee.projects.priority")?.cell;
+  // The same option labels the list cells read; an enum reads back as its
+  // upper-case member name, so the options are cased to match.
+  const priorityOptions = useEnumOptions(TASK_MODEL, "priority", { casing: "upper" });
+  const due = presentText(task.due_date);
+  return (
+    <div className="flex items-center gap-2 text-xs text-fg-muted empty:hidden">
+      {assignee ? (
+        <Avatar
+          size="sm"
+          role="img"
+          initials={avatarInitials(assignee)}
+          title={assignee}
+          aria-label={assignee}
+        />
+      ) : null}
+      {PriorityCell ? (
+        <PriorityCell value={task.priority} row={task} field={{ name: "priority", options: priorityOptions }} />
+      ) : null}
+      {due ? (
+        <span className="ml-auto shrink-0 tabular-nums">
+          <RelativeTime value={due} fallback={t("task.card.noDue")} />
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function presentText(value: unknown): string {
+  return typeof value === "string" || typeof value === "number"
+    ? String(value).trim()
+    : "";
 }
 
 export function TriageDwell({ value }: { value: unknown }): React.ReactElement {

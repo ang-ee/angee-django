@@ -236,7 +236,7 @@ describe("resource-view model", () => {
   });
 
   test("registers the calendar kind with its applicability", () => {
-    expect(RESOURCE_VIEW_KINDS).toEqual(["list", "board", "calendar"]);
+    expect(RESOURCE_VIEW_KINDS).toEqual(["list", "board", "calendar", "dashboard"]);
     // The calendar takes only window args in v1: no group-by/pager/columns/filter.
     expect(RESOURCE_VIEW_KIND_CAPABILITIES.calendar).toEqual({
       grouping: false,

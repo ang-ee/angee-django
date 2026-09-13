@@ -248,8 +248,16 @@ export function useFormViewSurface({
       }
     }
   }, [sectionEntries, sectionTarget.slot]);
+  // A create-form override declares the whole create surface, so the model's
+  // slot sections stay out of it. They are record extensions -- the work addon
+  // contributes "Queue work" and "Fixed in" to `projects.Task` -- and merging
+  // them into a create dialog put their tab strip and their fields back in front
+  // of a form whose point was to be one short column.
+  const createOverrideActive =
+    id == null && React.isValidElement(formOverride);
   const slotDeclarations = React.useMemo(
     () =>
+      createOverrideActive ? [] :
       sectionEntries.flatMap((entry, entryOrder) => {
         const sequence = entry.sequence ?? 0;
         return [
@@ -271,7 +279,7 @@ export function useFormViewSurface({
           ),
         ];
       }).sort(compareSlotDeclaration),
-    [sectionEntries],
+    [createOverrideActive, sectionEntries],
   );
   const slotGroups = React.useMemo(
     () =>

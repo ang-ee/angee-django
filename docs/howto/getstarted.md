@@ -134,7 +134,8 @@ Concretely, today:
 - **Being lifted in now.** The higher-level addons — agents, integrations,
   knowledge, storage, and communications. They already run in the team's other
   platforms; the work in flight is reconstructing and open-sourcing them here,
-  addon by addon.
+  addon by addon. A project-management suite — projects and tasks — is built on
+  them.
 
 This is the whole point of the framework — and why it is **technical investment,
 not technical debt**. Every component and its permissions are tested end to end,
