@@ -82,9 +82,9 @@ actually unique to your product.
 - **Integrate** — third-party systems: a vendor catalogue, accounts, stateless
   providers and stateful bridges, and signed inbound/outbound webhooks.
   **OAuth2 / OIDC** ships as the credential-source sibling and also powers SSO.
-- **Agents** — agents as first-class REBAC subjects with an audited **ceiling** on
-  what their runtime may do: pick a template, bind a model and an integration,
-  mount skills, and chat. Process lifecycle runs on the operator.
+- **Agents** — agents act as their non-login service users; their runtime reach is
+  exactly the REBAC grants assigned to that user. Pick a template, bind a model
+  and an integration, mount skills, and chat. Process lifecycle runs on the operator.
 - **Operator** — a thin Django bridge that hands the browser a connection to the
   Go daemon, plus a console to manage stacks, services, workspaces, sources, and
   secrets.

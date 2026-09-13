@@ -111,22 +111,15 @@ Authorization is structural: reads scope through the model manager, writes check
 the instance. Addons keep the owning `permissions.zed` contract adjacent to the
 addon (discovered by convention); `django-zed-rebac` owns sync.
 
-**Principal** — an identity that acts. The word means different things at
-different layers, deliberately. At the **database layer there is exactly one
-principal record**: a row in the swappable `AUTH_USER_MODEL` table — person or
-service alike — and every fact that answers "who" (audit stamps, history rows,
-revision authors) is an FK to that table. At the **authorization layer** a
-principal is a REBAC subject and keeps its species (`auth/user` for people,
-`agents/agent` for agents); authorization never collapses an agent into its
-user row. The two layers are *linked* (`actor_user_id` + the resolver
-registry), never merged. So `user = service account = actor = principal` is
-true **only at the database layer**, where all four words name the same row.
+**Principal** — an identity that acts. There is one principal record and one
+authorization species: a row in the swappable `AUTH_USER_MODEL` table and its
+`auth/user` REBAC subject. The row may represent a person or a service. Every
+fact that answers "who" (audit stamps, history rows, revision authors) is an FK
+to that table.
 
-**Actor** — the REBAC subject bound to the current operation (the
-`django-zed-rebac` actor context). Species-preserving: an agent acts as
-`agents/agent:<sqid>`, a person as `auth/user:<id>`. When attribution needs a
-database FK, the actor resolves to its user row through `actor_user_id`; it is
-never *replaced* by it for permission evaluation.
+**Actor** — the `auth/user` REBAC subject bound to the current operation (the
+`django-zed-rebac` actor context). `actor_user_id` resolves its public subject id
+to the database primary key used by attribution FKs.
 
 **User (row)** — the database-layer principal record. Not synonymous with "a
 human" or "a login": `kind` distinguishes `person` from `service`, and only
@@ -135,12 +128,13 @@ person rows authenticate. Real-world faces link to it one way, one shape:
 
 **Service account** — a `kind=service` user row: the database-layer principal
 of an agent or automation. Non-login (unusable password, excluded from OIDC
-linking and user pickers); its lifecycle is owned by the thing it represents
+linking and human-only member pickers). Access pickers include readable service
+users; their lifecycle is owned by the thing each represents
 (the agents manager creates, renames, and deactivates it with its `Agent`).
 
-**Agent** — an autonomous actor represented by an `agents.Agent` and linked
-service-account user row. The agent keeps its own authorization species while
-the user row owns database attribution.
+**Agent** — an autonomous capability represented by an `agents.Agent` and its
+linked service-account user row. The agent acts as that ordinary `auth/user`
+subject, and its reach is exactly the grants assigned to the service user.
 
 **Resource file** — tabular data owned by an addon and imported idempotently by
 tier (`master`, `install`, `demo`). Addons list resource files in their

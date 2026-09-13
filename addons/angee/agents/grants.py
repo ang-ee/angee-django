@@ -9,6 +9,7 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from rebac import ObjectRef, RelationshipTuple, SubjectRef, system_context
+from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationships, write_relationships
 from rebac.types import RelationshipFilter
 
@@ -155,16 +156,27 @@ def _sync_resource_reader_grants(server: Any, registered: list[Any]) -> None:
 
 
 def resync_tool_grants() -> int:
-    """Replace direct agent grants with the current Agent.mcp_tools selections.
+    """Migrate agent subjects, then replace direct grants from MCP selections.
 
-    Run after the current agents zed has been synced. Role and group grants
-    are preserved: only ``#grantee@agents/agent`` tuples are reconciled. Returns
-    the number of selected tool grants written.
+    Run once after syncing agents schema revision 5. Direct tool grants are
+    rebuilt from ``Agent.mcp_tools``. Existing tool-role and IAM-group
+    memberships are rewritten from the retired ``agents/agent`` principal to
+    the agent's service user, preserving caveats and expiration. Returns the
+    number of selected tool grants written.
     """
 
     agent_model = apps.get_model("agents", "Agent")
     writes: list[RelationshipTuple] = []
     with system_context(reason="agents.tool_grants.resync"), transaction.atomic():
+        agents = list(
+            agent_model._base_manager.select_related("user")
+            .prefetch_related("mcp_tools__server")
+            .order_by("pk")
+        )
+        for agent in agents:
+            if agent.user_id is None:
+                agent.user = agent_model.objects.sync_service_user(agent)
+        _migrate_agent_principal_memberships(agents)
         sync_builtin_tool_catalogue()
         delete_relationships(
             RelationshipFilter(
@@ -173,10 +185,9 @@ def resync_tool_grants() -> int:
                 subject_type="agents/agent",
             )
         )
-        agents = agent_model._base_manager.prefetch_related("mcp_tools__server").order_by("pk")
         for agent in agents:
             subject = agent.principal_subject()
-            tools: Any = agent.mcp_tools.select_related("server").order_by("server_id", "name", "pk")
+            tools: Any = sorted(agent.mcp_tools.all(), key=lambda tool: (tool.server_id, tool.name, tool.pk))
             writes.extend(
                 RelationshipTuple(
                     resource=tool_grant_ref(str(tool.server.sqid), tool.name),
@@ -188,3 +199,84 @@ def resync_tool_grants() -> int:
         if writes:
             write_relationships(writes)
     return len(writes)
+
+
+def _migrate_agent_principal_memberships(agents: list[Any]) -> None:
+    """Rewrite persisted memberships from agent resources to service users."""
+
+    relationship_model = active_relationship_model()
+    legacy = list(
+        relationship_model.objects.filter(
+            subject_type="agents/agent",
+        ).filter(
+            resource_type="agents/toolrole",
+            relation="member",
+        )
+    )
+    legacy_groups = list(
+        relationship_model.objects.filter(
+            resource_type="auth/group",
+            relation="agent_member",
+            subject_type="agents/agent",
+        )
+    )
+    legacy_group_refs = list(
+        relationship_model.objects.filter(
+            subject_type="auth/group",
+            optional_subject_relation="agent_member",
+        )
+    )
+    legacy_subject_ids = {str(row.subject_id) for row in legacy + legacy_groups}
+    agents_by_sqid = {
+        str(agent.sqid): agent
+        for agent in agents
+        if str(agent.sqid) in legacy_subject_ids
+    }
+    migrated: list[RelationshipTuple] = []
+    for row in legacy + legacy_groups:
+        agent = agents_by_sqid.get(str(row.subject_id))
+        if agent is None:
+            continue
+        migrated.append(
+            RelationshipTuple(
+                resource=ObjectRef(str(row.resource_type), str(row.resource_id)),
+                relation="member" if str(row.relation) == "agent_member" else str(row.relation),
+                subject=agent.principal_subject(),
+                caveat_name=str(row.caveat_name),
+                caveat_context=dict(row.caveat_context or {}),
+                expires_at=row.expires_at,
+            )
+        )
+    migrated.extend(
+        RelationshipTuple(
+            resource=ObjectRef(str(row.resource_type), str(row.resource_id)),
+            relation=str(row.relation),
+            subject=SubjectRef.of("auth/group", str(row.subject_id), "member"),
+            caveat_name=str(row.caveat_name),
+            caveat_context=dict(row.caveat_context or {}),
+            expires_at=row.expires_at,
+        )
+        for row in legacy_group_refs
+    )
+    if migrated:
+        write_relationships(migrated)
+    delete_relationships(
+        RelationshipFilter(
+            resource_type="agents/toolrole",
+            relation="member",
+            subject_type="agents/agent",
+        )
+    )
+    delete_relationships(
+        RelationshipFilter(
+            resource_type="auth/group",
+            relation="agent_member",
+            subject_type="agents/agent",
+        )
+    )
+    delete_relationships(
+        RelationshipFilter(
+            subject_type="auth/group",
+            optional_subject_relation="agent_member",
+        )
+    )

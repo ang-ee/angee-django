@@ -14,12 +14,14 @@ from collections.abc import Mapping
 from typing import Any, Self, cast
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
+from django.contrib.auth.models import Group as DjangoGroup
 from django.contrib.auth.models import UnicodeUsernameValidator
 from django.db import models, transaction
 from django.db.models import Exists, OuterRef, Q, Subquery, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
 from rebac import app_settings, current_actor, subject_id_attr, system_context
+from rebac.mixins import RebacModelBase
 from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.roles import ROLE_RELATION, grant, revoke
@@ -28,6 +30,7 @@ from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.iam.identity import user_label
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 """Default page size for member-facing people surfaces."""
@@ -36,8 +39,25 @@ VISIBLE_PEOPLE_MAX_LIMIT = 100
 """Upper bound a people-surface caller's ``limit`` is clamped to."""
 
 
+class Group(DjangoGroup, metaclass=RebacModelBase):
+    """Bind Django's existing group table to its native REBAC subject type.
+
+    This tableless proxy is registered by Django app population. It has no
+    ``runtime`` declaration: Django already owns the concrete group model.
+    IAM's write backend owns admin mutation gates; read querysets use REBAC.
+    """
+
+    class Meta:
+        """Native proxy identity used by REBAC lookup and subject resolution."""
+
+        proxy = True
+        app_label = "iam"
+        rebac_resource_type = "auth/group"
+        rebac_id_attr = "pk"
+
+
 class UserKind(models.TextChoices):
-    """Species of IAM principal stored in the swappable user table."""
+    """Kind of IAM principal stored in the swappable user table."""
 
     PERSON = "person", "Person"
     SERVICE = "service", "Service"
@@ -56,8 +76,8 @@ class UserQuerySet(AngeeQuerySet[Any]):
 
         return cast(Self, self.people().filter(is_active=True))
 
-    def search_people(self, search: str) -> Self:
-        """Filter people by the fields exposed by the IAM picker."""
+    def search_users(self, search: str) -> Self:
+        """Filter users by the fields exposed by IAM identity pickers."""
 
         term = search.strip()
         if not term:
@@ -72,7 +92,7 @@ class UserQuerySet(AngeeQuerySet[Any]):
             ),
         )
 
-    def ordered_people(self) -> Self:
+    def ordered_users(self) -> Self:
         """Apply deterministic ordering using the swappable user's native fields."""
 
         concrete_fields = {field.name for field in self.model._meta.fields}
@@ -86,7 +106,7 @@ class UserQuerySet(AngeeQuerySet[Any]):
         return cast(Self, self.order_by(*(fields or ["pk"])))
 
     def without_direct_roles(self, grant_rows: Any, role_resource_types: set[str]) -> Self:
-        """Return people without direct role memberships in the installed schema."""
+        """Return users without direct role memberships in the installed schema."""
 
         attribute = subject_id_attr(self.model)
         subject_lookup = self.model._meta.pk.name if attribute == "pk" and self.model._meta.pk else attribute
@@ -198,7 +218,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         """Return actor-readable active people after search, ordering, and cap."""
 
         bounded = max(1, min(int(limit), VISIBLE_PEOPLE_MAX_LIMIT))
-        queryset = self.with_actor(actor).active_people().search_people(search).ordered_people()
+        queryset = self.with_actor(actor).active_people().search_users(search).ordered_users()
         return list(queryset[:bounded])
 
     def visible_person_from_public_id(self, actor: Any, public_id: str) -> Any | None:
@@ -211,8 +231,8 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:
-    they exist so audit and revision FKs can point at every actor species without
-    widening password/OIDC login surfaces.
+    the same row owns authorization, audit stamps, and revision authorship
+    without widening password/OIDC login surfaces.
     """
 
     runtime = True
@@ -286,6 +306,11 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
         with system_context(reason="iam.preferences.update"), transaction.atomic():
             self.preferences = dict(preferences)
             self.save(update_fields=["preferences"])
+
+    def __str__(self) -> str:
+        """Use IAM's human label for person and service-user references alike."""
+
+        return user_label(self)
 
     def get_full_name(self) -> str:
         """Return first and last name joined with a space."""

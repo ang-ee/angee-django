@@ -2,33 +2,23 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
 from django.core.management import call_command
 from django.db import connection
-from django.test import override_settings
-from fastmcp.exceptions import ToolError
-from rebac import SubjectRef, actor_context, system_context, to_object_ref
+from rebac import system_context, to_object_ref
 from rebac.backends import backend
 
 from angee.agents.grants import tool_grant_ref
 from angee.agents.mcp_verifier import resolve_actor
 from angee.agents.models import MCPPlacement
 from angee.integrate.credentials import CredentialKind
-from angee.mcp.graphql import _CompiledTool
 from tests.conftest import IAM_CONNECTION_TEST_MODELS, INTEGRATE_TEST_MODELS, Credential, _clear_model_tables
 from tests.conftest import _create_missing_tables as _create_tables
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, MCPServer, MCPTool, User
 from tests.test_integrate_vcs import VCS_TEST_MODELS
-
-
-def _test_actor_user_resolver(subject_id: str) -> int | None:
-    """Resolver used by the MCP species-gate test."""
-
-    return 123 if subject_id == "agent-1" else None
 
 
 @pytest.fixture()
@@ -80,7 +70,27 @@ def test_mcp_bearer_resolves_to_single_agent_principal(agents_console_tables: No
         bearer = server.bearer_for(agent)
 
     assert bearer.startswith(f"{agent.sqid}.")
-    assert resolve_actor(bearer) == SubjectRef.of("agents/agent", str(agent.sqid))
+    assert resolve_actor(bearer) == agent.principal_subject()
+
+
+def test_mcp_bearer_declines_agent_without_service_user(agents_console_tables: None) -> None:
+    """Legacy runnable rows without a service principal fail closed."""
+
+    owner = User.objects.create_user(username="mcp-missing-user-owner")
+    with system_context(reason="test.mcp.actor.missing_service_user"):
+        credential = _static_credential(owner, name="mcp-missing-user", token="tok-missing-user")
+        server = MCPServer.objects.create(
+            name="missing-user",
+            url="http://x/mcp/missing-user/",
+            credential=credential,
+            placement=MCPPlacement.INTERNAL,
+        )
+        agent = _provisioned_agent(owner, name="Missing User Agent")
+        agent.mcp_servers.add(server)
+        bearer = server.bearer_for(agent)
+        Agent._base_manager.filter(pk=agent.pk).update(user=None)
+
+    assert resolve_actor(bearer) is None
 
 
 def test_mcp_bearer_resolves_for_ready_in_process_agent_without_operator_names(
@@ -295,29 +305,3 @@ def test_agent_mcp_m2m_reconciles_server_read_and_tool_use(agents_console_tables
         agent.mcp_tools.remove(tool)
         assert not backend().check_access(subject=subject, action="read", resource=tool_ref).allowed
         assert not backend().check_access(subject=subject, action="use", resource=grant_ref).allowed
-
-
-def test_requires_user_actor_is_actor_species_not_attribution_user() -> None:
-    """Service-user attribution must not turn an agent actor into a user actor."""
-
-    tool = _CompiledTool(
-        name="requires_user",
-        description="requires user",
-        parameters={"type": "object", "properties": {}},
-        output_schema={"type": "object"},
-        schema_name="public",
-        op_type="query",
-        document="query { noop }",
-        payload_field="noop",
-        node_type="Noop",
-        is_list=False,
-        leaves=(),
-        requires_user_actor=True,
-    )
-
-    with (
-        override_settings(ANGEE_ACTOR_USER_RESOLVERS={"agents/agent": "tests.test_mcp._test_actor_user_resolver"}),
-        actor_context(SubjectRef.of("agents/agent", "agent-1")),
-        pytest.raises(ToolError, match="user actor"),
-    ):
-        asyncio.run(tool.run({}))

@@ -9,10 +9,12 @@ from typing import Any, TypeVar, cast
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
-from rebac.resources import model_resource_type
+from rebac.resources import model_for_resource_type, model_resource_type
 from strawberry_django_hasura import HasuraResource
 
 from angee.base.impl import ImplClassField
+from angee.base.models import AngeeModel
+from angee.base.permissions import effective_rebac_definition
 from angee.base.refs import canonical_record_model
 from angee.data import metadata as data_contract
 from angee.data.field_classification import is_to_one_relation, model_field_scalar
@@ -75,6 +77,7 @@ class DataResourcePolicy:
     lines_declaration: object | None = None
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None
     public_id_field: str | None = None
+    subject_field: str | None = None
     row_model: str | None = None
 
 
@@ -248,13 +251,18 @@ def finalize_data_resources(
                 str,
                 _single_policy_value(model_label, contributions, "public_id_field") or PUBLIC_ID_FIELD_NAME,
             ),
+            subject_field=cast(str | None, _single_policy_value(model_label, contributions, "subject_field")),
             row_model=cast(str, _single_policy_value(model_label, contributions, "row_model") or "server"),
             graphql_schema=schema,
             identity_policies=identity_policies,
             contributors=tuple(dict.fromkeys(item.origin for item in contributions)),
         )
         finalized.append(metadata)
-    return tuple(finalized)
+    resources_by_model = {item.model: item for item in finalized if item.model is not None}
+    return tuple(
+        dataclasses.replace(item, grantable=_grantable_relations(item.model, resources_by_model))
+        for item in finalized
+    )
 
 
 def _single_sequence(
@@ -396,6 +404,7 @@ def _finalize_data_resource(
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None,
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
+    subject_field: str | None = None,
     row_model: str = "server",
     contributors: tuple[str, ...] = (),
     identity_policies: dict[str, str] | None = None,
@@ -499,6 +508,13 @@ def _finalize_data_resource(
         required=bool({"list", "detail"} & set(capabilities)),
     )
     record_representation = _record_representation_field(active_fields)
+    active_subject_field = None
+    if subject_field is not None:
+        if type_names.node is None:
+            raise ImproperlyConfigured(
+                f"resource metadata for {exposed_model_label} declares subject_field without a node type."
+            )
+        active_subject_field = final_wire_field_names(graphql_schema, type_names.node, (subject_field,))[0]
     active_subtitle = _resource_subtitle(
         model=model,
         model_label=exposed_model_label,
@@ -534,6 +550,7 @@ def _finalize_data_resource(
         canonical_label=canonical_record_model(model)._meta.label if model is not None else None,
         row_model=row_model,
         record_representation=record_representation,
+        subject_field=active_subject_field,
         subtitle=active_subtitle,
         impl_fields=_impl_fields(model, active_fields),
         capabilities=capabilities,
@@ -547,6 +564,51 @@ def _finalize_data_resource(
         revision_fields=revision_fields,
         lines=lines,
     )
+
+
+def _grantable_relations(
+    model: type[models.Model] | None,
+    resources_by_model: dict[type[models.Model], data_contract.DataResourceMetadata],
+) -> tuple[data_contract.GrantableRelationMetadata, ...]:
+    """Project a model's checked grant declaration through selectable resources."""
+
+    if model is None or not issubclass(model, AngeeModel):
+        return ()
+    declaration = model.get_rebac_grantable()
+    definition = effective_rebac_definition(model)
+    if not declaration or definition is None:
+        return ()
+    relations = {relation.name: relation for relation in definition.relations}
+    result: list[data_contract.GrantableRelationMetadata] = []
+    for relation_name, permission in sorted(declaration.items()):
+        relation = relations.get(relation_name)
+        if relation is None:
+            continue
+        subjects: list[data_contract.RecordAccessSubjectMetadata] = []
+        for allowed in relation.allowed_subjects:
+            if allowed.wildcard or allowed.with_caveat or allowed.id:
+                continue
+            subject_model = model_for_resource_type(allowed.type)
+            subject_resource = resources_by_model.get(subject_model) if subject_model is not None else None
+            subjects.append(
+                data_contract.RecordAccessSubjectMetadata(
+                    type=allowed.type,
+                    relation=allowed.relation or None,
+                    resource=(
+                        subject_resource.model_label
+                        if subject_resource is not None and subject_resource.subject_field is not None
+                        else None
+                    ),
+                )
+            )
+        result.append(
+            data_contract.GrantableRelationMetadata(
+                relation=relation_name,
+                permission=permission,
+                subjects=tuple(subjects),
+            )
+        )
+    return tuple(result)
 
 
 def _projected_public_id_field(

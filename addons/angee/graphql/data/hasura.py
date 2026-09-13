@@ -730,6 +730,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     id_column: str = "pk",
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
+    subject_field: str | None = None,
     row_model: str = "server",
     subtitle: DataResourceSubtitleMetadata | None = None,
 ) -> HasuraResource:
@@ -847,6 +848,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         lines=lines,
         model_label=model_label,
         public_id_field=public_id_field,
+        subject_field=subject_field,
         row_model=row_model,
         subtitle=subtitle,
     )
@@ -1005,6 +1007,7 @@ def attach_hasura_resource_metadata(
     lines: HasuraLines | None = None,
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
+    subject_field: str | None = None,
     row_model: str = "server",
     subtitle: DataResourceSubtitleMetadata | None = None,
 ) -> HasuraResource:
@@ -1032,6 +1035,7 @@ def attach_hasura_resource_metadata(
             aggregate_measures=_hasura_aggregate_measures(model, aggregatable),
             default_measures=(DataAggregateMeasureMetadata(op="count"),),
             public_id_field=public_id_field,
+            subject_field=subject_field,
             row_model=row_model,
             subtitle=subtitle,
             lines_declaration=lines,

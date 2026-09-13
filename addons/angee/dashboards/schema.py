@@ -9,25 +9,24 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.core import signing
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.db.models import Q
+from rebac import PermissionDenied, system_context
+from strawberry import auto
+from strawberry.scalars import JSON
+
 from angee.base.identity import instance_from_public_id
+from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id, to_public_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label, user_public_id
 from angee.iam.permissions import request_from_info, session_user
-from django.apps import apps
-from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group as DjangoGroup
-from django.core import signing
-from django.core.exceptions import ValidationError
-from django.db import transaction
-from django.db.models import Q
-from rebac import PermissionDenied, SubjectRef, subject_id_attr, system_context
-from strawberry import auto
-from strawberry.scalars import JSON
-
-from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot
 
 Dashboard = apps.get_model("dashboards", "Dashboard")
 DashboardWidget = apps.get_model("dashboards", "DashboardWidget")
@@ -38,18 +37,6 @@ class DashboardScope(Enum):
     PERSONAL = "personal"
     ADDON = "addon"
     RESOURCE = "resource"
-
-
-@strawberry.enum
-class DashboardShareSubject(Enum):
-    USER = "user"
-    GROUP = "group"
-
-
-@strawberry.enum
-class DashboardShareRole(Enum):
-    VIEWER = "viewer"
-    EDITOR = "editor"
 
 
 @strawberry.input
@@ -115,7 +102,6 @@ class DashboardPayload:
     snapshot: JSON | None = None
     can_edit: bool = False
     can_reset: bool = False
-    can_share: bool = False
     can_archive: bool = False
     current_revision: int | None = None
     message: str | None = None
@@ -134,16 +120,7 @@ class DashboardSummaryType:
     is_archived: bool
     resources: list[str]
     can_edit: bool
-    can_share: bool
     can_archive: bool
-
-
-@strawberry.type
-class DashboardShareType:
-    subject_type: DashboardShareSubject
-    subject_id: strawberry.ID
-    label: str
-    role: DashboardShareRole
 
 
 @strawberry.type
@@ -153,78 +130,6 @@ class DashboardSummaryPageType:
     next_cursor: str | None = None
     total: int = 0
     items: list[DashboardSummaryType] = strawberry.field(default_factory=list)
-
-
-def _personal_dashboard_for_share(id: PublicID) -> Any:
-    row = instance_from_public_id(Dashboard, str(id))
-    if row is None or row.scope != "personal":
-        raise ValueError("The personal dashboard was not found.")
-    if not row.has_access("share"):
-        raise PermissionDenied("You cannot manage sharing for this dashboard.")
-    return row
-
-
-def _share_subject(subject_type: DashboardShareSubject, subject_id: str) -> Any:
-    if subject_type is DashboardShareSubject.USER:
-        user = instance_from_public_id(get_user_model(), subject_id)
-        if user is None:
-            raise ValueError(f"User {subject_id!r} was not found.")
-        return user
-    from angee.iam.schema import GROUP_PUBLIC_IDENTITY
-
-    group = instance_from_public_id(
-        DjangoGroup,
-        subject_id,
-        queryset=DjangoGroup.objects.all(),
-        public_identity=GROUP_PUBLIC_IDENTITY,
-    )
-    if group is None:
-        raise ValueError(f"Group {subject_id!r} was not found.")
-    return SubjectRef.of("auth/group", str(group.pk), "member")
-
-
-def _dashboard_shares(row: Any) -> list[DashboardShareType]:
-    from angee.iam.schema import GROUP_PUBLIC_IDENTITY
-
-    result: list[DashboardShareType] = []
-    for access in row.direct_record_access():
-        subject = access.subject
-        if subject.subject_type == "auth/user" and not subject.optional_relation:
-            lookup = {subject_id_attr(get_user_model()): subject.subject_id}
-            with system_context(reason="dashboards.share.user_label"):
-                user = get_user_model().objects.system_context(
-                    reason="dashboards.share.user_label",
-                ).filter(**lookup).first()
-            if user is None:
-                continue
-            public_id = user_public_id(user.pk)
-            if public_id is None:
-                continue
-            result.append(
-                DashboardShareType(
-                    subject_type=DashboardShareSubject.USER,
-                    subject_id=strawberry.ID(public_id),
-                    label=user_display_label(user.pk) or str(public_id),
-                    role=DashboardShareRole(access.relation),
-                )
-            )
-        elif subject.subject_type == "auth/group" and subject.optional_relation == "member":
-            try:
-                group_pk = int(subject.subject_id)
-            except ValueError:
-                continue
-            group = DjangoGroup.objects.filter(pk=group_pk).only("pk", "name").first()
-            if group is None:
-                continue
-            result.append(
-                DashboardShareType(
-                    subject_type=DashboardShareSubject.GROUP,
-                    subject_id=strawberry.ID(GROUP_PUBLIC_IDENTITY.public_id_from_pk(group.pk)),
-                    label=group.name,
-                    role=DashboardShareRole(access.relation),
-                )
-            )
-    return result
 
 
 def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
@@ -247,14 +152,13 @@ def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
         is_archived=row.is_archived,
         resources=sorted(sources),
         can_edit=row.has_access("write"),
-        can_share=row.scope == "personal" and row.has_access("share"),
         can_archive=row.scope == "personal" and row.has_access("archive"),
     )
 
 
 def _summary_version(user: Any, items: list[DashboardSummaryType]) -> str:
     fingerprint = [
-        [str(item.id), item.revision, item.can_edit, item.can_share, item.can_archive]
+        [str(item.id), item.revision, item.can_edit, item.can_archive]
         for item in sorted(items, key=lambda value: str(value.id))
     ]
     body = json.dumps([str(user.pk), fingerprint], separators=(",", ":"), ensure_ascii=True).encode()
@@ -316,7 +220,6 @@ def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
         snapshot=cast(JSON, _snapshot(dashboard)),
         can_edit=dashboard.has_access("write"),
         can_reset=dashboard.scope != "personal" and dashboard.has_access("reset"),
-        can_share=dashboard.scope == "personal" and dashboard.has_access("share"),
         can_archive=dashboard.scope == "personal" and dashboard.has_access("archive"),
     )
 
@@ -389,53 +292,8 @@ class DashboardQuery:
             items=page,
         )
 
-    @strawberry.field
-    def dashboard_shares(self, info: strawberry.Info, id: PublicID) -> list[DashboardShareType]:
-        session_user(info)
-        return _dashboard_shares(_personal_dashboard_for_share(id))
-
-
 @strawberry.type
 class DashboardMutation:
-    @strawberry.mutation
-    def grant_dashboard_share(
-        self,
-        info: strawberry.Info,
-        id: PublicID,
-        subject_type: DashboardShareSubject,
-        subject_id: strawberry.ID,
-        role: DashboardShareRole,
-    ) -> list[DashboardShareType]:
-        session_user(info)
-        row = _personal_dashboard_for_share(id)
-        with transaction.atomic(), system_context(reason="dashboards.share.grant"):
-            locked = Dashboard.system_queryset(lock=("self",)).get(pk=row.pk).with_actor(row.actor())
-            subject = _share_subject(subject_type, str(subject_id))
-            other_role = "editor" if role is DashboardShareRole.VIEWER else "viewer"
-            locked.revoke_record_access(other_role, subject)
-            locked.grant_record_access(role.value, subject)
-            locked.revision += 1
-            locked.sudo(reason="dashboards.share.grant").save(update_fields=["revision"])
-        return _dashboard_shares(locked)
-
-    @strawberry.mutation
-    def revoke_dashboard_share(
-        self,
-        info: strawberry.Info,
-        id: PublicID,
-        subject_type: DashboardShareSubject,
-        subject_id: strawberry.ID,
-        role: DashboardShareRole,
-    ) -> list[DashboardShareType]:
-        session_user(info)
-        row = _personal_dashboard_for_share(id)
-        with transaction.atomic(), system_context(reason="dashboards.share.revoke"):
-            locked = Dashboard.system_queryset(lock=("self",)).get(pk=row.pk).with_actor(row.actor())
-            locked.revoke_record_access(role.value, _share_subject(subject_type, str(subject_id)))
-            locked.revision += 1
-            locked.sudo(reason="dashboards.share.revoke").save(update_fields=["revision"])
-        return _dashboard_shares(locked)
-
     @strawberry.mutation
     def create_personal_dashboard(
         self,
@@ -620,9 +478,6 @@ _BUCKET = {
         DashboardPayload,
         DashboardSummaryType,
         DashboardSummaryPageType,
-        DashboardShareType,
-        DashboardShareSubject,
-        DashboardShareRole,
         DashboardTargetInput,
         DashboardScope,
         *_DASHBOARD_RESOURCE.types,

@@ -26,7 +26,7 @@ from django.utils import timezone
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
-from rebac import RelationshipTuple, SubjectRef, system_context, to_object_ref
+from rebac import RelationshipTuple, SubjectRef, system_context, to_object_ref, to_subject_ref
 from rebac.mixins import RebacModelBase
 from rebac.relationships import delete_relationships, write_relationships
 from rebac.types import RelationshipFilter
@@ -664,7 +664,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.PROTECT,
         related_name="agent",
     )
-    """Non-login service user used for audit/revision attribution by this agent."""
+    """Non-login user that authenticates, authorizes, and attributes this agent's actions."""
     instructions = models.TextField(blank=True)
     """The agent's system instructions, rendered into AGENTS.md/CLAUDE.md."""
     model = models.ForeignKey(
@@ -780,14 +780,15 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
                 type(self).objects.sync_service_user(self)
 
     def principal_subject(self) -> SubjectRef:
-        """Return this agent's own REBAC subject identity for actions it performs.
+        """Return the service user's REBAC subject for actions this agent performs.
 
         This is distinct from :attr:`owner`: the owner manages the agent definition,
-        while the agent subject represents the running agent as an actor.
+        while the linked non-login user represents the running agent as an actor.
         """
 
-        ref = to_object_ref(self)
-        return SubjectRef.of(ref.resource_type, ref.resource_id)
+        if self.user_id is None:
+            raise ValueError("Agent has no service user and cannot act.")
+        return to_subject_ref(self.user)
 
     @property
     def runtime_backend(self) -> AgentRuntime:
@@ -1423,12 +1424,13 @@ _MCP_AGENT_RELATION = "agent"
 def _write_agent_mcp_relation(resource: models.Model, agent: Agent) -> None:
     """Grant one selected agent access to one selected MCP resource."""
 
+    agent_ref = to_object_ref(agent)
     write_relationships(
         [
             RelationshipTuple(
                 resource=to_object_ref(resource),
                 relation=_MCP_AGENT_RELATION,
-                subject=agent.principal_subject(),
+                subject=SubjectRef.of(agent_ref.resource_type, agent_ref.resource_id),
             )
         ]
     )
@@ -1438,7 +1440,8 @@ def _delete_agent_mcp_relation(resource: models.Model, agent: Agent) -> None:
     """Revoke one selected agent's access to one selected MCP resource."""
 
     resource_ref = to_object_ref(resource)
-    subject = agent.principal_subject()
+    agent_ref = to_object_ref(agent)
+    subject = SubjectRef.of(agent_ref.resource_type, agent_ref.resource_id)
     delete_relationships(
         RelationshipFilter(
             resource_type=resource_ref.resource_type,

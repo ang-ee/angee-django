@@ -12,7 +12,7 @@ import {
   PageToolbar,
   readRuntimeRouteShortcuts,
   ROUTE_SHORTCUTS_PREFERENCE_KEY,
-  Select,
+  RecordChrome,
   useDashboardRegistry,
   useRouteParam,
   useRouteHref,
@@ -54,10 +54,6 @@ function StoredDashboardPage({ target, store }: {
   const state = binding.state;
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<Error | null>(null);
-  const [sharing, setSharing] = React.useState(false);
-  const [subjectId, setSubjectId] = React.useState("");
-  const [subjectType, setSubjectType] = React.useState<"user" | "group">("user");
-  const [shareRole, setShareRole] = React.useState<"viewer" | "editor">("viewer");
   const [editingDetails, setEditingDetails] = React.useState(false);
   const [dashboardName, setDashboardName] = React.useState("");
   const [dashboardDescription, setDashboardDescription] = React.useState("");
@@ -83,20 +79,6 @@ function StoredDashboardPage({ target, store }: {
         clientCreationKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-copy-${Date.now()}`,
       });
       await navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause : new Error(String(cause)));
-    } finally {
-      setPending(false);
-    }
-  };
-
-  const grantShare = async () => {
-    if (state.status !== "ready" || !subjectId.trim()) return;
-    setPending(true);
-    setError(null);
-    try {
-      await binding.grantShare(state.persistedId, { subjectId: subjectId.trim(), subjectType, role: shareRole });
-      setSubjectId("");
     } catch (cause) {
       setError(cause instanceof Error ? cause : new Error(String(cause)));
     } finally {
@@ -158,18 +140,26 @@ function StoredDashboardPage({ target, store }: {
                 </Button>
               ) : null}
               end={state.status === "ready" ? (
-                <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              render={(
-                <Button type="button" variant="ghost" size="sm" disabled={pending}>
-                  <Glyph name="more-horizontal" fallbackName="more-vertical" />
-                  {t("common.moreActions")}
-                </Button>
-              )}
-            />
-            <DropdownMenu.Portal>
-              <DropdownMenu.Positioner sideOffset={6} align="end">
-                <DropdownMenu.Content className="w-52">
+                <>
+                  <RecordChrome value={{
+                    resource: "dashboards.Dashboard",
+                    canonicalResource: "dashboards.Dashboard",
+                    dataProviderName: "console",
+                    recordId: state.persistedId,
+                    record: { id: state.persistedId, displayName: state.name, name: state.name },
+                  }} />
+                  <DropdownMenu.Root>
+                    <DropdownMenu.Trigger
+                      render={(
+                        <Button type="button" variant="ghost" size="sm" disabled={pending}>
+                          <Glyph name="more-horizontal" fallbackName="more-vertical" />
+                          {t("common.moreActions")}
+                        </Button>
+                      )}
+                    />
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Positioner sideOffset={6} align="end">
+                        <DropdownMenu.Content className="w-52">
                   {href && preferences.available ? (
                     <>
                       <DropdownMenu.Item onClick={() => {
@@ -198,11 +188,6 @@ function StoredDashboardPage({ target, store }: {
                   <DropdownMenu.Item onClick={() => void duplicate()}>
                     <Glyph name="copy" />{t("common.duplicate")}
                   </DropdownMenu.Item>
-                  {state.capabilities.canShare ? (
-                    <DropdownMenu.Item onClick={() => setSharing((value) => !value)}>
-                      <Glyph name="share" />{t("common.share")}
-                    </DropdownMenu.Item>
-                  ) : null}
                   {target.scope === "personal" && state.capabilities.canArchive ? (
                     <>
                       <DropdownMenu.Separator />
@@ -211,10 +196,11 @@ function StoredDashboardPage({ target, store }: {
                       </DropdownMenu.Item>
                     </>
                   ) : null}
-                </DropdownMenu.Content>
-              </DropdownMenu.Positioner>
-            </DropdownMenu.Portal>
-                </DropdownMenu.Root>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Positioner>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                </>
               ) : null}
             />
             <ErrorBanner description={error?.message ?? null} />
@@ -232,34 +218,7 @@ function StoredDashboardPage({ target, store }: {
           <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => setEditingDetails(false)}>{t("common.cancel")}</Button>
         </section>
             ) : null}
-            {sharing && state.status === "ready" && state.capabilities.canShare ? (
-        <section className="flex flex-col gap-2 border-b border-border-subtle bg-inset p-3" aria-label={t("sharing.label")}>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select size="sm" aria-label={t("sharing.recipientType")} value={subjectType} onValueChange={(value) => setSubjectType(value as "user" | "group")} className="w-32" options={[
-              { value: "user", label: t("sharing.user") }, { value: "group", label: t("sharing.group") },
-            ]} />
-            <Input size="sm" value={subjectId} onChange={(event) => setSubjectId(event.target.value)} placeholder={t("sharing.publicIdFor", { type: t(`sharing.${subjectType}`) })} aria-label={t("sharing.publicId")} className="min-w-40 flex-1 sm:w-64 sm:flex-none" />
-            <Select size="sm" aria-label={t("sharing.role")} value={shareRole} onValueChange={(value) => setShareRole(value as "viewer" | "editor")} className="w-32" options={[
-              { value: "viewer", label: t("sharing.viewer") }, { value: "editor", label: t("sharing.editor") },
-            ]} />
-            <Button type="button" variant="primary" size="sm" disabled={pending || !subjectId.trim()} onClick={() => void grantShare()}>{t("sharing.add")}</Button>
-          </div>
-          <ErrorBanner description={binding.sharesError?.message ?? null} />
-          {binding.sharesLoading ? <p className="text-12 text-fg-muted">{t("sharing.loading")}</p> : null}
-          {binding.shares.map((share) => (
-            <div key={share.id} className="flex items-center gap-2 text-13 text-fg">
-              <span className="min-w-0 flex-1 truncate">{share.label} · {share.subjectType} · {share.role}</span>
-              <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => {
-                setPending(true);
-                setError(null);
-                void binding.revokeShare(state.persistedId, share)
-                  .catch((cause) => setError(cause instanceof Error ? cause : new Error(String(cause))))
-                  .finally(() => setPending(false));
-              }}>{t("common.remove")}</Button>
-            </div>
-          ))}
-        </section>
-            ) : null}
+
           </>
         )}
       />

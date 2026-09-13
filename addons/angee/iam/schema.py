@@ -16,11 +16,10 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.auth.models import Group as DjangoGroup
 from django.db import transaction
 from django.db.models import QuerySet
 from django.http import HttpRequest
-from rebac import ObjectRef, SubjectRef, system_context, to_subject_ref
+from rebac import RebacQuerySet, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.roles import (
     grant as rebac_grant,
@@ -41,7 +40,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.identity import user_label, user_principal
-from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT
+from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, Group
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin, require_platform_admin, session_user
 from angee.iam.permissions import request_from_info as _request
@@ -76,7 +75,6 @@ from angee.iam.roles import (
 )
 
 User = cast(type[Any], get_user_model())
-Group = DjangoGroup
 GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_", min_length=8)
 """Public data identity for Django auth groups exposed by IAM."""
 
@@ -171,7 +169,7 @@ class GroupType:
     def assignment_subject(self) -> str:
         """Canonical member subject for assigning work to this group."""
 
-        return str(SubjectRef(ObjectRef("auth/group", str(cast(Any, self).pk)), "member"))
+        return str(to_subject_ref(cast(Any, self)))
 
     @strawberry.field(description="The public ID of this object.")
     def id(self) -> PublicID:
@@ -403,18 +401,16 @@ def _admin_relationship_queryset(info: strawberry.Info) -> QuerySet[Any]:
     return _relationship_rows_owner()
 
 
-def _admin_user_queryset(info: strawberry.Info) -> QuerySet[Any]:
-    """Return the admin-scoped user queryset for console resources."""
+def _user_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return readable people and service users for identity and access pickers."""
 
-    require_platform_admin(info)
-    return cast(QuerySet[Any], User.objects.people())
+    return cast(QuerySet[Any], User.objects.with_actor(session_user(info)))
 
 
-def _admin_group_queryset(info: strawberry.Info) -> QuerySet[Any]:
-    """Return the admin-scoped Django auth-group catalogue queryset."""
+def _group_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return member-visible groups through the native REBAC query owner."""
 
-    require_platform_admin(info)
-    return cast(QuerySet[Any], Group.objects.all())
+    return RebacQuerySet(model=Group).with_actor(session_user(info)).with_action("read")
 
 
 def _user_for_resource_id(value: str, queryset: QuerySet[Any]) -> Any:
@@ -595,10 +591,11 @@ _USER_RESOURCE = hasura_model_resource(
     aggregatable=["id"],
     groupable=["is_staff", "is_active"],
     writable=["username", "password", "email", "first_name", "last_name", "is_staff", "is_active"],
-    get_queryset=_admin_user_queryset,
+    get_queryset=_user_queryset,
     write_backend=IAMUserWriteBackend(),
     id_column="sqid",
     model_label="iam.User",
+    subject_field="assignment_subject",
 )
 
 
@@ -611,12 +608,13 @@ _GROUP_RESOURCE = hasura_model_resource(
     aggregatable=["id"],
     groupable=["name"],
     writable=["name"],
-    get_queryset=_admin_group_queryset,
+    get_queryset=_group_queryset,
     write_backend=IAMGroupWriteBackend(),
     id_decode=_group_pk_from_public_id,
     id_column="pk",
     model_label="iam.Group",
     public_id_field="id",
+    subject_field="assignment_subject",
 )
 
 
@@ -670,7 +668,7 @@ class IAMQuery:
 
 @strawberry.type
 class IAMConsoleQuery:
-    """Admin IAM user and permission-hub queries."""
+    """Session identity reads and admin permission-hub queries."""
 
     @strawberry.field
     def colleagues(
@@ -681,9 +679,9 @@ class IAMConsoleQuery:
     ) -> list[UserType]:
         """Return the signed-in actor's visible people for member pickers.
 
-        The member surface the admin-only ``users`` catalogue cannot serve. REBAC
-        read arms authorize rows; the User collection owns active-human filtering,
-        ordering, search, and limits.
+        REBAC read arms authorize rows; the User collection owns active-human
+        filtering, ordering, search, and limits. Access pickers use the ``users``
+        resource, which also includes readable service users.
         """
 
         return cast(list[UserType], User.objects.visible_people(session_user(info), search=search, limit=limit))

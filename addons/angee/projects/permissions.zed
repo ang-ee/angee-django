@@ -1,7 +1,7 @@
 // Authorization schema for bounded projects and their work.
 // @rebac_package: projects
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition projects/project {
     relation owner:  auth/user // rebac:field=created_by
@@ -71,4 +71,14 @@ definition projects/link {
     permission read   = project->read + task->read + admin->member
     permission write  = project->write + task->write + admin->member
     permission delete = project->write + task->write + admin->member
+}
+
+definition projects/project_binding {
+    relation project: projects/project // rebac:field=project
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = project->write + admin->member
+    permission read = project->read + admin->member
+    permission write = project->write + admin->member
+    permission delete = project->write + admin->member
 }

@@ -10,9 +10,9 @@ from angee.agents.grants import resync_tool_grants
 
 
 class Command(BaseCommand):
-    """Backfill direct tool grants after the agents zed revision is synced."""
+    """Migrate agent principals and backfill grants after schema revision 5."""
 
-    help = "Reconcile Agent.mcp_tools selections into agents/tool_grant tuples."
+    help = "Migrate agent memberships to service users and reconcile Agent.mcp_tools grants."
 
     def handle(self, *args: Any, **options: Any) -> None:
         """Run the grant owner and report the number of mirrored selections."""

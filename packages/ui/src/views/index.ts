@@ -211,6 +211,7 @@ export {
   type RecordTabDescriptor,
 } from "./form/FormView";
 export {
+  RecordChrome,
   RecordChromeProvider,
   useRecordChromeContext,
   type RecordChromeContext,
@@ -371,3 +372,5 @@ export type {
   TabDescriptor,
   TabProps,
 } from "./page";
+
+export { ManageAccessDialog, type ManageAccessDialogProps, type RecordAccessEntry } from "./access/ManageAccessDialog";

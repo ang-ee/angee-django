@@ -4,11 +4,11 @@ Each provisioned agent presents its own bearer to a platform-internal MCP server
 ``MCPServer.bearer_for`` mints ``"<agent sqid>.<hmac>"`` from the server's
 ``agents.MCPServer.credential`` (an ``integrate.Credential``). This verifier parses that
 shape, resolves the named agent, and confirms one of the agent's internal MCP servers
-mints the presented digest — returning the agent subject the tool bodies run under. It is
+mints the presented digest — returning the agent's service-user subject the tool bodies run under. It is
 named by ``ANGEE_MCP_ACTOR_VERIFIER`` (see ``agents.autoconfig``); the base ``angee.mcp``
 runtime calls it and has no knowledge of the catalogue.
 
-This verifier authenticates the bearer to an agent subject only. Per-tool authorization
+This verifier authenticates the bearer to the linked service user only. Per-tool authorization
 is enforced separately by ``agents.grants`` tool grants (the pydantic runtime's
 ``ToolGrantAccess``), so an authenticated agent still reaches only the tools it was granted.
 """
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_actor(bearer: str) -> SubjectRef | None:
-    """Return the MCP actor for ``bearer``, or ``None`` when it resolves to no agent.
+    """Return the agent's service-user actor, or ``None`` when the bearer is declined.
 
     The bearer is ``"<agent sqid>.<hmac>"`` (see :meth:`MCPServer.bearer_for`): parse it,
     look the agent up by its public sqid, and — for a READY/RUNNING non-template agent —
@@ -71,6 +71,10 @@ def resolve_actor(bearer: str) -> SubjectRef | None:
         )
         for server in servers:
             if server.accepts_bearer_digest(agent, digest):
-                return agent.principal_subject()
+                try:
+                    return agent.principal_subject()
+                except ValueError:
+                    logger.warning("MCP bearer declined: agent %s has no service user", sqid)
+                    return None
         logger.warning("MCP bearer declined: no internal MCP server of agent %s accepts this bearer", sqid)
         return None

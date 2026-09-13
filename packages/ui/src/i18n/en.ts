@@ -2,6 +2,18 @@
 // the active translations; these are the defaults used when a key is missing.
 
 export const enUiMessages: Record<string, string> = {
+  "access.title": "Share {label}",
+  "access.directOnly": "Manage direct access to the selected records.",
+  "access.share": "Share",
+  "access.selection": "{count} selected records",
+  "access.relation": "Access",
+  "access.recipientType": "Recipient type",
+  "access.recipient": "Recipient",
+  "access.record": "Record",
+  "access.add": "Add access",
+  "access.remove": "Remove access",
+  "access.empty": "No direct access has been granted.",
+  "access.unavailableSubject": "This recipient type has no selectable resource.",
   "search.clear": "Clear search",
   "search.placeholder": "Search…",
   "toast.dismiss": "Dismiss notification",

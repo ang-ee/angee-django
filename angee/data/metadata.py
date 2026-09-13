@@ -311,6 +311,24 @@ class DataResourceSubtitleMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordAccessSubjectMetadata:
+    """One selectable subject species accepted by a grantable relation."""
+
+    type: str
+    relation: str | None
+    resource: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GrantableRelationMetadata:
+    """One model-declared direct relation exposed through record access."""
+
+    relation: str
+    permission: str
+    subjects: tuple[RecordAccessSubjectMetadata, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class DataResourceMetadata:
     """Internal metadata for one Angee model data resource."""
 
@@ -331,7 +349,9 @@ class DataResourceMetadata:
     canonical_label: str | None = None
     row_model: str = "server"
     record_representation: str | None = None
+    subject_field: str | None = None
     subtitle: DataResourceSubtitleMetadata | None = None
+    grantable: tuple[GrantableRelationMetadata, ...] = ()
     impl_fields: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     fields: tuple[DataResourceFieldMetadata, ...] = ()

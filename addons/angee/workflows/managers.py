@@ -22,7 +22,7 @@ from rebac import RelationshipTuple, SubjectRef, actor_context, current_actor, s
 from rebac.actors import NoActorResolvedError, to_subject_ref
 from rebac.resources import to_object_ref
 
-from angee.base.actors import actor_user_id, is_user_actor
+from angee.base.actors import actor_user_id
 from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeManager, AngeeQuerySet
@@ -4607,7 +4607,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             subject = SubjectRef.parse(prior.resolved_by)
         except (TypeError, ValueError) as error:
             raise ValidationError({"target": "Decision target authority requires a human resolver."}) from error
-        if not is_user_actor(subject) or actor_user_id(subject) is None:
+        if actor_user_id(subject) is None:
             raise ValidationError({"target": "Decision target authority requires a human resolver."})
         return subject
 

@@ -12,14 +12,25 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory, override_settings
-from rebac import ObjectRef, app_settings, system_context
+from rebac import (
+    ObjectRef,
+    RelationshipTuple,
+    app_settings,
+    resolve_subjects,
+    system_context,
+    to_object_ref,
+    write_relationships,
+)
 from rebac.actors import to_subject_ref
 from rebac.models import active_relationship_model
+from rebac.resources import model_for_resource_type
 from rebac.roles import ROLE_RELATION, grant
 
+from angee.graphql.data.metadata import _grantable_relations
 from tests.conftest import IAM_CONNECTION_TEST_MODELS, _clear_model_tables, addon_schema, execute_schema
 from tests.conftest import _create_missing_tables as _create_connection_tables
 from tests.conftest import result_data as _data
+from tests.projects_models import Project
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -37,11 +48,6 @@ def test_permission_hub_queries_are_admin_only(
     grant(actor=target, role="angee/role:auditor")
     console_schema = _schema("console")
     queries = [
-        """
-        query {
-          users(limit: 10) { username }
-        }
-        """,
         """
         query {
           roles { id namespace label }
@@ -78,10 +84,10 @@ def test_permission_hub_queries_are_admin_only(
         assert allowed.errors is None
 
 
-def test_users_resource_lists_people_not_service_accounts(
+def test_users_resource_includes_service_accounts(
     iam_permission_hub_tables: None,
 ) -> None:
-    """The console users catalogue is a people picker/list, not an attribution dump."""
+    """The identity catalogue includes service users so access grants can select agents."""
 
     admin = _platform_admin("hub-people-admin")
     User.objects.create_user(username="hub-person", email="hub-person@example.com")
@@ -107,7 +113,7 @@ def test_users_resource_lists_people_not_service_accounts(
     )
 
     assert {"username": "hub-person", "kind": "PERSON"} in data["users"]
-    assert all(row["username"] != "hub-service" for row in data["users"])
+    assert {"username": "hub-service", "kind": "SERVICE"} in data["users"]
 
 
 def test_rebac_relationships_resource_is_admin_scoped(
@@ -318,6 +324,10 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
             username=f"hub-overview-target-{index:03d}",
             email=f"target-{index:03d}@example.com",
         )
+    User.objects.create_user(
+        username="zz-hub-overview-service",
+        kind="service",
+    )
     targets = list(
         User.objects.sudo(reason="test.iam.overview.targets")
         .filter(username__startswith="hub-overview-target-")
@@ -369,14 +379,14 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
     overview = data["iam_overview"]
     assert len(data["users"]) == 1
     assert len(data["iam_grants"]) == 1
-    assert data["users_aggregate"]["aggregate"]["count"] == 506
+    assert data["users_aggregate"]["aggregate"]["count"] == 507
     assert data["iam_grants_aggregate"]["aggregate"]["count"] == 3
-    assert overview["user_count"] == 506
+    assert overview["user_count"] == 507
     assert overview["role_count"] == 2
     assert overview["grant_count"] == 3
     assert overview["relationship_count"] == 3
     assert overview["privileged_grant_count"] == 2
-    assert overview["unassigned_user_count"] == 503
+    assert overview["unassigned_user_count"] == 504
     assert overview["namespaces"] == [
         {"namespace": "angee", "role_count": 2, "grant_count": 3},
     ]
@@ -717,6 +727,75 @@ def test_role_refs_are_current_user_only(
     assert "grants(" not in public_sdl
     assert "rebac_relationships(" not in public_sdl
     assert "role_refs" not in _type_block(public_sdl, "UserType")
+
+
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_recipient_resources_follow_user_and_group_read_permissions(
+    iam_permission_hub_tables: None,
+    storage: str,
+) -> None:
+    """A non-admin sharer discovers readable service users and its member groups."""
+
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+        actor = User.objects.create_user(username=f"recipient-{storage}")
+        service = User.objects.create_user(
+            username=f"recipient-service-{storage}", kind="service", first_name="Research agent",
+        )
+        hidden = User.objects.create_user(username=f"recipient-hidden-{storage}")
+        group = iam_schema.Group.objects.create(name=f"Project reviewers {storage}")
+        hidden_group = iam_schema.Group.objects.create(name=f"Other reviewers {storage}")
+        with system_context(reason="test.iam.recipient.grants"):
+            write_relationships([
+                RelationshipTuple(
+                    resource=to_object_ref(service), relation="directory_reader", subject=to_subject_ref(actor),
+                ),
+                RelationshipTuple(
+                    resource=to_object_ref(group), relation="member", subject=to_subject_ref(actor),
+                ),
+            ])
+        schema = _schema("console")
+        metadata = {item.model_label: item for item in schema.angee_resources}
+        user_subject_field = metadata["iam.User"].subject_field
+        group_subject_field = metadata["iam.Group"].subject_field
+        assert user_subject_field and group_subject_field
+        assert metadata["iam.Group"].resource_type == "auth/group"
+        assert model_for_resource_type("auth/group") is iam_schema.Group
+        grantable = _grantable_relations(
+            Project, {item.model: item for item in schema.angee_resources if item.model is not None},
+        )
+        reader = next(item for item in grantable if item.relation == "reader")
+        assert {(subject.type, subject.relation, subject.resource) for subject in reader.subjects} == {
+            ("auth/user", None, "iam.User"),
+            ("auth/group", "member", "iam.Group"),
+        }
+        group_id = iam_schema.GROUP_PUBLIC_IDENTITY.public_id_from_pk(group.pk)
+        query = f"""
+            query {{
+              users(limit: 50) {{ id username first_name {user_subject_field} }}
+              groups(limit: 50) {{ id name {group_subject_field} }}
+            }}
+        """
+        data = _data(_execute(schema, query, user=actor))
+        assert data["users"] == [{
+            "id": service.sqid,
+            "username": service.username,
+            "first_name": "Research agent",
+            user_subject_field: str(to_subject_ref(service)),
+        }]
+        assert data["groups"] == [{
+            "id": group_id,
+            "name": group.name,
+            group_subject_field: str(to_subject_ref(group)),
+        }]
+        assert to_subject_ref(group).subject_id == str(group.pk)
+        assert to_subject_ref(group).subject_id != group_id
+        assert str(resolve_subjects([to_subject_ref(group)])[to_subject_ref(group)]) == group.name
+        assert _execute(schema, query).errors is not None
+
+        admin = _platform_admin(f"recipient-admin-{storage}")
+        all_data = _data(_execute(schema, query, user=admin))
+        assert hidden.username in {row["username"] for row in all_data["users"]}
+        assert hidden_group.name in {row["name"] for row in all_data["groups"]}
 
 
 @pytest.fixture()
