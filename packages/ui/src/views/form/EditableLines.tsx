@@ -33,6 +33,7 @@ import { titleCase } from "../../lib/titleCase";
 import { Button } from "../../ui/button";
 import { relationValueId } from "../../widgets/types";
 import {
+  CLIENT_LINE_KEY,
   duplicateLineRow,
   emptyLineRow,
   lineDiffConfig,
@@ -134,6 +135,16 @@ export function EditableLines({
     control: control as unknown as Control<FieldValues>,
     name,
   }) as Row[] | undefined) ?? [];
+  // Publish the native field-array identity into unsaved row values. The line
+  // serializer ignores this presentation key; it only emits declared columns.
+  React.useEffect(() => {
+    fields.forEach((field, index) => {
+      const row = rows[index];
+      if (row && row[config.idField] == null && row[CLIENT_LINE_KEY] == null) {
+        setValue<string>(`${name}.${index}.${CLIENT_LINE_KEY}`, field.rhfKey, { shouldDirty: false });
+      }
+    });
+  }, [config.idField, fields, name, rows, setValue]);
   // Async widgets retain a callback after reorder/remove/refresh. Resolve its
   // RHF identity at completion, never write through the captured row index.
   const latest = React.useRef({ fields, readOnly, setValue });

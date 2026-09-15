@@ -80,6 +80,15 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   formExtras?: (context: RecordToolbarContext) => React.ReactNode;
   /** Group presentation; ungrouped/title/body/status placement is unchanged. */
   layout?: "stacked" | "tabs";
+  /** Place the first two unlabeled groups side by side within one form overview. */
+  groupLayout?: "stacked" | "paired";
+  /** Content tabs inside the one create/edit form, alongside its editable lines and groups. */
+  bodyTabs?: readonly {
+    id: string;
+    label: React.ReactNode;
+    render: (context: RecordToolbarContext) => React.ReactNode;
+  }[];
+  linesTabLabel?: React.ReactNode;
   /** Record chrome density and height behavior. */
   recordPresentation?: RecordPresentation;
   /** Initial saved-record tab; invalid or unavailable ids fall back to Overview. */
@@ -130,6 +139,9 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     recordExtras,
     formExtras,
     layout = "stacked",
+    groupLayout = "stacked",
+    bodyTabs,
+    linesTabLabel,
     recordPresentation = "document",
     defaultRecordTab,
     overviewTab,
@@ -195,7 +207,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
-  const overview = <FormViewOverview surface={surface} layout={layout} />;
+  const overview = <FormViewOverview
+    surface={surface} layout={layout} groupLayout={groupLayout} bodyTabs={bodyTabs}
+    linesTabLabel={linesTabLabel} context={recordToolbarContext}
+  />;
   const overviewLabel = overviewTab?.label ?? t("form.tabOverview");
   const orderedTabs = overviewTab?.position === "last"
     ? [...recordTabList, { id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }]
@@ -271,6 +286,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             applyPatch={applyPatch}
             reload={reload}
             deleteAction={visibleDeleteAction}
+            blocked={formIsDirty || pending}
           />
         ) : null}
         {!readOnly && recordChromeContext ? (

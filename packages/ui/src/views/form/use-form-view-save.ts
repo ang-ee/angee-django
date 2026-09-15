@@ -31,6 +31,7 @@ import { fieldWidgetId, type FieldDescriptor } from "../page";
 import {
   diffLines,
   lineDiffConfig,
+  reconcileAcceptedLineRows,
   recordLinesToRows,
   sameObservedLines,
   type LineDiff,
@@ -57,6 +58,8 @@ export interface FormSubmitContext {
   id: string | null;
   isCreate: boolean;
   record: Row | null;
+  /** Saved record at the start of this local edit, held while the form is dirty. */
+  baselineRecord: Row | null;
   lines: LineDiff | null;
   /** Exact RHF snapshot submitted by the user, including externally supplied fields. */
   values: FormValues;
@@ -239,6 +242,7 @@ export function useFormViewSave({
     ? acknowledgedSource.record
     : read.result ?? null;
   const displayRecord = record;
+  const editBasisRecordRef = React.useRef<Row | null>(displayRecord);
   const loading = acknowledgedSource?.loading ?? read.query.isFetching;
   const reload = React.useCallback(() => {
     if (acknowledgedSource !== undefined) {
@@ -376,7 +380,8 @@ export function useFormViewSave({
   const customSubmit = useMutation({
     mutationFn: async ({ data, lines, submitted, baseline }: { data: FormValues; lines: LineDiff | null; submitted: FormValues; baseline: FormValues }) =>
       (await submitOwner?.(data, {
-        resource, id: id ?? null, isCreate, record: displayRecord, lines,
+        resource, id: id ?? null, isCreate, record: displayRecord,
+        baselineRecord: editBasisRecordRef.current, lines,
         values: submitted, baselineValues: baseline,
       })) ?? null,
   });
@@ -396,6 +401,9 @@ export function useFormViewSave({
   React.useEffect(() => {
     formIsDirtyRef.current = formIsDirty;
   }, [formIsDirty]);
+  React.useEffect(() => {
+    if (!formIsDirty) editBasisRecordRef.current = displayRecord;
+  }, [displayRecord, formIsDirty]);
   const isDirtyNow = React.useCallback(() => formIsDirtyRef.current, []);
   const requestLeave = useUnsavedChangesNavigationGuard({
     isDirty: formIsDirty,
@@ -465,29 +473,48 @@ export function useFormViewSave({
         detailKey,
         (current) => ({ ...current, data: { ...(current?.data ?? record), ...acceptedPatch } }),
       )?.data ?? acceptedPatch;
+      editBasisRecordRef.current = accepted;
       if (!mounted.current) return;
       const savedValues = options.acceptedValues
         ?? recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
+      const currentValues = form.getValues();
+      const savedLines = linesField ? savedValues[linesField] : undefined;
+      const submittedLines = linesField ? options.submitted?.[linesField] : undefined;
+      const currentLines = linesField ? currentValues[linesField] : undefined;
+      const reconciledLines = options.createdLines && linesConfig
+        && Array.isArray(savedLines) && Array.isArray(submittedLines) && Array.isArray(currentLines)
+          ? reconcileAcceptedLineRows(savedLines, submittedLines, currentLines, linesConfig)
+          : null;
       if (options.acceptedValues && options.submitted) {
         const reconciled = options.reconcile?.({
           accepted: options.acceptedValues,
           submitted: options.submitted,
-          current: form.getValues(),
+          current: currentValues,
         });
         if (reconciled) {
           reset(options.acceptedValues, { keepIsValid: true });
-          reset(reconciled, { keepDefaultValues: true, keepIsValid: true });
+          reset(reconciledLines && linesField
+            ? { ...reconciled, [linesField]: reconciledLines }
+            : reconciled, { keepDefaultValues: true, keepIsValid: true });
         } else {
           resetDefaultValues(options.submitted, { keepIsValid: true });
-          syncRecordValues(options.acceptedValues);
+          syncRecordValues(options.acceptedValues,
+            reconciledLines ? savedLines : undefined);
+          if (reconciledLines && linesField) {
+            setValue(linesField, reconciledLines, { shouldDirty: true });
+          }
         }
       } else {
         // Advancing only the submitted defaults makes RHF identify edits made
         // during the request without a second dirty-value comparison engine.
         resetDefaultValues({ ...form.formState.defaultValues, ...submitted }, { keepIsValid: true });
         syncRecordValues(savedValues, linesField
-          ? options.createdLines ? submitted[linesField] : savedValues[linesField]
+          ? reconciledLines ? savedLines
+            : options.createdLines ? submitted[linesField] : savedLines
           : undefined);
+        if (reconciledLines && linesField) {
+          setValue(linesField, reconciledLines, { shouldDirty: true });
+        }
       }
       const observedNames = new Set([
         ...formFields.map((field) => field.name),
@@ -507,7 +534,7 @@ export function useFormViewSave({
         || (linesActive && linesField !== null && !Object.hasOwn(saved, linesField))
       )) reload();
     },
-    [acknowledgedSource, detailKey, form, formFields, isCreate, linesActive, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, rowsFromRecord, setValue, syncRecordValues, t, toast],
+    [acknowledgedSource, detailKey, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, rowsFromRecord, setValue, syncRecordValues, t, toast],
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {
@@ -689,8 +716,9 @@ export function useFormViewSave({
   const discardChanges = React.useCallback(() => {
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     formIsDirtyRef.current = false;
+    editBasisRecordRef.current = displayRecord;
     onDiscarded?.();
-  }, [emptyValues, isCreate, onDiscarded, reset, values]);
+  }, [displayRecord, emptyValues, isCreate, onDiscarded, reset, values]);
   const activeFieldInteractions = React.useRef(new Set<string>());
   const startFieldInteraction = React.useCallback(
     (path: string) => {

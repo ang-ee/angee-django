@@ -36,12 +36,15 @@ export function RecordActionBar({
   applyPatch,
   reload,
   deleteAction,
+  blocked = false,
 }: {
   record: Row | null;
   actions: readonly ActionDescriptor[];
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
   reload: () => void;
   deleteAction?: RecordDeleteAction;
+  /** A dirty or pending form must be saved before acting on its persisted record. */
+  blocked?: boolean;
 }): React.ReactElement | null {
   const confirm = useConfirm();
   const prompt = usePrompt();
@@ -89,6 +92,7 @@ export function RecordActionBar({
 
   const runAction = React.useCallback(
     async (action: ActionDescriptor): Promise<void> => {
+      if (blocked) return;
       if (action.confirm) {
         const confirmation =
           typeof action.confirm === "function" && record !== null
@@ -126,7 +130,7 @@ export function RecordActionBar({
         .mutateAsync({ action, values })
         .catch(() => undefined);
     },
-    [actionMutation, confirm, prompt, record],
+    [actionMutation, blocked, confirm, prompt, record],
   );
 
   // An action with a `visibleWhen` predicate shows only when the open record
@@ -164,7 +168,7 @@ export function RecordActionBar({
               {deleteAction !== undefined ? (
                 <DropdownMenu.Item
                   variant="danger"
-                  disabled={!deleteAction.canDelete || deleteAction.isPending}
+                  disabled={blocked || !deleteAction.canDelete || deleteAction.isPending}
                   onClick={deleteAction.onDelete}
                 >
                   <Glyph name="trash" />
@@ -179,7 +183,7 @@ export function RecordActionBar({
                   key={action.id}
                   variant={action.danger ? "danger" : "default"}
                   disabled={
-                    Boolean(action.disabled) ||
+                    blocked || Boolean(action.disabled) ||
                     pendingId === action.id ||
                     (recordId === null && !action.run && !action.submit)
                   }

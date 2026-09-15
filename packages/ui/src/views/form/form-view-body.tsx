@@ -39,7 +39,7 @@ import {
   type FormSectionModel,
   type FormValues,
 } from "./form-view-model";
-import type { FormViewSurface } from "./form-view-surface";
+import type { FormViewSurface, RecordToolbarContext } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
 
 const TITLE_TEXT_CLASS =
@@ -238,9 +238,17 @@ export function FormViewRecordHeader({
 export function FormViewOverview({
   surface,
   layout,
+  groupLayout,
+  bodyTabs,
+  linesTabLabel,
+  context,
 }: {
   surface: FormViewSurface;
   layout: "stacked" | "tabs";
+  groupLayout: "stacked" | "paired";
+  bodyTabs?: readonly { id: string; label: React.ReactNode; render: (context: RecordToolbarContext) => React.ReactNode }[];
+  linesTabLabel?: React.ReactNode;
+  context: RecordToolbarContext;
 }): React.ReactElement {
   const {
     t,
@@ -279,25 +287,62 @@ export function FormViewOverview({
       />
     );
   };
-  const renderSections = (list: readonly FormSectionModel[]): React.ReactNode => {
-    if (layout !== "tabs") {
+  const editableLines = linesActive && linesResource && linesField ? (
+    <FormEditableLines
+      control={form.control}
+      setValue={form.setValue}
+      name={linesField}
+      lines={linesResource}
+      parentRow={surface.displayRecord}
+      readOnly={formReadOnly}
+      rowErrors={lineRowErrors}
+    />
+  ) : null;
+  const renderOverviewSections = (list: readonly FormSectionModel[]): React.ReactNode => {
+    const pair = groupLayout === "paired"
+      ? list.filter((section) => section.label == null && section.key.startsWith("group:")).slice(0, 2)
+      : [];
+    const [left, right] = pair;
+    if (!left || !right) {
       return list.map((section) => (
         <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
       ));
     }
+    return list.map((section) => {
+      if (section.key === right.key) return null;
+      if (section.key === left.key) {
+        return <FormGrid key="paired-overview-groups" columns="adaptiveTwo" density="comfortable" className="items-start gap-6">
+          {pair.map((group) => (
+            <FormSection key={group.key} section={group} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
+          ))}
+        </FormGrid>;
+      }
+      return <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />;
+    });
+  };
+  const renderSections = (list: readonly FormSectionModel[]): React.ReactNode => {
+    if (layout !== "tabs") {
+      return renderOverviewSections(list);
+    }
     const stacked = list.filter((section) => section.label == null);
-    const tabbedSections = list.filter(
+    const groupTabs = list.filter(
       (section) =>
         section.label != null
         && (section.fields.length > 0 || section.render !== undefined),
     );
+    const tabbedSections: FormSectionModel[] = [
+      ...(editableLines ? [{ key: "editable-lines", label: linesTabLabel ?? t("lines.section"), fields: [], render: () => editableLines }] : []),
+      ...(bodyTabs ?? []).map((tab) => ({ key: tab.id, label: tab.label, fields: [], render: () => tab.render(context) })),
+      ...groupTabs,
+    ];
     return (
       <>
-        {stacked.map((section) => (
-          <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
-        ))}
+        {renderOverviewSections(stacked)}
         {tabbedSections.length > 0 ? (
-          <FormSectionTabs sections={tabbedSections} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
+          <FormSectionTabs
+            sections={tabbedSections} renderField={renderField} control={form.control}
+            requestedFocusPath={requestedFocusPath} lineField={linesField}
+          />
         ) : null}
       </>
     );
@@ -316,7 +361,7 @@ export function FormViewOverview({
           renderSections(sections)
         )}
       </div>
-      {linesActive && linesResource && linesField ? (
+      {layout !== "tabs" && editableLines ? (
         <section className="grid gap-3">
           <SectionEyebrow
             as="h3"
@@ -327,15 +372,7 @@ export function FormViewOverview({
           >
             {t("lines.section")}
           </SectionEyebrow>
-          <FormEditableLines
-            control={form.control}
-            setValue={form.setValue}
-            name={linesField}
-            lines={linesResource}
-            parentRow={surface.displayRecord}
-            readOnly={formReadOnly}
-            rowErrors={lineRowErrors}
-          />
+          {editableLines}
         </section>
       ) : null}
       {currentBodyField ? (
@@ -522,13 +559,34 @@ function FormSectionTabs({
   renderField,
   control,
   requestedFocusPath,
+  lineField,
 }: {
   sections: readonly FormSectionModel[];
   renderField: (field: FieldDescriptor) => React.ReactNode;
   control: Control<FormValues>;
   requestedFocusPath: string | null;
+  lineField: string | null;
 }): React.ReactElement {
   const [active, setActive] = React.useState(sections[0]?.key);
+  const trackedFields = sections.flatMap((section) => section.fields.map((field) => field.name));
+  if (lineField) trackedFields.push(lineField);
+  const { errors } = useFormState({ control, name: trackedFields });
+  React.useEffect(() => {
+    const focus = requestedFocusPath;
+    if (focus) {
+      const target = sections.find((section) =>
+        section.fields.some((field) => focus === field.name || focus.startsWith(`${field.name}.`))
+        || (section.key === "editable-lines" && lineField && (focus === lineField || focus.startsWith(`${lineField}.`))),
+      );
+      if (target) setActive(target.key);
+      return;
+    }
+    const errored = sections.find((section) =>
+      section.fields.some((field) => get(errors, field.name) !== undefined)
+      || (section.key === "editable-lines" && lineField && get(errors, lineField) !== undefined),
+    );
+    if (errored) setActive(errored.key);
+  }, [errors, lineField, requestedFocusPath, sections]);
   const value = sections.some((section) => section.key === active)
     ? active
     : sections[0]?.key;

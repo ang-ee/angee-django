@@ -34,6 +34,7 @@ export const formLayoutVariants = tv({
     columns: {
       one: { grid: "grid-cols-1" },
       two: { grid: "lg:grid-cols-2" },
+      adaptiveTwo: { grid: "" },
       three: { grid: "lg:grid-cols-2 xl:grid-cols-3" },
       four: { grid: "sm:grid-cols-2 xl:grid-cols-4" },
     },
@@ -121,7 +122,11 @@ export const FormGrid = React.forwardRef<HTMLDivElement, FormGridProps>(
       <div
         ref={ref}
         className={styles.grid({ className })}
-        style={{ ...gridAreaStyle(areas), ...style }}
+        style={{
+          ...gridAreaStyle(areas),
+          ...(columns === "adaptiveTwo" ? { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 22rem), 1fr))" } : undefined),
+          ...style,
+        }}
         {...props}
       />
     );

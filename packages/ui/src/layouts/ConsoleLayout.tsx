@@ -193,10 +193,9 @@ export function ConsoleLayout({
 /**
  * The console content region: the single `Workbench` every console page flows
  * through — page-published context as the (collapsible) primary pane, the page
- * as content, and Chatter as the (collapsible) secondary pane. Lives inside
+ * as content, and Chatter or a record preview as the (collapsible) secondary pane. Lives inside
  * `ChatterProvider` so it can register the secondary pane's collapse controller
- * with the chatter bridge, letting the chrome `TopBar` toggle drive it (and stay
- * in sync with drag-to-collapse). The primary pane's controller is surfaced up to
+ * with the shell bridge. The primary pane's controller is surfaced up to
  * `ConsoleLayout` so the TopBar's left-panel toggle drives it too.
  *
  * The primary pane exists only while a page publishes a contextual explorer.
@@ -213,7 +212,7 @@ function ConsoleWorkbench({
   children: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
-  const { registerSecondaryController } = useChatter();
+  const { recordSupportKey, recordPreview, registerSecondaryController, setCollapsed } = useChatter();
   const { node: publishedPrimary } = usePrimaryPaneContent();
   const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
   const [desktopPrimaryController, setDesktopPrimaryController] =
@@ -223,7 +222,9 @@ function ConsoleWorkbench({
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  const desktopChatter = showChatter && largeViewport;
+  const compactAsideAvailable = showChatter || recordSupportKey !== null;
+  const desktopChatter = showChatter && largeViewport && recordSupportKey === null;
+  const desktopPreview = largeViewport && recordSupportKey !== null ? recordPreview : null;
   const desktopPrimary = largeViewport ? publishedPrimary : null;
   const compactPrimary = !largeViewport ? publishedPrimary : null;
   const toggleCompactPrimary = React.useCallback(() => {
@@ -259,26 +260,34 @@ function ConsoleWorkbench({
     onPrimaryController(effectivePrimaryController);
     return () => onPrimaryController(null);
   }, [effectivePrimaryController, onPrimaryController]);
+  React.useEffect(() => {
+    if (desktopPreview) setCollapsed(false);
+  }, [desktopPreview, setCollapsed]);
   React.useLayoutEffect(() => {
     setCompactPrimaryOpen(false);
     setCompactChatterOpen(false);
   }, [pathname, largeViewport]);
   React.useLayoutEffect(() => {
-    if (!showChatter || largeViewport) return;
+    if (largeViewport || !recordPreview) return;
+    setCompactPrimaryOpen(false);
+    setCompactChatterOpen(true);
+  }, [largeViewport, recordPreview]);
+  React.useLayoutEffect(() => {
+    if (!compactAsideAvailable || largeViewport) return;
     registerSecondaryController(compactChatterController);
     return () => registerSecondaryController(null);
-  }, [compactChatterController, largeViewport, registerSecondaryController, showChatter]);
+  }, [compactAsideAvailable, compactChatterController, largeViewport, registerSecondaryController]);
   React.useEffect(() => {
-    const controller = showChatter && !largeViewport
+    const controller = compactAsideAvailable && !largeViewport
       ? compactChatterController
       : null;
     onCompactChatterController(controller);
     return () => onCompactChatterController(null);
   }, [
     compactChatterController,
+    compactAsideAvailable,
     largeViewport,
     onCompactChatterController,
-    showChatter,
   ]);
   return (
     <>
@@ -294,13 +303,17 @@ function ConsoleWorkbench({
             </ControlBandProvider>
           ) : undefined
         }
-        secondary={desktopChatter ? (
+        secondary={desktopPreview ? (
+          <ControlBandProvider host={undefined}>
+            {desktopPreview}
+          </ControlBandProvider>
+        ) : desktopChatter ? (
           <ControlBandProvider host={undefined}>
             <Chatter />
           </ControlBandProvider>
         ) : undefined}
         onPrimaryController={setDesktopPrimaryController}
-        onSecondaryController={desktopChatter ? registerSecondaryController : undefined}
+        onSecondaryController={desktopChatter || desktopPreview ? registerSecondaryController : undefined}
       >
         <main className="console-content-main">{children}</main>
       </Workbench>
@@ -321,19 +334,19 @@ function ConsoleWorkbench({
           </Drawer.Content>
         </Drawer.Portal>
       </Drawer.Root>
-      {!largeViewport ? <Drawer.Root
-        open={showChatter && !largeViewport && compactChatterOpen}
+      {!largeViewport && (recordSupportKey === null || recordPreview) ? <Drawer.Root
+        open={compactAsideAvailable && compactChatterOpen}
         onOpenChange={setCompactChatterOpen}
       >
         <Drawer.Portal keepMounted>
           <Drawer.Backdrop />
           <Drawer.Content
             side="right"
-            aria-label="Chatter"
+            aria-label={recordSupportKey === null ? "Chatter" : t("chatter.tabRecords")}
             className="w-[min(28rem,calc(100vw-1rem))] p-0"
           >
             <ControlBandProvider host={undefined}>
-              <Chatter />
+              {recordSupportKey === null ? <Chatter /> : recordPreview}
             </ControlBandProvider>
           </Drawer.Content>
         </Drawer.Portal>

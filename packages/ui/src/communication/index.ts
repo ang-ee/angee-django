@@ -1,4 +1,4 @@
-export { Chatter, type ChatterProps } from "./Chatter";
+export { Chatter, RecordSupport, type ChatterProps } from "./Chatter";
 export { useRecordPeek, useRecordPeekContext, type RecordPeekReference } from "./record-peek";
 export { RevisionsTab, type RevisionsTabProps } from "./RevisionsTab";
 export {
@@ -6,6 +6,7 @@ export {
   CHATTER_TAB_SEARCH_KEY,
   useChatter,
   useChatterContent,
+  useRecordSupportPlacement,
   type ChatterContent,
   type ChatterContextValue,
   type ChatterProviderProps,

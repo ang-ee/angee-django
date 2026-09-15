@@ -3243,6 +3243,52 @@ describe("FormView", () => {
     );
   });
 
+  test("a created line edited and reordered during save keeps its server ID for the next save", async () => {
+    sdkMocks.record = saleDocRecord();
+    let resolveFirst!: (row: Row) => void;
+    sdkMocks.save.mockImplementation(async (variables: { lines?: readonly Row[] }) => {
+      const accepted: Row = {
+        id: "doc-1", title: "Order",
+        lines: (variables.lines ?? []).map((line, index) => ({
+          ...line, id: line.id ?? `new-${index}`,
+        })),
+      };
+      if (sdkMocks.save.mock.calls.length === 1) {
+        return new Promise<Row>((done) => { resolveFirst = done; });
+      }
+      sdkMocks.record = accepted;
+      return accepted;
+    });
+    renderSaleDoc("doc-1", (context) => <button type="button" onClick={() => {
+      const rows = context.form.form.getValues("lines") as Row[];
+      context.form.form.setValue("lines", [rows[2], rows[0], rows[1]], { shouldDirty: true });
+    }}>Move new line first</button>);
+    await screen.findByDisplayValue("Keep");
+    fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+    const newCell = screen.getAllByLabelText("Text").find((cell) =>
+      (cell as HTMLInputElement).value === "");
+    expect(newCell).toBeTruthy();
+    fireEvent.change(newCell as HTMLInputElement, { target: { value: "Submitted" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByDisplayValue("Submitted"), { target: { value: "Later edit" } });
+    fireEvent.click(screen.getByRole("button", { name: "Move new line first" }));
+    const firstLines = (sdkMocks.save.mock.calls[0]?.[0] as { lines: readonly Row[] }).lines;
+    const firstAccepted: Row = { id: "doc-1", title: "Order", lines: firstLines.map((line, index) => ({
+      ...line, id: line.id ?? `new-${index}`,
+    })) };
+    sdkMocks.record = firstAccepted;
+    await act(async () => resolveFirst(firstAccepted));
+    expect(screen.getByDisplayValue("Later edit")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(2));
+    const nextLines = (sdkMocks.save.mock.calls[1]?.[0] as { lines: readonly Row[] }).lines;
+    expect(nextLines[0]).toEqual(expect.objectContaining({
+      id: "new-2", label: "Later edit", position: 0,
+    }));
+    expect(nextLines.filter((line) => line.id == null)).toHaveLength(0);
+  });
+
   test("keeps a parent-only edit on the stock update path", async () => {
     sdkMocks.record = saleDocRecord();
     renderSaleDoc();
@@ -3299,12 +3345,16 @@ function saleDocRecord(): Row {
   };
 }
 
-function renderSaleDoc(id: string | null = "doc-1"): void {
+function renderSaleDoc(
+  id: string | null = "doc-1",
+  recordExtras?: React.ComponentProps<typeof FormView>["recordExtras"],
+): void {
   renderWithProviders(
     <FormView
       resource="demo.SaleDoc"
       id={id}
       fields={[{ name: "title", label: "Title", title: true }]}
+      recordExtras={recordExtras}
     />,
     SALES_METADATA,
     undefined,
