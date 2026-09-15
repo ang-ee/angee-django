@@ -27,6 +27,7 @@ from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows import steps as workflow_steps
 from angee.workflows.attempts import JsonPresence
+from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.steps import HandlerStep, StepResult
 from tests.workflows import (
     Decision,
@@ -676,8 +677,16 @@ def test_deliver_is_idempotent_and_ignores_terminal_runs(
     execute_started(run, now=now)
     engine.advance(run.pk, now=now)
 
+    with system_context(reason="test deliver pending dispatch baseline"):
+        pending_before = WorkflowDispatch.objects.filter(
+            run=run, kind=WorkflowDispatchKind.ADVANCE, consumed_at__isnull=True,
+        ).count()
     assert engine.deliver(run.pk, now=now) == {"woken": 1}
     assert engine.deliver(run.pk, now=now) == {"woken": 1}
+    with system_context(reason="test deliver durable dispatches"):
+        assert WorkflowDispatch.objects.filter(
+            run=run, kind=WorkflowDispatchKind.ADVANCE, consumed_at__isnull=True,
+        ).count() == pending_before + 2
     run.refresh_from_db()
     assert run.deliveries == 2
     assert engine.advance(run.pk, now=now) == {"claimed": 1}
@@ -767,7 +776,45 @@ def test_deliver_artifact_wakes_all_exact_external_waits_without_approvals(
         ).order_by("pk").values_list("pk", flat=True))
 
     assert engine.deliver_artifact(unrelated, now=now) == {"runs": 0, "woken": 0}
+    with system_context(reason="artifact delivery dispatch baseline"):
+        pending_before = {
+            run.pk: WorkflowDispatch.objects.filter(
+                run=run, kind=WorkflowDispatchKind.ADVANCE, consumed_at__isnull=True,
+            ).count()
+            for run in runs
+        }
+    manager_type = type(WorkflowDispatch.objects)
+    schedule_advance = manager_type.schedule_advance
+    scheduled = 0
+
+    def fail_second_schedule(manager: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal scheduled
+        scheduled += 1
+        if scheduled == 2:
+            raise RuntimeError("injected second artifact delivery dispatch failure")
+        return schedule_advance(manager, *args, **kwargs)
+
+    monkeypatch.setattr(manager_type, "schedule_advance", fail_second_schedule)
+    with pytest.raises(RuntimeError, match="second artifact delivery dispatch failure"):
+        engine.deliver_artifact(dependency, now=now)
+    monkeypatch.setattr(manager_type, "schedule_advance", schedule_advance)
+    with system_context(reason="artifact fan-out rollback before dispatch"):
+        for run in runs:
+            run.refresh_from_db()
+            assert run.deliveries == 0
+            assert WorkflowDispatch.objects.filter(
+                run=run, kind=WorkflowDispatchKind.ADVANCE, consumed_at__isnull=True,
+            ).count() == pending_before[run.pk]
+    for external in external_steps:
+        external.refresh_from_db()
+        assert external.wait_until is not None and external.wait_until > now
+
     assert engine.deliver_artifact(dependency, now=now) == {"runs": 2, "woken": 2}
+    with system_context(reason="artifact fan-out durable dispatch"):
+        for run in runs:
+            assert WorkflowDispatch.objects.filter(
+                run=run, kind=WorkflowDispatchKind.ADVANCE, consumed_at__isnull=True,
+            ).count() == pending_before[run.pk] + 1
     for external, approval in zip(external_steps, approval_steps, strict=True):
         external.refresh_from_db()
         approval.refresh_from_db()

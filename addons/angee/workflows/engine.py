@@ -179,7 +179,8 @@ def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
             woken += 1
         if run.status == RunStatus.WAITING and waiting:
             run.resume()
-        transaction.on_commit(lambda run_id=run.pk: enqueue_advance(run_id))
+        _model("WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
+        transaction.on_commit(enqueue_dispatch_publisher)
     return {"woken": woken}
 
 
@@ -243,11 +244,9 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
             if run.status == RunStatus.WAITING:
                 run.resume()
             delivered_run_ids.append(run_id)
-        def enqueue_delivered() -> None:
-            for run_id in delivered_run_ids:
-                enqueue_advance(run_id)
-
-        transaction.on_commit(enqueue_delivered)
+            _model("WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
+        if delivered_run_ids:
+            transaction.on_commit(enqueue_dispatch_publisher)
     return {"runs": len(delivered_run_ids), "woken": woken}
 
 

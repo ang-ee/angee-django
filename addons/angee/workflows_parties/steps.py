@@ -142,6 +142,7 @@ class DedupeExecuteStepImpl(StepImpl):
     label = "Apply duplicate decisions"
     category = "Activity"
     deterministic = False
+    execution_mode = StepExecutionMode.DATABASE_COMMAND
 
     @classmethod
     def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
@@ -781,7 +782,7 @@ def _apply_unit(value: Any, *, run: Any) -> dict[str, str]:
 
         into, source = (left, right) if survivor_side == "left" else (right, left)
         if source.canonical().pk == into.canonical().pk:
-            # A retried unit after a crash mid-batch: the merge already landed.
+            # Domain identity also handles a fresh recovery after another merge.
             return {"action": action, "result": "already_merged"}
         party_model.objects.merge(into=into, source=source)
         return {"action": action, "result": "merged"}

@@ -386,6 +386,21 @@ def test_dedupe_scan_gate_map_apply_end_to_end(
         # A second scan proposes nothing: one pair merged, the other vetoed.
         assert Party.objects.duplicate_candidates(limit=50) == []
 
+        units = list(StepRun.objects.filter(run=run, step__key="apply_unit").order_by("pk"))
+        assert len(units) == 2
+        retained = [
+            (StepAttempt.objects.get(pk=unit.current_attempt_id),
+             WorkflowDispatch.objects.get(step_attempt_id=unit.current_attempt_id))
+            for unit in units
+        ]
+        assert all(attempt.applied_at is not None for attempt, _ in retained)
+    for attempt, dispatch in retained:
+        assert engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)["executed"] == 0
+    with system_context(reason="test dedupe retained replay"):
+        drop_a.refresh_from_db()
+        assert drop_a.merged_into_id == keep_a.pk
+        assert MergeVeto._base_manager.count() == 1
+
 
 @pytest.mark.django_db(transaction=True)
 def test_dedupe_scan_without_candidates_routes_empty(
