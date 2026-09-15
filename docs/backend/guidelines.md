@@ -1103,6 +1103,12 @@ and current contracts before applying a historical example to a new deployment.
 - **Workflow step implementations persist continuation state in `resume_state`.**
   Pre-suspend side effects must be idempotent because resume replays from the
   journal row, not process memory.
+- **Database-only steps declare `StepImpl.execution_mode = StepExecutionMode.DATABASE_COMMAND`.**
+  This runtime contract is separate from the step's `StepEffect` authoring label.
+  The retained-attempt engine fences the run, step, and attempt before mutation,
+  then commits the domain write, result, artifacts, and continuation dispatch
+  together. Keep provider and blob I/O outside this mode; legacy non-retained
+  execution refuses database commands.
 - **Workflow joins count rows, not broker messages.** `join_rule` is evaluated
   over sibling `StepRun` rows.
 - **Never trust a workflow step to self-limit.** The engine owns `max_steps` and

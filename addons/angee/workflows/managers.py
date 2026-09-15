@@ -3986,6 +3986,64 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             )
             return LeaseRevocation(True, False)
 
+    def execute_database_command(
+        self,
+        attempt_id: int,
+        *,
+        lease_token: uuid.UUID,
+        command: Callable[[Any, Any], AttemptResult],
+        recorded_at: datetime,
+    ) -> AttemptFinalization | None:
+        """Fence a current attempt, run its database command, then finalize it atomically.
+
+        The caller keeps an outer transaction open while it schedules continuation
+        dispatches. A command exception rolls back its domain writes with the
+        result; the caller records failure evidence in a later transaction.
+        """
+
+        alias = self.db
+        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
+        with (
+            transaction.atomic(using=alias),
+            self._write(alias, unresolved.step_run_id),
+        ):
+            with system_context(reason="workflows.attempt.database_command.fence"):
+                run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
+                attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+            current = (
+                not run.is_terminal
+                and step_run.status == StepRunStatus.STARTED
+                and step_run.current_attempt_id == attempt.pk
+                and step_run.effect_key == attempt.effect_key
+                and step_run.effect_generation == attempt.effect_generation
+                and attempt.lease_token == lease_token
+                and attempt.started_at is not None
+                and attempt.lease_revoked_at is None
+                and attempt.result_recorded_at is None
+            )
+            if not current:
+                return None
+            result = command(step_run, attempt)
+            if result.kind in {
+                AttemptResultKind.ERROR,
+                AttemptResultKind.TRANSIENT_ERROR,
+                AttemptResultKind.NO_RESULT,
+                AttemptResultKind.PREPARATION_ERROR,
+            }:
+                raise ValidationError({"result": "A failed database command cannot commit its domain effect."})
+            with system_context(reason="workflows.attempt.database_command.finalize"):
+                finalization = self.finalize(
+                    attempt_id,
+                    lease_token=lease_token,
+                    result=result,
+                    recorded_at=recorded_at,
+                )
+            if not finalization.recorded or not finalization.applied:
+                raise ValidationError(
+                    {"attempt": "The command result was not applied; its domain effect was rolled back."}
+                )
+            return finalization
+
     def finalize(
         self, attempt_id: int, *, lease_token: uuid.UUID, result: AttemptResult, recorded_at: datetime
     ) -> AttemptFinalization:

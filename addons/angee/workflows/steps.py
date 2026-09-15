@@ -85,6 +85,13 @@ class StepEffect(str, Enum):
     EXTERNAL = "external"
 
 
+class StepExecutionMode(str, Enum):
+    """Runtime boundary for an attempt, independent of authoring effect labels."""
+
+    STANDARD = "standard"
+    DATABASE_COMMAND = "database_command"
+
+
 @dataclass(frozen=True, slots=True)
 class StepOutcome:
     """One labeled routing outcome a step implementation may produce."""
@@ -258,6 +265,7 @@ class StepImpl(ImplBase):
     output_model: ClassVar[type[BaseModel] | None] = None
     outcomes: ClassVar[tuple[StepOutcome, ...]] = ()
     effect: ClassVar[StepEffect] = StepEffect.UNKNOWN
+    execution_mode: ClassVar[StepExecutionMode] = StepExecutionMode.STANDARD
     effect_description: ClassVar[str] = ""
     idempotent: ClassVar[bool | None] = None
     subject_declaration: ClassVar[str] = ""
@@ -340,6 +348,8 @@ class StepImpl(ImplBase):
         owner = f"Workflow step implementation {key!r}"
         if not isinstance(cls.effect, StepEffect):
             raise ImproperlyConfigured(f"{owner} declares invalid effect {cls.effect!r}.")
+        if not isinstance(cls.execution_mode, StepExecutionMode):
+            raise ImproperlyConfigured(f"{owner} declares invalid execution mode {cls.execution_mode!r}.")
         if not isinstance(cls.outcomes, tuple):
             raise ImproperlyConfigured(f"{owner} declares invalid outcomes {cls.outcomes!r}.")
         seen: set[str] = set()

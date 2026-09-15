@@ -69,7 +69,7 @@ from angee.workflows.models import (
     Verdict,
     WaitingKind,
 )
-from angee.workflows.steps import DecisionSpec, MapStep, StepResult, TransientStepError
+from angee.workflows.steps import DecisionSpec, MapStep, StepExecutionMode, StepResult, TransientStepError
 from angee.workflows.testing import FixtureRole, WorkflowScope
 
 VERDICT_PENDING = cast(Verdict, Verdict.PENDING)
@@ -321,6 +321,8 @@ def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
         if step_run.status != StepRunStatus.STARTED or step_run.run.status in RunStatus.TERMINAL:
             return {"executed": 0}
         impl_class = step_run.step.resolve_impl("step_class")
+        if impl_class.execution_mode == StepExecutionMode.DATABASE_COMMAND:
+            raise ValidationError({"step": "Database commands require a retained attempt."})
     with system_context(reason="workflows.engine.execute.attempt"), transaction.atomic():
         locked = step_run_model.objects.lock_if_supported().select_related("run").get(pk=step_run_id)
         if locked.is_retained:
@@ -411,33 +413,73 @@ def execute_dispatch(
             "step_run__run", "step_run__step", "recovery_source_attempt"
         ).get(pk=attempt_id)
         step_run = attempt.step_run
-        step_run.input = attempt.input if attempt.input_present else None
         impl_class = step_run.step.resolve_impl("step_class")
-    try:
+
+    def invoke(owned_step_run: Any, owned_attempt: Any) -> AttemptResult:
+        owned_step_run.input = owned_attempt.input if owned_attempt.input_present else None
         implementation = cast(Any, impl_class)()
-        if attempt.cause == AttemptCause.MANUAL_RETRY:
-            recovery_mode = RecoveryMode(attempt.recovery_mode)
+        if owned_attempt.cause == AttemptCause.MANUAL_RETRY:
+            recovery_mode = RecoveryMode(owned_attempt.recovery_mode)
             capability = impl_class.recovery_capability(
-                attempt=attempt.recovery_source_attempt
+                attempt=owned_attempt.recovery_source_attempt
             )
             if capability.mode is not recovery_mode:
                 raise ValidationError(
                     {"recovery": "The operation's recovery capability changed after admission."}
                 )
             step_result = implementation.run_recovery(
-                step_run,
+                owned_step_run,
                 now=timestamp,
-                source_attempt=attempt.recovery_source_attempt,
+                source_attempt=owned_attempt.recovery_source_attempt,
                 mode=recovery_mode,
             )
         else:
-            step_result = implementation.run(step_run, now=timestamp)
+            step_result = implementation.run(owned_step_run, now=timestamp)
         result = (
             step_result.to_attempt_result()
             if step_result is not None
             else AttemptResult(AttemptResultKind.NO_RESULT)
         )
         attempt_model.objects.validate_result(result)
+        return result
+
+    def schedule_result(finalization: Any) -> None:
+        if finalization.retry_intent is not None:
+            successor = attempt_model.objects.get(pk=finalization.retry_intent.attempt_id)
+            dispatch_model.objects.schedule_execute(successor)
+        for intent in finalization.timer_intents:
+            decision = _model("Decision").objects.get(pk=intent.decision_id)
+            kind = (
+                WorkflowDispatchKind.DECISION_ESCALATE
+                if intent.kind.value == "escalate"
+                else WorkflowDispatchKind.DECISION_EXPIRE
+            )
+            dispatch_model.objects.schedule_decision(kind, decision)
+        if finalization.recorded and finalization.applied and finalization.retry_intent is None:
+            projected = _model("StepRun").objects.select_related("run").get(pk=attempt.step_run_id)
+            dispatch_model.objects.schedule_advance(projected.run, available_at=timezone.now())
+            if projected.status == StepRunStatus.WAITING and projected.wait_until is not None:
+                dispatch_model.objects.schedule_advance(
+                    projected.run, available_at=projected.wait_until
+                )
+        transaction.on_commit(enqueue_dispatch_publisher)
+
+    mode = impl_class.execution_mode
+    try:
+        if mode == StepExecutionMode.DATABASE_COMMAND:
+            with transaction.atomic():
+                finalization = attempt_model.objects.execute_database_command(
+                    attempt_id,
+                    lease_token=lease_token,
+                    command=invoke,
+                    recorded_at=timezone.now(),
+                )
+                if finalization is None:
+                    return {"executed": 0}
+                with system_context(reason="workflows.engine.execute_dispatch.database_command.dispatch"):
+                    schedule_result(finalization)
+            return {"executed": 1}
+        result = invoke(step_run, attempt)
     except TransientStepError as error:
         result = AttemptResult(
             AttemptResultKind.TRANSIENT_ERROR,
@@ -458,25 +500,7 @@ def execute_dispatch(
             result=result,
             recorded_at=timezone.now(),
         )
-        if finalization.retry_intent is not None:
-            successor = attempt_model.objects.get(pk=finalization.retry_intent.attempt_id)
-            dispatch_model.objects.schedule_execute(successor)
-        for intent in finalization.timer_intents:
-            decision = _model("Decision").objects.get(pk=intent.decision_id)
-            kind = (
-                WorkflowDispatchKind.DECISION_ESCALATE
-                if intent.kind.value == "escalate"
-                else WorkflowDispatchKind.DECISION_EXPIRE
-            )
-            dispatch_model.objects.schedule_decision(kind, decision)
-        if finalization.recorded and finalization.applied and finalization.retry_intent is None:
-            projected = _model("StepRun").objects.select_related("run").get(pk=attempt.step_run_id)
-            dispatch_model.objects.schedule_advance(projected.run, available_at=timezone.now())
-            if projected.status == StepRunStatus.WAITING and projected.wait_until is not None:
-                dispatch_model.objects.schedule_advance(
-                    projected.run, available_at=projected.wait_until
-                )
-        transaction.on_commit(enqueue_dispatch_publisher)
+        schedule_result(finalization)
     return {"executed": 1}
 
 

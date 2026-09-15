@@ -31,6 +31,7 @@ from tests.workflows import (
     Decision,
     StepAttempt,
     StepRun,
+    WorkflowDispatch,
     advance_once,
     execute_started,
     run_to_terminal,
@@ -267,11 +268,16 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
     assert (address.street, address.city, address.country) == ("10 Example Road", "Exampleton", "GB")
     assert step_run_for(run, "apply").output["context"] == proposal["context"]
 
-    replay = IdentityApplyStepImpl().run(
-        SimpleNamespace(input={"decisions": [str(decision.sqid)]}, run=run), now=timezone.now(),
-    )
-    assert replay.outcome == "applied"
-    assert replay.output["address_result"] == "already_applied"
+    with system_context(reason="test identity retained result replay"):
+        applied = step_run_for(run, "apply")
+        attempt = StepAttempt.objects.get(pk=applied.current_attempt_id)
+        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
+        assert attempt.applied_at is not None
+        retained_output = attempt.output
+    assert engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)["executed"] == 0
+    with system_context(reason="test identity retained result unchanged"):
+        attempt.refresh_from_db()
+    assert attempt.output == retained_output
     with system_context(reason="test identity replay remains singular"):
         assert Address._base_manager.filter(party=party).count() == 1
 

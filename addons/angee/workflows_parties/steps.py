@@ -28,7 +28,15 @@ from rebac.actors import to_subject_ref
 
 from angee.base.identity import canonical_subject_ref
 from angee.workflows.attempts import RecoveryCapability, RecoveryMode
-from angee.workflows.steps import DecisionSpec, StepEffect, StepImpl, StepOutcome, StepResult, positive_int
+from angee.workflows.steps import (
+    DecisionSpec,
+    StepEffect,
+    StepExecutionMode,
+    StepImpl,
+    StepOutcome,
+    StepResult,
+    positive_int,
+)
 
 _EXECUTE_MODES = frozenset({"prepare", "unit"})
 _ACTIONS = ("merge", "skip", "keep_separate")
@@ -237,6 +245,7 @@ class IdentityApplyStepImpl(StepImpl):
         StepOutcome("conflict", "Identity changed during review"),
     )
     effect = StepEffect.WRITE
+    execution_mode = StepExecutionMode.DATABASE_COMMAND
     effect_description = "Applies approved Party, Address, and PartyHandle facts."
     idempotent = True
 
@@ -270,15 +279,6 @@ class IdentityApplyStepImpl(StepImpl):
         actor = _decision_actor(approved)
         party, current = _identity_snapshot(approved["party_id"], actor=actor)
         if _facts_hash(current) != approved["facts_hash"]:
-            if _identity_already_applied(current, approved):
-                return StepResult.done(
-                    output={
-                        "party_id": approved["party_id"], "context": approved["context"],
-                        "name_result": "already_applied", "address_result": "already_applied",
-                        "handle_result": "already_applied",
-                    },
-                    outcome="applied",
-                )
             return StepResult.done(
                 output={"party_id": approved["party_id"], "context": approved["context"]},
                 outcome="conflict",
@@ -423,64 +423,6 @@ def _identity_differs(current: Mapping[str, Any], proposed: Mapping[str, Any]) -
     link_id = proposed["handle"]["party_handle_id"]
     return bool(link_id and any(row["id"] == link_id and not row["is_confirmed"]
                                 for row in current["handles"]))
-
-
-def _identity_already_applied(current: Mapping[str, Any], approved: Mapping[str, Any]) -> bool:
-    """Recognize exactly the approved post-state after a crash following owner writes."""
-
-    frozen, proposed = approved["current"], approved["proposed"]
-    expected_name = proposed["name"] if approved["name_action"] == "replace" else frozen["name"]
-    if current["name"] != expected_name:
-        return False
-
-    frozen_addresses = {row["id"]: row for row in frozen["addresses"]}
-    current_addresses = {row["id"]: row for row in current["addresses"]}
-    address_action = approved["address_action"]
-    if address_action == "keep" and current_addresses != frozen_addresses:
-        return False
-    if address_action == "replace":
-        primary = next((row for row in frozen["addresses"] if row["is_primary"]), None)
-        if primary is None:
-            if any(current_addresses.get(key) != value for key, value in frozen_addresses.items()):
-                return False
-            added = [row for key, row in current_addresses.items() if key not in frozen_addresses]
-            if len(added) != 1 or not added[0]["is_primary"]:
-                return False
-            if any(added[0][field] != proposed["address"][field] for field in ("label", *_ADDRESS_FIELDS)):
-                return False
-        else:
-            if set(current_addresses) != set(frozen_addresses):
-                return False
-            expected = {**primary, **proposed["address"]}
-            if current_addresses[primary["id"]] != expected:
-                return False
-            if any(current_addresses[key] != value for key, value in frozen_addresses.items()
-                   if key != primary["id"]):
-                return False
-    if address_action == "add":
-        if any(current_addresses.get(key) != value for key, value in frozen_addresses.items()):
-            return False
-        added = [row for key, row in current_addresses.items() if key not in frozen_addresses]
-        if len(added) != 1 or any(
-            added[0][field] != proposed["address"][field] for field in ("label", *_ADDRESS_FIELDS)
-        ):
-            return False
-
-    frozen_handles = {row["id"]: row for row in frozen["handles"]}
-    current_handles = {row["id"]: row for row in current["handles"]}
-    if set(current_handles) != set(frozen_handles):
-        return False
-    handle_action = approved["handle_action"]
-    selected_id = proposed["handle"]["party_handle_id"]
-    for key, frozen_row in frozen_handles.items():
-        expected = dict(frozen_row)
-        if key == selected_id and handle_action == "confirm":
-            expected.update(confidence=1.0, is_confirmed=True, is_dismissed=False)
-        elif key == selected_id and handle_action == "dismiss":
-            expected.update(is_confirmed=False, is_dismissed=True)
-        if current_handles[key] != expected:
-            return False
-    return True
 
 
 def _identity_form_schema(payload: Mapping[str, Any]) -> dict[str, Any]:
