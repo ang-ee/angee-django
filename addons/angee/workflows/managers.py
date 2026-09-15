@@ -3665,6 +3665,44 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             )
             return True
 
+    def subscribe_external(self, attempt_id: int, *, lease_token: uuid.UUID, resource: Any) -> None:
+        """Commit one current attempt's domain target before its predicate read."""
+
+        alias = self.db
+        if connections[alias].in_atomic_block:
+            raise RuntimeError("External subscription must commit before the domain predicate read.")
+        target = canonical_record_target(resource)
+        if not isinstance(target.object_id, int):
+            raise ValidationError({"resource": "External subscription requires an integer record identity."})
+        step_run_id = system_queryset(self.model, using=alias, lock=None).values_list(
+            "step_run_id", flat=True
+        ).get(pk=attempt_id)
+        with transaction.atomic(using=alias), self._write(alias, step_run_id), system_context(
+            reason="workflows.attempt.subscribe_external"
+        ):
+            run, step_run = self._locked_ancestry(step_run_id, alias)
+            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+            if (
+                run.is_terminal or step_run.status != StepRunStatus.STARTED
+                or step_run.current_attempt_id != attempt.pk
+                or step_run.effect_key != attempt.effect_key
+                or step_run.effect_generation != attempt.effect_generation
+                or attempt.lease_token != lease_token or attempt.started_at is None
+                or attempt.lease_revoked_at is not None or attempt.result_recorded_at is not None
+            ):
+                raise ValidationError({"attempt": "External subscription requires the current started lease."})
+            existing = (attempt.external_content_type_id, attempt.external_object_id)
+            subscribed = (target.content_type.pk, target.object_id)
+            if existing == subscribed:
+                return
+            if existing != (None, None):
+                raise ValidationError({"resource": "This attempt already subscribed to another record."})
+            attempt.external_content_type_id, attempt.external_object_id = subscribed
+            self._save_attempt(
+                attempt, alias=alias,
+                update_fields=["external_content_type", "external_object_id", "updated_at"],
+            )
+
     def cancel_current(self, step_run_id: int, *, at: datetime) -> bool:
         """Revoke a resultless current lease and project logical cancellation."""
 
@@ -5066,6 +5104,10 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
                 or locked_attempt.step_run_id != locked_step_run.pk
             ):
                 raise OperationalError("Execution dispatch ancestry changed while locking.")
+        elif unresolved.kind == WorkflowDispatchKind.ARTIFACT_DELIVERY:
+            # The sender inserts only this intent while holding domain locks.
+            # Delivery scans subscribed runs after the sender commits.
+            system_queryset(self.model, using=using, lock=("self",)).get(pk=dispatch_id)
         else:
             decision_model = self.model._meta.get_field("decision").remote_field.model
             ancestry = system_queryset(decision_model, using=using, lock=None).values(
@@ -5220,6 +5262,26 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
             dispatch = self.model(kind=WorkflowDispatchKind.ADVANCE, run=locked, available_at=available_at)
             self._save(dispatch, alias=alias, force_insert=True)
             return dispatch
+
+    def schedule_artifact_delivery(self, resource: Any, *, available_at: datetime | None = None) -> Any:
+        """Retain a domain-change intent without taking any Workflow run lock."""
+
+        alias = self.db
+        if not connections[alias].in_atomic_block:
+            raise RuntimeError("Artifact delivery must share the domain transition transaction.")
+        target = canonical_record_target(resource)
+        if not isinstance(target.object_id, int):
+            raise ValidationError({"resource": "Artifact delivery requires an integer record identity."})
+        dispatch = self.model(
+            kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
+            artifact_content_type_id=target.content_type.pk,
+            artifact_object_id=target.object_id,
+            available_at=available_at or timezone.now(),
+        )
+        with system_context(reason="workflows.dispatch.schedule_artifact_delivery"):
+            self._save(dispatch, alias=alias, force_insert=True)
+        transaction.on_commit(enqueue_dispatch_publisher, using=alias)
+        return dispatch
 
     def schedule_execute(self, attempt: Any) -> tuple[Any, bool]:
         """Ensure one execution intent using the attempt's immutable availability."""

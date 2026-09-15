@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import traceback
+import uuid
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -34,7 +35,7 @@ from rebac.types import RelationshipTuple
 
 from angee.base.actors import actor_user_id
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
-from angee.base.refs import canonical_record_target
+from angee.base.refs import CanonicalRecordTarget, canonical_record_target
 from angee.base.scoping import read_scoped_queryset
 from angee.jobs.enqueue import enqueue_task
 from angee.workflows.attempts import (
@@ -184,6 +185,23 @@ def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     return {"woken": woken}
 
 
+def subscribe_external(step_run: Any, resource: Any) -> None:
+    """Commit this invocation's domain subscription before its predicate read."""
+
+    lease_token = getattr(step_run, "_workflow_invocation_lease_token", None)
+    if step_run.current_attempt_id is None or not isinstance(lease_token, uuid.UUID):
+        raise RuntimeError("External subscription requires a retained invocation lease.")
+    _model("StepAttempt").objects.subscribe_external(
+        step_run.current_attempt_id, lease_token=lease_token, resource=resource,
+    )
+
+
+def schedule_artifact_delivery(resource: Any) -> Any:
+    """Keep a domain event in its native transaction without locking a run."""
+
+    return _model("WorkflowDispatch").objects.schedule_artifact_delivery(resource)
+
+
 def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str, int]:
     """Wake exact external waits whose current attempt retained ``resource``.
 
@@ -193,20 +211,29 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
     """
 
     timestamp = now or timezone.now()
-    target = canonical_record_target(resource)
+    target = resource if isinstance(resource, CanonicalRecordTarget) else canonical_record_target(resource)
     run_model = _model("WorkflowRun")
     step_run_model = _model("StepRun")
     artifact_model = _model("StepArtifact")
     woken = 0
     delivered_run_ids: list[int] = []
     with system_context(reason="workflows.engine.deliver_artifact"), transaction.atomic():
-        candidate_step_ids = list(artifact_model.objects.filter(
+        artifact_step_ids = list(artifact_model.objects.filter(
             target_content_type_id=target.content_type.pk,
             target_object_id=target.object_id,
             attempt__step_run__current_attempt_id=models.F("attempt_id"),
             attempt__step_run__status=StepRunStatus.WAITING,
             attempt__step_run__waiting_kind=WaitingKind.EXTERNAL,
         ).order_by().values_list("attempt__step_run_id", flat=True).distinct())
+        attempt_model = _model("StepAttempt")
+        subscribed_step_ids = list(attempt_model.objects.filter(
+            external_content_type_id=target.content_type.pk,
+            external_object_id=target.object_id,
+            step_run__current_attempt_id=models.F("pk"),
+            step_run__status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
+            lease_revoked_at__isnull=True,
+        ).order_by().values_list("step_run_id", flat=True))
+        candidate_step_ids = sorted(set(artifact_step_ids).union(subscribed_step_ids))
         candidate_run_ids = list(step_run_model.objects.filter(
             pk__in=candidate_step_ids,
         ).order_by().values_list("run_id", flat=True).distinct())
@@ -217,26 +244,37 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
         }
         step_runs = list(step_run_model.objects.lock_if_supported().filter(
             pk__in=candidate_step_ids,
-            status=StepRunStatus.WAITING,
-            waiting_kind=WaitingKind.EXTERNAL,
+            status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
         ).select_related("current_attempt").order_by("run_id", "pk"))
         touched: set[int] = set()
         for step_run in step_runs:
             run = runs.get(step_run.run_id)
             if run is None or run.status in RunStatus.TERMINAL or step_run.current_attempt_id is None:
                 continue
-            if not artifact_model.objects.filter(
+            attempt = attempt_model.objects.lock_if_supported().get(pk=step_run.current_attempt_id)
+            subscribed = (
+                attempt.external_content_type_id == target.content_type.pk
+                and attempt.external_object_id == target.object_id
+                and attempt.lease_revoked_at is None
+            )
+            retained_artifact = step_run.status == StepRunStatus.WAITING and artifact_model.objects.filter(
                 attempt_id=step_run.current_attempt_id,
                 target_content_type_id=target.content_type.pk,
                 target_object_id=target.object_id,
-            ).exists():
+            ).exists()
+            if not (subscribed or retained_artifact):
                 continue
-            if _is_retained_step_run(step_run):
-                _model("StepAttempt").objects.wake_current(step_run.pk, at=timestamp)
-            else:
-                step_run.wake(at=timestamp)
+            if step_run.status == StepRunStatus.WAITING:
+                if step_run.waiting_kind != WaitingKind.EXTERNAL:
+                    continue
+                if _is_retained_step_run(step_run):
+                    attempt_model.objects.wake_current(step_run.pk, at=timestamp)
+                else:
+                    step_run.wake(at=timestamp)
+                woken += 1
+            elif not subscribed or attempt.result_recorded_at is not None:
+                continue
             touched.add(run.pk)
-            woken += 1
         for run_id in sorted(touched):
             run = runs[run_id]
             run.deliveries += 1
@@ -248,6 +286,31 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
         if delivered_run_ids:
             transaction.on_commit(enqueue_dispatch_publisher)
     return {"runs": len(delivered_run_ids), "woken": woken}
+
+
+def deliver_artifact_dispatch(dispatch_id: int, *, now: datetime | None = None) -> dict[str, int]:
+    """Consume one committed domain intent and deliver to current subscribers."""
+
+    timestamp = now or timezone.now()
+    dispatch_model = _model("WorkflowDispatch")
+    with system_context(reason="workflows.engine.deliver_artifact_dispatch"), transaction.atomic():
+        with dispatch_model.objects._owner_transition(
+            dispatch_id=dispatch_id, lease_token=None, at=timestamp, using=dispatch_model.objects.db,
+        ) as preflight:
+            if preflight.disposition != DispatchPreflightDisposition.READY:
+                return {"runs": 0, "woken": 0}
+            if (
+                preflight.envelope.kind != WorkflowDispatchKind.ARTIFACT_DELIVERY
+                or preflight.envelope.target_id != dispatch_id
+            ):
+                raise ValidationError({"dispatch": "Artifact delivery envelope is invalid."})
+            dispatch = dispatch_model.objects.select_related("artifact_content_type").get(pk=dispatch_id)
+            target = CanonicalRecordTarget(
+                dispatch.artifact_content_type, dispatch.artifact_object_id,
+            )
+            outcome = deliver_artifact(target, now=timestamp)
+            dispatch_model.objects._consume_locked(dispatch_id, at=timestamp)
+            return outcome
 
 
 def advance(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
@@ -416,6 +479,7 @@ def execute_dispatch(
 
     def invoke(owned_step_run: Any, owned_attempt: Any) -> AttemptResult:
         owned_step_run.input = owned_attempt.input if owned_attempt.input_present else None
+        owned_step_run._workflow_invocation_lease_token = owned_attempt.lease_token
         implementation = cast(Any, impl_class)()
         if owned_attempt.cause == AttemptCause.MANUAL_RETRY:
             recovery_mode = RecoveryMode(owned_attempt.recovery_mode)

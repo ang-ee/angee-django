@@ -1109,6 +1109,17 @@ and current contracts before applying a historical example to a new deployment.
   then commits the domain write, result, artifacts, and continuation dispatch
   together. Keep provider and blob I/O outside this mode; legacy non-retained
   execution refuses database commands.
+- **External domain waits subscribe before reading their predicate.** A retained
+  standard invocation calls `engine.subscribe_external(step_run, record)` for one
+  target per attempt, lets that attempt-row write commit, then re-reads the domain
+  record before deciding whether to wait. Legacy non-retained execution and a
+  database command held in its atomic transaction cannot subscribe this way.
+  The native domain transition saves an artifact delivery intent
+  in its own transaction; its signal must not lock a Workflow run. After commit,
+  dispatch delivery locks the intent, then affected runs, steps, and attempts.
+  A delivery while the step runs increments the run generation, so finalization
+  makes a subsequent wait due; a delivery after finalization wakes its exact
+  external wait. Keep a bounded reconciliation timer for missed integrations.
 - **Workflow joins count rows, not broker messages.** `join_rule` is evaluated
   over sibling `StepRun` rows.
 - **Never trust a workflow step to self-limit.** The engine owns `max_steps` and

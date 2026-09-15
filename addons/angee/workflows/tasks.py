@@ -199,10 +199,12 @@ def consume_workflow_dispatch(
         engine.escalate_decision_dispatch(
             dispatch_id, expected_decision_id=target_id, expected_generation=generation
         )
-    else:
+    elif parsed == WorkflowDispatchKind.DECISION_EXPIRE:
         engine.expire_decision_dispatch(
             dispatch_id, expected_decision_id=target_id, expected_generation=generation
         )
+    elif parsed == WorkflowDispatchKind.ARTIFACT_DELIVERY:
+        engine.deliver_artifact_dispatch(dispatch_id)
 
 
 @shared_task(bind=True, name="workflows.publish_dispatches")

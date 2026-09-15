@@ -2324,6 +2324,10 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     intended_effect_key = models.UUIDField(null=True, blank=True, editable=False)
     claimed_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
+    external_content_type = models.ForeignKey(
+        ContentType, on_delete=models.PROTECT, null=True, blank=True, related_name="+", editable=False,
+    )
+    external_object_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
     lease_revoked_at = models.DateTimeField(null=True, blank=True)
     lease_revocation_reason = models.CharField(
@@ -2365,6 +2369,13 @@ class StepAttempt(AuditMixin, AngeeDataModel):
             models.CheckConstraint(
                 condition=models.Q(input_present=True) | models.Q(input__isnull=True),
                 name="chk_wsa_absent_input_null",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(external_content_type__isnull=True, external_object_id__isnull=True)
+                    | models.Q(external_content_type__isnull=False, external_object_id__isnull=False)
+                ),
+                name="chk_wsa_external_target_pair",
             ),
             models.CheckConstraint(
                 condition=models.Q(output_present=True) | models.Q(output__isnull=True),
@@ -2746,6 +2757,10 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
         "workflows.Decision", on_delete=models.PROTECT, null=True, blank=True, related_name="dispatches"
     )
     generation = models.PositiveIntegerField(null=True, blank=True, editable=False)
+    artifact_content_type = models.ForeignKey(
+        ContentType, on_delete=models.PROTECT, null=True, blank=True, related_name="+", editable=False,
+    )
+    artifact_object_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     available_at = models.DateTimeField(db_index=True, editable=False)
     next_send_at = models.DateTimeField(db_index=True, editable=False)
     consumed_at = models.DateTimeField(null=True, blank=True, editable=False)
@@ -2763,12 +2778,18 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
             models.CheckConstraint(
                 condition=(
                     models.Q(kind=WorkflowDispatchKind.ADVANCE, run__isnull=False, step_attempt__isnull=True,
-                             decision__isnull=True, generation__isnull=True)
+                             decision__isnull=True, generation__isnull=True,
+                             artifact_content_type__isnull=True, artifact_object_id__isnull=True)
                     | models.Q(kind=WorkflowDispatchKind.EXECUTE, run__isnull=True, step_attempt__isnull=False,
-                               decision__isnull=True, generation__isnull=True)
+                               decision__isnull=True, generation__isnull=True,
+                               artifact_content_type__isnull=True, artifact_object_id__isnull=True)
                     | models.Q(kind__in=[WorkflowDispatchKind.DECISION_EXPIRE,
                                          WorkflowDispatchKind.DECISION_ESCALATE], run__isnull=True,
-                               step_attempt__isnull=True, decision__isnull=False, generation__isnull=False)
+                               step_attempt__isnull=True, decision__isnull=False, generation__isnull=False,
+                               artifact_content_type__isnull=True, artifact_object_id__isnull=True)
+                    | models.Q(kind=WorkflowDispatchKind.ARTIFACT_DELIVERY, run__isnull=True,
+                               step_attempt__isnull=True, decision__isnull=True, generation__isnull=True,
+                               artifact_content_type__isnull=False, artifact_object_id__isnull=False)
                 ),
                 name="chk_wfd_target_shape",
             ),
@@ -2786,17 +2807,22 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
         )
 
     @property
-    def target_identity(self) -> tuple[int | None, int | None, int | None, int | None]:
+    def target_identity(self) -> tuple[int | None, ...]:
         """Return immutable target fields used by the exact-row write guard."""
 
-        return self.run_id, self.step_attempt_id, self.decision_id, self.generation
+        return (
+            self.run_id, self.step_attempt_id, self.decision_id, self.generation,
+            self.artifact_content_type_id, self.artifact_object_id,
+        )
 
     @property
     def envelope(self) -> WorkflowDispatchEnvelope:
         """Return the identifier-only transport message for this validated row."""
 
         kind = WorkflowDispatchKind(self.kind)
-        target_id = self.run_id if kind == WorkflowDispatchKind.ADVANCE else (
+        target_id = (
+            self.pk if kind == WorkflowDispatchKind.ARTIFACT_DELIVERY else
+            self.run_id if kind == WorkflowDispatchKind.ADVANCE else
             self.step_attempt_id if kind == WorkflowDispatchKind.EXECUTE else self.decision_id
         )
         if target_id is None:
@@ -2818,7 +2844,8 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
             raise TypeError("Workflow dispatches can only be saved by WorkflowDispatchManager.")
         if not self._state.adding:
             persisted = system_queryset(type(self), using=alias, lock=None).values(
-                "kind", "run_id", "step_attempt_id", "decision_id", "generation", "available_at"
+                "kind", "run_id", "step_attempt_id", "decision_id", "generation",
+                "artifact_content_type_id", "artifact_object_id", "available_at"
             ).get(pk=self.pk)
             if (
                 persisted["kind"] != self.kind
@@ -2826,6 +2853,8 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
                 or persisted["step_attempt_id"] != self.step_attempt_id
                 or persisted["decision_id"] != self.decision_id
                 or persisted["generation"] != self.generation
+                or persisted["artifact_content_type_id"] != self.artifact_content_type_id
+                or persisted["artifact_object_id"] != self.artifact_object_id
                 or persisted["available_at"] != self.available_at
             ):
                 raise TypeError("Workflow dispatch identity and availability are immutable.")
