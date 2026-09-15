@@ -17,11 +17,11 @@ import os
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
-from tests.hierdemo.models import HierNode, ScopedHierNode
+from tests.hierdemo.models import HierNode, PlainManagerHierNode, ScopedHierNode
 from tests.scopedemo.models import Scope
 
 
@@ -69,6 +69,51 @@ def test_create_under_parent_derives_path_shape() -> None:
     assert root.path == f"/{root.pk:0{width}d}/"
     assert child.path == f"{root.path}{child.pk:0{width}d}/"
     assert child.path.startswith(root.path)
+
+
+@pytest.mark.django_db
+def test_explicit_using_is_forwarded_through_create_and_reparent() -> None:
+    """The selected write alias reaches both internal saved-row paths once."""
+
+    with system_context(reason="test hierarchy explicit database alias"):
+        first = HierNode(name="first")
+        first.save(using="default")
+        second = HierNode(name="second")
+        second.save(using="default")
+        child = HierNode(name="child", parent=first)
+        child.save(using="default")
+        child.parent = second
+        child.save(using="default")
+        child.refresh_from_db(using="default")
+    assert child.path.startswith(second.path)
+    assert not child.path.startswith(first.path)
+
+
+@pytest.mark.django_db
+def test_direct_path_update_cannot_bypass_the_saved_row_owner() -> None:
+    """A composed queryset guard recognizes only the hierarchy's live capability."""
+
+    with system_context(reason="test hierarchy path bypass"):
+        node = HierNode.objects.create(name="guarded")
+        with pytest.raises(ValidationError, match="saved-row owner"):
+            HierNode.objects.filter(pk=node.pk).update(path="/forged/")
+        node.refresh_from_db()
+    assert node.path != "/forged/"
+
+
+@pytest.mark.django_db
+def test_plain_manager_hierarchy_keeps_create_and_reparent_support() -> None:
+    """HierarchyMixin does not require consumers to install HierarchyQuerySet."""
+
+    with system_context(reason="test plain-manager hierarchy"):
+        first = PlainManagerHierNode.objects.create(name="first")
+        second = PlainManagerHierNode.objects.create(name="second")
+        child = PlainManagerHierNode.objects.create(name="child", parent=first)
+        child.parent = second
+        child.save()
+        child.refresh_from_db()
+    assert child.path.startswith(second.path)
+    assert not child.path.startswith(first.path)
 
 
 @pytest.mark.django_db
@@ -241,7 +286,11 @@ def test_create_under_reparented_parent_uses_committed_path() -> None:
         parent = HierNode.objects.create(name="parent")  # a root
         stale_path = parent.path
         committed_path = f"{home.path}{parent.pk:0{width}d}/"
-        HierNode.objects.filter(pk=parent.pk).update(path=committed_path)
+        # Simulate a stale external observation without invoking the deliberately
+        # guarded public queryset surface exercised above.
+        models.QuerySet.update(
+            HierNode.objects.filter(pk=parent.pk), path=committed_path
+        )
         # `parent` still carries its stale root path in memory.
         child = HierNode.objects.create(name="child", parent=parent)
     assert not child.path.startswith(stale_path)
@@ -283,7 +332,7 @@ def test_empty_path_materialization_never_cascades() -> None:
         nodes = _tree()
         other_root_path = nodes["A"].path
         stray = HierNode.objects.create(name="stray")
-        HierNode.objects.filter(pk=stray.pk).update(path="")
+        models.QuerySet.update(HierNode.objects.filter(pk=stray.pk), path="")
 
         stray = HierNode.objects.get(pk=stray.pk)
         with CaptureQueriesContext(connection) as ctx:

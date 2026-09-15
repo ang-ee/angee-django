@@ -138,6 +138,14 @@ Use these owners instead of maintaining another contract in an addon:
   `transaction.atomic`; the following DB mutation path names its transaction
   owner and `system_context` reason. Platform install, agent provisioning, OAuth
   flows, and resources loading all follow this two-phase shape.
+- **Manager-only writes share one transaction-bound lifetime primitive.** Use
+  `angee.base.authority.TransactionBoundAuthority` when a model/queryset guard
+  must recognize an exact manager-owned mutation inside an already-open outer
+  transaction. Keep the manager's domain payload and validation at that owner;
+  the shared primitive owns only alias, connection, outer-atomic, thread,
+  copied-context revocation, and non-nesting lifetime fences. It is not actor authority,
+  does not open a transaction, and does not replace one-use workflow invocation
+  capabilities.
 - Cross-addon and generated-model references go through Django's app registry
   (`apps.get_model`, `apps.get_app_config`, `apps.get_app_configs`) and `_meta`.
   Never import generated `runtime/` modules or rediscover model/app facts by

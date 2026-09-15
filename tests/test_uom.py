@@ -9,12 +9,17 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from decimal import Decimal
+from importlib import import_module
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from django.db import IntegrityError, connection, transaction
-from rebac import system_context
+from django.core.exceptions import ValidationError
+from django.core.management import call_command
+from django.db import IntegrityError, connection, models, transaction
+from django.db.migrations.state import ModelState, ProjectState
+from rebac import system_context, to_object_ref
+from rebac.models import active_relationship_model
 
 from angee.uom.models import Uom as AbstractUom
 from angee.uom.models import UomCategory as AbstractUomCategory
@@ -55,6 +60,7 @@ def uom_tables(transactional_db: Any) -> Iterator[None]:
 
     del transactional_db
     created_models = _create_missing_tables(UOM_TEST_MODELS)
+    call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
@@ -77,6 +83,52 @@ def _make_uom(**fields: Any) -> Any:
 
     with system_context(reason="uom tests setup"):
         return Uom.objects.create(**fields)
+
+
+def _shared_reader_exists(row: Any) -> bool:
+    return active_relationship_model().objects.filter(
+        resource_type=row._meta.rebac_resource_type,
+        resource_id=to_object_ref(row).resource_id,
+        relation="shared",
+        subject_type="auth/user",
+        subject_id="*",
+    ).exists()
+
+
+def test_native_categories_and_units_receive_per_record_shared_readers(
+    uom_tables: None,
+) -> None:
+    """Native catalogue rows opt in explicitly to the wildcard relation."""
+
+    del uom_tables
+    category = _make_category(name="Native catalogue")
+    unit = _make_uom(
+        category=category,
+        name="Each",
+        ratio=Decimal(1),
+        rounding=Decimal("0.01"),
+        is_reference=True,
+    )
+    assert _shared_reader_exists(category)
+    assert _shared_reader_exists(unit)
+
+
+def test_native_reader_backfill_applies_only_to_exact_unextended_shapes() -> None:
+    """A composed visibility donor must own its own persisted-row classification."""
+
+    module = import_module(
+        "angee.uom.runtime_migrations.native_catalogue_shared_readers"
+    )
+    state = ProjectState()
+    state.add_model(ModelState.from_model(UomCategory))
+    state.add_model(ModelState.from_model(Uom))
+    assert module.applies(state)
+
+    extended = state.clone()
+    extended.models["uom", "uom"].fields["source_company"] = models.IntegerField(
+        null=True
+    )
+    assert not module.applies(extended)
 
 
 @pytest.fixture()
@@ -290,4 +342,108 @@ def test_reference_with_offset_is_rejected(uom_tables: None) -> None:
             offset=Decimal("273.15"),
             rounding=Decimal("0.01"),
             is_reference=True,
+        )
+
+
+def test_reference_projection_corrects_categories_and_units_without_growth(
+    uom_tables: None,
+) -> None:
+    """Exact correction keeps both native identities and rejects a stale CAS."""
+
+    del uom_tables
+    with system_context(reason="uom reference projection"):
+        category = UomCategory.objects.apply_reference_projection(
+            None,
+            UomCategory(name="Weight"),
+        )
+        unit = Uom.objects.apply_reference_projection(
+            None,
+            Uom(
+                category=category,
+                name="Kilogram",
+                ratio=Decimal(1),
+                rounding=Decimal("0.001"),
+                is_reference=True,
+            ),
+        )
+        observed = Uom.objects.get(pk=unit.pk)
+        corrected = Uom.objects.apply_reference_projection(
+            observed,
+            Uom(
+                category=category,
+                name="kg",
+                ratio=Decimal(1),
+                rounding=Decimal("0.001"),
+                is_reference=True,
+            ),
+        )
+        same = Uom.objects.apply_reference_projection(
+            corrected,
+            Uom(
+                category=category,
+                name="kg",
+                ratio=Decimal(1),
+                rounding=Decimal("0.001"),
+                is_reference=True,
+            ),
+        )
+        with pytest.raises(ValidationError):
+            Uom.objects.apply_reference_projection(
+                observed,
+                Uom(
+                    category=category,
+                    name="Kilogram stale",
+                    ratio=Decimal(1),
+                    rounding=Decimal("0.001"),
+                    is_reference=True,
+                ),
+            )
+        other_category = UomCategory.objects.apply_reference_projection(
+            None,
+            UomCategory(name="Volume"),
+        )
+        with pytest.raises(ValidationError):
+            Uom.objects.apply_reference_projection(
+                corrected,
+                Uom(
+                    category=other_category,
+                    name="kg",
+                    ratio=Decimal(1),
+                    rounding=Decimal("0.001"),
+                    is_reference=True,
+                ),
+            )
+    assert corrected.pk == unit.pk == same.pk
+    with system_context(reason="uom reference projection count"):
+        assert UomCategory.objects.count() == 2
+        assert Uom.objects.count() == 1
+
+
+def test_reference_projection_refuses_non_decimal_rounding(uom_tables: None) -> None:
+    """Projection cannot persist a step that the native quantize owner misreads."""
+
+    del uom_tables
+    category = _make_category(name="Packaging")
+    with system_context(reason="uom tens rounding"):
+        tens = Uom.objects.apply_reference_projection(
+            None,
+            Uom(
+                category=category,
+                name="Ten pack",
+                ratio=Decimal(1),
+                rounding=Decimal("10"),
+                is_reference=True,
+            ),
+        )
+    assert tens.quantize(Decimal("14")) == Decimal("1E+1")
+    with system_context(reason="uom unsupported rounding"), pytest.raises(ValidationError):
+        Uom.objects.apply_reference_projection(
+            None,
+            Uom(
+                category=category,
+                name="Half pack",
+                ratio=Decimal(1),
+                rounding=Decimal("0.5"),
+                is_reference=True,
+            ),
         )

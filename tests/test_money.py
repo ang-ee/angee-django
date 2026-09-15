@@ -16,7 +16,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.management import call_command
 from django.db import connection
 from django.test import override_settings
 from rebac import system_context
@@ -32,6 +33,9 @@ def money_tables(transactional_db: Any) -> Iterator[None]:
 
     del transactional_db
     created_models = _create_missing_tables(MONEY_TEST_MODELS)
+    # CurrencyRate now owns a persisted per-row reader. Production syncs the
+    # authorization schema before load; dynamic test models must do the same.
+    call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
@@ -178,3 +182,156 @@ def test_conversion_without_the_setting_raises_improperly_configured(money_table
         pytest.raises(ImproperlyConfigured),
     ):
         eur.convert(Decimal("1"), gbp)
+
+
+def test_contextual_rates_never_fall_back_to_global_history(money_tables: None) -> None:
+    """An explicit context reads only its exact reference-relative history."""
+
+    del money_tables
+    usd = _make_currency("USD")
+    eur = _make_currency("EUR")
+    context = _make_currency("GBP")
+    _make_rate(eur, date(2026, 1, 1), "0.9")
+    with system_context(reason="money contextual rate test"):
+        with pytest.raises(CurrencyRate.DoesNotExist):
+            CurrencyRate.objects.rate_for(
+                eur,
+                date(2026, 1, 1),
+                context=context,
+                reference_currency=usd,
+            )
+        projected = CurrencyRate.objects.apply_contextual_projection(
+            None,
+            CurrencyRate(currency=eur, date=date(2026, 1, 1), rate=Decimal("0.85")),
+            context=context,
+            reference_currency=usd,
+        )
+        assert CurrencyRate.objects.rate_for(
+            eur,
+            date(2026, 1, 1),
+            context=context,
+            reference_currency=usd,
+        ) == Decimal("0.85")
+        CurrencyRate.objects.withdraw_contextual_projection(
+            projected,
+            context=context,
+            reference_currency=usd,
+        )
+        with pytest.raises(CurrencyRate.DoesNotExist):
+            CurrencyRate.objects.rate_for(
+                eur,
+                date(2026, 1, 1),
+                context=context,
+                reference_currency=usd,
+            )
+
+
+def test_contextual_rate_priority_precedes_date(money_tables: None) -> None:
+    """A higher-priority context fact outranks a newer lower-priority fact."""
+
+    del money_tables
+    usd = _make_currency("USD")
+    eur = _make_currency("EUR")
+    context = _make_currency("GBP")
+    with system_context(reason="money contextual priority test"):
+        CurrencyRate.objects.apply_contextual_projection(
+            None,
+            CurrencyRate(
+                currency=eur,
+                date=date(2026, 1, 10),
+                rate=Decimal("0.8"),
+                source_priority=0,
+            ),
+            context=context,
+            reference_currency=usd,
+        )
+        CurrencyRate.objects.apply_contextual_projection(
+            None,
+            CurrencyRate(
+                currency=eur,
+                date=date(2026, 1, 1),
+                rate=Decimal("0.9"),
+                source_priority=1,
+            ),
+            context=context,
+            reference_currency=usd,
+        )
+        assert CurrencyRate.objects.rate_for(
+            eur,
+            date(2026, 1, 15),
+            context=context,
+            reference_currency=usd,
+        ) == Decimal("0.9")
+
+
+def test_context_is_validated_before_same_currency_identity(money_tables: None) -> None:
+    """An invalid contextual owner cannot bypass validation through identity conversion."""
+
+    del money_tables
+    usd = _make_currency("USD")
+    unsaved_context = Currency(code="EUR", name="EUR")
+    with system_context(reason="money contextual identity test"), pytest.raises(ValidationError):
+        usd.convert(
+            Decimal("1"),
+            usd,
+            context=unsaved_context,
+            reference_currency=usd,
+        )
+
+
+def test_currency_rate_identity_and_precision_are_native_owned(money_tables: None) -> None:
+    """Ordinary saves cannot move a slot or silently round its value."""
+
+    del money_tables
+    eur = _make_currency("EUR")
+    gbp = _make_currency("GBP")
+    rate = _make_rate(eur, date(2026, 1, 1), "0.9")
+    rate.currency = gbp
+    with system_context(reason="money rate identity test"), pytest.raises(ValidationError):
+        rate.save(update_fields={"currency"})
+    rate.refresh_from_db()
+    rate.rate = Decimal("0.123456789012345678901")
+    with system_context(reason="money rate precision test"), pytest.raises(ValidationError):
+        rate.save(update_fields={"rate"})
+    with system_context(reason="money wide exact rate test"):
+        exact = CurrencyRate(
+            currency=eur,
+            date=date(2026, 1, 2),
+            rate=Decimal("123456789012345678.12345678901234567890"),
+        )
+        exact.save()
+    assert exact.rate == Decimal("123456789012345678.12345678901234567890")
+
+
+def test_contextual_projection_rejects_wrong_alias_expected(money_tables: None) -> None:
+    """An equal-PK object from another database is not an exact CAS witness."""
+
+    del money_tables
+    usd = _make_currency("USD")
+    eur = _make_currency("EUR")
+    context = _make_currency("GBP")
+    with system_context(reason="money contextual alias test"):
+        projected = CurrencyRate.objects.apply_contextual_projection(
+            None,
+            CurrencyRate(currency=eur, date=date(2026, 1, 1), rate=Decimal("0.85")),
+            context=context,
+            reference_currency=usd,
+        )
+        projected._state.db = "other"
+        with pytest.raises(ValidationError):
+            CurrencyRate.objects.apply_contextual_projection(
+                projected,
+                CurrencyRate(
+                    currency=eur,
+                    date=date(2026, 1, 1),
+                    rate=Decimal("0.86"),
+                ),
+                context=context,
+                reference_currency=usd,
+            )
+        with pytest.raises(ValidationError):
+            CurrencyRate.objects.withdraw_contextual_projection(
+                projected,
+                context=context,
+                reference_currency=usd,
+            )

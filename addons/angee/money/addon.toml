@@ -10,3 +10,13 @@ master = [{ path = "resources/master/010_money.currency.yaml", adopt = "code" }]
 demo = [
   { path = "resources/demo/020_money.currencyrate.yaml", depends_on = "resources/master/010_money.currency.yaml" },
 ]
+
+[[migrations]]
+app_label = "money"
+name = "contextual_currency_rates"
+module = "runtime_migrations.contextual_currency_rates"
+
+[[migrations]]
+app_label = "money"
+name = "canonical_shared_reader_ids"
+module = "runtime_migrations.canonical_shared_reader_ids"

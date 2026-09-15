@@ -91,7 +91,9 @@ Money representation: money stays native — a `DecimalField` (default
 `max_digits=18, decimal_places=6`) paired with `MoneyField`'s `currency_field`
 path declaration, never a money library. `angee.money` owns the currency
 catalogue, dated exchange rates, and conversion; the reference currency is a
-required project setting.
+required project setting. Contextual rate histories carry an explicit canonical
+record context and reference currency, never fall back to global history, and
+resolve source priority before effective date.
 
 State-transition library choice: `angee.base.transitions` is deliberately owned
 in-repo. `django-fsm-2` and `viewflow.fsm` were evaluated and rejected because
