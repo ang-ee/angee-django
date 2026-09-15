@@ -23,6 +23,7 @@ class WorkflowDispatchKind(StrEnum):
     DECISION_EXPIRE = "decision_expire"
     DECISION_ESCALATE = "decision_escalate"
     ARTIFACT_DELIVERY = "artifact_delivery"
+    CHILD_CANCEL = "child_cancel"
 
 
 class DispatchConsumption(StrEnum):

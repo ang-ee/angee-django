@@ -205,6 +205,8 @@ def consume_workflow_dispatch(
         )
     elif parsed == WorkflowDispatchKind.ARTIFACT_DELIVERY:
         engine.deliver_artifact_dispatch(dispatch_id)
+    elif parsed == WorkflowDispatchKind.CHILD_CANCEL:
+        engine.cancel_child_dispatch(dispatch_id, expected_child_id=target_id)
 
 
 @shared_task(bind=True, name="workflows.publish_dispatches")

@@ -16,14 +16,14 @@ from typing import Any
 import pypdfium2 as pdfium
 from PIL import Image
 
-from angee.workflows_ocr.engines import (
+from angee.workflows_extraction.engines import (
     DocumentPart,
     DocumentPipelineError,
     DocumentSource,
     OcrEngine,
     PageImage,
 )
-from angee.workflows_ocr.structured import extract_structured_sources
+from angee.workflows_extraction.structured import extract_structured_sources
 
 _NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
 _NUMBER_TOKEN = re.compile(r"(?<![\w./-])[-+]?\d+(?:[.,]\d+)?(?![\w./-])")

@@ -2,11 +2,11 @@
 
 SETTINGS = {
     "ANGEE_OCR_ENGINE_CLASSES": {
-        "inference": "angee.workflows_ocr.engines.InferenceMappingEngine",
-        "inference_document": "angee.workflows_ocr.engines.InferenceDocumentEngine",
-        "none": "angee.workflows_ocr.engines.NoOcrEngine",
+        "inference": "angee.workflows_extraction.engines.InferenceMappingEngine",
+        "inference_document": "angee.workflows_extraction.engines.InferenceDocumentEngine",
+        "none": "angee.workflows_extraction.engines.NoOcrEngine",
     },
-    "ANGEE_WORKFLOW_STEP_CLASSES.ocr_extract": "angee.workflows_ocr.steps.OcrExtractStepImpl",
+    "ANGEE_WORKFLOW_STEP_CLASSES.ocr_extract": "angee.workflows_extraction.steps.OcrExtractStepImpl",
     "ANGEE_OCR_MAX_BYTES": 25 * 1024 * 1024,
     "ANGEE_OCR_MAX_PAGES": 10,
     "ANGEE_OCR_MAX_EDGE": 3500,

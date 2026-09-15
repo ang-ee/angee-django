@@ -32,14 +32,16 @@ from rebac import (
 
 from angee.messaging.backends import ParsedMessage, ParsedPart
 from angee.workflows.attempts import RecoveryMode
-from angee.workflows_ocr.engines import DocumentPart, DocumentPipelineError, PageImage, PageResult
-from angee.workflows_ocr.routing import (
+from angee.workflows_extraction.engines import DocumentPart, DocumentPipelineError, PageImage, PageResult
+from angee.workflows_extraction.managers import _document_mapping, _result_selectors
+from angee.workflows_extraction.models import DocumentRef, LineRef
+from angee.workflows_extraction.routing import (
     _decode_declared_text,
     _html_text,
     derive_text_claims,
     recognize_pages,
 )
-from angee.workflows_ocr.service import (
+from angee.workflows_extraction.service import (
     _document_sources,
     _merge,
     _unchanged_claims,
@@ -49,8 +51,8 @@ from angee.workflows_ocr.service import (
     reextract,
     revise,
 )
-from angee.workflows_ocr.steps import OcrExtractConfig, OcrExtractStepImpl
-from angee.workflows_ocr_glm.engine import GlmOllamaEngine
+from angee.workflows_extraction.steps import OcrExtractConfig, OcrExtractStepImpl
+from angee.workflows_extraction_glm.engine import GlmOllamaEngine
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
 from tests.ocr_engines import FakeOcrEngine
 from tests.ocr_models import OCR_MODELS, Extraction, ExtractionPage, ExtractionSource
@@ -91,6 +93,59 @@ SCHEMA = {
 
 
 class PageAggregationTests(SimpleTestCase):
+    def test_declared_empty_collection_and_reviewed_split_identity(self) -> None:
+        layout = {"document_collection": "/items", "line_collection": "/rows"}
+        self.assertEqual(_result_selectors({"items": []}, layout), ())
+        with self.assertRaisesMessage(ValidationError, "collection is absent"):
+            _result_selectors({"other": []}, layout)
+        self.assertEqual(
+            _result_selectors({"other": "root"}, {**layout, "root_document_on_missing": True}),
+            (("", ()),),
+        )
+        with self.assertRaisesMessage(ValidationError, "explicitly mapped"):
+            _document_mapping(
+                {"items": [{"label": "reclassified"}]}, layout=layout,
+                original=SimpleNamespace(
+                    result={"label": "root"}, document_refs=(DocumentRef("root-id", ""),),
+                ),
+                identity_mapping={}, retired_identities={},
+            )
+
+        original = SimpleNamespace(
+            result={"items": [
+                {"label": "A", "rows": [{"amount": 10}, {"amount": 20}]},
+                {"label": "B", "rows": [{"amount": 30}]},
+            ]},
+            document_refs=(
+                DocumentRef("doc-a", "/items/0", (
+                    LineRef("line-a1", "/items/0/rows/0"),
+                    LineRef("line-a2", "/items/0/rows/1"),
+                )),
+                DocumentRef("doc-b", "/items/1", (LineRef("line-b", "/items/1/rows/0"),)),
+            ),
+        )
+        rows, retired = _document_mapping(
+            {"items": [
+                {"label": "B corrected", "rows": [{"amount": 31}]},
+                {"label": "A corrected", "rows": [{"amount": 11}]},
+                {"label": "C split", "rows": [{"amount": 40}]},
+            ]},
+            layout=layout, original=original,
+            identity_mapping={
+                "/items/0": "doc-b", "/items/0/rows/0": "line-b",
+                "/items/1": "doc-a", "/items/1/rows/0": "line-a1",
+                "/items/2": "new", "/items/2/rows/0": "new",
+            },
+            retired_identities={"line-a2": "Reviewed line retirement after split"},
+        )
+        self.assertEqual([row["identity"] for row in rows[:2]], ["doc-b", "doc-a"])
+        self.assertNotIn(rows[2]["identity"], {"doc-a", "doc-b", "line-a2"})
+        self.assertEqual([row["lines"][0]["identity"] for row in rows[:2]], ["line-b", "line-a1"])
+        self.assertEqual(retired, [{
+            "identity": "line-a2", "kind": "line",
+            "reason": "Reviewed line retirement after split",
+        }])
+
     def test_preserves_required_nullable_value_until_substantive_evidence_replaces_it(self) -> None:
         schema = {
             "type": "object",
@@ -253,7 +308,7 @@ class ExtractionServiceTests(TestCase):
         vendor_model = apps.get_model("integrate", "Vendor")
         provider_model = apps.get_model("agents", "InferenceProvider")
         inference_model = apps.get_model("agents", "InferenceModel")
-        with system_context(reason="workflows_ocr tests setup"):
+        with system_context(reason="workflows_extraction tests setup"):
             mime_model.objects.get_or_create(
                 mime_type="image/png",
                 defaults={"category": "image", "label": "PNG image", "icon_key": "file-image"},
@@ -334,7 +389,7 @@ class ExtractionServiceTests(TestCase):
         payload: dict[str, Any] | None = None,
         verdict: str = "completed",
     ) -> Any:
-        with system_context(reason="workflows_ocr correction authority"):
+        with system_context(reason="workflows_extraction correction authority"):
             workflow = Workflow.objects.create(name="OCR correction authority")
             step = Step.objects.create(
                 workflow=workflow,
@@ -382,7 +437,7 @@ class ExtractionServiceTests(TestCase):
                 config={"provider_model": "unapproved"}, created_by=self.owner,
             )
         with actor_context(self.owner), override_settings(ANGEE_OCR_APPROVED_MODEL_DEPLOYMENTS=policy):
-            with patch("angee.workflows_ocr.service._document_sources") as acquire_sources:
+            with patch("angee.workflows_extraction.service._document_sources") as acquire_sources:
                 with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
                     extract(
                         files=self.files, schema=SCHEMA, model=unapproved,
@@ -390,7 +445,7 @@ class ExtractionServiceTests(TestCase):
                     )
                 acquire_sources.assert_not_called()
 
-            with patch("angee.workflows_ocr.service._document_sources") as acquire_sources:
+            with patch("angee.workflows_extraction.service._document_sources") as acquire_sources:
                 with self.assertRaisesRegex(DjangoPermissionDenied, "recognition model deployment is not approved"):
                     extract(
                         files=self.files, schema=SCHEMA, model=self.model, recognition_model=self.model,
@@ -403,7 +458,7 @@ class ExtractionServiceTests(TestCase):
             provider.base_url = "https://external.invalid/v1"
             provider.save(update_fields=("base_url", "updated_at"))
         with override_settings(ANGEE_OCR_APPROVED_MODEL_DEPLOYMENTS=policy):
-            with patch("angee.workflows_ocr.service._document_sources") as acquire_sources:
+            with patch("angee.workflows_extraction.service._document_sources") as acquire_sources:
                 with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
                     self._extract(config={})
                 acquire_sources.assert_not_called()
@@ -441,7 +496,7 @@ class ExtractionServiceTests(TestCase):
             self.assertEqual(failed.sources.count(), 2)
             self.assertEqual(failed.pages.count(), 2)
 
-        extraction_model = apps.get_model("workflows_ocr", "Extraction")
+        extraction_model = apps.get_model("workflows_extraction", "Extraction")
         with actor_context(self.stranger):
             self.assertFalse(extraction_model.objects.filter(pk=failed.pk).exists())
         with actor_context(self.owner):
@@ -500,8 +555,8 @@ class ExtractionServiceTests(TestCase):
 
         with (
             actor_context(self.owner),
-            patch("angee.workflows_ocr.service._engine_class") as engine_class,
-            patch("angee.workflows_ocr.service._document_sources") as acquire_sources,
+            patch("angee.workflows_extraction.service._engine_class") as engine_class,
+            patch("angee.workflows_extraction.service._document_sources") as acquire_sources,
         ):
             corrected = revise(
                 original,
@@ -672,7 +727,7 @@ class ExtractionServiceTests(TestCase):
             revise(original, result={"number": "NEW", "rows": []}, decision=decision)
 
         file_model = apps.get_model("storage", "File")
-        with system_context(reason="workflows_ocr correction source mismatch"):
+        with system_context(reason="workflows_extraction correction source mismatch"):
             file_model._base_manager.filter(pk=self.files[0].pk).update(content_hash="0" * 64)
         with actor_context(self.owner), self.assertRaisesRegex(ValidationError, "file source identity"):
             revise(original, result={"number": "NEW", "rows": []}, decision=decision)

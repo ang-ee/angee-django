@@ -1727,7 +1727,7 @@ importers:
         specifier: ^4.1.9
         version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
 
-  addons/angee/workflows_ocr/web:
+  addons/angee/workflows_extraction/web:
     dependencies:
       '@angee/app':
         specifier: workspace:*

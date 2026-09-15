@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 from django.conf import settings
 
-from angee.workflows_ocr.engines import (
+from angee.workflows_extraction.engines import (
     DocumentPart,
     DocumentPipelineError,
     DocumentResult,
@@ -22,7 +22,7 @@ from angee.workflows_ocr.engines import (
     PageResult,
     RecognitionResult,
 )
-from angee.workflows_ocr.routing import (
+from angee.workflows_extraction.routing import (
     acquire_native_parts,
     derive_text_claims,
     mapping_object,

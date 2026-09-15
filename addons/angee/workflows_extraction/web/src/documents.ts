@@ -9,6 +9,8 @@ export const ExtractionRecordEvidenceDocument = graphql(`
       result
       schema
       provenance
+      documents { identity selector lines { identity selector } }
+      retired { identity kind reason }
       sources {
         id position content_hash file message_part source_message
       }

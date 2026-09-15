@@ -17,10 +17,10 @@ from angee.graphql.ids import PublicID, instance_for_id, require_public_id
 from angee.graphql.node import AngeeNode
 from angee.iam.permissions import session_user
 
-Extraction = apps.get_model("workflows_ocr", "Extraction")
-ExtractionSource = apps.get_model("workflows_ocr", "ExtractionSource")
-ExtractionPage = apps.get_model("workflows_ocr", "ExtractionPage")
-ExtractionPart = apps.get_model("workflows_ocr", "ExtractionPart")
+Extraction = apps.get_model("workflows_extraction", "Extraction")
+ExtractionSource = apps.get_model("workflows_extraction", "ExtractionSource")
+ExtractionPage = apps.get_model("workflows_extraction", "ExtractionPage")
+ExtractionPart = apps.get_model("workflows_extraction", "ExtractionPart")
 File = apps.get_model("storage", "File")
 InferenceModel = apps.get_model("agents", "InferenceModel")
 MessagePart = apps.get_model("messaging", "Part")
@@ -120,6 +120,26 @@ class ExtractionPartEvidence:
 
 
 @strawberry.type
+class SourceLineEvidenceRef:
+    identity: str
+    selector: str
+
+
+@strawberry.type
+class DocumentEvidenceRef:
+    identity: str
+    selector: str
+    lines: list[SourceLineEvidenceRef]
+
+
+@strawberry.type
+class RetiredEvidenceRef:
+    identity: str
+    kind: str
+    reason: str
+
+
+@strawberry.type
 class ExtractionEvidence:
     """Authorized raw evidence detail for one extraction revision."""
 
@@ -127,6 +147,8 @@ class ExtractionEvidence:
     result: JSON
     schema: JSON
     provenance: JSON
+    documents: list[DocumentEvidenceRef]
+    retired: list[RetiredEvidenceRef]
     sources: list[ExtractionSourceType]
     pages: list[ExtractionPageEvidence]
     parts: list[ExtractionPartEvidence]
@@ -147,6 +169,15 @@ class ExtractionEvidenceQuery:
             result=cast(JSON, row.result),
             schema=cast(JSON, row.schema),
             provenance=cast(JSON, row.provenance),
+            documents=[
+                DocumentEvidenceRef(
+                    identity=ref.identity, selector=ref.selector,
+                    lines=[SourceLineEvidenceRef(identity=line.identity, selector=line.selector)
+                           for line in ref.lines],
+                )
+                for ref in row.document_refs
+            ],
+            retired=[RetiredEvidenceRef(**item) for item in row.retired_identities],
             sources=list(row.sources.order_by("position")),
             pages=[
                 ExtractionPageEvidence(
@@ -180,7 +211,7 @@ class ExtractionEvidenceQuery:
 _EXTRACTION_RESOURCE = hasura_model_resource(
     ExtractionType,
     model=Extraction,
-    name="workflow_ocr_extractions",
+    name="workflow_extraction_extractions",
     filterable=["id", "status", "schema_id", "engine", "model", "recognition_model", "created_at"],
     sortable=["revision", "status", "schema_id", "created_at"],
     aggregatable=["id", "revision"],
@@ -197,7 +228,7 @@ _EXTRACTION_RESOURCE = hasura_model_resource(
 _SOURCE_RESOURCE = hasura_model_resource(
     ExtractionSourceType,
     model=ExtractionSource,
-    name="workflow_ocr_extraction_sources",
+    name="workflow_extraction_extraction_sources",
     filterable=["id", "extraction", "file", "message_part", "position"],
     sortable=["extraction", "position"],
     aggregatable=["id", "position"],
@@ -215,7 +246,7 @@ _SOURCE_RESOURCE = hasura_model_resource(
 _PAGE_RESOURCE = hasura_model_resource(
     ExtractionPageType,
     model=ExtractionPage,
-    name="workflow_ocr_extraction_pages",
+    name="workflow_extraction_extraction_pages",
     filterable=["id", "extraction", "source", "position"],
     sortable=["extraction", "position"],
     aggregatable=["id", "position", "duration_ms"],

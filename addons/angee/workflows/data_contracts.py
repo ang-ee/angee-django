@@ -60,6 +60,24 @@ class DataContractNode:
             return False
         return True
 
+    def at_path(self, path: ConcretePath) -> "DataContractNode | None":
+        """Return the existing path catalogue node for bounded type checks."""
+
+        current = self
+        for segment in path:
+            if current.kind == "object" and isinstance(segment, str):
+                edge = next((edge for edge in current.fields if edge.key == segment), None)
+                if edge is None:
+                    return None
+                current = edge.contract
+            elif current.kind == "array" and isinstance(segment, int) and not isinstance(segment, bool) and segment >= 0:
+                if current.item is None:
+                    return None
+                current = current.item.contract
+            else:
+                return None
+        return current
+
 
 @dataclass(frozen=True, slots=True)
 class DataContract:
@@ -70,6 +88,13 @@ class DataContract:
 
     def matches_path(self, path: ConcretePath) -> bool:
         return self.catalogue.matches(path)
+
+    def guarantees_path(self, path: ConcretePath) -> bool:
+        """Prove a referenced property/index is present in every schema variant."""
+
+        if self.raw_schema is None:
+            return False
+        return _guarantees_path(self.raw_schema, tuple(path), self.raw_schema, frozenset())
 
     def flat_catalogue(self) -> "FlatDataContract":
         """Return deterministic rows for depth-independent transport."""
@@ -144,6 +169,51 @@ def model_data_contract(model: type[BaseModel] | None, *, mode: SchemaMode) -> D
         return DataContract(raw_schema=None, catalogue=_UNKNOWN)
     schema = model.model_json_schema(mode=mode, by_alias=True)
     return DataContract(raw_schema=schema, catalogue=_CatalogueProjector(schema).project())
+
+
+def schema_data_contract(schema: Mapping[str, Any]) -> DataContract:
+    """Project a checked published JSON Schema through the same path catalogue."""
+
+    copied = dict(schema)
+    return DataContract(raw_schema=copied, catalogue=_CatalogueProjector(copied).project())
+
+
+def _guarantees_path(
+    schema: Any, path: tuple[str | int, ...], root: Mapping[str, Any], active_refs: frozenset[str]
+) -> bool:
+    if not isinstance(schema, Mapping):
+        return False
+    reference = schema.get("$ref")
+    if isinstance(reference, str):
+        if reference in active_refs or not reference.startswith("#/$defs/"):
+            return False
+        definitions = root.get("$defs", {})
+        target = definitions.get(reference.removeprefix("#/$defs/")) if isinstance(definitions, Mapping) else None
+        return _guarantees_path(target, path, root, active_refs | {reference})
+    variants = schema.get("oneOf", schema.get("anyOf"))
+    if isinstance(variants, list):
+        return bool(variants) and all(
+            _guarantees_path(choice, path, root, active_refs) for choice in variants
+        )
+    if not path:
+        return True
+    segment, rest = path[0], path[1:]
+    if isinstance(segment, str):
+        if schema.get("type") != "object":
+            return False
+        required, properties = schema.get("required", ()), schema.get("properties", {})
+        return (
+            isinstance(required, list | tuple) and segment in required
+            and isinstance(properties, Mapping) and segment in properties
+            and _guarantees_path(properties[segment], rest, root, active_refs)
+        )
+    if isinstance(segment, int) and not isinstance(segment, bool) and segment >= 0:
+        return (
+            schema.get("type") == "array" and type(schema.get("minItems", 0)) is int
+            and schema.get("minItems", 0) > segment
+            and _guarantees_path(schema.get("items"), rest, root, active_refs)
+        )
+    return False
 
 
 class _CatalogueProjector:

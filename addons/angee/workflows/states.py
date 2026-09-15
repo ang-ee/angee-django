@@ -38,6 +38,13 @@ class RunOrigin(models.TextChoices):
     RECOVERY = "recovery", "Recovery"
 
 
+class ParentRelation(models.TextChoices):
+    """Cancellation lifetime of a run admitted from a parent step slot."""
+
+    OWNED_CALL = "owned_call", "Owned call"
+    CONTINUATION = "continuation", "Continuation"
+
+
 class WaitingKind(models.TextChoices):
     """Runtime reason a workflow step is waiting."""
 

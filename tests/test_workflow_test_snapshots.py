@@ -170,7 +170,7 @@ def test_fresh_recovery_reuses_original_child_handoff_across_multiple_failures(
             self.retained_children.append(retained_child.pk)
             retained = engine.start(
                 child_head, subject=None, actor=actor,
-                parent_step_run=step_run, dedup_key="recovery-child:stable",
+                parent_step_run=step_run, parent_relation="continuation", dedup_key="recovery-child:stable",
                 origin=RunOrigin.WORKFLOW,
                 input=JsonPresence(True, {"child": "retained"}),
             )
@@ -226,7 +226,7 @@ def test_fresh_recovery_child_handoff_rejects_changed_or_unrelated_identity(
             del now
             engine.start(
                 child_head, subject=None, actor=actor,
-                parent_step_run=step_run, dedup_key="recovery-child:mismatch",
+                parent_step_run=step_run, parent_relation="continuation", dedup_key="recovery-child:mismatch",
                 origin=RunOrigin.WORKFLOW,
                 input=JsonPresence(True, {"child": "changed"}),
             )
@@ -250,7 +250,7 @@ def test_fresh_recovery_child_handoff_rejects_changed_or_unrelated_identity(
     with pytest.raises(ValidationError, match="different immutable facts"):
         engine.start(
             child_head, subject=None, actor=actor,
-            parent_step_run=unrelated_parent, dedup_key="recovery-child:mismatch",
+            parent_step_run=unrelated_parent, parent_relation="continuation", dedup_key="recovery-child:mismatch",
             origin=RunOrigin.WORKFLOW,
             input=JsonPresence(True, {"child": "retained"}),
         )
@@ -314,7 +314,7 @@ def test_fresh_recovery_keeps_new_downstream_child_on_the_recovery_run(
             ) is None
             child = engine.start(
                 child_head, subject=None, actor=actor,
-                parent_step_run=step_run, dedup_key="recovery-child:downstream",
+                parent_step_run=step_run, parent_relation="continuation", dedup_key="recovery-child:downstream",
                 origin=RunOrigin.WORKFLOW,
             )
             assert WorkflowRun.objects.retained_child_for_start(
@@ -1348,7 +1348,7 @@ def _failed_child_handoff(
     )
     child = engine.start(
         child_head, subject=None, actor=actor,
-        parent_step_run=source_step_run, dedup_key=dedup_key,
+        parent_step_run=source_step_run, parent_relation="continuation", dedup_key=dedup_key,
         origin=RunOrigin.WORKFLOW,
         input=JsonPresence(True, {"child": "retained"}),
     )
@@ -1396,6 +1396,107 @@ def _execute_recovery(
     with system_context(reason="child handoff recovery result"):
         attempt.refresh_from_db()
     return recovery, attempt
+
+
+@pytest.mark.parametrize("child_finishes_before_recovery", [False, True])
+def test_native_call_recovery_retains_child_and_consumes_exact_completion(
+    workflow_engine_tables: None, child_finishes_before_recovery: bool,
+) -> None:
+    """An early or late child finish wakes the same child slot through FRESH recovery."""
+
+    actor = get_user_model().objects.create_user(username=f"call-recovery-{child_finishes_before_recovery}")
+    child_head = _published_wait_workflow(actor=actor)
+    with system_context(reason="native call recovery source fixture"):
+        child_version = child_head.published_versions.get(status=WorkflowStatus.PUBLISHED)
+        source_workflow, source_step = _draft(name="Native call recovery parent", owner=actor)
+        source_step.step_class = "call_workflow"
+        source_step.config = {"publication": str(child_version.sqid)}
+        source_step.save(update_fields={"step_class", "config"})
+        payload = {"publication": str(child_version.sqid), "input": {"child": "retained"}}
+        source_run = WorkflowRun.objects.create(
+            workflow=source_workflow, status="running", created_by=actor,
+            input_present=True, input=payload,
+        )
+        source_step_run = StepRun.objects.create(
+            run=source_run, step=source_step, status="scheduled", input=payload,
+        )
+    source_attempt = StepAttempt.objects.claim(
+        source_step_run,
+        input=AttemptInput(True, payload, {"kind": "run_input"}),
+        claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(
+        source_attempt.pk, lease_token=source_attempt.lease_token, at=timezone.now(),
+    )
+    child = engine.start(
+        child_version, subject=None, actor=actor,
+        parent_step_run=source_step_run, parent_relation="owned_call", origin=RunOrigin.WORKFLOW,
+        input=JsonPresence(True, payload["input"]),
+    )
+    StepAttempt.objects.finalize(
+        source_attempt.pk, lease_token=source_attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.ERROR, error="uncertain child handoff"),
+        recorded_at=timezone.now(),
+    )
+
+    def finish_child() -> None:
+        with system_context(reason="native call child dispatch fixture"):
+            initial = WorkflowDispatch.objects.get(run=child, kind=WorkflowDispatchKind.ADVANCE)
+        assert engine.advance_dispatch(initial.pk)["claimed"] == 1
+        with system_context(reason="native call child execute fixture"):
+            current = StepRun.objects.get(run=child)
+            attempt = current.current_attempt
+            execute = WorkflowDispatch.objects.get(step_attempt=attempt)
+        assert engine.execute_dispatch(execute.pk, attempt.pk, attempt.lease_token)["executed"] == 1
+        future = timezone.now() + timedelta(hours=2)
+        assert engine.advance(child.pk, now=future)["claimed"] == 1
+        with system_context(reason="native call child completion fixture"):
+            current = StepRun.objects.get(run=child)
+            attempt = current.current_attempt
+            execute = WorkflowDispatch.objects.get(step_attempt=attempt)
+        assert engine.execute_dispatch(
+            execute.pk, attempt.pk, attempt.lease_token, now=future
+        )["executed"] == 1
+        child.refresh_from_db()
+        assert child.result == {
+            "status": "succeeded", "outcome": "completed", "output": {}, "error": None,
+        }
+
+    if child_finishes_before_recovery:
+        finish_child()
+    recovery, attempt = _execute_recovery(
+        source_attempt, actor=actor, request_key=f"native-call-{child_finishes_before_recovery}",
+    )
+    with system_context(reason="native call retained identity assertion"):
+        assert WorkflowRun.objects.filter(parent_step_run=source_step_run).count() == 1
+        recovered_step = StepRun.objects.get(run=recovery)
+        assert recovered_step.current_attempt.external_object_id == child.pk
+    if not child_finishes_before_recovery:
+        assert recovered_step.status == "waiting"
+        finish_child()
+        with system_context(reason="native call completion dispatch"):
+            delivery = WorkflowDispatch.objects.get(
+                kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
+                artifact_object_id=child.pk,
+            )
+        assert engine.deliver_artifact_dispatch(delivery.pk)["woken"] == 1
+        with system_context(reason="native call wake dispatch"):
+            advance = WorkflowDispatch.objects.filter(
+                run=recovery, kind=WorkflowDispatchKind.ADVANCE, consumed_at__isnull=True,
+            ).order_by("pk").first()
+            assert advance is not None
+        assert engine.advance_dispatch(advance.pk)["claimed"] == 1
+        with system_context(reason="native call resumed execution"):
+            recovered_step.refresh_from_db()
+            resumed = recovered_step.current_attempt
+            execute = WorkflowDispatch.objects.get(step_attempt=resumed)
+        assert engine.execute_dispatch(execute.pk, resumed.pk, resumed.lease_token)["executed"] == 1
+    with system_context(reason="native call recovered result"):
+        recovered_step.refresh_from_db()
+        assert recovered_step.status == "succeeded"
+        assert recovered_step.outcome == "completed"
+        assert recovered_step.output_present is True
+        assert recovered_step.output == {}
 
 
 def _draft(name: str = "Testable draft", *, owner: object | None = None) -> tuple[Workflow, Step]:

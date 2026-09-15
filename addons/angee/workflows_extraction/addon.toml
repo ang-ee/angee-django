@@ -1,6 +1,6 @@
 # Angee addon manifest. The declarative contract hatch-angee compiles.
 [addon]
-name = "angee.workflows_ocr"
+name = "angee.workflows_extraction"
 description = "Schema-validated document extraction evidence and workflow step"
 keywords = ["workflows", "ocr", "documents", "evidence"]
 category = "Workflows"

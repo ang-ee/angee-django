@@ -7,8 +7,8 @@ import { ExtractionEvidenceDetails } from "./ExtractionEvidenceDetails";
 
 export function ExtractionEvidencePanel(): ReactElement {
   const { recordId } = useRecordChromeContext();
-  const t = useT("workflowsOcr");
-  const query = useAuthoredQuery(ExtractionRecordEvidenceDocument, { id: recordId }, { models: ["workflows_ocr.Extraction"] });
+  const t = useT("workflowsExtraction");
+  const query = useAuthoredQuery(ExtractionRecordEvidenceDocument, { id: recordId }, { models: ["workflows_extraction.Extraction"] });
   const evidence = query.data?.extraction_evidence;
   if (query.isFetching && !evidence) return <LoadingPanel message={t("loading")} />;
   if (query.error) return <ErrorBanner description={errorMessage(query.error, t("unavailable"))} />;

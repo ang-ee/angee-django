@@ -302,6 +302,9 @@ class WorkflowType(AngeeNode):
     error_workflow: "WorkflowType | None"
     max_steps: auto
     budget: JSON
+    input_schema: JSON
+    output_schema: JSON
+    result_rules: JSON
     created_at: auto
     updated_at: auto
 
@@ -890,6 +893,7 @@ class WorkflowRunType(AngeeNode):
     occurrence_id: auto
     trigger: TriggerType | None
     parent_step_run: "StepRunType | None"
+    parent_relation: auto
     recovery_source_attempt: "StepAttemptType | None"
     reprocessed_from: "WorkflowRunType | None"
     recovery_mode: auto
@@ -900,6 +904,7 @@ class WorkflowRunType(AngeeNode):
     steps_taken: auto
     budget_spent: JSON
     error: auto
+    result: JSON | None
     created_at: auto
     updated_at: auto
 
@@ -933,6 +938,7 @@ class StepRunType(AngeeNode):
     status: auto
     input: JSON
     output: JSON
+    output_present: auto
     resume_state: JSON
     outcome: auto
     attempt: auto
@@ -1291,6 +1297,9 @@ class WorkflowDefinitionPatchInput:
     error_workflow: PublicID | None = strawberry.UNSET
     max_steps: int | None = strawberry.UNSET
     budget: JSON | None = strawberry.UNSET
+    input_schema: JSON | None = strawberry.UNSET
+    output_schema: JSON | None = strawberry.UNSET
+    result_rules: JSON | None = strawberry.UNSET
 
 
 @strawberry.input

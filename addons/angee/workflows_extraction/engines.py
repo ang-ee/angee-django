@@ -195,7 +195,7 @@ class InferenceMappingEngine(OcrEngine):
         mapping_model = cast(Any, model)
         if timeout <= 0:
             raise TimeoutError("Document extraction exceeded its configured timeout.")
-        from angee.workflows_ocr.routing import derive_text_claims, mapping_object, mapping_prompt
+        from angee.workflows_extraction.routing import derive_text_claims, mapping_object, mapping_prompt
 
         prompt = mapping_prompt(parts, schema, config)
         settings = {"timeout": timeout, "max_tokens": int(config.get("max_tokens", 8192))}
@@ -308,7 +308,7 @@ class InferenceDocumentEngine(OcrEngine):
         from django.conf import settings
 
         from angee.base.impl import resolve_impl_class
-        from angee.workflows_ocr.routing import acquire_native_parts, recognize_pages
+        from angee.workflows_extraction.routing import acquire_native_parts, recognize_pages
 
         started = time.monotonic()
         acquired = acquire_native_parts(

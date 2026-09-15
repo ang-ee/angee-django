@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Column, Field, Form, List, ResourceList } from "@angee/ui";
 
-const EXTRACTION_MODEL = "workflows_ocr.Extraction";
+const EXTRACTION_MODEL = "workflows_extraction.Extraction";
 
 export function ExtractionsPage(): React.ReactElement {
   return <ResourceList resource={EXTRACTION_MODEL} placement="inline" routed hideCreate defaultRecordTab="evidence">

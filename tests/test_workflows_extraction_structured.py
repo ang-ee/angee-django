@@ -6,7 +6,7 @@ import io
 
 import pytest
 
-from angee.workflows_ocr.structured import (
+from angee.workflows_extraction.structured import (
     StructuredLimits,
     StructuredSourceError,
     extract_structured_sources,

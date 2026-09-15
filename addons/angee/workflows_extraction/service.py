@@ -21,7 +21,7 @@ from angee.base.actors import actor_user_id
 from angee.base.impl import resolve_impl_class
 from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.workflows.attempts import json_values_equal
-from angee.workflows_ocr.engines import (
+from angee.workflows_extraction.engines import (
     DocumentPart,
     DocumentPipelineError,
     DocumentResult,
@@ -52,16 +52,19 @@ def extract(
 
     ordered_files = tuple(files)
     ordered_message_parts = tuple(message_parts)
-    owner_id = actor_user_id(current_actor())
+    actor = current_actor()
+    if actor is None:
+        raise PermissionDenied("Authentication required.")
+    owner_id = actor_user_id(actor)
     if not ordered_files and not ordered_message_parts:
         raise ValidationError({"files": "At least one file or message part is required."})
     if len({file.pk for file in ordered_files}) != len(ordered_files):
         raise ValidationError({"files": "Each source file may appear only once in an extraction."})
     if len({part.pk for part in ordered_message_parts}) != len(ordered_message_parts):
         raise ValidationError({"message_parts": "Each message part may appear only once in an extraction."})
-    _authorize(ordered_files, ordered_message_parts, authorized_target)
+    _authorize(ordered_files, ordered_message_parts, authorized_target, actor=actor)
     for candidate in (model, recognition_model):
-        if candidate is not None and not candidate.has_access("read"):
+        if candidate is not None and not candidate.with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to every inference model is required.")
     require_approved_model_deployment(model, role="mapping")
     require_approved_model_deployment(recognition_model, role="recognition")
@@ -74,11 +77,12 @@ def extract(
     document_sources = _document_sources(ordered_files, ordered_message_parts)
     source_facts = [_source_fact(source) for source in document_sources]
     target_ref = record_ref_for(authorized_target)
-    lineage_key = _lineage_key(source_facts=source_facts, schema_id=schema_id, target_ref=target_ref)
+    lineage_key = _lineage_key(source_facts=source_facts, target_ref=target_ref)
     engine_class = _engine_class(engine)
     reuse_key = _digest(
         {
             "lineage": lineage_key,
+            "source_facts": source_facts,
             "schema": normalized_schema,
             "engine": engine,
             "pipeline_version": str(engine_class.pipeline_version),
@@ -87,9 +91,10 @@ def extract(
             "config": normalized_config,
         }
     )
-    extraction_model = apps.get_model("workflows_ocr", "Extraction")
-    with system_context(reason="workflows_ocr.extract.reuse"):
+    extraction_model = apps.get_model("workflows_extraction", "Extraction")
+    with system_context(reason="workflows_extraction.extract.reuse"):
         existing = extraction_model._base_manager.filter(reuse_key=reuse_key).first()
+        base = extraction_model._base_manager.filter(lineage_key=lineage_key).order_by("-revision").first()
     if existing is not None:
         return existing
 
@@ -184,6 +189,7 @@ def extract(
         parts=retained_parts,
         lineage_key=lineage_key,
         reuse_key=reuse_key,
+        expected_base_id=base.pk if base is not None else None,
         status=status,
         error_code=error_code,
         schema_id=schema_id,
@@ -223,8 +229,8 @@ def reextract(extraction: Any) -> Any:
 
     if extraction.status != "failed":
         raise ValidationError({"extraction": "Only failed extraction evidence can be retried."})
-    extraction_model = apps.get_model("workflows_ocr", "Extraction")
-    with system_context(reason="workflows_ocr.reextract.latest"):
+    extraction_model = apps.get_model("workflows_extraction", "Extraction")
+    with system_context(reason="workflows_extraction.reextract.latest"):
         candidates = extraction_model._base_manager.filter(
             lineage_key=extraction.lineage_key,
         ).order_by("-revision")
@@ -245,9 +251,12 @@ def reextract(extraction: Any) -> Any:
     )
     files = [source.file for source in sources if source.file_id is not None]
     message_parts = [source.message_part for source in sources if source.message_part_id is not None]
-    _authorize(files, message_parts, latest.target)
+    actor = current_actor()
+    if actor is None:
+        raise PermissionDenied("Authentication required.")
+    _authorize(files, message_parts, latest.target, actor=actor)
     for candidate in (latest.model, latest.recognition_model):
-        if candidate is not None and not candidate.has_access("read"):
+        if candidate is not None and not candidate.with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to every inference model is required.")
     if latest.status == "succeeded":
         return latest
@@ -265,7 +274,11 @@ def reextract(extraction: Any) -> Any:
     )
 
 
-def revise(extraction: Any, *, result: Mapping[str, Any], decision: Any) -> Any:
+def revise(
+    extraction: Any, *, result: Mapping[str, Any], decision: Any,
+    identity_mapping: Mapping[str, str] | None = None,
+    retired_identities: Mapping[str, str] | None = None,
+) -> Any:
     """Retain a schema-valid human correction as a new evidence revision.
 
     The actor must be able to read the original extraction, its target and
@@ -285,13 +298,13 @@ def revise(extraction: Any, *, result: Mapping[str, Any], decision: Any) -> Any:
     if actor is None:
         raise PermissionDenied("Authentication required.")
     owner_id = actor_user_id(actor)
-    extraction_model = apps.get_model("workflows_ocr", "Extraction")
+    extraction_model = apps.get_model("workflows_extraction", "Extraction")
     decision_model = apps.get_model("workflows", "Decision")
     if not isinstance(extraction, extraction_model) or extraction.pk is None:
         raise ValidationError({"extraction": "A retained extraction is required."})
     if not isinstance(decision, decision_model) or decision.pk is None:
         raise ValidationError({"decision": "A retained Decision is required."})
-    with system_context(reason="workflows_ocr.revise.load_authority"):
+    with system_context(reason="workflows_extraction.revise.load_authority"):
         original = extraction_model._base_manager.filter(pk=extraction.pk).first()
         authority = decision_model._base_manager.filter(pk=decision.pk).first()
         if original is None:
@@ -307,14 +320,14 @@ def revise(extraction: Any, *, result: Mapping[str, Any], decision: Any) -> Any:
             ).order_by("position")
         )
 
-    if not original.has_access("read"):
+    if not original.with_actor(actor).has_access("read"):
         raise PermissionDenied("Read access to the extraction is required.")
     files = [source.file for source in retained_sources if source.file_id is not None]
     message_parts = [
         source.message_part for source in retained_sources if source.message_part_id is not None
     ]
-    _authorize(files, message_parts, target)
-    if not authority.has_access("read"):
+    _authorize(files, message_parts, target, actor=actor)
+    if not authority.with_actor(actor).has_access("read"):
         raise PermissionDenied("Read access to the correction Decision is required.")
     if str(authority.verdict) != "completed":
         raise ValidationError({"decision": "The correction Decision must be completed."})
@@ -340,7 +353,7 @@ def revise(extraction: Any, *, result: Mapping[str, Any], decision: Any) -> Any:
 
     source_facts = _retained_source_facts(retained_sources)
     target_ref = record_ref_for(target)
-    lineage_key = _lineage_key(source_facts=source_facts, schema_id=schema_id, target_ref=target_ref)
+    lineage_key = _lineage_key(source_facts=source_facts, target_ref=target_ref)
     if lineage_key != str(original.lineage_key):
         raise ValidationError({"extraction": "The retained extraction source identity is invalid."})
 
@@ -349,6 +362,8 @@ def revise(extraction: Any, *, result: Mapping[str, Any], decision: Any) -> Any:
         original_provenance.get("claims", {}),
         before=original.result,
         after=normalized_result,
+        original_refs=original.document_refs,
+        identity_mapping=identity_mapping or {},
     )
     corrections = original_provenance.get("corrections", [])
     if not isinstance(corrections, list) or not all(isinstance(entry, Mapping) for entry in corrections):
@@ -382,6 +397,9 @@ def revise(extraction: Any, *, result: Mapping[str, Any], decision: Any) -> Any:
         original,
         lineage_key=lineage_key,
         reuse_key=reuse_key,
+        expected_base_id=original.pk,
+        identity_mapping=dict(identity_mapping or {}),
+        retired_identities=dict(retired_identities or {}),
         status="succeeded",
         error_code="",
         schema_id=schema_id,
@@ -442,12 +460,25 @@ def _retained_source_facts(sources: Sequence[Any]) -> list[dict[str, Any]]:
     return facts
 
 
-def _unchanged_claims(claims: Any, *, before: Any, after: Any) -> dict[str, Any]:
-    """Retain equal leaf claims only while indexed container identity is stable."""
+def _unchanged_claims(
+    claims: Any, *, before: Any, after: Any,
+    original_refs: Any = (), identity_mapping: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Move equal claims only where reviewed logical correspondence proves identity."""
 
     if not isinstance(claims, Mapping):
         raise ValidationError({"extraction": "The retained extraction claims are invalid."})
     retained: dict[str, Any] = {}
+    old_selectors = {
+        identity: selector
+        for ref in original_refs
+        for selector, identity in (
+            (ref.selector, ref.identity),
+            *((line.selector, line.identity) for line in ref.lines),
+        )
+    }
+    new_selectors = {identity: selector for selector, identity in (identity_mapping or {}).items()
+                     if identity != "new"}
     for pointer, entries in claims.items():
         if not isinstance(pointer, str) or not pointer.startswith("/") or not isinstance(entries, list):
             raise ValidationError({"extraction": "The retained extraction claims are invalid."})
@@ -459,13 +490,27 @@ def _unchanged_claims(claims: Any, *, before: Any, after: Any) -> dict[str, Any]
         ):
             raise ValidationError({"extraction": "The retained extraction claims are invalid."})
         old_value = _json_pointer_value(before, pointer)
-        new_value = _json_pointer_value(after, pointer, array_element_baseline=before)
+        mapped_pointer = pointer
+        matched = sorted(
+            ((selector, identity) for identity, selector in old_selectors.items()
+             if selector and (pointer == selector or pointer.startswith(f"{selector}/"))),
+            key=lambda item: len(item[0]), reverse=True,
+        )
+        if matched and matched[0][1] in new_selectors:
+            selector, identity = matched[0]
+            mapped_pointer = new_selectors[identity] + pointer[len(selector):]
+        elif matched and matched[0][1] not in new_selectors:
+            continue
+        new_value = _json_pointer_value(
+            after, mapped_pointer,
+            array_element_baseline=before if mapped_pointer == pointer and not matched else _MISSING,
+        )
         if (
             old_value is not _MISSING
             and new_value is not _MISSING
             and json_values_equal(old_value, new_value)
         ):
-            retained[pointer] = entries
+            retained[mapped_pointer] = entries
     return _json_object(retained, field="extraction")
 
 
@@ -479,6 +524,8 @@ def json_pointer_value(value: Any, pointer: str) -> Any:
     :func:`_json_pointer_value` keeps the internal sentinel/array-baseline shape.
     """
 
+    if pointer == "":
+        return value
     resolved = _json_pointer_value(value, pointer)
     if resolved is _MISSING:
         raise KeyError(pointer)
@@ -564,12 +611,12 @@ def _same_retry_policy(candidate: Any, original: Any) -> bool:
     )
 
 
-def _authorize(files: Sequence[Any], message_parts: Sequence[Any], target: Any) -> None:
-    if not target.has_access("read"):
+def _authorize(files: Sequence[Any], message_parts: Sequence[Any], target: Any, *, actor: Any) -> None:
+    if not target.with_actor(actor).has_access("read"):
         raise PermissionDenied("Read access to the extraction target is required.")
-    if any(not file.has_access("read") for file in files):
+    if any(not file.with_actor(actor).has_access("read") for file in files):
         raise PermissionDenied("Read access to every extraction source is required.")
-    if any(not part.has_access("read") for part in message_parts):
+    if any(not part.with_actor(actor).has_access("read") for part in message_parts):
         raise PermissionDenied("Read access to every extraction source is required.")
 
 
@@ -617,14 +664,28 @@ def _source_fact(source: DocumentSource) -> dict[str, Any]:
 
 
 def _lineage_key(
-    *, source_facts: Sequence[Mapping[str, Any]], schema_id: str, target_ref: RecordRef
+    *, source_facts: Sequence[Mapping[str, Any]], target_ref: RecordRef
 ) -> str:
-    """Return the canonical source, schema, and target extraction lineage."""
+    """Anchor logical lineage to the canonical authorized target.
+
+    A File target also names its original source when it occurs in the set.
+    Schema, source membership/order and bytes belong to exact revision facts.
+    """
+
+    if not source_facts:
+        raise ValueError("An original extraction source is required.")
+    identities = sorted(str(fact.get("file") or fact.get("message_part") or "") for fact in source_facts)
+    if not identities or not all(identities):
+        raise ValueError("The original extraction source identity is unavailable.")
+    original_file = (
+        target_ref.public_id
+        if target_ref.model_label == "storage.File" and target_ref.public_id in identities
+        else None
+    )
 
     return _digest(
         {
-            "sources": list(source_facts),
-            "schema_id": schema_id,
+            "original_source": original_file,
             "target": {
                 "model_label": target_ref.model_label,
                 "object_id": str(target_ref.object_id),

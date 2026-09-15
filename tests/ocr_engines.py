@@ -2,7 +2,7 @@
 
 from typing import Any, Sequence
 
-from angee.workflows_ocr.engines import DocumentPart, DocumentResult, DocumentSource, OcrEngine, PageImage, PageResult
+from angee.workflows_extraction.engines import DocumentPart, DocumentResult, DocumentSource, OcrEngine, PageImage, PageResult
 
 
 class FakeOcrEngine(OcrEngine):

@@ -10,11 +10,12 @@ from graphlib import CycleError, TopologicalSorter
 from typing import Any, Literal, TypeAlias, cast
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
+from jsonschema import Draft202012Validator
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.workflows.attempts import json_values_equal
 from angee.workflows.bindings import binding_error_details, parse_binding
-from angee.workflows.data_contracts import DataContract, model_data_contract
+from angee.workflows.data_contracts import DataContract, DataContractNode, model_data_contract, schema_data_contract
 from angee.workflows.steps import StepEffect, StepImpl, StepOutcome, validate_retry_config
 
 GraphLocationKind: TypeAlias = Literal["workflow", "node", "edge"]
@@ -165,12 +166,33 @@ class WorkflowGraph:
     nodes: tuple[GraphNode, ...]
     edges: tuple[GraphEdge, ...]
     subject_declaration: str = ""
+    input_schema: Any = None
+    output_schema: Any = None
+    result_rules: Any = None
 
     @property
     def nodes_by_identity(self) -> dict[GraphIdentity, GraphNode]:
         """Return the exact node lookup for this immutable graph snapshot."""
 
         return {node.identity: node for node in self.nodes}
+
+    @staticmethod
+    def _node_output_contract(node: GraphNode) -> DataContract:
+        if node.impl is None:
+            return model_data_contract(None, mode="serialization")
+        try:
+            return node.impl.declared_output_contract(node.config)
+        except ValidationError:
+            return model_data_contract(None, mode="serialization")
+
+    @staticmethod
+    def _node_outcomes(node: GraphNode) -> tuple[StepOutcome, ...]:
+        if node.impl is None:
+            return ()
+        try:
+            return node.impl.declared_outcomes(node.config)
+        except ValidationError:
+            return ()
 
     @classmethod
     def from_workflow(cls, workflow: Any) -> WorkflowGraph:
@@ -232,6 +254,9 @@ class WorkflowGraph:
             tuple(nodes),
             graph_edges,
             str(getattr(workflow, "subject_declaration", "")),
+            copy.deepcopy(getattr(workflow, "input_schema", None)),
+            copy.deepcopy(getattr(workflow, "output_schema", None)),
+            copy.deepcopy(getattr(workflow, "result_rules", None)),
         )
 
     def diagnostics(self) -> tuple[GraphDiagnostic, ...]:
@@ -242,6 +267,7 @@ class WorkflowGraph:
         diagnostics.extend(self._routing(map_targets))
         diagnostics.extend(self._capacity(map_targets))
         diagnostics.extend(self._bindings(map_targets))
+        diagnostics.extend(self._results(map_targets))
         return tuple(diagnostics)
 
     def input_sources(self, target_identity: GraphIdentity) -> tuple[GraphInputSource, ...]:
@@ -270,14 +296,14 @@ class WorkflowGraph:
         sources = [
             GraphInputSource(
                 "workflow_input",
-                model_data_contract(None, mode="validation"),
+                schema_data_contract(self.input_schema if isinstance(self.input_schema, dict) else {}),
                 label="Workflow input",
             )
         ]
         sources.extend(
             GraphInputSource(
                 "step_output",
-                source.impl.output_contract() if source.impl else model_data_contract(None, mode="serialization"),
+                self._node_output_contract(source),
                 node_identity=source.identity,
                 step_key=source.key,
                 label=source.name,
@@ -772,8 +798,9 @@ class WorkflowGraph:
                     self._edge(edge, "map_body_edge", "A Map body cannot have ordinary incoming edges.", "target")
                 )
             source = by_id[edge.source_identity]
-            if source.impl and edge.condition and source.impl.outcomes:
-                if edge.condition not in {outcome.key for outcome in source.impl.outcomes}:
+            declared = self._node_outcomes(source)
+            if source.impl and edge.condition and declared:
+                if edge.condition not in {outcome.key for outcome in declared}:
                     message = f"Outcome {edge.condition!r} is not declared by {source.key!r}."
                     result.append(self._edge(edge, "outcome_unsupported", message, "condition"))
         ordinary = set(by_id) - bodies
@@ -839,6 +866,26 @@ class WorkflowGraph:
 
     def _bindings(self, map_targets: dict[GraphIdentity, list[GraphNode]]) -> list[GraphDiagnostic]:
         result: list[GraphDiagnostic] = []
+        by_key = {node.key: node for node in self.nodes}
+        absent_reach: dict[str, set[GraphIdentity]] = {}
+        outgoing: dict[GraphIdentity, list[GraphEdge]] = defaultdict(list)
+        for edge in self.edges:
+            outgoing[edge.source_identity].append(edge)
+        for source in self.nodes:
+            if source.operation_key != "call_workflow":
+                continue
+            pending = deque(
+                edge.target_identity for edge in outgoing[source.identity]
+                if edge.condition in {"", "child_failed", "child_canceled"}
+            )
+            reached: set[GraphIdentity] = set()
+            while pending:
+                identity = pending.popleft()
+                if identity in reached:
+                    continue
+                reached.add(identity)
+                pending.extend(edge.target_identity for edge in outgoing[identity])
+            absent_reach[source.key] = reached
         for node in self.nodes:
             if node.input_binding is None or node.impl is None:
                 continue
@@ -861,6 +908,13 @@ class WorkflowGraph:
                 if reference.kind == "step_output":
                     matches = by_step_key.get(reference.step_key, [])
                     selected_source = matches[0] if len(matches) == 1 else None
+                    if (reference.step_key in absent_reach and node.identity in absent_reach[reference.step_key]
+                            and by_key.get(reference.step_key) is not None):
+                        result.append(self._binding(
+                            node, "binding_source_absent_on_route",
+                            "This call has no output on a child failure or cancellation route.",
+                            visit.binding_path,
+                        ))
                 else:
                     selected_source = by_kind.get(reference.kind)
                 if selected_source is None:
@@ -883,6 +937,156 @@ class WorkflowGraph:
                     )
         return result
 
+    def _results(self, map_targets: dict[GraphIdentity, list[GraphNode]]) -> list[GraphDiagnostic]:
+        """Validate explicit terminal producers and their one published output contract."""
+
+        result: list[GraphDiagnostic] = []
+        if not isinstance(self.input_schema, dict):
+            result.append(self._workflow("input_schema_invalid", "Workflow input schema must be an object.", "input_schema"))
+            return result
+        try:
+            Draft202012Validator.check_schema(self.input_schema)
+        except Exception:  # noqa: BLE001 - preserve one authoring diagnostic for native schema errors.
+            result.append(self._workflow("input_schema_invalid", "Workflow input schema is not valid JSON Schema.", "input_schema"))
+            return result
+        schema = self.output_schema
+        rules = self.result_rules
+        if not isinstance(schema, dict):
+            return [self._workflow("output_schema_invalid", "Workflow output schema must be an object.", "output_schema")]
+        try:
+            Draft202012Validator.check_schema(schema)
+        except Exception:  # noqa: BLE001 - preserve one authoring diagnostic for native schema errors.
+            result.append(self._workflow("output_schema_invalid", "Workflow output schema is not valid JSON Schema.", "output_schema"))
+            return result
+        if not isinstance(rules, list):
+            return [self._workflow("result_rules_invalid", "Terminal result rules must be a list.", "result_rules")]
+        if not rules:
+            if schema != {"type": "object", "properties": {}, "additionalProperties": False}:
+                result.append(self._workflow("result_rules_missing", "A nonempty workflow output needs terminal result rules.", "result_rules"))
+            return result
+        by_key = {node.key: node for node in self.nodes}
+        bodies = set(map_targets)
+        ordinary = [node for node in self.nodes if node.identity not in bodies]
+        outgoing = {edge.source_identity for edge in self.edges}
+        terminal = {node.key: node for node in ordinary if node.identity not in outgoing}
+        workflow_input_contract = schema_data_contract(self.input_schema)
+        seen_business: set[str] = set()
+        seen_producers: set[tuple[str, str]] = set()
+        covered: set[tuple[str, str]] = set()
+        for index, raw in enumerate(rules):
+            if not isinstance(raw, dict) or set(raw) != {"outcome", "producer", "when_outcome", "binding"}:
+                result.append(self._workflow("result_rule_invalid", f"Result rule {index} needs outcome, producer, when_outcome and binding.", "result_rules"))
+                continue
+            business, producer_key, producer_outcome = (raw[key] for key in ("outcome", "producer", "when_outcome"))
+            if (not isinstance(business, str) or not business or
+                    not isinstance(producer_key, str) or not producer_key or
+                    not isinstance(producer_outcome, str)):
+                result.append(self._workflow("result_rule_invalid", f"Result rule {index} uses invalid keys.", "result_rules"))
+                continue
+            if business in seen_business or business in {"failed", "canceled"}:
+                result.append(self._workflow("result_outcome_duplicate", f"Business result {business!r} is duplicated or reserved.", "result_rules"))
+            seen_business.add(business)
+            pair = (producer_key, producer_outcome)
+            if pair in seen_producers:
+                result.append(self._workflow("result_producer_duplicate", f"Producer outcome {pair!r} is duplicated.", "result_rules"))
+            seen_producers.add(pair)
+            producer = by_key.get(producer_key)
+            if producer is None or terminal.get(producer_key) is not producer:
+                result.append(self._workflow("result_producer_not_terminal", f"Producer {producer_key!r} must be one ordinary terminal step.", "result_rules"))
+                continue
+            declared = {outcome.key for outcome in self._node_outcomes(producer)} or {""}
+            if producer_outcome not in declared or producer_outcome in {"child_failed", "child_canceled"}:
+                result.append(self._workflow("result_producer_outcome", f"Producer {producer_key!r} does not declare successful outcome {producer_outcome!r}.", "result_rules"))
+                continue
+            covered.add(pair)
+            try:
+                binding = parse_binding(raw["binding"])
+            except PydanticValidationError:
+                result.append(self._workflow("result_binding_invalid", f"Result rule {index} has an invalid binding.", "result_rules"))
+                continue
+            producer_contract = self._node_output_contract(producer)
+            for visit in binding.visits():
+                reference = visit.binding.source_reference()
+                if reference is not None:
+                    if reference.kind == "map_item" or (reference.kind == "step_output" and reference.step_key != producer_key):
+                        result.append(self._workflow("result_binding_source", f"Result rule {index} may read only workflow input and its producer.", "result_rules"))
+                    elif reference.kind == "workflow_input" and not workflow_input_contract.matches_path(reference.path):
+                        result.append(self._workflow("result_binding_path", f"Result rule {index} reads outside workflow input.", "result_rules"))
+                    elif reference.kind == "workflow_input" and (
+                        Draft202012Validator(self.input_schema).is_valid(None)
+                        or not workflow_input_contract.guarantees_path(reference.path)
+                    ):
+                        result.append(self._workflow(
+                            "result_binding_optional_source",
+                            f"Result rule {index} cannot guarantee workflow input is present at this path.",
+                            "result_rules",
+                        ))
+                    elif reference.kind == "step_output" and not producer_contract.matches_path(reference.path):
+                        result.append(self._workflow("result_binding_path", f"Result rule {index} reads outside producer output.", "result_rules"))
+                    elif reference.kind == "step_output" and not producer_contract.guarantees_path(reference.path):
+                        result.append(self._workflow(
+                            "result_binding_optional_source",
+                            f"Result rule {index} cannot guarantee producer output is present at this path.",
+                            "result_rules",
+                        ))
+            if not _result_binding_compatible(
+                binding, schema, workflow_input_contract, producer_contract, producer_key
+            ):
+                result.append(self._workflow(
+                    "result_binding_schema",
+                    f"Result rule {index} cannot prove its binding satisfies the declared output schema.",
+                    "result_rules",
+                ))
+        for node in terminal.values():
+            declared = {outcome.key for outcome in self._node_outcomes(node)} or {""}
+            for key in declared - {"child_failed", "child_canceled"}:
+                if (node.key, key) not in covered:
+                    result.append(self._workflow("result_exit_uncovered", f"Successful terminal exit {node.key!r}/{key!r} has no result rule.", "result_rules"))
+        result.extend(self._result_mutual_exclusivity(terminal))
+        return result
+
+    def _result_mutual_exclusivity(self, terminal: dict[str, GraphNode]) -> list[GraphDiagnostic]:
+        """Reject terminal producers that can run under compatible routing choices."""
+
+        entries = [node for node in self.nodes if node.is_entry]
+        if len(entries) != 1 or len(terminal) < 2:
+            return []
+        outgoing: dict[GraphIdentity, list[GraphEdge]] = defaultdict(list)
+        for edge in self.edges:
+            outgoing[edge.source_identity].append(edge)
+        paths: dict[GraphIdentity, list[dict[GraphIdentity, str]]] = defaultdict(list)
+        pending = [(entries[0].identity, {})]
+        while pending:
+            identity, choices = pending.pop()
+            paths[identity].append(choices)
+            if sum(map(len, paths.values())) > 10_000:
+                return [self._workflow(
+                    "result_exclusivity_unproven", "Terminal result routing is too large to prove unique.",
+                    "result_rules",
+                )]
+            for edge in outgoing[identity]:
+                next_choices = dict(choices)
+                if edge.condition:
+                    prior = next_choices.get(identity)
+                    if prior is not None and prior != edge.condition:
+                        continue
+                    next_choices[identity] = edge.condition
+                pending.append((edge.target_identity, next_choices))
+        producers = list(terminal.values())
+        result: list[GraphDiagnostic] = []
+        for index, left in enumerate(producers):
+            for right in producers[index + 1:]:
+                if any(
+                    all(a.get(key, b.get(key)) == b.get(key, a.get(key)) for key in set(a) | set(b))
+                    for a in paths[left.identity] for b in paths[right.identity]
+                ):
+                    result.append(self._workflow(
+                        "result_producers_coapplicable",
+                        f"Terminal producers {left.key!r} and {right.key!r} can both complete.",
+                        "result_rules",
+                    ))
+        return result
+
     def _workflow(self, code: str, message: str, field: str) -> GraphDiagnostic:
         return GraphDiagnostic(code, message, GraphLocation("workflow", self.identity, field))
 
@@ -897,6 +1101,160 @@ class WorkflowGraph:
     @staticmethod
     def _edge(edge: GraphEdge, code: str, message: str, field: str) -> GraphDiagnostic:
         return GraphDiagnostic(code, message, GraphLocation("edge", edge.identity, field))
+
+
+def _result_binding_compatible(
+    binding: Any,
+    target_schema: Any,
+    workflow_input: DataContract,
+    producer_output: DataContract,
+    producer_key: str,
+) -> bool:
+    """Prove simple binding shapes against JSON Schema, rejecting unknown shapes.
+
+    This uses the existing path catalogues for references and JSON Schema for
+    constants. Complex source/target vocabulary remains a publication diagnostic;
+    runtime validation still checks the exact resulting JSON value.
+    """
+
+    if not isinstance(target_schema, dict):
+        return False
+    kind = getattr(binding, "kind", None)
+    if kind == "constant":
+        try:
+            return Draft202012Validator(target_schema).is_valid(binding.value)
+        except Exception:  # noqa: BLE001 - unsupported local refs remain a publication diagnostic.
+            return False
+    variants = target_schema.get("oneOf", target_schema.get("anyOf"))
+    if isinstance(variants, list):
+        if set(target_schema) - {"oneOf", "anyOf", "$defs", "title", "description"}:
+            return False
+        if "oneOf" in target_schema:
+            choice = _tagged_one_of_choice(binding, variants)
+            return choice is not None and _result_binding_compatible(
+                binding, choice, workflow_input, producer_output, producer_key,
+            )
+        return any(
+            _result_binding_compatible(binding, choice, workflow_input, producer_output, producer_key)
+            for choice in variants
+        )
+    if kind in {"workflow_input", "step_output"}:
+        if kind == "step_output" and binding.step_key != producer_key:
+            return False
+        source = workflow_input if kind == "workflow_input" else producer_output
+        source_node = source.catalogue.at_path(binding.path)
+        return source_node is not None and _catalogue_node_compatible(source_node, target_schema)
+    if kind == "object":
+        if set(target_schema) - {
+            "type", "properties", "required", "additionalProperties", "minProperties", "maxProperties",
+            "$defs", "title", "description",
+        }:
+            return False
+        if target_schema.get("type") not in (None, "object"):
+            return False
+        required = target_schema.get("required", ())
+        if not isinstance(required, list | tuple) or not set(required).issubset(binding.fields):
+            return False
+        properties = target_schema.get("properties", {})
+        if not isinstance(properties, dict):
+            return False
+        minimum, maximum = target_schema.get("minProperties", 0), target_schema.get("maxProperties")
+        if type(minimum) is not int or len(binding.fields) < minimum:
+            return False
+        if maximum is not None and (type(maximum) is not int or len(binding.fields) > maximum):
+            return False
+        if target_schema.get("additionalProperties") is False and not set(binding.fields).issubset(properties):
+            return False
+        extra = target_schema.get("additionalProperties", {})
+        if not isinstance(extra, dict | bool):
+            return False
+        return all(
+            _result_binding_compatible(
+                child, properties.get(key, extra if isinstance(extra, dict) else {}),
+                workflow_input, producer_output, producer_key,
+            )
+            for key, child in binding.fields.items()
+        )
+    if kind == "array":
+        if set(target_schema) - {"type", "items", "minItems", "maxItems", "$defs", "title", "description"}:
+            return False
+        if target_schema.get("type") not in (None, "array"):
+            return False
+        minimum, maximum = target_schema.get("minItems", 0), target_schema.get("maxItems")
+        if not isinstance(minimum, int) or len(binding.items) < minimum:
+            return False
+        if maximum is not None and (not isinstance(maximum, int) or len(binding.items) > maximum):
+            return False
+        return all(
+            _result_binding_compatible(child, target_schema.get("items", {}),
+                                       workflow_input, producer_output, producer_key)
+            for child in binding.items
+        )
+    return False
+
+
+def _tagged_one_of_choice(binding: Any, variants: list[Any]) -> dict[str, Any] | None:
+    """Select a disjoint object branch only when every variant requires one literal tag."""
+
+    if getattr(binding, "kind", None) != "object" or not variants:
+        return None
+    tag_field: str | None = None
+    tag_values: list[Any] = []
+    for variant in variants:
+        if not isinstance(variant, dict) or variant.get("type") != "object":
+            return None
+        required, properties = variant.get("required"), variant.get("properties")
+        if not isinstance(required, list) or not isinstance(properties, dict):
+            return None
+        candidates = {
+            key: properties[key]["const"]
+            for key in required
+            if key in properties and isinstance(properties[key], dict) and "const" in properties[key]
+        }
+        if tag_field is None:
+            matches = [key for key in candidates if getattr(binding.fields.get(key), "kind", None) == "constant"]
+            if len(matches) != 1:
+                return None
+            tag_field = matches[0]
+        if tag_field not in candidates:
+            return None
+        value = candidates[tag_field]
+        if any(value == prior for prior in tag_values):
+            return None
+        tag_values.append(value)
+    assert tag_field is not None
+    bound_value = binding.fields[tag_field].value
+    matches = [variant for variant, value in zip(variants, tag_values, strict=True) if bound_value == value]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _catalogue_node_compatible(source: DataContractNode, target_schema: dict[str, Any]) -> bool:
+    if not target_schema:
+        return True
+    if set(target_schema) - {"type", "title", "description", "$defs"}:
+        return False
+    target_type = target_schema.get("type")
+    if source.kind == "unknown" or target_type is None:
+        return False
+    if source.nullable and target_type != "null" and (
+        not isinstance(target_type, list) or "null" not in target_type
+    ):
+        return False
+    allowed = set(target_type) if isinstance(target_type, list) else {target_type}
+    if source.kind == "scalar":
+        return source.json_type in allowed or (source.json_type == "integer" and "number" in allowed)
+    if source.kind == "object":
+        if "object" not in allowed:
+            return False
+        required = target_schema.get("required", ())
+        if required:
+            # The path catalogue deliberately does not project requiredness.
+            # A whole-object reference cannot prove those fields are present.
+            return False
+        return True
+    if source.kind == "array":
+        return "array" in allowed and not target_schema.get("minItems")
+    return False
 
 
 def _reachable(entry: GraphIdentity, edges: list[GraphEdge]) -> set[GraphIdentity]:

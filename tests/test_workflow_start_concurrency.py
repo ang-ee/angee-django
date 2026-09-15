@@ -125,6 +125,7 @@ def test_failure_path_and_direct_start_share_parent_first_lock_order(
                 subject=parent_run,
                 actor=None,
                 parent_step_run=parent_step,
+                parent_relation="continuation",
                 origin=workflow_models.RunOrigin.ERROR_WORKFLOW,
             ).pk
 

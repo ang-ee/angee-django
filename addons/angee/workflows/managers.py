@@ -19,6 +19,7 @@ from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, Validat
 from django.core.validators import validate_slug
 from django.db import DEFAULT_DB_ALIAS, OperationalError, connections, models, transaction
 from django.utils import timezone
+from jsonschema import Draft202012Validator
 from pydantic_core import PydanticSerializationError
 from rebac import RelationshipTuple, actor_context, current_actor, system_context, write_relationships
 from rebac.actors import NoActorResolvedError, to_subject_ref
@@ -101,6 +102,7 @@ from angee.workflows.manager_authority import (
 )
 from angee.workflows.states import (
     CURRENT_PUBLICATION_STATUSES,
+    ParentRelation,
     RunOrigin,
     RunStatus,
     StepRunStatus,
@@ -441,85 +443,26 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
         )
 
     def update(self, **kwargs: Any) -> int:
-        """Keep creation-time input presence outside collection mutation paths."""
+        """No admitted run can have its creation tuple changed by a collection."""
 
-        if {
-            "input", "input_present", "occurrence_id",
-            "test_repair_source_attempt", "test_repair_source_attempt_id",
-            "reprocessed_from", "reprocessed_from_id",
-        } & kwargs.keys():
-            raise TypeError("Workflow run creation facts are immutable.")
-        identity_fields = {
-            "workflow",
-            "workflow_id",
-            "origin",
-            "subject_content_type",
-            "subject_content_type_id",
-            "subject_object_id",
-            "test_request_actor_ref",
-            "test_scope",
-            "test_step",
-            "test_step_id",
-            "test_source_step_id",
-            "test_repair_source_attempt",
-            "test_repair_source_attempt_id",
-            "recovery_source_attempt",
-            "recovery_source_attempt_id",
-            "recovery_request_actor_ref",
-            "recovery_mode",
-        }
-        with system_context(reason="workflows.runs.test_identity_guard"):
-            targets_test = models.QuerySet.filter(
-                self, origin__in=(RunOrigin.TEST, RunOrigin.RECOVERY)
-            ).exists()
-        creates_test = "origin" in kwargs and str(kwargs["origin"]) in {
-            str(RunOrigin.TEST), str(RunOrigin.RECOVERY)
-        }
-        if identity_fields & kwargs.keys() and (targets_test or creates_test):
-            raise TypeError("Workflow test and recovery request identity is immutable.")
+        if self.model.invocation_identity_write_names() & kwargs.keys() or {"result", "status"} & kwargs.keys():
+            raise TypeError("Workflow run invocation and terminal facts are immutable.")
         return super().update(**kwargs)
 
     def bulk_update(
         self, objs: Iterable[Any], fields: Iterable[str], batch_size: int | None = None
     ) -> int:
-        """Keep creation-time input presence outside bulk mutation paths."""
+        """Apply the same admitted-run identity rule to bulk writes."""
 
         field_names = tuple(fields)
-        if {
-            "input", "input_present", "occurrence_id",
-            "test_repair_source_attempt", "test_repair_source_attempt_id",
-            "reprocessed_from", "reprocessed_from_id",
-        } & set(field_names):
-            raise TypeError("Workflow run creation facts are immutable.")
-        rows = list(objs)
-        identity_fields = {
-            "workflow",
-            "workflow_id",
-            "origin",
-            "subject_content_type",
-            "subject_content_type_id",
-            "subject_object_id",
-            "test_request_actor_ref",
-            "test_scope",
-            "test_step",
-            "test_step_id",
-            "test_source_step_id",
-            "test_repair_source_attempt",
-            "test_repair_source_attempt_id",
-            "recovery_source_attempt",
-            "recovery_source_attempt_id",
-            "recovery_request_actor_ref",
-            "recovery_mode",
-        }
-        targets_test = system_queryset(self.model, using=self.db, lock=None).filter(
-            pk__in=[row.pk for row in rows], origin__in=(RunOrigin.TEST, RunOrigin.RECOVERY)
-        ).exists()
-        creates_test = "origin" in field_names and any(
-            str(row.origin) in {str(RunOrigin.TEST), str(RunOrigin.RECOVERY)} for row in rows
-        )
-        if identity_fields & set(field_names) and (targets_test or creates_test):
-            raise TypeError("Workflow test and recovery request identity is immutable.")
-        return super().bulk_update(rows, field_names, batch_size=batch_size)
+        if self.model.invocation_identity_write_names() & set(field_names) or {"result", "status"} & set(field_names):
+            raise TypeError("Workflow run invocation and terminal facts are immutable.")
+        return super().bulk_update(objs, field_names, batch_size=batch_size)
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
+        """Start admission pins publication, actor, and first durable work together."""
+
+        raise TypeError("Workflow runs must be admitted by the run owner, not bulk-created.")
 
 
 class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # type: ignore[misc]
@@ -533,6 +476,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         *,
         trigger: Any = None,
         parent_step_run: Any = None,
+        parent_relation: ParentRelation | str = "",
         dedup_key: str | None = None,
         origin: RunOrigin | None = None,
         input: JsonPresence = JsonPresence(),
@@ -548,6 +492,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         """
 
         input = validate_json_presence(input, label="workflow run input")
+        if (parent_step_run is None) != (parent_relation == ""):
+            raise ValidationError({"parent_relation": "Choose a parent relationship exactly when starting from a parent step."})
+        if parent_relation and parent_relation not in ParentRelation.values:
+            raise ValidationError({"parent_relation": "Unknown parent relationship."})
         if dedup_key is not None and len(dedup_key) > self.model._meta.get_field("dedup_key").max_length:
             raise ValidationError({"dedup_key": "Workflow run dedup key is too long."})
         alias = self.db
@@ -564,20 +512,20 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 locked_trigger = system_queryset(trigger_model, using=alias, lock=("self",)).get(pk=trigger.pk)
                 if locked_trigger.workflow_id != head.pk:
                     raise ValidationError({"trigger": "Workflow trigger does not belong to this lineage."})
-                if not locked_trigger.enabled:
-                    raise ValidationError({"trigger": "Workflow trigger is disabled."})
             return self._start_locked(
                 head,
                 subject,
                 actor,
                 trigger=locked_trigger,
                 parent_step_run=locked_parent,
+                parent_relation=parent_relation,
                 dedup_key=dedup_key,
                 origin=origin,
                 input=input,
                 available_at=available_at or timezone.now(),
                 using=alias,
                 validate_new=validate_new,
+                requested_publication_id=workflow.pk if workflow.published_from_id is not None else None,
             )
 
     def retained_child_for_start(
@@ -754,6 +702,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         *,
         trigger: Any = None,
         parent_step_run: Any = None,
+        parent_relation: ParentRelation | str = "",
         dedup_key: str | None = None,
         occurrence_id: str | None = None,
         origin: RunOrigin | None = None,
@@ -762,6 +711,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         using: str,
         reprocessed_from: Any = None,
         validate_new: Callable[[], None] | None = None,
+        requested_publication_id: int | None = None,
     ) -> Any:
         """Create initial rows after callers lock the exact lineage and trigger."""
 
@@ -769,17 +719,40 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         if not connection.in_atomic_block:
             raise RuntimeError("Pinned workflow start requires its owning transaction.")
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
-        version = workflow_model.objects.current_published_for(head)
+        content_type = None if subject is None else ContentType.objects.get_for_model(subject, for_concrete_model=False)
+        run_dedup_key = dedup_key or self._trigger_dedup_key(trigger, content_type, None if subject is None else subject.pk)
+        retained = None
+        if parent_step_run is not None:
+            retained = system_queryset(self.model, using=using, lock=("self",)).select_related("workflow").filter(
+                parent_step_run=parent_step_run,
+            ).first()
+        if retained is None and run_dedup_key:
+            retained = system_queryset(self.model, using=using, lock=("self",)).select_related("workflow").filter(
+                dedup_key=run_dedup_key,
+            ).first()
+        if retained is not None and (retained.workflow.published_from_id or retained.workflow_id) != head.pk:
+            raise ValidationError({"workflow": "Retained invocation belongs to a different workflow lineage."})
+        if requested_publication_id is not None:
+            version = system_queryset(workflow_model, using=using, lock=("self",)).get(pk=requested_publication_id)
+            if version.published_from_id != head.pk:
+                raise ValidationError({"workflow": "Requested publication does not belong to this lineage."})
+        elif retained is not None:
+            version = retained.workflow
+        else:
+            version = workflow_model.objects.current_published_for(head)
         if version is None:
             raise ValidationError({"workflow": "Workflow has no published version to start."})
-        if version.status != WorkflowStatus.PUBLISHED:
+        if version.status != WorkflowStatus.PUBLISHED and retained is None:
             raise ValidationError({"workflow": "Workflow runs must pin a published version."})
+        if retained is None and trigger is not None and not trigger.enabled:
+            raise ValidationError({"trigger": "Workflow trigger is disabled."})
         return self._start_pinned_locked(
             version,
             subject,
             actor,
             trigger=trigger,
             parent_step_run=parent_step_run,
+            parent_relation=parent_relation,
             dedup_key=dedup_key,
             occurrence_id=occurrence_id,
             origin=origin,
@@ -1553,6 +1526,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         *,
         trigger: Any = None,
         parent_step_run: Any = None,
+        parent_relation: ParentRelation | str = "",
         dedup_key: str | None = None,
         occurrence_id: str | None = None,
         origin: RunOrigin | None = None,
@@ -1576,6 +1550,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
     ) -> Any:
         """Create a Run and its first durable work for one explicit immutable definition."""
 
+        if list(Draft202012Validator(version.input_schema).iter_errors(input.value if input.present else None)):
+            raise ValidationError({"input": "Invocation input does not satisfy the published workflow schema."})
         version.validate_subject_declaration(subject)
         content_type = None if subject is None else ContentType.objects.get_for_model(subject, for_concrete_model=False)
         object_id = None if subject is None else subject.pk
@@ -1595,6 +1571,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             "dedup_key": run_dedup_key,
             "occurrence_id": occurrence_id,
             "parent_step_run": parent_step_run,
+            "parent_relation": parent_relation,
             "reprocessed_from": reprocessed_from,
             "subject_content_type": content_type,
             "subject_object_id": object_id,
@@ -1613,24 +1590,38 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         }
 
         def retain_exact(existing: Any) -> Any:
-            existing_head_id = existing.workflow.published_from_id or existing.workflow_id
-            requested_head_id = version.published_from_id or version.pk
-            matches = (
-                existing_head_id == requested_head_id
-                and existing.subject_content_type_id == (None if content_type is None else content_type.pk)
-                and existing.subject_object_id == object_id
-                and existing.created_by_id == owner_id
-                and existing.origin == resolved_origin
-                and existing.trigger_id == (None if trigger is None else trigger.pk)
-                and existing.parent_step_run_id == (None if parent_step_run is None else parent_step_run.pk)
-                and existing.dedup_key == run_dedup_key
-                and existing.occurrence_id == occurrence_id
-                and existing.input_present is input.present
-                and json_values_equal(existing.input, input.value if input.present else None)
-            )
-            if not matches:
-                field = "parent_step_run" if parent_step_run is not None else "dedup_key"
-                raise ValidationError({field: "Workflow start identity was reused with different immutable facts."})
+            expected = {
+                "workflow": version.pk,
+                "subject_content_type": None if content_type is None else content_type.pk,
+                "subject_object_id": object_id,
+                "actor": owner_id,
+                "origin": resolved_origin,
+                "trigger": None if trigger is None else trigger.pk,
+                "parent_step_run": None if parent_step_run is None else parent_step_run.pk,
+                "parent_relation": parent_relation,
+                "dedup_key": run_dedup_key,
+                "occurrence_id": occurrence_id,
+                "input_present": input.present,
+            }
+            actual = {
+                "workflow": existing.workflow_id,
+                "subject_content_type": existing.subject_content_type_id,
+                "subject_object_id": existing.subject_object_id,
+                "actor": existing.created_by_id,
+                "origin": existing.origin,
+                "trigger": existing.trigger_id,
+                "parent_step_run": existing.parent_step_run_id,
+                "parent_relation": existing.parent_relation,
+                "dedup_key": existing.dedup_key,
+                "occurrence_id": existing.occurrence_id,
+                "input_present": existing.input_present,
+            }
+            changed = {field: "Retained workflow invocation has different immutable facts." for field, value in expected.items()
+                       if actual[field] != value}
+            if not json_values_equal(existing.input, input.value if input.present else None):
+                changed["input"] = "Retained workflow invocation has different frozen input."
+            if changed:
+                raise ValidationError(changed)
             return existing
 
         retained = None
@@ -1644,6 +1635,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             ).first()
         if retained is not None:
             return retain_exact(retained)
+        if parent_step_run is not None:
+            parent_run = system_queryset(self.model, using=using, lock=("self",)).get(pk=parent_step_run.run_id)
+            if parent_run.status == RunStatus.CANCELED or (
+                parent_relation == ParentRelation.OWNED_CALL and parent_run.status in RunStatus.TERMINAL
+            ):
+                raise ValidationError({"parent_step_run": "A terminal parent cannot admit another owned child."})
         if validate_new is not None:
             validate_new()
         if parent_step_run is not None:
@@ -3024,6 +3021,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     alias=alias,
                     operation=lambda: step_run.mark_succeeded(
                         output=copy.deepcopy(fixture.value) if fixture.value_present else None,
+                        output_present=fixture.value_present,
                         outcome=fixture.outcome,
                     ),
                 )
@@ -3324,12 +3322,18 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                         "status": str(child.status),
                         "outcome": child.outcome,
                         "output": output,
+                        "output_present": bool(item_attempt.output_present) if item_attempt is not None else False,
                         "error": child.error,
                     }
                 )
-            successes = sum(child.status == StepRunStatus.SUCCEEDED for child in children)
+            successes = sum(
+                child.status == StepRunStatus.SUCCEEDED
+                and child.outcome not in {"child_failed", "child_canceled"}
+                for child in children
+            )
             failures = sum(
                 child.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
+                or child.outcome in {"child_failed", "child_canceled"}
                 for child in children
             )
             expected_output = {
@@ -3698,6 +3702,44 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             if existing != (None, None):
                 raise ValidationError({"resource": "This attempt already subscribed to another record."})
             attempt.external_content_type_id, attempt.external_object_id = subscribed
+            self._save_attempt(
+                attempt, alias=alias,
+                update_fields=["external_content_type", "external_object_id", "updated_at"],
+            )
+
+    def bind_call_child(self, attempt_id: int, *, lease_token: uuid.UUID, child: Any) -> None:
+        """Bind the exact owned child while a fenced call command holds its parent."""
+
+        alias = self.db
+        if not connections[alias].in_atomic_block or _attempt_write_session.get() is None:
+            raise RuntimeError("Child completion binding requires the fenced database-command transaction.")
+        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
+        with self._write(alias, unresolved.step_run_id), system_context(reason="workflows.attempt.bind_call_child"):
+            run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
+            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+            child_model = self.model._meta.apps.get_model("workflows", "WorkflowRun")
+            retained = system_queryset(child_model, using=alias, lock=("self",)).select_related(
+                "parent_step_run__run"
+            ).get(pk=child.pk)
+            original = retained.parent_step_run
+            if (
+                run.is_terminal or step_run.status != StepRunStatus.STARTED
+                or step_run.current_attempt_id != attempt.pk
+                or attempt.lease_token != lease_token or attempt.started_at is None
+                or attempt.lease_revoked_at is not None or attempt.result_recorded_at is not None
+                or retained.parent_relation != ParentRelation.OWNED_CALL or original is None
+                or original.step_id != step_run.step_id or original.map_index != step_run.map_index
+                or original.run.execution_lineage_root_id() != run.execution_lineage_root_id()
+            ):
+                raise ValidationError({"child": "Call subscription does not match the current exact child slot."})
+            target = canonical_record_target(retained)
+            expected = (target.content_type.pk, target.object_id)
+            existing = (attempt.external_content_type_id, attempt.external_object_id)
+            if existing == expected:
+                return
+            if existing != (None, None):
+                raise ValidationError({"child": "This call attempt is bound to a different child."})
+            attempt.external_content_type_id, attempt.external_object_id = expected
             self._save_attempt(
                 attempt, alias=alias,
                 update_fields=["external_content_type", "external_object_id", "updated_at"],
@@ -4345,6 +4387,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 alias=self.db,
                 operation=lambda: step_run.mark_succeeded(
                     output=result.output if result.output_present else None,
+                    output_present=result.output_present,
                     outcome=result.outcome,
                 ),
             )
@@ -5083,6 +5126,23 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
             locked_run = system_queryset(run_model, using=using, lock=("self",)).get(pk=unresolved.run_id)
             if locked_run.pk != unresolved.run_id:
                 raise OperationalError("Advance dispatch ancestry changed while locking.")
+        elif unresolved.kind == WorkflowDispatchKind.CHILD_CANCEL:
+            run_model = self.model._meta.get_field("run").remote_field.model
+            ancestry = system_queryset(run_model, using=using, lock=None).values(
+                "parent_step_run_id", "parent_step_run__run_id",
+            ).get(pk=unresolved.run_id)
+            if ancestry["parent_step_run_id"] is None or ancestry["parent_step_run__run_id"] is None:
+                raise OperationalError("Owned-child cancellation lost its original parent slot.")
+            parent = system_queryset(run_model, using=using, lock=("self",)).get(
+                pk=ancestry["parent_step_run__run_id"]
+            )
+            step_run_model = run_model._meta.apps.get_model("workflows", "StepRun")
+            slot = system_queryset(step_run_model, using=using, lock=("self",)).get(
+                pk=ancestry["parent_step_run_id"]
+            )
+            child = system_queryset(run_model, using=using, lock=("self",)).get(pk=unresolved.run_id)
+            if slot.run_id != parent.pk or child.parent_step_run_id != slot.pk:
+                raise OperationalError("Owned-child cancellation ancestry changed while locking.")
         elif unresolved.kind == WorkflowDispatchKind.EXECUTE:
             attempt_model = self.model._meta.get_field("step_attempt").remote_field.model
             ancestry = system_queryset(attempt_model, using=using, lock=None).values(
@@ -5282,6 +5342,30 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
             self._save(dispatch, alias=alias, force_insert=True)
         transaction.on_commit(enqueue_dispatch_publisher, using=alias)
         return dispatch
+
+    def schedule_child_cancel(self, child: Any, *, available_at: datetime | None = None) -> tuple[Any, bool]:
+        """Retain one owned-child cancellation while the canceling parent is locked."""
+
+        alias = self.db
+        if not connections[alias].in_atomic_block:
+            raise RuntimeError("Owned-child cancellation must share the parent cancellation transaction.")
+        run_model = self.model._meta.get_field("run").remote_field.model
+        with system_context(reason="workflows.dispatch.child_cancel"):
+            retained = system_queryset(run_model, using=alias, lock=None).get(pk=child.pk)
+            if retained.parent_relation != ParentRelation.OWNED_CALL or retained.parent_step_run_id is None:
+                raise ValidationError({"child": "Cancellation target is not an owned child call."})
+            existing = system_queryset(self.model, using=alias, lock=None).filter(
+                kind=WorkflowDispatchKind.CHILD_CANCEL, run_id=retained.pk,
+            ).first()
+            if existing is not None:
+                return existing, False
+            dispatch = self.model(
+                kind=WorkflowDispatchKind.CHILD_CANCEL, run=retained,
+                available_at=available_at or timezone.now(),
+            )
+            self._save(dispatch, alias=alias, force_insert=True)
+            transaction.on_commit(enqueue_dispatch_publisher, using=alias)
+            return dispatch, True
 
     def schedule_execute(self, attempt: Any) -> tuple[Any, bool]:
         """Ensure one execution intent using the attempt's immutable availability."""

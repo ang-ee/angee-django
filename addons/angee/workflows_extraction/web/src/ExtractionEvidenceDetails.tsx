@@ -23,7 +23,7 @@ function evidencePreviewPage(evidence: ExtractionEvidence): number | null {
 }
 
 export function ExtractionEvidenceDetails({ evidence }: { evidence: ExtractionEvidence }): React.ReactElement {
-  const t = useT("workflowsOcr");
+  const t = useT("workflowsExtraction");
   const recordHref = useResourceRecordHrefLookup();
   const peek = useRecordPeekContext();
   const [sourceId, setSourceId] = React.useState(evidence.sources[0]?.id);
@@ -70,6 +70,12 @@ export function ExtractionEvidenceDetails({ evidence }: { evidence: ExtractionEv
       <summary className="cursor-pointer font-medium">{t("processingDetails")}</summary>
       <div className="mt-3 grid gap-3">
         <p>{evidence.extraction.schema_id}</p>
+        <details><summary>{t("logicalDocuments")} ({evidence.documents.length})</summary>
+          <CodeBlock wrap className="mt-2 max-h-96 overflow-auto">{json(evidence.documents)}</CodeBlock>
+        </details>
+        {evidence.retired.length ? <details><summary>{t("retiredIdentities")} ({evidence.retired.length})</summary>
+          <CodeBlock wrap className="mt-2 max-h-96 overflow-auto">{json(evidence.retired)}</CodeBlock>
+        </details> : null}
         {selected ? <details><summary>{t("sourceBinding")}</summary>
           <div className="break-all">{t("sourceHash")}: {selected.content_hash}</div>
           <div className="break-all">{selected.file} {selected.message_part}</div>

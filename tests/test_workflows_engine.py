@@ -867,6 +867,7 @@ def test_cancellation_propagates_to_journal_and_child_runs(
         child = WorkflowRun.objects.create(
             workflow=workflow,
             parent_step_run=waiting_row,
+            parent_relation="owned_call",
             status=workflow_models.RunStatus.WAITING,
         )
         StepRun.objects.create(run=child, step=waiting, status=step_run_status.WAITING)
@@ -1192,7 +1193,9 @@ def test_identity_migration_backfills_only_structurally_known_run_origins(
         unexplained = WorkflowRun.objects.create(workflow=version)
         parent_run = WorkflowRun.objects.create(workflow=version)
         parent_step = StepRun.objects.create(run=parent_run, step=step_for(version, "start"))
-        child = WorkflowRun.objects.create(workflow=version, parent_step_run=parent_step)
+        child = WorkflowRun.objects.create(
+            workflow=version, parent_step_run=parent_step, parent_relation="continuation"
+        )
 
     editor = SimpleNamespace(connection=connection)
     backfill_structural_run_origins(django_apps, editor)
@@ -1237,6 +1240,7 @@ def test_linked_business_workflow_can_start_its_error_workflow(
         subject=None,
         actor=None,
         parent_step_run=step_run_for(parent, "handoff"),
+        parent_relation="continuation",
         origin=workflow_models.RunOrigin.WORKFLOW,
     )
     run_to_terminal(child)
@@ -1328,11 +1332,11 @@ def test_override_run_reuses_existing_terminal_step_run(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("handler_calls")
-def test_workflow_run_save_uses_loaded_dedup_key_without_extra_select(
+def test_workflow_run_save_checks_current_invocation_under_run_lock(
     workflow_engine_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    """Loaded dedup keys are compared from ``from_db`` state, not a save-time SELECT."""
+    """An ordinary run update compares the current retained invocation under a lock."""
 
     del workflow_engine_tables, no_workflow_queue
     workflow = workflow_with_steps(
@@ -1349,7 +1353,43 @@ def test_workflow_run_save_uses_loaded_dedup_key_without_extra_select(
             loaded.save(update_fields={"error", "updated_at"})
 
     sql = "\n".join(query["sql"] for query in queries.captured_queries)
-    assert "SELECT" not in sql.upper()
+    assert "SELECT" in sql.upper()
+    if connection.vendor == "postgresql":
+        assert "FOR UPDATE" in sql.upper()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ordinary_workflow_run_invocation_is_immutable_across_write_paths(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Manual runs retain publication, parent, actor, and subject facts after admission."""
+
+    del workflow_engine_tables, no_workflow_queue
+    workflow = workflow_with_steps(
+        steps=({"key": "start", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    other = workflow_with_steps(
+        steps=({"key": "other", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    with system_context(reason="test workflows ordinary invocation setup"):
+        run = WorkflowRun.objects.create(workflow=workflow, dedup_key="manual:retained")
+        loaded = WorkflowRun.objects.get(pk=run.pk)
+        loaded.workflow = other
+        with pytest.raises(ValidationError, match="invocation facts are immutable"):
+            loaded.save(update_fields={"workflow", "updated_at"})
+        with pytest.raises(TypeError, match="invocation"):
+            WorkflowRun.objects.filter(pk=run.pk).update(subject_object_id=42)
+        with pytest.raises(TypeError, match="invocation"):
+            WorkflowRun.objects.bulk_update([run], ["parent_step_run"])
+        with pytest.raises(TypeError, match="admitted"):
+            WorkflowRun._base_manager.bulk_create([WorkflowRun(workflow=workflow)])
+        run.refresh_from_db()
+    assert run.workflow_id == workflow.pk
+    assert run.subject_object_id is None
+    assert run.parent_step_run_id is None
 
 
 @pytest.mark.django_db(transaction=True)

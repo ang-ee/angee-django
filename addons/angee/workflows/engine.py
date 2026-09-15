@@ -109,6 +109,7 @@ def start(
     *,
     trigger: Any = None,
     parent_step_run: Any = None,
+    parent_relation: str = "",
     dedup_key: str | None = None,
     origin: RunOrigin | None = None,
     input: JsonPresence = JsonPresence(),
@@ -130,6 +131,7 @@ def start(
         actor,
         trigger=trigger,
         parent_step_run=parent_step_run,
+        parent_relation=parent_relation,
         dedup_key=dedup_key,
         origin=origin,
         input=input,
@@ -272,6 +274,7 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
                 else:
                     step_run.wake(at=timestamp)
                 woken += 1
+                touched.add(run.pk)
             elif not subscribed or attempt.result_recorded_at is not None:
                 continue
             touched.add(run.pk)
@@ -310,7 +313,33 @@ def deliver_artifact_dispatch(dispatch_id: int, *, now: datetime | None = None) 
             )
             outcome = deliver_artifact(target, now=timestamp)
             dispatch_model.objects._consume_locked(dispatch_id, at=timestamp)
-            return outcome
+    return outcome
+
+
+def cancel_child_dispatch(dispatch_id: int, *, expected_child_id: int | None = None) -> dict[str, int]:
+    """Deliver an owned-child cancel after the parent is terminal, with parent-first locks."""
+
+    dispatch_model = _model("WorkflowDispatch")
+    canceled = 0
+    with system_context(reason="workflows.engine.child_cancel_dispatch"), transaction.atomic():
+        with dispatch_model.objects._owner_transition(
+            dispatch_id=dispatch_id, lease_token=None, at=timezone.now(), using=dispatch_model.objects.db,
+        ) as preflight:
+            if preflight.disposition != DispatchPreflightDisposition.READY:
+                return {"canceled": 0}
+            envelope = preflight.envelope
+            if envelope.kind != WorkflowDispatchKind.CHILD_CANCEL or (
+                expected_child_id is not None and expected_child_id != envelope.target_id
+            ):
+                raise ValidationError({"dispatch": "Owned-child cancellation envelope changed."})
+            child = _model("WorkflowRun").objects.get(pk=envelope.target_id)
+            if child.parent_relation != "owned_call":
+                raise ValidationError({"child": "Cancellation target is no longer an owned child."})
+            if child.status not in RunStatus.TERMINAL:
+                cancel(child)
+                canceled = 1
+            dispatch_model.objects._consume_locked(dispatch_id, at=timezone.now(), fenced=not canceled)
+    return {"canceled": canceled}
 
 
 def advance(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
@@ -418,7 +447,7 @@ def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
         elif result is None:
             locked.mark_failed(error="Step implementation returned no result.", stacktrace="")
         elif result.kind == "done":
-            locked.mark_succeeded(output=result.output, outcome=result.outcome)
+            locked.mark_succeeded(output=result.output, output_present=result.output_present, outcome=result.outcome)
         elif result.kind == "wait":
             wait_until = timezone.now() if locked_run.deliveries > locked.claimed_deliveries else result.until
             locked.mark_waiting(
@@ -568,19 +597,20 @@ def execute_dispatch(
 
 
 def cancel(run: Any) -> None:
-    """Cancel a run, its durable waits, scheduled rows, and child runs."""
+    """Cancel a run and commit durable intents for its owned active children."""
 
     run_model = _model("WorkflowRun")
     step_run_model = _model("StepRun")
     run_id = run.pk if hasattr(run, "pk") else int(run)
-    child_ids: list[int] = []
     with system_context(reason="workflows.engine.cancel"), transaction.atomic():
         locked = run_model.objects.lock_if_supported().get(pk=run_id)
         if locked.status in RunStatus.TERMINAL:
             return
-        child_ids = list(
-            run_model.objects.filter(parent_step_run__run=locked).values_list("pk", flat=True).order_by("pk")
-        )
+        owned_children = list(run_model.objects.filter(
+            parent_step_run__run=locked,
+            parent_relation="owned_call",
+            status__in=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
+        ).order_by("pk"))
         for step_run in step_run_model.objects.lock_if_supported().filter(run=locked).order_by("pk"):
             if _is_retained_step_run(step_run):
                 was_waiting = step_run.status == StepRunStatus.WAITING
@@ -601,9 +631,11 @@ def cancel(run: Any) -> None:
                 step_run.error = "Cancellation requested; running worker result will be ignored."
                 step_run.save(update_fields=["resume_state", "error", "updated_at"])
         locked.mark_canceled()
-
-    for child_id in child_ids:
-        cancel(child_id)
+        dispatch_model = _model("WorkflowDispatch")
+        for child in owned_children:
+            dispatch_model.objects.schedule_child_cancel(child)
+        if owned_children:
+            transaction.on_commit(enqueue_dispatch_publisher)
 
 
 def expire_pending_decisions(run: Any, *, resolved_by: str) -> int:
@@ -1779,12 +1811,15 @@ def _map_output(children: list[Any]) -> dict[str, Any]:
             "status": str(child.status),
             "outcome": child.outcome,
             "output": child.output,
+            "output_present": child.output_present,
             "error": child.error,
         }
         for child in children
     ]
-    successes = sum(1 for child in children if child.status == StepRunStatus.SUCCEEDED)
-    failures = sum(1 for child in children if child.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED})
+    successes = sum(1 for child in children if child.status == StepRunStatus.SUCCEEDED
+                    and child.outcome not in {"child_failed", "child_canceled"})
+    failures = sum(1 for child in children if child.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
+                   or child.outcome in {"child_failed", "child_canceled"})
     return {
         "total": len(children),
         "successes": successes,
@@ -2414,12 +2449,72 @@ def _update_run_status(run: Any, *, timestamp: datetime) -> None:
     if run.step_runs.exists():
         if run.status == RunStatus.PENDING:
             run.mark_running()
-        run.mark_succeeded()
+        _finish_run_result(run)
         return
 
     if run.status == RunStatus.RUNNING and run.wake_at is not None and run.wake_at <= timestamp:
         run.wake_at = None
         run.save(update_fields=["wake_at", "updated_at"])
+
+
+def _finish_run_result(run: Any) -> None:
+    """Select exactly one declared terminal rule and retain its typed run result."""
+
+    rules = run.workflow.result_rules
+    terminals = list(
+        run.step_runs.select_related("step").filter(
+            map_index=-1, status=StepRunStatus.SUCCEEDED, step__isnull=False,
+        ).order_by("pk")
+    )
+    outgoing_routes = list(run.workflow.edges.values_list("source_id", "condition"))
+    unhandled_calls = [
+        row for row in terminals
+        if not any(source_id == row.step_id and condition in {"", row.outcome}
+                   for source_id, condition in outgoing_routes)
+        and row.step.step_class == "call_workflow"
+        and row.outcome in {"child_failed", "child_canceled"}
+    ]
+    if unhandled_calls:
+        if any(row.outcome == "child_failed" for row in unhandled_calls):
+            run.mark_failed("An unhandled child workflow failed.")
+        else:
+            run.mark_canceled()
+        return
+    if not rules:
+        run.mark_succeeded(outcome="completed", output={})
+        return
+    matches = [
+        (rule, producer)
+        for rule in rules
+        for producer in terminals
+        if producer.step.key == rule["producer"] and producer.outcome == rule["when_outcome"]
+    ]
+    if len(matches) != 1:
+        run.mark_failed(f"Workflow result contract matched {len(matches)} terminal producers; expected one.")
+        return
+    rule, producer = matches[0]
+    context = BindingContext(
+        workflow_input=SourceValue(
+            JsonPresence(run.input_present, run.input), {"kind": "workflow_input", "run_id": run.pk}
+        ),
+        step_outputs={producer.step.key: SourceValue(
+            JsonPresence(producer.output_present, producer.output),
+            {"kind": "step_output", "step_run_id": producer.pk},
+        )},
+        map_item=UnavailableSource("source_unavailable", "Result rules cannot read Map items.", {"kind": "map_item"}),
+    )
+    try:
+        evaluated = evaluate_binding(parse_binding(rule["binding"]), context)
+        if evaluated.diagnostics or evaluated.value is None or not evaluated.value.present:
+            raise ValidationError({"result": "Terminal binding did not produce a complete output."})
+        output = evaluated.value.value
+        errors = list(Draft202012Validator(run.workflow.output_schema).iter_errors(output))
+        if errors:
+            raise ValidationError({"result": "Terminal output does not satisfy the published workflow schema."})
+    except (PydanticValidationError, ValidationError) as error:
+        run.mark_failed(f"Workflow result contract failed: {error}")
+        return
+    run.mark_succeeded(outcome=rule["outcome"], output=output)
 
 
 def _input_from_previous(previous: list[Any]) -> Any:
@@ -2465,6 +2560,7 @@ def _start_error_workflow(run: Any, *, failed_step_run: Any) -> None:
         subject=run,
         actor=None,
         parent_step_run=failed_step_run,
+        parent_relation="continuation",
         origin=cast(RunOrigin, RunOrigin.ERROR_WORKFLOW),
     )
 

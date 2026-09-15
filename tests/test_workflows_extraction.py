@@ -13,8 +13,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from PIL import Image
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
-from angee.workflows_ocr import service
-from angee.workflows_ocr.engines import (
+from angee.workflows_extraction import service
+from angee.workflows_extraction.engines import (
     DocumentPart,
     DocumentPipelineError,
     DocumentSource,
@@ -22,9 +22,9 @@ from angee.workflows_ocr.engines import (
     PageImage,
     PageResult,
 )
-from angee.workflows_ocr.routing import acquire_native_parts
-from angee.workflows_ocr.service import _merge, _validated_schema
-from angee.workflows_ocr_glm.engine import GlmOllamaEngine
+from angee.workflows_extraction.routing import acquire_native_parts
+from angee.workflows_extraction.service import _merge, _validated_schema
+from angee.workflows_extraction_glm.engine import GlmOllamaEngine
 from tests.ocr_engines import FakeOcrEngine
 
 SCHEMA = {

@@ -47,8 +47,8 @@ INSTALLED_APPS = [
     "angee.workflows_agents",
     "angee.workflows_parties",
     "angee.workflows_integrate",
-    "angee.workflows_ocr",
-    "angee.workflows_ocr_glm",
+    "angee.workflows_extraction",
+    "angee.workflows_extraction_glm",
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",
@@ -170,6 +170,7 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "wait": "angee.workflows.steps.WaitStep",
     "gate": "angee.workflows.steps.GateStep",
     "map": "angee.workflows.steps.MapStep",
+    "call_workflow": "angee.workflows.steps.CallWorkflow",
     "agent": "angee.workflows_agents.steps.AgentStepImpl",
     "agent_session": "angee.workflows_agents.steps.AgentSessionStepImpl",
     "archive_probe": "angee.workflows_integrate.steps.ArchiveProbeStepImpl",
@@ -180,14 +181,14 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "parties_identity_apply": "angee.workflows_parties.steps.IdentityApplyStepImpl",
     "parties_dedupe_gate": "angee.workflows_parties.steps.DedupeGateStepImpl",
     "parties_dedupe_execute": "angee.workflows_parties.steps.DedupeExecuteStepImpl",
-    "ocr_extract": "angee.workflows_ocr.steps.OcrExtractStepImpl",
+    "ocr_extract": "angee.workflows_extraction.steps.OcrExtractStepImpl",
 }
 ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
 ANGEE_OCR_ENGINE_CLASSES = {
-    "none": "angee.workflows_ocr.engines.NoOcrEngine",
+    "none": "angee.workflows_extraction.engines.NoOcrEngine",
     "fake": "tests.ocr_engines.FakeOcrEngine",
     "fake_document": "tests.ocr_engines.FakeDocumentEngine",
-    "glm": "angee.workflows_ocr_glm.engine.GlmOllamaEngine",
+    "glm": "angee.workflows_extraction_glm.engine.GlmOllamaEngine",
 }
 ANGEE_OCR_MAX_BYTES = 25 * 1024 * 1024
 ANGEE_OCR_MAX_PAGES = 10

@@ -11,7 +11,7 @@ from rebac import actor_context
 
 from angee.workflows.attempts import ArtifactSpec, RecoveryCapability, RecoveryMode
 from angee.workflows.steps import StepEffect, StepImpl, StepOutcome, StepResult
-from angee.workflows_ocr.service import extract, reextract
+from angee.workflows_extraction.service import extract, reextract
 
 
 class OcrExtractInput(BaseModel):
@@ -127,7 +127,7 @@ class OcrExtractStepImpl(StepImpl):
         actor = step_run.run.created_by
         if actor is None:
             raise ValueError("OCR recovery requires the workflow run actor.")
-        extraction_model = apps.get_model("workflows_ocr", "Extraction")
+        extraction_model = apps.get_model("workflows_extraction", "Extraction")
         config = OcrExtractConfig.model_validate(step_run.step.config)
         with actor_context(actor):
             evidence = reextract(extraction_model.objects.get(sqid=source_attempt.output["extraction_id"]))

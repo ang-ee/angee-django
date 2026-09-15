@@ -212,7 +212,8 @@ class WorkflowDefinitionManagerMixin:
         def _definition_revision(self, workflow_id: int, current: int) -> int: ...
 
     _WORKFLOW_FIELDS = frozenset(
-        {"name", "description", "purpose", "subject_declaration", "error_workflow", "max_steps", "budget"}
+        {"name", "description", "purpose", "subject_declaration", "error_workflow", "max_steps", "budget",
+         "input_schema", "output_schema", "result_rules"}
     )
     _NODE_FIELDS = frozenset(
         {"key", "name", "step_class", "config", "input_binding", "join_rule", "is_entry", "position"}

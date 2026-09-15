@@ -1,4 +1,4 @@
-export const enWorkflowsOcrMessages = {
+export const enWorkflowsExtractionMessages = {
   "loading": "Loading extraction evidence…",
   "unavailable": "Extraction evidence is unavailable.",
   "evidence": "Evidence",
@@ -10,6 +10,8 @@ export const enWorkflowsOcrMessages = {
   "documentSource": "Document {number}",
   "messageSource": "Message {number}",
   "processingDetails": "Processing details",
+  "logicalDocuments": "Logical documents",
+  "retiredIdentities": "Retired identities",
   "sourceHash": "Content hash",
   "sourceBinding": "Exact source reference",
   "openFile": "Open file",
