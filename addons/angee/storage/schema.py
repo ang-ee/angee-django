@@ -37,6 +37,7 @@ Drive = apps.get_model("storage", "Drive")
 Folder = apps.get_model("storage", "Folder")
 MimeType = apps.get_model("storage", "MimeType")
 File = apps.get_model("storage", "File")
+ExternalLink = apps.get_model("storage", "ExternalLink")
 
 _STORAGE_ADMIN_ROLE = ObjectRef("storage/role", "storage_admin")
 """Role whose effective members may manage backends and drives."""
@@ -160,6 +161,22 @@ class FileType(AuthoredRefMixin, AngeeNode):
         if row.upload_state != UploadState.READY:
             return ""
         return str(row.download_url())
+
+
+@strawberry_django.type(ExternalLink)
+class ExternalLinkType(AuthoredRefMixin, AngeeNode):
+    """Authorized projection of a byte-free external attachment link."""
+
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["title", "url"],
+        description=NODE_DISPLAY_NAME_DESCRIPTION,
+    )
+    url: auto
+    title: auto
+    metadata: JSON
+    created_at: auto
+    updated_at: auto
 
 
 @strawberry.input
@@ -321,6 +338,17 @@ _FILE_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(File, public_id_fields=("folder",)),
 )
+_EXTERNAL_LINK_RESOURCE = hasura_model_resource(
+    ExternalLinkType,
+    model=ExternalLink,
+    name="external_links",
+    filterable=["id", "url", "title", "created_at", "updated_at"],
+    sortable=["url", "title", "created_at", "updated_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+)
 _BACKEND_RESOURCE = hasura_model_resource(
     BackendType,
     model=Backend,
@@ -445,12 +473,14 @@ _SHARED_TYPES = [
     DriveType,
     FolderType,
     FileType,
+    ExternalLinkType,
     FileUploadBeginPayload,
     FileUploadFinalizePayload,
     *_MIME_TYPE_RESOURCE.types,
     *_DRIVE_RESOURCE.types,
     *_FOLDER_RESOURCE.types,
     *_FILE_RESOURCE.types,
+    *_EXTERNAL_LINK_RESOURCE.types,
 ]
 
 schemas = {
@@ -460,6 +490,7 @@ schemas = {
             _DRIVE_RESOURCE.query,
             _FOLDER_RESOURCE.query,
             _FILE_RESOURCE.query,
+            _EXTERNAL_LINK_RESOURCE.query,
         ],
         "mutation": [
             StorageMutation,
@@ -474,6 +505,7 @@ schemas = {
             _DRIVE_RESOURCE.query,
             _FOLDER_RESOURCE.query,
             _FILE_RESOURCE.query,
+            _EXTERNAL_LINK_RESOURCE.query,
             _BACKEND_RESOURCE.query,
         ],
         "mutation": [

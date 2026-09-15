@@ -25,3 +25,13 @@ module = "runtime_migrations.alter_message_status"
 name = "thread_attachment_source_edges"
 app_label = "messaging"
 module = "runtime_migrations.thread_attachment_source_edges"
+
+[[migrations]]
+name = "part_source_claim"
+app_label = "messaging"
+module = "runtime_migrations.part_source_claim"
+
+[[migrations]]
+name = "external_link_parts"
+app_label = "messaging"
+module = "runtime_migrations.external_link_parts"

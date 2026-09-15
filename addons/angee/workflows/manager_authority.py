@@ -3,11 +3,101 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from threading import get_ident
 from typing import Any
 
 from django.db import connections
+
+
+class StepInvocationFenced(RuntimeError):
+    """Reject work attempted outside the exact live physical invocation."""
+
+
+@dataclass(slots=True)
+class _PhysicalInvocationCapability:
+    """Opaque identity for one engine-admitted physical invocation."""
+
+    alias: str
+    run_id: int
+    step_run_id: int
+    attempt_id: int
+    lease_token: uuid.UUID
+    connection_id: int
+    thread_id: int
+    closed: bool = False
+
+
+_physical_invocation: ContextVar[_PhysicalInvocationCapability | None] = ContextVar(
+    "workflow_physical_invocation", default=None
+)
+
+
+@contextmanager
+def _physical_invocation_scope(
+    *,
+    alias: str,
+    run_id: int,
+    step_run_id: int,
+    attempt_id: int,
+    lease_token: uuid.UUID,
+) -> Iterator[None]:
+    """Open one non-reconstructible invocation scope around implementation code."""
+
+    if _physical_invocation.get() is not None:
+        raise StepInvocationFenced("Workflow physical invocations cannot be nested.")
+    capability = _PhysicalInvocationCapability(
+        alias=alias,
+        run_id=run_id,
+        step_run_id=step_run_id,
+        attempt_id=attempt_id,
+        lease_token=lease_token,
+        connection_id=id(connections[alias]),
+        thread_id=get_ident(),
+    )
+    token = _physical_invocation.set(capability)
+    try:
+        yield
+    finally:
+        capability.closed = True
+        _physical_invocation.reset(token)
+
+
+def _physical_invocation_for(
+    *, alias: str, step_run_id: int, required: bool = True
+) -> _PhysicalInvocationCapability | None:
+    """Return the exact active capability for a step or fail closed."""
+
+    capability = _physical_invocation.get()
+    if capability is None:
+        if required:
+            raise StepInvocationFenced("This operation requires an active workflow invocation.")
+        return None
+    if (
+        capability.closed
+        or capability.alias != alias
+        or capability.step_run_id != step_run_id
+        or capability.connection_id != id(connections[alias])
+        or capability.thread_id != get_ident()
+    ):
+        raise StepInvocationFenced("The workflow invocation is no longer active for this step run.")
+    return capability
+
+
+def _physical_invocation_is_active(capability: object, *, alias: str) -> bool:
+    """Return whether ``capability`` is the exact current context identity."""
+
+    return (
+        isinstance(capability, _PhysicalInvocationCapability)
+        and not capability.closed
+        and capability.alias == alias
+        and capability.connection_id == id(connections[alias])
+        and capability.thread_id == get_ident()
+        and _physical_invocation.get() is capability
+    )
 
 
 @dataclass

@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
+from uuid import UUID
 
 import pytest
 from angee.base import actors as actor_module
 from angee.base.actors import actor_user_id
 from django.core.management import call_command
+from django.core.exceptions import ValidationError
 from django.db import connection
+from django.db import models
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import SubjectRef, app_settings, system_context
+from rebac import SubjectRef, app_settings, system_context, to_subject_ref
 
 from tests.conftest import IAM_CONNECTION_TEST_MODELS, INTEGRATE_TEST_MODELS, POSTS_TEST_MODELS, _clear_model_tables
 from tests.conftest import _create_missing_tables as _create_tables
@@ -75,6 +79,67 @@ def test_actor_user_id_non_user_without_resolver_fails_safe(monkeypatch: pytest.
 
     with override_settings(ANGEE_ACTOR_USER_RESOLVERS={}):
         assert actor_user_id(SubjectRef.of("agents/agent", "agent-1")) is None
+
+
+def test_actor_user_id_converts_pk_backed_subject_to_the_field_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A string REBAC subject becomes the typed primary key promised to FK callers."""
+
+    pk = models.AutoField(primary_key=True)
+    pk.set_attributes_from_name("id")
+    user_model = SimpleNamespace(_meta=SimpleNamespace(pk=pk, rebac_id_attr="pk"))
+    monkeypatch.setattr(actor_module, "get_user_model", lambda: user_model)
+
+    value = actor_user_id(SubjectRef.of(app_settings.REBAC_USER_TYPE, "41"))
+
+    assert value == 41
+    assert isinstance(value, int)
+
+
+def test_actor_user_id_rejects_an_invalid_pk_backed_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An invalid authorization subject never becomes an audit-owner FK value."""
+
+    pk = models.AutoField(primary_key=True)
+    pk.set_attributes_from_name("id")
+    user_model = SimpleNamespace(_meta=SimpleNamespace(pk=pk, rebac_id_attr="pk"))
+    monkeypatch.setattr(actor_module, "get_user_model", lambda: user_model)
+
+    assert actor_user_id(SubjectRef.of(app_settings.REBAC_USER_TYPE, "not-an-int")) is None
+
+
+def test_actor_user_id_converts_uuid_pk_backed_subject_to_the_field_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UUID primary keys retain their native value type for audit-owner FKs."""
+
+    pk = models.UUIDField(primary_key=True)
+    pk.set_attributes_from_name("id")
+    user_model = SimpleNamespace(_meta=SimpleNamespace(pk=pk, rebac_id_attr="pk"))
+    monkeypatch.setattr(actor_module, "get_user_model", lambda: user_model)
+    expected = UUID("7bb22d7e-d758-4e22-a4fb-57848573681d")
+
+    value = actor_user_id(
+        SubjectRef.of(app_settings.REBAC_USER_TYPE, str(expected))
+    )
+
+    assert value == expected
+    assert isinstance(value, UUID)
+
+
+def test_actor_user_id_preserves_public_id_lookup(
+    agents_console_tables: None,
+) -> None:
+    """A public REBAC user id still resolves through the canonical user manager."""
+
+    user = User.objects.create_user(
+        username="principal-public-id",
+        email="principal-public-id@example.com",
+    )
+
+    assert actor_user_id(to_subject_ref(user)) == user.pk
 
 
 def test_is_user_actor_checks_authorization_species() -> None:

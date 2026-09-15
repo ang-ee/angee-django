@@ -7,7 +7,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
   return { ...actual, useSlot: vi.fn(() => []) };
 });
 import { useSlot } from "@angee/ui";
-import { OrganizationForm, OrganizationsPage } from "./OrganizationsPage";
+import { OrganizationForm, OrganizationsPage, organizationForm } from "./OrganizationsPage";
 import { ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 
 function formFields() {
@@ -23,6 +23,11 @@ function recordTabIds() {
 }
 
 describe("organization form extensions", () => {
+  test("registers the canonical form for routed and inline relation surfaces", () => {
+    const page = OrganizationsPage();
+    expect((page.props as ResourceListProps).form).toBe(organizationForm);
+  });
+
   test("shares canonical identity and address tabs with person records", () => {
     expect(recordTabIds()).toEqual(["identity", "addresses"]);
   });

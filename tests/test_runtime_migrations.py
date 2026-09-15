@@ -6,10 +6,12 @@ import hashlib
 import importlib
 import logging
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from django.apps import apps as django_apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, migrations, models
 from django.db.migrations.loader import MigrationLoader
@@ -30,6 +32,49 @@ from tests.conftest import make_addon, write_addon_manifest
 def _write_module(path: Path, text: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def test_file_attachment_contribution_migration_accepts_only_exact_states() -> None:
+    """Legacy edges backfill as direct; malformed partial claim states fail closed."""
+
+    module = importlib.import_module(
+        "angee.storage.runtime_migrations.file_attachment_contributions"
+    )
+    state = ProjectState()
+    state.add_model(
+        ModelState(
+            app_label="storage",
+            name="FileAttachment",
+            fields={"id": models.AutoField(primary_key=True)},
+        )
+    )
+    assert module.applies(state) is True
+    for operation in module.Migration.operations:
+        operation.state_forwards("storage", state)
+    assert module.applies(state) is False
+
+    state.models["storage", "fileattachment"].fields[
+        "direct_membership"
+    ] = models.BooleanField(default=False, editable=False)
+    with pytest.raises(ImproperlyConfigured, match="partial membership transition"):
+        module.applies(state)
+
+    malformed_claim = module.Migration("probe", "storage").mutate_state(
+        ProjectState(
+            models={
+                ("storage", "fileattachment"): ModelState(
+                    app_label="storage",
+                    name="FileAttachment",
+                    fields={"id": models.AutoField(primary_key=True)},
+                )
+            }
+        )
+    )
+    malformed_claim.models["storage", "fileattachmentclaim"].fields[
+        "contributor_object_id"
+    ] = models.CharField(max_length=128)
+    with pytest.raises(ImproperlyConfigured, match="partial membership transition"):
+        module.applies(malformed_claim)
 
 
 def test_vcs_state_delete_waits_for_non_moved_integrate_consumer() -> None:
@@ -279,7 +324,17 @@ class Migration(migrations.Migration):
         if module_name == "example" or module_name.startswith("example."):
             monkeypatch.delitem(sys.modules, module_name)
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setitem(settings.MIGRATION_MODULES, "resources", f"{runtime_module}.resources.migrations")
+    configured_modules = getattr(settings, "MIGRATION_MODULES", {})
+    if isinstance(configured_modules, Mapping):
+        migration_modules = dict(configured_modules)
+    else:
+        # pytest-django's --nomigrations sentinel deliberately is not a
+        # mapping. This fixture owns one explicit migration graph, so retain
+        # that isolation for every other installed app and enable only the
+        # temporary resources module it is exercising.
+        migration_modules = {config.label: None for config in django_apps.get_app_configs()}
+    migration_modules["resources"] = f"{runtime_module}.resources.migrations"
+    settings.MIGRATION_MODULES = migration_modules
     importlib.invalidate_caches()
     addon = make_addon(
         name="example.demo",
@@ -602,6 +657,185 @@ class Migration(migrations.Migration):
     assert '("iam", "0004_current") if dependency == ("iam", "__latest__")' in text
 
 
+def test_latest_run_before_is_frozen_to_current_leaf(runtime_migration_probe, monkeypatch, settings) -> None:
+    """A later migration cannot retarget an already materialized ordering edge."""
+
+    materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
+    iam_migrations = runtime_dir / "iam" / "migrations"
+    _write_module(runtime_dir / "iam" / "__init__.py")
+    _write_module(iam_migrations / "__init__.py")
+    _write_module(
+        iam_migrations / "0004_current.py",
+        """\
+from django.db import migrations
+
+
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = []
+""",
+    )
+    source_path.write_text(
+        source_path.read_text(encoding="utf-8").replace(
+            "    dependencies = []",
+            '    dependencies = []\n    run_before = [("iam", "__latest__")]',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "iam", f"{runtime_dir.name}.iam.migrations")
+    importlib.invalidate_caches()
+
+    materializer.materialize()
+
+    output = runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py"
+    text = output.read_text(encoding="utf-8")
+    assert '("iam", "0004_current") if node == ("iam", "__latest__")' in text
+    _write_module(
+        iam_migrations / "0005_future.py",
+        """\
+from django.db import migrations
+
+
+class Migration(migrations.Migration):
+    dependencies = [("iam", "0004_current")]
+    operations = []
+""",
+    )
+    importlib.invalidate_caches()
+
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    migration = loader.disk_migrations[("resources", "0002_rename_legacy")]
+    assert migration.run_before == [("iam", "0004_current")]
+    plan = loader.graph.forwards_plan(("iam", "0005_future"))
+    assert plan.index(("resources", "0002_rename_legacy")) < plan.index(
+        ("iam", "0004_current")
+    )
+
+
+def test_latest_run_before_requires_an_existing_leaf(runtime_migration_probe) -> None:
+    materializer, _, source_path, _, _ = runtime_migration_probe
+    source_path.write_text(
+        source_path.read_text(encoding="utf-8").replace(
+            "    dependencies = []",
+            '    dependencies = []\n    run_before = [("missing", "__latest__")]',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    importlib.invalidate_caches()
+
+    with pytest.raises(
+        RuntimeError,
+        match="__latest__ dependency app 'missing' has no migration leaf",
+    ):
+        materializer.materialize()
+
+
+def test_origin_run_before_requires_prior_origin_and_freezes_target(
+    runtime_migration_probe, monkeypatch, settings
+) -> None:
+    """An origin edge resolves once and never follows a later target-app leaf."""
+
+    materializer, addon, source_path, runtime_dir, source_root = runtime_migration_probe
+    iam_migrations = runtime_dir / "iam" / "migrations"
+    _write_module(runtime_dir / "iam" / "__init__.py")
+    _write_module(iam_migrations / "__init__.py")
+    _write_module(
+        iam_migrations / "0001_initial.py",
+        """\
+from django.db import migrations
+
+
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = []
+""",
+    )
+    target_path = source_root / "runtime_migrations" / "target.py"
+    _write_module(
+        target_path,
+        """\
+from django.db import migrations
+
+
+def applies(project_state):
+    return True
+
+
+class Migration(migrations.Migration):
+    dependencies = [("iam", "__latest__")]
+    operations = []
+""",
+    )
+    source_path.write_text(
+        source_path.read_text(encoding="utf-8").replace(
+            "    dependencies = []",
+            '    dependencies = []\n    run_before = [("__angee_origin__", "example.demo:target")]',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    target = {
+        "name": "target",
+        "app_label": "iam",
+        "module": "runtime_migrations.target",
+    }
+    before = {
+        "name": "rename_legacy",
+        "app_label": "resources",
+        "module": "runtime_migrations.rename_legacy",
+    }
+    monkeypatch.setitem(
+        settings.MIGRATION_MODULES,
+        "iam",
+        f"{runtime_dir.name}.iam.migrations",
+    )
+    write_addon_manifest(addon, migrations=(before, target))
+    importlib.invalidate_caches()
+    materializer = RuntimeMigrations(
+        (addon,),
+        runtime_dir=runtime_dir,
+        labels=("resources", "iam"),
+    )
+    with pytest.raises(RuntimeError, match="unknown or not yet planned"):
+        materializer.materialize()
+
+    write_addon_manifest(addon, migrations=(target, before))
+    importlib.invalidate_caches()
+    written = materializer.materialize()
+    assert [path.name for path in written] == [
+        "0002_target.py",
+        "0002_rename_legacy.py",
+    ]
+    output = runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py"
+    text = output.read_text(encoding="utf-8")
+    assert (
+        '("iam", "0002_target") if node == '
+        '("__angee_origin__", "example.demo:target")'
+    ) in text
+
+    _write_module(
+        iam_migrations / "0003_future.py",
+        """\
+from django.db import migrations
+
+
+class Migration(migrations.Migration):
+    dependencies = [("iam", "0002_target")]
+    operations = []
+""",
+    )
+    importlib.invalidate_caches()
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    migration = loader.disk_migrations[("resources", "0002_rename_legacy")]
+    assert migration.run_before == [("iam", "0002_target")]
+    plan = loader.graph.forwards_plan(("iam", "0003_future"))
+    assert plan.index(("resources", "0002_rename_legacy")) < plan.index(
+        ("iam", "0002_target")
+    )
+
+
 def test_materialization_is_idempotent(runtime_migration_probe) -> None:
     materializer, _, _, _, _ = runtime_migration_probe
 
@@ -914,11 +1148,17 @@ def test_workflow_stable_key_migration_guards_and_preserves_constraint_state() -
 
 
 def test_workflow_identity_migration_is_additive_and_matches_source_fields() -> None:
-    """The identity migration applies once and preserves exact StateField state."""
+    """Purpose evolution appends to the exact historical identity state."""
 
     from angee.workflows.models import StepRun, Workflow, WorkflowRun
 
     module = importlib.import_module("angee.workflows.runtime_migrations.workflow_identity")
+    purpose_module = importlib.import_module(
+        "angee.workflows.runtime_migrations.workflow_integration_sync_purpose"
+    )
+    origin_module = importlib.import_module(
+        "angee.workflows.runtime_migrations.workflow_integration_sync_origin"
+    )
     legacy = ProjectState()
     for name in ("Workflow", "WorkflowRun", "StepRun"):
         legacy.add_model(ModelState("workflows", name, [("id", models.AutoField(primary_key=True))]))
@@ -930,6 +1170,32 @@ def test_workflow_identity_migration_is_additive_and_matches_source_fields() -> 
         module.applies(partial)
     migrated = module.Migration("probe", "workflows").mutate_state(legacy)
     assert module.applies(migrated) is False
+    historical_purpose = migrated.models["workflows", "workflow"].fields["purpose"]
+    assert historical_purpose.max_length == 13
+    assert tuple(historical_purpose.choices) == module.WORKFLOW_PURPOSE_CHOICES
+    assert purpose_module.applies(migrated) is True
+
+    undersized = migrated.clone()
+    undersized.models["workflows", "workflow"].fields["purpose"] = (
+        purpose_module.Migration.operations[0].field.clone()
+    )
+    undersized.models["workflows", "workflow"].fields["purpose"].max_length = 13
+    with pytest.raises(ImproperlyConfigured, match="partial purpose transition"):
+        purpose_module.applies(undersized)
+
+    migrated = purpose_module.Migration("purpose_probe", "workflows").mutate_state(migrated)
+    assert purpose_module.applies(migrated) is False
+    historical_origin = migrated.models["workflows", "workflowrun"].fields["origin"]
+    assert historical_origin.max_length == 14
+    assert tuple(historical_origin.choices) == module.RUN_ORIGIN_CHOICES
+    assert origin_module.applies(migrated) is True
+    source_predecessor = migrated.clone()
+    source_predecessor_origin = historical_origin.clone()
+    source_predecessor_origin.choices = origin_module.SOURCE_PREDECESSOR_CHOICES
+    source_predecessor.models["workflows", "workflowrun"].fields["origin"] = source_predecessor_origin
+    assert origin_module.applies(source_predecessor) is True
+    migrated = origin_module.Migration("origin_probe", "workflows").mutate_state(migrated)
+    assert origin_module.applies(migrated) is False
 
     for model_name, field_name, source_model in (
         ("workflow", "purpose", Workflow),
@@ -941,20 +1207,104 @@ def test_workflow_identity_migration_is_additive_and_matches_source_fields() -> 
         migrated_path, migrated_args, migrated_kwargs = migrated_field.deconstruct()[1:]
         source_path, source_args, source_kwargs = source_field.deconstruct()[1:]
         if (model_name, field_name) == ("workflowrun", "origin"):
-            assert tuple(migrated_kwargs.pop("choices")) == module.RUN_ORIGIN_CHOICES
-            current_choices = tuple(source_kwargs.pop("choices"))
-            assert set(current_choices) == {
-                *module.RUN_ORIGIN_CHOICES,
-                ("test", "Test"),
-                ("recovery", "Recovery"),
-                ("workflow", "Workflow"),
-            }
-            assert len(current_choices) == len(module.RUN_ORIGIN_CHOICES) + 3
+            assert tuple(migrated_kwargs.pop("choices")) == origin_module.CURRENT_CHOICES
+            assert tuple(source_kwargs.pop("choices")) == origin_module.CURRENT_CHOICES
         assert (migrated_path, migrated_args, migrated_kwargs) == (
             source_path,
             source_args,
             source_kwargs,
         )
+
+
+@pytest.mark.parametrize("current", [False, True], ids=["predecessor", "current"])
+@pytest.mark.parametrize(
+    ("malformation", "expected_message"),
+    [
+        ("field_type", "incompatible field type"),
+        ("default", "incompatible field shape"),
+        ("db_index", "incompatible field shape"),
+        ("null", "incompatible field shape"),
+    ],
+)
+def test_workflow_integration_sync_purpose_rejects_malformed_field_shape(
+    current: bool,
+    malformation: str,
+    expected_message: str,
+) -> None:
+    """Purpose evolution never accepts or alters a malformed persisted field."""
+
+    identity_module = importlib.import_module("angee.workflows.runtime_migrations.workflow_identity")
+    purpose_module = importlib.import_module(
+        "angee.workflows.runtime_migrations.workflow_integration_sync_purpose"
+    )
+    state = ProjectState()
+    for name in ("Workflow", "WorkflowRun", "StepRun"):
+        state.add_model(ModelState("workflows", name, [("id", models.AutoField(primary_key=True))]))
+    state = identity_module.Migration("identity_probe", "workflows").mutate_state(state)
+    if current:
+        state = purpose_module.Migration("purpose_probe", "workflows").mutate_state(state)
+
+    original = state.models["workflows", "workflow"].fields["purpose"]
+    if malformation == "field_type":
+        field = models.CharField(
+            choices=original.choices,
+            db_index=True,
+            default="automation",
+            max_length=original.max_length,
+        )
+    else:
+        field = original.clone()
+        if malformation == "default":
+            field.default = "agent_session"
+        elif malformation == "db_index":
+            field.db_index = False
+        else:
+            field.null = True
+    state.models["workflows", "workflow"].fields["purpose"] = field
+
+    with pytest.raises(ImproperlyConfigured, match=expected_message):
+        purpose_module.applies(state)
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    ["field_type", "default", "db_index", "null", "width"],
+)
+def test_workflow_integration_sync_origin_rejects_malformed_predecessor(
+    malformation: str,
+) -> None:
+    """The provenance append accepts only the exact historical origin column."""
+
+    identity_module = importlib.import_module("angee.workflows.runtime_migrations.workflow_identity")
+    origin_module = importlib.import_module(
+        "angee.workflows.runtime_migrations.workflow_integration_sync_origin"
+    )
+    state = ProjectState()
+    for name in ("Workflow", "WorkflowRun", "StepRun"):
+        state.add_model(ModelState("workflows", name, [("id", models.AutoField(primary_key=True))]))
+    state = identity_module.Migration("identity_probe", "workflows").mutate_state(state)
+    original = state.models["workflows", "workflowrun"].fields["origin"]
+    if malformation == "field_type":
+        field = models.CharField(
+            choices=original.choices,
+            db_index=True,
+            default="unknown",
+            max_length=original.max_length,
+        )
+    else:
+        field = original.clone()
+        if malformation == "default":
+            field.default = "manual"
+        elif malformation == "db_index":
+            field.db_index = False
+        elif malformation == "null":
+            field.null = True
+        else:
+            field.max_length = 13
+    state.models["workflows", "workflowrun"].fields["origin"] = field
+
+    with pytest.raises(ImproperlyConfigured, match="incompatible|partial origin transition"):
+        origin_module.applies(state)
 
 
 def test_agent_session_identity_migration_waits_for_complete_identity_state() -> None:
@@ -1190,6 +1540,11 @@ def test_integrate_lifecycle_values_migration_rewrites_existing_rows() -> None:
             ]
         )
         with connection.schema_editor() as schema_editor:
+            legacy_field = LegacyIntegration._meta.get_field("lifecycle")
+            widened_field = module.Migration.operations[0].field.clone()
+            widened_field.set_attributes_from_name("lifecycle")
+            widened_field.model = LegacyIntegration
+            schema_editor.alter_field(LegacyIntegration, legacy_field, widened_field)
             module.rewrite_lifecycle_values(historical_apps, schema_editor)
 
         table = connection.ops.quote_name(LegacyIntegration._meta.db_table)
@@ -1250,8 +1605,14 @@ def test_integrate_lifecycle_values_migration_restores_legacy_values_that_fit_th
             ]
         )
         with connection.schema_editor() as schema_editor:
+            legacy_field = ReversedIntegration._meta.get_field("lifecycle")
+            widened_field = module.Migration.operations[0].field.clone()
+            widened_field.set_attributes_from_name("lifecycle")
+            widened_field.model = ReversedIntegration
+            schema_editor.alter_field(ReversedIntegration, legacy_field, widened_field)
             module.rewrite_lifecycle_values(historical_apps, schema_editor)
             module.restore_lifecycle_values(historical_apps, schema_editor)
+            schema_editor.alter_field(ReversedIntegration, widened_field, legacy_field)
 
         table = connection.ops.quote_name(ReversedIntegration._meta.db_table)
         lifecycle = connection.ops.quote_name("lifecycle")
@@ -1751,7 +2112,13 @@ def test_migration_owner_validates_native_manifest_fields(runtime_migration_prob
 @pytest.mark.parametrize("node", ["ab", ("resources", "0001_legacy", "extra"), ("resources",)])
 def test_run_before_rejects_non_pair_nodes(node) -> None:
     with pytest.raises(RuntimeError, match="invalid Django run_before node"):
-        RuntimeMigrations._resolve_run_before(None, [node], current_app="resources", origin="example:probe")
+        RuntimeMigrations._resolve_run_before(
+            None,
+            [node],
+            current_app="resources",
+            origin="example:probe",
+            origin_nodes={},
+        )
 
 
 def test_validated_plan_render_uses_the_hashed_source_snapshot(runtime_migration_probe) -> None:

@@ -138,6 +138,14 @@ Use these owners instead of maintaining another contract in an addon:
   `transaction.atomic`; the following DB mutation path names its transaction
   owner and `system_context` reason. Platform install, agent provisioning, OAuth
   flows, and resources loading all follow this two-phase shape.
+- **Manager-only writes share one transaction-bound lifetime primitive.** Use
+  `angee.base.authority.TransactionBoundAuthority` when a model/queryset guard
+  must recognize an exact manager-owned mutation inside an already-open outer
+  transaction. Keep the manager's domain payload and validation at that owner;
+  the shared primitive owns only alias, connection, outer-atomic, thread,
+  copied-context revocation, and non-nesting lifetime fences. It is not actor authority,
+  does not open a transaction, and does not replace one-use workflow invocation
+  capabilities.
 - Cross-addon and generated-model references go through Django's app registry
   (`apps.get_model`, `apps.get_app_config`, `apps.get_app_configs`) and `_meta`.
   Never import generated `runtime/` modules or rediscover model/app facts by
@@ -859,6 +867,64 @@ and current contracts before applying a historical example to a new deployment.
 
 ### Integrations and workers
 
+- **Exact workflow launch pins definition and occurrence identity.**
+  `Workflow.definition_digest()` is the native canonical digest of one persisted
+  definition, and `engine.start_pinned()` locks that immutable published version
+  before it verifies the digest and starts or exactly retains the supplied dedup
+  key and occurrence. The manager invokes the version's cooperative
+  `validate_run_launch()` hook on both new and retained paths, before returning
+  or writing runtime rows; an exact path is create-only after retained discovery.
+  Donors may add domain admission there, but ordinary callers still authorize
+  before the system-owned persistence boundary. The digest is exact persisted
+  content, not a portable resource signature: arbitrary error-workflow references
+  contain database-local identity. A portable shipped integration workflow must
+  therefore forbid an error workflow or canonicalize that reference at its own
+  definition owner. Admission lock order is Version, retained Run, then donor
+  locks; no owner may reacquire Version or Run after taking a donor lock.
+- **Integration-sync workflow authority is closed and server-owned.** Only a
+  workflow whose explicit purpose is `integration_sync` may enter the protected
+  launch path. Its integration owner selects the exact published version and
+  native definition digest, persists `integration_sync` as the Run origin, and
+  supplies the persisted active Integration owner as execution principal; a
+  request cannot replace that actor. The dedup key contains only the Bridge
+  identity and stable issued occurrence kind/key. Configuration generation,
+  credential ID/revision, exact definition facts, source window, and the cutoff
+  derived from the occurrence time remain immutable input facts: a replay with
+  changed facts collides with and rejects the retained cycle instead of minting
+  another. The closed input contains identities and bounded window facts, not
+  credentials, secrets, or source business records. Concrete connectors own the
+  shipped-definition binding and affected-scope authorization. Physical step
+  invocation authority is a separate engine capability; merely possessing a
+  Run or StepRun ID never authorizes source reads or imported writes.
+- **Credential material has a server-owned monotonic fence.**
+  `Credential.material_revision` is the generation of the canonical credential
+  kind/material mapping. New rows start at 1; each actual canonical kind or
+  plaintext material change increments once under the credential row lock,
+  including transient and consume-once keys. Semantic no-ops and metadata-only
+  health, name, or expiry writes do not increment. Consumers fence durable work
+  with credential ID plus material revision and recheck canonical rows before and
+  after remote reads and before commit. A mismatch means stale work, not proof of
+  a new principal. Never persist, log, or compare a secret hash, and never use
+  `updated_at` as an ABA fence.
+- **Bridge dispatch may complete inline or hand off to one durable owner.**
+  `Bridge.dispatch_sync` returns the shared completed/dispatched receipt; a
+  concrete asynchronous bridge persists the receipt's opaque execution reference
+  atomically with admission and resolves its liveness at that execution owner.
+  Queue admission snapshots the concrete bridge's configuration generation and
+  the worker rechecks generation, connected lifecycle, and retry eligibility
+  after taking the advisory lock. Runtime `ERROR` alone is not terminal: a
+  scheduled `next_sync_at` remains recoverable, while a terminal failure clears
+  that schedule until an explicit repair verb resets it. Asynchronous terminal
+  delivery uses `record_sync_terminal(expected_execution_ref=…)`, whose row-locked
+  compare-and-set prevents duplicate or late delivery from settling newer work;
+  an opaque reference alone never proves work is alive.
+- **Workflow terminal effects run after terminal state commits.** A
+  `WorkflowRun` terminal transition atomically persists its state and schedules
+  a follow-up `ADVANCE`; it never invokes a composed external effect inline.
+  When that later dispatch finds the canonical run already terminal, it calls
+  the run's cooperative `deliver_terminal_effect()` hook and consumes the intent
+  only after the hook succeeds. Overrides must be idempotent: a failure leaves
+  the durable intent unconsumed for the periodic publisher to retry.
 - **An integration failure reaches the operator only as an `IntegrationError`.**
   `Bridge.record_sync_error` and the console action results project every other
   exception to the generic "Integration operation failed." — a vendor SDK's

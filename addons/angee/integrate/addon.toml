@@ -32,6 +32,16 @@ app_label = "integrate"
 module = "runtime_migrations.integration_parent_impl_axis"
 
 [[migrations]]
+name = "credential_material_revision"
+app_label = "integrate"
+module = "runtime_migrations.credential_material_revision"
+
+[[migrations]]
+name = "integration_credential_binding_revision"
+app_label = "integrate"
+module = "runtime_migrations.integration_credential_binding_revision"
+
+[[migrations]]
 name = "platform_managed_integrations"
 app_label = "integrate"
 module = "runtime_migrations.platform_managed_integrations"

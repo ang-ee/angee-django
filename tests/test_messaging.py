@@ -19,10 +19,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.signals import post_save
@@ -83,6 +84,9 @@ from tests.conftest import (
     STORAGE_TEST_MODELS,
     Backend,
     Drive,
+    ExternalLink,
+    FileAttachment,
+    FileAttachmentContributor,
     MimeType,
     PostMetrics,
     _clear_model_tables,
@@ -97,6 +101,61 @@ from tests.mtidemo.models import MtiChild, MtiParent
 from tests.spaces_models import Group as SpaceGroup
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent
 from tests.test_integrate_vcs import VCS_TEST_MODELS
+
+
+def test_part_source_claim_migration_requires_exact_complete_shape() -> None:
+    """The append owns legacy, exact-current, and partial migration states."""
+
+    from django.core.exceptions import ImproperlyConfigured
+    from django.db.migrations.state import ProjectState
+
+    from angee.messaging.runtime_migrations import part_source_claim
+
+    current = ProjectState.from_apps(apps)
+    assert part_source_claim.applies(current) is False
+
+    legacy = current.clone()
+    part = legacy.models[("messaging", "part")]
+    part.fields.pop("source_claim")
+    part.options["constraints"] = tuple(
+        constraint
+        for constraint in part.options.get("constraints", ())
+        if constraint.name != "ck_part_source_claim_attachment"
+    )
+    part.options.pop("base_manager_name", None)
+    assert part_source_claim.applies(legacy) is True
+
+    partial = legacy.clone()
+    part_source_claim.Migration.operations[0].state_forwards("messaging", partial)
+    with pytest.raises(ImproperlyConfigured, match="partial Part claim-provenance"):
+        part_source_claim.applies(partial)
+
+
+def test_external_link_parts_migration_requires_exact_complete_shape() -> None:
+    """The append refuses a partially materialized File-to-link transition."""
+
+    from django.core.exceptions import ImproperlyConfigured
+    from django.db.migrations.state import ProjectState
+
+    from angee.messaging.runtime_migrations import external_link_parts
+
+    current = ProjectState.from_apps(apps)
+    assert external_link_parts.applies(current) is False
+
+    legacy = current.clone()
+    part = legacy.models[("messaging", "part")]
+    part.fields.pop("external_link")
+    part.options["constraints"] = tuple(
+        constraint
+        for constraint in part.options.get("constraints", ())
+        if constraint.name != "ck_part_at_most_one_content"
+    )
+    assert external_link_parts.applies(legacy) is True
+
+    partial = legacy.clone()
+    external_link_parts.Migration.operations[0].state_forwards("messaging", partial)
+    with pytest.raises(ImproperlyConfigured, match="partial Part transition"):
+        external_link_parts.applies(partial)
 
 _PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
 _OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
@@ -657,6 +716,137 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
         assert events == []
     finally:
         message_ingested.disconnect(capture)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_historical_record_ingest_owns_exact_classification_without_rebuilding(
+    channel: Any,
+) -> None:
+    """A source-attached replay corrects only its exact native classification."""
+
+    with system_context(reason="test historical record classification"):
+        ticket = ThreadedTicket.objects.create(title="Imported classified record")
+        source = Thread._base_manager.create(
+            channel=channel,
+            platform="other",
+            modality="group",
+            visibility="restricted",
+            external_id="source:classified-record",
+            created_by=channel.owner,
+        )
+        attachment = ThreadAttachment.objects.bind_source_thread(ticket, source)
+        target_model = attachment.content_type.model_class()
+        assert target_model is not None
+        subtype = MessageSubtype._base_manager.create(
+            model_label=target_model._meta.label,
+            key="source-event",
+            name="Source event",
+            default=False,
+            created_by=channel.owner,
+        )
+        parsed = _parsed("classified-record", sent_at=_AT)
+        landed = Message.objects.ingest(
+            [parsed],
+            channel=channel,
+            explicit_thread=source,
+            historical=True,
+            historical_message_type=Message.MessageKind.COMMENT,
+            historical_subtype=subtype,
+            quote_edges=False,
+        )[0]
+        part_ids = tuple(
+            landed.parts.order_by("position", "pk").values_list("pk", flat=True)
+        )
+        sync_hash = landed.metadata["sync_hash"]
+
+        corrected = Message.objects.ingest(
+            [parsed],
+            channel=channel,
+            explicit_thread=source,
+            historical=True,
+            historical_message_type=Message.MessageKind.NOTIFICATION,
+            historical_subtype=subtype,
+            quote_edges=False,
+        )[0]
+
+    corrected.refresh_from_db()
+    assert corrected.pk == landed.pk
+    assert corrected.message_type == Message.MessageKind.NOTIFICATION
+    assert corrected.subtype_id == subtype.pk
+    assert corrected.metadata["sync_hash"] == sync_hash
+    assert corrected.edit_history == []
+    assert (
+        tuple(
+            corrected.parts.order_by("position", "pk").values_list("pk", flat=True)
+        )
+        == part_ids
+    )
+
+    with system_context(reason="test invalid historical record classification"):
+        wrong_subtype = MessageSubtype._base_manager.create(
+            model_label="messaging.Message",
+            key="wrong-source-model",
+            name="Wrong source model",
+            default=False,
+            created_by=channel.owner,
+        )
+        with pytest.raises(ValidationError, match="source record model and owner"):
+            Message.objects.ingest(
+                [parsed],
+                channel=channel,
+                explicit_thread=source,
+                historical=True,
+                historical_message_type=Message.MessageKind.NOTIFICATION,
+                historical_subtype=wrong_subtype,
+                quote_edges=False,
+            )
+        other_owner = get_user_model().objects.create_user(username="other-history-owner")
+        wrong_owner_subtype = MessageSubtype._base_manager.create(
+            model_label=target_model._meta.label,
+            key="wrong-source-owner",
+            name="Wrong source owner",
+            default=False,
+            created_by=other_owner,
+        )
+        with pytest.raises(ValidationError, match="source record model and owner"):
+            Message.objects.ingest(
+                [parsed],
+                channel=channel,
+                explicit_thread=source,
+                historical=True,
+                historical_message_type=Message.MessageKind.NOTIFICATION,
+                historical_subtype=wrong_owner_subtype,
+                quote_edges=False,
+            )
+        with pytest.raises(ValidationError, match="source channel owner"):
+            Message.objects.ingest(
+                [parsed],
+                channel=channel,
+                owner_id=other_owner.pk,
+                explicit_thread=source,
+                historical=True,
+                historical_message_type=Message.MessageKind.NOTIFICATION,
+                quote_edges=False,
+            )
+        with pytest.raises(ValidationError, match="only on the default database"):
+            Message.objects.db_manager("other").ingest(
+                [parsed],
+                channel=channel,
+                explicit_thread=source,
+                historical=True,
+                historical_message_type=Message.MessageKind.NOTIFICATION,
+                quote_edges=False,
+            )
+        with pytest.raises(ValidationError, match="limited to historical record ingestion"):
+            Message.objects.ingest(
+                [parsed],
+                channel=channel,
+                explicit_thread=source,
+                historical=False,
+                historical_message_type=Message.MessageKind.NOTIFICATION,
+                historical_subtype=subtype,
+                quote_edges=False,
+            )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2508,6 +2698,343 @@ def test_resync_rethreads_and_reconciles_both_thread_counters(channel: Any) -> N
     assert root_thread.last_message_at == b_sent
     # The losing thread emptied out: the recount deletes the husk outright.
     assert not Thread._base_manager.filter(pk=orphan_thread.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_historical_relocation_repairs_participants_and_preserves_source_thread(
+    channel: Any,
+) -> None:
+    """The retained-source move owns its whole thread graph and exact CAS."""
+
+    owner = channel.owner
+    with system_context(reason="test historical relocation setup"):
+        source = Thread._base_manager.create(
+            channel=channel,
+            platform="other",
+            modality="group",
+            visibility="restricted",
+            external_id="source:historical-relocation",
+            created_by=owner,
+        )
+        destination = Thread._base_manager.create(
+            channel=channel,
+            platform="other",
+            modality="group",
+            visibility="restricted",
+            external_id="destination:historical-relocation",
+            created_by=owner,
+        )
+        unrelated = Thread._base_manager.create(
+            channel=channel,
+            platform="other",
+            modality="group",
+            visibility="restricted",
+            external_id="unrelated:historical-relocation",
+            created_by=owner,
+        )
+        record = ChatterDoc.objects.create(title="Retained source thread")
+        ThreadAttachment.objects.bind_source_thread(record, source)
+        parsed = ParsedMessage(
+            external_id="historical-relocation",
+            platform="other",
+            sender=ParsedHandle(platform="other", value="source-author"),
+            sent_at=_AT,
+            body=ParsedPart(text="Retained history"),
+        )
+        message = Message.objects.ingest(
+            [parsed],
+            channel=channel,
+            explicit_thread=source,
+            historical=True,
+            quote_edges=False,
+        )[0]
+
+    relocated = Message.objects.relocate_historical(
+        message.with_actor(owner),
+        channel=channel.with_actor(owner),
+        expected_thread=source.with_actor(owner),
+        thread=destination.with_actor(owner),
+    )
+
+    relocated.refresh_from_db()
+    source.refresh_from_db()
+    destination.refresh_from_db()
+    assert relocated.thread_id == destination.pk
+    assert Participant._base_manager.get(message=relocated).thread_id == destination.pk
+    assert source.message_count == 0
+    assert source.last_message_at is None
+    assert destination.message_count == 1
+    assert destination.last_message_at == _AT
+    assert Thread._base_manager.filter(pk=source.pk).exists()
+
+    repeated = Message.objects.relocate_historical(
+        relocated.with_actor(owner),
+        channel=channel.with_actor(owner),
+        expected_thread=source.with_actor(owner),
+        thread=destination.with_actor(owner),
+    )
+    assert repeated.pk == relocated.pk
+    assert Participant._base_manager.get(message=relocated).thread_id == destination.pk
+
+    with system_context(reason="test disposable relocation source"):
+        disposable_source = Thread._base_manager.create(
+            channel=channel,
+            platform="other",
+            modality="group",
+            visibility="restricted",
+            external_id="disposable:historical-relocation",
+            created_by=owner,
+        )
+        disposable = Message.objects.ingest(
+            [
+                ParsedMessage(
+                    external_id="disposable-historical-relocation",
+                    platform="other",
+                    sender=ParsedHandle(platform="other", value="source-author"),
+                    sent_at=_AT,
+                    body=ParsedPart(text="Disposable source thread"),
+                )
+            ],
+            channel=channel,
+            explicit_thread=disposable_source,
+            historical=True,
+            quote_edges=False,
+        )[0]
+    disposable = Message.objects.relocate_historical(
+        disposable.with_actor(owner),
+        channel=channel.with_actor(owner),
+        expected_thread=disposable_source.with_actor(owner),
+        thread=destination.with_actor(owner),
+    )
+    assert not Thread._base_manager.filter(pk=disposable_source.pk).exists()
+    assert (
+        Message.objects.relocate_historical(
+            disposable.with_actor(owner),
+            channel=channel.with_actor(owner),
+            expected_thread=disposable_source.with_actor(owner),
+            thread=destination.with_actor(owner),
+        ).pk
+        == disposable.pk
+    )
+    with pytest.raises(ValueError, match="thread changed"):
+        Message.objects.relocate_historical(
+            relocated.with_actor(owner),
+            channel=channel.with_actor(owner),
+            expected_thread=unrelated.with_actor(owner),
+            thread=source.with_actor(owner),
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_historical_file_binding_requires_exact_claim_and_part(
+    messaging_tables: None,
+    channel: Any,
+    tmp_path: Path,
+) -> None:
+    """A claimed source file gets one exact, idempotent historical Part."""
+
+    del messaging_tables
+    owner = channel.owner
+    with system_context(reason="test historical file binding setup"):
+        _storage_drive(tmp_path, owner=owner)
+        file = StorageFile.objects.ingest_bytes(
+            b"Historical attachment",
+            filename="retained.pdf",
+            owner_id=owner.pk,
+        )
+        contributor = FileAttachmentContributor.objects.create(name="Source file 17")
+        message = Message.objects.ingest(
+            [
+                ParsedMessage(
+                    external_id="historical-file-binding",
+                    platform="other",
+                    sender=ParsedHandle(platform="other", value="source-author"),
+                    sent_at=_AT,
+                    body=ParsedPart(text="Message before its attachment"),
+                )
+            ],
+            channel=channel,
+            historical=True,
+            quote_edges=False,
+        )[0]
+        claim = FileAttachment.objects.claim(
+            file,
+            message,
+            contributor=contributor,
+        )
+
+    part = Message.objects.bind_historical_file(
+        message.with_actor(owner),
+        file=file,
+        contributor=contributor,
+    )
+    repeated = Message.objects.bind_historical_file(
+        message.with_actor(owner),
+        file=file,
+        contributor=contributor,
+        expected_part=part,
+    )
+    assert repeated.pk == part.pk
+    assert repeated.message_id == message.pk
+    assert repeated.file_id == file.pk
+    assert repeated.source_claim_id == claim.pk
+
+    with system_context(reason="test claimed Part write guards"):
+        with pytest.raises(ValidationError, match="historical file owner"):
+            Part._base_manager.create(
+                message=message,
+                position=part.position + 1,
+                type="application/pdf",
+                disposition=Part.Disposition.ATTACHMENT,
+                role=Part.PartRole.BODY,
+                file=file,
+                source_claim=claim,
+                created_by_id=owner.pk,
+            )
+        with pytest.raises(ValidationError, match="historical file owner"):
+            Part._base_manager.filter(pk=part.pk).update(file_id=None)
+        forged = Part._base_manager.get(pk=part.pk)
+        forged.file_id = None
+        with pytest.raises(ValidationError, match="Bulk claim-backed"):
+            Part._base_manager.bulk_update([forged], ["file"])
+        with pytest.raises(ValidationError, match="historical file owner"):
+            part.delete()
+        with pytest.raises(ValidationError, match="historical file owner"):
+            Part._base_manager.filter(pk=part.pk).delete()
+        with pytest.raises(ValidationError, match="historical file owner"):
+            Message._base_manager.filter(pk=message.pk).delete()
+
+    with system_context(reason="test unrelated attachment Part"):
+        unrelated = Part._base_manager.create(
+            message=message,
+            position=part.position + 1,
+            type="application/pdf",
+            disposition=Part.Disposition.ATTACHMENT,
+            role=Part.PartRole.BODY,
+            file=file,
+            created_by_id=owner.pk,
+        )
+    with pytest.raises(ValueError, match="identity changed"):
+        Message.objects.bind_historical_file(
+            message.with_actor(owner),
+            file=file,
+            contributor=contributor,
+            expected_part=unrelated,
+        )
+
+    with system_context(reason="test historical message content refresh"):
+        refreshed = Message.objects.ingest(
+            [
+                ParsedMessage(
+                    external_id="historical-file-binding",
+                    platform="other",
+                    sender=ParsedHandle(platform="other", value="source-author"),
+                    sent_at=_AT,
+                    body=ParsedPart(text="Message after its attachment"),
+                )
+            ],
+            channel=channel,
+            explicit_thread=message.thread,
+            historical=True,
+            quote_edges=False,
+        )[0]
+    assert refreshed.pk == message.pk
+    with system_context(reason="test retained claimed Part"):
+        part.refresh_from_db()
+        assert part.source_claim_id == claim.pk
+        assert part.message_id == refreshed.pk
+        assert Part._base_manager.filter(pk=part.pk).exists()
+        assert not Part._base_manager.filter(pk=unrelated.pk).exists()
+
+    Message.objects.unbind_historical_file(
+        refreshed.with_actor(owner),
+        file=file,
+        contributor=contributor,
+        expected_part=part,
+    )
+    with system_context(reason="test withdrawn claimed Part"):
+        assert not Part._base_manager.filter(pk=part.pk).exists()
+    assert FileAttachment.objects.release_claim(
+        file,
+        message,
+        contributor=contributor,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_historical_external_link_uses_the_existing_claimed_part_owner(
+    messaging_tables: None,
+    channel: Any,
+) -> None:
+    """A URL is one exclusive Part arm with the same claim lifecycle as a File."""
+
+    del messaging_tables
+    owner = channel.owner
+    with actor_context(owner):
+        link = ExternalLink.objects.create_link(
+            url="https://example.test/source/invoice/17",
+            title="Source invoice",
+        )
+    with system_context(reason="test historical external-link binding setup"):
+        contributor = FileAttachmentContributor.objects.create(name="Source link 17")
+        message = Message.objects.ingest(
+            [
+                ParsedMessage(
+                    external_id="historical-link-binding",
+                    platform="other",
+                    sender=ParsedHandle(platform="other", value="source-author"),
+                    sent_at=_AT,
+                    body=ParsedPart(text="Message before its external link"),
+                )
+            ],
+            channel=channel,
+            historical=True,
+            quote_edges=False,
+        )[0]
+
+    part = Message.objects.bind_historical_asset(
+        message.with_actor(owner),
+        asset=link,
+        contributor=contributor,
+    )
+    repeated = Message.objects.bind_historical_asset(
+        message.with_actor(owner),
+        asset=link,
+        contributor=contributor,
+        expected_part=part,
+    )
+    assert repeated.pk == part.pk
+    assert part.file_id is None
+    assert part.external_link_id == link.pk
+    assert part.type == "text/uri-list"
+    assert part.name == "Source invoice"
+    assert part.source_claim.attachment.external_link_id == link.pk
+    with actor_context(owner):
+        assert Part._base_manager.attachments().filter(pk=part.pk).exists()
+
+    with system_context(reason="test native Part content exclusivity"):
+        body = Part._base_manager.get(
+            message=message,
+            fragment__isnull=False,
+        )
+        body.external_link = link
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                body.save(update_fields=("external_link", "updated_at"))
+
+    Message.objects.unbind_historical_asset(
+        message.with_actor(owner),
+        asset=link,
+        contributor=contributor,
+        expected_part=part,
+    )
+    with system_context(reason="test withdrawn external-link Part"):
+        assert not Part._base_manager.filter(pk=part.pk).exists()
+    assert FileAttachment.objects.release_asset_claim(
+        link,
+        message,
+        contributor=contributor,
+    )
 
 
 @pytest.mark.django_db(transaction=True)

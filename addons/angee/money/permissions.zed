@@ -1,7 +1,7 @@
 // Authorization schema for the money addon.
 // @rebac_package: money
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 // Roles-as-namespace anchor, mirroring sequence/role: `includes` lets one money
 // role imply another, and resources gate on `effective_member` so granted +
@@ -30,14 +30,15 @@ definition money/currency {
     permission delete = admin->member + manager
 }
 
-// Exchange rates are dated financial configuration: read by any authenticated
-// user, written only by an admin (the same posture as the catalogue).
+// Only explicitly eligible native/global rates carry the shared reader tuple.
+// Contextual or source-owned rates are scoped by composing product addons.
 definition money/rate {
     relation admin:   angee/role // rebac:const=admin
     relation manager: money/role:money_admin#effective_member
+    relation shared:  auth/user:*
 
     permission create = admin->member + manager
-    permission read   = authenticated
+    permission read   = shared + admin->member + manager
     permission write  = admin->member + manager
     permission delete = admin->member + manager
 }

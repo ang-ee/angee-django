@@ -1,7 +1,7 @@
 // Authorization schema for the uom addon.
 // @rebac_package: uom
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 // Roles-as-namespace anchor, mirroring sequence/role: `includes` lets one uom
 // role imply another, and resources gate on `effective_member` so granted +
@@ -21,21 +21,23 @@ definition uom/role {
 // admin-only. The create path preflights `create` through the write backend and
 // runs elevated, so an admin is granted and everyone else denied on writes.
 definition uom/category {
+    relation shared:  auth/user:*
     relation admin:   angee/role // rebac:const=admin
     relation manager: uom/role:uom_admin#effective_member
 
     permission create = admin->member + manager
-    permission read   = authenticated
+    permission read   = shared + admin->member + manager
     permission write  = admin->member + manager
     permission delete = admin->member + manager
 }
 
 definition uom/uom {
+    relation shared:  auth/user:*
     relation admin:   angee/role // rebac:const=admin
     relation manager: uom/role:uom_admin#effective_member
 
     permission create = admin->member + manager
-    permission read   = authenticated
+    permission read   = shared + admin->member + manager
     permission write  = admin->member + manager
     permission delete = admin->member + manager
 }

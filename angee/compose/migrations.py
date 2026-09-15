@@ -42,6 +42,8 @@ class RuntimeMigrationPlan:
     source_sha256: str
     dependencies: tuple[tuple[str, str], ...]
     latest_dependencies: tuple[tuple[tuple[str, str], tuple[str, str]], ...]
+    run_before: tuple[tuple[str, str], ...]
+    resolved_run_before: tuple[tuple[tuple[str, str], tuple[str, str]], ...]
     migration_class: type[Migration]
 
 
@@ -68,6 +70,9 @@ class RuntimeMigrations:
 
         loader = MigrationLoader(None, ignore_no_migrations=True)
         existing = self._existing_migrations(loader)
+        origin_nodes = {
+            origin: node for origin, (node, _migration, _path) in existing.items()
+        }
         state = loader.project_state()
         plans: list[RuntimeMigrationPlan] = []
         next_numbers: dict[str, int] = {}
@@ -146,6 +151,13 @@ class RuntimeMigrations:
                     current_app=declaration["app_label"],
                     origin=origin,
                 )
+                run_before, resolved_run_before = self._resolve_run_before(
+                    loader,
+                    migration_class.run_before,
+                    current_app=declaration["app_label"],
+                    origin=origin,
+                    origin_nodes=origin_nodes,
+                )
                 if round_number:
                     deferred_dependencies = tuple(
                         node
@@ -168,20 +180,18 @@ class RuntimeMigrations:
                     source_sha256=source_sha256,
                     dependencies=dependencies,
                     latest_dependencies=latest_dependencies,
+                    run_before=run_before,
+                    resolved_run_before=resolved_run_before,
                     migration_class=migration_class,
                 )
                 migration = migration_class(name, declaration["app_label"])
                 migration.dependencies = list(dependencies)
+                migration.run_before = list(run_before)
                 try:
                     loader.graph.add_node(node, migration)
                     for dependency in dependencies:
                         loader.graph.add_dependency(migration, node, dependency)
-                    for run_before in self._resolve_run_before(
-                        loader,
-                        migration.run_before,
-                        current_app=declaration["app_label"],
-                        origin=origin,
-                    ):
+                    for run_before in migration.run_before:
                         loader.graph.add_dependency(migration, run_before, node)
                     loader.graph.validate_consistency()
                     loader.graph.ensure_not_cyclic()
@@ -192,6 +202,7 @@ class RuntimeMigrations:
                 except Exception as error:
                     raise RuntimeError(f"{origin}: migration state transition is invalid") from error
                 leaves[declaration["app_label"]] = node
+                origin_nodes[origin] = node
                 plans.append(plan)
                 progressed = True
 
@@ -331,19 +342,37 @@ class RuntimeMigrations:
         *,
         current_app: str,
         origin: str,
-    ) -> tuple[tuple[str, str], ...]:
+        origin_nodes: Mapping[str, tuple[str, str]],
+    ) -> tuple[
+        tuple[tuple[str, str], ...],
+        tuple[tuple[tuple[str, str], tuple[str, str]], ...],
+    ]:
         nodes: list[tuple[str, str]] = []
+        resolved_nodes: list[tuple[tuple[str, str], tuple[str, str]]] = []
         for raw_node in raw_nodes:
             node = cls._dependency_node(raw_node, origin=origin, kind="run_before node")
+            if node[0] == "__angee_origin__":
+                resolved = origin_nodes.get(node[1])
+                if resolved is None:
+                    raise RuntimeError(
+                        f"{origin}: run_before origin {node[1]!r} is unknown or not yet planned"
+                    )
+                nodes.append(resolved)
+                resolved_nodes.append((node, resolved))
+                continue
             if node[1] == "__latest__":
-                raise RuntimeError(f"{origin}: run_before does not support __latest__")
+                resolved = cls._target_leaf(loader, node[0], origin=origin, required=True)
+                assert resolved is not None
+                nodes.append(resolved)
+                resolved_nodes.append((node, resolved))
+                continue
             try:
                 checked = loader.check_key(node, current_app)
             except (IndexError, ValueError) as error:
                 raise RuntimeError(f"{origin}: invalid run_before node {node!r}") from error
             if checked is not None:
                 nodes.append(checked)
-        return tuple(nodes)
+        return tuple(nodes), tuple(resolved_nodes)
 
     def _existing_migrations(
         self,
@@ -460,6 +489,17 @@ class RuntimeMigrations:
                     f"if dependency == ({json.dumps(dependency[0])}, {json.dumps(dependency[1])}) ",
                     "else dependency\n",
                     "    for dependency in Migration.dependencies\n",
+                    "]\n",
+                )
+            )
+        for node, resolved in plan.resolved_run_before:
+            lines.extend(
+                (
+                    "Migration.run_before = [\n",
+                    f"    ({json.dumps(resolved[0])}, {json.dumps(resolved[1])}) ",
+                    f"if node == ({json.dumps(node[0])}, {json.dumps(node[1])}) ",
+                    "else node\n",
+                    "    for node in Migration.run_before\n",
                     "]\n",
                 )
             )

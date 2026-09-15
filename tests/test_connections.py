@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import multiprocessing
 import time
 from datetime import timedelta
@@ -704,6 +703,7 @@ def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
         assert events.count(("result", "process-fresh")) == 2
         reloaded = Credential.objects.sudo(reason="test cross-process credential verify").get(pk=credential.pk)
         assert reloaded.reveal()["refresh_token"] == "process-rotated"
+        assert reloaded.material_revision == 2
     finally:
         for process in processes:
             if process.is_alive():
@@ -739,15 +739,14 @@ def test_ensure_fresh_does_not_call_select_for_update_on_sqlite(monkeypatch: pyt
             raise AssertionError("SQLite refresh must not call select_for_update()")
 
         def fake_handler_refresh(self: Any, locked: Any) -> None:
-            locked.material = json.dumps(
-                {"access_token": "sqlite-access", "refresh_token": "sqlite-refresh"},
-                sort_keys=True,
-                separators=(",", ":"),
+            locked.update_material(
+                access_token="sqlite-access",
+                refresh_token="sqlite-refresh",
             )
             locked.expires_at = timezone.now() + timedelta(hours=2)
             locked.last_refresh_at = timezone.now()
             locked.last_refresh_status = "ok"
-            locked.save(update_fields=["material", "expires_at", "last_refresh_at", "last_refresh_status"])
+            locked.save(update_fields=["expires_at", "last_refresh_at", "last_refresh_status"])
 
         monkeypatch.setattr(type(Credential.objects.all()), "select_for_update", forbidden_select_for_update)
         monkeypatch.setattr(OAuthCredentialHandler, "refresh", fake_handler_refresh)
@@ -784,10 +783,10 @@ def test_attach_credential_preserves_paused_lifecycle_while_resetting_health() -
                 backend_class="local",
                 lifecycle="connected",
             )
-        with system_context(reason="test paused attach state"):
-            integration.pause()
-            integration.report_status("error", "expired token")
-            integration.attach_credential(second)
+        integration = VcsBridge.objects.with_actor(user).get(pk=integration.pk)
+        integration.pause()
+        integration.report_status("error", "expired token")
+        integration.attach_credential(second)
 
         integration.refresh_from_db()
         assert str(integration.lifecycle) == "paused"

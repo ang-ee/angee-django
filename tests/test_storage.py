@@ -5,17 +5,21 @@ from __future__ import annotations
 import hashlib
 import importlib
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from io import BytesIO
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import SuspiciousFileOperation
+from django.core.exceptions import SuspiciousFileOperation, ValidationError
 from django.core.management import call_command
-from django.db import connection, models
+from django.db import close_old_connections, connection, connections, models, transaction
+from django.db.models.deletion import ProtectedError
 from django.db.models.signals import post_save
 from rebac import actor_context, app_settings, system_context
 from rebac.actors import to_subject_ref
@@ -25,6 +29,10 @@ from rebac.roles import grant
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
 from angee.data.field_classification import is_archive_field
 from angee.storage import exceptions
+from angee.storage.manager_authority import (
+    attachment_membership_authority,
+    attachment_membership_is_authorized,
+)
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
@@ -32,8 +40,11 @@ from tests.conftest import (
     STORAGE_TEST_MODELS,
     Backend,
     Drive,
+    ExternalLink,
     File,
     FileAttachment,
+    FileAttachmentClaim,
+    FileAttachmentContributor,
     Folder,
     MimeType,
     _clear_model_tables,
@@ -52,6 +63,54 @@ PNG_BYTES = bytes.fromhex(
 )
 PNG_SHA256 = hashlib.sha256(PNG_BYTES).hexdigest()
 storage_schema = importlib.import_module("angee.storage.schema")
+
+
+def test_external_link_assets_migration_requires_exact_complete_shape() -> None:
+    """The append owns only the full File-only predecessor state."""
+
+    from django.apps import apps
+    from django.core.exceptions import ImproperlyConfigured
+    from django.db.migrations.state import ProjectState
+
+    from angee.storage.runtime_migrations import external_link_assets
+
+    current = ProjectState.from_apps(apps)
+    assert external_link_assets.applies(current) is False
+    assert (
+        current.models[("storage", "externallink")].options["base_manager_name"]
+        == "objects"
+    )
+
+    missing_base_manager = current.clone()
+    missing_base_manager.models[("storage", "externallink")].options.pop(
+        "base_manager_name"
+    )
+    with pytest.raises(ImproperlyConfigured, match="partial asset transition"):
+        external_link_assets.applies(missing_base_manager)
+
+    legacy = current.clone()
+    legacy.remove_model("storage", "externallink")
+    attachment = legacy.models[("storage", "fileattachment")]
+    attachment.fields.pop("external_link")
+    legacy_file = attachment.fields["file"].clone()
+    legacy_file.null = False
+    legacy_file.blank = False
+    attachment.fields["file"] = legacy_file
+    attachment.options["constraints"] = tuple(
+        constraint
+        for constraint in attachment.options.get("constraints", ())
+        if constraint.name
+        not in {
+            "ck_storage_attachment_exactly_one_asset",
+            "uq_storage_external_link_attachment_edge",
+        }
+    )
+    assert external_link_assets.applies(legacy) is True
+
+    partial = legacy.clone()
+    external_link_assets.Migration.operations[0].state_forwards("storage", partial)
+    with pytest.raises(ImproperlyConfigured, match="partial asset transition"):
+        external_link_assets.applies(partial)
 
 
 def test_file_source_model_owns_the_upload_protocol() -> None:
@@ -217,6 +276,94 @@ def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_external_link_creation_is_actor_owned_validated_and_immutable(
+    drive: Any,
+) -> None:
+    """External links are byte-free evidence, never impersonated or edited in place."""
+
+    with actor_context(drive.alice):
+        link = ExternalLink.objects.create_link(
+            url=" https://example.test/invoice/17 ",
+            title="Source invoice",
+            metadata={"source": {"kind": "external_link"}},
+        )
+    assert link.url == "https://example.test/invoice/17"
+    assert link.created_by_id == drive.alice.pk
+
+    other = get_user_model().objects.create_user(username="link-other")
+    with actor_context(drive.alice), pytest.raises(PermissionDenied, match="another owner"):
+        ExternalLink(
+            url="https://example.test/forged-owner",
+            created_by=other,
+        ).save()
+
+    link.title = "Changed source invoice"
+    with pytest.raises(ValidationError, match="immutable"):
+        link.save(update_fields=("title", "updated_at"))
+    with pytest.raises(ValidationError, match="immutable"):
+        ExternalLink._base_manager.filter(pk=link.pk).update(
+            url="https://example.test/other"
+        )
+    with actor_context(drive.alice), pytest.raises(ValidationError, match="immutable"):
+        ExternalLink(
+            pk=link.pk,
+            url="https://example.test/explicit-pk-bypass",
+            title="Source invoice",
+            metadata=link.metadata,
+            created_by_id=link.created_by_id,
+        ).save()
+    with pytest.raises(ValidationError, match="Bulk external-link creation"):
+        ExternalLink._base_manager.bulk_create(
+            [ExternalLink(url="https://example.test/forged")]
+        )
+    with actor_context(drive.alice), pytest.raises(ValidationError):
+        ExternalLink.objects.create_link(url="ftp://example.test/file")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_external_link_reuses_the_file_attachment_claim_owner(drive: Any) -> None:
+    """A link contribution is one alternate arm of the existing attachment graph."""
+
+    with actor_context(drive.alice):
+        link = ExternalLink.objects.create_link(
+            url="https://example.test/invoice/17",
+            title="Source invoice",
+        )
+    with system_context(reason="external-link attachment setup"):
+        target = MtiParent.objects.create(title="Link target")
+        source = FileAttachmentContributor.objects.create(name="Link source")
+        claim = FileAttachment.objects.claim_asset(
+            link,
+            target,
+            contributor=source,
+        )
+        edge = claim.attachment
+        assert edge.file_id is None
+        assert edge.external_link_id == link.pk
+        assert edge.direct_membership is False
+
+        with pytest.raises(ProtectedError):
+            link.delete()
+        with pytest.raises(ProtectedError):
+            ExternalLink._base_manager.filter(pk=link.pk).delete()
+
+        with pytest.raises(ValidationError, match="exactly one"):
+            FileAttachment(
+                file=None,
+                external_link=None,
+                content_type=edge.content_type,
+                object_id=target.pk,
+            ).save()
+
+        assert FileAttachment.objects.release_asset_claim(
+            link,
+            target,
+            contributor=source,
+        )
+        assert not FileAttachment._base_manager.filter(pk=edge.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, drive: Any) -> None:
     """attach() keys the file edge on the canonical (topmost REBAC-typed) MTI target.
 
@@ -239,6 +386,265 @@ def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, driv
         assert via_child.content_type == ContentType.objects.get_for_model(MtiParent)
         assert via_child.object_id == child.pk
         assert FileAttachment._base_manager.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_attachment_claims_preserve_direct_and_other_contributors(
+    tmp_path: Path, drive: Any,
+) -> None:
+    """A source release removes only its claim, never another membership."""
+
+    del tmp_path
+    file = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="file attachment contribution setup"):
+        target = MtiParent.objects.create(title="Claim target")
+        first_source = FileAttachmentContributor.objects.create(name="First source")
+        second_source = FileAttachmentContributor.objects.create(name="Second source")
+        first = FileAttachment.objects.claim(
+            file, target, contributor=first_source,
+        )
+        second = FileAttachment.objects.claim(
+            file, target, contributor=second_source,
+        )
+        attachment = first.attachment
+        attachment.refresh_from_db()
+        assert second.attachment_id == attachment.pk
+        assert attachment.direct_membership is False
+        assert attachment.contributions.count() == 2
+
+        assert FileAttachment.objects.release_claim(
+            file, target, contributor=first_source,
+        )
+        assert FileAttachment._base_manager.filter(pk=attachment.pk).exists()
+        assert attachment.contributions.count() == 1
+
+        direct = FileAttachment.objects.attach(file, target)
+        direct.refresh_from_db()
+        assert direct.pk == attachment.pk
+        assert direct.direct_membership is True
+        assert FileAttachment.objects.release_claim(
+            file, target, contributor=second_source,
+        )
+        assert FileAttachment._base_manager.filter(pk=attachment.pk).exists()
+        assert not attachment.contributions.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_attachment_last_source_claim_deletes_only_source_edge(
+    tmp_path: Path, drive: Any,
+) -> None:
+    """A source-only edge disappears after its final exact claim is released."""
+
+    del tmp_path
+    file = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="file attachment source-only setup"):
+        old_target = MtiParent.objects.create(title="Old target")
+        new_target = MtiParent.objects.create(title="New target")
+        source = FileAttachmentContributor.objects.create(name="Moving source")
+        old_claim = FileAttachment.objects.claim(
+            file, old_target, contributor=source,
+        )
+        new_claim = FileAttachment.objects.claim(
+            file, new_target, contributor=source,
+        )
+        assert old_claim.attachment_id != new_claim.attachment_id
+        assert FileAttachment.objects.release_claim(
+            file, old_target, contributor=source,
+        )
+        assert not FileAttachment._base_manager.filter(
+            pk=old_claim.attachment_id,
+        ).exists()
+        assert FileAttachment._base_manager.filter(
+            pk=new_claim.attachment_id,
+        ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_attachment_claim_write_bypasses_fail_closed(
+    tmp_path: Path, drive: Any,
+) -> None:
+    """Direct, bulk, and cascade paths cannot erase managed membership."""
+
+    del tmp_path
+    file = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="file attachment claim guard setup"):
+        target = MtiParent.objects.create(title="Guard target")
+        source = FileAttachmentContributor.objects.create(name="Guard source")
+        claim = FileAttachment.objects.claim(file, target, contributor=source)
+        attachment = claim.attachment
+
+        with pytest.raises(ValidationError, match="native manager"):
+            claim.delete()
+        with pytest.raises(ValidationError, match="native manager"):
+            FileAttachmentClaim.objects.filter(pk=claim.pk).delete()
+        with pytest.raises(ValidationError, match="native manager"):
+            FileAttachment.objects.filter(pk=attachment.pk).update(
+                direct_membership=True,
+            )
+        attachment.object_id = source.pk
+        with pytest.raises(ValidationError, match="cannot be moved"):
+            attachment.save(update_fields=("object_id", "updated_at"))
+
+        constructed = FileAttachment(
+            pk=attachment.pk,
+            file=file,
+            content_type=attachment.content_type,
+            object_id=source.pk,
+            label=attachment.label,
+            direct_membership=True,
+        )
+        with pytest.raises(ValidationError, match="native manager|cannot be moved"):
+            constructed.save(using=attachment._state.db)
+
+        conflict = FileAttachment(
+            file=file,
+            content_type=attachment.content_type,
+            object_id=attachment.object_id,
+            direct_membership=True,
+        )
+        with pytest.raises(ValidationError, match="Conflict updates"):
+            FileAttachment.objects.bulk_create(
+                [conflict],
+                update_conflicts=True,
+                update_fields=("direct_membership",),
+                unique_fields=("file", "content_type", "object_id"),
+            )
+        with pytest.raises(ProtectedError):
+            attachment.delete()
+
+        explicit_target = MtiParent.objects.create(title="Explicit edge target")
+        explicit = FileAttachment(
+            pk=attachment.pk + 1_000,
+            file=file,
+            content_type=ContentType.objects.get_for_model(MtiParent),
+            object_id=explicit_target.pk,
+            direct_membership=True,
+        )
+        explicit.save(using=attachment._state.db)
+        assert FileAttachment._base_manager.filter(pk=explicit.pk).exists()
+
+        missing = FileAttachment(
+            pk=explicit.pk + 1,
+            file=file,
+            content_type=explicit.content_type,
+            object_id=explicit_target.pk,
+            direct_membership=True,
+        )
+        with pytest.raises(FileAttachment.NotUpdated):
+            missing.save(
+                using=attachment._state.db,
+                update_fields=("direct_membership",),
+            )
+        assert not FileAttachment._base_manager.filter(pk=missing.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_attachment_membership_authority_cannot_be_replayed() -> None:
+    """A copied owner context is revoked even while its outer transaction remains."""
+
+    alias = connection.alias
+    with transaction.atomic(using=alias):
+        with attachment_membership_authority(alias):
+            retained = copy_context()
+            assert attachment_membership_is_authorized(alias)
+        assert not attachment_membership_is_authorized(alias)
+        assert not retained.run(attachment_membership_is_authorized, alias)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_attachment_contributor_delete_requires_explicit_release(
+    tmp_path: Path, drive: Any,
+) -> None:
+    """Instance and queryset deletion preserve claims until their owner releases."""
+
+    del tmp_path
+    file = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="file attachment contributor delete setup"):
+        target = MtiParent.objects.create(title="Protected contributor target")
+        source = FileAttachmentContributor.objects.create(name="Protected source")
+        FileAttachment.objects.claim(file, target, contributor=source)
+
+        with pytest.raises(ProtectedError, match="Release file-attachment claims"):
+            source.delete()
+        with pytest.raises(ProtectedError, match="Release file-attachment claims"):
+            FileAttachmentContributor.objects.filter(pk=source.pk).delete()
+        assert FileAttachmentContributor._base_manager.filter(pk=source.pk).exists()
+
+        assert FileAttachment.objects.release_claim(
+            file, target, contributor=source,
+        )
+        source.delete()
+        assert not FileAttachmentContributor._base_manager.filter(pk=source.pk).exists()
+
+        undeclared = MtiParent.objects.create(title="Undeclared contributor")
+        with pytest.raises(ValidationError, match="must declare deletion protection"):
+            FileAttachment.objects.claim(
+                file,
+                target,
+                contributor=undeclared,
+            )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(
+    connection.vendor != "postgresql",
+    reason="PostgreSQL file-attachment membership serialization contract",
+)
+def test_direct_attach_and_final_claim_release_serialize(
+    tmp_path: Path, drive: Any,
+) -> None:
+    """Concurrent direct promotion and final release retain one direct edge."""
+
+    del tmp_path
+    file = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="file attachment membership race setup"):
+        target = MtiParent.objects.create(title="Race target")
+        source = FileAttachmentContributor.objects.create(name="Race source")
+        claim = FileAttachment.objects.claim(file, target, contributor=source)
+    starting = Barrier(2)
+
+    def run(call: Any) -> Any:
+        close_old_connections()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout TO '5s'")
+            with system_context(reason="file attachment membership race"):
+                current_file = File._base_manager.get(pk=file.pk)
+                current_target = MtiParent._base_manager.get(pk=target.pk)
+                current_source = FileAttachmentContributor._base_manager.get(pk=source.pk)
+                starting.wait(timeout=10)
+                return call(current_file, current_target, current_source)
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        attached = pool.submit(
+            run,
+            lambda current_file, current_target, _source: (
+                FileAttachment.objects.attach(current_file, current_target).pk
+            ),
+        )
+        released = pool.submit(
+            run,
+            lambda current_file, current_target, current_source: (
+                FileAttachment.objects.release_claim(
+                    current_file,
+                    current_target,
+                    contributor=current_source,
+                )
+            ),
+        )
+        attached.result(timeout=15)
+        assert released.result(timeout=15) is True
+
+    with system_context(reason="file attachment membership race inspect"):
+        edge = FileAttachment._base_manager.get(
+            file_id=file.pk,
+            content_type_id=claim.attachment.content_type_id,
+            object_id=target.pk,
+        )
+        assert edge.direct_membership is True
+        assert not edge.contributions.exists()
 
 
 @pytest.mark.django_db(transaction=True)

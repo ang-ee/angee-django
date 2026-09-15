@@ -11,6 +11,8 @@ references; public ids stay at the transport boundary.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import logging
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
@@ -56,6 +58,7 @@ from angee.workflows.attempts import (
 from angee.workflows.dispatch import (
     WorkflowDispatchEnvelope,
     WorkflowDispatchKind,
+    enqueue_dispatch_publisher,
 )
 from angee.workflows.graph import GraphIdentity, WorkflowGraph
 from angee.workflows.manager_authority import (
@@ -136,6 +139,21 @@ def _save_workflow_status(instance: models.Model, source: Any, target: Any) -> N
         save_state(workflow, source, target)
     finally:
         del workflow._allow_immutable_status_save
+
+
+def _save_run_terminal_state(instance: models.Model, source: Any, target: Any) -> None:
+    """Persist a terminal run and its separate durable delivery pulse atomically."""
+
+    run = cast("WorkflowRun", instance)
+    alias = router.db_for_write(type(run), instance=run)
+    dispatch_model = run._meta.apps.get_model("workflows", "WorkflowDispatch")
+    with transaction.atomic(using=alias):
+        save_state(run, source, target)
+        dispatch_model.objects.db_manager(alias).schedule_advance(
+            run,
+            available_at=timezone.now(),
+        )
+        transaction.on_commit(enqueue_dispatch_publisher, using=alias)
 
 
 #: Statuses that participate in version currency: a newer ARCHIVED row
@@ -600,6 +618,49 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 )
             ],
         }
+
+    def definition_digest(self) -> str:
+        """Return the canonical digest of this exact persisted definition."""
+
+        alias = self._state.db or router.db_for_read(type(self), instance=self)
+        with system_context(reason="workflows.definition_digest"):
+            canonical = _definition_rows(type(self), alias).get(pk=self.pk)
+            payload = json.dumps(
+                canonical._definition_signature(),
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def validate_run_launch(
+        self,
+        *,
+        subject: Any,
+        actor: Any,
+        origin: RunOrigin,
+        trigger: Any,
+        parent_step_run: Any,
+        dedup_key: str | None,
+        occurrence_id: str | None,
+        input: JsonPresence,
+        retained_run: Any,
+        exact_version: bool,
+    ) -> None:
+        """Allow cooperative donors to guard every new or retained run launch."""
+
+        del (
+            subject,
+            actor,
+            origin,
+            trigger,
+            parent_step_run,
+            dedup_key,
+            occurrence_id,
+            input,
+            retained_run,
+            exact_version,
+        )
 
     def _validate_publishable(self) -> None:
         """Validate the exact locked graph before creating an executable snapshot."""
@@ -1573,7 +1634,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         status,
         source=[RunStatus.RUNNING, RunStatus.WAITING],
         target=RunStatus.SUCCEEDED,
-        on_success=save_state,
+        on_success=_save_run_terminal_state,
     )
     def mark_succeeded(self) -> None:
         """Mark a run as successful."""
@@ -1585,7 +1646,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         status,
         source=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
         target=RunStatus.FAILED,
-        on_success=save_state,
+        on_success=_save_run_terminal_state,
     )
     def mark_failed(self, error: str = "") -> None:
         """Mark a run as failed with an optional durable error message."""
@@ -1598,13 +1659,23 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         status,
         source=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
         target=RunStatus.CANCELED,
-        on_success=save_state,
+        on_success=_save_run_terminal_state,
     )
     def mark_canceled(self) -> None:
         """Mark a run as canceled."""
 
         self.wake_at = None
         self._transition_fields = {"wake_at"}
+
+    def deliver_terminal_effect(self, *, at: datetime) -> None:
+        """Deliver an idempotent terminal effect from a later durable ADVANCE.
+
+        Composed run donors may override this cooperative hook. The engine calls
+        it only for a freshly loaded terminal run and consumes the ADVANCE after
+        the hook returns, so failures remain pending for publisher retry.
+        """
+
+        del at
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the run while keeping start identity and input immutable."""

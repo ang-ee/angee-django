@@ -15,7 +15,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import OperationalError, ProgrammingError
 from django.db.models import Model
-from django.db.models.signals import post_save
+from django.db.models.signals import class_prepared, post_save, pre_delete
 from django.dispatch import Signal
 from rebac import system_context
 
@@ -30,13 +30,58 @@ Rendition, virus-scan, extraction, and indexing addons subscribe here.
 
 
 def connect() -> None:
-    """Wire the per-user Trash smart folder to user creation."""
+    """Wire storage lifecycle owners after app population."""
 
     post_save.connect(
         create_trash_folder,
         sender=get_user_model(),
         dispatch_uid="angee-storage-trash-folder",
     )
+    for model in apps.get_models():
+        _bind_attachment_contributor(model)
+    class_prepared.connect(
+        _on_class_prepared,
+        dispatch_uid="angee-storage-file-attachment-contributor.class_prepared",
+    )
+
+
+def _on_class_prepared(sender: type[Model], **kwargs: Any) -> None:
+    """Bind deletion protection to later composed and test contributor models."""
+
+    del kwargs
+    _bind_attachment_contributor(sender)
+
+
+def _bind_attachment_contributor(model: type[Model]) -> None:
+    """Bind only declared contributors; unrelated model fast deletes stay native."""
+
+    from angee.storage.models import FileAttachmentContributorMixin
+
+    if model._meta.abstract or not issubclass(model, FileAttachmentContributorMixin):
+        return
+    pre_delete.connect(
+        protect_attachment_contributor,
+        sender=model,
+        dispatch_uid=(
+            "angee-storage-file-attachment-contributor-protect."
+            f"{model._meta.label_lower}"
+        ),
+    )
+
+
+def protect_attachment_contributor(
+    sender: type[Model], instance: Model, using: str, **kwargs: Any
+) -> None:
+    """Refuse deletion of a canonical record that still owns attachment claims."""
+
+    del kwargs
+    del sender
+    try:
+        attachment_model = apps.get_model("storage", "FileAttachment")
+    except LookupError:
+        return
+    with system_context(reason="storage.file_attachment.contributor_delete"):
+        attachment_model.objects.db_manager(using).protect_contributor(instance)
 
 
 def create_trash_folder(

@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -92,14 +92,29 @@ definition storage/file {
     permission delete = owner + drive->write + admin->member
 }
 
+// Byte-free external links are distinct storage assets. The server never
+// dereferences them; an authorized read receives only the validated HTTP(S)
+// address. Viewer grants are the same explicit sharing surface as File.
+definition storage/external_link {
+    relation owner:  auth/user // rebac:field=created_by
+    relation viewer: auth/user | auth/group#member | auth/user:*
+    relation admin:  angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + viewer + admin->member
+    permission write  = owner + admin->member
+    permission delete = owner + admin->member
+}
+
 // The attachment target is polymorphic (GenericForeignKey to any row), so no
-// single zed type can cover it; access rides entirely on the file parent.
+// single zed type can cover it; access rides on the exact-one asset parent.
 // Consumers needing target-side gating wrap their own attach call sites.
 definition storage/file_attachment {
-    relation file:  storage/file // rebac:field=file
-    relation admin: angee/role // rebac:const=admin
+    relation file:          storage/file // rebac:field=file
+    relation external_link: storage/external_link // rebac:field=external_link
+    relation admin:         angee/role // rebac:const=admin
 
-    permission read   = file->read + admin->member
-    permission write  = file->write + admin->member
-    permission delete = file->write + admin->member
+    permission read   = file->read + external_link->read + admin->member
+    permission write  = file->write + external_link->write + admin->member
+    permission delete = file->write + external_link->write + admin->member
 }

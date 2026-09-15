@@ -24,3 +24,13 @@ module = "runtime_migrations.workflow_identity"
 name = "decision_target"
 app_label = "workflows"
 module = "runtime_migrations.decision_target"
+
+[[migrations]]
+name = "workflow_integration_sync_purpose"
+app_label = "workflows"
+module = "runtime_migrations.workflow_integration_sync_purpose"
+
+[[migrations]]
+name = "workflow_integration_sync_origin"
+app_label = "workflows"
+module = "runtime_migrations.workflow_integration_sync_origin"

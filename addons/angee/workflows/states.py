@@ -23,6 +23,7 @@ class WorkflowPurpose(models.TextChoices):
 
     AUTOMATION = "automation", "Automation"
     AGENT_SESSION = "agent_session", "Agent session"
+    INTEGRATION_SYNC = "integration_sync", "Integration sync"
 
 
 class RunOrigin(models.TextChoices):
@@ -36,6 +37,7 @@ class RunOrigin(models.TextChoices):
     WORKFLOW = "workflow", "Workflow"
     ERROR_WORKFLOW = "error_workflow", "Error workflow"
     RECOVERY = "recovery", "Recovery"
+    INTEGRATION_SYNC = "integration_sync", "Integration sync"
 
 
 class WaitingKind(models.TextChoices):

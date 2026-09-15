@@ -339,6 +339,7 @@ def test_event_admission_policy_has_legacy_default_and_readable_summaries() -> N
 def test_event_trigger_each_change_uses_publisher_occurrence_identity(
     workflow_trigger_tables: None,
     no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One publisher occurrence starts once while later changes to the same subject remain distinct."""
 
@@ -351,6 +352,14 @@ def test_event_trigger_each_change_uses_publisher_occurrence_identity(
     TriggerSubject.objects.filter(pk=subject.pk).update(state="ready")
     subject.refresh_from_db()
     now = timezone.now()
+    launch_calls: list[int | None] = []
+
+    def validate_run_launch(self: Workflow, **facts: Any) -> None:
+        del self
+        retained = facts["retained_run"]
+        launch_calls.append(None if retained is None else retained.pk)
+
+    monkeypatch.setattr(Workflow, "validate_run_launch", validate_run_launch)
 
     first = Trigger.objects.start_event(
         trigger.pk,
@@ -376,6 +385,20 @@ def test_event_trigger_each_change_uses_publisher_occurrence_identity(
     assert duplicate.pk == first.pk
     assert second is not None
     assert second.pk != first.pk
+    assert launch_calls == [None, first.pk, None]
+
+    def deny_launch(self: Workflow, **facts: Any) -> None:
+        del self, facts
+        raise ValidationError("launch denied")
+
+    monkeypatch.setattr(Workflow, "validate_run_launch", deny_launch)
+    with pytest.raises(ValidationError, match="launch denied"):
+        Trigger.objects.start_event(
+            trigger.pk,
+            subject=subject,
+            occurrence_id="change-1",
+            timestamp=now + timedelta(seconds=2),
+        )
     with system_context(reason="inspect event occurrence runs"):
         occurrences = list(WorkflowRun.objects.order_by("pk").values_list("occurrence_id", flat=True))
     assert occurrences == ["change-1", "change-2"]
@@ -718,6 +741,30 @@ def test_schedule_trigger_primes_missing_next_fire_with_injected_timestamp(
 
     assert _run_count() == 0
     assert trigger.next_fire_at == now + timedelta(hours=1)
+
+
+def test_schedule_start_runs_version_launch_hook(
+    workflow_trigger_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A due schedule cannot bypass cooperative workflow launch policy."""
+
+    del workflow_trigger_tables, no_workflow_queue
+    now = timezone.now().replace(microsecond=0)
+    trigger = _schedule_trigger(config={"interval_seconds": 3600}, next_fire_at=now)
+    calls: list[int | None] = []
+
+    def validate_run_launch(self: Workflow, **facts: Any) -> None:
+        del self
+        retained = facts["retained_run"]
+        calls.append(None if retained is None else retained.pk)
+
+    monkeypatch.setattr(Workflow, "validate_run_launch", validate_run_launch)
+    result = Trigger.objects.start_due_schedule(trigger.pk, timestamp=now)
+
+    assert result is not None
+    assert calls == [None]
 
 
 def test_schedule_trigger_validation_requires_cron_xor_interval(

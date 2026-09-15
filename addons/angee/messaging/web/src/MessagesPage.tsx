@@ -60,7 +60,22 @@ const PART_FIELDS = [
   "file.id",
   "file.filename",
   "file.title",
+  "external_link.id",
+  "external_link.title",
+  "external_link.url",
 ] as const;
+
+function safeExternalLinkHref(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? value
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function partColumns(
   t: ReturnType<typeof useMessagingT>,
@@ -110,12 +125,28 @@ function partColumns(
         // plain text where storage.File has no routed page.
         const file = row.file;
         const label = file?.title || file?.filename;
-        if (!label) return null;
-        const href = file?.id ? recordHref(FILE_MODEL, file.id) : undefined;
-        return href ? (
-          <TextLink href={href}>{label}</TextLink>
+        if (label) {
+          const href = file?.id ? recordHref(FILE_MODEL, file.id) : undefined;
+          return href ? (
+            <TextLink href={href}>{label}</TextLink>
+          ) : (
+            <span className="text-fg-subtle">{label}</span>
+          );
+        }
+        const externalLink = row.external_link;
+        const externalHref = safeExternalLinkHref(externalLink?.url);
+        const externalLabel = externalLink?.title || externalHref;
+        if (!externalLabel) return null;
+        return externalHref ? (
+          <TextLink
+            href={externalHref}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+          >
+            {externalLabel}
+          </TextLink>
         ) : (
-          <span className="text-fg-subtle">{label}</span>
+          <span className="text-fg-subtle">{externalLabel}</span>
         );
       },
     },

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.utils.module_loading import import_string
 from rebac import app_settings, subject_id_attr, system_context
 
@@ -46,7 +46,10 @@ def actor_user_id(actor: Any) -> Any | None:
     pk_name = pk.name if pk is not None else "pk"
     attribute = subject_id_attr(user_model)
     if attribute in {"pk", pk_name}:
-        return actor.subject_id
+        try:
+            return pk.to_python(actor.subject_id) if pk is not None else actor.subject_id
+        except (TypeError, ValueError, ValidationError):
+            return None
     with system_context(reason="base.actor_user_id"):
         return user_model._base_manager.filter(**{attribute: actor.subject_id}).values_list(pk_name, flat=True).first()
 

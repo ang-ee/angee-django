@@ -11,20 +11,20 @@ from __future__ import annotations
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from angee.base.identity import public_id_for
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, models, transaction
-from django.test.utils import CaptureQueriesContext
 from rebac import (
     actor_context,
     system_context,
 )
 from rebac.models import active_relationship_model
 
-from angee.tags.models import _NEVER_LOADED
 from angee.tags.models import Tag as AbstractTag
 from angee.tags.models import TagAssignment as AbstractTagAssignment
 from angee.tags.models import TagRole as AbstractTagRole
@@ -191,7 +191,7 @@ def test_the_same_tag_attaches_once_per_target(tags_tables: None) -> None:
             TagAssignment.objects.create(tag=tag, content_type=content_type, object_id=party.pk)
 
 
-def test_base_tag_is_always_shared_and_declares_no_scope_source_fields(tags_tables: None) -> None:
+def test_base_tag_is_always_shared_and_declares_no_policy_fields(tags_tables: None) -> None:
     """The framework tag is shared vocabulary; consumers may extend scope later."""
 
     del tags_tables
@@ -272,50 +272,53 @@ def test_shared_scope_fact_controls_actor_scoped_reads(tags_tables: None) -> Non
         assert not ScopeFlagTag.objects.filter(pk=scoped.pk).exists()
 
 
-def test_deferred_scope_source_field_defers_snapshot(tags_tables: None) -> None:
-    """A deferred scope source does not evaluate ``is_shared_scope`` in ``from_db``."""
-
-    del tags_tables
-    with system_context(reason="tags test deferred scope setup"):
-        tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=False)
-        with CaptureQueriesContext(connection) as ctx:
-            loaded = ScopeFlagTag.objects.defer("shared_marker").get(pk=tag.pk)
-
-    assert len(ctx.captured_queries) == 1
-    assert loaded.get_deferred_fields() == {"shared_marker"}
-    assert getattr(loaded, "_loaded_is_shared_scope") is _NEVER_LOADED
-
-
-def test_deferred_scope_source_field_save_resyncs_idempotently(tags_tables: None) -> None:
-    """A row loaded without its scope source falls back to an idempotent resync."""
+def test_deferred_dirty_policy_field_cannot_drive_reader_when_excluded(tags_tables: None) -> None:
+    """Reconcile reads persisted eligibility, not a dirty deferred instance value."""
 
     del tags_tables
     with system_context(reason="tags test deferred scope save"):
-        tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=True)
+        tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=False)
         loaded = ScopeFlagTag.objects.defer("shared_marker").get(pk=tag.pk)
+        loaded.shared_marker = True
         loaded.name = "Deferred renamed"
-        loaded.save()
+        loaded.save(update_fields={"name"})
+
+    with system_context(reason="tags deferred policy assertion"):
+        assert not _shared_reader_exists(tag)
+        assert (
+            ScopeFlagTag.objects.values_list("shared_marker", flat=True).get(pk=tag.pk)
+            is False
+        )
+
+
+def test_policy_queryset_and_bulk_writes_fail_closed(tags_tables: None) -> None:
+    """Write paths that cannot reconcile the tuple reject eligibility changes."""
+
+    del tags_tables
+    with system_context(reason="tags test policy write guards"):
+        tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
+        with pytest.raises(ValidationError, match="native owner"):
+            ScopeFlagTag.objects.filter(pk=tag.pk).update(shared_marker=False)
+        tag.shared_marker = False
+        with pytest.raises(ValidationError, match="native owner"):
+            ScopeFlagTag.objects.bulk_update([tag], ["shared_marker"])
+        with pytest.raises(ValidationError, match="native owner"):
+            ScopeFlagTag.objects.bulk_create(
+                [ScopeFlagTag(name="Bypass", shared_marker=True)]
+            )
 
     assert _shared_reader_exists(tag)
 
 
-def test_loaded_scope_snapshot_skips_unrelated_wildcard_rewrites(tags_tables: None) -> None:
-    """An unrelated save with a complete snapshot does not rewrite wildcard rows."""
+def test_empty_update_fields_preserves_django_noop_semantics(tags_tables: None) -> None:
+    """An empty narrow save neither writes the row nor reconciles authorization."""
 
     del tags_tables
-    with system_context(reason="tags test complete scope snapshot"):
+    with system_context(reason="tags empty save"):
         tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
-        loaded = ScopeFlagTag.objects.get(pk=tag.pk)
-        loaded.name = "Still stable"
-        with CaptureQueriesContext(connection) as ctx:
-            loaded.save()
-
-    tuple_writes = [
-        query
-        for query in ctx.captured_queries
-        if "rebac" in query["sql"].lower() and ("relationship" in query["sql"].lower())
-    ]
-    assert tuple_writes == []
+        with patch.object(tag, "reconcile_shared_reader") as reconcile:
+            tag.save(update_fields=())
+    reconcile.assert_not_called()
 
 
 @pytest.fixture()

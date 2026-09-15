@@ -116,6 +116,13 @@ else:
             "TEST": {"NAME": _TEST_DB_FILE},
         }
     }
+# The historical-relationship owner has an explicit non-default-alias contract.
+# A mirror exercises Django's real alias routing without provisioning a second
+# database or making the focused test depend on one backend.
+DATABASES["historical_relationships_other"] = {
+    **DATABASES["default"],
+    "TEST": {"MIRROR": "default"},
+}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "iam.User"
 # Bare tests skip addon autoconfig; reuse IAM's native REBAC policy binding.

@@ -139,4 +139,52 @@ describe("MessagePartsView", () => {
     expect(screen.queryByRole("link", { name: /payload\.txt/ })).toBeNull();
     expect(screen.getByText("payload.txt")).toBeTruthy();
   });
+
+  test("opens validated external-link parts without treating them as downloads", () => {
+    render(
+      <MessagePartsView
+        parts={[
+          {
+            id: "prt_link",
+            role: "BODY",
+            disposition: "ATTACHMENT",
+            external_link: {
+              id: "xln_1",
+              title: "Source invoice",
+              url: "https://odoo.example.test/invoice/17",
+            },
+          },
+        ]}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "Source invoice" });
+    expect(link.getAttribute("href")).toBe(
+      "https://odoo.example.test/invoice/17",
+    );
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer nofollow");
+    expect(link.hasAttribute("download")).toBe(false);
+  });
+
+  test("renders an unsafe external-link value as inert text", () => {
+    render(
+      <MessagePartsView
+        parts={[
+          {
+            id: "prt_link_unsafe",
+            role: "BODY",
+            external_link: {
+              id: "xln_unsafe",
+              title: "Unsafe source link",
+              url: "javascript:alert(1)",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByRole("link", { name: "Unsafe source link" })).toBeNull();
+    expect(screen.getByText("Unsafe source link")).toBeTruthy();
+  });
 });

@@ -12,6 +12,7 @@ from django.db.models.signals import post_save
 from django.utils import timezone
 from rebac import system_context
 
+from angee.workflows import engine
 from angee.workflows.attempts import AttemptResult, AttemptResultKind
 from angee.workflows.dispatch import (
     DispatchConsumption,
@@ -20,6 +21,7 @@ from angee.workflows.dispatch import (
     WorkflowDispatchKind,
     publish_due,
 )
+from angee.workflows.states import RunStatus
 from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 
@@ -289,7 +291,9 @@ def test_owner_preflight_rejects_ancestry_drift_during_locking(run: WorkflowRun)
         nonlocal drifted
         if model is WorkflowRun and kwargs.get("lock") == ("self",) and not drifted:
             drifted = True
-            native_system_queryset(StepRun, using="default", lock=None).filter(pk=step_run.pk).update(
+            # Deliberately create otherwise-forbidden ancestry drift to exercise
+            # the defensive preflight; public system querysets retain domain guards.
+            StepRun._base_manager.using("default").filter(pk=step_run.pk).update(
                 run_id=other_run.pk
             )
         return native_system_queryset(model, **kwargs)
@@ -326,3 +330,130 @@ def test_dispatch_kind_is_closed() -> None:
     assert {kind.value for kind in WorkflowDispatchKind} == {
         "advance", "execute", "decision_expire", "decision_escalate",
     }
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "terminal_status",
+    [RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED],
+)
+def test_run_terminal_transition_schedules_one_follow_up_advance(
+    run: WorkflowRun,
+    no_workflow_queue: None,
+    terminal_status: RunStatus,
+) -> None:
+    del no_workflow_queue
+    with patch.object(WorkflowRun, "deliver_terminal_effect", autospec=True) as deliver:
+        with system_context(reason="terminal transition test"):
+            if terminal_status == RunStatus.SUCCEEDED:
+                run.mark_running()
+                run.mark_succeeded()
+            elif terminal_status == RunStatus.FAILED:
+                run.mark_failed("terminal failure")
+            else:
+                engine.cancel(run)
+
+        deliver.assert_not_called()
+        with system_context(reason="verify terminal follow-up"):
+            run.refresh_from_db()
+            dispatches = list(WorkflowDispatch.objects.filter(run=run))
+        assert run.status == terminal_status
+        assert len(dispatches) == 1
+        assert dispatches[0].kind == WorkflowDispatchKind.ADVANCE
+        assert dispatches[0].consumed_at is None
+
+        engine.advance_dispatch(
+            dispatches[0].pk,
+            expected_run_id=run.pk,
+            now=dispatches[0].available_at,
+        )
+
+    assert deliver.call_args.args[0].status == terminal_status
+
+
+@pytest.mark.django_db(transaction=True)
+def test_budget_failure_delivers_only_from_follow_up_advance(
+    run: WorkflowRun,
+    no_workflow_queue: None,
+) -> None:
+    del no_workflow_queue
+    now = timezone.now()
+    with system_context(reason="configure exhausted workflow budget"):
+        run.workflow.budget = {"credits": 0}
+        run.workflow.save(update_fields=["budget", "updated_at"])
+        run.budget_spent = {"credits": 1}
+        run.save(update_fields=["budget_spent", "updated_at"])
+    initial = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
+
+    with patch.object(WorkflowRun, "deliver_terminal_effect", autospec=True) as deliver:
+        assert engine.advance_dispatch(initial.pk, expected_run_id=run.pk, now=now) == {
+            "claimed": 0
+        }
+        deliver.assert_not_called()
+        with system_context(reason="load terminal delivery pulse"):
+            run.refresh_from_db()
+            follow_up = WorkflowDispatch.objects.get(run=run, consumed_at__isnull=True)
+        assert run.status == RunStatus.FAILED
+
+        engine.advance_dispatch(
+            follow_up.pk,
+            expected_run_id=run.pk,
+            now=follow_up.available_at,
+        )
+
+    delivered_run = deliver.call_args.args[0]
+    assert delivered_run.pk == run.pk
+    assert delivered_run.status == RunStatus.FAILED
+    assert "exceeded budget" in delivered_run.error
+
+
+@pytest.mark.django_db(transaction=True)
+def test_terminal_effect_failure_preserves_terminal_state_and_retries_canonically(
+    run: WorkflowRun,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del no_workflow_queue
+    with system_context(reason="terminal retry setup"):
+        run.mark_failed("persisted terminal error")
+    with system_context(reason="load terminal retry dispatch"):
+        dispatch = WorkflowDispatch.objects.get(run=run)
+    run.error = "unsaved stale error"
+
+    deliveries: list[tuple[RunStatus, str]] = []
+
+    def fail_once(canonical: WorkflowRun, *, at: Any) -> None:
+        del at
+        deliveries.append((canonical.status, canonical.error))
+        if len(deliveries) == 1:
+            raise RuntimeError("terminal recipient unavailable")
+
+    monkeypatch.setattr(WorkflowRun, "deliver_terminal_effect", fail_once)
+    with pytest.raises(RuntimeError, match="recipient unavailable"):
+        engine.advance_dispatch(dispatch.pk, expected_run_id=run.pk)
+
+    with system_context(reason="verify terminal callback rollback boundary"):
+        run.refresh_from_db()
+        dispatch.refresh_from_db()
+    assert run.status == RunStatus.FAILED
+    assert run.error == "persisted terminal error"
+    assert dispatch.consumed_at is None
+
+    assert engine.advance_dispatch(dispatch.pk, expected_run_id=run.pk) == {"claimed": 0}
+    with system_context(reason="verify successful terminal retry"):
+        dispatch.refresh_from_db()
+    assert dispatch.consumed_at is not None
+    assert deliveries == [
+        (RunStatus.FAILED, "persisted terminal error"),
+        (RunStatus.FAILED, "persisted terminal error"),
+    ]
+
+    assert engine.advance_dispatch(dispatch.pk, expected_run_id=run.pk) == {"claimed": 0}
+    assert len(deliveries) == 2
+
+    late = WorkflowDispatch.objects.schedule_advance(run, available_at=timezone.now())
+    assert engine.advance_dispatch(late.pk, expected_run_id=run.pk) == {"claimed": 0}
+    with system_context(reason="verify harmless late terminal delivery"):
+        run.refresh_from_db()
+    assert run.status == RunStatus.FAILED
+    assert deliveries[-1] == (RunStatus.FAILED, "persisted terminal error")

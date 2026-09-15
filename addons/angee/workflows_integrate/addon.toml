@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see hatch-angee's native AddonManifest.
 [addon]
 name = "angee.workflows_integrate"
-description = "Archive extraction workflow steps for integration-owned ingest surfaces"
+description = "Workflow admission and archive extraction for integration-owned ingest surfaces"
 keywords = ["workflows", "integrate", "archives"]
 category = "Workflows"
-depends_on = ["angee.workflows", "angee.storage"]
+depends_on = ["angee.workflows", "angee.storage", "angee.integrate"]

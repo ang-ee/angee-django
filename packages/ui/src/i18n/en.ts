@@ -234,6 +234,7 @@ export const enUiMessages: Record<string, string> = {
   "message.parts.showQuoted": "Show quoted text",
   "message.parts.hideQuoted": "Hide quoted text",
   "message.parts.attachment": "Attachment",
+  "message.parts.externalLink": "Open external link",
   "message.parts.inlineImage": "Inline image",
   "message.parts.htmlBody": "HTML message body",
   "chat.typing": "Agent is thinking…",

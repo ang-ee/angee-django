@@ -367,9 +367,10 @@ class AngeeModel(TimestampMixin, RebacMixin):
         Locking was previously dead at these call sites and is now real.
         """
 
-        queryset = AngeeQuerySet[Self](model=cls, using=using).system_context(
-            reason=f"{cls._meta.label_lower}.system_queryset"
-        )
+        queryset = cast(
+            AngeeQuerySet[Self],
+            cls._default_manager.db_manager(using=using).get_queryset(),
+        ).system_context(reason=f"{cls._meta.label_lower}.system_queryset")
         return queryset.lock_if_supported(of=lock) if lock is not None else queryset
 
     @classmethod

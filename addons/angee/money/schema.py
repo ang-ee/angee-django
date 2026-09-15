@@ -1,9 +1,9 @@
 """GraphQL schema contributions for Angee money.
 
-Both models are exposed on the admin console only. Reads are open to any
-authenticated actor (currencies and rates are shared configuration every document
-references); writes are admin-gated by ``permissions.zed`` and the resource write
-backend. Console-only is the deliberate default: unlike ``parties``/``storage``
+Both models are exposed on the admin console only. Currency reads remain open to
+authenticated actors; rate reads require their persisted shared or composed
+context reader. Writes are admin-gated by ``permissions.zed`` and the resource
+write backend. Console-only is the deliberate default: unlike ``parties``/``storage``
 (which publish a ``public`` bucket for outward-facing directory/file reads), a
 currency catalogue has no public consumer yet — a storefront that needs
 public prices can add a ``public`` projection later. The ``currency`` foreign key
@@ -42,8 +42,13 @@ class CurrencyRateType(AngeeNode):
     """Admin projection of one dated exchange rate, with its currency as a display node."""
 
     currency: CurrencyType
+    reference_currency: CurrencyType | None
     date: auto
     rate: auto
+    source_priority: auto
+    record_model_label: auto
+    record_public_id: auto
+    is_archived: auto
     created_at: auto
     updated_at: auto
 
@@ -64,10 +69,17 @@ _RATE_RESOURCE = hasura_model_resource(
     CurrencyRateType,
     model=CurrencyRate,
     name="currency_rates",
-    filterable=["id", "currency", "date"],
-    sortable=["date", "rate", "created_at", "updated_at"],
+    filterable=[
+        "id",
+        "currency",
+        "reference_currency",
+        "date",
+        "source_priority",
+        "is_archived",
+    ],
+    sortable=["date", "source_priority", "rate", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["currency"],
+    groupable=["currency", "reference_currency", "source_priority", "is_archived"],
     writable=["currency", "date", "rate"],
     field_id_decode={"currency": public_pk_decoder(Currency)},
     write_backend=AngeeHasuraWriteBackend(CurrencyRate, public_id_fields=("currency",)),

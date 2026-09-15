@@ -52,8 +52,11 @@ from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
+from angee.storage.models import ExternalLink as AbstractExternalLink
 from angee.storage.models import File as AbstractFile
 from angee.storage.models import FileAttachment as AbstractFileAttachment
+from angee.storage.models import FileAttachmentClaim as AbstractFileAttachmentClaim
+from angee.storage.models import FileAttachmentContributorMixin
 from angee.storage.models import Folder as AbstractFolder
 from angee.storage.models import MimeType as AbstractMimeType
 from angee.storage.models import StorageRole as AbstractStorageRole
@@ -513,6 +516,17 @@ class File(AbstractFile):
         rebac_id_attr = "sqid"
 
 
+class ExternalLink(AbstractExternalLink):
+    """Concrete byte-free link used by source-addon tests."""
+
+    class Meta(AbstractExternalLink.Meta):
+        abstract = False
+        app_label = "storage"
+        db_table = "test_storage_external_link"
+        rebac_resource_type = "storage/external_link"
+        rebac_id_attr = "sqid"
+
+
 class FileAttachment(AbstractFileAttachment):
     """Concrete polymorphic file edge used by storage tests."""
 
@@ -524,6 +538,27 @@ class FileAttachment(AbstractFileAttachment):
         db_table = "test_storage_file_attachment"
         rebac_resource_type = "storage/file_attachment"
         rebac_id_attr = "sqid"
+
+
+class FileAttachmentClaim(AbstractFileAttachmentClaim):
+    """Concrete attachment contributor claim used by storage tests."""
+
+    class Meta(AbstractFileAttachmentClaim.Meta):
+        """Django model options for the canonical test claim."""
+
+        abstract = False
+        app_label = "storage"
+        db_table = "test_storage_file_attachment_claim"
+
+
+class FileAttachmentContributor(FileAttachmentContributorMixin, models.Model):
+    """Concrete deletion-protected contributor used by storage tests."""
+
+    name = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "storage"
+        db_table = "test_storage_file_attachment_contributor"
 
 
 class StorageRole(AbstractStorageRole):
@@ -545,7 +580,17 @@ class StorageRole(AbstractStorageRole):
         rebac_resource_type = "storage/role"
 
 
-STORAGE_TEST_MODELS = (Backend, Drive, Folder, MimeType, File, FileAttachment)
+STORAGE_TEST_MODELS = (
+    Backend,
+    Drive,
+    Folder,
+    MimeType,
+    File,
+    ExternalLink,
+    FileAttachment,
+    FileAttachmentClaim,
+    FileAttachmentContributor,
+)
 """Concrete storage models created on demand by storage test fixtures."""
 
 

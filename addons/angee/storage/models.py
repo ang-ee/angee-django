@@ -1,11 +1,12 @@
 """Source models for the storage addon.
 
-The file domain in six models: :class:`Backend` (credentialed backend
+The storage domain includes :class:`Backend` (credentialed backend
 instance), :class:`Drive` (addressable volume with its own key prefix),
 :class:`Folder` (tree node or per-user smart folder), :class:`MimeType`
 (reference taxonomy), :class:`File` (content-addressed row, deduplicated per
-drive, soft-deleted to Trash), and :class:`FileAttachment` (polymorphic edge
-from any model row to a file).
+drive, soft-deleted to Trash), :class:`ExternalLink` (validated byte-free HTTP(S)
+evidence), and :class:`FileAttachment` (the polymorphic edge from any model row
+to exactly one File or ExternalLink).
 
 A File is created as a DRAFT targeting a backend key, then bytes arrive from
 some source and :meth:`File.finalize` verifies and publishes them. Two byte
@@ -29,31 +30,29 @@ import posixpath
 import re
 import secrets
 from collections import OrderedDict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO, ClassVar, NoReturn, cast
 from urllib.parse import urlencode
 
-from angee.base.actors import actor_user_id
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
-from angee.base.refs import RecordRefMixin, canonical_record_target
+from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import signing
 from django.core.exceptions import (
+    FieldDoesNotExist,
     SuspiciousFileOperation,
     ValidationError,
 )
 from django.core.files.base import ContentFile
 from django.core.files.base import File as DjangoFile
+from django.core.validators import URLValidator
 from django.db import IntegrityError, connections, models, transaction
 from django.db.models import Q
+from django.db.models.deletion import ProtectedError
 from django.db.models.signals import post_save
 from django.urls import reverse
 from django.utils import timezone
@@ -70,8 +69,28 @@ from rebac import (
 from rebac.backends import backend as rebac_backend
 from rebac.managers import RebacManager
 
+from angee.base.actors import actor_user_id
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeModel,
+    AngeeQuerySet,
+    role_anchor,
+)
+from angee.base.refs import (
+    CanonicalRecordTarget,
+    RecordRefMixin,
+    canonical_record_model,
+)
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
+from angee.storage.manager_authority import (
+    attachment_membership_authority,
+    attachment_membership_is_authorized,
+)
 from angee.storage.signals import file_finalized
 from angee.storage.uploads import (
     DOWNLOAD_TOKEN_MAX_AGE,
@@ -1547,8 +1566,343 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         )
 
 
-class FileAttachmentManager(AngeeManager):
-    """Owns the polymorphic file edge — the canonical-target attach write.
+_EXTERNAL_LINK_URL_VALIDATOR = URLValidator(schemes=("http", "https"))
+
+
+def validate_external_link_url(value: object) -> str:
+    """Return one display-only HTTP(S) URL without resolving or fetching it."""
+
+    url = str(value or "").strip()
+    _EXTERNAL_LINK_URL_VALIDATOR(url)
+    return url
+
+
+class ExternalLinkQuerySet(AngeeQuerySet["ExternalLink"]):
+    """Keep retained link evidence immutable after creation."""
+
+    def update(self, **kwargs: Any) -> int:
+        if {"url", "title", "metadata", "created_by", "created_by_id"}.intersection(
+            kwargs
+        ):
+            raise ValidationError(
+                "External-link evidence and ownership are immutable; create a replacement asset."
+            )
+        return super().update(**kwargs)
+
+    def bulk_update(
+        self,
+        objs: Sequence[models.Model],
+        fields: Sequence[str],
+        batch_size: int | None = None,
+    ) -> int:
+        if {"url", "title", "metadata", "created_by", "created_by_id"}.intersection(
+            fields
+        ):
+            raise ValidationError(
+                "External-link evidence and ownership are immutable; create replacement assets."
+            )
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def bulk_create(
+        self,
+        objs: Iterable[models.Model],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Any = None,
+        unique_fields: Any = None,
+    ) -> list[models.Model]:
+        del (
+            objs,
+            batch_size,
+            ignore_conflicts,
+            update_conflicts,
+            update_fields,
+            unique_fields,
+        )
+        raise ValidationError(
+            "Bulk external-link creation bypasses actor ownership; use create_link()."
+        )
+
+
+class ExternalLinkManager(AngeeManager.from_queryset(ExternalLinkQuerySet)):  # type: ignore[misc]
+    """Own creation of byte-free external-link assets."""
+
+    def create_link(
+        self,
+        *,
+        url: str,
+        title: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """Create one actor-owned link without dereferencing its address."""
+
+        actor = self.check_create()
+        owner_id = actor_user_id(actor)
+        if owner_id is None:
+            raise PermissionDenied(
+                "External-link creation requires an authenticated user actor."
+            )
+        row = self.model(
+            url=validate_external_link_url(url),
+            title=str(title or ""),
+            metadata=dict(metadata or {}),
+            created_by_id=owner_id,
+        )
+        row.full_clean()
+        row.sudo(reason="storage.external_link.create").save(using=self.db)
+        return row.with_actor(actor)
+
+
+class ExternalLink(SqidMixin, AuditMixin, AngeeModel):
+    """A display-only HTTP(S) asset with no byte or download semantics."""
+
+    runtime = True
+    rebac_grantable = {"viewer": "write"}
+
+    sqid_prefix = "xln_"
+    url = models.URLField(max_length=2048, validators=(_EXTERNAL_LINK_URL_VALIDATOR,))
+    title = models.CharField(max_length=512, blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    objects = ExternalLinkManager()
+
+    class Meta:
+        """Django model options for byte-free external links."""
+
+        abstract = True
+        base_manager_name = "objects"
+        ordering = ("-updated_at", "title", "sqid")
+        rebac_resource_type = "storage/external_link"
+        rebac_id_attr = "sqid"
+
+    def clean(self) -> None:
+        """Normalize and validate the display URL without network access."""
+
+        super().clean()
+        self.url = validate_external_link_url(self.url)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Validate creation and reject in-place evidence correction."""
+
+        self.url = validate_external_link_url(self.url)
+        alias = kwargs.get("using") or self._state.db or "default"
+        update_fields = kwargs.get("update_fields")
+        with transaction.atomic(using=alias):
+            previous = (
+                type(self).system_queryset(using=alias, lock=("self",))
+                .filter(pk=self.pk)
+                .values("url", "title", "metadata", "created_by_id")
+                .first()
+                if self.pk is not None
+                else None
+            )
+            if previous is not None:
+                self._state.adding = False
+                self._state.db = alias
+            if previous is not None and any(
+                previous[name] != getattr(self, name)
+                for name in ("url", "title", "metadata", "created_by_id")
+            ):
+                raise ValidationError(
+                    "External-link evidence and ownership are immutable; create a replacement asset."
+                )
+            if previous is None:
+                actor_id = actor_user_id(current_actor())
+                if actor_id is None:
+                    raise PermissionDenied(
+                        "External-link creation requires an authenticated user actor."
+                    )
+                if self.created_by_id not in (None, actor_id):
+                    raise PermissionDenied(
+                        "External links cannot be created on behalf of another owner."
+                    )
+                self.created_by_id = actor_id
+                if self.pk is not None:
+                    if kwargs.get("force_update") or update_fields is not None:
+                        raise self.NotUpdated("Forced update did not affect any rows.")
+                    kwargs["force_insert"] = kwargs.get("force_insert") or True
+            super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        """Return the title or validated URL."""
+
+        return self.title or self.url
+
+
+_ATTACHMENT_IDENTITY_FIELDS = frozenset(
+    {
+        "file",
+        "file_id",
+        "external_link",
+        "external_link_id",
+        "content_type",
+        "content_type_id",
+        "object_id",
+    }
+)
+_ATTACHMENT_PROTECTED_FIELDS = _ATTACHMENT_IDENTITY_FIELDS | {
+    "direct_membership"
+}
+
+
+class FileAttachmentContributorMixin(models.Model):
+    """Declare canonical rows whose deletion must respect attachment claims.
+
+    Apply this fieldless mixin to the canonical (topmost REBAC-typed) model that
+    a source uses as a contributor. Storage binds its delete guard only to
+    concrete subclasses, preserving fast-delete behavior for unrelated models.
+    """
+
+    class Meta:
+        abstract = True
+
+
+def _normalized_attachment_write_fields(
+    model: type[models.Model], fields: Collection[str]
+) -> set[str]:
+    """Normalize public field names to stored attnames for invariant checks."""
+
+    normalized: set[str] = set()
+    for name in fields:
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist:
+            normalized.add(name)
+        else:
+            normalized.add(field.attname)
+    return normalized
+
+
+def _canonical_attachment_target(obj: models.Model, *, alias: str) -> CanonicalRecordTarget:
+    """Return an alias-bound canonical target for one persisted row."""
+
+    if obj.pk is None or obj._state.adding or obj._state.db != alias:
+        raise ValidationError("File-attachment membership requires a persisted row on its database.")
+    model = canonical_record_model(type(obj))
+    if not model._base_manager.using(alias).filter(pk=obj.pk).exists():
+        raise ValidationError("File-attachment membership target no longer exists.")
+    content_type = ContentType.objects.db_manager(alias).get_for_model(model)
+    return CanonicalRecordTarget(content_type, obj.pk)
+
+
+class FileAttachmentQuerySet(AngeeQuerySet[Any]):
+    """Preserve direct and contributed membership across supported bulk writes."""
+
+    def update(self, **kwargs: Any) -> int:
+        alias = self.db
+        membership_change = "direct_membership" in kwargs
+        identity_change = bool(_ATTACHMENT_IDENTITY_FIELDS.intersection(kwargs))
+        if not membership_change and not identity_change:
+            return super().update(**kwargs)
+        with transaction.atomic(using=alias):
+            locked_ids = tuple(
+                self.select_for_update().order_by("pk").values_list("pk", flat=True)
+            )
+            if membership_change and not attachment_membership_is_authorized(alias):
+                raise ValidationError(
+                    "Change file-attachment membership through its native manager."
+                )
+            if identity_change and self.model._base_manager.using(alias).filter(
+                pk__in=locked_ids,
+                contributions__isnull=False,
+            ).exists():
+                raise ValidationError(
+                    "A contributed file attachment cannot be moved in place."
+                )
+            frozen = self.filter(pk__in=locked_ids)
+            return super(FileAttachmentQuerySet, frozen).update(**kwargs)
+
+    def bulk_update(
+        self,
+        objs: Sequence[models.Model],
+        fields: Sequence[str],
+        batch_size: int | None = None,
+    ) -> int:
+        protected = {field for field in fields if field in _ATTACHMENT_IDENTITY_FIELDS}
+        if "direct_membership" in fields or protected:
+            raise ValidationError(
+                "Bulk file-attachment membership changes are not supported."
+            )
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def bulk_create(
+        self,
+        objs: Iterable[models.Model],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Any = None,
+        unique_fields: Any = None,
+    ) -> list[models.Model]:
+        objects = list(objs)
+        conflict_fields = _normalized_attachment_write_fields(
+            self.model, update_fields or ()
+        )
+        if update_conflicts and _ATTACHMENT_PROTECTED_FIELDS.intersection(conflict_fields):
+            raise ValidationError(
+                "Conflict updates cannot change file-attachment membership."
+            )
+        if any(not obj.direct_membership for obj in objects) and not (
+            attachment_membership_is_authorized(self.db)
+        ):
+            raise ValidationError(
+                "Create source-only file attachments through their native manager."
+            )
+        return super().bulk_create(
+            objects,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
+
+
+class FileAttachmentClaimQuerySet(AngeeQuerySet[Any]):
+    """Keep contributor claims behind the attachment manager's exact verbs."""
+
+    def update(self, **kwargs: Any) -> int:
+        if not attachment_membership_is_authorized(self.db):
+            raise ValidationError("Change attachment claims through their native manager.")
+        return super().update(**kwargs)
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        if not attachment_membership_is_authorized(self.db):
+            raise ValidationError("Release attachment claims through their native manager.")
+        return super().delete()
+
+    def bulk_create(
+        self,
+        objs: Iterable[models.Model],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Any = None,
+        unique_fields: Any = None,
+    ) -> list[models.Model]:
+        if not attachment_membership_is_authorized(self.db):
+            raise ValidationError("Create attachment claims through their native manager.")
+        return super().bulk_create(
+            objs,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
+
+
+class FileAttachmentClaimManager(
+    AngeeManager.from_queryset(FileAttachmentClaimQuerySet)  # type: ignore[misc]
+):
+    """Internal manager; public membership verbs live on FileAttachmentManager."""
+
+
+class FileAttachmentManager(
+    AngeeManager.from_queryset(FileAttachmentQuerySet)  # type: ignore[misc]
+):
+    """Owns the polymorphic asset edge — the canonical-target attach write.
 
     Mirrors :meth:`angee.tags.models.TagAssignmentManager.attach`: the edge keys on the
     target's canonical record target (:func:`angee.base.refs.canonical_record_target`), so
@@ -1562,19 +1916,300 @@ class FileAttachmentManager(AngeeManager):
     def attach(self, file: Any, record: models.Model, *, label: str = "") -> Any:
         """Attach ``file`` to ``record``, idempotently per (file, canonical target) edge."""
 
-        target = canonical_record_target(record)
-        with system_context(reason="storage.file_attachment.attach"):
-            attachment, _created = self.get_or_create(
-                file=file,
-                content_type=target.content_type,
-                object_id=target.object_id,
-                defaults={"label": label},
+        return self.attach_asset(file, record, label=label)
+
+    def attach_external_link(
+        self,
+        external_link: Any,
+        record: models.Model,
+        *,
+        label: str = "",
+    ) -> Any:
+        """Attach one external link through the same exact edge owner."""
+
+        return self.attach_asset(external_link, record, label=label)
+
+    def attach_asset(
+        self,
+        asset: models.Model,
+        record: models.Model,
+        *,
+        label: str = "",
+    ) -> Any:
+        """Attach one supported asset to a canonical record target."""
+
+        alias = asset._state.db or self.db
+        target = _canonical_attachment_target(record, alias=alias)
+        asset_field, canonical_asset = self._lockable_asset(asset, alias=alias)
+        with (
+            system_context(reason="storage.file_attachment.attach"),
+            transaction.atomic(using=alias),
+            attachment_membership_authority(alias),
+        ):
+            canonical_asset = (
+                type(canonical_asset)._base_manager.using(alias).select_for_update().get(
+                    pk=canonical_asset.pk
+                )
             )
+            attachment = self._locked_edge(
+                alias=alias,
+                asset_field=asset_field,
+                asset_id=canonical_asset.pk,
+                target=target,
+                defaults={"label": label, "direct_membership": True},
+            )
+            if not attachment.direct_membership:
+                type(attachment).objects.using(alias).filter(pk=attachment.pk).update(
+                    direct_membership=True
+                )
+                attachment.direct_membership = True
         return attachment
+
+    def _locked_edge(
+        self,
+        *,
+        alias: str,
+        asset_field: str,
+        asset_id: Any,
+        target: CanonicalRecordTarget,
+        defaults: Mapping[str, Any],
+    ) -> Any:
+        """Return the canonical persisted edge locked against claim/release races."""
+
+        manager = self.db_manager(alias)
+        attachment, _created = manager.select_for_update().get_or_create(
+            **{f"{asset_field}_id": asset_id},
+            content_type_id=target.content_type.pk,
+            object_id=target.object_id,
+            defaults=dict(defaults),
+        )
+        return attachment
+
+    def claim(
+        self,
+        file: Any,
+        record: models.Model,
+        *,
+        contributor: models.Model,
+        label: str = "",
+    ) -> Any:
+        """Retain one independently removable contributor on a canonical file edge."""
+
+        return self.claim_asset(
+            file,
+            record,
+            contributor=contributor,
+            label=label,
+        )
+
+    def claim_external_link(
+        self,
+        external_link: Any,
+        record: models.Model,
+        *,
+        contributor: models.Model,
+        label: str = "",
+    ) -> Any:
+        """Retain a contributor on one external-link attachment edge."""
+
+        return self.claim_asset(
+            external_link,
+            record,
+            contributor=contributor,
+            label=label,
+        )
+
+    def claim_asset(
+        self,
+        asset: models.Model,
+        record: models.Model,
+        *,
+        contributor: models.Model,
+        label: str = "",
+    ) -> Any:
+        """Retain one contributor on a supported asset edge."""
+
+        alias = asset._state.db or self.db
+        target = _canonical_attachment_target(record, alias=alias)
+        asset_field, canonical_asset = self._lockable_asset(asset, alias=alias)
+        Claim = apps.get_model("storage", "FileAttachmentClaim")
+        with (
+            system_context(reason="storage.file_attachment.claim"),
+            transaction.atomic(using=alias),
+            attachment_membership_authority(alias),
+        ):
+            # Contributed membership has one global lock order:
+            # contributor -> asset -> edge -> claim. Connector fences already
+            # retain their contributor before entering this owner, while asset
+            # deletion owns asset -> edge and never subsequently acquires a
+            # contributor.  Reversing the first two locks would deadlock those
+            # two legitimate paths.
+            source = self._lock_contributor(contributor, alias=alias)
+            canonical_asset = (
+                type(canonical_asset)._base_manager.using(alias).select_for_update().get(
+                    pk=canonical_asset.pk
+                )
+            )
+            attachment = self._locked_edge(
+                alias=alias,
+                asset_field=asset_field,
+                asset_id=canonical_asset.pk,
+                target=target,
+                defaults={"label": label, "direct_membership": False},
+            )
+            claim, _created = Claim.objects.db_manager(alias).select_for_update().get_or_create(
+                attachment=attachment,
+                contributor_content_type_id=source.content_type.pk,
+                contributor_object_id=str(source.object_id),
+            )
+            return claim
+
+    def release_claim(
+        self,
+        file: Any,
+        record: models.Model,
+        *,
+        contributor: models.Model,
+    ) -> bool:
+        """Release one contributor and delete only an otherwise unowned edge."""
+
+        return self.release_asset_claim(file, record, contributor=contributor)
+
+    def release_external_link_claim(
+        self,
+        external_link: Any,
+        record: models.Model,
+        *,
+        contributor: models.Model,
+    ) -> bool:
+        """Release one contributor from an external-link attachment edge."""
+
+        return self.release_asset_claim(
+            external_link,
+            record,
+            contributor=contributor,
+        )
+
+    def release_asset_claim(
+        self,
+        asset: models.Model,
+        record: models.Model,
+        *,
+        contributor: models.Model,
+    ) -> bool:
+        """Release one contributor from a supported asset edge."""
+
+        alias = asset._state.db or self.db
+        target = _canonical_attachment_target(record, alias=alias)
+        asset_field, canonical_asset = self._lockable_asset(asset, alias=alias)
+        Claim = apps.get_model("storage", "FileAttachmentClaim")
+        with (
+            system_context(reason="storage.file_attachment.release_claim"),
+            transaction.atomic(using=alias),
+            attachment_membership_authority(alias),
+        ):
+            source = self._lock_contributor(contributor, alias=alias)
+            canonical_asset = (
+                type(canonical_asset)._base_manager.using(alias).select_for_update().get(
+                    pk=canonical_asset.pk
+                )
+            )
+            attachment = (
+                self.db_manager(alias)
+                .select_for_update()
+                .filter(
+                    **{f"{asset_field}_id": canonical_asset.pk},
+                    content_type_id=target.content_type.pk,
+                    object_id=target.object_id,
+                )
+                .first()
+            )
+            if attachment is None:
+                return False
+            claims = Claim.objects.db_manager(alias).select_for_update().filter(
+                attachment=attachment
+            )
+            claim = claims.filter(
+                contributor_content_type_id=source.content_type.pk,
+                contributor_object_id=str(source.object_id),
+            ).first()
+            if claim is None:
+                return False
+            claim.delete(using=alias)
+            if not attachment.direct_membership and not claims.exists():
+                attachment.delete(using=alias)
+            return True
+
+    def _lockable_asset(
+        self,
+        asset: models.Model,
+        *,
+        alias: str,
+    ) -> tuple[str, models.Model]:
+        """Return the exact supported attachment field and persisted asset."""
+
+        if asset.pk is None or asset._state.adding or asset._state.db != alias:
+            raise ValidationError(
+                "Attachment membership requires a persisted asset on its database."
+            )
+        for field_name in ("file", "external_link"):
+            field = self.model._meta.get_field(field_name)
+            if isinstance(asset, field.related_model):
+                if not type(asset).system_queryset(
+                    using=alias,
+                    lock=None,
+                ).filter(pk=asset.pk).exists():
+                    raise ValidationError("Attachment asset no longer exists.")
+                return field_name, asset
+        raise ValidationError("Attachment assets must be a File or ExternalLink.")
+
+    @staticmethod
+    def _lock_contributor(
+        contributor: models.Model, *, alias: str
+    ) -> CanonicalRecordTarget:
+        """Lock and return one canonical contributor before any edge or claim."""
+
+        source = _canonical_attachment_target(contributor, alias=alias)
+        model = canonical_record_model(type(contributor))
+        if not issubclass(model, FileAttachmentContributorMixin):
+            raise ValidationError(
+                "Attachment claim contributors must declare deletion protection."
+            )
+        try:
+            model._base_manager.using(alias).select_for_update().only(
+                model._meta.pk.attname
+            ).get(pk=source.object_id)
+        except model.DoesNotExist as error:
+            raise ValidationError(
+                "Attachment claim contributor no longer exists."
+            ) from error
+        return source
+
+    def protect_contributor(self, contributor: models.Model) -> None:
+        """Refuse deletion while the canonical record owns attachment claims."""
+
+        alias = contributor._state.db or self.db
+        with transaction.atomic(using=alias):
+            source = self._lock_contributor(contributor, alias=alias)
+            Claim = apps.get_model("storage", "FileAttachmentClaim")
+            claims = tuple(
+                Claim._base_manager.using(alias)
+                .select_for_update()
+                .filter(
+                    contributor_content_type_id=source.content_type.pk,
+                    contributor_object_id=str(source.object_id),
+                )
+                .order_by("pk")
+            )
+            if claims:
+                raise ProtectedError(
+                    "Release file-attachment claims before deleting their contributor.",
+                    claims,
+                )
 
 
 class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
-    """Polymorphic edge attaching one :class:`File` to any model row.
+    """Polymorphic edge attaching one File or ExternalLink to any model row.
 
     Consumers attach explicitly through :meth:`FileAttachmentManager.attach` (which keys
     the edge on the target's canonical record target) or declare a
@@ -1592,12 +2227,22 @@ class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     file = models.ForeignKey(
         "storage.File",
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="attachments",
+    )
+    external_link = models.ForeignKey(
+        "storage.ExternalLink",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name="attachments",
     )
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
     label = models.CharField(max_length=200, blank=True)
+    direct_membership = models.BooleanField(default=True, editable=False)
 
     objects = FileAttachmentManager()
 
@@ -1609,9 +2254,20 @@ class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         rebac_resource_type = "storage/file_attachment"
         rebac_id_attr = "sqid"
         constraints = (
+            models.CheckConstraint(
+                condition=(
+                    models.Q(file__isnull=False, external_link__isnull=True)
+                    | models.Q(file__isnull=True, external_link__isnull=False)
+                ),
+                name="ck_storage_attachment_exactly_one_asset",
+            ),
             models.UniqueConstraint(
                 fields=("file", "content_type", "object_id"),
                 name="uq_storage_file_attachment_edge",
+            ),
+            models.UniqueConstraint(
+                fields=("external_link", "content_type", "object_id"),
+                name="uq_storage_external_link_attachment_edge",
             ),
         )
         indexes = (models.Index(fields=("content_type", "object_id")),)
@@ -1619,7 +2275,157 @@ class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     def __str__(self) -> str:
         """Return the attachment label or a file-qualified fallback."""
 
-        return self.label or f"attachment:{self.file_id}"
+        asset = (
+            f"file:{self.file_id}"
+            if self.file_id is not None
+            else f"external-link:{self.external_link_id}"
+        )
+        return self.label or f"attachment:{asset}"
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Protect source-only membership and the identity beneath active claims."""
+
+        alias = kwargs.get("using") or self._state.db or "default"
+        update_fields = kwargs.get("update_fields")
+        written_fields = (
+            {
+                "file_id",
+                "external_link_id",
+                "content_type_id",
+                "object_id",
+                "direct_membership",
+            }
+            if update_fields is None
+            else _normalized_attachment_write_fields(type(self), update_fields)
+            & {
+                "file_id",
+                "external_link_id",
+                "content_type_id",
+                "object_id",
+                "direct_membership",
+            }
+        )
+        if not written_fields and self.pk is not None:
+            return super().save(*args, **kwargs)
+        with transaction.atomic(using=alias):
+            previous = (
+                type(self)._base_manager.using(alias)
+                .select_for_update()
+                .filter(pk=self.pk)
+                .values(
+                    "file_id",
+                    "external_link_id",
+                    "content_type_id",
+                    "object_id",
+                    "direct_membership",
+                )
+                .first()
+                if self.pk is not None
+                else None
+            )
+            authorized = attachment_membership_is_authorized(alias)
+            if previous is None:
+                if not self.direct_membership and not authorized:
+                    raise ValidationError(
+                        "Create source-only file attachments through their native manager."
+                    )
+                if self.pk is not None:
+                    # A missing explicit PK cannot be predicate-locked. Preserve
+                    # update-only failure; otherwise force a real insert so a
+                    # concurrent winner becomes a uniqueness conflict, never an
+                    # UPDATE that bypasses this membership guard.
+                    if kwargs.get("force_update") or update_fields is not None:
+                        raise self.NotUpdated("Forced update did not affect any rows.")
+                    kwargs["force_insert"] = kwargs.get("force_insert") or True
+            else:
+                changed_membership = (
+                    "direct_membership" in written_fields
+                    and previous["direct_membership"] != self.direct_membership
+                )
+                changed_identity = any(
+                    name in written_fields and previous[name] != getattr(self, name)
+                    for name in (
+                        "file_id",
+                        "external_link_id",
+                        "content_type_id",
+                        "object_id",
+                    )
+                )
+                if changed_membership and not authorized:
+                    raise ValidationError(
+                        "Change file-attachment membership through its native manager."
+                    )
+                if changed_identity and type(self)._base_manager.using(alias).filter(
+                    pk=self.pk,
+                    contributions__isnull=False,
+                ).exists():
+                    raise ValidationError(
+                        "A contributed file attachment cannot be moved in place."
+                    )
+            if (self.file_id is None) == (self.external_link_id is None):
+                raise ValidationError(
+                    "An attachment requires exactly one File or ExternalLink asset."
+                )
+            super().save(*args, **kwargs)
+
+
+class FileAttachmentClaim(AuditMixin, RecordRefMixin, AngeeDataModel):
+    """One durable contributor retaining a shared canonical file edge."""
+
+    runtime = True
+    sqid_prefix = "fac_"
+    record_ref_field_prefix = "contributor"
+
+    attachment = models.ForeignKey(
+        "storage.FileAttachment",
+        on_delete=models.PROTECT,
+        related_name="contributions",
+    )
+    contributor_content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.PROTECT,
+        related_name="+",
+    )
+    contributor_object_id = models.CharField(max_length=255)
+    contributor = GenericForeignKey(
+        "contributor_content_type", "contributor_object_id"
+    )
+
+    objects = FileAttachmentClaimManager()
+
+    class Meta:
+        """Django model options for contributor-owned attachment membership."""
+
+        abstract = True
+        ordering = ("attachment", "contributor_content_type", "contributor_object_id")
+        constraints = (
+            models.UniqueConstraint(
+                fields=(
+                    "attachment",
+                    "contributor_content_type",
+                    "contributor_object_id",
+                ),
+                name="uq_storage_file_attachment_contributor",
+            ),
+        )
+        indexes = (
+            models.Index(
+                fields=("contributor_content_type", "contributor_object_id"),
+                name="storage_fil_contrib_idx",
+            ),
+        )
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        alias = kwargs.get("using") or self._state.db or "default"
+        if not attachment_membership_is_authorized(alias):
+            raise ValidationError("Create attachment claims through their native manager.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        alias = kwargs.get("using") or self._state.db or "default"
+        if not attachment_membership_is_authorized(alias):
+            raise ValidationError("Release attachment claims through their native manager.")
+        return super().delete(*args, **kwargs)
 
 
 StorageRole = role_anchor("storage/role")

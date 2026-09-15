@@ -635,8 +635,10 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
         model=VcsBridge,
     )
     credential = bridge.credential
-    with system_context(reason="test.integrate.oauth_concrete_target.disconnect"):
-        VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
+    disconnected = VcsBridge.objects.with_actor(bridge.owner).get(pk=bridge.pk)
+    disconnected.credential = None
+    disconnected.save(update_fields=["credential", "updated_at"])
+    disconnected.disconnect()
     mutation = """
         mutation Connect($resource: String!, $id: ID!) {
           connect_integration(resource: $resource, id: $id) {
@@ -864,9 +866,9 @@ def test_test_connection_probes_the_credential_of_a_parent_integration(
     result = _data(_execute(console_schema, mutation, {"id": _public_id(conn)}, user=admin))["test_connection"]
     assert result == {"ok": True, "message": "Credential is usable."}
 
-    with system_context(reason="test integrate detach credential"):
-        conn.credential = None
-        conn.save(update_fields=["credential"])
+    conn = Integration.objects.with_actor(conn.owner).get(pk=conn.pk)
+    conn.credential = None
+    conn.save(update_fields=["credential"])
     result = _data(_execute(console_schema, mutation, {"id": _public_id(conn)}, user=admin))["test_connection"]
     assert result == {"ok": False, "message": "No credential is attached."}
 
@@ -955,6 +957,49 @@ def test_sync_integration_queues_bridge_for_an_admin(
         "last_sync_summary": {},
         "is_syncing": False,
     }
+
+
+@pytest.mark.parametrize("lifecycle", ["paused", "disconnected"])
+def test_sync_integration_manual_lifecycle_admission(
+    integrate_console_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    lifecycle: str,
+) -> None:
+    """The authorized action allows a paused one-shot, never disconnected work."""
+
+    console_schema = _schema()
+    admin = _platform_admin("sync-paused-admin")
+    bridge = make_integration("sync-paused", backend_class="stub", model=VcsBridge)
+    with system_context(reason="test pause integration before sync"):
+        bridge.set_lifecycle(lifecycle)
+    enqueued: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        integrate_queue,
+        "enqueue_task",
+        lambda _task_name, *, kwargs, **_options: enqueued.append(kwargs),
+    )
+
+    result = _data(
+        _execute(
+            console_schema,
+            "mutation($id: ID!){ sync_integration(id: $id){ ok message } }",
+            {"id": _public_id(bridge)},
+            user=admin,
+        )
+    )["sync_integration"]
+
+    bridge.refresh_from_db()
+    if lifecycle == "paused":
+        assert result == {"ok": True, "message": "Queued 1 bridge sync(s)."}
+        assert len(enqueued) == 1
+        assert enqueued[0]["occurrence"]["kind"] == "manual"
+        assert bridge.sync_stage == VcsBridge.SyncStage.QUEUED
+        assert bridge.sync_progress["queue_lifecycle"] == "paused"
+        assert bridge.next_sync_at is None
+    else:
+        assert result == {"ok": False, "message": "Integration sync could not be queued."}
+        assert enqueued == []
+        assert bridge.sync_stage == VcsBridge.SyncStage.IDLE
 
 
 def test_rotate_webhook_secret_changes_the_stored_secret(
@@ -1277,7 +1322,7 @@ def test_model_save_rejects_backend_switch_and_scopes_partial_config_validation(
         with pytest.raises(ValidationError, match="Implementation selection is create-only"):
             VcsBridge.objects.update_or_create(pk=bridge.pk, defaults={"backend_class": "local"})
 
-        reconstructed = VcsBridge(pk=bridge.pk, backend_class="local")
+        reconstructed = VcsBridge(pk=bridge.pk, backend_class="local", credential_id=bridge.credential_id)
         with pytest.raises(ValidationError, match="Implementation selection is create-only"):
             reconstructed.save(using="default")
 

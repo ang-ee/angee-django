@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import DEFAULT_DB_ALIAS, models, router, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
-from rebac import current_actor
+from rebac import (
+    RelationshipTuple,
+    SubjectRef,
+    current_actor,
+    delete_relationships,
+    to_object_ref,
+    write_relationships,
+)
+from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id
+from angee.base.authority import TransactionBoundAuthority
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.scoping import system_queryset
@@ -31,6 +41,149 @@ the resource-metadata field classifier recognises the archive flag by this name
 identical everywhere is the contract that lets pickers default-filter archived
 rows and lists expose an archived facet without per-model wiring.
 """
+
+_EVERY_AUTHENTICATED_USER = SubjectRef.of("auth/user", "*")
+
+
+class ConditionalSharedReaderQuerySet(models.QuerySet[_ArchiveModelT]):
+    """Protect fields that decide whether one row receives a wildcard reader."""
+
+    @classmethod
+    def _policy_fields(
+        cls,
+        model: type[models.Model],
+        fields: Iterable[str],
+    ) -> set[str]:
+        names = {
+            name
+            for owner in model.__mro__
+            for declaration in (
+                owner.__dict__.get("shared_reader_policy_fields", ()),
+                owner.__dict__.get("shared_scope_source_fields", ()),
+            )
+            for name in declaration
+        }
+        spellings = {
+            spelling
+            for name in names
+            for field in (model._meta.get_field(name),)
+            for spelling in (field.name, field.attname)
+        }
+        return {str(field) for field in fields} & spellings
+
+    def update(self, **kwargs: Any) -> int:
+        """Reject eligibility changes that would bypass tuple reconciliation."""
+
+        if self._policy_fields(self.model, kwargs):
+            raise ValidationError("Change shared-reader eligibility through its native owner.")
+        return super().update(**kwargs)
+
+    def bulk_update(
+        self,
+        objs: Iterable[models.Model],
+        fields: Iterable[str],
+        batch_size: int | None = None,
+    ) -> int:
+        """Reject batched eligibility changes while preserving ordinary batching."""
+
+        rows, names = list(objs), tuple(fields)
+        if self._policy_fields(self.model, names):
+            raise ValidationError("Change shared-reader eligibility through its native owner.")
+        return super().bulk_update(rows, names, batch_size=batch_size)
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[models.Model]:
+        """Require create-through-save so every eligible row receives its tuple."""
+
+        del args, kwargs
+        raise ValidationError("Create conditional shared-reader rows through their native owner.")
+
+
+class ConditionalSharedReaderMixin(models.Model):
+    """Keep one per-record wildcard reader aligned with canonical persisted facts.
+
+    Consumers declare the stored fields that decide eligibility and override
+    :attr:`shared_reader_eligible`; the generic default is private. The
+    reconciler reads a fresh canonical row after persistence,
+    so deferred or dirty values excluded by ``update_fields`` never drive access.
+    It changes only its configured wildcard tuple; manual and source-scope grants
+    remain owned by their distinct relations.
+    """
+
+    shared_reader_relation: ClassVar[str | None] = "shared"
+    shared_reader_policy_fields: ClassVar[tuple[str, ...]] = ()
+
+    class Meta:
+        abstract = True
+
+    @property
+    def shared_reader_eligible(self) -> bool:
+        """Deny wildcard visibility unless the native model opts in explicitly."""
+
+        return False
+
+    def apply_create_defaults(self) -> Any:
+        """Contribute the wildcard relation before a per-row create preflight."""
+
+        contributions = dict(super().apply_create_defaults())
+        relation = self.shared_reader_relation
+        if relation is not None and self.shared_reader_eligible:
+            contributions[relation] = (_EVERY_AUTHENTICATED_USER,)
+        return contributions
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist and reconcile the wildcard from a fresh row in one transaction."""
+
+        alias = kwargs.get("using") or self._state.db or DEFAULT_DB_ALIAS
+        if alias != DEFAULT_DB_ALIAS:
+            raise ValidationError(
+                "Conditional shared-reader writes require the default authorization database."
+            )
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and not update_fields:
+            super().save(*args, **kwargs)
+            return
+        with transaction.atomic(using=alias):
+            super().save(*args, **kwargs)
+            self.reconcile_shared_reader(using=alias)
+
+    def reconcile_shared_reader(self, *, using: str | None = None) -> None:
+        """Reconcile only this owner's wildcard tuple from persisted row facts.
+
+        This public hook is also the cooperative boundary for a manager that
+        changes a declared eligibility fact through an exact locked queryset
+        write, such as an immutable external-provenance claim.
+        """
+
+        alias = using or self._state.db or DEFAULT_DB_ALIAS
+        if alias != DEFAULT_DB_ALIAS:
+            raise ValidationError(
+                "Conditional shared-reader reconciliation requires the default authorization database."
+            )
+        if self.pk is None:
+            raise ValidationError("A shared reader requires a saved row.")
+        with transaction.atomic(using=alias):
+            canonical = system_queryset(type(self), using=alias, lock=("self",)).get(pk=self.pk)
+            relation = canonical.shared_reader_relation
+            if relation is None:
+                return
+            resource = to_object_ref(canonical)
+            relationship = RelationshipTuple(
+                resource=resource,
+                relation=relation,
+                subject=_EVERY_AUTHENTICATED_USER,
+            )
+            if canonical.shared_reader_eligible:
+                write_relationships([relationship])
+            else:
+                delete_relationships(
+                    RelationshipFilter(
+                        resource_type=resource.resource_type,
+                        resource_id=resource.resource_id,
+                        relation=relation,
+                        subject_type=_EVERY_AUTHENTICATED_USER.subject_type,
+                        subject_id=_EVERY_AUTHENTICATED_USER.subject_id,
+                    )
+                )
 
 
 class TimestampMixin(models.Model):
@@ -305,6 +458,75 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
 
         return cast(Self, self.filter(path__in=node.ancestor_paths()))
 
+    def _clone(self) -> Self:
+        """Carry a live hierarchy-owner token through cooperative queryset narrowing."""
+
+        clone = cast(Self, super()._clone())
+        authority = _hierarchy_path_write.payload(self.db)
+        if (
+            authority is not None
+            and getattr(self, _HIERARCHY_PATH_WRITE_TOKEN, None) is authority
+        ):
+            setattr(clone, _HIERARCHY_PATH_WRITE_TOKEN, authority)
+        return clone
+
+    def update(self, **kwargs: Any) -> int:
+        """Consume an exact internal path write before continuing the queryset MRO."""
+
+        authority = _hierarchy_path_write_authority(self, kwargs)
+        if authority is not None:
+            if authority.consumed:
+                raise RuntimeError("Hierarchy path authority was already consumed.")
+            authority.consumed = True
+        return super().update(**kwargs)
+
+
+@dataclass(slots=True)
+class _HierarchyPathWrite:
+    """One path-only queryset write owned by one concrete hierarchy operation."""
+
+    model: type[models.Model]
+    alias: str
+    path_value: Any
+    consumed: bool = False
+
+
+_HIERARCHY_PATH_WRITE_TOKEN = "_angee_hierarchy_path_write_token"
+_hierarchy_path_write = TransactionBoundAuthority[_HierarchyPathWrite](
+    "angee_hierarchy_path_write",
+    atomic_error="Hierarchy path writes require one atomic owner.",
+    nested_error="Hierarchy path owners cannot be nested.",
+)
+
+
+def _hierarchy_path_write_authority(
+    queryset: models.QuerySet[Any],
+    values: dict[str, Any],
+) -> _HierarchyPathWrite | None:
+    """Return the exact live path-write capability carried by ``queryset``."""
+
+    authority = _hierarchy_path_write.payload(queryset.db)
+    if (
+        authority is None
+        or getattr(queryset, _HIERARCHY_PATH_WRITE_TOKEN, None) is not authority
+        or authority.model is not queryset.model
+        or authority.alias != queryset.db
+        or set(values) != {"path"}
+        or values["path"] is not authority.path_value
+    ):
+        return None
+    return authority
+
+
+def is_hierarchy_path_write_authorized(
+    queryset: models.QuerySet[Any],
+    values: dict[str, Any],
+) -> bool:
+    """Tell a composed guard whether this is the hierarchy owner's exact path write."""
+
+    authority = _hierarchy_path_write_authority(queryset, values)
+    return authority is not None and not authority.consumed
+
 
 class HierarchyMixin(models.Model):
     """Materialized-path tree membership for a self-parented model.
@@ -457,18 +679,20 @@ class HierarchyMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row, maintaining ``path`` on create and reparent."""
 
+        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        kwargs["using"] = alias
         if self._state.adding:
-            self._save_created(*args, **kwargs)
-        elif self._hierarchy_needs_repath():
-            self._save_reparented(*args, **kwargs)
+            self._save_created(alias, *args, **kwargs)
+        elif self._hierarchy_needs_repath(using=alias):
+            self._save_reparented(alias, *args, **kwargs)
         else:
             super().save(*args, **kwargs)
         self._hierarchy_saved_parent_id = self.parent_id
 
-    def _save_created(self, *args: Any, **kwargs: Any) -> None:
+    def _save_created(self, database: str, /, *args: Any, **kwargs: Any) -> None:
         """Insert the row, then derive its ``path`` from the parent's committed path."""
 
-        with transaction.atomic():
+        with transaction.atomic(using=database):
             super().save(*args, **kwargs)
             parent = self._hierarchy_parent()
             if parent is not None:
@@ -476,16 +700,20 @@ class HierarchyMixin(models.Model):
                 # child prefix: a create racing a reparent of that parent would
                 # otherwise bake in a stale prefix that the reparent's cascade never
                 # reaches (the new row is not yet under the old prefix it rewrites).
-                fresh = self._locked_paths([parent.pk])
+                fresh = self._locked_paths([parent.pk], using=database)
                 if parent.pk in fresh:
                     parent.path = fresh[parent.pk]
             self._reject_cross_scope_parent(parent)
             new_path = self._hierarchy_path(parent)
             if new_path != self.path:
-                system_queryset(type(self)).filter(pk=self.pk).update(path=new_path)
+                self._write_hierarchy_path(
+                    system_queryset(type(self), using=database).filter(pk=self.pk),
+                    new_path,
+                    using=database,
+                )
                 self.path = new_path
 
-    def _save_reparented(self, *args: Any, **kwargs: Any) -> None:
+    def _save_reparented(self, database: str, /, *args: Any, **kwargs: Any) -> None:
         """Validate the move under lock, then rewrite the subtree in one UPDATE."""
 
         # A reparent is defined by the moved ``parent``, so persist it (and the
@@ -494,8 +722,8 @@ class HierarchyMixin(models.Model):
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             kwargs["update_fields"] = set(update_fields) | {"parent", "path"}
-        with transaction.atomic():
-            old_path = self._lock_moved_paths()
+        with transaction.atomic(using=database):
+            old_path = self._lock_moved_paths(using=database)
             parent = self._hierarchy_parent()
             self._reject_cycle(parent)
             self._reject_cross_scope_parent(parent)
@@ -510,11 +738,39 @@ class HierarchyMixin(models.Model):
                 # head. An empty old path (an unmaterialized row) skips the
                 # cascade: it has nothing under it, and ``LIKE '%'`` would
                 # rewrite the whole table.
-                system_queryset(type(self)).filter(path__startswith=old_path).update(
-                    path=Replace(F("path"), Value(old_path), Value(new_path))
+                replacement = Replace(F("path"), Value(old_path), Value(new_path))
+                self._write_hierarchy_path(
+                    system_queryset(type(self), using=database).filter(
+                        path__startswith=old_path
+                    ),
+                    replacement,
+                    using=database,
                 )
 
-    def _lock_moved_paths(self) -> str:
+    def _write_hierarchy_path(
+        self,
+        queryset: models.QuerySet[Any],
+        path_value: Any,
+        *,
+        using: str,
+    ) -> int:
+        """Perform one exact derived-path update through the cooperative queryset."""
+
+        if not isinstance(queryset, HierarchyQuerySet):
+            return queryset.update(path=path_value)
+        authority = _HierarchyPathWrite(
+            model=type(self),
+            alias=using,
+            path_value=path_value,
+        )
+        setattr(queryset, _HIERARCHY_PATH_WRITE_TOKEN, authority)
+        with _hierarchy_path_write.scope(using, authority):
+            updated = queryset.update(path=path_value)
+        if not authority.consumed:
+            raise RuntimeError("Hierarchy path authority was not consumed.")
+        return updated
+
+    def _lock_moved_paths(self, *, using: str) -> str:
         """Row-lock this node and its new parent, refreshing committed paths.
 
         Two overlapping reparents interleaving on stale in-memory paths is the
@@ -525,7 +781,7 @@ class HierarchyMixin(models.Model):
         """
 
         pks = [self.pk] if self.parent_id is None else [self.pk, self.parent_id]
-        fresh = self._locked_paths(pks)
+        fresh = self._locked_paths(pks, using=using)
         self.path = fresh.get(self.pk, self.path)
         if self.parent_id is not None and self.parent_id in fresh:
             parent = self._hierarchy_parent()
@@ -533,13 +789,13 @@ class HierarchyMixin(models.Model):
                 parent.path = fresh[self.parent_id]
         return self.path
 
-    def _locked_paths(self, pks: list[Any]) -> dict[Any, str]:
+    def _locked_paths(self, pks: list[Any], *, using: str) -> dict[Any, str]:
         """Return committed paths, serializing overlapping moves when supported."""
 
-        reader = system_queryset(type(self), lock=())
+        reader = system_queryset(type(self), using=using, lock=())
         return dict(reader.filter(pk__in=pks).values_list("pk", "path"))
 
-    def _hierarchy_needs_repath(self) -> bool:
+    def _hierarchy_needs_repath(self, *, using: str) -> bool:
         """Return whether an existing row's ``parent`` moved (or its path is unset)."""
 
         if not self.path:
@@ -550,12 +806,17 @@ class HierarchyMixin(models.Model):
         # so a reparent would be invisible if we compared ``parent_id`` to itself.
         # Fetch the committed ``parent_id`` from the row to compare against the
         # in-memory FK the caller may have moved.
-        return self._hierarchy_committed_parent_id() != self.parent_id
+        return self._hierarchy_committed_parent_id(using=using) != self.parent_id
 
-    def _hierarchy_committed_parent_id(self) -> Any:
+    def _hierarchy_committed_parent_id(self, *, using: str) -> Any:
         """Return this row's committed ``parent_id`` from the database."""
 
-        return system_queryset(type(self)).filter(pk=self.pk).values_list("parent_id", flat=True).first()
+        return (
+            system_queryset(type(self), using=using)
+            .filter(pk=self.pk)
+            .values_list("parent_id", flat=True)
+            .first()
+        )
 
     def _hierarchy_parent(self) -> HierarchyMixin | None:
         """Return the parent instance (cached when assigned), or ``None`` for a root."""

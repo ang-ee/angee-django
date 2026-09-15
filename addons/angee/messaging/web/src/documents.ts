@@ -40,6 +40,7 @@ export const MessagingPartListRow = graphql(`
     parent { id }
     fragment { id kind hash text part_count message_count }
     file { id filename title }
+    external_link { id title url }
   }
 `);
 
@@ -123,6 +124,11 @@ export const MessagePartFields = graphql(`
       size_bytes
       url
       mime_type { mime_type label }
+    }
+    external_link {
+      id
+      title
+      url
     }
   }
 `);

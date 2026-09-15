@@ -38,10 +38,23 @@ def _flag_shutdown(**_kwargs: Any) -> None:
     retry_backoff=True,
     retry_kwargs={"max_retries": 3},
 )
-def sync_bridge_now(model_label: str, pk: int, timestamp: str | None = None) -> dict[str, Any]:
+def sync_bridge_now(
+    model_label: str,
+    pk: int,
+    timestamp: str | None = None,
+    generation: str | None = None,
+    occurrence: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Run one queued bridge sync task."""
 
-    return run_bridge_sync_job(model_label, pk, timestamp, require_queue_token=True)
+    return run_bridge_sync_job(
+        model_label,
+        pk,
+        timestamp,
+        generation=generation,
+        occurrence=occurrence,
+        require_queue_token=True,
+    )
 
 
 @shared_task(

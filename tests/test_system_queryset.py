@@ -12,7 +12,7 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import RebacMixin
 
-from angee.base.models import AngeeModel
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
 from angee.base.scoping import system_queryset
 
 POSTGRESQL_ONLY = pytest.mark.skipif(
@@ -29,6 +29,40 @@ class SystemQueryThing(AngeeModel):
     """Concrete Angee model used to exercise the system queryset owner."""
 
     name = models.CharField(max_length=32)
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+
+
+class GuardedSystemQuerySet(AngeeQuerySet["GuardedSystemQueryThing"]):
+    """Test-local queryset whose write rule must survive system elevation."""
+
+    def update(self, **kwargs: object) -> int:
+        """Reject the guarded field through every supported queryset ingress."""
+
+        if "name" in kwargs:
+            raise TypeError("name is guarded")
+        return super().update(**kwargs)
+
+
+class GuardedSystemManager(AngeeManager.from_queryset(GuardedSystemQuerySet)):  # type: ignore[misc]
+    """Keep a manager-owned base predicate on elevated querysets."""
+
+    def get_queryset(self) -> GuardedSystemQuerySet:
+        """Expose only manager-selected rows without changing their queryset type."""
+
+        return super().get_queryset().filter(selected=True)
+
+
+class GuardedSystemQueryThing(AngeeModel):
+    """Concrete model proving system paths preserve domain queryset ownership."""
+
+    name = models.CharField(max_length=32)
+    selected = models.BooleanField(default=True)
+
+    objects = GuardedSystemManager()
 
     class Meta:
         """Django model options for the test model."""
@@ -54,12 +88,14 @@ def system_query_tables() -> Iterator[None]:
 
     with connection.schema_editor() as schema_editor:
         schema_editor.create_model(SystemQueryThing)
+        schema_editor.create_model(GuardedSystemQueryThing)
         schema_editor.create_model(ThirdPartySystemQueryThing)
     try:
         yield
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(ThirdPartySystemQueryThing)
+            schema_editor.delete_model(GuardedSystemQueryThing)
             schema_editor.delete_model(SystemQueryThing)
 
 
@@ -84,6 +120,26 @@ def test_system_querysets_ignore_the_user_sudo_toggle(system_query_tables: None)
 
     assert SystemQueryThing.system_queryset().count() == 0
     assert system_queryset(ThirdPartySystemQueryThing).count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_system_querysets_preserve_domain_queryset_and_manager_policy(system_query_tables: None) -> None:
+    """Elevation bypasses REBAC without discarding the model's collection owner."""
+
+    selected = GuardedSystemQueryThing._base_manager.create(name="selected", selected=True)
+    GuardedSystemQueryThing._base_manager.create(name="excluded", selected=False)
+
+    owned = GuardedSystemQueryThing.system_queryset()
+    adapted = system_queryset(GuardedSystemQueryThing)
+
+    assert isinstance(owned, GuardedSystemQuerySet)
+    assert isinstance(adapted, GuardedSystemQuerySet)
+    assert list(owned) == [selected]
+    assert list(adapted) == [selected]
+    with pytest.raises(TypeError, match="name is guarded"):
+        owned.update(name="bypassed")
+    with pytest.raises(TypeError, match="name is guarded"):
+        adapted.update(name="bypassed")
 
 
 @pytest.mark.django_db(transaction=True)

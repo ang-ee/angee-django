@@ -16,8 +16,11 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models.signals import class_prepared, pre_delete
 
+from angee.messaging.manager_authority import part_claim_write_is_authorized
 from angee.messaging.models import ThreadedModelMixin
 
 
@@ -26,6 +29,7 @@ def connect() -> None:
 
     for model in apps.get_models():
         _bind_teardown(model)
+        _bind_claimed_part_guard(model)
     # Models prepared after app population — e.g. test-defined threaded records — bind as
     # their class is finalized, so the teardown covers them too.
     class_prepared.connect(_on_class_prepared, dispatch_uid="messaging.chatter_teardown.class_prepared")
@@ -36,6 +40,7 @@ def _on_class_prepared(sender: Any, **kwargs: Any) -> None:
 
     del kwargs
     _bind_teardown(sender)
+    _bind_claimed_part_guard(sender)
 
 
 def _bind_teardown(model: Any) -> None:
@@ -55,3 +60,37 @@ def teardown_record_thread(sender: Any, instance: Any, **kwargs: Any) -> None:
 
     del sender, kwargs
     apps.get_model("messaging", "ThreadAttachment").objects.teardown_for_record(instance)
+
+
+def _bind_claimed_part_guard(model: Any) -> None:
+    """Bind cascade protection to the concrete runtime Part only."""
+
+    if (
+        model._meta.abstract
+        or model._meta.label_lower != "messaging.part"
+        or not any(field.name == "source_claim" for field in model._meta.fields)
+    ):
+        return
+    pre_delete.connect(
+        protect_claimed_part,
+        sender=model,
+        dispatch_uid="messaging.part_source_claim.pre_delete",
+    )
+
+
+def protect_claimed_part(sender: Any, instance: Any, **kwargs: Any) -> None:
+    """Refuse instance, queryset, or cascade deletion of a retained source Part."""
+
+    alias = kwargs.get("using") or instance._state.db or "default"
+    with transaction.atomic(using=alias):
+        source_claim_id = (
+            sender._base_manager.using(alias)
+            .select_for_update()
+            .filter(pk=instance.pk)
+            .values_list("source_claim_id", flat=True)
+            .first()
+        )
+        if source_claim_id is not None and not part_claim_write_is_authorized(alias):
+            raise ValidationError(
+                "Delete claim-backed Parts through the historical file owner."
+            )

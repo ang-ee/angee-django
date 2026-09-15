@@ -19,19 +19,21 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import field as dataclass_field
+from datetime import UTC, datetime, timedelta
 from functools import cache
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import checks
-from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import connections, models, transaction
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.db import connections, models, router, transaction
 from django.db.models import Prefetch, Q
 from django.utils import timezone
 from django.utils.module_loading import import_string
@@ -78,6 +80,104 @@ logger = logging.getLogger(__name__)
 # Renew an OAuth access token this far ahead of its expiry, so a consumer about to
 # use it (e.g. provisioning) gets a token with life left rather than one about to lapse.
 _OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
+
+
+@dataclass(frozen=True, slots=True)
+class SyncDispatchReceipt:
+    """Describe whether one bridge dispatch completed inline or continues elsewhere."""
+
+    state: Literal["completed", "dispatched"]
+    items: int | None = None
+    execution_ref: str = ""
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous receipts at the bridge/worker boundary."""
+
+        if self.state == "completed":
+            if not isinstance(self.items, int) or isinstance(self.items, bool) or self.items < 0 or self.execution_ref:
+                raise ValueError("A completed bridge sync requires items and no execution reference.")
+        elif self.state == "dispatched":
+            if self.items is None and isinstance(self.execution_ref, str) and self.execution_ref.strip():
+                return
+            raise ValueError("A dispatched bridge sync requires only an execution reference.")
+        else:
+            raise ValueError(f"Unknown bridge sync dispatch state: {self.state!r}.")
+
+    @classmethod
+    def completed(cls, items: int) -> SyncDispatchReceipt:
+        """Return a receipt for a synchronous dispatch that already completed."""
+
+        return cls(state="completed", items=items)
+
+    @classmethod
+    def dispatched(cls, execution_ref: str) -> SyncDispatchReceipt:
+        """Return a receipt for durable asynchronous execution owned elsewhere."""
+
+        if not isinstance(execution_ref, str):
+            raise ValueError("A dispatched bridge sync requires a string execution reference.")
+        reference = execution_ref.strip()
+        if not reference:
+            raise ValueError("A dispatched bridge sync requires an execution reference.")
+        return cls(state="dispatched", execution_ref=reference)
+
+    def as_payload(self) -> dict[str, int | str]:
+        """Return the stable task-result projection for this receipt."""
+
+        if self.state == "completed":
+            return {"state": self.state, "items": cast(int, self.items)}
+        return {"state": self.state, "execution_ref": self.execution_ref}
+
+
+@dataclass(frozen=True, slots=True)
+class BridgeSyncOccurrence:
+    """Immutable queue-issued identity and source window for one bridge cycle."""
+
+    kind: Literal["manual", "scheduled"]
+    key: str
+    occurred_at: datetime
+    window_key: str
+
+    def canonical(self) -> dict[str, str]:
+        """Return the bounded transport and persisted representation."""
+
+        key = self.key.strip() if isinstance(self.key, str) else ""
+        window_key = self.window_key.strip() if isinstance(self.window_key, str) else ""
+        if self.kind not in ("manual", "scheduled") or not key or not window_key:
+            raise ValueError("A bridge sync occurrence requires a kind and stable keys.")
+        if len(key) > 255 or len(window_key) > 255:
+            raise ValueError("Bridge sync occurrence keys must be at most 255 characters.")
+        if not isinstance(self.occurred_at, datetime) or self.occurred_at.tzinfo is None:
+            raise ValueError("A bridge sync occurrence time must be timezone-aware.")
+        return {
+            "kind": self.kind,
+            "key": key,
+            "occurred_at": self.occurred_at.astimezone(UTC).isoformat(),
+            "window_key": window_key,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> BridgeSyncOccurrence:
+        """Validate one queue/task payload without accepting implicit defaults."""
+
+        if not isinstance(payload, Mapping):
+            raise ValueError("Bridge sync occurrence payload must be an object.")
+        occurred_at = payload.get("occurred_at")
+        if not isinstance(occurred_at, str):
+            raise ValueError("Bridge sync occurrence time is missing.")
+        try:
+            parsed = datetime.fromisoformat(occurred_at)
+        except ValueError as error:
+            raise ValueError("Bridge sync occurrence time is invalid.") from error
+        occurrence = cls(
+            kind=cast(Any, payload.get("kind")),
+            key=cast(Any, payload.get("key")),
+            occurred_at=parsed,
+            window_key=cast(Any, payload.get("window_key")),
+        )
+        occurrence.canonical()
+        return occurrence
+
+
 _UNSET = object()
 _INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
@@ -739,8 +839,127 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
         return email
 
 
+@dataclass(slots=True)
+class _CredentialMaterialSaveCapability:
+    """One-use authority for one exact locked credential-material transition."""
+
+    alias: str
+    connection_id: int
+    outer_atomic_id: int
+    instance_id: int
+    credential_id: Any
+    previous_revision: int
+    next_revision: int
+    kind: str
+    material: str = dataclass_field(repr=False)
+    consumed: bool = False
+
+    def consume(self, alias: str, instance: Any, persisted: Any) -> bool:
+        """Spend this authority only in its issuing transaction and transition."""
+
+        connection = connections[alias]
+        matches = (
+            not self.consumed
+            and self.alias == alias
+            and self.connection_id == id(connection)
+            and connection.in_atomic_block
+            and bool(connection.atomic_blocks)
+            and self.outer_atomic_id == id(connection.atomic_blocks[0])
+            and self.instance_id == id(instance)
+            and self.credential_id == instance.pk == persisted.pk
+            and int(persisted.material_revision) == self.previous_revision
+            and int(instance.material_revision) == self.next_revision
+            and str(instance.kind) == self.kind
+            and str(instance.material) == self.material
+        )
+        if matches:
+            self.consumed = True
+        return matches
+
+
+_credential_material_save_capability: ContextVar[_CredentialMaterialSaveCapability | None] = ContextVar(
+    "integrate_credential_material_save_capability",
+    default=None,
+)
+
+
 class CredentialQuerySet(AngeeQuerySet[Any]):
-    """REBAC-scoped reads for credential health and connected accounts."""
+    """REBAC-scoped reads with credential-material generation protection."""
+
+    _material_fields = frozenset({"kind", "material", "material_revision"})
+
+    @staticmethod
+    def _field_names(fields: Iterable[Any]) -> set[str]:
+        """Return concrete field names from Django's string-or-field inputs."""
+
+        return {str(getattr(field, "name", field)) for field in fields}
+
+    def update(self, **kwargs: Any) -> int:
+        """Keep material and its generation on the locked instance owner."""
+
+        if self._material_fields & kwargs.keys():
+            raise TypeError("Credential material can only be changed by Credential's material owner.")
+        return super().update(**kwargs)
+
+    def update_or_create(
+        self,
+        defaults: Mapping[str, Any] | None = None,
+        create_defaults: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> tuple[Any, bool]:
+        """Reject generic upserts that could replace retained credential material."""
+
+        if self._material_fields & set(defaults or {}):
+            raise TypeError("Credential material can only be changed by Credential's material owner.")
+        create_values = create_defaults if create_defaults is not None else defaults
+        if self._material_fields & set(create_values or {}):
+            raise TypeError("Credential material can only be changed by Credential's material owner.")
+        return super().update_or_create(
+            defaults=defaults,
+            create_defaults=create_defaults,
+            **kwargs,
+        )
+
+    def bulk_update(
+        self,
+        objs: Iterable[Any],
+        fields: Iterable[str],
+        batch_size: int | None = None,
+    ) -> int:
+        """Reject CASE-expression writes to material or its generation."""
+
+        rows = list(objs)
+        field_names = tuple(fields)
+        if self._material_fields & self._field_names(field_names):
+            raise TypeError("Credential material can only be changed by Credential's material owner.")
+        return super().bulk_update(rows, field_names, batch_size=batch_size)
+
+    def bulk_create(
+        self,
+        objs: Iterable[Any],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Collection[str] | None = None,
+        unique_fields: Collection[str] | None = None,
+    ) -> list[Any]:
+        """Allow canonical new rows, but never conflict-update material facts."""
+
+        rows = list(objs)
+        for row in rows:
+            revision = row.material_revision
+            if isinstance(revision, bool) or not isinstance(revision, int) or revision != 1:
+                raise TypeError("New credentials must start at material revision 1.")
+        if update_conflicts and self._material_fields & self._field_names(update_fields or ()):
+            raise TypeError("Credential material can only be changed by Credential's material owner.")
+        return super().bulk_create(
+            rows,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
 
     def connected_for(self, user: Any) -> CredentialQuerySet:
         """Return ``user``'s external-account-backed credentials.
@@ -787,7 +1006,7 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
             "last_refresh_status",
         }
     )
-    operation_fields = frozenset({"kind", "material"})
+    operation_fields = frozenset({"kind", "material", "material_revision"})
 
     _REASON = "integrate.connections.credential"
 
@@ -846,14 +1065,12 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         # own). Create-only so an admin rename, and token refreshes, are preserved.
         if not str(create_values.get("name") or ""):
             create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
-        with system_context(reason=self._REASON), transaction.atomic():
-            instance, _created = self.update_or_create(
-                user=user,
-                oauth_client=oauth_client,
-                defaults={**operation_values, **update_values},
-                create_defaults=create_values,
-            )
-        return instance
+        return self._upsert_material(
+            identity={"user": user, "oauth_client": oauth_client},
+            operation_values=operation_values,
+            update_values=update_values,
+            create_values=create_values,
+        )
 
     @staticmethod
     def _oauth_credential_name(oauth_client: Any, external_account: Any | None) -> str:
@@ -899,15 +1116,82 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
             **operation_values,
             **update_values,
         }
-        with system_context(reason=self._REASON), transaction.atomic():
-            instance, _created = self.update_or_create(
-                user=user,
-                name=name,
-                oauth_client=None,
-                defaults={**operation_values, **update_values},
-                create_defaults=create_values,
+        return self._upsert_material(
+            identity={"user": user, "name": name, "oauth_client": None},
+            operation_values=operation_values,
+            update_values=update_values,
+            create_values=create_values,
+        )
+
+    def _upsert_material(
+        self,
+        *,
+        identity: Mapping[str, Any],
+        operation_values: Mapping[str, Any],
+        update_values: Mapping[str, Any],
+        create_values: Mapping[str, Any],
+    ) -> Any:
+        """Create at revision one or update one locked canonical credential."""
+
+        alias = self.db
+        with system_context(reason=self._REASON), transaction.atomic(using=alias):
+            row, created = self.lock_if_supported().get_or_create(
+                **identity,
+                defaults={**create_values, "material_revision": 1},
             )
-        return instance
+            if created:
+                return row
+            return self._save_material_locked(
+                row,
+                operation_values=operation_values,
+                update_values=update_values,
+            )
+
+    def _save_material_locked(
+        self,
+        credential: Any,
+        *,
+        operation_values: Mapping[str, Any],
+        update_values: Mapping[str, Any],
+    ) -> Any:
+        """Persist one canonical material change under the caller's row lock."""
+
+        alias = self.db
+        connection = connections[alias]
+        if not connection.in_atomic_block or not connection.atomic_blocks:
+            raise RuntimeError("Credential material writes require their owning transaction.")
+        next_kind = str(operation_values["kind"])
+        next_material = credential.encode_material(json.loads(str(operation_values["material"] or "{}")))
+        current_material = credential.encode_material(credential.reveal())
+        changed = str(credential.kind) != next_kind or current_material != next_material
+        for field, value in update_values.items():
+            setattr(credential, field, value)
+        fields = set(update_values)
+        if changed:
+            previous_revision = int(credential.material_revision)
+            credential.kind = next_kind
+            credential.material = next_material
+            credential.material_revision = previous_revision + 1
+            fields.update({"kind", "material", "material_revision"})
+            capability = _CredentialMaterialSaveCapability(
+                alias=alias,
+                connection_id=id(connection),
+                outer_atomic_id=id(connection.atomic_blocks[0]),
+                instance_id=id(credential),
+                credential_id=credential.pk,
+                previous_revision=previous_revision,
+                next_revision=previous_revision + 1,
+                kind=next_kind,
+                material=str(credential.material),
+            )
+            token = _credential_material_save_capability.set(capability)
+            try:
+                credential.save(update_fields=[*fields, "updated_at"], using=alias)
+            finally:
+                _credential_material_save_capability.reset(token)
+        elif fields:
+            credential.save(update_fields=[*fields, "updated_at"], using=alias)
+        return credential
 
     def prepare_local_credential(
         self,
@@ -1068,6 +1352,7 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
     rows use it as their per-user identity."""
     kind = StateField(choices_enum=CredentialKind)
     material = EncryptedField()
+    material_revision = models.PositiveBigIntegerField(default=1, editable=False)
     status = StateField(choices_enum=CredentialStatus, default=CredentialStatus.ACTIVE)
     expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
     granted_scopes = models.JSONField(default=list, blank=True)
@@ -1124,6 +1409,64 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
 
         return self.handler.reveal(self)
 
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Keep credential material and its monotonic generation on one owner."""
+
+        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        update_fields = kwargs.get("update_fields")
+        field_names = (
+            None
+            if update_fields is None
+            else (
+                {update_fields}
+                if isinstance(update_fields, str)
+                else {str(getattr(field, "name", field)) for field in update_fields}
+            )
+        )
+        material_fields = CredentialQuerySet._material_fields
+        writes_material = field_names is None or bool(material_fields & field_names)
+        if self.pk is None:
+            self._validate_initial_material_revision()
+            super().save(*args, **kwargs)
+            return
+        if not writes_material:
+            super().save(*args, **kwargs)
+            return
+        with transaction.atomic(using=alias):
+            persisted = (
+                type(self)
+                .objects.db_manager(alias)
+                .sudo(reason="integrate.credential.material_guard")
+                .lock_if_supported()
+                .only("kind", "material", "material_revision")
+                .filter(pk=self.pk)
+                .first()
+            )
+            if persisted is None:
+                self._validate_initial_material_revision()
+                if kwargs.get("force_update") or update_fields is not None:
+                    raise self.NotUpdated("Forced update did not affect any rows.")
+                kwargs["force_insert"] = kwargs.get("force_insert") or True
+                super().save(*args, **kwargs)
+                return
+            changed = (
+                str(self.kind) != str(persisted.kind)
+                or str(self.material) != str(persisted.material)
+                or self.material_revision != persisted.material_revision
+            )
+            if changed:
+                capability = _credential_material_save_capability.get()
+                if capability is None or not capability.consume(alias, self, persisted):
+                    raise TypeError("Credential material can only be changed by Credential's material owner.")
+            super().save(*args, **kwargs)
+
+    def _validate_initial_material_revision(self) -> None:
+        """Require the canonical first generation for every newly inserted row."""
+
+        revision = self.material_revision
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision != 1:
+            raise TypeError("New credentials must start at material revision 1.")
+
     @staticmethod
     def encode_material(material: Mapping[str, Any]) -> str:
         """Encode credential material into its deterministic encrypted-field payload."""
@@ -1141,18 +1484,25 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         extra keys remain permitted here.
         """
 
-        with system_context(reason="integrate.credential.material"):
-            with transaction.atomic():
-                row: Credential = type(self).objects.lock_if_supported().get(pk=self.pk)
-                material = dict(row.reveal())
-                for key, value in changes.items():
-                    if value is None:
-                        material.pop(key, None)
-                    else:
-                        material[key] = value
-                row.material = self.encode_material(material)  # type: ignore[assignment]  # EncryptedField descriptor unmodeled by django-stubs
-                row.save(update_fields=["material", "updated_at"])
-            self.refresh_from_db(fields=["material", "updated_at"])
+        alias = router.db_for_write(type(self), instance=self)
+        manager = type(self).objects.db_manager(alias)
+        with system_context(reason="integrate.credential.material"), transaction.atomic(using=alias):
+            row: Credential = manager.lock_if_supported().get(pk=self.pk)
+            material = dict(row.reveal())
+            for key, value in changes.items():
+                if value is None:
+                    material.pop(key, None)
+                else:
+                    material[key] = value
+            manager._save_material_locked(
+                row,
+                operation_values={
+                    "kind": row.kind,
+                    "material": self.encode_material(material),
+                },
+                update_values={},
+            )
+        self.refresh_from_db(fields=["material", "material_revision", "updated_at"])
 
     def replace_material(self, material: Mapping[str, Any]) -> None:
         """Re-enter this credential's secret(s) under the kind handler's validation.
@@ -1426,7 +1776,83 @@ def integration_status_axes(status: object) -> tuple[str, str]:
 
 
 class IntegrationQuerySet(AngeeQuerySet[Any]):
-    """Chainable collection scopes for integration and bridge rows."""
+    """Chainable scopes with credential-binding generation protection."""
+
+    _credential_binding_fields = frozenset({"credential_id", "credential_binding_revision"})
+
+    @staticmethod
+    def _field_attnames(model: type[models.Model], fields: Iterable[Any]) -> set[str]:
+        """Normalize Django string-or-field inputs to concrete attnames."""
+
+        names: set[str] = set()
+        for value in fields:
+            name = str(getattr(value, "name", value))
+            try:
+                names.add(str(model._meta.get_field(name).attname))
+            except FieldDoesNotExist:
+                names.add(name)
+        return names
+
+    def update(self, **kwargs: Any) -> int:
+        """Keep credential rebinding and its generation on the instance owner."""
+
+        if self._credential_binding_fields & self._field_attnames(self.model, kwargs):
+            raise TypeError("Integration credentials can only be rebound through Integration.save().")
+        return super().update(**kwargs)
+
+    def update_or_create(
+        self,
+        defaults: Mapping[str, Any] | None = None,
+        create_defaults: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> tuple[Any, bool]:
+        """Reject generic upserts that could rewrite an existing credential binding."""
+
+        create_values = create_defaults if create_defaults is not None else defaults
+        fields = set(defaults or {}) | set(create_values or {})
+        if self._credential_binding_fields & self._field_attnames(self.model, fields):
+            raise TypeError("Integration credentials can only be rebound through Integration.save().")
+        return super().update_or_create(defaults=defaults, create_defaults=create_defaults, **kwargs)
+
+    def bulk_update(
+        self,
+        objs: Iterable[Any],
+        fields: Iterable[str],
+        batch_size: int | None = None,
+    ) -> int:
+        """Reject CASE-expression credential and generation writes."""
+
+        rows, field_names = list(objs), tuple(fields)
+        if self._credential_binding_fields & self._field_attnames(self.model, field_names):
+            raise TypeError("Integration credentials can only be rebound through Integration.save().")
+        return super().bulk_update(rows, field_names, batch_size=batch_size)
+
+    def bulk_create(
+        self,
+        objs: Iterable[Any],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Collection[str] | None = None,
+        unique_fields: Collection[str] | None = None,
+    ) -> list[Any]:
+        """Allow generation-one inserts, never conflict-update credential identity."""
+
+        rows = list(objs)
+        for row in rows:
+            row._validate_initial_credential_binding_revision()
+        if update_conflicts and self._credential_binding_fields & self._field_attnames(
+            self.model, update_fields or ()
+        ):
+            raise TypeError("Integration credentials can only be rebound through Integration.save().")
+        return super().bulk_create(
+            rows,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
 
     def due_for_enqueue(self, *, timestamp: datetime, stale_before: datetime) -> Any:
         """Return bridge rows due for a new queue attempt or stale recovery."""
@@ -1683,6 +2109,14 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         blank=True,
         related_name="integrations",
     )
+    credential_binding_revision = models.PositiveBigIntegerField(default=1, editable=False)
+    """Monotonic identity of the credential row attached to this integration.
+
+    Credential material has its own generation on :class:`Credential`. This
+    generation changes only when the integration points at a different
+    credential row, making A→B→A distinguishable to queued and durable work.
+    The optional ``account`` association is deliberately outside this contract.
+    """
     account = models.ForeignKey(
         "integrate.ExternalAccount",
         on_delete=models.SET_NULL,
@@ -1766,7 +2200,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         return capfirst(cls._meta.verbose_name)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the parent grouping kind when a concrete child row saves."""
+        """Persist kind and serialize actor-authorized credential rebinding."""
 
         current_kind = self.kind
         if _is_integration_child_model(type(self)) or not self.kind:
@@ -1774,7 +2208,104 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         update_fields = kwargs.get("update_fields")
         if update_fields is not None and self.kind != current_kind:
             kwargs["update_fields"] = {*update_fields, "kind"}
-        super().save(*args, **kwargs)
+            update_fields = kwargs["update_fields"]
+        names = (
+            None
+            if update_fields is None
+            else IntegrationQuerySet._field_attnames(
+                type(self),
+                (update_fields,) if isinstance(update_fields, str) else update_fields,
+            )
+        )
+        binding_fields = IntegrationQuerySet._credential_binding_fields
+        if names is not None and not binding_fields.intersection(names):
+            super().save(*args, **kwargs)
+            return
+
+        if self.pk is None:
+            self._validate_initial_credential_binding_revision()
+            super().save(*args, **kwargs)
+            return
+
+        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        parent_model = type(self)._meta.get_field("credential_binding_revision").model
+        credential_model = type(self)._meta.get_field("credential").remote_field.model
+        with transaction.atomic(using=alias):
+            credential = None
+            if self.credential_id is not None:
+                credential = (
+                    credential_model.objects.db_manager(alias)
+                    .sudo(reason="integrate.integration.credential_binding.credential")
+                    .lock_if_supported()
+                    .get(pk=self.credential_id)
+                )
+            persisted = (
+                parent_model.objects.db_manager(alias)
+                .sudo(reason="integrate.integration.credential_binding.integration")
+                .lock_if_supported()
+                .only("credential_id", "credential_binding_revision")
+                .filter(pk=self.pk)
+                .first()
+            )
+            if persisted is None:
+                self._validate_initial_credential_binding_revision()
+                if kwargs.get("force_update") or update_fields is not None:
+                    raise self.NotUpdated("Forced update did not affect any rows.")
+                kwargs["force_insert"] = kwargs.get("force_insert") or True
+                super().save(*args, **kwargs)
+                return
+            # A freshly constructed instance may carry an existing explicit PK.
+            # Canonical storage, not the caller's in-memory state, decides
+            # whether this is an update for Django signals and SQL persistence.
+            self._state.adding = False
+            self._state.db = alias
+            if int(self.credential_binding_revision) != int(persisted.credential_binding_revision):
+                raise TypeError("Integration credential binding revision is stale or caller-controlled.")
+            if self.credential_id != persisted.credential_id:
+                actor, unscoped = self.effective_actor(strict=True)
+                if unscoped or actor is None:
+                    raise TypeError("Integration credential rebinding requires an authorized actor.")
+                persisted.with_actor(actor)._require_record_access("write")
+                if credential is not None:
+                    credential.with_actor(actor)._require_record_access("read")
+                validator = persisted._credential_binding_validator(actor=actor)
+                validator.validate_integration_credential_binding_change(
+                    actor=actor,
+                    previous_credential_id=persisted.credential_id,
+                    credential=credential,
+                )
+                self.credential_binding_revision = int(persisted.credential_binding_revision) + 1
+                if update_fields is not None:
+                    kwargs["update_fields"] = {*update_fields, "credential_binding_revision"}
+            super().save(*args, **kwargs)
+
+    def _validate_initial_credential_binding_revision(self) -> None:
+        """Require the canonical first generation for a newly inserted row."""
+
+        revision = self.credential_binding_revision
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision != 1:
+            raise TypeError("New integrations must start at credential binding revision 1.")
+
+    def _credential_binding_validator(self, *, actor: Any) -> Integration:
+        """Return the one concrete child whose binding policy extends this parent."""
+
+        if _is_integration_child_model(type(self)):
+            return self.with_actor(actor)
+        integrity, _authorized = self.concrete_children(actor=actor, exposed_model_labels=set())
+        if len(integrity) > 1:
+            raise ImproperlyConfigured("An Integration credential binding has multiple concrete capability owners.")
+        return (integrity[0] if integrity else self).with_actor(actor)
+
+    def validate_integration_credential_binding_change(
+        self,
+        *,
+        actor: Any,
+        previous_credential_id: Any,
+        credential: Any | None,
+    ) -> None:
+        """Let a concrete integration reject or further authorize rebinding."""
+
+        del actor, previous_credential_id, credential
 
     @property
     def display_label(self) -> str:
@@ -2195,9 +2726,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             duplicate_channel_name="" if duplicate is None else str(duplicate.display_name),
         )
 
-    # The persisted stages that assert a live run. Their whole legitimate lifetime
-    # is spent holding the advisory sync lock, so a row carrying one without the
-    # lock is a stale record — the worker died before writing an outcome.
+    # Persisted stages that assert either an inline lock holder or a durable
+    # asynchronous execution whose concrete bridge can still prove it active.
     LIVE_SYNC_STAGES: ClassVar[tuple[str, ...]] = (
         str(SyncStage.DISCOVERING),
         str(SyncStage.SYNCING),
@@ -2207,20 +2737,121 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     def effective_sync_stage(self) -> str:
         """Return the sync stage reconciled against the live lock, not the record.
 
-        The persisted ``sync_stage`` is a progress report, not the source of truth
-        for "is a run alive" — only the advisory lock is. A crashed worker leaves
-        ``syncing`` behind forever; this projection reports such a row as
-        ``FAILED`` (the run was interrupted) instead of trusting the stale column.
-        ``queued`` is exempt: a queued task legitimately holds no lock until a
-        worker picks it up. When the lock backend is process-local (the SQLite
-        floor), the web process cannot see a worker's lock at all — reconciling
-        there would misreport every healthy run, so the column is trusted as-is.
+        Inline work proves liveness with the advisory lock. Asynchronous work may
+        outlive that dispatch lock, so its concrete bridge must resolve the stored
+        execution reference against its durable execution owner. A reference by
+        itself is never proof of liveness. ``queued`` is exempt because a queued
+        task legitimately holds no lock until a worker picks it up. A process-local
+        lock backend cannot support cross-process reconciliation, so it trusts the
+        persisted stage.
         """
 
         stage = str(self.sync_stage)
-        if stage in self.LIVE_SYNC_STAGES and task_locks_are_cross_process() and not self.is_syncing:
-            return str(self.SyncStage.FAILED)
+        if stage in self.LIVE_SYNC_STAGES and task_locks_are_cross_process():
+            execution_ref = self.sync_execution_ref
+            if execution_ref and self.sync_execution_is_active(execution_ref):
+                return stage
+            if not self.is_syncing:
+                return str(self.SyncStage.FAILED)
         return stage
+
+    @property
+    def sync_execution_ref(self) -> str:
+        """Return the durable asynchronous execution reference, when dispatched."""
+
+        progress = self.sync_progress if isinstance(self.sync_progress, Mapping) else {}
+        reference = progress.get("execution_ref")
+        return reference.strip() if isinstance(reference, str) else ""
+
+    def sync_execution_is_active(self, execution_ref: str) -> bool:
+        """Resolve an asynchronous execution reference at its concrete owner.
+
+        A bridge that returns a dispatched receipt must override this hook and
+        arrange idempotent terminal delivery through :meth:`record_sync_terminal`,
+        passing the expected execution reference. The conservative default prevents
+        an opaque or stale reference from manufacturing live telemetry.
+        """
+
+        del execution_ref
+        return False
+
+    def sync_admission_generation(self) -> str:
+        """Return the credential-binding generation fencing queued work."""
+
+        return str(self.credential_binding_revision)
+
+    def validate_sync_eligibility(self, *, allow_paused: bool = False) -> None:
+        """Require retry eligibility and an enabled or explicitly one-shot lifecycle."""
+
+        if self.lifecycle != type(self).Lifecycle.CONNECTED and not (
+            allow_paused and self.lifecycle == type(self).Lifecycle.PAUSED
+        ):
+            raise ValidationError("Only a connected integration can synchronize.")
+        if self.runtime_status == IntegrationRuntimeStatus.ERROR and self.next_sync_at is None:
+            raise ValidationError("This integration requires repair before it can synchronize.")
+
+    def validate_sync_admission(self, *, allow_paused: bool = False) -> None:
+        """Require eligibility and absence of another asynchronous execution."""
+
+        self.validate_sync_eligibility(allow_paused=allow_paused)
+        if self.sync_execution_ref:
+            raise ValidationError("This integration already has asynchronous sync execution to reconcile.")
+
+    def validate_sync_occurrence_lifecycle(
+        self,
+        occurrence: BridgeSyncOccurrence | None,
+        *,
+        expected_lifecycle: object = _UNSET,
+    ) -> bool:
+        """Validate the durable queue lifecycle and return manual-paused posture.
+
+        Only a manual request admitted while paused can execute while paused.
+        Legacy markers predate one-shot admission and are treated as connected.
+        """
+
+        progress = self.sync_progress if isinstance(self.sync_progress, Mapping) else {}
+        queued_lifecycle = progress.get(
+            "queue_lifecycle",
+            str(type(self).Lifecycle.CONNECTED),
+        )
+        retained_lifecycle = (
+            queued_lifecycle
+            if expected_lifecycle is _UNSET
+            else expected_lifecycle
+        )
+        if (
+            retained_lifecycle
+            not in (
+                str(type(self).Lifecycle.CONNECTED),
+                str(type(self).Lifecycle.PAUSED),
+            )
+            or queued_lifecycle != retained_lifecycle
+            or retained_lifecycle != str(self.lifecycle)
+        ):
+            raise ValidationError("Integration lifecycle changed after sync was queued.")
+        retained_occurrence = progress.get("queue_occurrence")
+        if (
+            retained_occurrence is not None
+            and (
+                occurrence is None
+                or retained_occurrence != occurrence.canonical()
+            )
+        ):
+            raise ValidationError("Integration sync occurrence changed after it was queued.")
+        allow_paused = (
+            retained_lifecycle == str(type(self).Lifecycle.PAUSED)
+            and occurrence is not None
+            and occurrence.kind == "manual"
+        )
+        if retained_lifecycle == str(type(self).Lifecycle.PAUSED) and not allow_paused:
+            raise ValidationError("Only a manual request can synchronize a paused integration.")
+        return allow_paused
+
+    def validate_queued_sync_admission(self, occurrence: BridgeSyncOccurrence | None) -> None:
+        """Recheck one queued occurrence before dispatching its exact work."""
+
+        allow_paused = self.validate_sync_occurrence_lifecycle(occurrence)
+        self.validate_sync_admission(allow_paused=allow_paused)
 
     def sync_lock_key(self) -> LockKey:
         """Return the advisory task lock key for this bridge sync."""
@@ -2282,7 +2913,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.last_sync_started_at = now
         self.sync_stage = self.SyncStage.SYNCING
         self.sync_error = ""
-        self.sync_progress = self._sync_marker(stage=self.SyncStage.SYNCING, started_at=now.isoformat())
+        self.sync_progress = self._sync_marker(
+            stage=self.SyncStage.SYNCING,
+            started_at=now.isoformat(),
+            execution_ref="",
+        )
         with transaction.atomic():
             self.save(
                 update_fields=[
@@ -2308,32 +2943,77 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         with transaction.atomic():
             self.save(update_fields=["next_sync_at", "updated_at"])
 
-    def mark_sync_queued(self, *, now: datetime) -> None:
+    def mark_sync_queued(
+        self,
+        *,
+        now: datetime,
+        occurrence: BridgeSyncOccurrence | None = None,
+    ) -> None:
         """Persist that a worker task has been queued for this bridge."""
 
+        issued = occurrence or BridgeSyncOccurrence(
+            kind="manual",
+            key=f"manual:{now.isoformat()}",
+            occurred_at=now,
+            window_key=now.isoformat(),
+        )
+        self.validate_sync_admission(allow_paused=issued.kind == "manual")
         self.sync_stage = self.SyncStage.QUEUED
         self.sync_error = ""
-        self.sync_progress = self._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
+        self.sync_progress = self._sync_marker(
+            stage=self.SyncStage.QUEUED,
+            queued_at=now.isoformat(),
+            queue_generation=self.sync_admission_generation(),
+            queue_occurrence=issued.canonical(),
+            queue_lifecycle=str(self.lifecycle),
+        )
         with transaction.atomic():
             self.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"])
 
     def reset_sync_queue(self, *, now: datetime) -> None:
-        """Make a failed queue dispatch due again for the next scheduler pass."""
+        """Retry failed dispatch without turning a paused one-shot into periodic work."""
 
+        if self.lifecycle == type(self).Lifecycle.PAUSED:
+            # This row has no periodic poll to rearm. Keep the fresh queue marker
+            # and its manual occurrence for the next bounded stale-queue recovery.
+            return
         self.next_sync_at = now
         self.sync_stage = self.SyncStage.IDLE
         self.sync_progress = {}
         with transaction.atomic():
             self.save(update_fields=["next_sync_at", "sync_progress", "sync_stage", "updated_at"])
 
-    def sync_queue_token_matches(self, timestamp: datetime) -> bool:
-        """Return whether a queued task payload still matches this bridge row."""
+    def sync_queue_token_matches(
+        self,
+        timestamp: datetime,
+        generation: str | None,
+        occurrence: BridgeSyncOccurrence | None = None,
+    ) -> bool:
+        """Return whether a queued task still matches this bridge and generation."""
 
-        if self.sync_stage != self.SyncStage.QUEUED or not isinstance(self.sync_progress, Mapping):
+        if generation is None or not self._sync_queue_marker_matches(timestamp, generation):
             return False
-        return self.sync_progress.get("queued_at") == timestamp.isoformat()
+        if occurrence is not None and self.sync_progress.get("queue_occurrence") != occurrence.canonical():
+            return False
+        return generation == self.sync_admission_generation()
 
-    def release_sync_queue(self, *, now: datetime) -> bool:
+    def _sync_queue_marker_matches(self, timestamp: datetime, generation: str) -> bool:
+        """Return whether the current queue marker belongs to this exact task."""
+
+        return (
+            self.sync_stage == self.SyncStage.QUEUED
+            and isinstance(self.sync_progress, Mapping)
+            and self.sync_progress.get("queued_at") == timestamp.isoformat()
+            and self.sync_progress.get("queue_generation") == generation
+        )
+
+    def release_sync_queue(
+        self,
+        *,
+        now: datetime,
+        generation: str | None = None,
+        occurrence: BridgeSyncOccurrence | None = None,
+    ) -> bool:
         """Release a queue claim this run declined; return whether it was still ours.
 
         A declined run is terminal for its queue token — the work is not happening.
@@ -2349,19 +3029,51 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         holder's stage. Mirrors :meth:`merge_subscription_state`.
         """
 
-        with transaction.atomic():
+        with system_context(reason="integrate.bridge.release_sync_queue"), transaction.atomic():
             row = (
                 type(self)
                 .objects.sudo(reason="integrate.bridge.release_sync_queue")
                 .lock_if_supported()
                 .get(pk=self.pk)
             )
-            if not row.sync_queue_token_matches(now):
+            if generation is None or not row._sync_queue_marker_matches(now, generation):
                 return False
-            row.sync_stage = row.SyncStage.IDLE
-            row.save(update_fields=["sync_stage", "updated_at"])
+            if occurrence is not None and row.sync_progress.get("queue_occurrence") != occurrence.canonical():
+                return False
+            row._clear_sync_queue_marker()
         self.sync_stage = self.SyncStage.IDLE
+        self.sync_progress = row.sync_progress
         return True
+
+    def discard_sync_queue(self) -> bool:
+        """Clear any queued marker while preserving retry scheduling and details."""
+
+        with system_context(reason="integrate.bridge.discard_sync_queue"), transaction.atomic():
+            row = (
+                type(self)
+                .objects.sudo(reason="integrate.bridge.discard_sync_queue")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
+            if row.sync_stage != row.SyncStage.QUEUED:
+                return False
+            row._clear_sync_queue_marker()
+        self.sync_stage = self.SyncStage.IDLE
+        self.sync_progress = row.sync_progress
+        return True
+
+    def _clear_sync_queue_marker(self) -> None:
+        """Persist an idle marker without discarding another reporter's details."""
+
+        progress = dict(self.sync_progress) if isinstance(self.sync_progress, Mapping) else {}
+        progress.pop("queued_at", None)
+        progress.pop("queue_generation", None)
+        progress.pop("queue_occurrence", None)
+        progress.pop("queue_lifecycle", None)
+        progress["stage"] = self.SyncStage.IDLE
+        self.sync_stage = self.SyncStage.IDLE
+        self.sync_progress = progress
+        self.save(update_fields=["sync_progress", "sync_stage", "updated_at"])
 
     def record_sync(self, result: int, *, now: datetime) -> None:
         """Persist one successful scheduler sync result and healthy status report."""
@@ -2375,6 +3087,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             stage=self.SyncStage.COMPLETED,
             items=result,
             completed_at=now.isoformat(),
+            execution_ref="",
         )
         self.last_sync_summary = {
             "status": "ok",
@@ -2399,7 +3112,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                 ]
             )
 
-    def record_sync_error(self, error: Exception, *, now: datetime) -> None:
+    def record_sync_error(self, error: Exception, *, now: datetime, retryable: bool = True) -> None:
         """Persist one failed scheduler sync result and error status report."""
 
         failure = _safe_integration_failure(error)
@@ -2407,8 +3120,12 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.last_sync_status = "error"
         self.sync_stage = self.SyncStage.FAILED
         self.sync_error = error_message
-        self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=error_message)
-        self.next_sync_at = self._next_sync_at(now=now)
+        self.sync_progress = self._sync_marker(
+            stage=self.SyncStage.FAILED,
+            error=error_message,
+            execution_ref="",
+        )
+        self.next_sync_at = self._next_sync_at(now=now) if retryable else None
         with transaction.atomic():
             cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
             self.save(
@@ -2421,6 +3138,90 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                     "updated_at",
                 ]
             )
+
+    def record_sync_dispatched(self, receipt: SyncDispatchReceipt, *, now: datetime) -> None:
+        """Persist the durable owner reference for asynchronous sync execution.
+
+        The concrete dispatcher must commit this marker atomically with its
+        durable execution admission. Its terminal owner must later call
+        :meth:`record_sync_terminal` with the expected execution reference so a
+        duplicate or late delivery cannot settle a newer execution.
+        """
+
+        self.validate_sync_admission(allow_paused=True)
+        if receipt.state != "dispatched":
+            raise ValueError("Only a dispatched receipt can start asynchronous telemetry.")
+        self.last_sync_started_at = now
+        self.sync_stage = self.SyncStage.SYNCING
+        self.sync_error = ""
+        self.sync_progress = self._sync_marker(
+            stage=self.SyncStage.SYNCING,
+            started_at=now.isoformat(),
+            execution_ref=receipt.execution_ref,
+        )
+        self.next_sync_at = None
+        with transaction.atomic():
+            self.save(
+                update_fields=[
+                    "last_sync_started_at",
+                    "next_sync_at",
+                    "sync_error",
+                    "sync_progress",
+                    "sync_stage",
+                    "updated_at",
+                ]
+            )
+
+    def record_sync_terminal(
+        self,
+        expected_execution_ref: str,
+        *,
+        now: datetime,
+        result: int | None = None,
+        error: Exception | None = None,
+        retryable: bool = True,
+    ) -> bool:
+        """Record one async terminal outcome only for its current execution.
+
+        The expected reference is a compare-and-set fence: duplicate delivery or
+        a late callback from an older execution cannot settle newer work.
+        """
+
+        if not isinstance(expected_execution_ref, str) or not expected_execution_ref.strip():
+            raise ValueError("Async sync terminal delivery requires an execution reference.")
+        if (result is None) == (error is None):
+            raise ValueError("Async sync terminal delivery requires exactly one result or error.")
+        reference = expected_execution_ref.strip()
+        if error is None:
+            SyncDispatchReceipt.completed(cast(int, result))
+        with system_context(reason="integrate.bridge.record_sync_terminal"), transaction.atomic():
+            row = (
+                type(self)
+                .objects.sudo(reason="integrate.bridge.record_sync_terminal")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
+            if row.sync_execution_ref != reference or row.sync_stage not in row.LIVE_SYNC_STAGES:
+                return False
+            if error is None:
+                row.record_sync(cast(int, result), now=now)
+            else:
+                row.record_sync_error(error, now=now, retryable=retryable)
+        self.refresh_from_db()
+        return True
+
+    def dispatch_sync(self, *, now: datetime) -> SyncDispatchReceipt:
+        """Dispatch one admitted sync, completing inline by default.
+
+        Concrete bridges may return a dispatched receipt after atomically
+        persisting its durable execution through :meth:`record_sync_dispatched`.
+        They must also resolve liveness and deliver terminal telemetry through
+        the corresponding hooks; this base class never guesses another engine's
+        state from an opaque reference.
+        """
+
+        self.validate_sync_admission(allow_paused=True)
+        return SyncDispatchReceipt.completed(self.run_sync(now=now))
 
     def run_sync(self, *, now: datetime) -> int:
         """Run one sync attempt and persist its lifecycle telemetry."""

@@ -159,6 +159,12 @@ export interface MessagePartFile {
   mime_type?: MessagePartMime | null;
 }
 
+export interface MessagePartExternalLink {
+  id?: string | null;
+  title?: string | null;
+  url?: string | null;
+}
+
 export interface MessagePartFragment {
   id?: string | null;
   text?: string | null;
@@ -174,6 +180,7 @@ export interface MessagePart {
   disposition?: string | null;
   cid?: string | null;
   file?: MessagePartFile | null;
+  external_link?: MessagePartExternalLink | null;
 }
 
 export interface MessagePartsViewProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
@@ -248,21 +255,25 @@ function MessagePartContent({ part, allParts, resolveFileUrl, active, onPreviewF
   const text = part.fragment?.text ?? "";
   const hasText = text.trim() !== "";
   const file = part.file;
-  const fileNode = file ? renderMessagePartFile(part, file, resolveFileUrl, t, onPreviewFile) : null;
+  const assetNode = file
+    ? renderMessagePartFile(part, file, resolveFileUrl, t, onPreviewFile)
+    : part.external_link
+      ? renderMessagePartExternalLink(part, part.external_link, t)
+      : null;
   const role = normalisePartValue(part.role);
   const textNode = hasText
     ? renderMessagePartText(text, part.type, allParts, resolveFileUrl, t)
     : null;
 
   if (role === "QUOTED") {
-    return <QuotedMessagePart content={textNode} file={fileNode} active={active} />;
+    return <QuotedMessagePart content={textNode} file={assetNode} active={active} />;
   }
 
   if (role === "TITLE") {
     return (
       <div className="space-y-1">
         {hasText ? <h3 className="text-14 font-semibold leading-snug text-current">{text}</h3> : null}
-        {fileNode}
+        {assetNode}
       </div>
     );
   }
@@ -271,7 +282,7 @@ function MessagePartContent({ part, allParts, resolveFileUrl, active, onPreviewF
     return (
       <div className="space-y-1 text-current opacity-70">
         {textNode}
-        {fileNode}
+        {assetNode}
       </div>
     );
   }
@@ -279,7 +290,7 @@ function MessagePartContent({ part, allParts, resolveFileUrl, active, onPreviewF
   return (
     <div className="space-y-1">
       {textNode}
-      {fileNode}
+      {assetNode}
     </div>
   );
 }
@@ -408,9 +419,42 @@ function renderMessagePartFile(
   );
 }
 
+function renderMessagePartExternalLink(
+  part: MessagePart,
+  externalLink: MessagePartExternalLink,
+  t: ReturnType<typeof useUiT>,
+): ReactElement {
+  const url = safeMessagePartUrl(externalLink.url);
+  const label =
+    part.name ||
+    externalLink.title ||
+    url ||
+    t("message.parts.externalLink");
+  const chip = (
+    <MessageAttachmentChip icon={<Glyph decorative name="arrow-up-right" />}>
+      {label}
+    </MessageAttachmentChip>
+  );
+  if (!url) return chip;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer nofollow"
+      className="inline-flex max-w-full align-middle"
+    >
+      {chip}
+    </a>
+  );
+}
+
 function hasRenderableMessagePart(part: MessagePart): boolean {
   if (normalisePartValue(part.role) === "HEADER") return false;
-  return (part.fragment?.text ?? "").trim() !== "" || (part.file !== null && part.file !== undefined);
+  return (
+    (part.fragment?.text ?? "").trim() !== "" ||
+    (part.file !== null && part.file !== undefined) ||
+    (part.external_link !== null && part.external_link !== undefined)
+  );
 }
 
 function messagePartKey(part: MessagePart, index: number): string {

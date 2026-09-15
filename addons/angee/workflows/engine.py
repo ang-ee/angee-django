@@ -58,6 +58,7 @@ from angee.workflows.dispatch import (
     WorkflowDispatchKind,
     enqueue_dispatch_publisher,
 )
+from angee.workflows.manager_authority import _physical_invocation_scope
 from angee.workflows.models import (
     JoinRule,
     RunOrigin,
@@ -125,6 +126,33 @@ def start(
         trigger=trigger,
         parent_step_run=parent_step_run,
         dedup_key=dedup_key,
+        origin=origin,
+        input=input,
+        validate_new=validate_new,
+    )
+
+
+def start_pinned(
+    version: Any,
+    subject: Any,
+    actor: Any,
+    *,
+    expected_definition_digest: str,
+    dedup_key: str,
+    occurrence_id: str,
+    origin: RunOrigin = cast(RunOrigin, RunOrigin.MANUAL),
+    input: JsonPresence = JsonPresence(),
+    validate_new: Callable[[], None] | None = None,
+) -> Any:
+    """Start or retain one exact immutable workflow definition and occurrence."""
+
+    return _model("WorkflowRun").objects.start_pinned(
+        version,
+        subject,
+        actor,
+        expected_definition_digest=expected_definition_digest,
+        dedup_key=dedup_key,
+        occurrence_id=occurrence_id,
         origin=origin,
         input=input,
         validate_new=validate_new,
@@ -212,7 +240,9 @@ def advance_dispatch(
                 pk=preflight.envelope.target_id
             )
             claimed_ids: list[int] = []
-            if run.status not in RunStatus.TERMINAL:
+            if run.status in RunStatus.TERMINAL:
+                run.deliver_terminal_effect(at=timestamp)
+            else:
                 _activate_run_if_needed(run, timestamp=timestamp)
                 _route_completed_steps(run)
                 if _process_map_steps(run, timestamp=timestamp):
@@ -331,30 +361,37 @@ def execute_dispatch(
         step_run.input = attempt.input if attempt.input_present else None
         impl_class = step_run.step.resolve_impl("step_class")
     try:
-        implementation = cast(Any, impl_class)()
-        if attempt.cause == AttemptCause.MANUAL_RETRY:
-            recovery_mode = RecoveryMode(attempt.recovery_mode)
-            capability = impl_class.recovery_capability(
-                attempt=attempt.recovery_source_attempt
-            )
-            if capability.mode is not recovery_mode:
-                raise ValidationError(
-                    {"recovery": "The operation's recovery capability changed after admission."}
+        with _physical_invocation_scope(
+            alias=attempt._state.db or attempt_model.objects.db,
+            run_id=attempt.step_run.run_id,
+            step_run_id=attempt.step_run_id,
+            attempt_id=attempt.pk,
+            lease_token=attempt.lease_token,
+        ):
+            implementation = cast(Any, impl_class)()
+            if attempt.cause == AttemptCause.MANUAL_RETRY:
+                recovery_mode = RecoveryMode(attempt.recovery_mode)
+                capability = impl_class.recovery_capability(
+                    attempt=attempt.recovery_source_attempt
                 )
-            step_result = implementation.run_recovery(
-                step_run,
-                now=timestamp,
-                source_attempt=attempt.recovery_source_attempt,
-                mode=recovery_mode,
+                if capability.mode is not recovery_mode:
+                    raise ValidationError(
+                        {"recovery": "The operation's recovery capability changed after admission."}
+                    )
+                step_result = implementation.run_recovery(
+                    step_run,
+                    now=timestamp,
+                    source_attempt=attempt.recovery_source_attempt,
+                    mode=recovery_mode,
+                )
+            else:
+                step_result = implementation.run(step_run, now=timestamp)
+            result = (
+                step_result.to_attempt_result()
+                if step_result is not None
+                else AttemptResult(AttemptResultKind.NO_RESULT)
             )
-        else:
-            step_result = implementation.run(step_run, now=timestamp)
-        result = (
-            step_result.to_attempt_result()
-            if step_result is not None
-            else AttemptResult(AttemptResultKind.NO_RESULT)
-        )
-        attempt_model.objects.validate_result(result)
+            attempt_model.objects.validate_result(result)
     except TransientStepError as error:
         result = AttemptResult(
             AttemptResultKind.TRANSIENT_ERROR,

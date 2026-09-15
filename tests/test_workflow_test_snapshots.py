@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -110,13 +111,31 @@ def test_recovery_reuses_exact_input_and_records_nonduplicated_artifacts(
     )
     monkeypatch.setattr(type(step), "resolve_impl", lambda self, field: _ReconcilingTestStep)
     _ReconcilingTestStep.calls = []
+    launch_calls: list[int | None] = []
+
+    def validate_run_launch(self: Workflow, **facts: Any) -> None:
+        del self
+        retained = facts["retained_run"]
+        launch_calls.append(None if retained is None else retained.pk)
+
+    monkeypatch.setattr(Workflow, "validate_run_launch", validate_run_launch)
 
     recovery = WorkflowRun.objects.start_recovery(source, request_key="recover-once", actor=actor)
     duplicate = WorkflowRun.objects.start_recovery(source, request_key="recover-once", actor=actor)
     assert duplicate.pk == recovery.pk
+    assert launch_calls == [None, recovery.pk]
+
+    def deny_launch(self: Workflow, **facts: Any) -> None:
+        del self, facts
+        raise ValidationError("launch denied")
+
+    monkeypatch.setattr(Workflow, "validate_run_launch", deny_launch)
+    with pytest.raises(ValidationError, match="launch denied"):
+        WorkflowRun.objects.start_recovery(source, request_key="recover-once", actor=actor)
     with system_context(reason="recovery admission inspection"):
         evidence = WorkflowRecoveryEvidence.objects.filter(run=recovery)
         assert evidence.count() == 0
+        assert WorkflowRun.objects.filter(origin=RunOrigin.RECOVERY).count() == 1
         advance = WorkflowDispatch.objects.get(run=recovery, kind=WorkflowDispatchKind.ADVANCE)
     assert engine.advance_dispatch(advance.pk)["claimed"] == 1
     with system_context(reason="recovery invocation inspection"):
@@ -1066,11 +1085,20 @@ def test_snapshot_workflow_and_definition_rows_are_immutable(
 
 def test_old_snapshot_starts_after_head_edit_and_ambiguous_retry_returns_same_run(
     workflow_engine_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     actor = get_user_model().objects.create_user(username="snapshot-runner")
     workflow, step = _draft(owner=actor)
     revision = workflow.draft_revision
     snapshot = Workflow.objects.test_snapshot(workflow, expected_revision=revision)
+    launch_calls: list[int | None] = []
+
+    def validate_run_launch(self: Workflow, **facts: Any) -> None:
+        del self
+        retained = facts["retained_run"]
+        launch_calls.append(None if retained is None else retained.pk)
+
+    monkeypatch.setattr(Workflow, "validate_run_launch", validate_run_launch)
     first = WorkflowRun.objects.start_test(
         snapshot,
         expected_revision=revision,
@@ -1100,12 +1128,31 @@ def test_old_snapshot_starts_after_head_edit_and_ambiguous_retry_returns_same_ru
     )
 
     assert retried.pk == first.pk
+    assert launch_calls == [None, first.pk, None]
     assert another.workflow_id == snapshot.pk
     assert first.workflow_id == snapshot.pk
     assert first.origin == RunOrigin.TEST
     assert first.input_present is True
     assert first.input == {"value": 1}
+    with system_context(reason="count test launch rows before denial"):
+        before = WorkflowRun.objects.count()
+
+    def deny_launch(self: Workflow, **facts: Any) -> None:
+        del self, facts
+        raise ValidationError("launch denied")
+
+    monkeypatch.setattr(Workflow, "validate_run_launch", deny_launch)
+    with pytest.raises(ValidationError, match="launch denied"):
+        WorkflowRun.objects.start_test(
+            snapshot,
+            expected_revision=revision,
+            request_key="same-request",
+            subject=None,
+            actor=actor,
+            input=JsonPresence(True, {"value": 1}),
+        )
     with system_context(reason="read test run projection"):
+        assert WorkflowRun.objects.count() == before
         assert first.step_runs.count() == 1
         assert WorkflowDispatch.objects.filter(run=first).count() == 1
 

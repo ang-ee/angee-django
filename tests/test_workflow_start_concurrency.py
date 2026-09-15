@@ -135,3 +135,47 @@ def test_failure_path_and_direct_start_share_parent_first_lock_order(
     with system_context(reason="linked start race verification"):
         child = WorkflowRun.objects.get(parent_step_run=parent_step)
         assert child.dispatches.count() == 1
+
+
+def test_two_exact_pinned_starts_retain_one_version_and_occurrence(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """The exact Version lock serializes create-only pinned admission."""
+
+    del workflow_engine_tables, no_workflow_queue
+    with system_context(reason="exact pinned start race setup"):
+        workflow = Workflow.objects.create(name="Exact pinned race")
+        Step.objects.create(
+            workflow=workflow,
+            key="start",
+            name="Start",
+            step_class="wait",
+            config={"until": (timezone.now() + timedelta(hours=2)).isoformat()},
+            is_entry=True,
+        )
+        version = workflow.publish()
+        digest = version.definition_digest()
+    starting = Barrier(2)
+
+    def start_exact() -> int:
+        starting.wait(timeout=5)
+        return engine.start_pinned(
+            version,
+            subject=None,
+            actor=None,
+            expected_definition_digest=digest,
+            dedup_key="exact-pinned-race",
+            occurrence_id="schedule:2030-01-01T00:00:00Z",
+        ).pk
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = (pool.submit(_thread, start_exact), pool.submit(_thread, start_exact))
+        outcomes = [future.result(timeout=10) for future in futures]
+
+    assert outcomes[0] == outcomes[1]
+    with system_context(reason="exact pinned start race verification"):
+        run = WorkflowRun.objects.get(pk=outcomes[0])
+        assert run.workflow_id == version.pk
+        assert run.occurrence_id == "schedule:2030-01-01T00:00:00Z"
+        assert run.dispatches.count() == 1

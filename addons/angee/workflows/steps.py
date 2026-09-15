@@ -17,7 +17,7 @@ suspended result.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
@@ -25,7 +25,7 @@ from typing import Any, ClassVar, Literal, Self
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
-from django.db import models
+from django.db import DEFAULT_DB_ALIAS, models
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from pydantic import BaseModel
@@ -43,6 +43,10 @@ from angee.workflows.attempts import (
 )
 from angee.workflows.configs import GateConfig, MapConfig, WaitConfig, map_items_expression_path
 from angee.workflows.data_contracts import DataContract, model_data_contract
+from angee.workflows.manager_authority import (
+    StepInvocationFenced,
+    _physical_invocation_for,
+)
 
 _MODEL_LABEL_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
 _OUTCOME_KEY_FIELD = models.SlugField(max_length=100)
@@ -261,6 +265,20 @@ class StepImpl(ImplBase):
             return self.run(step_run, now=now)
         raise ValidationError({"recovery": "This operation does not implement reconciliation."})
 
+    def commit_current(self, step_run: Any, writer: Callable[[], Any]) -> Any:
+        """Run one local domain writer while the retained invocation is current."""
+
+        alias = step_run._state.db or DEFAULT_DB_ALIAS
+        invocation = _physical_invocation_for(
+            alias=alias,
+            step_run_id=step_run.pk,
+        )
+        attempt_model = apps.get_model("workflows", "StepAttempt")
+        return attempt_model.objects.db_manager(alias).commit_current(
+            invocation,
+            writer=writer,
+        )
+
     @classmethod
     def input_contract(cls) -> DataContract:
         """Return Pydantic's declared validation shape for operation input."""
@@ -359,16 +377,25 @@ class StepImpl(ImplBase):
     def heartbeat(self, step_run: Any, *, at: datetime | None = None) -> None:
         """Refresh ``step_run``'s heartbeat while a long implementation is running."""
 
-        if str(getattr(step_run.status, "value", step_run.status)) != "started":
-            return
+        alias = step_run._state.db or DEFAULT_DB_ALIAS
         timestamp = at or timezone.now()
-        if step_run.current_attempt_id is not None:
+        invocation = _physical_invocation_for(
+            alias=alias,
+            step_run_id=step_run.pk,
+            required=False,
+        )
+        if invocation is not None:
             attempt_model = apps.get_model("workflows", "StepAttempt")
-            with system_context(reason="workflows.step.heartbeat.load"):
-                attempt = attempt_model.objects.get(pk=step_run.current_attempt_id)
-            attempt_model.objects.heartbeat(
-                attempt.pk, lease_token=attempt.lease_token, at=timestamp
+            attempt_model.objects.db_manager(alias).heartbeat_current(
+                invocation,
+                at=timestamp,
             )
+            return
+        if step_run.current_attempt_id is not None:
+            raise StepInvocationFenced(
+                "A retained step heartbeat requires its active physical invocation."
+            )
+        if str(getattr(step_run.status, "value", step_run.status)) != "started":
             return
         step_run.heartbeat_at = timestamp
         with system_context(reason="workflows.step.heartbeat"):

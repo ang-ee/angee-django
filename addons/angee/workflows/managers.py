@@ -66,6 +66,7 @@ from angee.workflows.dispatch import (
 )
 from angee.workflows.graph import GraphFreshnessReason, GraphIdentity, WorkflowGraph
 from angee.workflows.manager_authority import (
+    StepInvocationFenced,
     _artifact_batch_capability,
     _artifact_write_capability,
     _ArtifactBatchCapability,
@@ -88,6 +89,8 @@ from angee.workflows.manager_authority import (
     _dispatch_save_capability,
     _DispatchConsumeSession,
     _DispatchSaveCapability,
+    _physical_invocation_is_active,
+    _PhysicalInvocationCapability,
     _recovery_evidence_batch,
     _recovery_evidence_write_row,
     _recovery_write_run,
@@ -591,6 +594,56 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 validate_new=validate_new,
             )
 
+    def start_pinned(
+        self,
+        version: Any,
+        subject: Any,
+        actor: Any,
+        *,
+        expected_definition_digest: str,
+        dedup_key: str,
+        occurrence_id: str,
+        origin: RunOrigin = cast(RunOrigin, RunOrigin.MANUAL),
+        input: JsonPresence = JsonPresence(),
+        available_at: datetime | None = None,
+        validate_new: Callable[[], None] | None = None,
+    ) -> Any:
+        """Start or exactly retain one explicitly pinned immutable version."""
+
+        input = validate_json_presence(input, label="workflow run input")
+        digest = expected_definition_digest.strip() if isinstance(expected_definition_digest, str) else ""
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise ValidationError({"expected_definition_digest": "Expected a lowercase SHA-256 definition digest."})
+        run_dedup_key = dedup_key.strip() if isinstance(dedup_key, str) else ""
+        occurrence = occurrence_id.strip() if isinstance(occurrence_id, str) else ""
+        dedup_max_length = cast(int, self.model._meta.get_field("dedup_key").max_length)
+        occurrence_max_length = cast(int, self.model._meta.get_field("occurrence_id").max_length)
+        if not run_dedup_key or len(run_dedup_key) > dedup_max_length:
+            raise ValidationError({"dedup_key": "Pinned starts require a bounded non-empty dedup key."})
+        if not occurrence or len(occurrence) > occurrence_max_length:
+            raise ValidationError({"occurrence_id": "Pinned starts require a bounded non-empty occurrence identity."})
+        alias = self.db
+        workflow_model = self.model._meta.get_field("workflow").remote_field.model
+        with system_context(reason="workflows.runs.start_pinned"), transaction.atomic(using=alias):
+            locked_version = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=version.pk)
+            if locked_version.status != WorkflowStatus.PUBLISHED or locked_version.published_from_id is None:
+                raise ValidationError({"workflow": "Pinned starts require an immutable published workflow version."})
+            if locked_version.definition_digest() != digest:
+                raise ValidationError({"expected_definition_digest": "Workflow definition digest does not match."})
+            return self._start_pinned_locked(
+                locked_version,
+                subject,
+                actor,
+                dedup_key=run_dedup_key,
+                occurrence_id=occurrence,
+                origin=origin,
+                input=input,
+                available_at=available_at or timezone.now(),
+                using=alias,
+                validate_new=validate_new,
+                exact_version=True,
+            )
+
     def reprocess(self, source_run: Any, *, actor: Any, request_key: str) -> Any:
         """Start an idempotent new current-publication run for the same subject.
 
@@ -611,11 +664,27 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             raise ValidationError({"request_key": "Reprocessing request key is too long."})
         with system_context(reason="workflows.runs.reprocess"), transaction.atomic(using=alias):
             head = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=head_id)
-            existing = system_queryset(self.model, using=alias, lock=None).filter(dedup_key=dedup_key).first()
+            existing = (
+                system_queryset(self.model, using=alias, lock=("self",))
+                .select_related("workflow")
+                .filter(dedup_key=dedup_key)
+                .first()
+            )
             if existing is not None:
                 if existing.reprocessed_from_id != source.pk:
                     raise ValidationError("Reprocessing request identity conflicts with an existing run.")
-                return existing
+                return self._start_pinned_locked(
+                    existing.workflow,
+                    source.subject,
+                    actor,
+                    dedup_key=dedup_key,
+                    origin=cast(RunOrigin, RunOrigin.MANUAL),
+                    input=JsonPresence(source.input_present, copy.deepcopy(source.input)),
+                    reprocessed_from=source,
+                    available_at=timezone.now(),
+                    using=alias,
+                    known_retained=existing,
+                )
             lineage_versions = system_queryset(workflow_model, using=alias, lock=None).filter(
                 models.Q(pk=head.pk) | models.Q(published_from_id=head.pk)
             ).values("pk")
@@ -740,7 +809,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 actor_ref = str(to_subject_ref(actor))
             except NoActorResolvedError as error:
                 raise PermissionDenied("Test launches require an effective actor.") from error
-            existing = self.select_related("workflow", "test_step").filter(dedup_key=dedup_key).first()
+            existing = (
+                system_queryset(self.model, using=alias, lock=("self",))
+                .select_related("workflow", "test_step")
+                .filter(dedup_key=dedup_key)
+                .first()
+            )
             if existing is not None:
                 if existing.test_request_actor_ref != actor_ref:
                     raise PermissionDenied("Test launch request is owned by another actor.")
@@ -771,7 +845,22 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     selected_step_key=existing.test_step.key if existing.test_step_id else None,
                     fixture_rows=retry_rows,
                 )
-                return existing
+                return self._start_pinned_locked(
+                    existing.workflow,
+                    subject,
+                    actor,
+                    dedup_key=dedup_key,
+                    origin=cast(RunOrigin, RunOrigin.TEST),
+                    input=input,
+                    test_request_actor_ref=actor_ref,
+                    test_scope=scope,
+                    test_step=existing.test_step,
+                    test_source_step_id=existing.test_source_step_id,
+                    test_repair_source_attempt=repair_source_attempt,
+                    available_at=timezone.now(),
+                    using=alias,
+                    known_retained=existing,
+                )
             selected_key = None
             if selected_step is not None:
                 step_model = workflow_model._meta.apps.get_model("workflows", "Step")
@@ -935,7 +1024,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             except NoActorResolvedError as error:
                 raise PermissionDenied("Recovery requires an effective actor.") from error
             dedup_key = f"recovery:{source_run.pk}:{locked_attempt.pk}:{request_key}"
-            existing = self.filter(dedup_key=dedup_key).first()
+            existing = (
+                system_queryset(self.model, using=alias, lock=("self",))
+                .select_related("workflow")
+                .filter(dedup_key=dedup_key)
+                .first()
+            )
             if existing is not None:
                 if (
                     existing.recovery_source_attempt_id != locked_attempt.pk
@@ -943,7 +1037,20 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     or existing.recovery_mode != str(capability.mode)
                 ):
                     raise ValidationError({"request_key": "Recovery request facts do not match."})
-                return existing
+                return self._start_pinned_locked(
+                    existing.workflow,
+                    source_subject,
+                    actor,
+                    dedup_key=dedup_key,
+                    origin=cast(RunOrigin, RunOrigin.RECOVERY),
+                    input=JsonPresence(source_run.input_present, copy.deepcopy(source_run.input)),
+                    recovery_source_attempt=locked_attempt,
+                    recovery_request_actor_ref=actor_ref,
+                    recovery_mode=str(capability.mode),
+                    available_at=timezone.now(),
+                    using=alias,
+                    known_retained=existing,
+                )
 
             recovery_graph = WorkflowGraph.from_workflow(source_run.workflow)
             accepted_step_ids = {
@@ -1460,6 +1567,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         using: str,
         reprocessed_from: Any = None,
         validate_new: Callable[[], None] | None = None,
+        exact_version: bool = False,
+        known_retained: Any = None,
     ) -> Any:
         """Create a Run and its first durable work for one explicit immutable definition."""
 
@@ -1504,6 +1613,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             requested_head_id = version.published_from_id or version.pk
             matches = (
                 existing_head_id == requested_head_id
+                and (not exact_version or existing.workflow_id == version.pk)
                 and existing.subject_content_type_id == (None if content_type is None else content_type.pk)
                 and existing.subject_object_id == object_id
                 and existing.created_by_id == owner_id
@@ -1520,20 +1630,36 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 raise ValidationError({field: "Workflow start identity was reused with different immutable facts."})
             return existing
 
-        retained = None
-        if parent_step_run is not None:
+        retained = known_retained
+        if retained is None and parent_step_run is not None:
             retained = system_queryset(self.model, using=using, lock=("self",)).filter(
                 parent_step_run=parent_step_run,
             ).first()
-        elif run_dedup_key:
+        elif retained is None and run_dedup_key:
             retained = system_queryset(self.model, using=using, lock=("self",)).filter(
                 dedup_key=run_dedup_key,
             ).first()
         if retained is not None:
-            return retain_exact(retained)
+            retained = retain_exact(retained)
+        version.validate_run_launch(
+            subject=subject,
+            actor=actor,
+            origin=cast(RunOrigin, resolved_origin),
+            trigger=trigger,
+            parent_step_run=parent_step_run,
+            dedup_key=run_dedup_key,
+            occurrence_id=occurrence_id,
+            input=JsonPresence(input.present, copy.deepcopy(input.value)),
+            retained_run=retained,
+            exact_version=exact_version,
+        )
+        if retained is not None:
+            return retained
         if validate_new is not None:
             validate_new()
-        if parent_step_run is not None:
+        if exact_version:
+            run, created = self.create(**attrs), True
+        elif parent_step_run is not None:
             run, created = self.get_or_create(parent_step_run=parent_step_run, defaults=attrs)
         elif run_dedup_key:
             run, created = self.get_or_create(dedup_key=run_dedup_key, defaults=attrs)
@@ -1975,9 +2101,12 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             else:
                 retained_occurrence = None
                 dedup_key = f"trigger:{trigger.pk}:subject:{content_type.pk}:{subject.pk}"
-            existing = system_queryset(run_model, using=alias, lock=None).filter(
-                dedup_key=dedup_key
-            ).first()
+            existing = (
+                system_queryset(run_model, using=alias, lock=("self",))
+                .select_related("workflow")
+                .filter(dedup_key=dedup_key)
+                .first()
+            )
             if existing is not None:
                 existing_head_id = existing.workflow.published_from_id or existing.workflow_id
                 if (
@@ -1990,7 +2119,19 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                     or existing.dedup_key != dedup_key
                 ):
                     raise ValidationError({"occurrence_id": "Event occurrence identity conflicts with retained work."})
-                return existing
+                return run_model.objects._start_pinned_locked(
+                    existing.workflow,
+                    subject,
+                    actor,
+                    trigger=trigger,
+                    dedup_key=dedup_key,
+                    occurrence_id=retained_occurrence,
+                    origin=cast(RunOrigin, RunOrigin.TRIGGER),
+                    input=JsonPresence(existing.input_present, copy.deepcopy(existing.input)),
+                    available_at=timestamp,
+                    using=alias,
+                    known_retained=existing,
+                )
             trigger.validate_event_admission(subject, source=source, dedup_key=dedup_key)
             if not trigger.rate_limit_allows(timestamp=timestamp):
                 return None
@@ -3467,6 +3608,56 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 update_fields=["started_at", "heartbeat_at", "updated_at"],
             )
             return InvocationAdmission.FIRST_START
+
+    def heartbeat_current(
+        self, invocation: object, *, at: datetime
+    ) -> None:
+        """Refresh the exact invocation lease or make lease loss observable."""
+
+        alias = self.db
+        if not _physical_invocation_is_active(invocation, alias=alias):
+            raise StepInvocationFenced("The workflow invocation is no longer active.")
+        capability = cast(_PhysicalInvocationCapability, invocation)
+        if not self.heartbeat(
+            capability.attempt_id,
+            lease_token=capability.lease_token,
+            at=at,
+        ):
+            raise StepInvocationFenced("The workflow invocation lease is no longer current.")
+
+    def commit_current(self, invocation: object, *, writer: Callable[[], Any]) -> Any:
+        """Run one local writer after locking and fencing the current attempt."""
+
+        alias = self.db
+        if not callable(writer):
+            raise TypeError("The workflow invocation writer must be callable.")
+        if not _physical_invocation_is_active(invocation, alias=alias):
+            raise StepInvocationFenced("The workflow invocation is no longer active.")
+        capability = cast(_PhysicalInvocationCapability, invocation)
+        with (
+            transaction.atomic(using=alias),
+            self._write(alias, capability.step_run_id),
+            system_context(reason="workflows.attempt.commit_current"),
+        ):
+            run, step_run = self._locked_ancestry(capability.step_run_id, alias)
+            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
+                pk=capability.attempt_id
+            )
+            if (
+                not _physical_invocation_is_active(capability, alias=alias)
+                or run.pk != capability.run_id
+                or run.is_terminal
+                or step_run.run_id != capability.run_id
+                or step_run.status != StepRunStatus.STARTED
+                or step_run.current_attempt_id != attempt.pk
+                or attempt.step_run_id != capability.step_run_id
+                or attempt.lease_token != capability.lease_token
+                or attempt.started_at is None
+                or attempt.lease_revoked_at is not None
+                or attempt.result_recorded_at is not None
+            ):
+                raise StepInvocationFenced("The workflow invocation is no longer current.")
+            return writer()
 
     def heartbeat(self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime) -> bool:
         """Refresh a live lease without changing logical lifecycle state."""

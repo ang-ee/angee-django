@@ -8,8 +8,9 @@ source; the email/social mapping lands in ``messaging_integrate_*`` backends.
 
 The shapes mirror JMAP/Gmail/RFC-5322: a :class:`Thread` aggregates :class:`Message`
 rows; a message's body is a recursive :class:`Part` tree whose text nodes reference
-a content-addressed :class:`Fragment` (dedup + quotation + signature isolation) and
-whose byte nodes reference a ``storage.File``; cross-message relations (quote/reply/
+a content-addressed :class:`Fragment` (dedup + quotation + signature isolation),
+whose byte nodes reference a ``storage.File``, and whose link nodes reference a
+``storage.ExternalLink``; cross-message relations (quote/reply/
 mention) live on :class:`MessageEdge`. A subject is not a column: it is a sparse
 ``TITLE`` part pointing at a shared fragment, and a thread's display/grouping title
 is a fragment FK — so only messages that *have* a title pay for one, and a re-quoted
@@ -61,6 +62,11 @@ from angee.integrate.models import Bridge
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
 from angee.jobs.autoconfig import SETTINGS as _JOB_SETTINGS
 from angee.messaging.backends import ChannelBackend
+from angee.messaging.manager_authority import (
+    PART_CLAIM_IDENTITY_FIELDS,
+    normalized_part_claim_write_fields,
+    part_claim_write_is_authorized,
+)
 from angee.messaging.managers import (
     ChannelManager,
     FragmentManager,
@@ -2437,8 +2443,9 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
 
     ``type``/``role`` is a genuine discriminator, not MTI: a ``multipart/*`` is a
     container; a text part references a :class:`Fragment`; a byte part references a
-    ``storage.File``. Attachments are ``disposition=attachment`` + ``file``; inline
-    images are ``disposition=inline`` + ``cid``.
+    ``storage.File``. Link parts reference ``storage.ExternalLink`` without fetching
+    it. Attachments are ``disposition=attachment`` + exactly one asset; inline images
+    are ``disposition=inline`` + ``cid``.
     """
 
     runtime = True
@@ -2498,6 +2505,21 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.SET_NULL,
         related_name="+",
     )
+    external_link = models.ForeignKey(
+        "storage.ExternalLink",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    source_claim = models.OneToOneField(
+        "storage.FileAttachmentClaim",
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.PROTECT,
+        related_name="message_part",
+    )
 
     objects = PartManager()
 
@@ -2505,6 +2527,7 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
         """Django model options for the part source model."""
 
         abstract = True
+        base_manager_name = "objects"
         ordering = ("message", "position", "sqid")
         rebac_resource_type = "messaging/part"
         rebac_id_attr = "sqid"
@@ -2514,12 +2537,110 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
                 condition=models.Q(role="title"),
                 name="uq_part_message_title",
             ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(fragment__isnull=True, file__isnull=True)
+                    | models.Q(fragment__isnull=True, external_link__isnull=True)
+                    | models.Q(file__isnull=True, external_link__isnull=True)
+                ),
+                name="ck_part_at_most_one_content",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(source_claim__isnull=True)
+                    | (
+                        models.Q(parent__isnull=True)
+                        & (
+                            models.Q(file__isnull=False, external_link__isnull=True)
+                            | models.Q(file__isnull=True, external_link__isnull=False)
+                        )
+                        & models.Q(fragment__isnull=True)
+                        & models.Q(disposition="attachment")
+                    )
+                ),
+                name="ck_part_source_claim_attachment",
+            ),
         )
 
     def __str__(self) -> str:
         """Return the part type for Django displays."""
 
         return f"{self.type} ({self.role})"
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Keep exact source-claim projection identity behind Messaging's owner."""
+
+        alias = kwargs.get("using") or self._state.db or "default"
+        update_fields = kwargs.get("update_fields")
+        written_fields = (
+            set(PART_CLAIM_IDENTITY_FIELDS)
+            if update_fields is None
+            else normalized_part_claim_write_fields(type(self), update_fields)
+            & PART_CLAIM_IDENTITY_FIELDS
+        )
+        if not written_fields and self.pk is not None:
+            return super().save(*args, **kwargs)
+        with transaction.atomic(using=alias):
+            previous = (
+                type(self)._base_manager.using(alias)
+                .select_for_update()
+                .filter(pk=self.pk)
+                .values(*sorted(PART_CLAIM_IDENTITY_FIELDS))
+                .first()
+                if self.pk is not None
+                else None
+            )
+            authorized = part_claim_write_is_authorized(alias)
+            if previous is None:
+                if self.source_claim_id is not None and not authorized:
+                    raise ValidationError(
+                        "Create claim-backed Parts through the historical file owner."
+                    )
+                if self.pk is not None:
+                    if kwargs.get("force_update") or update_fields is not None:
+                        raise self.NotUpdated("Forced update did not affect any rows.")
+                    kwargs["force_insert"] = kwargs.get("force_insert") or True
+            else:
+                resulting_claim_id = (
+                    self.source_claim_id
+                    if "source_claim_id" in written_fields
+                    else previous["source_claim_id"]
+                )
+                changed = any(
+                    name in written_fields and previous[name] != getattr(self, name)
+                    for name in PART_CLAIM_IDENTITY_FIELDS
+                )
+                if (
+                    changed
+                    and (previous["source_claim_id"] is not None or resulting_claim_id is not None)
+                    and not authorized
+                ):
+                    raise ValidationError(
+                        "Change claim-backed Part identity through the historical file owner."
+                    )
+            super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        """Refuse direct deletion of a claim-backed source projection."""
+
+        alias = kwargs.get("using") or self._state.db or "default"
+        with transaction.atomic(using=alias):
+            canonical = (
+                type(self)._base_manager.using(alias)
+                .select_for_update()
+                .filter(pk=self.pk)
+                .values("source_claim_id")
+                .first()
+            )
+            if (
+                canonical is not None
+                and canonical["source_claim_id"] is not None
+                and not part_claim_write_is_authorized(alias)
+            ):
+                raise ValidationError(
+                    "Delete claim-backed Parts through the historical file owner."
+                )
+            return super().delete(*args, **kwargs)
 
 
 class MessageEdge(SqidMixin, AuditMixin, AngeeModel):

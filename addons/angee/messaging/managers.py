@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Iterable, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -34,8 +35,8 @@ from zoneinfo import ZoneInfo
 
 from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
-from django.core.exceptions import ImproperlyConfigured
-from django.db import IntegrityError, connection, models, transaction
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
 from rebac import PermissionDenied, current_actor, system_context
@@ -48,6 +49,12 @@ from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
+from angee.messaging.manager_authority import (
+    PART_CLAIM_IDENTITY_FIELDS,
+    normalized_part_claim_write_fields,
+    part_claim_write_authority,
+    part_claim_write_is_authorized,
+)
 from angee.messaging.tracking import TrackingChange
 from angee.parties.mixins import LinkSource
 
@@ -358,10 +365,12 @@ def _parsed_sync_hash(
 ) -> str:
     """Return a stable digest of everything an ingest of ``parsed`` would write.
 
-    Covers the message columns, its Part tree, and its participants for the given
-    channel, so an identical re-sync hashes equal and can skip the rewrite. The thread
-    is excluded — a re-thread must still reconcile counters even when nothing else
-    changed — and is compared separately by the caller.
+    Covers the content-owned message columns, its Part tree, and its participants
+    for the given channel, so an identical re-sync hashes equal and can skip the
+    rewrite. The thread is excluded — a re-thread must still reconcile counters even
+    when nothing else changed — and is compared separately by the caller. Explicit
+    historical record classification is also compared separately, allowing its exact
+    owner to correct only kind/subtype without rebuilding unchanged content.
     """
 
     payload = {
@@ -2421,7 +2430,338 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             self._recount_thread(thread)
         return thread
 
-    def _recount_thread(self, thread: Any) -> None:
+    def relocate_historical(
+        self,
+        message: Any,
+        *,
+        channel: Any,
+        expected_thread: Any,
+        thread: Any,
+    ) -> Any:
+        """Move one retained source message while repairing its native thread graph.
+
+        The caller supplies saved identities and an actor-bound source channel. The
+        channel is the authority as well as a compare-and-set fact: both threads and
+        the canonical message must still belong to that exact source. A repeated move
+        to ``thread`` is idempotent; a third current thread is rejected.
+        """
+
+        thread_model = self.model._meta.get_field("thread").related_model
+        channel_model = self.model._meta.get_field("channel").related_model
+        if (
+            not isinstance(message, self.model)
+            or not isinstance(channel, channel_model)
+            or not isinstance(expected_thread, thread_model)
+            or not isinstance(thread, thread_model)
+            or any(row.pk is None for row in (message, channel, expected_thread, thread))
+        ):
+            raise ValueError("Historical relocation requires saved canonical identities.")
+        alias = message._state.db or self.db
+        if any(
+            row._state.db != alias
+            for row in (channel, expected_thread, thread)
+        ):
+            raise ValueError("Historical relocation cannot cross databases.")
+        actor, unscoped = channel.effective_actor(strict=True)
+        if unscoped or actor is None:
+            raise PermissionDenied("Historical relocation requires an authorized channel actor.")
+        channel.with_actor(actor)._require_record_access("write")
+        message.with_actor(actor)._require_record_access("read")
+        thread.with_actor(actor)._require_record_access("read")
+        participant_model = apps.get_model("messaging", "Participant")
+        with (
+            system_context(reason="messaging.message.relocate_historical"),
+            mute_changes(),
+            transaction.atomic(using=alias),
+        ):
+            canonical_channel = (
+                type(channel)._base_manager.using(alias).select_for_update().get(
+                    pk=channel.pk
+                )
+            )
+            canonical_channel.with_actor(actor)._require_record_access("write")
+            canonical = (
+                self.model._base_manager.using(alias).select_for_update().get(
+                    pk=message.pk
+                )
+            )
+            canonical.with_actor(actor)._require_record_access("read")
+            if canonical.channel_id != canonical_channel.pk:
+                raise ValueError("Historical message belongs to a different source channel.")
+            if canonical.thread_id == thread.pk:
+                locked_destination = (
+                    thread_model._base_manager.using(alias).select_for_update().get(
+                        pk=thread.pk
+                    )
+                )
+                locked_destination.with_actor(actor)._require_record_access("read")
+                if (
+                    locked_destination.channel_id != canonical_channel.pk
+                    or locked_destination.platform != canonical.platform
+                ):
+                    raise ValueError(
+                        "Historical relocation source channel or platform changed."
+                    )
+                participant_model._base_manager.using(alias).filter(
+                    message=canonical
+                ).exclude(thread=locked_destination).update(thread=locked_destination)
+                self._recount_thread(locked_destination, using=alias)
+                return canonical
+            if canonical.thread_id != expected_thread.pk:
+                raise ValueError("Historical message thread changed before relocation.")
+            locked_threads = {
+                row.pk: row
+                for row in thread_model._base_manager.using(alias).select_for_update()
+                .filter(pk__in=sorted((expected_thread.pk, thread.pk)))
+                .order_by("pk")
+            }
+            if set(locked_threads) != {expected_thread.pk, thread.pk}:
+                raise ValueError("Historical relocation thread identity is unavailable.")
+            locked_expected = locked_threads[expected_thread.pk]
+            locked_destination = locked_threads[thread.pk]
+            locked_expected.with_actor(actor)._require_record_access("read")
+            locked_destination.with_actor(actor)._require_record_access("read")
+            if (
+                locked_expected.channel_id != canonical_channel.pk
+                or locked_destination.channel_id != canonical_channel.pk
+                or locked_expected.platform != canonical.platform
+                or locked_destination.platform != canonical.platform
+            ):
+                raise ValueError("Historical relocation source channel or platform changed.")
+            canonical.thread = locked_destination
+            canonical.save(using=alias, update_fields=("thread", "updated_at"))
+            participant_model._base_manager.using(alias).filter(message=canonical).update(
+                thread=locked_destination
+            )
+            self._recount_thread(locked_expected, using=alias)
+            self._recount_thread(locked_destination, using=alias)
+        return canonical
+
+    def bind_historical_file(
+        self,
+        message: Any,
+        *,
+        file: Any,
+        contributor: Any,
+        expected_part: Any | None = None,
+    ) -> Any:
+        """Compatibility entry point for one historical byte asset."""
+
+        return self.bind_historical_asset(
+            message,
+            asset=file,
+            contributor=contributor,
+            expected_part=expected_part,
+        )
+
+    def bind_historical_asset(
+        self,
+        message: Any,
+        *,
+        asset: Any,
+        contributor: Any,
+        expected_part: Any | None = None,
+    ) -> Any:
+        """Claim and materialize one historical file or link as a message Part.
+
+        Lock order is channel -> contributor -> asset -> attachment -> claim ->
+        message -> Part.  Storage owns the middle chain; Messaging owns the channel
+        authority and the trailing message projection.
+        """
+
+        File = apps.get_model("storage", "File")
+        ExternalLink = apps.get_model("storage", "ExternalLink")
+        Attachment = apps.get_model("storage", "FileAttachment")
+        Claim = apps.get_model("storage", "FileAttachmentClaim")
+        Part = apps.get_model("messaging", "Part")
+        asset_field = (
+            "file"
+            if isinstance(asset, File)
+            else "external_link"
+            if isinstance(asset, ExternalLink)
+            else ""
+        )
+        if (
+            not isinstance(message, self.model)
+            or not asset_field
+            or not isinstance(contributor, models.Model)
+            or (expected_part is not None and not isinstance(expected_part, Part))
+            or any(row.pk is None for row in (message, asset, contributor))
+            or (expected_part is not None and expected_part.pk is None)
+        ):
+            raise ValueError(
+                "Historical asset binding requires saved canonical identities."
+            )
+        alias = message._state.db or self.db
+        if (
+            asset._state.db != alias
+            or contributor._state.db != alias
+            or (expected_part is not None and expected_part._state.db != alias)
+        ):
+            raise ValueError("Historical asset binding cannot cross databases.")
+        actor, unscoped = message.effective_actor(strict=True)
+        if unscoped or actor is None:
+            raise PermissionDenied(
+                "Historical asset binding requires an authorized channel actor."
+            )
+        channel_id = (
+            self.model._base_manager.using(alias).values_list("channel_id", flat=True).get(
+                pk=message.pk
+            )
+        )
+        channel_model = self.model._meta.get_field("channel").related_model
+        with (
+            system_context(reason="messaging.message.bind_historical_asset"),
+            mute_changes(),
+            transaction.atomic(using=alias),
+        ):
+            channel = channel_model._base_manager.using(alias).select_for_update().get(
+                pk=channel_id
+            )
+            channel.with_actor(actor)._require_record_access("write")
+            canonical_claim = Attachment.objects.db_manager(alias).claim_asset(
+                asset,
+                message,
+                contributor=contributor,
+                label="",
+            )
+            if not isinstance(canonical_claim, Claim):
+                raise ValueError("Historical asset claim owner returned an invalid row.")
+            attachment = canonical_claim.attachment
+            canonical_asset = type(asset).system_queryset(
+                using=alias,
+                lock=(),
+            ).get(pk=asset.pk)
+            canonical_asset.with_actor(actor)._require_record_access("read")
+            canonical = self.model._base_manager.using(alias).select_for_update().get(
+                pk=message.pk
+            )
+            canonical.with_actor(actor)._require_record_access("read")
+            if canonical.channel_id != channel.pk:
+                raise ValueError("Historical message channel changed before file binding.")
+            target = canonical_record_target(canonical)
+            if (
+                getattr(attachment, f"{asset_field}_id") != canonical_asset.pk
+                or getattr(
+                    attachment,
+                    "external_link_id" if asset_field == "file" else "file_id",
+                )
+                is not None
+                or attachment.content_type_id != target.content_type.pk
+                or str(attachment.object_id) != str(target.object_id)
+            ):
+                raise ValueError(
+                    "Historical asset claim does not bind the canonical message."
+                )
+            asset_id_field = f"{asset_field}_id"
+            other_asset_id_field = (
+                "external_link_id" if asset_field == "file" else "file_id"
+            )
+            if expected_part is not None:
+                part = Part._base_manager.using(alias).select_for_update().get(
+                    pk=expected_part.pk
+                )
+                if (
+                    part.source_claim_id != canonical_claim.pk
+                    or part.message_id != canonical.pk
+                    or getattr(part, asset_id_field) != canonical_asset.pk
+                    or getattr(part, other_asset_id_field) is not None
+                    or part.parent_id is not None
+                    or part.fragment_id is not None
+                    or part.disposition != Part.Disposition.ATTACHMENT
+                ):
+                    raise ValueError("Historical attachment Part identity changed.")
+                return part
+            part = (
+                Part._base_manager.using(alias)
+                .select_for_update()
+                .filter(source_claim=canonical_claim)
+                .first()
+            )
+            if part is not None:
+                if (
+                    part.message_id != canonical.pk
+                    or getattr(part, asset_id_field) != canonical_asset.pk
+                    or getattr(part, other_asset_id_field) is not None
+                    or part.parent_id is not None
+                    or part.fragment_id is not None
+                    or part.disposition != Part.Disposition.ATTACHMENT
+                ):
+                    raise ValueError(
+                        "Historical attachment claim belongs to another Part."
+                    )
+                return part
+            position = int(
+                Part._base_manager.using(alias).filter(message=canonical).aggregate(
+                    value=models.Max("position")
+                )["value"]
+                or 0
+            ) + 1
+            with part_claim_write_authority(alias):
+                return Part.objects.db_manager(alias).create(
+                    message=canonical,
+                    position=position,
+                    type=(
+                        canonical_asset.mime_type.mime_type
+                        if asset_field == "file" and canonical_asset.mime_type_id
+                        else "application/octet-stream"
+                        if asset_field == "file"
+                        else "text/uri-list"
+                    ),
+                    disposition=Part.Disposition.ATTACHMENT,
+                    role=Part.PartRole.BODY,
+                    name=(
+                        ""
+                        if asset_field == "file"
+                        else str(canonical_asset.title or "")
+                    ),
+                    **{asset_field: canonical_asset},
+                    source_claim=canonical_claim,
+                    created_by_id=canonical.created_by_id,
+                )
+
+    def unbind_historical_file(
+        self,
+        message: Any,
+        *,
+        file: Any,
+        contributor: Any,
+        expected_part: Any,
+    ) -> None:
+        """Compatibility entry point for withdrawing one historical byte asset."""
+
+        self.unbind_historical_asset(
+            message,
+            asset=file,
+            contributor=contributor,
+            expected_part=expected_part,
+        )
+
+    def unbind_historical_asset(
+        self,
+        message: Any,
+        *,
+        asset: Any,
+        contributor: Any,
+        expected_part: Any,
+    ) -> None:
+        """Remove the exact Part projected for one retained asset claim."""
+
+        alias = message._state.db or self.db
+        with transaction.atomic(using=alias):
+            part = self.bind_historical_asset(
+                message,
+                asset=asset,
+                contributor=contributor,
+                expected_part=expected_part,
+            )
+            with (
+                system_context(reason="messaging.message.unbind_historical_asset"),
+                part_claim_write_authority(alias),
+            ):
+                part.delete(using=alias)
+
+    def _recount_thread(self, thread: Any, *, using: str | None = None) -> None:
         """Recompute a thread's denormalised counters from its surviving messages.
 
         Shared by the two paths where a thread *loses* a message: a delete
@@ -2430,20 +2770,27 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         losing thread is recounted by aggregate. Call with the locked ``thread`` row.
         """
 
-        summary = self.model._base_manager.filter(thread=thread).aggregate(
+        alias = using or thread._state.db or self.db
+        summary = self.model._base_manager.using(alias).filter(thread=thread).aggregate(
             count=models.Count("pk"),
             last_sent_at=models.Max("sent_at"),
         )
         count = int(summary["count"] or 0)
-        if count == 0 and not thread.is_record_attached():
+        has_attachment = apps.get_model(
+            "messaging", "ThreadAttachment"
+        )._base_manager.using(alias).filter(thread=thread).exists()
+        if count == 0 and not has_attachment:
             # An emptied inbox thread is a husk — every message re-resolved
             # elsewhere. Deleting it keeps the thread list free of zero-message
-            # rows; a record chatter thread stays (it exists before its first post).
-            thread.delete()
+            # rows; any explicit record/source edge preserves its historical graph.
+            thread.delete(using=alias)
             return
         thread.message_count = count
         thread.last_message_at = summary["last_sent_at"]
-        thread.save(update_fields=("message_count", "last_message_at", "updated_at"))
+        thread.save(
+            using=alias,
+            update_fields=("message_count", "last_message_at", "updated_at"),
+        )
 
     def _thread_advance_values(self, sent_at: Any) -> dict[str, Any]:
         """Return the monotonic counter advances shared by the post and ingest bumps.
@@ -2518,6 +2865,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         quote_edges: bool = True,
         explicit_thread: Any = None,
         historical: bool = False,
+        historical_message_type: Any = None,
+        historical_subtype: Any = None,
     ) -> list[Any]:
         """Upsert each parsed message into a thread with its parts/participants/edges.
 
@@ -2534,12 +2883,13 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         thread under a non-email :class:`~angee.messaging.models.Thread.Modality` /
         :class:`~angee.messaging.models.Thread.Visibility` (a public feed passes
         ``PUBLIC_THREAD``/``PUBLIC``); each defaults to the private email-thread shape.
-        The functional :class:`~angee.messaging.models.Message.MessageKind` is decided
-        here, from the structural facts, never by the producer: content in a
+        The functional :class:`~angee.messaging.models.Message.MessageKind` is normally
+        decided here from structural facts: content in a
         record-attached thread or ``PUBLIC_THREAD`` is a ``COMMENT``, a message whose
         source names its conversation (``ParsedThread`` or ``explicit_thread``) is
         ``CHAT``, and everything else is ``EMAIL``. The same act keeps its kind across
-        backends. ``quote_edges`` runs the RFC-5322 quotation
+        live backends; the exact retained-record exception is described below.
+        ``quote_edges`` runs the RFC-5322 quotation
         builder — email's shared-fragment graph — and defaults on; a non-email producer
         whose short shared text would otherwise mint spurious ``quote`` edges passes
         ``quote_edges=False``. The externally controlled metadata envelope is rejected
@@ -2550,7 +2900,12 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         saved thread, avoiding email subject/reply heuristics. Replaying a channel's
         external ID into a different explicit thread is rejected. ``historical``
         suppresses the live message event and party-suggestion side effects while
-        retaining original timestamps, content history and thread counters.
+        retaining original timestamps, content history and thread counters. A
+        historical adapter may also supply ``historical_message_type`` and
+        ``historical_subtype`` for an exact source-attached record thread. That
+        classification is validated against the canonical source edge and channel
+        owner; it never changes the structural default for live or ordinary backup
+        ingestion.
         """
 
         owner_id = owner_id if owner_id is not None else channel.owner_id
@@ -2575,6 +2930,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     visibility=visibility,
                     explicit_thread=explicit_thread,
                     historical=historical,
+                    historical_message_type=historical_message_type,
+                    historical_subtype=historical_subtype,
                 )
                 ingested.append(message)
                 for handle in handles:
@@ -2610,6 +2967,128 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
 
             transaction.on_commit(suggest_parties)
         return ingested
+
+    def _historical_record_classification(
+        self,
+        *,
+        channel: Any,
+        owner_id: Any,
+        explicit_thread: Any,
+        historical: bool,
+        message_type: Any,
+        subtype: Any,
+    ) -> tuple[Any, Any | None] | None:
+        """Return one locked, source-neutral historical record classification.
+
+        Functional message kinds are normally structural.  The sole exception is
+        retained record history whose source carries an explicit functional kind.
+        It must target an existing ``source`` attachment, use the source channel's
+        persisted owner, and (when present) use a subtype scoped to the canonical
+        attached model.  The returned rows are canonical locked identities in the
+        current ingest transaction.
+        """
+
+        requested = message_type is not None or subtype is not None
+        if not requested:
+            return None
+        if not historical or explicit_thread is None:
+            raise ValidationError(
+                "Explicit message classification is limited to historical record ingestion."
+            )
+        if message_type is None:
+            raise ValidationError("Historical record classification requires a message kind.")
+        try:
+            kind = self.model.MessageKind(message_type)
+        except (TypeError, ValueError) as error:
+            raise ValidationError(
+                "Historical record classification has an invalid message kind."
+            ) from error
+
+        alias = self.db
+        if alias != DEFAULT_DB_ALIAS:
+            raise ValidationError(
+                "Historical record classification is supported only on the default database."
+            )
+        channel_model = self.model._meta.get_field("channel").related_model
+        thread_model = self.model._meta.get_field("thread").related_model
+        subtype_model = apps.get_model("messaging", "MessageSubtype")
+        if (
+            not isinstance(channel, channel_model)
+            or channel.pk is None
+            or not isinstance(explicit_thread, thread_model)
+            or explicit_thread.pk is None
+            or (
+                subtype is not None
+                and (not isinstance(subtype, subtype_model) or subtype.pk is None)
+            )
+        ):
+            raise ValidationError(
+                "Historical record classification requires saved canonical identities."
+            )
+        for row in (channel, explicit_thread, subtype):
+            if row is not None and (row._state.db or alias) != alias:
+                raise ValidationError(
+                    "Historical record classification cannot cross databases."
+                )
+
+        canonical_channel = (
+            channel_model._base_manager.using(alias).select_for_update().get(pk=channel.pk)
+        )
+        if canonical_channel.owner_id is None or canonical_channel.owner_id != owner_id:
+            raise ValidationError(
+                "Historical record classification requires the source channel owner."
+            )
+        canonical_thread = (
+            thread_model._base_manager.using(alias)
+            .select_for_update()
+            .get(pk=explicit_thread.pk)
+        )
+        if canonical_thread.channel_id != canonical_channel.pk:
+            raise ValidationError(
+                "Historical record classification thread belongs to another channel."
+            )
+
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        attachments = tuple(
+            attachment_model._base_manager.using(alias)
+            .select_for_update(of=("self",))
+            .select_related("content_type")
+            .filter(
+                thread=canonical_thread,
+                role=attachment_model.AttachmentRole.SOURCE,
+            )
+            .order_by("pk")
+        )
+        if not attachments:
+            raise ValidationError(
+                "Historical record classification requires a source-attached record thread."
+            )
+        model_labels = {
+            target_model._meta.label
+            for attachment in attachments
+            if (target_model := attachment.content_type.model_class()) is not None
+        }
+        if len(model_labels) != 1 or len(model_labels) != len(
+            {attachment.content_type_id for attachment in attachments}
+        ):
+            raise ValidationError(
+                "Historical record classification source model is unavailable or ambiguous."
+            )
+        model_label = next(iter(model_labels))
+
+        canonical_subtype = None
+        if subtype is not None:
+            canonical_subtype = (
+                subtype_model._base_manager.using(alias).select_for_update().get(pk=subtype.pk)
+            )
+            if (
+                canonical_subtype.model_label != model_label
+                or canonical_subtype.created_by_id != canonical_channel.owner_id
+            ):
+                raise ValidationError(
+                    "Historical record subtype does not belong to the source record model and owner."
+                )
+        return kind, canonical_subtype
 
     def expand_retained_part(self, part: Any, children: tuple[ParsedPart, ...]) -> tuple[Any, ...]:
         """Append parsed descendants beneath one retained byte-backed Part.
@@ -2660,6 +3139,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         visibility: Any = None,
         explicit_thread: Any = None,
         historical: bool = False,
+        historical_message_type: Any = None,
+        historical_subtype: Any = None,
     ) -> Any:
         handle_model = apps.get_model("parties", "Handle")
         part_model = apps.get_model("messaging", "Part")
@@ -2680,6 +3161,14 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 thread=parsed.thread,
             )
         )
+        historical_classification = self._historical_record_classification(
+            channel=channel,
+            owner_id=owner_id,
+            explicit_thread=explicit_thread,
+            historical=historical,
+            message_type=historical_message_type,
+            subtype=historical_subtype,
+        )
         sender = None
         if parsed.sender is not None:
             sender = handle_model.objects.upsert(
@@ -2695,9 +3184,18 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         # threads' counters below) and the digest its last sync stored (an identical
         # re-sync is a no-op). The read rides the channel-scoped MD5 identity index.
         prior = (
-            _external_id_annotated(self.model._base_manager)
+            _external_id_annotated(
+                self.model._base_manager.select_for_update(of=("self",))
+            )
             .filter(_external_id_q(parsed.external_id), channel=channel)
-            .values("pk", "thread_id", "parent_id", "metadata")
+            .values(
+                "pk",
+                "thread_id",
+                "parent_id",
+                "metadata",
+                "message_type",
+                "subtype_id",
+            )
             .first()
         )
         content_hash = _parsed_sync_hash(
@@ -2716,12 +3214,26 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # precise exception: a reply that landed before its parent keeps NULL, so
             # the re-sync backfills the pointer once its parent exists (this is how a
             # resumed backup import heals reply order across batches).
-            message = self.model._base_manager.select_related("thread").get(pk=prior["pk"])
+            message = self.model._base_manager.select_for_update().select_related("thread").get(
+                pk=prior["pk"]
+            )
+            update_fields: list[str] = []
             if parsed.in_reply_to and prior["parent_id"] is None:
                 parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
                 if parent is not None:
                     message.parent = parent
-                    message.save(update_fields=("parent", "updated_at"))
+                    update_fields.append("parent")
+            if historical_classification is not None:
+                message_type, subtype = historical_classification
+                subtype_id = None if subtype is None else subtype.pk
+                if message.message_type != message_type:
+                    message.message_type = message_type
+                    update_fields.append("message_type")
+                if message.subtype_id != subtype_id:
+                    message.subtype = subtype
+                    update_fields.append("subtype")
+            if update_fields:
+                message.save(update_fields=(*update_fields, "updated_at"))
             return message, ()
         metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         defaults = {
@@ -2745,6 +3257,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             "received_at": parsed.received_at,
             "metadata": metadata,
         }
+        if historical_classification is not None:
+            defaults["message_type"], defaults["subtype"] = historical_classification
         created = prior is None
         if created:
             try:
@@ -2771,10 +3285,19 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             for field, value in defaults.items():
                 setattr(message, field, value)
             message.save()
-        message.parts.all().delete()
+        retained_parts = tuple(
+            part_model._base_manager.select_for_update()
+            .filter(message=message, source_claim__isnull=False)
+            .order_by("position", "pk")
+        )
+        message.parts.filter(source_claim__isnull=True).delete()
         position = self._write_envelope_parts(message, parsed, owner_id=owner_id)
         if parsed.body is not None:
             self._build_parts(message, parsed.body, parent=None, position=position, owner_id=owner_id)
+            position += 1
+        for index, retained in enumerate(retained_parts):
+            retained.position = position + index
+            retained.save(update_fields=("position", "updated_at"))
         if not created:
             new_hashes = self._content_fragment_hashes(part_model, message)
             if new_hashes != prior_hashes:
@@ -2993,6 +3516,111 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
 class PartQuerySet(AngeeQuerySet[Any]):
     """Chainable read scopes for message body parts."""
 
+    def update(self, **kwargs: Any) -> int:
+        """Freeze and guard bulk identity writes that touch claim-backed Parts."""
+
+        written = normalized_part_claim_write_fields(self.model, kwargs)
+        protected = written & PART_CLAIM_IDENTITY_FIELDS
+        if not protected:
+            return super().update(**kwargs)
+        alias = self.db
+        with transaction.atomic(using=alias):
+            locked_ids = tuple(
+                self.select_for_update().order_by("pk").values_list("pk", flat=True)
+            )
+            claimed = self.model._base_manager.using(alias).filter(
+                pk__in=locked_ids,
+                source_claim__isnull=False,
+            ).exists()
+            binding_claim = "source_claim_id" in protected and (
+                kwargs.get("source_claim_id") is not None
+                or getattr(kwargs.get("source_claim"), "pk", None) is not None
+            )
+            if (claimed or binding_claim) and not part_claim_write_is_authorized(alias):
+                raise ValidationError(
+                    "Change claim-backed Part identity through the historical file owner."
+                )
+            frozen = self.filter(pk__in=locked_ids)
+            return super(PartQuerySet, frozen).update(**kwargs)
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        """Refuse collector entry through a queryset containing claimed Parts."""
+
+        alias = self.db
+        with transaction.atomic(using=alias):
+            locked_ids = tuple(
+                self.select_for_update().order_by("pk").values_list("pk", flat=True)
+            )
+            if (
+                self.model._base_manager.using(alias)
+                .filter(pk__in=locked_ids, source_claim__isnull=False)
+                .exists()
+                and not part_claim_write_is_authorized(alias)
+            ):
+                raise ValidationError(
+                    "Delete claim-backed Parts through the historical file owner."
+                )
+            frozen = self.filter(pk__in=locked_ids)
+            return super(PartQuerySet, frozen).delete()
+
+    def bulk_update(
+        self,
+        objs: Sequence[models.Model],
+        fields: Sequence[str],
+        batch_size: int | None = None,
+    ) -> int:
+        """Guard claim identity across Django's CASE-based bulk update."""
+
+        protected = normalized_part_claim_write_fields(self.model, fields) & (
+            PART_CLAIM_IDENTITY_FIELDS
+        )
+        if protected:
+            ids = tuple(obj.pk for obj in objs if obj.pk is not None)
+            claimed = any(getattr(obj, "source_claim_id", None) is not None for obj in objs)
+            claimed = claimed or self.model._base_manager.using(self.db).filter(
+                pk__in=ids,
+                source_claim__isnull=False,
+            ).exists()
+            if claimed and not part_claim_write_is_authorized(self.db):
+                raise ValidationError(
+                    "Bulk claim-backed Part identity changes are not supported."
+                )
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def bulk_create(
+        self,
+        objs: Iterable[models.Model],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Any = None,
+        unique_fields: Any = None,
+    ) -> list[models.Model]:
+        """Guard claim creation and protected conflict-upsert fields."""
+
+        objects = list(objs)
+        conflict_fields = normalized_part_claim_write_fields(
+            self.model, update_fields or ()
+        )
+        if update_conflicts and PART_CLAIM_IDENTITY_FIELDS.intersection(conflict_fields):
+            raise ValidationError(
+                "Conflict updates cannot change claim-backed Part identity."
+            )
+        if any(obj.source_claim_id is not None for obj in objects) and not (
+            part_claim_write_is_authorized(self.db)
+        ):
+            raise ValidationError(
+                "Create claim-backed Parts through the historical file owner."
+            )
+        return super().bulk_create(
+            objects,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
+
     def inbox(self) -> PartQuerySet:
         """Return inbox messages' parts — the part mirror of ``MessageQuerySet.inbox``.
 
@@ -3007,9 +3635,15 @@ class PartQuerySet(AngeeQuerySet[Any]):
         )
 
     def attachments(self) -> PartQuerySet:
-        """Return parts that carry a stored file — a message's attachment parts."""
+        """Return parts that carry a stored file or external link asset."""
 
-        return cast(PartQuerySet, self.filter(file__isnull=False))
+        return cast(
+            PartQuerySet,
+            self.filter(
+                models.Q(file__isnull=False)
+                | models.Q(external_link__isnull=False)
+            ),
+        )
 
 
 class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[misc]

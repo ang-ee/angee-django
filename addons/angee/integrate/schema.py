@@ -25,7 +25,7 @@ from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.identity import public_id_of
-from angee.graphql.actions import ActionResult, action_target, resolve_action_target
+from angee.graphql.actions import ActionResult, action_guard, action_target, resolve_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -1488,6 +1488,7 @@ class IntegrationActionMutation:
         return ActionResult(ok=True, message="Disconnected integration.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Integration sync could not be queued.")
     def sync_integration(self, id: PublicID) -> ActionResult:
         """Queue every bridge of one integration for sync now."""
 

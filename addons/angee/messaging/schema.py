@@ -46,11 +46,12 @@ from angee.messaging import connect
 from angee.messaging.managers import MessageQuerySet, message_subtype_options
 from angee.messaging.models import ThreadedModelMixin
 from angee.parties.schema import HandleType
-from angee.storage.schema import FileType
+from angee.storage.schema import ExternalLinkType, FileType
 
 Integration = apps.get_model("integrate", "Integration")
 Handle = apps.get_model("parties", "Handle")
 File = apps.get_model("storage", "File")
+ExternalLink = apps.get_model("storage", "ExternalLink")
 Channel = apps.get_model("messaging", "Channel")
 Thread = apps.get_model("messaging", "Thread")
 ThreadAttachment = apps.get_model("messaging", "ThreadAttachment")
@@ -290,6 +291,7 @@ class PartType(AngeeNode):
     parent: "PartType | None"
     fragment: FragmentType | None
     file: FileType | None
+    external_link: ExternalLinkType | None
     created_at: auto
 
 

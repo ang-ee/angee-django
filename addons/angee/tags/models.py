@@ -11,16 +11,14 @@ exactly as storage consumers attach a file.
 
 **Scope.** Base tags are shared vocabulary, readable by every authenticated actor
 through a wildcard ``shared@auth/user:*`` reader tuple maintained by
-:meth:`Tag.save`. Downstream addons may extend the row with their own scope field
-and override :attr:`is_shared_scope`; the base model declares which stored fields
-back that fact through :attr:`shared_scope_source_fields` so deferred loads do not
-snapshot an unloaded value.
+:class:`angee.base.mixins.ConditionalSharedReaderMixin`. Downstream addons may
+extend the row with their own scope field and override :attr:`is_shared_scope`;
+the canonical reconciler reloads persisted facts before changing the wildcard.
 
-**Pitfalls.** Shared-tag visibility rides :meth:`Tag.save`: any write path that
-skips ``save()`` — ``bulk_create``, ``queryset.update(...)``, raw
-``loaddata`` — leaves the wildcard reader stale (an invisible shared tag or a
-lingering everyone-grant); route scope changes through instance saves. And the
-tuple write validates against the *loaded* REBAC schema, so creating a tag
+**Pitfalls.** Eligibility fields cannot be changed through queryset or bulk
+writes, and conditional-reader rows cannot be bulk-created; route those changes
+through the native owner so row and tuple stay atomic. The tuple write validates
+against the *loaded* REBAC schema, so creating a tag
 requires ``rebac sync`` to have run first — the standard loop order
 (``migrate`` → ``rebac sync`` → ``resources load``) already guarantees it.
 
@@ -41,7 +39,14 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from angee.base.identity import instance_from_public_id
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
+from angee.base.mixins import (
+    ArchiveMixin,
+    ArchiveQuerySet,
+    AuditMixin,
+    ConditionalSharedReaderMixin,
+    ConditionalSharedReaderQuerySet,
+    SqidMixin,
+)
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
@@ -54,34 +59,23 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models, transaction
 from rebac import (
-    RelationshipTuple,
-    SubjectRef,
-    delete_relationships,
     system_context,
-    to_object_ref,
-    write_relationships,
 )
 from rebac.resources import model_for_resource_type
-from rebac.types import RelationshipFilter
-
-SHARED_READER_RELATION = "shared"
-"""The wildcard-subject relation that opens a shared tag to everyone."""
-
-_EVERYONE = SubjectRef.of("auth/user", "*")
-"""The ``auth/user:*`` wildcard subject — every authenticated actor at once."""
-
-_NEVER_LOADED = object()
-"""Sentinel for "this instance was not loaded from the DB" in the save-time diff."""
 
 
-class TagQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+class TagQuerySet(
+    ConditionalSharedReaderQuerySet[Any],
+    ArchiveQuerySet[Any],
+    AngeeQuerySet[Any],
+):
     """Archive read scopes layered over the REBAC-scoped tag queryset."""
 
 
 TagManager = AngeeManager.from_queryset(TagQuerySet)
 
 
-class Tag(ArchiveMixin, AngeeDataModel):
+class Tag(ConditionalSharedReaderMixin, ArchiveMixin, AngeeDataModel):
     """One label in a shared vocabulary.
 
     :meth:`save` keeps the wildcard reader tuple in step with
@@ -92,8 +86,6 @@ class Tag(ArchiveMixin, AngeeDataModel):
     runtime = True
     sqid_prefix = "tag_"
     shared_scope_source_fields: ClassVar[tuple[str, ...]] = ()
-    """Stored fields from which :attr:`is_shared_scope` is computed."""
-
     name = models.CharField(max_length=128)
     color = models.CharField(max_length=32, blank=True, default="")
 
@@ -113,87 +105,16 @@ class Tag(ArchiveMixin, AngeeDataModel):
         return self.name
 
     @property
+    def shared_reader_eligible(self) -> bool:
+        """Delegate to the established downstream shared-scope hook."""
+
+        return self.is_shared_scope
+
+    @property
     def is_shared_scope(self) -> bool:
-        """Return whether this row should carry the shared wildcard reader."""
+        """Base native tags are shared; downstream scope donors may narrow them."""
 
         return True
-
-    @classmethod
-    def from_db(cls, db: Any, field_names: Any, values: Any) -> "Tag":
-        """Load a row, snapshotting shared scope when its source fields are loaded.
-
-        Tag owns the original-value snapshot the reconcile compares against (the
-        canonical Django "track the loaded value" shape). If any declared source
-        field is deferred, the snapshot is skipped so :meth:`save` fail-safes into
-        the idempotent re-sync rather than evaluating a missing row fact.
-        """
-
-        instance = super().from_db(db, field_names, values)
-        source_attnames = cls._shared_scope_source_attnames()
-        if all(attname in field_names for attname in source_attnames):
-            instance._loaded_is_shared_scope = instance.is_shared_scope
-        else:
-            instance._loaded_is_shared_scope = _NEVER_LOADED
-        return instance
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the row and reconcile its shared-reader wildcard tuple atomically.
-
-        A shared tag carries a ``shared@auth/user:*`` tuple that opens it to every
-        actor. Row and tuple commit or roll back together — a shared tag must
-        never land without its reader, nor a scoped transition leave a stale
-        grant. The reconcile runs only when the row is new, no complete snapshot
-        exists, or the shared/scoped fact changes; an instance with no snapshot
-        fail-safes into the idempotent re-sync.
-        """
-
-        adding = self._state.adding
-        loaded_is_shared_scope = getattr(self, "_loaded_is_shared_scope", _NEVER_LOADED)
-        with transaction.atomic():
-            super().save(*args, **kwargs)
-            if (
-                adding
-                or loaded_is_shared_scope is _NEVER_LOADED
-                or loaded_is_shared_scope != self.is_shared_scope
-            ):
-                self._sync_shared_reader()
-            self._loaded_is_shared_scope = self.is_shared_scope
-
-    def _sync_shared_reader(self) -> None:
-        """Grant or revoke the ``shared@auth/user:*`` reader for this tag's scope."""
-
-        resource = to_object_ref(self)
-        if self.is_shared_scope:
-            write_relationships(
-                [
-                    RelationshipTuple(
-                        resource=resource,
-                        relation=SHARED_READER_RELATION,
-                        subject=_EVERYONE,
-                    )
-                ]
-            )
-        else:
-            delete_relationships(
-                RelationshipFilter(
-                    resource_type=resource.resource_type,
-                    resource_id=resource.resource_id,
-                    relation=SHARED_READER_RELATION,
-                    subject_type=_EVERYONE.subject_type,
-                    subject_id=_EVERYONE.subject_id,
-                )
-            )
-
-    @classmethod
-    def _shared_scope_source_attnames(cls) -> tuple[str, ...]:
-        """Return attnames for declared shared-scope source fields."""
-
-        attnames: list[str] = []
-        for field_name in cls.shared_scope_source_fields:
-            field = cls._meta.get_field(field_name)
-            attnames.append(getattr(field, "attname", field.name))
-        return tuple(attnames)
-
 
 class TagAssignmentManager(AngeeManager):
     """Owns the polymorphic tag edge: target resolution, attach, and detach.
