@@ -1359,6 +1359,7 @@ def test_workflow_run_save_checks_current_invocation_under_run_lock(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("handler_calls")
 def test_ordinary_workflow_run_invocation_is_immutable_across_write_paths(
     workflow_engine_tables: None,
     no_workflow_queue: None,

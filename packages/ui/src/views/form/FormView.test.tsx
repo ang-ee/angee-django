@@ -74,6 +74,7 @@ import {
 const sdkMocks = vi.hoisted(() => ({
   record: null as Row | null,
   listRows: [] as Row[],
+  listFilters: undefined as unknown,
   // Whether the most recent relation-options `useList` ran with its query
   // enabled — the deferred 200-row fetch fires only once the picker is opened,
   // so this stays `false` on a read-only/show render and an editable mount.
@@ -175,12 +176,13 @@ vi.mock("@refinedev/core", async (importOriginal) => {
         },
       };
     },
-    useList: (options?: { queryOptions?: { enabled?: boolean } }) => {
+    useList: (options?: { filters?: unknown; queryOptions?: { enabled?: boolean } }) => {
       // The relation-options query is deferred via refine's `queryOptions.enabled`;
       // when disabled it returns no rows and never fires — mirror that so a test
       // can prove the read path does not pull the 200-row option list.
       const enabled = options?.queryOptions?.enabled !== false;
       sdkMocks.listEnabled = enabled;
+      sdkMocks.listFilters = options?.filters;
       return {
         result: enabled
           ? { data: sdkMocks.listRows, total: sdkMocks.listRows.length }
@@ -248,6 +250,7 @@ describe("FormView", () => {
     sdkMocks.mutate.mockReset();
     sdkMocks.save.mockReset();
     sdkMocks.listRows = [];
+    sdkMocks.listFilters = undefined;
     sdkMocks.listEnabled = false;
     sdkMocks.recordSelection = undefined;
     sdkMocks.projectToSelection = false;
@@ -1014,7 +1017,11 @@ describe("FormView", () => {
         id="provider-1"
         fields={[
           { name: "name", label: "Name", title: true },
-          { name: "vendor", label: "Vendor" },
+          {
+            name: "vendor",
+            label: "Vendor",
+            filters: [{ field: "company", operator: "eq", value: "cmp_1" }],
+          },
         ]}
       />,
       metadata,
@@ -1037,6 +1044,9 @@ describe("FormView", () => {
       screen.getByRole("button", { name: "Vendor: Anthropic Vendor" }),
     );
     await waitFor(() => expect(sdkMocks.listEnabled).toBe(true));
+    expect(sdkMocks.listFilters).toEqual([
+      { field: "company", operator: "eq", value: "cmp_1" },
+    ]);
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Vendor: Vendor From List" }),

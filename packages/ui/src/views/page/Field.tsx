@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { CrudFilter } from "@refinedev/core";
 import type { Row } from "@angee/metadata";
 
 import { PAGE_ELEMENT_SLOT } from "./types";
@@ -22,6 +23,8 @@ export interface FieldDescriptor extends FieldPresentation {
    * Organization).
    */
   relationResource?: string;
+  /** Server-side filters narrowing the rows offered by a relation picker. */
+  filters?: readonly CrudFilter[];
   widget?: string;
   readOnly?: boolean;
   /** Require a value independently of generated model create metadata. */

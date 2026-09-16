@@ -2457,8 +2457,10 @@ def _prepare_attempt_input(
     impl_class = step_run.step.resolve_impl("step_class")
     if impl_class.input_model is not None:
         try:
-            impl_class.input_model.model_validate(candidate.value)
-        except PydanticValidationError as error:
+            impl_class.input_model.model_validate_json(
+                json.dumps(candidate.value, allow_nan=False)
+            )
+        except (PydanticValidationError, TypeError, ValueError) as error:
             failure = _preparation_error("Workflow step input is invalid.", error)
             return _AttemptPreparation(
                 AttemptInput(candidate.present, candidate.value, evaluation.provenance),

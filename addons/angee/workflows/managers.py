@@ -620,9 +620,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         if (
             current is None
             or current.step_run_id != recovery_step_run.pk
-            or current.cause != AttemptCause.MANUAL_RETRY
-            or current.recovery_mode != RecoveryMode.FRESH
-            or current.recovery_source_attempt_id != recovery_run.recovery_source_attempt_id
             or current.started_at is None
             or current.result_recorded_at is not None
             or current.lease_revoked_at is not None
@@ -630,27 +627,75 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             raise ValidationError({
                 "parent_step_run": "Recovery child handoff requires the active exact source attempt."
             })
+        lineage = current
+        retained_child_target = (
+            (current.external_content_type_id, current.external_object_id)
+            if current.external_content_type_id is not None
+            and current.external_object_id is not None
+            else None
+        )
+        while lineage.cause == AttemptCause.CONTINUATION:
+            previous = system_queryset(
+                attempt_model, using=using, lock=("self",)
+            ).filter(
+                step_run_id=recovery_step_run.pk,
+                ordinal=lineage.ordinal - 1,
+            ).first()
+            if (
+                previous is None
+                or previous.result_kind != str(AttemptResultKind.SUSPEND)
+                or previous.result_recorded_at is None
+                or previous.applied_at is None
+                or previous.lease_revoked_at is not None
+                or previous.external_content_type_id is None
+                or previous.external_object_id is None
+                or previous.input_present != lineage.input_present
+                or not json_values_equal(previous.input, lineage.input)
+                or previous.effect_key != lineage.effect_key
+                or previous.effect_generation != lineage.effect_generation
+            ):
+                raise ValidationError({
+                    "parent_step_run": "Recovery child continuation identity changed."
+                })
+            previous_target = (
+                previous.external_content_type_id,
+                previous.external_object_id,
+            )
+            if retained_child_target is not None and previous_target != retained_child_target:
+                raise ValidationError({
+                    "parent_step_run": "Recovery child continuation target changed."
+                })
+            retained_child_target = previous_target
+            lineage = previous
+        if (
+            lineage.cause != AttemptCause.MANUAL_RETRY
+            or lineage.recovery_mode != RecoveryMode.FRESH
+            or lineage.recovery_source_attempt_id != recovery_run.recovery_source_attempt_id
+        ):
+            raise ValidationError({
+                "parent_step_run": "Recovery child handoff requires the exact FRESH source attempt."
+            })
         parent = recovery_step_run
         seen: set[int] = set()
         while (
-            current.cause == AttemptCause.MANUAL_RETRY
-            and current.recovery_mode == RecoveryMode.FRESH
-            and current.recovery_source_attempt_id is not None
+            lineage.cause == AttemptCause.MANUAL_RETRY
+            and lineage.recovery_mode == RecoveryMode.FRESH
+            and lineage.recovery_source_attempt_id is not None
         ):
-            if current.pk in seen:
+            if lineage.pk in seen:
                 raise ValidationError({"parent_step_run": "Recovery attempt lineage contains a cycle."})
-            seen.add(current.pk)
+            seen.add(lineage.pk)
             source = system_queryset(
                 attempt_model, using=using, lock=("self",)
-            ).select_related("step_run").get(pk=current.recovery_source_attempt_id)
+            ).select_related("step_run").get(pk=lineage.recovery_source_attempt_id)
             source_parent = source.step_run
             if (
                 source_parent.step_id != parent.step_id
                 or source_parent.map_index != parent.map_index
                 or source_parent.current_attempt_id != source.pk
                 or source_parent.status not in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
-                or source.input_present != current.input_present
-                or not json_values_equal(source.input, current.input)
+                or source.input_present != lineage.input_present
+                or not json_values_equal(source.input, lineage.input)
             ):
                 raise ValidationError({
                     "parent_step_run": "Recovery child handoff source identity changed."
@@ -658,7 +703,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             parent = system_queryset(
                 step_run_model, using=using, lock=("self",)
             ).get(pk=source_parent.pk)
-            current = source
+            lineage = source
         return parent
 
     def reprocess(self, source_run: Any, *, actor: Any, request_key: str) -> Any:
@@ -1897,6 +1942,15 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             lineage.created_by_id
             if lineage is not None and lineage.created_by_id is not None
             else workflow.created_by_id
+        )
+
+
+class WorkflowRunSystemManager(WorkflowRunManager):
+    """Expose guarded unscoped rows to Django and field-backed REBAC traversal."""
+
+    def get_queryset(self) -> WorkflowRunQuerySet:
+        return super().get_queryset().system_context(
+            reason="workflows.run.base_manager"
         )
 
 

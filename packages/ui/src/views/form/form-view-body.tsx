@@ -148,6 +148,7 @@ export function FormViewRecordHeader({
                       }}
                       onCommit={() => commitFieldInteraction(currentTitleField.name)}
                       relation={titleRelation}
+                      filters={currentTitleField.filters}
                       selectedOption={titleSelectedOption}
                       placeholder={currentTitleField.placeholder ?? t("form.untitled")}
                       aria-label={fieldAriaLabel(currentTitleField)}
@@ -687,6 +688,7 @@ function BoundFieldRow({
             onCommit={onCommit}
             readOnly={effectiveReadOnly}
             relation={relation}
+            filters={field.filters}
             selectedOption={selectedOption}
             aria-label={fieldAriaLabel(field)}
           />

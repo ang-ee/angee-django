@@ -1457,13 +1457,24 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
         assert engine.execute_dispatch(
             execute.pk, attempt.pk, attempt.lease_token, now=future
         )["executed"] == 1
-        child.refresh_from_db()
+        assert engine.advance(child.pk, now=future)["claimed"] == 0
+        with system_context(reason="native call child completion assertion"):
+            child.refresh_from_db()
         assert child.result == {
             "status": "succeeded", "outcome": "completed", "output": {}, "error": None,
         }
 
     if child_finishes_before_recovery:
         finish_child()
+    stranger = get_user_model().objects.create_user(
+        username=f"call-recovery-stranger-{child_finishes_before_recovery}"
+    )
+    with pytest.raises(PermissionDenied, match="Recovery source evidence is unavailable"):
+        WorkflowRun.objects.start_recovery(
+            source_attempt,
+            request_key=f"native-call-denied-{child_finishes_before_recovery}",
+            actor=stranger,
+        )
     recovery, attempt = _execute_recovery(
         source_attempt, actor=actor, request_key=f"native-call-{child_finishes_before_recovery}",
     )
@@ -1493,7 +1504,7 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
         assert engine.execute_dispatch(execute.pk, resumed.pk, resumed.lease_token)["executed"] == 1
     with system_context(reason="native call recovered result"):
         recovered_step.refresh_from_db()
-        assert recovered_step.status == "succeeded"
+        assert recovered_step.status == "succeeded", recovered_step.error
         assert recovered_step.outcome == "completed"
         assert recovered_step.output_present is True
         assert recovered_step.output == {}

@@ -275,6 +275,7 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
     del workflow_gate_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-bound-decision")
     pending_assignee = User.objects.create_user(username="wdc-bound-decision-pending")
+    requester = User.objects.create_user(username="wdc-bound-decision-requester")
 
     def gate_then_consume(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
@@ -309,7 +310,7 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
         ),
         edges=(("gate", "consumer", "completed"),),
     )
-    run = start_run(workflow)
+    run = engine.start(workflow, subject=None, actor=requester)
     advance_once(run)
     execute_started(run)
     gate = _step_run(run, "gate")
@@ -324,7 +325,8 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
     gate.refresh_from_db()
     consumer = _step_run(run, "consumer")
     suspension.refresh_from_db()
-    pending.refresh_from_db()
+    with system_context(reason="test settled sibling assertion"):
+        pending.refresh_from_db()
     assert suspension.result_kind == str(AttemptResultKind.SUSPEND)
     assert pending.verdict == workflow_models.Verdict.EXPIRED
     assert suspension.decision_settlement == {
@@ -1561,7 +1563,8 @@ def _gate_config(
 
 
 def _open_gate_run(workflow: Workflow, *, now: Any = None) -> Any:
-    run = start_run(workflow)
+    actor = User.objects.create_user(username=f"wdc-run-actor-{workflow.pk}")
+    run = engine.start(workflow, subject=None, actor=actor)
     advance_once(run, now=now)
     execute_started(run, now=now)
     return run

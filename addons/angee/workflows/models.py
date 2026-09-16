@@ -86,6 +86,7 @@ from angee.workflows.managers import (
     WorkflowManager,
     WorkflowRecoveryEvidenceManager,
     WorkflowRunManager,
+    WorkflowRunSystemManager,
     WorkflowTestFixtureManager,
     _combined_delete_results,
     _definition_rows,
@@ -1477,12 +1478,13 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     )
 
     objects = WorkflowRunManager()
+    system_objects = WorkflowRunSystemManager()
 
     class Meta:
         """Django model options for workflow runs."""
 
         abstract = True
-        base_manager_name = "objects"
+        base_manager_name = "system_objects"
         ordering = ("-created_at", "sqid")
         rebac_resource_type = "workflows/run"
         constraints = (

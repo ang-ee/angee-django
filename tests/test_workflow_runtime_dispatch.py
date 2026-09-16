@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from rebac import system_context
 
 from angee.workflows import engine
-from angee.workflows.attempts import AttemptResultKind
+from angee.workflows.attempts import AttemptResultKind, DecisionGateOutput
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepResult
@@ -42,6 +42,10 @@ class _IntegerInput(BaseModel):
 
 class _ValidatedImpl:
     input_model = _IntegerInput
+
+
+class _DecisionGateConsumer:
+    input_model = DecisionGateOutput
 
 
 @pytest.mark.django_db(transaction=True)
@@ -251,3 +255,50 @@ def test_preparation_failure_retains_candidate_provenance_and_advance(
             kind=WorkflowDispatchKind.ADVANCE,
             consumed_at__isnull=True,
         ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_preparation_validates_persisted_json_through_the_input_model_json_boundary(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict tuple contracts accept the JSON arrays retained by JSONField."""
+
+    del workflow_engine_tables, no_workflow_queue
+    now = timezone.now()
+    gate_output = {"resolutions": [], "outcome": "completed"}
+    with system_context(reason="JSON input model boundary setup"):
+        workflow = Workflow.objects.create(name="JSON input model boundary", max_steps=10)
+        step = Step.objects.create(
+            workflow=workflow,
+            key="consume",
+            name="Consume gate",
+            step_class="agent_session",
+            input_binding={"kind": "workflow_input"},
+            is_entry=True,
+        )
+        run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status=RunStatus.RUNNING,
+            input_present=True,
+            input=gate_output,
+        )
+        step_run = StepRun.objects.create(
+            run=run,
+            step=step,
+            status=StepRunStatus.SCHEDULED,
+        )
+    monkeypatch.setattr(type(step), "resolve_impl", lambda self, field: _DecisionGateConsumer)
+    pulse = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
+
+    assert engine.advance_dispatch(pulse.pk, now=now)["claimed"] == 1
+
+    with system_context(reason="JSON input model boundary assertion"):
+        step_run.refresh_from_db()
+        attempt = step_run.current_attempt
+        execute = WorkflowDispatch.objects.get(step_attempt=attempt)
+    assert step_run.status == StepRunStatus.STARTED
+    assert attempt.input == gate_output
+    assert attempt.result_recorded_at is None
+    assert execute.kind == WorkflowDispatchKind.EXECUTE
