@@ -18,6 +18,7 @@ import {
   GraphView,
   Group,
   List,
+  RelationFieldWidget,
   ResourceList,
   routeSearchParam,
   Skeleton,
@@ -663,6 +664,7 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
   const currentAttempt = React.useRef(attemptId);
   const [pending, setPending] = React.useState(false);
   const [uncertaintyAck, setUncertaintyAck] = React.useState(false);
+  const [priorRecovery, setPriorRecovery] = React.useState("");
   const [message, setMessage] = React.useState<string | null>(null);
   const [started, setStarted] = React.useState<{ id: string; href?: string } | null>(null);
   const recovery = plan.data?.workflow_recovery_plan;
@@ -674,6 +676,7 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
     setStarted(null);
     setPending(false);
     setUncertaintyAck(false);
+    setPriorRecovery("");
   }, [attemptId]);
   const startRecovery = async () => {
     requestKey.current ??= crypto.randomUUID();
@@ -684,6 +687,7 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
         sourceAttempt: attemptId,
         requestKey: requestKey.current,
         acknowledgeUncertainExternal: Boolean(recovery?.requires_uncertainty_ack && uncertaintyAck),
+        priorRecovery: priorRecovery.trim() || null,
       });
       if (currentAttempt.current !== attemptId) return;
       const result = data?.start_workflow_recovery;
@@ -712,6 +716,25 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
           <input type="checkbox" checked={uncertaintyAck} onChange={(event) => setUncertaintyAck(event.target.checked)} />
           <span>{t("runs.uncertainExternalAck")}</span>
         </label>
+      </div> : null}
+      {recovery?.map_index != null ? <div className="mt-3 text-13 text-fg">
+        <p>{t("runs.priorMapRecovery")}</p>
+        <div className="mt-1">
+          <RelationFieldWidget
+            aria-label={t("runs.priorMapRecovery")}
+            relation={{ resource: RUN_MODEL, labelField: "display_name", canCreate: false }}
+            filters={[
+              { field: "origin", operator: "eq", value: "RECOVERY" },
+              { field: "status", operator: "in", value: ["SUCCEEDED", "FAILED", "CANCELED"] },
+            ]}
+            searchFields={["display_name"]}
+            value={priorRecovery || null}
+            onChange={setPriorRecovery}
+            readOnly={pending || Boolean(started)}
+            placeholder={t("runs.priorMapRecoveryPlaceholder")}
+          />
+        </div>
+        <span className="mt-1 block text-fg-muted">{t("runs.priorMapRecoveryHelp")}</span>
       </div> : null}
       {message ? <ErrorBanner description={message} /> : null}
       {started ? <p className="mt-2 text-13 text-fg-muted">

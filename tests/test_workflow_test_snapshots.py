@@ -447,6 +447,200 @@ def test_fresh_recovery_validates_downstream_map_items_against_their_expansion(
     assert recovery.status == "succeeded"
 
 
+@pytest.mark.parametrize("scenario", ["remaining_sibling", "retry_failed_recovery"])
+def test_fresh_map_body_recovery_rejoins_retained_results_before_continuing(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+) -> None:
+    """Map recovery carries its exact admitted aggregate across a linear branch."""
+
+    del workflow_engine_tables, no_workflow_queue
+    actor = get_user_model().objects.create_user(
+        username=f"map-body-recovery-{scenario}"
+    )
+    original_failures = {1, 2} if scenario == "remaining_sibling" else {1}
+    recovery_failures = {1: 1} if scenario == "retry_failed_recovery" else {}
+
+    class RecoverableItem(StepImpl):
+        @classmethod
+        def recovery_capability(cls, *, attempt: object) -> RecoveryCapability:
+            del attempt
+            return RecoveryCapability(RecoveryMode.FRESH)
+
+        def run(self, step_run: object, *, now: object) -> StepResult:
+            del now
+            if step_run.run.origin != RunOrigin.RECOVERY and step_run.map_index in original_failures:
+                raise RuntimeError("retained page failure")
+            remaining = recovery_failures.get(step_run.map_index, 0)
+            if step_run.run.origin == RunOrigin.RECOVERY and remaining:
+                recovery_failures[step_run.map_index] = remaining - 1
+                raise RuntimeError("repeated retained page failure")
+            return StepResult.done(
+                {
+                    "value": step_run.input["value"],
+                    "recovered": step_run.run.origin == RunOrigin.RECOVERY,
+                },
+                outcome="done",
+            )
+
+    class CollectItems(StepImpl):
+        inputs: list[dict[str, object]] = []
+
+        def run(self, step_run: object, *, now: object) -> StepResult:
+            del now
+            type(self).inputs.append(copy.deepcopy(step_run.input))
+            return StepResult.done({"joined": step_run.input["results"]}, outcome="done")
+
+    with system_context(reason="Map body recovery fixture"):
+        workflow = Workflow.objects.create(name="Recover Map body", created_by=actor)
+        map_step = Step.objects.create(
+            workflow=workflow,
+            key="map",
+            name="Map",
+            step_class="map",
+            config={
+                "target_step": "page",
+                "items": [{"value": 0}, {"value": 1}, {"value": 2}],
+                "all_must_succeed": True,
+            },
+            is_entry=True,
+        )
+        Step.objects.create(
+            workflow=workflow, key="page", name="Page", step_class="handler",
+        )
+        collect_step = Step.objects.create(
+            workflow=workflow, key="collect", name="Collect", step_class="handler",
+        )
+        Edge.objects.create(
+            workflow=workflow, source=map_step, target=collect_step, condition="succeeded",
+        )
+        original_resolve = type(map_step).resolve_impl
+        monkeypatch.setattr(
+            type(map_step),
+            "resolve_impl",
+            lambda self, field: (
+                RecoverableItem
+                if self.key == "page"
+                else CollectItems
+                if self.key == "collect"
+                else original_resolve(self, field)
+            ),
+        )
+        workflow = workflow.publish()
+        map_step = workflow.steps.get(key="map")
+        page_step = workflow.steps.get(key="page")
+        collect_step = workflow.steps.get(key="collect")
+
+    source_run = engine.start(workflow, subject=None, actor=actor)
+    assert len(advance_once(source_run)) == 3
+    execute_started(source_run)
+    with system_context(reason="unaggregated Map recovery evidence"):
+        unaggregated_source = StepRun.objects.get(
+            run=source_run, step=page_step, map_index=1,
+        ).current_attempt
+    unavailable = StepAttempt.objects.recovery_plan(unaggregated_source, actor=actor)
+    assert unavailable.capability.available is False
+    assert "exact retained expansion" in unavailable.capability.unavailable_reason
+    assert advance_once(source_run) == []
+    with system_context(reason="Map body recovery source evidence"):
+        source_controller = StepRun.objects.get(run=source_run, step=map_step)
+        source_page = StepRun.objects.get(run=source_run, step=page_step, map_index=1)
+        source_attempt = source_page.current_attempt
+        source_results = copy.deepcopy(source_controller.output["results"])
+    assert source_controller.outcome == "failed"
+    assert [source_results[index]["status"] for index in sorted(original_failures)] == [
+        "failed" for _index in original_failures
+    ]
+
+    first = WorkflowRun.objects.start_recovery(
+        source_attempt, request_key=f"recover-map-page-first-{scenario}", actor=actor,
+    )
+    started = advance_once(first)
+    assert [(row.step_id, row.map_index) for row in started] == [(page_step.pk, 1)]
+    execute_started(first)
+    assert advance_once(first) == []
+    first.refresh_from_db()
+    with system_context(reason="first Map recovery evidence"):
+        first_page = StepRun.objects.get(run=first, step=page_step, map_index=1)
+        first_basis = first.recovery_evidence.get(step=map_step, map_index=-1)
+    assert first_basis.source_attempt_id == source_controller.current_attempt_id
+
+    if scenario == "remaining_sibling":
+        assert first.status == "succeeded"
+        with system_context(reason="remaining Map sibling evidence"):
+            first_controller = StepRun.objects.get(run=first, step=map_step)
+            remaining_source = StepRun.objects.get(
+                run=source_run, step=page_step, map_index=2,
+            ).current_attempt
+        assert first_controller.output["results"][1]["status"] == "succeeded"
+        assert first_controller.output["results"][2]["status"] == "failed"
+        final = WorkflowRun.objects.start_recovery(
+            remaining_source,
+            request_key="recover-map-page-remaining",
+            actor=actor,
+            prior_recovery=first,
+        )
+        expected_index = 2
+        expected_basis_id = first_controller.current_attempt_id
+    else:
+        assert first.status == "failed"
+        assert first_page.current_attempt.result_kind == AttemptResultKind.ERROR
+        with system_context(reason="failed Map recovery has no projected controller"):
+            assert not StepRun.objects.filter(run=first, step=map_step).exists()
+        final = WorkflowRun.objects.start_recovery(
+            first_page.current_attempt,
+            request_key="retry-failed-map-page",
+            actor=actor,
+        )
+        expected_index = 1
+        expected_basis_id = source_controller.current_attempt_id
+
+    started = advance_once(final)
+    assert [(row.step_id, row.map_index) for row in started] == [
+        (page_step.pk, expected_index)
+    ]
+    execute_started(final)
+    continued = advance_once(final)
+    final.refresh_from_db()
+    assert [(row.step_id, row.map_index) for row in continued] == [(collect_step.pk, -1)]
+    with system_context(reason="recovered Map aggregate evidence"):
+        controller = StepRun.objects.get(run=final, step=map_step)
+        recovered_page = StepRun.objects.get(
+            run=final, step=page_step, map_index=expected_index,
+        )
+        basis = final.recovery_evidence.get(step=map_step, map_index=-1)
+        results = controller.output["results"]
+        assert controller.current_attempt.cause == AttemptCause.MAP_ENGINE
+        assert recovered_page.current_attempt.map_expansion_id == source_attempt.map_expansion_id
+    assert basis.source_attempt_id == expected_basis_id
+    assert controller.outcome == "succeeded"
+    assert results[0] == source_results[0]
+    for index in original_failures:
+        assert results[index] == {
+            "map_index": index,
+            "status": "succeeded",
+            "outcome": "done",
+            "output": {"value": index, "recovered": True},
+            "output_present": True,
+            "error": "",
+        }
+    execute_started(final)
+    assert CollectItems.inputs[-1] == controller.output
+    assert advance_once(final) == []
+    final.refresh_from_db()
+    assert final.status == "succeeded"
+
+    if scenario == "remaining_sibling":
+        with pytest.raises(ValidationError, match="request facts do not match"):
+            WorkflowRun.objects.start_recovery(
+                remaining_source,
+                request_key="recover-map-page-remaining",
+                actor=actor,
+            )
+
+
 def test_retained_child_for_start_requires_parent_and_child_read_access(
     workflow_engine_tables: None,
     no_workflow_queue: None,

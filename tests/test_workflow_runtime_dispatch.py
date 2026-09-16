@@ -15,7 +15,7 @@ from angee.workflows import engine
 from angee.workflows.attempts import AttemptResultKind, DecisionGateOutput
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus
-from angee.workflows.steps import StepResult
+from angee.workflows.steps import StepImpl, StepResult
 from tests.workflows import Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 
@@ -40,11 +40,11 @@ class _IntegerInput(BaseModel):
     value: int
 
 
-class _ValidatedImpl:
+class _ValidatedImpl(StepImpl):
     input_model = _IntegerInput
 
 
-class _DecisionGateConsumer:
+class _DecisionGateConsumer(StepImpl):
     input_model = DecisionGateOutput
 
 
@@ -302,3 +302,4 @@ def test_preparation_validates_persisted_json_through_the_input_model_json_bound
     assert attempt.input == gate_output
     assert attempt.result_recorded_at is None
     assert execute.kind == WorkflowDispatchKind.EXECUTE
+    assert _DecisionGateConsumer.validate_input(attempt.input).resolutions == ()

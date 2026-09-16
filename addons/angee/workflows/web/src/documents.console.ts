@@ -280,9 +280,10 @@ export const WorkflowRecoveryPlanDocument = graphql(`
 `);
 
 export const StartWorkflowRecoveryDocument = graphql(`
-  mutation StartWorkflowRecovery($sourceAttempt: ID!, $requestKey: String!, $acknowledgeUncertainExternal: Boolean!) {
+  mutation StartWorkflowRecovery($sourceAttempt: ID!, $requestKey: String!, $acknowledgeUncertainExternal: Boolean!, $priorRecovery: ID) {
     start_workflow_recovery(source_attempt: $sourceAttempt, request_key: $requestKey,
-      acknowledge_uncertain_external: $acknowledgeUncertainExternal) {
+      acknowledge_uncertain_external: $acknowledgeUncertainExternal,
+      prior_recovery: $priorRecovery) {
       ok message validation_errors id
     }
   }

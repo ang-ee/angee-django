@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   executionStatus: "FAILED",
   runStatus: "RUNNING",
   runError: null as string | null,
+  recoveryMapIndex: null as number | null,
   payloadVariables: [] as unknown[],
   resources: [] as Array<Record<string, unknown>>,
   mutation: vi.fn(),
@@ -33,7 +34,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
       );
       if (Object.hasOwn(variables, "sourceAttempt")) return {
         data: {
-          workflow_recovery_plan: { available: true, mode: "reconcile", unavailable_reason: "" },
+          workflow_recovery_plan: { available: true, mode: "reconcile", unavailable_reason: "", map_index: mocks.recoveryMapIndex },
           workflow_test_repair_context: null,
         },
         isFetching: false, error: null,
@@ -140,6 +141,25 @@ vi.mock("@angee/ui", async (importOriginal) => {
       const select = props.onSelect as ((id: string) => void) | undefined;
       return <div data-testid={`resource-${String(props.resource)}`}><button type="button" onClick={() => select?.("execution-1")}>select record</button>{props.recordId ? `record:${String(props.recordId)}` : "list"}</div>;
     },
+    RelationFieldWidget: ({
+      value,
+      onChange,
+      readOnly,
+      "aria-label": ariaLabel,
+    }: {
+      value?: string | null;
+      onChange?: (value: string) => void;
+      readOnly?: boolean;
+      "aria-label"?: string;
+    }) => <select
+      aria-label={ariaLabel}
+      value={value ?? ""}
+      disabled={readOnly}
+      onChange={(event) => onChange?.(event.target.value)}
+    >
+      <option value="" />
+      <option value="wfr_exact_prior">Recovery: exact retained basis</option>
+    </select>,
     List: () => null,
     Form: () => null,
     Column: () => null,
@@ -161,6 +181,7 @@ beforeEach(() => {
   mocks.executionStatus = "FAILED";
   mocks.runStatus = "RUNNING";
   mocks.runError = null;
+  mocks.recoveryMapIndex = null;
   mocks.payloadVariables.length = 0;
   mocks.resources.length = 0;
   mocks.mutation.mockReset();
@@ -259,6 +280,21 @@ test("a successful recovery without a route retains its acknowledged run and can
   expect((screen.getByRole("button", { name: "Recover from this attempt" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Recover from this attempt" }));
   expect(mocks.mutation).toHaveBeenCalledTimes(1);
+});
+
+test("a Map recovery can name the exact retained prior recovery basis", async () => {
+  mocks.loading = false;
+  mocks.recoveryMapIndex = 2;
+  mocks.mutation.mockResolvedValue({ start_workflow_recovery: { ok: true, id: "run-map-recovery" } });
+  render(<AttemptRecoveryPanel attemptId="attempt-map-failure" />);
+  fireEvent.change(await screen.findByLabelText("Prior Map recovery run"), {
+    target: { value: "wfr_exact_prior" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Recover from this attempt" }));
+  await waitFor(() => expect(mocks.mutation).toHaveBeenCalledWith(expect.objectContaining({
+    sourceAttempt: "attempt-map-failure",
+    priorRecovery: "wfr_exact_prior",
+  })));
 });
 
 test("a legacy execution shows parent-scoped recorded data instead of an empty attempt list", async () => {

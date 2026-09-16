@@ -16,6 +16,7 @@ suspended result.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -282,6 +283,18 @@ class StepImpl(ImplBase):
     deterministic: ClassVar[bool] = True
     decision_schema: ClassVar[type[Any] | None] = None
     map_body_operation: ClassVar[bool] = False
+
+    @classmethod
+    def validate_input(cls, value: Any) -> Any:
+        """Parse one retained JSON value through the operation's input contract."""
+
+        if cls.input_model is None:
+            raise ImproperlyConfigured(
+                f"{cls.__name__} does not declare an input model."
+            )
+        return cls.input_model.model_validate_json(
+            json.dumps(value, allow_nan=False)
+        )
 
     @classmethod
     def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:

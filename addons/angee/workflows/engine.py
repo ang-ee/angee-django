@@ -144,13 +144,16 @@ def start(
     )
 
 
-def recover(source_attempt: Any, *, request_key: str, actor: Any) -> Any:
+def recover(
+    source_attempt: Any, *, request_key: str, actor: Any, prior_recovery: Any = None,
+) -> Any:
     """Start or recover one exact same-revision retained recovery request."""
 
     return _model("WorkflowRun").objects.start_recovery(
         source_attempt,
         request_key=request_key,
         actor=actor,
+        prior_recovery=prior_recovery,
     )
 
 
@@ -386,6 +389,8 @@ def advance_dispatch(
                 claimed_ids: list[int] = []
                 if run.status not in RunStatus.TERMINAL:
                     _activate_run_if_needed(run, timestamp=timestamp)
+                    _route_completed_steps(run)
+                    _process_recovery_map_aggregate(run, timestamp=timestamp)
                     _route_completed_steps(run)
                     if _process_map_steps(run, timestamp=timestamp):
                         _route_completed_steps(run)
@@ -1738,6 +1743,26 @@ def _terminal_step_runs(run: Any) -> Iterable[Any]:
     )
 
 
+def _process_recovery_map_aggregate(run: Any, *, timestamp: datetime) -> None:
+    """Project a successful FRESH Map member through the ordinary Map join owner."""
+
+    if run.origin != RunOrigin.RECOVERY or run.recovery_source_attempt_id is None:
+        return
+    source = run.recovery_source_attempt
+    source_step_run = source.step_run
+    if source_step_run.map_index < 0 or source.map_expansion_id is None:
+        return
+    recovered = run.step_runs.filter(
+        step_id=source_step_run.step_id,
+        map_index=source_step_run.map_index,
+    ).first()
+    if recovered is None or recovered.status != StepRunStatus.SUCCEEDED:
+        return
+    _model("StepAttempt").objects.record_recovery_map_aggregate(
+        recovered.pk, at=timestamp,
+    )
+
+
 def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
     locked_rows = list(
         run.step_runs.lock_if_supported()
@@ -2457,9 +2482,7 @@ def _prepare_attempt_input(
     impl_class = step_run.step.resolve_impl("step_class")
     if impl_class.input_model is not None:
         try:
-            impl_class.input_model.model_validate_json(
-                json.dumps(candidate.value, allow_nan=False)
-            )
+            impl_class.validate_input(candidate.value)
         except (PydanticValidationError, TypeError, ValueError) as error:
             failure = _preparation_error("Workflow step input is invalid.", error)
             return _AttemptPreparation(
@@ -2573,6 +2596,18 @@ def _update_run_status(run: Any, *, timestamp: datetime) -> None:
         .order_by("-pk")
         .first()
     )
+    if (
+        failed is None
+        and run.origin == RunOrigin.RECOVERY
+        and run.recovery_source_attempt_id is not None
+        and run.recovery_source_attempt.step_run.map_index >= 0
+    ):
+        source_step_run = run.recovery_source_attempt.step_run
+        failed = run.step_runs.filter(
+            step_id=source_step_run.step_id,
+            map_index=source_step_run.map_index,
+            status__in=[StepRunStatus.FAILED, StepRunStatus.CANCELED],
+        ).first()
     if failed is not None:
         if run.status == RunStatus.PENDING:
             run.mark_running()

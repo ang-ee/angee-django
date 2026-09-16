@@ -614,67 +614,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
         attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
         step_run_model = self.model._meta.apps.get_model("workflows", "StepRun")
-        current = system_queryset(attempt_model, using=using, lock=("self",)).filter(
-            pk=recovery_step_run.current_attempt_id,
-        ).first()
-        if (
-            current is None
-            or current.step_run_id != recovery_step_run.pk
-            or current.started_at is None
-            or current.result_recorded_at is not None
-            or current.lease_revoked_at is not None
-        ):
-            raise ValidationError({
-                "parent_step_run": "Recovery child handoff requires the active exact source attempt."
-            })
-        lineage = current
-        retained_child_target = (
-            (current.external_content_type_id, current.external_object_id)
-            if current.external_content_type_id is not None
-            and current.external_object_id is not None
-            else None
+        lineage, _retained_child_target = attempt_model.objects._fresh_recovery_anchor(
+            recovery_step_run.current_attempt_id,
+            recovery_run_id=recovery_run.pk,
+            alias=using,
+            lock=("self",),
+            require_active=True,
         )
-        while lineage.cause == AttemptCause.CONTINUATION:
-            previous = system_queryset(
-                attempt_model, using=using, lock=("self",)
-            ).filter(
-                step_run_id=recovery_step_run.pk,
-                ordinal=lineage.ordinal - 1,
-            ).first()
-            if (
-                previous is None
-                or previous.result_kind != str(AttemptResultKind.SUSPEND)
-                or previous.result_recorded_at is None
-                or previous.applied_at is None
-                or previous.lease_revoked_at is not None
-                or previous.external_content_type_id is None
-                or previous.external_object_id is None
-                or previous.input_present != lineage.input_present
-                or not json_values_equal(previous.input, lineage.input)
-                or previous.effect_key != lineage.effect_key
-                or previous.effect_generation != lineage.effect_generation
-            ):
-                raise ValidationError({
-                    "parent_step_run": "Recovery child continuation identity changed."
-                })
-            previous_target = (
-                previous.external_content_type_id,
-                previous.external_object_id,
-            )
-            if retained_child_target is not None and previous_target != retained_child_target:
-                raise ValidationError({
-                    "parent_step_run": "Recovery child continuation target changed."
-                })
-            retained_child_target = previous_target
-            lineage = previous
-        if (
-            lineage.cause != AttemptCause.MANUAL_RETRY
-            or lineage.recovery_mode != RecoveryMode.FRESH
-            or lineage.recovery_source_attempt_id != recovery_run.recovery_source_attempt_id
-        ):
-            raise ValidationError({
-                "parent_step_run": "Recovery child handoff requires the exact FRESH source attempt."
-            })
         parent = recovery_step_run
         seen: set[int] = set()
         while (
@@ -984,6 +930,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         request_key: str,
         actor: Any,
         acknowledge_uncertain_external: bool = False,
+        prior_recovery: Any = None,
     ) -> Any:
         """Admit one linked same-revision recovery from exact retained evidence."""
 
@@ -1078,6 +1025,89 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 )
             ):
                 raise ValidationError({"attempt": "Recovery requires an applied retained failure."})
+            map_base_attempt = None
+            map_controller = None
+            if source_step_run.map_index >= 0:
+                (
+                    _map_source,
+                    _map_source_step,
+                    _map_expansion,
+                    map_controller,
+                    map_base_attempt,
+                    _map_state,
+                ) = attempt_model.objects._map_recovery_source(
+                    locked_attempt.pk, alias=alias, lock=("self",),
+                )
+                if prior_recovery is not None:
+                    readable_prior = read_scoped_queryset(self.model, actor, action="read")
+                    prior = (
+                        None
+                        if readable_prior is None
+                        else readable_prior.using(alias).filter(pk=prior_recovery.pk).first()
+                    )
+                    if (
+                        prior is None
+                        or prior.origin != RunOrigin.RECOVERY
+                        or prior.status not in RunStatus.TERMINAL
+                        or prior.workflow_id != source_run.workflow_id
+                        or not prior.same_execution_lineage(source_run)
+                        or prior.recovery_source_attempt_id is None
+                        or prior.recovery_source_attempt.map_expansion_id != locked_attempt.map_expansion_id
+                    ):
+                        raise ValidationError({
+                            "prior_recovery": "Prior Map recovery must be a readable terminal descendant of this expansion."
+                        })
+                    prior_controller = system_queryset(
+                        step_run_model, using=alias, lock=None,
+                    ).filter(
+                        run_id=prior.pk,
+                        step_id=map_controller.step_id,
+                        map_index=-1,
+                        status=StepRunStatus.SUCCEEDED,
+                    ).first()
+                    if prior_controller is None or prior_controller.current_attempt_id is None:
+                        raise ValidationError({
+                            "prior_recovery": "Prior Map recovery has no retained controller aggregate."
+                        })
+                    (
+                        _map_source,
+                        _map_source_step,
+                        _map_expansion,
+                        map_controller,
+                        map_base_attempt,
+                        _map_state,
+                    ) = attempt_model.objects._map_recovery_source(
+                        locked_attempt.pk,
+                        alias=alias,
+                        lock=("self",),
+                        aggregate_attempt_id=prior_controller.current_attempt_id,
+                    )
+                elif source_run.origin == RunOrigin.RECOVERY:
+                    evidence = source_run.recovery_evidence.filter(
+                        step_id=map_controller.step_id,
+                        map_index=-1,
+                    ).select_related("source_attempt").first()
+                    if evidence is None:
+                        raise ValidationError({
+                            "attempt": "Failed Map recovery has no admitted controller basis."
+                        })
+                    (
+                        _map_source,
+                        _map_source_step,
+                        _map_expansion,
+                        map_controller,
+                        map_base_attempt,
+                        _map_state,
+                    ) = attempt_model.objects._map_recovery_source(
+                        locked_attempt.pk,
+                        alias=alias,
+                        lock=("self",),
+                        aggregate_attempt_id=evidence.source_attempt_id,
+                    )
+            elif prior_recovery is not None:
+                raise ValidationError({
+                    "prior_recovery": "Prior recovery applies only to a retained Map member."
+                })
             try:
                 actor_ref = str(to_subject_ref(actor))
             except NoActorResolvedError as error:
@@ -1085,11 +1115,20 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             dedup_key = f"recovery:{source_run.pk}:{locked_attempt.pk}:{request_key}"
             existing = self.filter(dedup_key=dedup_key).first()
             if existing is not None:
+                existing_map_basis_id = None
+                if map_controller is not None:
+                    existing_map_basis_id = existing.recovery_evidence.filter(
+                        step_id=map_controller.step_id,
+                        map_index=-1,
+                    ).values_list("source_attempt_id", flat=True).first()
                 if (
                     existing.recovery_source_attempt_id != locked_attempt.pk
                     or existing.recovery_request_actor_ref != actor_ref
                     or existing.recovery_mode != str(capability.mode)
                     or existing.recovery_uncertainty_ack != acknowledge_uncertain_external
+                    or existing_map_basis_id != (
+                        None if map_base_attempt is None else map_base_attempt.pk
+                    )
                 ):
                     raise ValidationError({"request_key": "Recovery request facts do not match."})
                 return existing
@@ -1143,6 +1182,16 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 if gate_row.output != projected:
                     continue
                 accepted.append(candidate)
+            if map_base_attempt is not None and map_controller is not None:
+                accepted = [
+                    candidate
+                    for candidate in accepted
+                    if not (
+                        candidate.step_run.step_id == map_controller.step_id
+                        and candidate.step_run.map_index == -1
+                    )
+                ]
+                accepted.append(map_base_attempt)
             return self._start_pinned_locked(
                 source_run.workflow,
                 source_subject,
@@ -3264,9 +3313,14 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
     def recovery_plan(self, attempt: Any, *, actor: Any) -> RecoveryPlan:
         """Return the operation-owned recovery capability for authorized evidence."""
 
-        row = self.select_related("step_run__run__workflow", "step_run__step").filter(
-            pk=attempt.pk
-        ).first()
+        readable_attempts = read_scoped_queryset(self.model, actor, action="read")
+        row = (
+            None
+            if readable_attempts is None
+            else readable_attempts.select_related(
+                "step_run__run__workflow", "step_run__step"
+            ).filter(pk=attempt.pk).first()
+        )
         if row is None or row.step_run.step_id is None:
             raise PermissionDenied("Recovery source evidence is unavailable.")
         run_model = row.step_run._meta.get_field("run").remote_field.model
@@ -3303,6 +3357,14 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             if admissible
             else RecoveryCapability(None, "This retained attempt is not an admissible failure.")
         )
+        if capability.available and step_run.map_index >= 0:
+            try:
+                self._map_recovery_source(row.pk, alias=self.db, lock=None)
+            except ValidationError:
+                capability = RecoveryCapability(
+                    None,
+                    "Map recovery is unavailable until its exact retained expansion is aggregated.",
+                )
         return RecoveryPlan(
             attempt_id=row.sqid,
             run_id=step_run.run.sqid,
@@ -3635,6 +3697,91 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         self._validated_artifacts(result)
         return result
 
+    def _fresh_recovery_anchor(
+        self,
+        current_attempt_id: int | None,
+        *,
+        recovery_run_id: int,
+        alias: str,
+        lock: tuple[str, ...] | None,
+        require_active: bool,
+    ) -> tuple[Any, tuple[int, int] | None]:
+        """Trace one same-slot continuation chain to its admitted FRESH attempt."""
+
+        if current_attempt_id is None:
+            raise ValidationError({"recovery": "FRESH recovery has no current attempt."})
+        step_run_model = self.model._meta.get_field("step_run").remote_field.model
+        run_model = step_run_model._meta.get_field("run").remote_field.model
+        recovery_run = system_queryset(run_model, using=alias, lock=lock).get(
+            pk=recovery_run_id
+        )
+        step_run = system_queryset(step_run_model, using=alias, lock=lock).get(
+            current_attempt_id=current_attempt_id,
+            run_id=recovery_run.pk,
+        )
+        current = system_queryset(self.model, using=alias, lock=lock).get(
+            pk=current_attempt_id,
+            step_run_id=step_run.pk,
+        )
+        if require_active:
+            eligible_current = (
+                current.started_at is not None
+                and current.result_recorded_at is None
+                and current.lease_revoked_at is None
+            )
+        else:
+            eligible_current = (
+                (current.result_recorded_at is not None and current.applied_at is not None)
+                or (current.result_recorded_at is None and current.lease_revoked_at is not None)
+            )
+        if not eligible_current:
+            raise ValidationError({"recovery": "FRESH recovery current attempt is not retained."})
+        lineage = current
+        retained_target = (
+            (current.external_content_type_id, current.external_object_id)
+            if current.external_content_type_id is not None
+            and current.external_object_id is not None
+            else None
+        )
+        while lineage.cause == str(AttemptCause.CONTINUATION):
+            previous = system_queryset(self.model, using=alias, lock=lock).filter(
+                step_run_id=step_run.pk,
+                ordinal=lineage.ordinal - 1,
+            ).first()
+            if (
+                previous is None
+                or previous.result_kind != str(AttemptResultKind.SUSPEND)
+                or previous.result_recorded_at is None
+                or previous.applied_at is None
+                or previous.lease_revoked_at is not None
+                or previous.external_content_type_id is None
+                or previous.external_object_id is None
+                or previous.input_present != lineage.input_present
+                or not json_values_equal(previous.input, lineage.input)
+                or previous.effect_key != lineage.effect_key
+                or previous.effect_generation != lineage.effect_generation
+                or previous.map_expansion_id != lineage.map_expansion_id
+                or previous.map_item_index != lineage.map_item_index
+                or previous.map_item_present != lineage.map_item_present
+                or not json_values_equal(previous.map_item, lineage.map_item)
+            ):
+                raise ValidationError({"recovery": "FRESH recovery continuation identity changed."})
+            previous_target = (
+                previous.external_content_type_id,
+                previous.external_object_id,
+            )
+            if retained_target is not None and previous_target != retained_target:
+                raise ValidationError({"recovery": "FRESH recovery continuation target changed."})
+            retained_target = previous_target
+            lineage = previous
+        if (
+            lineage.cause != str(AttemptCause.MANUAL_RETRY)
+            or lineage.recovery_mode != str(RecoveryMode.FRESH)
+            or lineage.recovery_source_attempt_id != recovery_run.recovery_source_attempt_id
+        ):
+            raise ValidationError({"recovery": "Attempt is not anchored to this exact FRESH recovery."})
+        return lineage, retained_target
+
     def record_map_expansion(
         self,
         step_run: Any,
@@ -3746,6 +3893,362 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             return MapExpansionPlan(None, "", [], str(error))
         return MapExpansionPlan(target.pk, target.key, items, "")
 
+    @staticmethod
+    def _map_member_result(child: Any, item_attempt: Any, *, expansion_id: int) -> dict[str, Any]:
+        """Project one exact terminal Map member through the shared aggregate owner."""
+
+        output = None
+        if child.status == StepRunStatus.SUCCEEDED:
+            if (
+                item_attempt is None
+                or item_attempt.map_expansion_id != expansion_id
+                or item_attempt.map_item_index != child.map_index
+                or item_attempt.effect_key != child.effect_key
+                or item_attempt.effect_generation != child.effect_generation
+                or item_attempt.result_kind != str(AttemptResultKind.DONE)
+                or item_attempt.applied_at is None
+                or item_attempt.lease_revoked_at is not None
+            ):
+                raise ValidationError(
+                    {"map": "Map member success lacks current retained DONE evidence."}
+                )
+            if item_attempt.output_present:
+                output = copy.deepcopy(item_attempt.output)
+        return {
+            "map_index": child.map_index,
+            "status": str(child.status),
+            "outcome": child.outcome,
+            "output": output,
+            "output_present": bool(item_attempt.output_present) if item_attempt is not None else False,
+            "error": child.error,
+        }
+
+    @staticmethod
+    def _map_aggregate_output(
+        results: list[dict[str, Any]], *, error: Any = None,
+    ) -> dict[str, Any]:
+        """Build the one public ordered Map result shape from member projections."""
+
+        successes = sum(
+            result["status"] == str(StepRunStatus.SUCCEEDED)
+            and result["outcome"] not in {"child_failed", "child_canceled"}
+            for result in results
+        )
+        failures = sum(
+            result["status"] in {
+                str(StepRunStatus.FAILED), str(StepRunStatus.CANCELED),
+            }
+            or result["outcome"] in {"child_failed", "child_canceled"}
+            for result in results
+        )
+        output = {
+            "total": len(results),
+            "successes": successes,
+            "failures": failures,
+            "results": results,
+        }
+        if error:
+            output["error"] = error
+        return output
+
+    @staticmethod
+    def _map_policy_outcome(controller: Any, output: dict[str, Any]) -> str:
+        """Evaluate the configured Map policy for an ordinary or recovered join."""
+
+        impl_class = controller.step.resolve_impl("step_class")
+        return (
+            "failed"
+            if output.get("error")
+            else "succeeded"
+            if impl_class.policy_passes(controller.step.config, output)
+            else "failed"
+        )
+
+    def _map_recovery_source(
+        self,
+        source_attempt_id: int,
+        *,
+        alias: str,
+        lock: tuple[str, ...] | None,
+        aggregate_attempt_id: int | None = None,
+    ) -> tuple[Any, Any, Any, Any, Any, dict[str, Any]]:
+        """Resolve an exact failed member and its already-applied retained Map join."""
+
+        step_run_model = self.model._meta.get_field("step_run").remote_field.model
+        source = system_queryset(self.model, using=alias, lock=lock).get(pk=source_attempt_id)
+        source_step = system_queryset(step_run_model, using=alias, lock=lock).select_related(
+            "run__workflow", "step"
+        ).get(pk=source.step_run_id)
+        if (
+            source_step.current_attempt_id != source.pk
+            or source_step.status not in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
+            or source_step.map_index < 0
+            or source.map_expansion_id is None
+            or source.map_item_index != source_step.map_index
+            or source.effect_key != source_step.effect_key
+            or source.effect_generation != source_step.effect_generation
+        ):
+            raise ValidationError({"attempt": "Map recovery requires one exact current failed member."})
+        root_source = source
+        source_runs_seen: set[int] = set()
+        while root_source.step_run.run.origin == RunOrigin.RECOVERY:
+            recovery_run_id = root_source.step_run.run_id
+            if recovery_run_id in source_runs_seen:
+                raise ValidationError({"attempt": "Map recovery source lineage is cyclic."})
+            source_runs_seen.add(recovery_run_id)
+            anchor, _target = self._fresh_recovery_anchor(
+                root_source.pk,
+                recovery_run_id=recovery_run_id,
+                alias=alias,
+                lock=lock,
+                require_active=False,
+            )
+            if anchor.recovery_source_attempt_id is None:
+                raise ValidationError({"attempt": "Map recovery source lineage is incomplete."})
+            previous = system_queryset(self.model, using=alias, lock=lock).get(
+                pk=anchor.recovery_source_attempt_id
+            )
+            if (
+                previous.step_run.step_id != source_step.step_id
+                or previous.step_run.map_index != source_step.map_index
+                or previous.map_expansion_id != source.map_expansion_id
+                or previous.map_item_index != source.map_item_index
+                or previous.map_item_present != source.map_item_present
+                or not json_values_equal(previous.map_item, source.map_item)
+            ):
+                raise ValidationError({"attempt": "Map recovery source lineage changed its retained item."})
+            root_source = previous
+        root_step = system_queryset(step_run_model, using=alias, lock=lock).select_related(
+            "run__workflow", "step"
+        ).get(pk=root_source.step_run_id)
+        if (
+            root_step.current_attempt_id != root_source.pk
+            or root_step.status not in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
+            or root_step.step_id != source_step.step_id
+            or root_step.map_index != source_step.map_index
+            or root_step.run.workflow_id != source_step.run.workflow_id
+        ):
+            raise ValidationError({"attempt": "Map recovery root evidence is no longer exact."})
+        expansion = system_queryset(self.model, using=alias, lock=lock).get(pk=root_source.map_expansion_id)
+        controller = system_queryset(step_run_model, using=alias, lock=lock).select_related(
+            "run__workflow", "step"
+        ).get(pk=expansion.step_run_id)
+        aggregate = (
+            system_queryset(self.model, using=alias, lock=lock).filter(
+                pk=aggregate_attempt_id or controller.current_attempt_id
+            ).first()
+            if aggregate_attempt_id is not None or controller.current_attempt_id is not None
+            else None
+        )
+        aggregate_controller = (
+            system_queryset(step_run_model, using=alias, lock=lock).select_related(
+                "run__workflow", "step"
+            ).get(pk=aggregate.step_run_id)
+            if aggregate is not None
+            else None
+        )
+        checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
+        map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
+        items = map_state.get("items") if isinstance(map_state, dict) else None
+        output = aggregate.output if aggregate is not None and aggregate.output_present else None
+        results = output.get("results") if isinstance(output, dict) else None
+        if (
+            controller.run_id != root_step.run_id
+            or controller.run.workflow_id != source_step.run.workflow_id
+            or controller.map_index != -1
+            or controller.step_id is None
+            or controller.step.step_class != "map"
+            or aggregate is None
+            or aggregate_controller is None
+            or aggregate_controller.current_attempt_id != aggregate.pk
+            or aggregate_controller.status != StepRunStatus.SUCCEEDED
+            or aggregate_controller.run.workflow_id != controller.run.workflow_id
+            or aggregate_controller.step_id != controller.step_id
+            or aggregate_controller.map_index != -1
+            or aggregate.cause != str(AttemptCause.MAP_ENGINE)
+            or aggregate.result_kind != str(AttemptResultKind.DONE)
+            or aggregate.applied_at is None
+            or aggregate.lease_revoked_at is not None
+            or aggregate.effect_key != aggregate_controller.effect_key
+            or aggregate.effect_generation != aggregate_controller.effect_generation
+            or expansion.cause != str(AttemptCause.MAP_ENGINE)
+            or expansion.result_kind != str(AttemptResultKind.WAIT)
+            or expansion.applied_at is None
+            or expansion.lease_revoked_at is not None
+            or not isinstance(map_state, dict)
+            or not isinstance(items, list)
+            or map_state.get("target_step_id") != source_step.step_id
+            or source_step.map_index >= len(items)
+            or not root_source.map_item_present
+            or not json_values_equal(root_source.map_item, items[source_step.map_index])
+            or not isinstance(results, list)
+            or len(results) != len(items)
+            or [result.get("map_index") if isinstance(result, dict) else None for result in results]
+            != list(range(len(items)))
+            or not json_values_equal(
+                results[source_step.map_index],
+                self._map_member_result(root_step, root_source, expansion_id=expansion.pk),
+            )
+        ):
+            raise ValidationError({
+                "attempt": "Map recovery is unavailable until the exact retained expansion is aggregated."
+            })
+        return source, source_step, expansion, controller, aggregate, map_state
+
+    def record_recovery_map_aggregate(
+        self, recovered_step_run_id: int, *, at: datetime,
+    ) -> Any | None:
+        """Overlay one recovered member onto its exact retained Map aggregate."""
+
+        alias = self.db
+        step_run_model = self.model._meta.get_field("step_run").remote_field.model
+        run_model = step_run_model._meta.get_field("run").remote_field.model
+        with transaction.atomic(using=alias), system_context(reason="workflows.map.recovery_aggregate"):
+            run_id = system_queryset(step_run_model, using=alias, lock=None).values_list(
+                "run_id", flat=True
+            ).get(pk=recovered_step_run_id)
+            run = system_queryset(run_model, using=alias, lock=("self",)).select_related(
+                "recovery_source_attempt"
+            ).get(pk=run_id)
+            recovered = system_queryset(step_run_model, using=alias, lock=("self",)).select_related(
+                "step"
+            ).get(pk=recovered_step_run_id)
+            source_attempt_id = run.recovery_source_attempt_id
+            if (
+                run.origin != RunOrigin.RECOVERY
+                or run.recovery_mode != str(RecoveryMode.FRESH)
+                or source_attempt_id is None
+                or recovered.run_id != run.pk
+                or recovered.step_id != run.recovery_source_attempt.step_run.step_id
+                or recovered.map_index != run.recovery_source_attempt.step_run.map_index
+                or recovered.map_index < 0
+            ):
+                raise ValidationError({"run": "Map recovery aggregate requires its exact FRESH member."})
+            if recovered.status != StepRunStatus.SUCCEEDED:
+                return None
+            current = (
+                system_queryset(self.model, using=alias, lock=("self",)).filter(
+                    pk=recovered.current_attempt_id
+                ).first()
+                if recovered.current_attempt_id is not None
+                else None
+            )
+            recovery_anchor = None
+            if current is not None:
+                recovery_anchor, _recovery_target = self._fresh_recovery_anchor(
+                    current.pk,
+                    recovery_run_id=run.pk,
+                    alias=alias,
+                    lock=("self",),
+                    require_active=False,
+                )
+            source, _source_step, expansion, source_controller, _root_aggregate, _map_state = (
+                self._map_recovery_source(source_attempt_id, alias=alias, lock=None)
+            )
+            evidence_model = run._meta.apps.get_model("workflows", "WorkflowRecoveryEvidence")
+            basis = system_queryset(evidence_model, using=alias, lock=None).filter(
+                run_id=run.pk,
+                step_id=source_controller.step_id,
+                map_index=-1,
+            ).first()
+            if basis is None:
+                raise ValidationError({"map": "Recovered Map aggregate basis was not admitted."})
+            source, _source_step, expansion, source_controller, source_aggregate, map_state = (
+                self._map_recovery_source(
+                    source_attempt_id,
+                    alias=alias,
+                    lock=None,
+                    aggregate_attempt_id=basis.source_attempt_id,
+                )
+            )
+            if (
+                current is None
+                or current.step_run_id != recovered.pk
+                or recovery_anchor is None
+                or recovery_anchor.recovery_source_attempt_id != source.pk
+                or current.map_expansion_id != expansion.pk
+                or current.map_item_index != source.map_item_index
+                or current.map_item_present != source.map_item_present
+                or not json_values_equal(current.map_item, source.map_item)
+                or current.effect_key != recovered.effect_key
+                or current.effect_generation != recovered.effect_generation
+                or current.result_kind != str(AttemptResultKind.DONE)
+                or current.applied_at is None
+                or current.lease_revoked_at is not None
+                or run.workflow_id != source_controller.run.workflow_id
+            ):
+                raise ValidationError({"attempt": "Recovered Map member lacks exact retained DONE evidence."})
+
+            retained_output = copy.deepcopy(source_aggregate.output)
+            results = retained_output.get("results") if isinstance(retained_output, dict) else None
+            if not isinstance(results, list) or source.map_item_index is None:
+                raise ValidationError({"map": "Retained Map aggregate output is unavailable."})
+            results[source.map_item_index] = self._map_member_result(
+                recovered, current, expansion_id=expansion.pk,
+            )
+            expected_output = self._map_aggregate_output(
+                results, error=map_state.get("error"),
+            )
+
+            controller, _ = step_run_model.objects.get_or_create(
+                run=run,
+                step=source_controller.step,
+                map_index=-1,
+                defaults={"status": StepRunStatus.SCHEDULED, "input": {}},
+            )
+            controller = system_queryset(
+                step_run_model, using=alias, lock=("self",)
+            ).select_related("run", "step").get(pk=controller.pk)
+            expected_outcome = self._map_policy_outcome(controller, expected_output)
+            if controller.current_attempt_id is not None:
+                existing = system_queryset(self.model, using=alias, lock=("self",)).get(
+                    pk=controller.current_attempt_id
+                )
+                if (
+                    controller.status != StepRunStatus.SUCCEEDED
+                    or existing.cause != str(AttemptCause.MAP_ENGINE)
+                    or existing.result_kind != str(AttemptResultKind.DONE)
+                    or existing.applied_at is None
+                    or existing.lease_revoked_at is not None
+                    or existing.output_present is not True
+                    or not json_values_equal(existing.output, expected_output)
+                    or existing.outcome != expected_outcome
+                ):
+                    raise ValidationError({"map": "Recovered Map aggregate identity changed."})
+                return existing
+            if controller.status != StepRunStatus.SCHEDULED or controller.is_retained:
+                raise ValidationError({"map": "Recovered Map controller is not pristine."})
+            with self._write(alias, controller.pk):
+                aggregate = self._allocate_locked(
+                    controller,
+                    cause=AttemptCause.MAP_ENGINE,
+                    input=AttemptInput(),
+                    claimed_at=at,
+                    alias=alias,
+                )
+                self._write_step_run(
+                    controller,
+                    alias=alias,
+                    operation=lambda: controller.mark_started(
+                        heartbeat_at=None, claimed_deliveries=run.deliveries,
+                    ),
+                )
+                aggregate.result_kind = str(AttemptResultKind.DONE)
+                aggregate.result_recorded_at = at
+                aggregate.output_present = True
+                aggregate.output = copy.deepcopy(expected_output)
+                aggregate.outcome = expected_outcome
+                aggregate.applied_at = at
+                self._save_attempt(aggregate, alias=alias)
+                self._write_step_run(
+                    controller,
+                    alias=alias,
+                    operation=lambda: controller.mark_succeeded(
+                        output=expected_output, outcome=expected_outcome,
+                    ),
+                )
+                return aggregate
+
     def record_map_aggregate(
         self,
         step_run_id: int,
@@ -3828,58 +4331,15 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             results: list[dict[str, Any]] = []
             for child in children:
                 item_attempt = attempts.get(child.current_attempt_id)
-                output = None
-                if child.status == StepRunStatus.SUCCEEDED:
-                    if (
-                        item_attempt is None
-                        or item_attempt.map_expansion_id != expansion.pk
-                        or item_attempt.map_item_index != child.map_index
-                        or item_attempt.effect_generation != child.effect_generation
-                        or item_attempt.result_kind != str(AttemptResultKind.DONE)
-                        or item_attempt.applied_at is None
-                        or item_attempt.lease_revoked_at is not None
-                    ):
-                        raise ValidationError(
-                            {"map": "Map member success lacks current retained DONE evidence."}
-                        )
-                    if item_attempt.output_present:
-                        output = copy.deepcopy(item_attempt.output)
                 results.append(
-                    {
-                        "map_index": child.map_index,
-                        "status": str(child.status),
-                        "outcome": child.outcome,
-                        "output": output,
-                        "output_present": bool(item_attempt.output_present) if item_attempt is not None else False,
-                        "error": child.error,
-                    }
+                    self._map_member_result(
+                        child, item_attempt, expansion_id=expansion.pk,
+                    )
                 )
-            successes = sum(
-                child.status == StepRunStatus.SUCCEEDED
-                and child.outcome not in {"child_failed", "child_canceled"}
-                for child in children
+            expected_output = self._map_aggregate_output(
+                results, error=map_state.get("error"),
             )
-            failures = sum(
-                child.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
-                or child.outcome in {"child_failed", "child_canceled"}
-                for child in children
-            )
-            expected_output = {
-                "total": len(children),
-                "successes": successes,
-                "failures": failures,
-                "results": results,
-            }
-            if map_state.get("error"):
-                expected_output["error"] = map_state["error"]
-            impl_class = locked.step.resolve_impl("step_class")
-            expected_outcome = (
-                "failed"
-                if map_state.get("error")
-                else "succeeded"
-                if impl_class.policy_passes(locked.step.config, expected_output)
-                else "failed"
-            )
+            expected_outcome = self._map_policy_outcome(locked, expected_output)
             aggregate = self._allocate_locked(
                 locked,
                 cause=AttemptCause.MAP_ENGINE,

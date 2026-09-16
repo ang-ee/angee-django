@@ -2708,17 +2708,22 @@ class WorkflowRunActionMutation:
         source_attempt: PublicID,
         request_key: str,
         acknowledge_uncertain_external: bool = False,
+        prior_recovery: PublicID | None = None,
     ) -> ActionResult:
         """Start or recover one idempotent run from exact retained failure evidence."""
 
         attempt = instance_for_id(StepAttempt, source_attempt)
         if attempt is None:
             raise ValidationError({"source_attempt": "Recovery source evidence is unavailable."})
+        prior = instance_for_id(WorkflowRun, prior_recovery) if prior_recovery is not None else None
+        if prior_recovery is not None and prior is None:
+            raise ValidationError({"prior_recovery": "Prior recovery is unavailable."})
         run = WorkflowRun.objects.start_recovery(
             attempt,
             request_key=request_key,
             actor=session_user(info),
             acknowledge_uncertain_external=acknowledge_uncertain_external,
+            prior_recovery=prior,
         )
         return ActionResult(ok=True, message=f"Started workflow recovery {run.sqid}.", id=run.sqid)
 
