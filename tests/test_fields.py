@@ -657,6 +657,79 @@ def test_fractional_rank_full_clean_allows_the_pending_none() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_fractional_rank_backfills_a_populated_table_from_its_database_default() -> None:
+    """A ranked column added to rows that already exist is seeded by the field.
+
+    Schema backfill copies rows without a model instance, so ``pre_save`` never
+    allocates for them; the field's database default seeds them, since
+    ``get_default`` deliberately defers to ``pre_save`` and cannot serve as one.
+    """
+
+    class RankedExisting(models.Model):
+        """Concrete model that gains a ranked column after it holds rows."""
+
+        lane = models.CharField(max_length=8)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankedExisting)
+    try:
+        RankedExisting.objects.create(lane="a")
+
+        added = FractionalRankField()
+        added.set_attributes_from_name("rank")
+        added.model = RankedExisting
+        with connection.schema_editor() as schema_editor:
+            schema_editor.add_field(RankedExisting, added)
+
+        table = connection.ops.quote_name(RankedExisting._meta.db_table)
+        column = connection.ops.quote_name("rank")
+
+        with connection.cursor() as cursor:
+            cursor.execute(f"SELECT {column} FROM {table}")
+            stored = [row[0] for row in cursor.fetchall()]
+
+        assert stored == [FractionalRankField.STEP]
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedExisting)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_database_default_leaves_new_rows_appending() -> None:
+    """The database default seeds only pre-existing rows; new rows still append in context."""
+
+    class RankedSeeded(models.Model):
+        """Concrete model with a rank ordered inside its lane."""
+
+        lane = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_seeded_lane_rank"),
+            )
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankedSeeded)
+    try:
+        first = RankedSeeded.objects.create(lane="a")
+        second = RankedSeeded.objects.create(lane="a")
+
+        assert (first.rank, second.rank) == (FractionalRankField.STEP, FractionalRankField.STEP * 2)
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedSeeded)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_fractional_rank_requires_exactly_one_unique_context() -> None:
     """Allocation fails loudly without exactly one field-based unique context."""
 
