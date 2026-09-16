@@ -20,6 +20,7 @@ from django.core.management import call_command
 from django.db import IntegrityError, models
 from django.test import SimpleTestCase, override_settings
 from rebac import (
+    MissingActorError,
     PermissionDenied,
     RelationshipTuple,
     actor_context,
@@ -708,12 +709,19 @@ class ExtractionServiceTests(TestCase):
         self.assertEqual(failed.status, "failed")
         self.assertEqual(failed.error_code, "processing:SyntheticFailure")
         self.assertEqual(failed.result, {})
+        failed.with_actor(self.owner)._require_record_access("read")
+        with self.assertRaises(PermissionDenied):
+            failed.with_actor(self.stranger)._require_record_access("read")
+        extraction_model = apps.get_model("workflows_extraction", "Extraction")
+        with self.assertRaises(MissingActorError):
+            extraction_model.objects.filter(pk=failed.pk).exists()
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            extraction_model._base_manager.filter(pk=failed.pk).update(status="succeeded")
         with actor_context(self.owner):
             self.assertEqual(failed.sources.count(), 2)
             self.assertEqual(failed.pages.count(), 2)
             self.assertEqual(failed.parts.count(), 2)
 
-        extraction_model = apps.get_model("workflows_extraction", "Extraction")
         with actor_context(self.stranger):
             self.assertFalse(extraction_model.objects.filter(pk=failed.pk).exists())
         with actor_context(self.owner):

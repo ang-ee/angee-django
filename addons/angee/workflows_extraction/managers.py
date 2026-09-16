@@ -482,6 +482,15 @@ class ExtractionManager(ImmutableEvidenceManager):
         )
 
 
+class ExtractionSystemManager(ExtractionManager):
+    """Expose guarded unscoped rows to Django and field-backed REBAC traversal."""
+
+    def get_queryset(self) -> ImmutableEvidenceQuerySet:
+        return super().get_queryset().system_context(
+            reason="workflows_extraction.extraction.base_manager"
+        )
+
+
 def _claims_for_part(claims: dict[str, list[dict[str, Any]]], position: int) -> dict[str, list[dict[str, Any]]]:
     return {
         pointer: matching

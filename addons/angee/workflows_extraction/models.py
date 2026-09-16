@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -16,7 +16,10 @@ from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.workflows_extraction.engines import OcrEngine
 from angee.workflows_extraction.managers import (
-    ExtractionManager, ImmutableEvidenceManager, evidence_insert_allowed,
+    ExtractionManager,
+    ExtractionSystemManager,
+    ImmutableEvidenceManager,
+    evidence_insert_allowed,
 )
 
 
@@ -140,10 +143,11 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     object_id = models.CharField(max_length=255)
     target = GenericForeignKey("content_type", "object_id")
     objects = ExtractionManager()
+    system_objects = ExtractionSystemManager()
 
     class Meta:
         abstract = True
-        base_manager_name = "objects"
+        base_manager_name = "system_objects"
         ordering = ("lineage_key", "-revision")
         rebac_resource_type = "workflows_extraction/extraction"
         constraints = (
