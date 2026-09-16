@@ -2417,6 +2417,52 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                 ]
             )
 
+    def clear_sync_error(self) -> None:
+        """Clear a stale failure once a live session proves the account healthy.
+
+        The mirror of :meth:`record_sync_error` — that method is the only writer
+        of ``sync_error``, ``last_sync_status == "error"``, and the ``error``
+        outcome key, and only the poll scheduler's start/finish markers drop them
+        again. A live-desired bridge never enters the poll loop
+        (:meth:`Channel._next_sync_at` returns ``None`` while ``desired`` is
+        ``live``), so a months-old failure would otherwise outlive a successful
+        reconnect forever. :meth:`LiveSession._mark_paired` calls this the moment
+        it reports ``OK``: reaching ``PAIRED`` is the proof the failure is no
+        longer true, and resume/start is not — a failure stays true until the
+        session actually pairs.
+
+        Re-reads under a row lock because the session's pairing report
+        (:class:`~angee.integrate.sync.BridgeProgressReporter`) is the concurrent
+        writer of the same ``sync_progress`` dict: the pairing ``details`` (the QR
+        the operator is looking at) and the scheduler's ``stage``/``queued_at``
+        markers must survive. Dropping the failure is exactly :meth:`_sync_marker`
+        with no new values — it keeps everything but this run's outcome keys. A row
+        with nothing to clear is left untouched so a healthy reconnect writes
+        nothing to the change feed.
+        """
+
+        with transaction.atomic():
+            row = (
+                type(self).objects.sudo(reason="integrate.bridge.clear_sync_error").lock_if_supported().get(pk=self.pk)
+            )
+            progress = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
+            if not row.sync_error and row.last_sync_status != "error" and "error" not in progress:
+                return
+            row.last_sync_status = "ok"
+            row.sync_error = ""
+            row.sync_progress = row._sync_marker()
+            row.save(
+                update_fields=[
+                    "last_sync_status",
+                    "sync_error",
+                    "sync_progress",
+                    "updated_at",
+                ]
+            )
+        self.last_sync_status = row.last_sync_status
+        self.sync_error = row.sync_error
+        self.sync_progress = row.sync_progress
+
     def run_sync(self, *, now: datetime) -> int:
         """Run one sync attempt and persist its lifecycle telemetry."""
 
