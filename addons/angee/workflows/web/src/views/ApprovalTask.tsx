@@ -1,10 +1,11 @@
 import * as React from "react";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
   Badge, Button, Collapsible, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
   Glyph, JsonEditor, JsonValueView, LabeledDescriptorField, LazyBoundary, TextLink, formSpecInitialValues,
   PageAside,
-  errorMessage, jsonValueFromUnknown, statusTone, useDottedPathFieldErrors, useFormSpecFields, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
+  compileDecisionActionFormSpec, errorMessage, jsonValueFromUnknown, statusTone, useAppRuntime, useConfirm, useDottedPathFieldErrors, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
   useModelSlot,
   useRecordPeek,
   type DottedPathFieldErrorMap, type FormSpecFieldDescriptor, type JsonValue, type RecordPeekReference,
@@ -26,7 +27,6 @@ export interface WorkflowDecisionContentProps {
   values: Readonly<Record<string, unknown>>;
   setValue: (name: string, value: unknown) => void;
   messagesFor: (name: string) => readonly string[];
-  resolve: (verdict: ApprovalVerdict, values?: Readonly<Record<string, unknown>>) => Promise<void>;
   editable: boolean;
   fetching: boolean;
   readOnly: boolean;
@@ -159,21 +159,48 @@ function FormSpecApprovalResolution({ approval, active, editable, onResolved, re
   onOpenEvidence?: WorkflowDecisionContentProps["openEvidence"];
 }): React.ReactElement {
   const t = useWorkflowsT();
-  const fields = useFormSpecFields(approval.decision_schema);
-  const contextFields = React.useMemo(() => fields.filter((field) => field.layout === "context"), [fields]);
-  const inputFields = React.useMemo(() => fields.filter((field) => field.layout !== "context"), [fields]);
+  const { widgets } = useAppRuntime();
+  const confirm = useConfirm();
+  const compiled = React.useMemo(() => {
+    try { return { form: compileDecisionActionFormSpec(approval.decision_schema, widgets), error: null }; }
+    catch (cause) { return { form: null, error: errorMessage(cause, "Decision form is unavailable.") }; }
+  }, [approval.decision_schema, widgets]);
+  const form = compiled.form;
+  const contextFields = form?.contextFields ?? [];
+  const inputFields = form?.inputFields ?? [];
   const contextValues = React.useMemo(
     () => formSpecInitialValues(contextFields, approval.payload),
     [approval.payload, contextFields],
   );
-  const [values, setValues] = React.useState<Record<string, unknown>>(
-    () => formSpecInitialValues(inputFields, active ? approval.payload : approval.resolution),
-  );
-  const fieldNames = React.useMemo(() => inputFields.map((field) => field.name), [inputFields]);
-  const validationErrors = useDottedPathFieldErrors(fieldNames);
-  const [error, setError] = React.useState<string | null>(null);
+  const source = active ? approval.payload : approval.resolution;
+  const seed = formSpecInitialValues(inputFields, source);
+  const authoredAction = source && typeof source === "object" && !Array.isArray(source)
+    ? (source as Record<string, unknown>).action : null;
+  if (typeof authoredAction === "string" && form?.options.some((option) => option.value === authoredAction)) {
+    seed.action = authoredAction;
+  }
+  const rhf = useForm<Record<string, unknown>>({ defaultValues: seed });
+  React.useEffect(() => {
+    if (active) return;
+    const retained = formSpecInitialValues(inputFields, approval.resolution);
+    const resolvedAction = approval.resolution && typeof approval.resolution === "object"
+      && !Array.isArray(approval.resolution)
+      ? (approval.resolution as Record<string, unknown>).action : null;
+    if (typeof resolvedAction === "string" && form?.options.some((option) => option.value === resolvedAction)) {
+      retained.action = resolvedAction;
+    }
+    rhf.reset(retained);
+  }, [active, approval.updated_at, approval.resolution, form, inputFields, rhf.reset]);
+  const values = (useWatch({ control: rhf.control }) ?? {}) as Record<string, unknown>;
+  const selectedAction = typeof values.action === "string" && form?.options.some((option) => option.value === values.action)
+    ? values.action : null;
+  const branchFields = selectedAction && form ? form.fieldsFor(selectedAction) : [];
+  const { errors, isDirty, isSubmitting } = rhf.formState;
+  React.useEffect(() => onDirtyChange?.(isDirty), [isDirty, onDirtyChange]);
   const resolution = useApprovalResolver(onResolved, reconcile, onCommitted);
   const resolutionEditable = editable && !resolution.committed;
+  const contextCheck = form?.validateContext(approval.payload);
+  const submitting = React.useRef(false);
   const contributions = useModelSlot({
     slot: WORKFLOW_DECISION_CONTENT_SLOT,
     model: DECISION_MODEL,
@@ -188,49 +215,93 @@ function FormSpecApprovalResolution({ approval, active, editable, onResolved, re
     ? contributedContent as React.ComponentType<WorkflowDecisionContentProps>
     : undefined;
   const setValue = React.useCallback((name: string, value: unknown) => {
-    validationErrors.clearField(name);
-    onDirtyChange?.(true);
-    setValues((current) => ({ ...current, [name]: value }));
-  }, [onDirtyChange, validationErrors]);
-  async function resolve(verdict: ApprovalVerdict, submittedValues: Readonly<Record<string, unknown>> = values): Promise<void> {
-    setError(null); validationErrors.clear();
-    try {
-      validationErrors.replace(await resolution.resolve(approval.id, verdict, jsonValueFromUnknown(submittedValues) ?? {}));
-    } catch (cause) {
-      setError(errorMessage(cause, t("inbox.actionFailed")));
+    if (!branchFields.some((field) => field.name === name)) return;
+    rhf.clearErrors(name);
+    rhf.setValue(name, value, { shouldDirty: true, shouldValidate: false });
+  }, [branchFields, rhf]);
+  function applyErrors(messages: Readonly<Record<string, readonly string[]>>): void {
+    rhf.clearErrors();
+    for (const [path, entries] of Object.entries(messages)) {
+      if (entries.length) rhf.setError(path, { type: "decision", message: entries.join(" ") });
     }
   }
+  async function submitAction(submitted: Record<string, unknown>): Promise<void> {
+    if (submitting.current || !resolutionEditable || resolution.fetching || !contextCheck?.valid) return;
+    rhf.clearErrors();
+    if (!form || !selectedAction) return;
+    const option = form.options.find((entry) => entry.value === selectedAction);
+    if (!option) return;
+    const candidate = form.project(selectedAction, submitted);
+    const check = form.validate(candidate);
+    if (!check.valid) { applyErrors(check.messages); return; }
+    submitting.current = true;
+    try {
+      if (option.confirm && !await confirm({
+        title: option.label, body: option.confirm, confirm: option.label,
+        danger: option.variant === "destructive",
+      })) return;
+      applyErrors(await resolution.resolve(approval.id, option.verdict, jsonValueFromUnknown(candidate) ?? {}));
+    } catch (cause) {
+      rhf.setError("root", { type: "mutation", message: errorMessage(cause, t("inbox.actionFailed")) });
+    } finally {
+      submitting.current = false;
+    }
+  }
+  const messagesFor = (name: string): readonly string[] => fieldErrorMessages(errors[name]);
   const contentProps: WorkflowDecisionContentProps = {
-    approval, contextFields, contextValues, inputFields, values, setValue,
-    messagesFor: validationErrors.messagesFor,
-    resolve, editable: resolutionEditable, fetching: resolution.fetching, readOnly: !resolutionEditable,
+    approval, contextFields, contextValues, inputFields: branchFields, values, setValue,
+    messagesFor,
+    editable: resolutionEditable, fetching: resolution.fetching, readOnly: !resolutionEditable,
     openRecord: onOpenRecord, openEvidence: onOpenEvidence,
   };
   return (
-    <div className="space-y-4">
-      {resolutionEditable && !Content ? <ApprovalVerdictButtons fetching={resolution.fetching} onResolve={resolve} /> : null}
-      {Content ? <Content {...contentProps} /> : <>
-      <h2 className="text-xl font-semibold text-fg">{approval.step_name || approval.action}</h2>
-      {contextFields.length ? <section className="space-y-3">
+    <form className="space-y-4" onSubmit={rhf.handleSubmit(submitAction)}>
+      {compiled.error ? <ErrorBanner description={compiled.error} /> : null}
+      {!contextCheck?.valid ? <ErrorBanner description="Frozen Decision context is unavailable." /> : null}
+      {Content ? <Content {...contentProps} /> : <h2 className="text-xl font-semibold text-fg">{approval.step_name || approval.action}</h2>}
+      {!Content && contextFields.length ? <section className="space-y-3">
         <h3 className="text-xs font-semibold text-fg-muted">{t("inbox.decisionContext")}</h3>
         {contextFields.map((field) => (
           <LabeledDescriptorField key={field.name} field={field} value={contextValues[field.name]}
             readOnly messages={[]} onChange={() => undefined} />
         ))}
       </section> : null}
-      <section className="space-y-3">
+      {form ? <section className="space-y-3">
         <h3 className="text-xs font-semibold text-fg-muted">{t("inbox.yourDecision")}</h3>
-      {inputFields.map((field) => (
-        <LabeledDescriptorField key={field.name} field={field} value={values[field.name]}
-          readOnly={field.readOnly || !resolutionEditable || resolution.fetching} messages={validationErrors.messagesFor(field.name)}
-          onChange={(value) => setValue(field.name, value)} />
-      ))}
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Decision actions">
+          {form.options.map((option) => <Button key={option.value} type="button"
+            variant={selectedAction === option.value ? "primary" : "secondary"}
+            disabled={!resolutionEditable || resolution.fetching || isSubmitting}
+            aria-pressed={selectedAction === option.value}
+            onClick={() => { rhf.clearErrors(); rhf.setValue("action", option.value, { shouldDirty: true }); }}>
+            {option.label}
+          </Button>)}
+        </div>
+      {branchFields.map((field) => <Controller key={field.name} name={field.name} control={rhf.control}
+        render={({ field: controlled }) => <LabeledDescriptorField field={field} value={controlled.value}
+          readOnly={field.readOnly || !resolutionEditable || resolution.fetching || isSubmitting} messages={messagesFor(field.name)}
+          onChange={(value) => { rhf.clearErrors(field.name); controlled.onChange(value); }} />}
+      />)}
+      {resolutionEditable && selectedAction ? <div className="flex justify-end"><Button type="submit"
+        variant={form.options.find((option) => option.value === selectedAction)?.variant === "destructive" ? "danger" : "primary"}
+        loading={resolution.fetching || isSubmitting} disabled={!contextCheck?.valid || isSubmitting}
+        >
+        {form.options.find((option) => option.value === selectedAction)?.label}
+      </Button></div> : null}
       </section>
-      </>}
+      : null}
       <PostCommitContinuationBanner resolution={resolution} />
-      <ErrorBanner description={error ?? resolution.error?.message ?? validationErrors.formSummary} />
-    </div>
+      <ErrorBanner description={errors.root?.message ?? resolution.error?.message} />
+    </form>
   );
+}
+
+function fieldErrorMessages(value: unknown): readonly string[] {
+  if (!value || typeof value !== "object") return [];
+  const entries = value as Record<string, unknown>;
+  return [...(typeof entries.message === "string" ? [entries.message] : []),
+    ...Object.entries(entries).filter(([key]) => key !== "message" && key !== "type")
+      .flatMap(([, child]) => fieldErrorMessages(child))];
 }
 
 function JsonApprovalResolution({ approval, active, editable, onResolved, reconcile, onDirtyChange, onCommitted }: {

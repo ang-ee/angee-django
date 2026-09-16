@@ -274,14 +274,15 @@ export const WorkflowRecoveryPlanDocument = graphql(`
   query WorkflowRecoveryPlan($sourceAttempt: ID!) {
     workflow_recovery_plan(source_attempt: $sourceAttempt) {
       attempt_id run_id workflow_id workflow_revision step_id step_key map_index
-      available mode unavailable_reason
+      available mode unavailable_reason requires_uncertainty_ack uncertainty_reason
     }
   }
 `);
 
 export const StartWorkflowRecoveryDocument = graphql(`
-  mutation StartWorkflowRecovery($sourceAttempt: ID!, $requestKey: String!) {
-    start_workflow_recovery(source_attempt: $sourceAttempt, request_key: $requestKey) {
+  mutation StartWorkflowRecovery($sourceAttempt: ID!, $requestKey: String!, $acknowledgeUncertainExternal: Boolean!) {
+    start_workflow_recovery(source_attempt: $sourceAttempt, request_key: $requestKey,
+      acknowledge_uncertain_external: $acknowledgeUncertainExternal) {
       ok message validation_errors id
     }
   }

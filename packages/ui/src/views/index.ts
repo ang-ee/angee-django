@@ -70,6 +70,7 @@ export {
 } from "./form/MutationDialog";
 export { RowsField, type RowsValue } from "./form/RowsField";
 export {
+  compileDecisionActionFormSpec,
   deserializeFormSpec,
   formSpecInitialValues,
   normalizeFormSpecValues,
@@ -77,6 +78,9 @@ export {
   type FormSpecFieldDescriptor,
   type FormSpecFieldType,
   type FormSpecRelationCreate,
+  type DecisionActionFormSpec,
+  type DecisionFormActionOption,
+  type DecisionFormValidation,
 } from "./form/form-spec";
 export { structuredFieldErrorPaths } from "./form/field-values";
 export { useUnsavedChangesNavigationGuard } from "./form/use-unsaved-changes-navigation-guard";

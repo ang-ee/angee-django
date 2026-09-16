@@ -21,6 +21,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import AttemptResultKind
+from angee.workflows.decision_actions import compile_decision_action_schema
 from angee.workflows.steps import DecisionSpec, HandlerStep, StepResult
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.conftest import create_platform_admin as _platform_admin
@@ -37,6 +38,37 @@ from tests.workflows import (
 )
 
 User = get_user_model()
+
+
+def test_decision_context_local_defs_are_validated_with_root_scope() -> None:
+    """A published typed context $ref keeps its root $defs at resolution."""
+
+    schema = {
+        "type": "object", "required": ["action"],
+        "$defs": {"facts": {"type": "array", "items": {
+            "type": "object", "required": ["pointer", "label", "value", "authority"],
+            "properties": {
+                "pointer": {"type": "string"}, "label": {"type": "string"},
+                "value": {}, "authority": {"enum": ["source", "correction", "unverified"]},
+            },
+        }}},
+        "properties": {
+            "action": {"type": "string", "enum": ["approve"], "options": [
+                {"value": "approve", "label": "Approve", "verdict": "COMPLETE"},
+            ]},
+            "facts": {"$ref": "#/$defs/facts", "layout": "context", "widget": "facts"},
+        },
+        "oneOf": [{"type": "object", "required": ["action"],
+                   "properties": {"action": {"const": "approve"}},
+                   "additionalProperties": False}],
+    }
+    contract = compile_decision_action_schema(schema)
+    assert contract is not None
+    contract.validate_context({"facts": [{
+        "pointer": "/supplier", "label": "Supplier", "value": "A", "authority": "source",
+    }]})
+    with pytest.raises(ValidationError, match="does not satisfy"):
+        contract.validate_context({"facts": [{"pointer": "/supplier"}]})
 
 
 @pytest.fixture(autouse=True)
@@ -238,7 +270,7 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A settled suspension exposes its decision envelope without rewriting its attempt."""
+    """One winning slot retains the original gate value after sibling expiry."""
 
     del workflow_gate_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-bound-decision")
@@ -294,12 +326,16 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
     suspension.refresh_from_db()
     pending.refresh_from_db()
     assert suspension.result_kind == str(AttemptResultKind.SUSPEND)
-    assert pending.verdict == workflow_models.Verdict.PENDING
+    assert pending.verdict == workflow_models.Verdict.EXPIRED
+    assert suspension.decision_settlement == {
+        "decision_ids": [decision.pk], "outcome": "completed",
+    }
     assert consumer.status == workflow_models.StepRunStatus.SUCCEEDED
-    assert consumer.output == {"decisions": [decision.sqid, pending.sqid]}
+    assert consumer.output == gate.output
+    assert consumer.output["outcome"] == "completed"
+    assert [item["decision_id"] for item in consumer.output["resolutions"]] == [decision.sqid]
     assert consumer.current_attempt.input_provenance["settled_decision_ids"] == [
         decision.pk,
-        pending.pk,
     ]
 
 

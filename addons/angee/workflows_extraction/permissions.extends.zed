@@ -1,0 +1,8 @@
+// A File writer can open the exact File to one pending Decision's assignees.
+// @rebac_package: workflows_extraction
+// @rebac_schema_revision: 1
+
+definition storage/file {
+    relation pending_decision: workflows/decision
+    permission read = pending_decision->assignee
+}

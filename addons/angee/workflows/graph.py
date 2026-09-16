@@ -967,8 +967,20 @@ class WorkflowGraph:
         by_key = {node.key: node for node in self.nodes}
         bodies = set(map_targets)
         ordinary = [node for node in self.nodes if node.identity not in bodies]
-        outgoing = {edge.source_identity for edge in self.edges}
-        terminal = {node.key: node for node in ordinary if node.identity not in outgoing}
+        outgoing: dict[GraphIdentity, list[GraphEdge]] = defaultdict(list)
+        for edge in self.edges:
+            outgoing[edge.source_identity].append(edge)
+        eligible_exits = tuple(
+            (node.key, outcome)
+            for node in ordinary
+            for outcome in (tuple(item.key for item in self._node_outcomes(node)) or ("",))
+            if outcome not in {"child_failed", "child_canceled"}
+            and not any(edge.condition in {"", outcome} for edge in outgoing[node.identity])
+        )
+        terminal_exits = set(eligible_exits)
+        terminal = {node.key: node for node in ordinary if any(
+            key == node.key for key, _ in terminal_exits
+        )}
         workflow_input_contract = schema_data_contract(self.input_schema)
         seen_business: set[str] = set()
         seen_producers: set[tuple[str, str]] = set()
@@ -991,8 +1003,8 @@ class WorkflowGraph:
                 result.append(self._workflow("result_producer_duplicate", f"Producer outcome {pair!r} is duplicated.", "result_rules"))
             seen_producers.add(pair)
             producer = by_key.get(producer_key)
-            if producer is None or terminal.get(producer_key) is not producer:
-                result.append(self._workflow("result_producer_not_terminal", f"Producer {producer_key!r} must be one ordinary terminal step.", "result_rules"))
+            if producer is None or terminal.get(producer_key) is not producer or pair not in terminal_exits:
+                result.append(self._workflow("result_producer_not_terminal", f"Producer {producer_key!r}/{producer_outcome!r} must be one ordinary terminal exit.", "result_rules"))
                 continue
             declared = {outcome.key for outcome in self._node_outcomes(producer)} or {""}
             if producer_outcome not in declared or producer_outcome in {"child_failed", "child_canceled"}:
@@ -1037,11 +1049,9 @@ class WorkflowGraph:
                     f"Result rule {index} cannot prove its binding satisfies the declared output schema.",
                     "result_rules",
                 ))
-        for node in terminal.values():
-            declared = {outcome.key for outcome in self._node_outcomes(node)} or {""}
-            for key in declared - {"child_failed", "child_canceled"}:
-                if (node.key, key) not in covered:
-                    result.append(self._workflow("result_exit_uncovered", f"Successful terminal exit {node.key!r}/{key!r} has no result rule.", "result_rules"))
+        for node_key, outcome in eligible_exits:
+            if (node_key, outcome) not in covered:
+                result.append(self._workflow("result_exit_uncovered", f"Successful terminal exit {node_key!r}/{outcome!r} has no result rule.", "result_rules"))
         result.extend(self._result_mutual_exclusivity(terminal))
         return result
 
@@ -1072,13 +1082,24 @@ class WorkflowGraph:
                         continue
                     next_choices[identity] = edge.condition
                 pending.append((edge.target_identity, next_choices))
-        producers = list(terminal.values())
+        exits = [
+            (terminal[raw["producer"]], raw["when_outcome"])
+            for raw in self.result_rules
+            if isinstance(raw, dict)
+            and raw.get("producer") in terminal
+            and isinstance(raw.get("when_outcome"), str)
+        ]
         result: list[GraphDiagnostic] = []
-        for index, left in enumerate(producers):
-            for right in producers[index + 1:]:
+        for index, (left, left_outcome) in enumerate(exits):
+            for right, right_outcome in exits[index + 1:]:
+                if left.identity == right.identity:
+                    continue
                 if any(
                     all(a.get(key, b.get(key)) == b.get(key, a.get(key)) for key in set(a) | set(b))
-                    for a in paths[left.identity] for b in paths[right.identity]
+                    for original_left in paths[left.identity]
+                    for original_right in paths[right.identity]
+                    for a in ({**original_left, left.identity: left_outcome},)
+                    for b in ({**original_right, right.identity: right_outcome},)
                 ):
                     result.append(self._workflow(
                         "result_producers_coapplicable",
@@ -1231,7 +1252,7 @@ def _tagged_one_of_choice(binding: Any, variants: list[Any]) -> dict[str, Any] |
 def _catalogue_node_compatible(source: DataContractNode, target_schema: dict[str, Any]) -> bool:
     if not target_schema:
         return True
-    if set(target_schema) - {"type", "title", "description", "$defs"}:
+    if set(target_schema) - {"type", "title", "description", "$defs", "items"}:
         return False
     target_type = target_schema.get("type")
     if source.kind == "unknown" or target_type is None:
@@ -1253,7 +1274,16 @@ def _catalogue_node_compatible(source: DataContractNode, target_schema: dict[str
             return False
         return True
     if source.kind == "array":
-        return "array" in allowed and not target_schema.get("minItems")
+        if "array" not in allowed:
+            return False
+        item_schema = target_schema.get("items")
+        if item_schema is None:
+            return True
+        return (
+            isinstance(item_schema, dict)
+            and source.item is not None
+            and _catalogue_node_compatible(source.item.contract, item_schema)
+        )
     return False
 
 

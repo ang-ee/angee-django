@@ -42,9 +42,12 @@ from angee.workflows_extraction.routing import (
     recognize_pages,
 )
 from angee.workflows_extraction.service import (
+    PreparedDocument,
+    PreparedPage,
     _document_sources,
     _merge,
     _unchanged_claims,
+    collect_carriers,
     extract,
     json_pointer_value,
     model_deployment_identity,
@@ -93,6 +96,24 @@ SCHEMA = {
 
 
 class PageAggregationTests(SimpleTestCase):
+    def test_missing_recognition_keeps_native_page_and_explicitly_holds_scanned_page(self) -> None:
+        source = SimpleNamespace(source_position=0, file=SimpleNamespace(sqid="fil_source"),
+                                 message_part=None, content_hash="source")
+        native = DocumentPart(0, 0, "text/plain", "native_text", "printed text", "pdf_text", "native")
+        raster = PageImage(0, 1, "image/jpeg", b"synthetic-image", 200, 100, 200)
+        image_file = SimpleNamespace(sqid="fil_image", content_hash="image", upload_state="ready")
+        prepared = PreparedDocument(
+            (source,),
+            (PreparedPage(0, 0, (native,), ()),
+             PreparedPage(0, 1, (), (image_file,), raster, image_file)),
+        )
+        collected = collect_carriers(prepared, [])
+        self.assertEqual(collected.parts, (native,))
+        self.assertEqual([(page.source_position, page.page_position) for page in collected.pages],
+                         [(0, 0), (0, 1)])
+        self.assertEqual([result.value["status"] for result in collected.page_results], ["native", "held"])
+        self.assertEqual(collected.hold_reasons, ("recognition_page_0_1_missing",))
+
     def test_declared_empty_collection_and_reviewed_split_identity(self) -> None:
         layout = {"document_collection": "/items", "line_collection": "/rows"}
         self.assertEqual(_result_selectors({"items": []}, layout), ())
@@ -486,6 +507,60 @@ class ExtractionServiceTests(TestCase):
                 list(first.pages.values_list("position", "source__position", "source_page")),
                 [(0, 0, 0), (1, 1, 0)],
             )
+
+    def test_success_held_success_preserves_last_known_document_and_line_identities(self) -> None:
+        config = {
+            "evidence_layout": {"line_collection": "/rows"},
+            "page_results": {
+                "0:0": {"number": "SYN-1", "rows": ["first"]},
+                "1:0": {"number": "SYN-1", "rows": ["second"]},
+            },
+        }
+        first = self._extract(config=config)
+        manager = type(first).objects
+
+        def revision_values(original: Any, *, result: dict[str, Any], status: str, marker: str) -> dict[str, Any]:
+            return {
+                "lineage_key": original.lineage_key,
+                "reuse_key": hashlib.sha256(marker.encode()).hexdigest(),
+                "expected_base_id": original.pk,
+                "status": status,
+                "error_code": "source_hold:incomplete_recognition" if status == "failed" else "",
+                "schema_id": original.schema_id,
+                "schema": original.schema,
+                "schema_digest": original.schema_digest,
+                "engine": str(original.engine),
+                "model": original.model,
+                "recognition_model": original.recognition_model,
+                "engine_config": original.engine_config,
+                "result": result,
+                "provenance": {**original.provenance, "claims": first.claims},
+                "content_type_id": original.content_type_id,
+                "object_id": original.object_id,
+                "created_by_id": self.owner.pk,
+            }
+
+        with actor_context(self.owner):
+            held = manager.create_revision_from_evidence(
+                first, **revision_values(first, result={}, status="failed", marker="held-after-success")
+            )
+            carried = {
+                item.selector: item.identity
+                for document in held.document_refs for item in (document, *document.lines)
+            }
+            recovered = manager.create_revision_from_evidence(
+                held,
+                identity_mapping=carried,
+                retired_identities={},
+                **revision_values(held, result=first.result, status="succeeded", marker="success-after-held"),
+            )
+            self.assertEqual((first.revision, held.revision, recovered.revision), (1, 2, 3))
+            self.assertEqual(first.document_refs, held.document_refs)
+            self.assertEqual(first.document_refs, recovered.document_refs)
+            self.assertEqual(first.result, recovered.result)
+            self.assertEqual(first.claims, recovered.claims)
+            self.assertEqual(held.provenance["identity_correspondence"]["last_known_revision"], 1)
+            self.assertEqual(first.result, {"number": "SYN-1", "rows": ["first", "second"]})
 
     def test_retains_failed_evidence_and_scopes_raw_values_to_authorized_readers(self) -> None:
         failed = self._extract(config={"result": {"unvalidated_raw": "private synthetic value"}})

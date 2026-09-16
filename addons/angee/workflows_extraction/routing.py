@@ -67,10 +67,19 @@ def mapping_object(text: str) -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class AcquiredDocument:
-    """Native evidence plus only the pages that still require recognition."""
+    """Every ordered page, native evidence, and the recognition subset."""
 
     parts: tuple[DocumentPart, ...]
     recognition_pages: tuple[PageImage, ...]
+    pages: tuple["AcquiredPage", ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AcquiredPage:
+    source_position: int
+    page_position: int
+    native_parts: tuple[DocumentPart, ...]
+    recognition_image: PageImage | None = None
 
 
 def acquire_native_parts(
@@ -187,7 +196,19 @@ def _acquire_native_parts(
                 f"Native document acquisition failed ({type(error).__name__}).", parts=parts,
                 stage="acquisition", code=type(error).__name__,
             ) from None
-    return AcquiredDocument(tuple(parts), tuple(recognition_pages))
+    page_parts: dict[tuple[int, int], list[DocumentPart]] = {}
+    page_images = {(page.source_position, page.page_position): page for page in recognition_pages}
+    for part in parts:
+        page_parts.setdefault((part.source_position, part.source_page or 0), []).append(part)
+    keys = sorted(set(page_parts) | set(page_images))
+    return AcquiredDocument(
+        tuple(parts), tuple(recognition_pages),
+        tuple(
+            AcquiredPage(source_position, page_position, tuple(page_parts.get((source_position, page_position), ())),
+                         page_images.get((source_position, page_position)))
+            for source_position, page_position in keys
+        ),
+    )
 
 
 def recognize_pages(

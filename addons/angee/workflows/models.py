@@ -64,6 +64,7 @@ from angee.workflows.manager_authority import (
     _attempt_save_capability,
     _attempt_write_active,
     _decision_save_capability,
+    _decision_resolution_session,
     _decision_write_active,
     _definition_write_session,
     _dispatch_save_capability,
@@ -1389,7 +1390,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         "dedup_key", "occurrence_id", "created_by_id", "input_present", "input",
         "test_request_actor_ref", "test_scope", "test_step_id", "test_source_step_id",
         "test_repair_source_attempt_id", "recovery_source_attempt_id",
-        "recovery_request_actor_ref", "recovery_mode",
+        "recovery_request_actor_ref", "recovery_mode", "recovery_uncertainty_ack",
     })
 
     record_ref_field_prefix = "subject"
@@ -1456,6 +1457,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     )
     recovery_request_actor_ref = models.CharField(max_length=255, blank=True, editable=False)
     recovery_mode = models.CharField(max_length=32, blank=True, editable=False)
+    recovery_uncertainty_ack = models.BooleanField(default=False, editable=False)
     input_present = models.BooleanField(default=False, editable=False)
     input = models.JSONField(null=True, blank=True, editable=False)
     wake_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -1541,6 +1543,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                             recovery_source_attempt__isnull=True,
                             recovery_request_actor_ref="",
                             recovery_mode="",
+                            recovery_uncertainty_ack=False,
                         )
                     )
                 ),
@@ -1794,6 +1797,8 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                 raise ValidationError(
                     {"test_repair_source_attempt": "Only test runs retain repair source evidence."}
                 )
+            if self.origin != RunOrigin.RECOVERY and self.recovery_uncertainty_ack:
+                raise ValidationError({"recovery_uncertainty_ack": "Only recovery runs can retain uncertainty acknowledgement."})
             if self.origin == RunOrigin.TEST:
                 if self.test_scope not in WorkflowScope.values:
                     raise ValidationError({"test_scope": "Test runs require a declared scope."})
@@ -2367,6 +2372,7 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     waiting_kind = models.CharField(max_length=32, blank=True, default="")
     result_requested_until = models.DateTimeField(null=True, blank=True)
     result_decisions = models.JSONField(default=list, blank=True)
+    decision_settlement = models.JSONField(default=dict, blank=True, editable=False)
     artifacts_present = models.BooleanField(default=False, editable=False)
     orchestration_error = models.TextField(blank=True, default="", editable=False)
     applied_at = models.DateTimeField(null=True, blank=True)
@@ -2511,6 +2517,27 @@ class StepAttempt(AuditMixin, AngeeDataModel):
             or not capability.atomic.consume(alias, self)
         ):
             raise TypeError("Step attempts can only be saved by StepAttemptManager.")
+        if not self._state.adding:
+            retained = system_queryset(type(self), using=alias, lock=("self",)).filter(
+                pk=self.pk
+            ).values_list("decision_settlement", flat=True).get()
+            if retained != self.decision_settlement:
+                session = _decision_resolution_session.get()
+                if (
+                    retained
+                    or not isinstance(self.decision_settlement, dict)
+                    or set(self.decision_settlement) != {"decision_ids", "outcome"}
+                    or not isinstance(self.decision_settlement["decision_ids"], list)
+                    or not self.decision_settlement["decision_ids"]
+                    or not isinstance(self.decision_settlement["outcome"], str)
+                    or self.result_kind != str(AttemptResultKind.SUSPEND)
+                    or self.applied_at is None
+                    or session is None
+                    or session.completed
+                    or session.alias != alias
+                    or session.decision_id not in self.decision_settlement["decision_ids"]
+                ):
+                    raise TypeError("Decision settlement is a write-once retained suspension fact.")
         super().save(*args, **kwargs)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
@@ -2563,7 +2590,7 @@ class Decision(AuditMixin, AngeeDataModel):
     """One awaited resolution slot for a suspended step-run."""
 
     runtime = True
-    rebac_grantable = {"reader": "share"}
+    rebac_grantable = {"reader": "share", "pending_decision": "share"}
     _form_schema_state_attribute = "_workflows_form_schema_state"
 
     sqid_prefix = "wdc_"
@@ -2578,9 +2605,15 @@ class Decision(AuditMixin, AngeeDataModel):
     target_model = models.CharField(max_length=255, blank=True, default="", db_index=True)
     target_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
     target_tab = models.CharField(max_length=100, blank=True, default="")
+    target_authority_decision = models.ForeignKey(
+        "workflows.Decision", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="authorized_target_decisions", editable=False,
+    )
+    record_access = models.JSONField(default=list, blank=True, editable=False)
     verdict = StateField(choices_enum=Verdict, default=Verdict.PENDING)
     resolution = models.JSONField(default=dict, blank=True)
     resolved_by = models.CharField(max_length=255, blank=True, default="")
+    resolved_at = models.DateTimeField(null=True, blank=True, editable=False)
     attempts = models.PositiveIntegerField(default=0)
     max_attempts = models.PositiveIntegerField(null=True, blank=True)
     expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -2604,6 +2637,7 @@ class Decision(AuditMixin, AngeeDataModel):
         """Django model options for workflow decisions."""
 
         abstract = True
+        base_manager_name = "objects"
         ordering = ("step_run", "priority", "declaration_index", "created_at", "sqid")
         rebac_resource_type = "workflows/decision"
         indexes = (
@@ -2647,7 +2681,8 @@ class Decision(AuditMixin, AngeeDataModel):
         else:
             retained = system_queryset(type(self), using=alias, lock=None).filter(pk=self.pk).values(
                 "suspension_attempt_id", "declaration_index", "priority", "action", "payload",
-                "target_model", "target_id", "target_tab", "max_attempts", "expires_at", "escalate_at",
+                "target_model", "target_id", "target_tab", "target_authority_decision_id",
+                "record_access", "max_attempts", "expires_at", "escalate_at",
             ).get()
             if retained["suspension_attempt_id"] != self.suspension_attempt_id or retained[
                 "declaration_index"
@@ -2657,6 +2692,7 @@ class Decision(AuditMixin, AngeeDataModel):
                 name
                 for name in (
                     "priority", "action", "payload", "target_model", "target_id", "target_tab",
+                    "target_authority_decision_id", "record_access",
                     "max_attempts", "expires_at", "escalate_at"
                 )
                 if retained[name] != getattr(self, name)
@@ -2664,7 +2700,7 @@ class Decision(AuditMixin, AngeeDataModel):
             if retained["suspension_attempt_id"] is not None and immutable:
                 raise TypeError("Retained Decision declarations are immutable.")
             update_fields = kwargs.get("update_fields")
-            execution_fields = {"verdict", "resolution", "resolved_by", "attempts"}
+            execution_fields = {"verdict", "resolution", "resolved_by", "resolved_at", "attempts"}
             touches_execution = update_fields is None or bool(execution_fields.intersection(update_fields))
             if retained["suspension_attempt_id"] is not None and touches_execution:
                 capability = _decision_save_capability.get()
@@ -2750,7 +2786,8 @@ class Decision(AuditMixin, AngeeDataModel):
 
         self.resolution = resolution if resolution is not None else {}
         self.resolved_by = resolved_by
-        self._transition_fields = {"resolution", "resolved_by"}
+        self.resolved_at = timezone.now()
+        self._transition_fields = {"resolution", "resolved_by", "resolved_at"}
 
 
 class WorkflowDispatch(AuditMixin, AngeeDataModel):

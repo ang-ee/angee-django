@@ -40,6 +40,8 @@ from angee.workflows.attempts import (
     AttemptResult,
     AttemptResultKind,
     DecisionSpec,
+    DecisionGateOutput,
+    ExternalOperationPolicy,
     JsonPresence,
     RecoveryCapability,
     RecoveryMode,
@@ -94,6 +96,7 @@ class StepExecutionMode(str, Enum):
 
     STANDARD = "standard"
     DATABASE_COMMAND = "database_command"
+    EXTERNAL_OPERATION = "external_operation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +290,17 @@ class StepImpl(ImplBase):
         del attempt
         return RecoveryCapability(mode=None, unavailable_reason="This operation does not support recovery.")
 
+    @classmethod
+    def external_operation_policy(cls, *, attempt: Any) -> ExternalOperationPolicy:
+        """Report a configured provider's proven retry/reconciliation capability.
+
+        ``idempotent`` authoring metadata alone is not a provider guarantee.
+        An operation must override this method using its actual adapter contract.
+        """
+
+        del attempt
+        return ExternalOperationPolicy.UNSUPPORTED
+
     def run_recovery(
         self,
         step_run: Any,
@@ -371,6 +385,8 @@ class StepImpl(ImplBase):
             raise ImproperlyConfigured(f"{owner} declares invalid effect {cls.effect!r}.")
         if not isinstance(cls.execution_mode, StepExecutionMode):
             raise ImproperlyConfigured(f"{owner} declares invalid execution mode {cls.execution_mode!r}.")
+        if cls.execution_mode is StepExecutionMode.EXTERNAL_OPERATION and cls.effect is not StepEffect.EXTERNAL:
+            raise ImproperlyConfigured(f"{owner} external operation mode requires an external effect.")
         if not isinstance(cls.outcomes, tuple):
             raise ImproperlyConfigured(f"{owner} declares invalid outcomes {cls.outcomes!r}.")
         seen: set[str] = set()
@@ -696,6 +712,7 @@ class GateStep(StepImpl):
         )
     )
     effect = StepEffect.NONE
+    output_model = DecisionGateOutput
     effect_description = "Creates workflow decision journals without changing the workflow subject."
     config_model = GateConfig
 

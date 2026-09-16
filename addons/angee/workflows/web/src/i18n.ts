@@ -367,6 +367,7 @@ export const enWorkflowsMessages: Record<string, string> = {
   "runs.recovery": "Recovery",
   "runs.recoveryAvailable": "This operation can recover in {mode} mode from the selected evidence.",
   "runs.recoveryUnavailable": "This attempt is not eligible for recovery.",
+  "runs.uncertainExternalAck": "I understand the external request may already have run, and I choose to start a new recovery attempt.",
   "runs.recoveryStarting": "Starting recovery…",
   "runs.startRecovery": "Recover from this attempt",
   "runs.recoveryStarted": "Recovery {id} started",

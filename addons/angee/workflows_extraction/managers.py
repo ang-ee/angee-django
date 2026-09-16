@@ -119,6 +119,22 @@ class ExtractionManager(ImmutableEvidenceManager):
                         lineage = lineage_model._base_manager.using(self.db).select_for_update().get(pk=lineage.pk)
                         previous = lineage.head
                         existing = self.filter(reuse_key=values["reuse_key"]).first()
+                        unresolved_failure = (
+                            values.get("status") == "failed" and values.get("result") == {}
+                            and (
+                                previous is not None if existing is None else
+                                "last_known_revision" in existing.provenance.get("identity_correspondence", {})
+                            )
+                        )
+                        if unresolved_failure:
+                            if identity_mapping or retired_identities:
+                                raise ValidationError({
+                                    "extraction": "A transient source failure cannot remap or retire known identities."
+                                })
+                            values["provenance"]["identity_correspondence"]["last_known_revision"] = (
+                                existing.provenance.get("identity_correspondence", {}).get("last_known_revision")
+                                if existing is not None else previous.revision
+                            )
                         if existing is not None:
                             return self._validated_reuse(existing, original=original, values=values, evidence=evidence)
                         if (previous.pk if previous is not None else None) != expected_base_id:
@@ -127,11 +143,15 @@ class ExtractionManager(ImmutableEvidenceManager):
                             raise ValidationError({
                                 "extraction": "The correction source is no longer the current extraction revision."
                             })
-                        document_map, retired = _document_mapping(
-                            values["result"], layout=values["engine_config"].get("evidence_layout", {}),
-                            original=previous, identity_mapping=identity_mapping,
-                            retired_identities=retired_identities,
-                        )
+                        if unresolved_failure:
+                            document_map = deepcopy(previous.document_map)
+                            retired = deepcopy(previous.retired_identities)
+                        else:
+                            document_map, retired = _document_mapping(
+                                values["result"], layout=values["engine_config"].get("evidence_layout", {}),
+                                original=previous, identity_mapping=identity_mapping,
+                                retired_identities=retired_identities,
+                            )
                         extraction = self.create(
                             revision=previous.revision + 1 if previous else 1,
                             document_map=document_map, retired_identities=retired, **values,

@@ -247,7 +247,7 @@ class ArchiveExecuteStepImpl(StepImpl):
 
         mode = str(step_run.step.config.get("mode") or "")
         if mode == "prepare":
-            return StepResult.done(output=_prepared_mappings(step_run.input), outcome="prepared")
+            return StepResult.done(output=_prepared_mappings(step_run), outcome="prepared")
 
         subject = _subject_container(step_run)
         extractor_key, target_pk = _mapping_unit(step_run.input)
@@ -362,40 +362,34 @@ def _registered_extractor(key: str, *, owner: str) -> type[ArchiveExtractor]:
 def _mapping_form_schema(target_resource: str) -> dict[str, Any]:
     """Return the serializable fixed-row mapping form for ``target_resource``."""
 
+    mappings = {
+        "type": "array",
+        "widget": "rows",
+        "label": "Archive mappings",
+        "items": {
+            "type": "object",
+            "required": ["extractor", "label", "target"],
+            "properties": {
+                "extractor": {"type": "string", "label": "Extractor key", "readOnly": True},
+                "label": {"type": "string", "label": "Archive type", "readOnly": True},
+                "target": {"type": "string", "label": "Target", "relation": {
+                    "resource": target_resource, "create": {"resource": target_resource},
+                }},
+            },
+        },
+    }
     return {
         "type": "object",
-        "required": ["mappings"],
+        "required": ["action"],
         "properties": {
-            "mappings": {
-                "type": "array",
-                "widget": "rows",
-                "label": "Archive mappings",
-                "items": {
-                    "type": "object",
-                    "required": ["extractor", "label", "target"],
-                    "properties": {
-                        "extractor": {
-                            "type": "string",
-                            "label": "Extractor key",
-                            "readOnly": True,
-                        },
-                        "label": {
-                            "type": "string",
-                            "label": "Archive type",
-                            "readOnly": True,
-                        },
-                        "target": {
-                            "type": "string",
-                            "label": "Target",
-                            "relation": {
-                                "resource": target_resource,
-                                "create": {"resource": target_resource},
-                            },
-                        },
-                    },
-                },
-            }
+            "action": {"type": "string", "enum": ["apply_mappings"],
+                       "options": [{"value": "apply_mappings", "label": "Apply mappings",
+                                    "verdict": "COMPLETE"}]},
+            "mappings": mappings,
         },
+        "oneOf": [{"type": "object", "required": ["action", "mappings"],
+                   "properties": {"action": {"const": "apply_mappings"}, "mappings": mappings},
+                   "additionalProperties": False}],
     }
 
 
@@ -411,50 +405,50 @@ def _run_owner_subject(run: Any) -> str:
     return str(to_subject_ref(owner))
 
 
-def _prepared_mappings(value: Any) -> list[dict[str, str]]:
+def _prepared_mappings(step_run: Any) -> list[dict[str, str]]:
     """Load completed decision resolutions and return verified map items."""
 
-    if not isinstance(value, Mapping) or not isinstance(value.get("decisions"), list):
-        raise ValidationError({"input": "Archive execute prepare input must contain decision ids."})
-    decision_ids = [str(decision_id) for decision_id in value["decisions"]]
-    if not decision_ids or any(not decision_id for decision_id in decision_ids):
-        raise ValidationError({"input": "Archive execute prepare input requires completed decisions."})
+    value = step_run.input
+    if not isinstance(value, Mapping) or not isinstance(value.get("resolutions"), list):
+        raise ValidationError({"input": "Archive prepare requires the typed gate resolution."})
+    if len(value["resolutions"]) != 1 or not isinstance(value["resolutions"][0], Mapping):
+        raise ValidationError({"input": "Archive prepare requires one exact resolution."})
+    gate_rows = list(step_run.previous.select_related("step").filter(
+        step__step_class="archive_gate"
+    ))
+    if len(gate_rows) != 1:
+        raise ValidationError({"gate": "Archive prepare needs one declared predecessor gate."})
+    gate = gate_rows[0]
+    from angee.workflows import engine
 
-    decision_model = apps.get_model("workflows", "Decision")
-    with system_context(reason="workflows_integrate.archive_execute.decisions"):
-        decisions = {
-            str(decision.sqid): decision
-            for decision in decision_model._base_manager.filter(sqid__in=decision_ids)
-        }
-    if set(decisions) != set(decision_ids):
-        raise ValidationError({"input": "Archive mapping decision was not found."})
+    decision, _ = engine.consume_decision_resolution(
+        step_run, ("resolutions", 0),
+        expected_action=str(gate.step.config.get("action") or "map-archive"),
+        expected_target=("", ""), expected_verdict="completed",
+        actor=value["resolutions"][0].get("resolved_by"),
+    )
 
     mappings: list[dict[str, str]] = []
     seen: set[str] = set()
-    for decision_id in decision_ids:
-        decision = decisions[decision_id]
-        verdict = str(getattr(decision.verdict, "value", decision.verdict))
-        if verdict != "completed":
-            raise ValidationError({"input": "Archive mapping decision must be completed."})
-        expected_rows = _mapping_rows(decision.payload, owner="payload")
-        resolved_rows = _mapping_rows(decision.resolution, owner="resolution")
-        if len(expected_rows) != len(resolved_rows):
-            raise ValidationError({"input": "Archive mapping resolution must preserve every proposed row."})
-        for expected, resolved in zip(expected_rows, resolved_rows, strict=True):
-            extractor_key = str(resolved.get("extractor") or "")
-            label = str(resolved.get("label") or "")
-            target_pk = str(resolved.get("target") or "")
-            if extractor_key != str(expected.get("extractor") or "") or label != str(expected.get("label") or ""):
-                raise ValidationError({"input": "Archive mapping resolution changed a proposed extractor."})
-            extractor = _registered_extractor(extractor_key, owner="input")
-            if label != extractor.display_label():
-                raise ValidationError({"input": "Archive mapping resolution has stale extractor metadata."})
-            if not target_pk:
-                raise ValidationError({"input": f"Archive extractor {extractor_key!r} requires a target."})
-            if extractor_key in seen:
-                raise ValidationError({"input": f"Archive extractor {extractor_key!r} is mapped twice."})
-            seen.add(extractor_key)
-            mappings.append({"extractor": extractor_key, "target": target_pk})
+    expected_rows = _mapping_rows(decision.payload, owner="payload")
+    resolved_rows = _mapping_rows(decision.resolution, owner="resolution")
+    if len(expected_rows) != len(resolved_rows):
+        raise ValidationError({"input": "Archive mapping resolution must preserve every proposed row."})
+    for expected, resolved in zip(expected_rows, resolved_rows, strict=True):
+        extractor_key = str(resolved.get("extractor") or "")
+        label = str(resolved.get("label") or "")
+        target_pk = str(resolved.get("target") or "")
+        if extractor_key != str(expected.get("extractor") or "") or label != str(expected.get("label") or ""):
+            raise ValidationError({"input": "Archive mapping resolution changed a proposed extractor."})
+        extractor = _registered_extractor(extractor_key, owner="input")
+        if label != extractor.display_label():
+            raise ValidationError({"input": "Archive mapping resolution has stale extractor metadata."})
+        if not target_pk:
+            raise ValidationError({"input": f"Archive extractor {extractor_key!r} requires a target."})
+        if extractor_key in seen:
+            raise ValidationError({"input": f"Archive extractor {extractor_key!r} is mapped twice."})
+        seen.add(extractor_key)
+        mappings.append({"extractor": extractor_key, "target": target_pk})
     return mappings
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import logging
 import uuid
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
@@ -20,9 +21,12 @@ from django.core.validators import validate_slug
 from django.db import DEFAULT_DB_ALIAS, OperationalError, connections, models, transaction
 from django.utils import timezone
 from jsonschema import Draft202012Validator
+from pydantic import ValidationError as PydanticValidationError
 from pydantic_core import PydanticSerializationError
-from rebac import RelationshipTuple, actor_context, current_actor, system_context, write_relationships
+from rebac import LocalBackend, ObjectRef, RelationshipTuple, SubjectRef, actor_context, current_actor, system_context, write_relationships
 from rebac.actors import NoActorResolvedError, to_subject_ref
+from rebac.backends import backend as rebac_backend
+from rebac.relationships import delete_relationship
 from rebac.resources import to_object_ref
 
 from angee.base.actors import actor_user_id
@@ -40,6 +44,9 @@ from angee.workflows.attempts import (
     AttemptResult,
     AttemptResultKind,
     DecisionSpec,
+    DecisionResolution,
+    DecisionGateOutput,
+    ExternalOperationPolicy,
     DecisionTimerIntent,
     DecisionTimerKind,
     InvocationAdmission,
@@ -59,6 +66,7 @@ from angee.workflows.attempts import (
     validate_json_presence,
 )
 from angee.workflows.definitions import StaleDefinitionError, WorkflowDefinitionManagerMixin
+from angee.workflows.decision_actions import compile_decision_action_schema
 from angee.workflows.dispatch import (
     DispatchConsumption,
     DispatchPreflight,
@@ -102,6 +110,7 @@ from angee.workflows.manager_authority import (
 )
 from angee.workflows.states import (
     CURRENT_PUBLICATION_STATUSES,
+    DecisionGate,
     ParentRelation,
     RunOrigin,
     RunStatus,
@@ -112,7 +121,7 @@ from angee.workflows.states import (
     WorkflowPurpose,
     WorkflowStatus,
 )
-from angee.workflows.steps import retry_policy_from_config
+from angee.workflows.steps import StepExecutionMode, retry_policy_from_config
 from angee.workflows.testing import (
     FixtureRole,
     FixtureSource,
@@ -929,6 +938,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         *,
         request_key: str,
         actor: Any,
+        acknowledge_uncertain_external: bool = False,
     ) -> Any:
         """Admit one linked same-revision recovery from exact retained evidence."""
 
@@ -956,6 +966,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         capability = impl.recovery_capability(attempt=capability_source)
         if not capability.available:
             raise ValidationError({"attempt": capability.unavailable_reason})
+        if capability.requires_uncertainty_ack and not acknowledge_uncertain_external:
+            raise ValidationError({
+                "acknowledge_uncertain_external": capability.uncertainty_reason
+                or "This external request may already have run; explicit acknowledgement is required."
+            })
+        if acknowledge_uncertain_external and not capability.requires_uncertainty_ack:
+            raise ValidationError({"acknowledge_uncertain_external": "This recovery does not require uncertainty acknowledgement."})
         with system_context(reason="workflows.runs.start_recovery"), transaction.atomic(using=alias):
             source_run = system_queryset(self.model, using=alias, lock=("self",)).select_related(
                 "workflow"
@@ -1027,6 +1044,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     existing.recovery_source_attempt_id != locked_attempt.pk
                     or existing.recovery_request_actor_ref != actor_ref
                     or existing.recovery_mode != str(capability.mode)
+                    or existing.recovery_uncertainty_ack != acknowledge_uncertain_external
                 ):
                     raise ValidationError({"request_key": "Recovery request facts do not match."})
                 return existing
@@ -1043,7 +1061,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             accepted_step_runs = [
                 row for row in locked_step_runs if row.step_id in accepted_step_ids
             ]
-            accepted = list(
+            candidates = list(
                 system_queryset(attempt_model, using=alias, lock=("self",))
                 .select_related("step_run__step")
                 .filter(
@@ -1052,13 +1070,34 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     step_run__current_attempt=models.F("pk"),
                     effect_key=models.F("step_run__effect_key"),
                     effect_generation=models.F("step_run__effect_generation"),
-                    result_kind=AttemptResultKind.DONE,
+                    result_kind__in=(AttemptResultKind.DONE, AttemptResultKind.SUSPEND),
                     applied_at__isnull=False,
                     lease_revoked_at__isnull=True,
                 )
                 .exclude(step_run=source_step_run)
                 .order_by("pk")
             )
+            accepted = []
+            for candidate in candidates:
+                if candidate.result_kind == str(AttemptResultKind.DONE):
+                    accepted.append(candidate)
+                    continue
+                gate_row = candidate.step_run
+                if not gate_row.output_present:
+                    continue
+                decisions = list(
+                    system_queryset(
+                        self.model._meta.apps.get_model("workflows", "Decision"),
+                        using=alias,
+                        lock=None,
+                    ).filter(suspension_attempt=candidate).order_by("priority", "pk")
+                )
+                projected = retained_gate_output(candidate, decisions)
+                if projected is None or projected["outcome"] != gate_row.outcome:
+                    continue
+                if gate_row.output != projected:
+                    continue
+                accepted.append(candidate)
             return self._start_pinned_locked(
                 source_run.workflow,
                 source_subject,
@@ -1069,6 +1108,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 recovery_source_attempt=locked_attempt,
                 recovery_request_actor_ref=actor_ref,
                 recovery_mode=str(capability.mode),
+                recovery_uncertainty_ack=acknowledge_uncertain_external,
                 recovery_evidence=tuple(accepted),
                 recovery_step=source_step_run.step,
                 recovery_map_index=source_step_run.map_index,
@@ -1540,6 +1580,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         recovery_source_attempt: Any = None,
         recovery_request_actor_ref: str = "",
         recovery_mode: str = "",
+        recovery_uncertainty_ack: bool = False,
         recovery_evidence: tuple[Any, ...] = (),
         recovery_step: Any = None,
         recovery_map_index: int = -1,
@@ -1585,6 +1626,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             "recovery_source_attempt": recovery_source_attempt,
             "recovery_request_actor_ref": recovery_request_actor_ref,
             "recovery_mode": recovery_mode,
+            "recovery_uncertainty_ack": recovery_uncertainty_ack,
             "created_by_id": owner_id,
             "updated_by_id": owner_id,
         }
@@ -1602,6 +1644,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 "dedup_key": run_dedup_key,
                 "occurrence_id": occurrence_id,
                 "input_present": input.present,
+                "recovery_uncertainty_ack": recovery_uncertainty_ack,
             }
             actual = {
                 "workflow": existing.workflow_id,
@@ -1615,6 +1658,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 "dedup_key": existing.dedup_key,
                 "occurrence_id": existing.occurrence_id,
                 "input_present": existing.input_present,
+                "recovery_uncertainty_ack": existing.recovery_uncertainty_ack,
             }
             changed = {field: "Retained workflow invocation has different immutable facts." for field, value in expected.items()
                        if actual[field] != value}
@@ -2441,6 +2485,198 @@ class StepRunQuerySet(AngeeQuerySet[Any]):
         )
 
 
+def _decision_resolution(decision: Any, *, index: int | None) -> DecisionResolution:
+    """Project exact terminal Decision evidence into one typed binding value."""
+
+    if (
+        index is None
+        or decision.verdict not in Verdict.TERMINAL
+        or decision.resolved_at is None
+        or not isinstance(decision.resolution, dict)
+    ):
+        raise ValidationError({"decision": "Terminal Decision projection requires complete retained evidence."})
+    return DecisionResolution(
+        decision_id=str(decision.sqid),
+        action=decision.action,
+        verdict=str(decision.verdict),
+        resolution=decision.resolution,
+        resolved_by=decision.resolved_by,
+        resolved_at=decision.resolved_at,
+        declaration_index=index,
+    )
+
+
+def decision_gate_output(decisions: Collection[Any], *, outcome: str) -> dict[str, Any]:
+    """Project terminal slots in declaration order through one typed owner."""
+
+    ordered = sorted(
+        decisions,
+        key=lambda row: (row.declaration_index if row.declaration_index is not None else row.priority, row.pk),
+    )
+    return DecisionGateOutput(
+        resolutions=tuple(
+            _decision_resolution(decision, index=(
+                decision.declaration_index if decision.declaration_index is not None else index
+            ))
+            for index, decision in enumerate(ordered)
+            if decision.verdict in Verdict.TERMINAL
+        ),
+        outcome=outcome,
+    ).model_dump(mode="json")
+
+
+def retained_gate_output(attempt: Any, decisions: Collection[Any]) -> dict[str, Any] | None:
+    """Derive one historical gate value from its immutable suspension declaration."""
+
+    if (
+        attempt.result_kind != str(AttemptResultKind.SUSPEND)
+        or not attempt.checkpoint_present
+        or not isinstance(attempt.checkpoint, dict)
+    ):
+        return None
+    settlement = attempt.decision_settlement
+    if not isinstance(settlement, dict) or set(settlement) != {"decision_ids", "outcome"}:
+        return None
+    ids = settlement["decision_ids"]
+    outcome = settlement["outcome"]
+    if not isinstance(ids, list) or not ids or any(type(value) is not int for value in ids):
+        return None
+    selected = [decision for decision in decisions if decision.pk in ids]
+    if len(selected) != len(ids) or any(decision.verdict not in Verdict.TERMINAL for decision in selected):
+        return None
+    return decision_gate_output(selected, outcome=outcome)
+
+
+def _decision_value_at(value: Any, path: Collection[str | int]) -> Any:
+    """Select one JSON value by a typed path without fallback or coercion."""
+
+    current = value
+    for part in path:
+        if isinstance(part, str) and isinstance(current, dict) and part in current:
+            current = current[part]
+        elif type(part) is int and isinstance(current, list) and 0 <= part < len(current):
+            current = current[part]
+        else:
+            raise ValidationError({"resolution_path": "The admitted resolution path does not exist."})
+    return current
+
+
+def _decision_source_leaf(
+    provenance: Any, path: tuple[str | int, ...], *, recovery_source_attempt_id: int | None
+) -> tuple[dict[str, Any], tuple[str | int, ...]]:
+    """Pair one admitted input path with its exact engine-authored source leaf."""
+
+    current = provenance
+    remaining = path
+    while isinstance(current, dict):
+        kind = current.get("kind")
+        if kind == "recovery_input":
+            if (
+                recovery_source_attempt_id is None
+                or current.get("attempt_id") != recovery_source_attempt_id
+            ):
+                break
+            current = current.get("source_provenance")
+            continue
+        if kind == "object" and remaining and isinstance(remaining[0], str):
+            fields = current.get("fields")
+            if not isinstance(fields, dict):
+                break
+            current = fields.get(remaining[0])
+            remaining = remaining[1:]
+            continue
+        if kind == "array" and remaining and type(remaining[0]) is int:
+            items = current.get("items")
+            if not isinstance(items, list) or remaining[0] < 0 or remaining[0] >= len(items):
+                break
+            current = items[remaining[0]]
+            remaining = remaining[1:]
+            continue
+        if kind in {"step_output", "recovery_evidence"}:
+            return current, remaining
+        break
+    raise ValidationError({"resolution_path": "This value was not admitted from a retained Decision gate."})
+
+
+def _admitted_source_attempt(
+    leaf: dict[str, Any], *, run: Any, alias: str, attempt_model: type[Any]
+) -> tuple[Any, Any]:
+    """Resolve one exact current output or immutable recovery-evidence source."""
+
+    if leaf.get("kind") == "recovery_evidence":
+        evidence_model = attempt_model._meta.apps.get_model("workflows", "WorkflowRecoveryEvidence")
+        evidence = system_queryset(evidence_model, using=alias, lock=None).filter(
+            sqid=leaf.get("evidence_id"), run_id=run.pk,
+            source_attempt_id=leaf.get("attempt_id"),
+        ).select_related("source_attempt__step_run__run", "step").first()
+        if (
+            evidence is None
+            or evidence.step.key != leaf.get("step_key")
+            or evidence.map_index != leaf.get("map_index")
+        ):
+            raise ValidationError({"decision": "Exact recovery source was not admitted."})
+        source_attempt = evidence.source_attempt
+        source_step_run = source_attempt.step_run
+    elif leaf.get("kind") == "step_output":
+        step_run_model = attempt_model._meta.get_field("step_run").remote_field.model
+        source_step_run = system_queryset(step_run_model, using=alias, lock=None).filter(
+            pk=leaf.get("step_run_id"), step__key=leaf.get("step_key"),
+        ).select_related("run").first()
+        if (
+            source_step_run is None
+            or source_step_run.current_attempt_id != leaf.get("attempt_id")
+            or source_step_run.status != StepRunStatus.SUCCEEDED
+            or source_step_run.effect_generation != leaf.get("effect_generation")
+        ):
+            raise ValidationError({"decision": "Exact upstream result is not current."})
+        source_attempt = system_queryset(attempt_model, using=alias, lock=None).filter(
+            pk=leaf.get("attempt_id"), step_run_id=source_step_run.pk,
+        ).first()
+    else:
+        raise ValidationError({"decision": "Decision authority requires an exact retained source."})
+    if (
+        source_attempt is None
+        or source_attempt.applied_at is None
+        or source_attempt.lease_revoked_at is not None
+        or (
+            leaf.get("kind") == "step_output"
+            and (
+                source_attempt.effect_key != source_step_run.effect_key
+                or source_attempt.effect_generation != source_step_run.effect_generation
+            )
+        )
+        or not run.same_execution_lineage(source_step_run.run)
+    ):
+        raise ValidationError({"decision": "Decision authority is outside exact execution lineage."})
+    return source_attempt, source_step_run
+
+
+def _canonical_decision_target(
+    model_label: str, public_id: str, *, actor: Any,
+) -> tuple[str, str]:
+    """Use the same native record target identity at creation and consumption."""
+
+    if not model_label and not public_id:
+        return "", ""
+    if not model_label or not public_id:
+        raise ValidationError({"target": "Decision target model and id must be supplied together."})
+    try:
+        model = apps.get_model(model_label)
+    except (LookupError, ValueError) as error:
+        raise ValidationError({"target": "Decision target model is not installed."}) from error
+    queryset = read_scoped_queryset(model, actor, action="read")
+    if queryset is None:
+        raise PermissionDenied("Decision target is not readable by the execution actor.")
+    target = instance_from_public_id(model, public_id, queryset=queryset)
+    if target is None:
+        raise ValidationError({"target": "Decision target was not found."})
+    canonical = canonical_record_target(target)
+    canonical_model = canonical.content_type.model_class()
+    if canonical_model is None:
+        raise ValidationError({"target": "Canonical Decision target model is not installed."})
+    return canonical_model._meta.label, public_id_for(canonical_model, canonical.object_id)
+
+
 class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: ignore[misc]
     """Manager preserving existing StepRun creation with guarded attempt facts."""
 
@@ -2644,9 +2880,30 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
             authoritative = step_run.decision_gate.outcome(decisions)
             if authoritative is None or authoritative != outcome:
                 raise ValidationError({"outcome": "Decision outcome must be derived from the full policy."})
+            if attempt.decision_settlement:
+                raise ValidationError({"decisions": "This suspension was already settled."})
+            settled = [decision for decision in decisions if decision.verdict in Verdict.TERMINAL]
+            attempt.decision_settlement = {
+                "decision_ids": [decision.pk for decision in settled], "outcome": outcome,
+            }
+            attempt_model.objects._save_attempt(
+                attempt, alias=alias, update_fields=["decision_settlement", "updated_at"]
+            )
+            for sibling in decisions:
+                if sibling.verdict == Verdict.PENDING:
+                    decision_model.objects._write_retained(
+                        sibling,
+                        lambda sibling=sibling: sibling.resolve(
+                            Verdict.EXPIRED, resolution={}, resolved_by="workflows/gate_settlement"
+                        ),
+                    )
+            projected = retained_gate_output(attempt, decisions)
+            if projected is None:
+                raise ValidationError({"decisions": "Retained gate settlement cannot be projected."})
             if step_run.resume_state.get("_resume_after_decisions"):
                 state = dict(step_run.resume_state)
                 state["_decision_outcome"] = outcome
+                state["_decision_resolutions"] = projected
                 step_run.resume_state = state
                 attempt_model.objects._write_step_run(
                     step_run, alias=alias, operation=lambda: step_run.wake(at=at)
@@ -2656,7 +2913,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                     step_run,
                     alias=alias,
                     operation=lambda: step_run.mark_succeeded(
-                        output={"decisions": [decision.sqid for decision in decisions]},
+                        output=projected,
                         outcome=outcome,
                     ),
                 )
@@ -2732,6 +2989,223 @@ class StepAttemptQuerySet(AngeeQuerySet[Any]):
 
 class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # type: ignore[misc]
     """Allocate, lease, and finalize retained attempts under ancestor locks."""
+
+    def admitted_continuation_child(
+        self, step_run_id: int, *, lease_token: uuid.UUID,
+        child_id_path: tuple[str | int, ...], expected_starter_class: str,
+    ) -> Any:
+        """Resolve the exact child named by a current admitted starter output."""
+
+        if (
+            not child_id_path
+            or any(type(part) not in {str, int} or part == "" for part in child_id_path)
+            or not expected_starter_class
+        ):
+            raise ValidationError({"child": "An exact typed starter output path and class are required."})
+        alias = self.db
+        with transaction.atomic(using=alias), self._write(alias, step_run_id), system_context(
+            reason="workflows.continuation.admitted_child"
+        ):
+            run, step_run = self._locked_ancestry(step_run_id, alias)
+            if run.is_terminal or step_run.status != StepRunStatus.STARTED or step_run.current_attempt_id is None:
+                raise ValidationError({"child": "Child result requires the current active invocation."})
+            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
+                pk=step_run.current_attempt_id
+            )
+            if (
+                attempt.step_run_id != step_run.pk
+                or attempt.lease_token != lease_token
+                or attempt.started_at is None
+                or attempt.result_recorded_at is not None
+                or attempt.lease_revoked_at is not None
+            ):
+                raise ValidationError({"child": "Child result requires the current admitted lease."})
+            leaf, remaining = _decision_source_leaf(
+                attempt.input_provenance, child_id_path,
+                recovery_source_attempt_id=run.recovery_source_attempt_id,
+            )
+            source_attempt, starter = _admitted_source_attempt(
+                leaf, run=run, alias=alias, attempt_model=self.model,
+            )
+            if (
+                source_attempt.result_kind != str(AttemptResultKind.DONE)
+                or not source_attempt.output_present
+                or starter.step.step_class != expected_starter_class
+                or (leaf.get("kind") == "step_output" and starter.status != StepRunStatus.SUCCEEDED)
+            ):
+                raise ValidationError({"child": "The admitted source is not a completed child starter."})
+            selected_path = leaf.get("path", [])
+            if not isinstance(selected_path, list) or any(type(part) not in {str, int} for part in selected_path):
+                raise ValidationError({"child": "The retained starter path is invalid."})
+            retained_id = _decision_value_at(
+                source_attempt.output, (*selected_path, *remaining),
+            )
+            admitted_id = _decision_value_at(attempt.input, child_id_path)
+            if not isinstance(retained_id, str) or not retained_id or retained_id != admitted_id:
+                raise ValidationError({"child": "The child id differs from its exact admitted starter."})
+            run_model = self.model._meta.apps.get_model("workflows", "WorkflowRun")
+            child = instance_from_public_id(
+                run_model, retained_id,
+                queryset=system_queryset(run_model, using=alias, lock=None),
+            )
+            if (
+                child is None
+                or child.parent_step_run_id != starter.pk
+                or child.parent_relation != ParentRelation.CONTINUATION
+                or child.created_by_id != run.created_by_id
+            ):
+                raise ValidationError({"child": "The retained run is not this admitted continuation child."})
+            return child
+
+    def target_read_authority(
+        self, step_run_id: int, *, lease_token: uuid.UUID,
+        authority_path: tuple[str | int, ...], proposal_gate_path: tuple[str | int, ...] = (),
+    ) -> tuple[Any, Any]:
+        """Resolve a prior human gate through this exact active invocation input."""
+
+        if not authority_path or any(type(part) not in {str, int} for part in authority_path):
+            raise ValidationError({"target": "Target authority needs an admitted typed input path."})
+        if any(type(part) not in {str, int} for part in proposal_gate_path):
+            raise ValidationError({"target": "Proposal gate path must be typed."})
+        alias = self.db
+        with transaction.atomic(using=alias), self._write(alias, step_run_id), system_context(
+            reason="workflows.decision.target_read_authority"
+        ):
+            run, step_run = self._locked_ancestry(step_run_id, alias)
+            if run.is_terminal or step_run.status != StepRunStatus.STARTED or step_run.current_attempt_id is None:
+                raise ValidationError({"step_run": "Target authority requires the active admitted step."})
+            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
+                pk=step_run.current_attempt_id
+            )
+            if (
+                attempt.step_run_id != step_run.pk
+                or attempt.lease_token != lease_token
+                or attempt.started_at is None
+                or attempt.result_recorded_at is not None
+                or attempt.lease_revoked_at is not None
+            ):
+                raise ValidationError({"attempt": "Target authority requires the current invocation lease."})
+            actor, prior = step_run.decisions.model.objects._resolve_target_authority(
+                authority_path=authority_path, proposal_gate_path=proposal_gate_path,
+                step_run=step_run, attempt=attempt, using=alias,
+            )
+            if actor is None or prior is None:
+                raise ValidationError({"target": "No prior gate authority was admitted."})
+            return actor, prior
+
+    def consume_decision_resolution(
+        self,
+        step_run_id: int,
+        resolution_path: tuple[str | int, ...],
+        *,
+        lease_token: uuid.UUID,
+        expected_action: str,
+        expected_target: tuple[str, str],
+        expected_verdict: str,
+        actor: Any,
+    ) -> tuple[Any, DecisionResolution]:
+        """Authorize one current admitted gate value from exact suspension evidence."""
+
+        if (
+            not isinstance(resolution_path, tuple)
+            or not resolution_path
+            or any(type(part) not in {str, int} or part == "" for part in resolution_path)
+        ):
+            raise ValidationError({"resolution_path": "A nonempty typed admitted-input path is required."})
+        if (
+            not isinstance(expected_action, str)
+            or not expected_action
+            or not isinstance(expected_target, tuple)
+            or len(expected_target) != 2
+            or any(not isinstance(value, str) for value in expected_target)
+            or expected_verdict not in {str(value) for value in Verdict.TERMINAL}
+        ):
+            raise ValidationError({"decision": "The consumer must declare exact action, target and terminal verdict."})
+        try:
+            actor_ref = to_subject_ref(actor)
+        except NoActorResolvedError as error:
+            raise PermissionDenied("Decision resolution requires an acting subject.") from error
+        alias = self.db
+        with transaction.atomic(using=alias), self._write(alias, step_run_id), system_context(
+            reason="workflows.decision.consume"
+        ):
+            run, step_run = self._locked_ancestry(step_run_id, alias)
+            if run.is_terminal or step_run.status != StepRunStatus.STARTED or step_run.current_attempt_id is None:
+                raise ValidationError({"step_run": "Decision consumption requires the current active step."})
+            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
+                pk=step_run.current_attempt_id
+            )
+            if (
+                attempt.step_run_id != step_run.pk
+                or attempt.lease_token != lease_token
+                or attempt.started_at is None
+                or attempt.result_recorded_at is not None
+                or attempt.lease_revoked_at is not None
+            ):
+                raise ValidationError({"attempt": "Decision consumption requires the current admitted lease."})
+            leaf, remaining = _decision_source_leaf(
+                attempt.input_provenance,
+                resolution_path,
+                recovery_source_attempt_id=run.recovery_source_attempt_id,
+            )
+            source_attempt, source_step_run = _admitted_source_attempt(
+                leaf, run=run, alias=alias, attempt_model=self.model,
+            )
+            if source_attempt.result_kind != str(AttemptResultKind.SUSPEND):
+                raise ValidationError({"decision": "The admitted source is not a retained Decision gate."})
+            decision_model = self.model._meta.apps.get_model("workflows", "Decision")
+            source_decisions = list(
+                system_queryset(decision_model, using=alias, lock=None)
+                .filter(suspension_attempt_id=source_attempt.pk)
+                .order_by("priority", "pk")
+            )
+            projected = retained_gate_output(source_attempt, source_decisions)
+            if projected is None:
+                raise ValidationError({"decision": "The retained suspension has no terminal gate projection."})
+            if leaf.get("kind") == "step_output" and (
+                source_step_run.status != StepRunStatus.SUCCEEDED
+                or not source_step_run.output_present
+                or source_step_run.output != projected
+                or source_step_run.outcome != projected["outcome"]
+            ):
+                raise ValidationError({"decision": "The upstream gate projection does not match retained evidence."})
+            selected_path = leaf.get("path", [])
+            if not isinstance(selected_path, list) or any(type(part) not in {str, int} for part in selected_path):
+                raise ValidationError({"decision": "The admitted gate source path is invalid."})
+            retained_value = _decision_value_at(projected, (*selected_path, *remaining))
+            admitted_value = _decision_value_at(attempt.input, resolution_path)
+            if not json_values_equal(admitted_value, retained_value):
+                raise ValidationError({"decision": "The input resolution differs from its retained gate source."})
+            try:
+                resolution = DecisionResolution.model_validate_json(json.dumps(admitted_value, allow_nan=False))
+            except (PydanticValidationError, TypeError, ValueError) as error:
+                raise ValidationError({"decision": "The admitted gate resolution is not typed terminal evidence."}) from error
+            decision = instance_from_public_id(
+                decision_model,
+                resolution.decision_id,
+                queryset=system_queryset(decision_model, using=alias, lock=None),
+            )
+            canonical_expected_target = _canonical_decision_target(
+                *expected_target, actor=actor,
+            )
+            if (
+                decision is None
+                or decision.pk not in {row.pk for row in source_decisions}
+                or not isinstance(leaf.get("settled_decision_ids"), list)
+                or decision.pk not in leaf["settled_decision_ids"]
+                or decision.pk not in source_attempt.decision_settlement.get("decision_ids", ())
+                or decision.suspension_attempt_id != source_attempt.pk
+                or decision.action != expected_action
+                or (decision.target_model, decision.target_id) != canonical_expected_target
+                or str(decision.verdict) != expected_verdict
+                or _decision_resolution(decision, index=decision.declaration_index) != resolution
+            ):
+                raise ValidationError({"decision": "Decision action, target, verdict or provenance differs."})
+            if not rebac_backend().check_access(
+                subject=actor_ref, action="read", resource=to_object_ref(decision)
+            ).allowed:
+                raise PermissionDenied("Decision resolution is not readable by this actor.")
+            return decision, resolution
 
     def recovery_plan(self, attempt: Any, *, actor: Any) -> RecoveryPlan:
         """Return the operation-owned recovery capability for authorized evidence."""
@@ -3510,7 +3984,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             if cause == AttemptCause.MANUAL_RETRY and locked.run.origin == RunOrigin.RECOVERY
             else None
         )
-        if recovery_source is not None and locked.run.recovery_mode == "reconcile":
+        external_recovery = (
+            recovery_source is not None
+            and locked.step.resolve_impl("step_class").execution_mode == StepExecutionMode.EXTERNAL_OPERATION
+        )
+        if recovery_source is not None and (locked.run.recovery_mode == "reconcile" or external_recovery):
             locked.effect_key = recovery_source.effect_key
         elif locked.effect_key is None:
             locked.effect_key = uuid.uuid4()
@@ -3817,7 +4295,19 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 step_run,
                 alias=alias,
                 operation=lambda: step_run.mark_failed(
-                    error="Step heartbeat timed out.", stacktrace=""
+                    error=(
+                        "External request result is uncertain after heartbeat loss."
+                        if step_run.step.resolve_impl("step_class").execution_mode
+                        == StepExecutionMode.EXTERNAL_OPERATION
+                        else "Step heartbeat timed out."
+                    ),
+                    stacktrace="",
+                    outcome=(
+                        "uncertain_external_result"
+                        if step_run.step.resolve_impl("step_class").execution_mode
+                        == StepExecutionMode.EXTERNAL_OPERATION
+                        else "failed"
+                    ),
                 ),
             )
             return True
@@ -4237,6 +4727,22 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
 
         if attempt.started_at is None or step_run.status != StepRunStatus.STARTED:
             raise ValidationError({"result": "Transient errors require a started current attempt."})
+        impl = step_run.step.resolve_impl("step_class")
+        if impl.execution_mode == StepExecutionMode.EXTERNAL_OPERATION:
+            provider_policy = impl.external_operation_policy(attempt=attempt)
+            if not isinstance(provider_policy, ExternalOperationPolicy):
+                raise ValidationError({"operation": "External operation policy is invalid."})
+            if provider_policy is not ExternalOperationPolicy.IDEMPOTENT_REQUEST:
+                self._write_step_run(
+                    step_run,
+                    alias=alias,
+                    operation=lambda: step_run.mark_failed(
+                        error="External request result is uncertain; automatic replay is unavailable.",
+                        stacktrace=result.stacktrace or "",
+                        outcome="uncertain_external_result",
+                    ),
+                )
+                return None
         try:
             policy = retry_policy_from_config(step_run.step.config)
             retry_index = attempt.retry_index + 1
@@ -4554,7 +5060,9 @@ class DecisionQuerySet(AngeeQuerySet[Any]):
             "suspension_attempt", "suspension_attempt_id", "declaration_index",
             "priority", "action", "payload", "max_attempts", "expires_at", "escalate_at",
             "target_model", "target_id", "target_tab",
+            "target_authority_decision", "target_authority_decision_id", "record_access",
             "verdict", "resolution", "resolved_by", "attempts",
+            "resolved_at",
         }
     )
 
@@ -4658,6 +5166,8 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             result = operation()
             if not capability.atomic.consumed:
                 raise RuntimeError("Retained Decision transition did not save its exact row.")
+            if decision.is_terminal:
+                self._remove_pending_record_access(decision)
             return result
         finally:
             _decision_save_capability.reset(token)
@@ -4922,25 +5432,34 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             raise ValidationError(
                 {"using": "Atomic decision relationship creation currently requires the default database."}
             )
+        if not isinstance(rebac_backend(), LocalBackend):
+            raise ValidationError({
+                "rebac": "Decision-scoped review access requires the transactional local REBAC adapter."
+            })
         if not _attempt_write_active(using, step_run.pk):
             raise RuntimeError("Retained decisions require an active StepAttemptManager transaction.")
 
         declarations = deserialize_decision_specs(serialize_decision_specs(declarations))
 
-        prepared = tuple(
-            (
+        prepared_rows: list[tuple[Any, ...]] = []
+        for spec in declarations:
+            delegated_actor, target_authority = self._target_actor(
+                spec, step_run=step_run, attempt=attempt, using=using,
+            )
+            grant_actor = step_run.run.created_by
+            if grant_actor is None:
+                raise ValidationError({"actor": "Decision delegation requires the admitted run actor."})
+            prepared_rows.append((
                 spec,
                 tuple(canonical_subject_ref(subject) for subject in spec.assignees),
                 canonical_subject_ref(spec.requester) if spec.requester else None,
                 tuple(canonical_subject_ref(subject) for subject in spec.escalation),
-                self._validated_target(
-                    spec,
-                    actor=self._target_actor(spec, step_run=step_run)
-                    or current_actor() or step_run.run.created_by,
-                ),
-            )
-            for spec in declarations
-        )
+                self._validated_target(spec, actor=delegated_actor or grant_actor),
+                self._validated_record_access(spec, actor=grant_actor),
+                grant_actor,
+                target_authority,
+            ))
+        prepared = tuple(prepared_rows)
         if attempt.step_run_id != step_run.pk:
             raise ValidationError({"attempt": "The suspension attempt must belong to this step run."})
         if (
@@ -4959,7 +5478,11 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         with transaction.atomic(using=using):
             connection = connections[using]
             manager = self.db_manager(using)
-            for index, (spec, assignees, requester, escalation, target) in enumerate(prepared):
+            for index, (spec, assignees, requester, escalation, target, record_access,
+                        grant_actor, target_authority) in enumerate(prepared):
+                contract = compile_decision_action_schema(spec.decision_schema)
+                if contract is not None:
+                    contract.validate_context(spec.payload)
                 token = _decision_write_session.set(
                     _DecisionWriteSession(using, id(connection), step_run.pk, attempt.pk, index)
                 )
@@ -4974,6 +5497,11 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                         target_model=target[0],
                         target_id=target[1],
                         target_tab=spec.target_tab,
+                        target_authority_decision=target_authority,
+                        record_access=[
+                            {"resource_type": ref.resource_type, "resource_id": ref.resource_id}
+                            for _, ref in record_access
+                        ],
                         max_attempts=spec.max_attempts,
                         expires_at=spec.expires_at,
                         escalate_at=spec.escalate_at,
@@ -4995,6 +5523,10 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 )
                 if relationships:
                     write_relationships(relationships)
+                decision_subject = self._pending_decision_subject(decision)
+                for record, _ in record_access:
+                    with actor_context(grant_actor):
+                        record.grant_record_access("pending_decision", decision_subject)
                 decisions.append(decision)
                 if spec.escalate_at is not None:
                     timer_intents.append(
@@ -5011,50 +5543,165 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         return tuple(decisions), tuple(timer_intents)
 
     @staticmethod
-    def _target_actor(spec: DecisionSpec, *, step_run: Any) -> Any | None:
-        """Resolve a prior same-run human Decision as explicit target-read authority."""
+    def _pending_decision_subject(decision: Any) -> SubjectRef:
+        ref = to_object_ref(decision)
+        return SubjectRef.of(ref.resource_type, ref.resource_id)
 
-        if not spec.target_authority_decision_id:
-            return None
+    @staticmethod
+    def _validated_record_access(spec: DecisionSpec, *, actor: Any) -> tuple[tuple[Any, Any], ...]:
+        """Resolve and deduplicate the exact opting-in review records."""
+
+        selected: dict[tuple[str, str], tuple[Any, Any]] = {}
+        for declared in spec.record_access:
+            try:
+                model = apps.get_model(declared.model)
+            except (LookupError, ValueError) as error:
+                raise ValidationError({"record_access": "Decision review record model is not installed."}) from error
+            queryset = read_scoped_queryset(model, actor, action="read")
+            if queryset is None:
+                raise PermissionDenied("Decision review record is not readable by the execution actor.")
+            record = instance_from_public_id(model, declared.id, queryset=queryset)
+            if record is None:
+                raise ValidationError({"record_access": "Decision review record was not found."})
+            if "pending_decision" not in type(record).get_rebac_grantable():
+                raise ValidationError({
+                    "record_access": "Decision review record has no pending_decision delegation owner."
+                })
+            ref = to_object_ref(record)
+            selected[(ref.resource_type, ref.resource_id)] = (record, ref)
+        return tuple(selected[key] for key in sorted(selected))
+
+    @classmethod
+    def _remove_pending_record_access(cls, decision: Any) -> None:
+        """Remove only tuples retained for this terminal Decision, inside its verdict transaction."""
+
+        subject = cls._pending_decision_subject(decision)
+        for raw in decision.record_access:
+            if not isinstance(raw, dict) or set(raw) != {"resource_type", "resource_id"}:
+                raise ValidationError({"record_access": "Retained Decision delegation identity is invalid."})
+            resource_type = raw["resource_type"]
+            resource_id = raw["resource_id"]
+            if not isinstance(resource_type, str) or not isinstance(resource_id, str):
+                raise ValidationError({"record_access": "Retained Decision delegation identity is invalid."})
+            delete_relationship(RelationshipTuple(
+                resource=ObjectRef(resource_type, resource_id),
+                relation="pending_decision",
+                subject=subject,
+            ))
+
+    @staticmethod
+    def _target_actor(
+        spec: DecisionSpec, *, step_run: Any, attempt: Any, using: str
+    ) -> tuple[Any | None, Any | None]:
+        return DecisionManager._resolve_target_authority(
+            authority_path=spec.target_authority_path,
+            proposal_gate_path=spec.target_authority_gate_path,
+            step_run=step_run, attempt=attempt, using=using,
+        )
+
+    @staticmethod
+    def _resolve_target_authority(
+        *, authority_path: tuple[str | int, ...], proposal_gate_path: tuple[str | int, ...],
+        step_run: Any, attempt: Any, using: str,
+    ) -> tuple[Any | None, Any | None]:
+        """Prove one explicitly forwarded, exact settled gate Decision for target read."""
+
+        if not authority_path:
+            return None, None
+        selected_id = _decision_value_at(attempt.input, authority_path)
+        if not isinstance(selected_id, str) or not selected_id:
+            raise ValidationError({"target": "Admitted target authority ID is missing."})
+        leaf, remaining = _decision_source_leaf(
+            attempt.input_provenance, authority_path,
+            recovery_source_attempt_id=step_run.run.recovery_source_attempt_id,
+        )
+        producer_attempt, producer_step = _admitted_source_attempt(
+            leaf, run=step_run.run, alias=using, attempt_model=type(attempt),
+        )
+        source_path = leaf.get("path", [])
+        if not isinstance(source_path, list) or any(type(part) not in {str, int} for part in source_path):
+            raise ValidationError({"target": "Admitted target authority source path is invalid."})
+        if producer_attempt.result_kind == str(AttemptResultKind.SUSPEND):
+            if proposal_gate_path:
+                raise ValidationError({"target": "Direct gate authority cannot name a proposal gate path."})
+            gate_attempt = producer_attempt
+            gate_decisions = list(system_queryset(
+                step_run._meta.apps.get_model("workflows", "Decision"), using=using, lock=None,
+            ).filter(suspension_attempt=gate_attempt).order_by("declaration_index"))
+            gate_output = retained_gate_output(gate_attempt, gate_decisions)
+            if gate_output is None or not json_values_equal(
+                selected_id, _decision_value_at(gate_output, (*source_path, *remaining))
+            ):
+                raise ValidationError({"target": "Direct target authority differs from its settled gate."})
+        elif producer_attempt.result_kind == str(AttemptResultKind.DONE):
+            if not proposal_gate_path:
+                raise ValidationError({"target": "Proposal authority needs its admitted gate path."})
+            if leaf.get("kind") == "step_output" and (
+                not producer_step.output_present
+                or not json_values_equal(producer_step.output, producer_attempt.output)
+            ):
+                raise ValidationError({"target": "Current proposal output differs from retained evidence."})
+            if not producer_attempt.output_present or not json_values_equal(
+                selected_id, _decision_value_at(producer_attempt.output, (*source_path, *remaining))
+            ):
+                raise ValidationError({"target": "Proposal did not retain the selected authority ID."})
+            gate_leaf, gate_remaining = _decision_source_leaf(
+                producer_attempt.input_provenance, proposal_gate_path,
+                recovery_source_attempt_id=producer_step.run.recovery_source_attempt_id,
+            )
+            gate_attempt, _ = _admitted_source_attempt(
+                gate_leaf, run=producer_step.run, alias=using, attempt_model=type(attempt),
+            )
+            gate_decisions = list(system_queryset(
+                step_run._meta.apps.get_model("workflows", "Decision"), using=using, lock=None,
+            ).filter(suspension_attempt=gate_attempt).order_by("declaration_index"))
+            gate_output = retained_gate_output(gate_attempt, gate_decisions)
+            gate_path = gate_leaf.get("path", [])
+            admitted_gate_value = _decision_value_at(
+                producer_attempt.input, proposal_gate_path
+            )
+            forwarded_id = (
+                admitted_gate_value.get("decision_id")
+                if isinstance(admitted_gate_value, dict) else admitted_gate_value
+            )
+            if (
+                gate_output is None
+                or not isinstance(gate_path, list)
+                or any(type(part) not in {str, int} for part in gate_path)
+                or forwarded_id != selected_id
+                or not json_values_equal(
+                    admitted_gate_value,
+                    _decision_value_at(gate_output, (*gate_path, *gate_remaining)),
+                )
+            ):
+                raise ValidationError({"target": "Proposal did not admit the original settled gate."})
+        else:
+            raise ValidationError({"target": "Target authority needs a retained gate or one proposal producer."})
         decision_model = step_run._meta.apps.get_model("workflows", "Decision")
-        prior = system_queryset(decision_model, using=step_run._state.db, lock=None).filter(
-            sqid=spec.target_authority_decision_id,
-            step_run__run_id=step_run.run_id,
-            verdict=Verdict.COMPLETED,
-        ).exclude(step_run_id=step_run.pk).first()
-        if prior is None:
-            raise ValidationError({
-                "target": "Decision target authority is not a prior completed Decision in this run."
-            })
+        prior = system_queryset(decision_model, using=using, lock=None).filter(
+            sqid=selected_id, suspension_attempt=gate_attempt, verdict=Verdict.COMPLETED,
+        ).first()
+        if (
+            prior is None
+            or prior.pk not in gate_attempt.decision_settlement.get("decision_ids", ())
+            or prior.step_run_id == step_run.pk
+        ):
+            raise ValidationError({"target": "Selected target authority is not this exact completed gate."})
         try:
             subject = canonical_subject_ref(prior.resolved_by)
         except (TypeError, ValueError) as error:
             raise ValidationError({"target": "Decision target authority requires a human resolver."}) from error
         if get_user_model().objects.active_person_for_subject(subject) is None:
             raise ValidationError({"target": "Decision target authority requires a human resolver."})
-        return subject
+        return subject, prior
 
     @staticmethod
     def _validated_target(spec: DecisionSpec, *, actor: Any | None = None) -> tuple[str, str]:
         """Resolve one declared related record through the execution actor's read scope."""
 
-        if not spec.target_model:
-            return "", ""
-        try:
-            model = apps.get_model(spec.target_model)
-        except (LookupError, ValueError) as error:
-            raise ValidationError({"target_model": "Decision target model is not installed."}) from error
-        queryset = read_scoped_queryset(model, actor, action="read")
-        if queryset is None:
-            raise PermissionDenied("Decision target is not readable by the execution actor.")
-        target = instance_from_public_id(model, spec.target_id, queryset=queryset)
-        if target is None:
-            raise ValidationError({"target_id": "Decision target was not found."})
-        canonical = canonical_record_target(target)
-        canonical_model = canonical.content_type.model_class()
-        if canonical_model is None:  # pragma: no cover - ContentType integrity guard
-            raise ValidationError({"target_model": "Decision target model is not installed."})
-        return canonical_model._meta.label, public_id_for(canonical_model, canonical.object_id)
+        return _canonical_decision_target(
+            spec.target_model, spec.target_id, actor=actor,
+        )
 
 
 class WorkflowDispatchQuerySet(AngeeQuerySet[Any]):

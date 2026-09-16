@@ -16,6 +16,7 @@ import {
 
 import { enWorkflowsMessages } from "./i18n";
 import { RunWorkflowMenu } from "./RunWorkflowMenu";
+import { decisionContextWidgets } from "./views/DecisionContextWidgets";
 export { WORKFLOW_DECISION_CONTENT_SLOT, WORKFLOW_TRIGGER_FORM_FIELDS_SLOT } from "./slots";
 
 import { CHATTER_TAB_SEARCH_KEY } from "@angee/ui";
@@ -81,6 +82,7 @@ const workflows = defineBaseAddon({
   routes: workflowsRoutes,
   menus: workflowsMenu,
   i18n: { workflows: enWorkflowsMessages },
+  widgets: decisionContextWidgets,
   slots: [
     {
       slot: FORM_VIEW_RECORD_CHROME_SLOT,

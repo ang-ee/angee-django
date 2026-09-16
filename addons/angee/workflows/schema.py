@@ -587,6 +587,8 @@ class WorkflowRecoveryPlan:
     available: bool
     mode: str | None
     unavailable_reason: str
+    requires_uncertainty_ack: bool
+    uncertainty_reason: str
 
 
 @strawberry.type
@@ -835,6 +837,8 @@ class WorkflowTestSetupQuery:
             available=plan.capability.available,
             mode=None if plan.capability.mode is None else str(plan.capability.mode),
             unavailable_reason=plan.capability.unavailable_reason,
+            requires_uncertainty_ack=plan.capability.requires_uncertainty_ack,
+            uncertainty_reason=plan.capability.uncertainty_reason,
         )
 
     @strawberry.field
@@ -2703,6 +2707,7 @@ class WorkflowRunActionMutation:
         info: strawberry.Info,
         source_attempt: PublicID,
         request_key: str,
+        acknowledge_uncertain_external: bool = False,
     ) -> ActionResult:
         """Start or recover one idempotent run from exact retained failure evidence."""
 
@@ -2713,6 +2718,7 @@ class WorkflowRunActionMutation:
             attempt,
             request_key=request_key,
             actor=session_user(info),
+            acknowledge_uncertain_external=acknowledge_uncertain_external,
         )
         return ActionResult(ok=True, message=f"Started workflow recovery {run.sqid}.", id=run.sqid)
 

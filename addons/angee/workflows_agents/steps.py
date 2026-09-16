@@ -308,7 +308,8 @@ def _deferred_results(step_run: Any) -> list[dict[str, Any]]:
     decisions = step_run.decisions.filter(pk__in=decision_ids).order_by("priority", "pk")
     return [
         {
-            **dict(decision.payload or {}),
+            **{key: value for key, value in dict(decision.payload or {}).items()
+               if key != "facts"},
             "approved": decision.verdict == Verdict.COMPLETED,
             "verdict": str(decision.verdict),
             "resolution": dict(decision.resolution or {}),
@@ -397,19 +398,50 @@ def _approval_decisions(session: Any, requests: list[dict[str, Any]]) -> tuple[D
     assignee = str(to_subject_ref(session.owner))
     schema: dict[str, JsonValue] = {
         "type": "object",
+        "required": ["action"],
         "properties": {
+            "action": {
+                "type": "string", "enum": ["approve", "reject"],
+                "options": [
+                    {"value": "approve", "label": "Approve tool request", "verdict": "COMPLETE"},
+                    {"value": "reject", "label": "Reject tool request", "verdict": "REJECT",
+                     "variant": "destructive"},
+                ],
+            },
             "reason": {
                 "type": "string",
                 "label": "Decision note",
                 "widget": "textarea",
-            }
+            },
+            "facts": {
+                "type": "array", "items": {"type": "object"},
+                "layout": "context", "widget": "facts",
+            },
         },
+        "oneOf": [
+            {"type": "object", "required": ["action"],
+             "properties": {"action": {"const": "approve"}, "reason": {"type": "string"}},
+             "additionalProperties": False},
+            {"type": "object", "required": ["action", "reason"],
+             "properties": {"action": {"const": "reject"},
+                            "reason": {"type": "string", "minLength": 1}},
+             "additionalProperties": False},
+        ],
     }
     return tuple(
         DecisionSpec(
             assignees=(assignee,),
             action="approve_tool",
-            payload=dict(request),
+            payload={
+                **request,
+                "facts": [{
+                    "pointer": f"/approval_requests/{index}",
+                    "label": "Requested tool call",
+                    "value": dict(request),
+                    "authority": "unverified",
+                    "evidence": [],
+                }],
+            },
             priority=index,
             max_attempts=3,
             decision_schema=schema,

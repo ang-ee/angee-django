@@ -70,6 +70,16 @@ class CorrectionRef:
     corrected_paths: tuple[str, ...]
 
 
+class DecisionReadableFile(models.Model):
+    """Temporarily let one pending Decision's assignees read its exact File."""
+
+    extends = "storage.File"
+    rebac_grantable = {"viewer": "write", "pending_decision": "write"}
+
+    class Meta:
+        abstract = True
+
+
 class ExtractionLineage(AngeeModel):
     """Private lockable head for first allocation and subsequent revision CAS."""
 
@@ -98,7 +108,7 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "ext_"
-    rebac_grantable = {"viewer": "read"}
+    rebac_grantable = {"viewer": "read", "pending_decision": "read"}
 
     revision = models.PositiveIntegerField(default=1, editable=False)
     lineage_key = models.CharField(max_length=64, db_index=True, editable=False)

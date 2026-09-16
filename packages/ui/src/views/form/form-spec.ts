@@ -1,4 +1,8 @@
 import * as React from "react";
+import * as v from "valibot";
+import Ajv2020 from "ajv/dist/2020.js";
+import type { ErrorObject, ValidateFunction } from "ajv";
+import addFormats from "ajv-formats";
 
 import { useAppRuntime, type WidgetMap } from "../../runtime";
 import {
@@ -7,9 +11,164 @@ import {
 } from "../../widgets";
 import type { MutationDialogField } from "./MutationDialog";
 import { emptyValueForField } from "./field-values";
+import { JsonValueSchema } from "../../widgets/json-value";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
 import { parseFormSpec, parseFormSpecPayload, type FormSpecWire, type FormSpecFieldType } from "./form-spec-schema";
 export type { FormSpecFieldType } from "./form-spec-schema";
+
+export interface DecisionFormActionOption {
+  value: string;
+  label: string;
+  verdict: "COMPLETE" | "REJECT" | "ESCALATE";
+  variant?: "primary" | "secondary" | "destructive" | "ghost";
+  confirm?: string;
+}
+
+export interface DecisionFormValidation {
+  valid: boolean;
+  messages: Readonly<Record<string, readonly string[]>>;
+}
+
+/** One frozen native Decision schema, with Ajv owning every branch constraint. */
+export interface DecisionActionFormSpec {
+  readonly options: readonly DecisionFormActionOption[];
+  readonly inputFields: readonly FormSpecFieldDescriptor[];
+  readonly contextFields: readonly FormSpecFieldDescriptor[];
+  fieldsFor(action: string): readonly FormSpecFieldDescriptor[];
+  project(action: string, values: Readonly<Record<string, unknown>>): Record<string, unknown>;
+  validate(candidate: unknown): DecisionFormValidation;
+  validateContext(payload: unknown): DecisionFormValidation;
+}
+
+const DECISION_CONTEXT_WIDGETS = new Set(["record", "facts", "differences", "reasons"]);
+const FORM_ANNOTATIONS = [
+  "widget", "label", "placeholder", "layout", "defaultValue",
+  "omittable", "presenceRequired", "options", "relation",
+] as const;
+
+/** Compile the original Draft 2020-12 schema; presentation parsing never strips validation rules. */
+export function compileDecisionActionFormSpec(value: unknown, widgets: WidgetMap): DecisionActionFormSpec {
+  const presented = parseFormSpec(value);
+  const checkedJson = v.safeParse(JsonValueSchema, value);
+  if (!checkedJson.success || checkedJson.output === null || Array.isArray(checkedJson.output)
+      || typeof checkedJson.output !== "object") {
+    throw new Error("Decision schema must be a JSON object.");
+  }
+  const action = presented.properties?.action;
+  const values = action?.enum;
+  const options = action?.options;
+  if (action?.type !== "string" || !presented.required?.includes("action")
+      || !values?.length || !options || options.length !== values.length
+      || new Set(values).size !== values.length) {
+    throw new Error("Decision schema needs one required action enum and matching options.");
+  }
+  const byValue = new Map<string, DecisionFormActionOption>();
+  for (const option of options) {
+    if (!option.verdict || !values.includes(option.value) || byValue.has(option.value)) {
+      throw new Error("Decision action options must name a unique enum value and native verdict.");
+    }
+    byValue.set(option.value, option as DecisionFormActionOption);
+  }
+  const branches = presented.oneOf;
+  if (!branches || branches.length !== values.length) {
+    throw new Error("Decision schema needs one closed oneOf branch per action.");
+  }
+  const contextNames = new Set(Object.entries(presented.properties ?? {})
+    .filter(([, field]) => field.layout === "context")
+    .map(([name, field]) => {
+      if (!DECISION_CONTEXT_WIDGETS.has(field.widget ?? "")) {
+        throw new Error(`Decision context ${name} needs a typed shared widget.`);
+      }
+      return name;
+    }));
+  const byBranch = new Map<string, Set<string>>();
+  for (const branch of branches) {
+    const selected = branch.properties?.action?.const;
+    const names = new Set(Object.keys(branch.properties ?? {}));
+    if (branch.type !== "object" || branch.additionalProperties !== false
+        || !Array.isArray(branch.required) || !branch.required.includes("action")
+        || typeof selected !== "string" || !values.includes(selected)
+        || byBranch.has(selected) || !names.has("action")
+        || [...names].some((name) => !Object.hasOwn(presented.properties ?? {}, name) || contextNames.has(name))
+        || branch.required.some((name) => !names.has(name))) {
+      throw new Error("Decision branches need distinct closed action input scopes.");
+    }
+    byBranch.set(selected, names);
+  }
+  if (byBranch.size !== values.length || contextNames.has("action")
+      || [...contextNames].some((name) => presented.required?.includes(name))) {
+    throw new Error("Decision action/context scopes do not cover the declared schema.");
+  }
+
+  const ajv = new Ajv2020({
+    allErrors: true, strict: true, coerceTypes: false, useDefaults: false, removeAdditional: false,
+  });
+  addFormats(ajv, { mode: "full" });
+  for (const keyword of FORM_ANNOTATIONS) {
+    if (!ajv.getKeyword(keyword)) ajv.addKeyword(keyword);
+  }
+  let validate: ValidateFunction;
+  try {
+    validate = ajv.compile(checkedJson.output);
+  } catch (cause) {
+    throw new Error(`Invalid Decision schema: ${String(cause)}`);
+  }
+  const fields = deserializeObjectFields(presented, widgets, "form spec");
+  const contextFields = fields.filter((field) => contextNames.has(field.name));
+  const inputFields = fields.filter((field) => field.name !== "action" && !contextNames.has(field.name));
+  const contextValidators = Object.fromEntries([...contextNames].map((name) => {
+    const root = checkedJson.output as Record<string, unknown>;
+    const raw = root.properties;
+    const properties = raw && typeof raw === "object" && !Array.isArray(raw)
+      ? raw as Record<string, unknown> : {};
+    const fieldSchema = properties[name];
+    if (!fieldSchema || typeof fieldSchema !== "object" || Array.isArray(fieldSchema)) {
+      throw new Error(`Decision context ${name} needs a JSON schema object.`);
+    }
+    return [name, ajv.compile({ ...fieldSchema, ...(root.$defs ? { $defs: root.$defs } : {}) })];
+  })) as Record<string, ValidateFunction>;
+
+  return {
+    options: values.map((selected) => byValue.get(selected)!), inputFields, contextFields,
+    fieldsFor(selected) {
+      const names = byBranch.get(selected);
+      if (!names) throw new Error("Choose a declared Decision action.");
+      return inputFields.filter((field) => names.has(field.name));
+    },
+    project(selected, current) {
+      return { ...normalizeFormSpecValues(this.fieldsFor(selected), current), action: selected };
+    },
+    validate(candidate) {
+      return { valid: Boolean(validate(candidate)), messages: ajvErrorMessages(validate.errors) };
+    },
+    validateContext(payload) {
+      const seeds = parseFormSpecPayload(payload);
+      const messages: Record<string, string[]> = {};
+      for (const name of contextNames) {
+        if (!Object.hasOwn(seeds, name)) {
+          messages[name] = ["Frozen Decision context is missing."];
+          continue;
+        }
+        const checker = contextValidators[name];
+        if (!checker || !checker(seeds[name])) messages[name] = ["Frozen Decision context is invalid."];
+      }
+      return { valid: Object.keys(messages).length === 0, messages };
+    },
+  };
+}
+
+function ajvErrorMessages(errors: readonly ErrorObject[] | null | undefined): Record<string, string[]> {
+  const messages: Record<string, string[]> = {};
+  for (const error of errors ?? []) {
+    const missing = error.keyword === "required" && typeof error.params.missingProperty === "string"
+      ? error.params.missingProperty : "";
+    const pointer = error.instancePath.replace(/^\//, "").replace(/\//g, ".")
+      .replace(/~1/g, "/").replace(/~0/g, "~");
+    const name = pointer || missing || "root";
+    (messages[name] ??= []).push(error.message ?? "Value does not satisfy this Decision action.");
+  }
+  return messages;
+}
 
 export type FormSpecRelationCreate = Pick<RelationCreateConfig, "resource" | "defaultValues">;
 
@@ -164,12 +323,14 @@ function deserializeField(
   parentPath: string,
 ): FormSpecFieldDescriptor {
   const path = parentPath === "form spec" ? name : `${parentPath}.${name}`;
-  const type = field.type ?? "any";
-  const variableList = field.type === "array" && field.widget === "list";
-  const rowTemplate = field.type === "array" && field.items?.type === "object" && !variableList
+  const type = formSpecFieldType(field.type);
+  const nullable = field.nullable || (Array.isArray(field.type) && field.type.includes("null"));
+  const variableList = type === "array" && field.widget === "list";
+  const rowTemplate = type === "array" && field.items && formSpecFieldType(field.items.type) === "object"
+    && field.layout !== "context" && !variableList
     ? deserializeObjectFields(field.items, widgets, path)
     : undefined;
-  const objectTemplate = field.type === "object" && field.widget === "object"
+  const objectTemplate = type === "object" && field.widget === "object"
     ? deserializeObjectFields(field, widgets, path)
     : undefined;
   const itemTemplate = variableList && field.items
@@ -200,7 +361,7 @@ function deserializeField(
     ...(required ? { required: true } : {}),
     ...(field.presenceRequired ? { presenceRequired: true } : {}),
     ...(field.omittable ? { omittable: true } : {}),
-    ...(field.nullable ? { nullable: true } : {}),
+    ...(nullable ? { nullable: true } : {}),
     ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
     ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
     ...(field.minLength !== undefined ? { minLength: field.minLength } : {}),
@@ -217,6 +378,14 @@ function deserializeField(
     ...(objectTemplate ? { objectTemplate } : {}),
     ...(itemTemplate ? { itemTemplate } : {}),
   };
+}
+
+function formSpecFieldType(type: FormSpecWire["type"]): FormSpecFieldType {
+  if (Array.isArray(type)) {
+    const nonNull = type.filter((value) => value !== "null");
+    return nonNull.length === 1 ? nonNull[0] as FormSpecFieldType : "any";
+  }
+  return type ?? "any";
 }
 
 function optionsFrom(field: FormSpecWire): readonly WidgetOption[] | undefined {

@@ -5,10 +5,21 @@ from __future__ import annotations
 from django.db import models, transaction
 
 
+class DecisionReadableParty(models.Model):
+    """Opt native Party records into exact pending Decision read delegation."""
+
+    extends = "parties.Party"
+    rebac_grantable = {"reader": "write", "pending_decision": "write"}
+
+    class Meta:
+        abstract = True
+
+
 class PartyHandle(models.Model):
     """Wake workflows retaining this exact association when its review changes."""
 
     extends = "parties.PartyHandle"
+    rebac_grantable = {"pending_decision": "write"}
 
     class Meta:
         abstract = True

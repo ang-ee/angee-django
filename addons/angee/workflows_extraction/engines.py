@@ -111,6 +111,7 @@ class OcrEngine(ImplBase):
     label = "OCR engine"
     pipeline_version: ClassVar[str] = "page-v1"
     document_engine: ClassVar[bool] = False
+    evidence_layout: ClassVar[dict[str, Any]] = {}
 
     def validate_model(self, model: Any | None, *, role: Literal["mapping", "recognition"]) -> None:
         """Validate a configured model using the same contract as extraction.
@@ -139,6 +140,24 @@ class OcrEngine(ImplBase):
         timeout: float,
     ) -> DocumentResult:
         """Extract a whole document; engines opt in without replacing the registry."""
+
+        raise NotImplementedError
+
+    def process_parts(
+        self, sources: Sequence[DocumentSource], parts: Sequence[DocumentPart],
+        schema: dict[str, Any], *, config: dict[str, Any], recognition_used: bool = False,
+    ) -> DocumentResult:
+        """Published domain profile's pure deterministic processing contract."""
+
+        raise NotImplementedError
+
+    def normalize_inference_candidate(
+        self, sources: Sequence[DocumentSource], parts: Sequence[DocumentPart],
+        schema: dict[str, Any], *, value: dict[str, Any],
+        claims: dict[str, list[dict[str, Any]]], metadata: dict[str, Any],
+        config: dict[str, Any], recognition_used: bool = False,
+    ) -> DocumentResult:
+        """Pure domain meaning and grounding of one bound mapping response."""
 
         raise NotImplementedError
 

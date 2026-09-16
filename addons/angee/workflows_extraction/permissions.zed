@@ -3,9 +3,10 @@
 definition workflows_extraction/extraction {
     relation owner: auth/user // rebac:field=created_by
     relation viewer: auth/user | auth/group#member
+    relation pending_decision: workflows/decision
     relation admin: angee/role // rebac:const=admin
 
-    permission read = owner + viewer + admin->member
+    permission read = owner + viewer + pending_decision->assignee + admin->member
 }
 
 definition workflows_extraction/extraction_source {

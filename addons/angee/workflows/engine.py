@@ -23,7 +23,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import JsonValue, create_model
 from pydantic import ValidationError as PydanticValidationError
 from rebac import PermissionDenied, SubjectRef, current_actor, system_context
@@ -43,6 +43,9 @@ from angee.workflows.attempts import (
     AttemptInput,
     AttemptResult,
     AttemptResultKind,
+    DecisionResolution,
+    ExternalOperationPolicy,
+    ExternalOperationRequest,
     InvocationAdmission,
     JsonPresence,
     MapItemSource,
@@ -62,6 +65,7 @@ from angee.workflows.dispatch import (
     WorkflowDispatchKind,
     enqueue_dispatch_publisher,
 )
+from angee.workflows.decision_actions import compile_decision_action_schema
 from angee.workflows.models import (
     JoinRule,
     RunOrigin,
@@ -70,6 +74,7 @@ from angee.workflows.models import (
     Verdict,
     WaitingKind,
 )
+from angee.workflows.managers import decision_gate_output, retained_gate_output
 from angee.workflows.steps import DecisionSpec, MapStep, StepExecutionMode, StepResult, TransientStepError
 from angee.workflows.testing import FixtureRole, WorkflowScope
 
@@ -468,6 +473,70 @@ def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     return {"executed": 1}
 
 
+def external_operation_request(step_run: Any) -> ExternalOperationRequest:
+    """Return the exact retained request identity for the current provider call."""
+
+    request = getattr(step_run, "_workflow_external_operation_request", None)
+    if not isinstance(request, ExternalOperationRequest):
+        raise RuntimeError("External operation requests are available only inside their admitted invocation.")
+    return request
+
+
+def consume_decision_resolution(
+    consumer_step_run: Any,
+    resolution_path: tuple[str | int, ...],
+    *,
+    expected_action: str,
+    expected_target: tuple[str, str],
+    expected_verdict: str,
+    actor: Any,
+) -> tuple[Any, DecisionResolution]:
+    """Consume one exact gate value from this invocation's admitted input."""
+
+    lease_token = getattr(consumer_step_run, "_workflow_invocation_lease_token", None)
+    if not isinstance(lease_token, uuid.UUID):
+        raise RuntimeError("Decision consumption requires the active fenced invocation lease.")
+    return _model("StepAttempt").objects.consume_decision_resolution(
+        consumer_step_run.pk,
+        resolution_path,
+        lease_token=lease_token,
+        expected_action=expected_action,
+        expected_target=expected_target,
+        expected_verdict=expected_verdict,
+        actor=actor,
+    )
+
+
+def admitted_continuation_child(
+    consumer_step_run: Any, child_id_path: tuple[str | int, ...],
+    *, expected_starter_class: str,
+) -> Any:
+    """Resolve a continuation run from one exact admitted starter output."""
+
+    lease_token = getattr(consumer_step_run, "_workflow_invocation_lease_token", None)
+    if not isinstance(lease_token, uuid.UUID):
+        raise RuntimeError("Continuation result requires the active fenced invocation lease.")
+    return _model("StepAttempt").objects.admitted_continuation_child(
+        consumer_step_run.pk, lease_token=lease_token,
+        child_id_path=child_id_path, expected_starter_class=expected_starter_class,
+    )
+
+
+def target_read_authority(
+    consumer_step_run: Any, authority_path: tuple[str | int, ...],
+    *, proposal_gate_path: tuple[str | int, ...] = (),
+) -> tuple[Any, Any]:
+    """Return one human resolver and Decision proven by this admitted input."""
+
+    lease_token = getattr(consumer_step_run, "_workflow_invocation_lease_token", None)
+    if not isinstance(lease_token, uuid.UUID):
+        raise RuntimeError("Target authority requires the active fenced invocation lease.")
+    return _model("StepAttempt").objects.target_read_authority(
+        consumer_step_run.pk, lease_token=lease_token,
+        authority_path=authority_path, proposal_gate_path=proposal_gate_path,
+    )
+
+
 def execute_dispatch(
     dispatch_id: int, attempt_id: int, lease_token: Any, *, now: datetime | None = None
 ) -> dict[str, int]:
@@ -509,6 +578,19 @@ def execute_dispatch(
     def invoke(owned_step_run: Any, owned_attempt: Any) -> AttemptResult:
         owned_step_run.input = owned_attempt.input if owned_attempt.input_present else None
         owned_step_run._workflow_invocation_lease_token = owned_attempt.lease_token
+        if impl_class.execution_mode == StepExecutionMode.EXTERNAL_OPERATION:
+            policy = impl_class.external_operation_policy(attempt=owned_attempt)
+            if not isinstance(policy, ExternalOperationPolicy):
+                raise ValidationError({"operation": "External operation policy must be a declared provider capability."})
+            source = owned_attempt.recovery_source_attempt
+            owned_step_run._workflow_external_operation_request = ExternalOperationRequest(
+                request_key=str(source.effect_key if source is not None else owned_attempt.effect_key),
+                attempt_id=owned_attempt.pk,
+                input_present=owned_attempt.input_present,
+                input=owned_attempt.input,
+                recovery_source_attempt_id=None if source is None else source.pk,
+                uncertainty_acknowledged=bool(owned_step_run.run.recovery_uncertainty_ack),
+            )
         implementation = cast(Any, impl_class)()
         if owned_attempt.cause == AttemptCause.MANUAL_RETRY:
             recovery_mode = RecoveryMode(owned_attempt.recovery_mode)
@@ -774,6 +856,7 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
         ):
             try:
                 resolution = _validate_resolution(current, payload, actor=actor_ref)
+                _assert_selected_action_verdict(current, resolution, target)
             except ValidationError as resolution_error:
                 locked, exhausted = decision_model.objects.record_invalid_retained(decision_id)
                 retained_validation_error = resolution_error
@@ -816,6 +899,7 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
         decision_model.objects.ensure_sequential_turn(locked)
         try:
             resolution = _validate_resolution(locked, payload, actor=actor_ref)
+            _assert_selected_action_verdict(locked, resolution, target)
         except ValidationError as error:
             _record_invalid_resolution(locked, error)
             legacy_validation_error = error
@@ -1202,6 +1286,15 @@ def _validate_resolution(decision: Any, payload: Any, *, actor: Any = None) -> d
     return dict(resolution)
 
 
+def _assert_selected_action_verdict(decision: Any, resolution: dict[str, Any], verdict: Verdict) -> None:
+    """Prevent an independent mutation verdict from overriding the selected action."""
+
+    schema = _schema_for_decision(decision)
+    contract = compile_decision_action_schema(schema) if isinstance(schema, dict) else None
+    if contract is not None and contract.verdict_for(resolution.get("action")) != str(verdict):
+        raise ValidationError({"verdict": "The selected action maps to a different native verdict."})
+
+
 def _schema_for_decision(decision: Any) -> Any | None:
     """Return the resolution schema owned by the suspended step."""
 
@@ -1223,6 +1316,35 @@ def _validate_mapping_schema(
     """Normalize a JSON-authored resolution, then enforce its full schema."""
 
     if not schema:
+        return dict(resolution)
+    contract = compile_decision_action_schema(schema)
+    if contract is not None:
+        submitted_context = set(contract.context_fields).intersection(resolution)
+        if submitted_context:
+            raise ValidationError({
+                name: "Decision context cannot be submitted as a resolution."
+                for name in sorted(submitted_context)
+            })
+        selected = resolution.get("action")
+        branch = contract.branches.get(selected) if isinstance(selected, str) else None
+        if branch is None:
+            raise ValidationError({"action": "Choose one declared Decision action."})
+        extraneous = set(resolution) - set(branch["properties"])
+        if extraneous:
+            raise ValidationError({
+                name: "This field is not permitted for the selected action."
+                for name in sorted(extraneous)
+            })
+        schema_errors: dict[str, list[str]] = {}
+        for error in sorted(
+            Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(resolution),
+            key=lambda item: (tuple(str(part) for part in item.path), item.message),
+        ):
+            field = ".".join(str(component) for component in error.path) or "payload"
+            schema_errors.setdefault(field, []).append(error.message)
+        if schema_errors:
+            raise ValidationError(schema_errors)
+        _validate_relation_fields(schema, resolution, actor)
         return dict(resolution)
     if schema.get("type", "object") != "object":
         raise ValidationError({"payload": "Decision schema root type must be object."})
@@ -1267,9 +1389,8 @@ def _validate_mapping_schema(
         schema_errors.setdefault(field, []).append(error.message)
     if schema_errors:
         raise ValidationError(schema_errors)
-    validated = cast(dict[str, Any], parsed.model_dump(exclude_none=False))
-    _validate_relation_fields(resolution_schema, validated, actor)
-    return validated
+    _validate_relation_fields(resolution_schema, submitted, actor)
+    return submitted
 
 
 def _validate_relation_fields(schema: dict[str, Any], resolution: dict[str, Any], actor: Any) -> None:
@@ -1468,7 +1589,7 @@ def _apply_decision_policy(step_run: Any) -> None:
         step_run.wake(at=timezone.now())
         return
     step_run.mark_succeeded(
-        output={"decisions": [decision.sqid for decision in decisions]},
+        output=decision_gate_output(decisions, outcome=outcome),
         outcome=outcome,
     )
 
@@ -2184,14 +2305,25 @@ def _prepare_attempt_input(
             "step", "source_attempt"
         ).order_by("pk"):
             source_attempt = evidence.source_attempt
+            gate_decisions = (
+                list(source_attempt.decisions.order_by("priority", "pk"))
+                if source_attempt.result_kind == str(AttemptResultKind.SUSPEND)
+                else []
+            )
+            gate_output = retained_gate_output(source_attempt, gate_decisions) if gate_decisions else None
             sources[evidence.step.key] = SourceValue(
-                JsonPresence(source_attempt.output_present, source_attempt.output),
+                JsonPresence(
+                    True if gate_output is not None else source_attempt.output_present,
+                    gate_output if gate_output is not None else source_attempt.output,
+                ),
                 {
                     "kind": "recovery_evidence",
                     "evidence_id": evidence.sqid,
                     "attempt_id": source_attempt.pk,
                     "step_key": evidence.step.key,
                     "map_index": evidence.map_index,
+                    **({"settled_decision_ids": source_attempt.decision_settlement["decision_ids"]}
+                       if gate_output is not None else {}),
                 },
             )
     for source in source_rows:
@@ -2213,14 +2345,13 @@ def _prepare_attempt_input(
                 source.decisions.filter(suspension_attempt_id=attempt.pk)
                 .order_by("priority", "pk")
             )
-        settled_output = {
-            "decisions": [decision.sqid for decision in settled_decisions]
-        }
+        settled_output = retained_gate_output(attempt, settled_decisions) if settled_decisions else None
         valid_done = valid_attempt and attempt.result_kind == str(AttemptResultKind.DONE)
         valid_settled_decisions = (
             bool(settled_decisions)
+            and settled_output is not None
             and source.output == settled_output
-            and source.decision_gate.outcome(settled_decisions) == source.outcome
+            and settled_output["outcome"] == source.outcome
         )
         provenance = {
             "kind": "step_output",
@@ -2229,7 +2360,7 @@ def _prepare_attempt_input(
             "attempt_id": attempt.pk if attempt is not None else None,
             "effect_generation": source.effect_generation,
             **(
-                {"settled_decision_ids": [decision.pk for decision in settled_decisions]}
+                {"settled_decision_ids": attempt.decision_settlement["decision_ids"]}
                 if valid_settled_decisions
                 else {}
             ),
