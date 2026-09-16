@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel
 
-from angee.workflows.graph import GraphEdge, GraphIdentity, GraphNode, WorkflowGraph
+from angee.workflows.bindings import parse_binding
+from angee.workflows.data_contracts import model_data_contract, schema_data_contract
+from angee.workflows.graph import (
+    GraphEdge,
+    GraphIdentity,
+    GraphNode,
+    WorkflowGraph,
+    _result_binding_compatible,
+)
 from angee.workflows.steps import GateStep, HandlerStep, MapStep, StepImpl, StepResult, WaitStep
 from angee.workflows_agents.steps import AgentSessionStepImpl
 from angee.workflows_parties.steps import DedupeExecuteStepImpl, DedupeGateStepImpl, DedupeScanStepImpl
@@ -51,6 +59,42 @@ class TargetStep(LegacyOutcomeStep):
 class SubjectStep(LegacyOutcomeStep):
     key = "subject_contract"
     subject_declaration = "notes.note"
+
+
+class ExactLiteralOutput(BaseModel):
+    status: Literal["held", "stale"]
+
+
+class SubsetLiteralOutput(BaseModel):
+    status: Literal["held"]
+
+
+class SupersetLiteralOutput(BaseModel):
+    status: Literal["held", "rejected"]
+
+
+class UnboundedStringOutput(BaseModel):
+    status: str
+
+
+class BooleanLiteralOutput(BaseModel):
+    status: Literal[True]
+
+
+class ReferencedLiteralValue(BaseModel):
+    status: Literal["held"]
+
+
+class ReferencedLiteralOutput(BaseModel):
+    result: ReferencedLiteralValue
+
+
+class ObjectOutput(BaseModel):
+    status: dict[str, str]
+
+
+class ArrayOutput(BaseModel):
+    status: list[str]
 
 
 def node(
@@ -104,6 +148,83 @@ def graph(
 
 def codes(value: WorkflowGraph) -> set[str]:
     return {diagnostic.code for diagnostic in value.diagnostics()}
+
+
+@pytest.mark.parametrize(
+    ("source_model", "expected"),
+    [
+        (ExactLiteralOutput, True),
+        (SubsetLiteralOutput, True),
+        (SupersetLiteralOutput, False),
+        (UnboundedStringOutput, False),
+    ],
+)
+def test_result_binding_proves_only_bounded_literal_subsets(
+    source_model: type[BaseModel], expected: bool,
+) -> None:
+    binding = parse_binding({
+        "kind": "step_output", "step_key": "producer", "path": ["status"],
+    })
+    compatible = _result_binding_compatible(
+        binding,
+        {"type": "string", "enum": ["held", "stale"]},
+        schema_data_contract({"type": "object", "properties": {}}),
+        model_data_contract(source_model, mode="serialization"),
+        "producer",
+    )
+
+    assert compatible is expected
+
+
+def test_result_binding_literal_subset_uses_json_type_semantics() -> None:
+    binding = parse_binding({
+        "kind": "step_output", "step_key": "producer", "path": ["status"],
+    })
+
+    assert not _result_binding_compatible(
+        binding,
+        {"type": ["boolean", "integer"], "enum": [1]},
+        schema_data_contract({"type": "object", "properties": {}}),
+        model_data_contract(BooleanLiteralOutput, mode="serialization"),
+        "producer",
+    )
+
+
+def test_result_binding_resolves_literal_values_through_source_refs() -> None:
+    binding = parse_binding({
+        "kind": "step_output", "step_key": "producer", "path": ["result", "status"],
+    })
+
+    assert _result_binding_compatible(
+        binding,
+        {"type": "string", "enum": ["held", "stale"]},
+        schema_data_contract({"type": "object", "properties": {}}),
+        model_data_contract(ReferencedLiteralOutput, mode="serialization"),
+        "producer",
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_model", "target_schema"),
+    [
+        (ObjectOutput, {"type": "object", "const": {}}),
+        (ArrayOutput, {"type": "array", "enum": [[]]}),
+    ],
+)
+def test_result_binding_rejects_unbounded_container_literals(
+    source_model: type[BaseModel], target_schema: dict[str, Any],
+) -> None:
+    binding = parse_binding({
+        "kind": "step_output", "step_key": "producer", "path": ["status"],
+    })
+
+    assert not _result_binding_compatible(
+        binding,
+        target_schema,
+        schema_data_contract({"type": "object", "properties": {}}),
+        model_data_contract(source_model, mode="serialization"),
+        "producer",
+    )
 
 
 def test_map_body_candidates_use_graph_ownership_and_explain_exclusions() -> None:

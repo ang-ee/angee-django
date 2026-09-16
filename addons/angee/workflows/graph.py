@@ -1164,7 +1164,11 @@ def _result_binding_compatible(
             return False
         source = workflow_input if kind == "workflow_input" else producer_output
         source_node = source.catalogue.at_path(binding.path)
-        return source_node is not None and _catalogue_node_compatible(source_node, target_schema)
+        return source_node is not None and _catalogue_node_compatible(
+            source_node,
+            target_schema,
+            literal_values=source.literal_values_at_path(binding.path),
+        )
     if kind == "object":
         if set(target_schema) - {
             "type", "properties", "required", "additionalProperties", "minProperties", "maxProperties",
@@ -1249,10 +1253,17 @@ def _tagged_one_of_choice(binding: Any, variants: list[Any]) -> dict[str, Any] |
     return matches[0] if len(matches) == 1 else None
 
 
-def _catalogue_node_compatible(source: DataContractNode, target_schema: dict[str, Any]) -> bool:
+def _catalogue_node_compatible(
+    source: DataContractNode,
+    target_schema: dict[str, Any],
+    *,
+    literal_values: tuple[Any, ...] | None = None,
+) -> bool:
     if not target_schema:
         return True
-    if set(target_schema) - {"type", "title", "description", "$defs", "items"}:
+    if set(target_schema) - {
+        "type", "title", "description", "$defs", "items", "enum", "const",
+    }:
         return False
     target_type = target_schema.get("type")
     if source.kind == "unknown" or target_type is None:
@@ -1262,8 +1273,22 @@ def _catalogue_node_compatible(source: DataContractNode, target_schema: dict[str
     ):
         return False
     allowed = set(target_type) if isinstance(target_type, list) else {target_type}
+    has_literal_constraint = "enum" in target_schema or "const" in target_schema
+    if has_literal_constraint and source.kind != "scalar":
+        return False
     if source.kind == "scalar":
-        return source.json_type in allowed or (source.json_type == "integer" and "number" in allowed)
+        type_compatible = (
+            source.json_type in allowed
+            or (source.json_type == "integer" and "number" in allowed)
+        )
+        if not type_compatible:
+            return False
+        if has_literal_constraint:
+            return literal_values is not None and all(
+                Draft202012Validator(target_schema).is_valid(value)
+                for value in literal_values
+            )
+        return True
     if source.kind == "object":
         if "object" not in allowed:
             return False

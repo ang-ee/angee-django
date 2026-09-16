@@ -96,6 +96,15 @@ class DataContract:
             return False
         return _guarantees_path(self.raw_schema, tuple(path), self.raw_schema, frozenset())
 
+    def literal_values_at_path(self, path: ConcretePath) -> tuple[Any, ...] | None:
+        """Return every exact JSON value allowed at a bounded scalar path."""
+
+        if self.raw_schema is None:
+            return None
+        return _literal_values_at_path(
+            self.raw_schema, tuple(path), self.raw_schema, frozenset()
+        )
+
     def flat_catalogue(self) -> "FlatDataContract":
         """Return deterministic rows for depth-independent transport."""
 
@@ -214,6 +223,56 @@ def _guarantees_path(
             and _guarantees_path(schema.get("items"), rest, root, active_refs)
         )
     return False
+
+
+def _literal_values_at_path(
+    schema: Any,
+    path: tuple[str | int, ...],
+    root: Mapping[str, Any],
+    active_refs: frozenset[str],
+) -> tuple[Any, ...] | None:
+    """Resolve refs/unions and retain only paths with finite literal values."""
+
+    if not isinstance(schema, Mapping):
+        return None
+    reference = schema.get("$ref")
+    if isinstance(reference, str):
+        if reference in active_refs or not reference.startswith("#/$defs/"):
+            return None
+        definitions = root.get("$defs", {})
+        target = definitions.get(reference.removeprefix("#/$defs/")) if isinstance(definitions, Mapping) else None
+        return _literal_values_at_path(target, path, root, active_refs | {reference})
+    variants = schema.get("oneOf", schema.get("anyOf"))
+    if isinstance(variants, list):
+        if not variants:
+            return None
+        values: list[Any] = []
+        for choice in variants:
+            choice_values = _literal_values_at_path(choice, path, root, active_refs)
+            if choice_values is None:
+                return None
+            values.extend(choice_values)
+        return tuple(values)
+    if path:
+        segment, rest = path[0], path[1:]
+        if isinstance(segment, str):
+            properties = schema.get("properties", {})
+            if schema.get("type") != "object" or not isinstance(properties, Mapping):
+                return None
+            return _literal_values_at_path(properties.get(segment), rest, root, active_refs)
+        if isinstance(segment, int) and not isinstance(segment, bool) and segment >= 0:
+            if schema.get("type") != "array":
+                return None
+            return _literal_values_at_path(schema.get("items"), rest, root, active_refs)
+        return None
+    if "const" in schema:
+        return (schema["const"],)
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        return tuple(enum)
+    if schema.get("type") == "null":
+        return (None,)
+    return None
 
 
 class _CatalogueProjector:
