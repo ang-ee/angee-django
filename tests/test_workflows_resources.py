@@ -77,6 +77,7 @@ def test_demo_workflow_resources_publish_lineage_and_leave_trigger_disabled(
     assert [row.version for row in published] == [1]
     assert current == published[0]
     assert trigger.enabled is False
+    assert draft.error_workflow_id is None
     assert draft_binding == {"kind": "workflow_input", "path": []}
     assert published_binding == {"kind": "workflow_input", "path": []}
 

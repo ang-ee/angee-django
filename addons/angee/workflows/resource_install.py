@@ -45,6 +45,8 @@ def _declared_fields(resource: Any, row: Mapping[str, Any], names: frozenset[str
             values[name] = resource.fields[name].clean(row)
         elif model_field.has_default():
             values[name] = copy.deepcopy(model_field.get_default())
+        elif model_field.null:
+            values[name] = None
         else:
             raise ResourceLoadError(f"{resource.entry.display}: missing required declaration field {name!r}")
     return values

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 import hashlib
 import json
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -23,6 +23,9 @@ from angee.workflows_extraction.service import (
     SupersededInference, collect_carriers, extract, infer, prepare_pages, process, reextract,
     require_approved_model_deployment, restore_prepared_pages,
 )
+
+
+EngineConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
 
 
 class OcrExtractInput(BaseModel):
@@ -51,7 +54,7 @@ class OcrExtractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_: dict[str, Any] = Field(alias="schema", json_schema_extra={"widget": "json"})
     engine: str
-    engine_config: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
+    engine_config: EngineConfig = Field(default_factory=dict)
     retained_failure_outcome: Literal["failed", "retained_failure"] = "failed"
 
 
@@ -229,8 +232,8 @@ class RecognizePageOutput(BaseModel):
 class RecognizePageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     engine: str = "glm"
-    engine_config: dict[str, Any] = Field(default_factory=dict)
-    timeout: float = Field(default=60, gt=0)
+    engine_config: EngineConfig = Field(default_factory=dict)
+    timeout: int = Field(default=60, gt=0, description="Provider timeout in whole seconds.")
 
 
 class RecognizePageStepImpl(StepImpl):

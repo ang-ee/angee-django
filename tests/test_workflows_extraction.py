@@ -24,6 +24,7 @@ from angee.workflows_extraction.engines import (
 )
 from angee.workflows_extraction.routing import acquire_native_parts
 from angee.workflows_extraction.service import _merge, _validated_schema
+from angee.workflows_extraction.steps import OcrExtractStepImpl, RecognizePageStepImpl
 from angee.workflows_extraction_glm.engine import GlmOllamaEngine
 from tests.ocr_engines import FakeOcrEngine
 
@@ -52,6 +53,44 @@ def _message_part(
         type=mime_type,
         has_access=lambda _permission: True,
     )
+
+
+@pytest.mark.parametrize("step_impl", [OcrExtractStepImpl, RecognizePageStepImpl])
+def test_extraction_step_engine_config_is_authored_as_json(step_impl: type) -> None:
+    """Provider/profile options remain editable without weakening structured config projection."""
+
+    spec = step_impl.config_form_spec()
+
+    assert spec is not None
+    assert spec["properties"]["engine_config"] == {
+        "type": "object",
+        "widget": "json",
+        "label": "Engine Config",
+        "omittable": True,
+    }
+    assert step_impl.normalize_config({
+        **({"schema": {}, "engine": "profile"} if step_impl is OcrExtractStepImpl else {}),
+        "engine_config": {"nested": {"enabled": False}, "limit": 0, "nullable": None},
+    })["engine_config"] == {
+        "nested": {"enabled": False}, "limit": 0, "nullable": None,
+    }
+
+
+def test_recognize_page_config_retains_authored_defaults() -> None:
+    spec = RecognizePageStepImpl.config_form_spec()
+
+    assert spec is not None
+    assert spec["properties"]["timeout"] == {
+        "type": "integer",
+        "minimum": 1,
+        "label": "Timeout",
+        "description": "Provider timeout in whole seconds.",
+        "defaultValue": 60,
+        "omittable": True,
+    }
+    assert RecognizePageStepImpl.config_defaults() == {"engine": "glm", "timeout": 60}
+    with pytest.raises(ValidationError, match="config.timeout"):
+        RecognizePageStepImpl.normalize_config({"timeout": 0})
 
 
 @pytest.mark.parametrize("role", ["body", "title", "quoted", "signature", "header"])
