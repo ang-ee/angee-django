@@ -491,6 +491,7 @@ def infer(
         raise ValidationError({"inference": "Retired identities require typed retained reasons."})
     if not isinstance(input_facts, Mapping) or (
         input_facts.get("base_extraction_id") != str(base.sqid)
+        or input_facts.get("base_revision") != base.revision
         or input_facts.get("model_id") != str(model.sqid)
         or input_facts.get("identity_mapping", {}) != requested_mapping
         or input_facts.get("retired_identities", {}) != requested_retirement
@@ -510,24 +511,29 @@ def infer(
         raise ValidationError({"inference": "This publication permits deterministic processing only."})
     if not base.unresolved_reasons:
         raise ValidationError({"inference": "The retained base has no unresolved source facts."})
-    prior_identities = {
-        identity
-        for document in base.document_refs
-        for identity in (document.identity, *(line.identity for line in document.lines))
-    }
-    mapped_identities = [
-        identity for identity in requested_mapping.values() if identity != "new"
-    ]
-    if (
-        len(mapped_identities) != len(set(mapped_identities))
-        or set(mapped_identities) - prior_identities
-        or set(requested_retirement) - prior_identities
-        or set(mapped_identities).intersection(requested_retirement)
-        or set(mapped_identities).union(requested_retirement) != prior_identities
-    ):
-        raise ValidationError({
-            "inference": "Reviewed correspondence must account for every prior document and line identity."
-        })
+    automatic_correspondence = not requested_mapping and not requested_retirement
+    if automatic_correspondence:
+        effective_mapping = extraction_model.objects.automatic_inference_mapping(base)
+    else:
+        effective_mapping = requested_mapping
+        prior_identities = {
+            identity
+            for document in base.document_refs
+            for identity in (document.identity, *(line.identity for line in document.lines))
+        }
+        mapped_identities = [
+            identity for identity in requested_mapping.values() if identity != "new"
+        ]
+        if (
+            len(mapped_identities) != len(set(mapped_identities))
+            or set(mapped_identities) - prior_identities
+            or set(requested_retirement) - prior_identities
+            or set(mapped_identities).intersection(requested_retirement)
+            or set(mapped_identities).union(requested_retirement) != prior_identities
+        ):
+            raise ValidationError({
+                "inference": "Reviewed correspondence must account for every prior document and line identity."
+            })
     if correspondence_hold and not (requested_mapping or requested_retirement):
         raise ValidationError({
             "inference": "The retained correspondence hold requires an explicit reviewed mapping."
@@ -542,7 +548,6 @@ def infer(
     })
     with system_context(reason="workflows_extraction.infer.current"):
         existing = extraction_model._base_manager.filter(reuse_key=reuse_key).first()
-        head = extraction_model._base_manager.filter(lineage_key=base.lineage_key).order_by("-revision").first()
     if existing is not None:
         correspondence = existing.provenance.get("identity_correspondence", {})
         inference_facts = existing.stage_provenance.get("inference", {})
@@ -555,13 +560,13 @@ def infer(
             or inference_facts.get("mapping_config_digest") != _digest(config.get("mapping_config") or config)
             or inference_facts.get("requested_identity_mapping") != requested_mapping
             or inference_facts.get("requested_retirement") != requested_retirement
+            or bool(inference_facts.get("automatic_correspondence")) != automatic_correspondence
         ):
             raise ValidationError({"inference": "The frozen request key owns different retained facts."})
         return existing
-    if head is None:
-        raise ValidationError({"inference": "The retained lineage is unavailable."})
-    if head.pk != base.pk:
-        return SupersededInference(str(base.sqid), str(head.sqid))
+    current = extraction_model.objects.inference_current_head(base, actor=actor)
+    if current.pk != base.pk:
+        return SupersededInference(str(base.sqid), str(current.sqid))
     sources, parts = _retained_evidence(
         base, authorized_target=authorized_target, actor=actor,
     )
@@ -600,9 +605,13 @@ def infer(
     )
     if document_result.parts != parts:
         raise ValidationError({"inference": "The profile changed the retained carrier ordering."})
+    if automatic_correspondence:
+        effective_mapping = extraction_model.objects.automatic_inference_mapping(
+            base, result=document_result.value,
+        )
     final_value, final_claims = _preserve_retained_authority(
         authority_base, document_result.value, document_result.claims,
-        identity_mapping=requested_mapping, retired_identities=requested_retirement,
+        identity_mapping=effective_mapping, retired_identities=requested_retirement,
         claim_part_positions=claim_part_positions,
     )
     document_result = DocumentResult(
@@ -634,6 +643,8 @@ def infer(
                 "request_key": request_key, "mapping_config_digest": _digest(config.get("mapping_config") or config),
                 "requested_identity_mapping": requested_mapping,
                 "requested_retirement": requested_retirement,
+                "automatic_correspondence": automatic_correspondence,
+                "effective_identity_mapping": effective_mapping,
                 "provider": dict(document_result.engine_metadata or {}),
             },
         },
@@ -641,7 +652,7 @@ def infer(
     try:
         return extraction_model.objects.create_revision_from_evidence(
             base, lineage_key=base.lineage_key, reuse_key=reuse_key,
-            expected_base_id=base.pk, identity_mapping=requested_mapping,
+            expected_base_id=base.pk, identity_mapping=effective_mapping,
             retired_identities=requested_retirement,
             status="succeeded", error_code="", schema_id=base.schema_id, schema=base.schema,
             schema_digest=base.schema_digest, engine=str(base.engine), model=model,
@@ -651,9 +662,8 @@ def infer(
             created_by_id=actor_user_id(actor),
         )
     except ValidationError:
-        with system_context(reason="workflows_extraction.infer.superseded"):
-            current = extraction_model._base_manager.filter(lineage_key=base.lineage_key).order_by("-revision").first()
-        if current is not None and current.pk != base.pk:
+        current = extraction_model.objects.inference_current_head(base, actor=actor)
+        if current.pk != base.pk:
             return SupersededInference(str(base.sqid), str(current.sqid))
         raise
 

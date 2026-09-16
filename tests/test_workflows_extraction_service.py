@@ -566,11 +566,14 @@ class ExtractionServiceTests(TestCase):
 
         document = authoritative.document_refs[0]
         line = document.lines[0]
+        with self.assertRaisesRegex(ValidationError, "reviewed correspondence"):
+            type(authoritative).objects.automatic_inference_mapping(authoritative)
         continuing = {document.selector: document.identity, line.selector: line.identity}
         admitted = SimpleNamespace(
             request_key="held-authority-request",
             input={
                 "base_extraction_id": str(held.sqid),
+                "base_revision": held.revision,
                 "model_id": str(self.model.sqid),
                 "identity_mapping": continuing,
                 "retired_identities": {},

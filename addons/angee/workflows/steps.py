@@ -621,7 +621,7 @@ class CallWorkflow(StepImpl):
                 not json_values_equal(type(self)._input_schema(publication), expected_input)
                 or
                 not json_values_equal(publication.output_schema, expected)
-                or publication.subject_declaration != config["expected_subject"]
+                or publication.subject_declaration != config["expected_subject"].strip().lower()
                 or not actual_outcomes.issubset(set(config["expected_outcomes"]))
             ):
                 raise ValidationError({"publication": "Selected publication does not satisfy the call contract."})

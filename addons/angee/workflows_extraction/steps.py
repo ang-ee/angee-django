@@ -15,6 +15,7 @@ from rebac import actor_context
 
 from angee.base.actors import actor_user_id
 from angee.base.impl import resolve_impl_class
+from angee.base.refs import canonical_record_target
 from angee.workflows.attempts import ArtifactSpec, ExternalOperationPolicy, RecoveryCapability, RecoveryMode
 from angee.workflows.engine import external_operation_request
 from angee.workflows.steps import StepEffect, StepExecutionMode, StepImpl, StepOutcome, StepResult
@@ -384,7 +385,8 @@ class ProcessEvidenceStepImpl(StepImpl):
 class InferEvidenceInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_extraction_id: str
-    model_id: str
+    base_revision: int = Field(ge=1)
+    model_id: str | None = None
     target_model: str
     target_id: str
     identity_mapping: dict[str, str] = Field(default_factory=dict)
@@ -393,8 +395,11 @@ class InferEvidenceInput(BaseModel):
 
 class InferEvidenceOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    extraction_id: str | None = None
-    revision: int | None = None
+    extraction_id: str
+    revision: int = Field(ge=1)
+    status: str
+    error_code: str
+    unresolved_reasons: list[str]
     superseded_by: str | None = None
 
 
@@ -409,7 +414,10 @@ class InferEvidenceStepImpl(StepImpl):
     effect_description = "Requests one bound mapping model response and retains a CAS successor."
     input_model = InferEvidenceInput
     output_model = InferEvidenceOutput
-    outcomes = (StepOutcome("inferred", "Inferred"), StepOutcome("superseded", "Superseded"))
+    outcomes = (
+        StepOutcome("inferred", "Inferred"), StepOutcome("unchanged", "Unchanged"),
+        StepOutcome("superseded", "Superseded"),
+    )
 
     @classmethod
     def external_operation_policy(cls, *, attempt: Any) -> ExternalOperationPolicy:
@@ -444,17 +452,63 @@ class InferEvidenceStepImpl(StepImpl):
             raise PermissionDenied("Bound inference requires the workflow actor.")
         with actor_context(actor):
             base = apps.get_model("workflows_extraction", "Extraction").objects.get(sqid=value.base_extraction_id)
-            model = apps.get_model("agents", "InferenceModel").objects.get(sqid=value.model_id)
+            if base.revision != value.base_revision:
+                raise ValidationError({"base_revision": "The retained extraction revision differs."})
             target = apps.get_model(value.target_model).objects.get(sqid=value.target_id)
+            target_ref = canonical_record_target(target)
+            if (
+                target_ref.content_type.pk != base.content_type_id
+                or str(target_ref.object_id) != str(base.object_id)
+            ):
+                raise ValidationError({"target_id": "The target differs from the retained extraction."})
+            current = type(base).objects.inference_current_head(base, actor=actor)
+            if current.pk != base.pk:
+                return StepResult.done(
+                    output={**_inference_output(current), "superseded_by": str(current.sqid)},
+                    outcome="superseded",
+                    artifacts=(ArtifactSpec(current, "Current extraction evidence"),),
+                )
+            unchanged = (
+                base.status == "succeeded"
+                and (
+                    bool(base.corrections)
+                    or not base.unresolved_reasons
+                    or "mapping" in base.provenance.get("used_model_roles", ())
+                )
+            )
+            if unchanged:
+                return StepResult.done(
+                    output=_inference_output(base), outcome="unchanged",
+                    artifacts=(ArtifactSpec(base, "Retained extraction evidence"),),
+                )
+            if value.model_id is None:
+                raise ValidationError({"model_id": "An admitted mapping model is required."})
+            model = apps.get_model("agents", "InferenceModel").objects.get(sqid=value.model_id)
             outcome = infer(
                 base, model=model, authorized_target=target, operation_step_run=step_run,
                 identity_mapping=value.identity_mapping, retired_identities=value.retired_identities,
             )
         if isinstance(outcome, SupersededInference):
-            return StepResult.done(output={"superseded_by": outcome.current_extraction_id}, outcome="superseded")
-        return StepResult.done(output={
-            "extraction_id": str(outcome.sqid), "revision": outcome.revision,
-        }, outcome="inferred", artifacts=(ArtifactSpec(outcome, "Inferred extraction evidence"),))
+            with actor_context(actor):
+                current = apps.get_model("workflows_extraction", "Extraction").objects.get(
+                    sqid=outcome.current_extraction_id,
+                )
+            return StepResult.done(
+                output={**_inference_output(current), "superseded_by": outcome.current_extraction_id},
+                outcome="superseded", artifacts=(ArtifactSpec(current, "Current extraction evidence"),),
+            )
+        return StepResult.done(
+            output=_inference_output(outcome), outcome="inferred",
+            artifacts=(ArtifactSpec(outcome, "Inferred extraction evidence"),),
+        )
+
+
+def _inference_output(extraction: Any) -> dict[str, Any]:
+    return {
+        "extraction_id": str(extraction.sqid), "revision": extraction.revision,
+        "status": extraction.status, "error_code": extraction.error_code,
+        "unresolved_reasons": list(extraction.unresolved_reasons),
+    }
 
 
 def _restore_prepared(

@@ -58,6 +58,59 @@ ImmutableEvidenceManager: Any = AngeeManager.from_queryset(ImmutableEvidenceQuer
 class ExtractionManager(ImmutableEvidenceManager):
     """Persist one authorized result and all of its ordered evidence atomically."""
 
+    def automatic_inference_mapping(
+        self, base: Any, *, result: Any | None = None,
+    ) -> dict[str, str]:
+        """Carry identity only for an empty lineage or one unchanged root document."""
+
+        previous = tuple(base.document_refs)
+        if not previous:
+            mapping: dict[str, str] = {}
+        elif len(previous) == 1 and previous[0].selector == "" and not previous[0].lines:
+            mapping = {"": previous[0].identity}
+        else:
+            raise ValidationError({
+                "inference": "Existing document or line identities require reviewed correspondence."
+            })
+        if result is None:
+            return mapping
+        requested = _result_selectors(
+            result, base.engine_config.get("evidence_layout", {}),
+        )
+        selectors = {
+            selector
+            for document_selector, line_selectors in requested
+            for selector in (document_selector, *line_selectors)
+        }
+        if previous and "" not in selectors:
+            raise ValidationError({
+                "inference": "Automatic inference cannot replace the retained root document."
+            })
+        return {**mapping, **{selector: "new" for selector in selectors - set(mapping)}}
+
+    def inference_current_head(self, base: Any, *, actor: Any) -> Any:
+        """Resolve the exact actor-readable lineage head without selecting another lineage."""
+
+        lineage_model = self.model._meta.apps.get_model("workflows_extraction", "ExtractionLineage")
+        with system_context(reason="workflows_extraction.infer.current_head"):
+            lineage = lineage_model._base_manager.using(self.db).select_related("head").filter(
+                key=base.lineage_key,
+            ).first()
+        current = lineage.head if lineage is not None else None
+        if current is None:
+            raise ValidationError({"inference": "The retained lineage is unavailable."})
+        if not current.with_actor(actor).has_access("read"):
+            raise PermissionDenied("Read access to the current extraction is required.")
+        if (
+            current.lineage_key != base.lineage_key
+            or current.content_type_id != base.content_type_id
+            or str(current.object_id) != str(base.object_id)
+            or current.schema_id != base.schema_id
+            or current.schema_digest != base.schema_digest
+        ):
+            raise ValidationError({"inference": "The current extraction differs from the retained base."})
+        return current
+
     def inference_authority_base(self, base: Any, *, actor: Any) -> Any:
         """Resolve the exact successful fact owner retained by a correspondence hold."""
 
