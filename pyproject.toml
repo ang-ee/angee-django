@@ -50,6 +50,9 @@ dependencies = [
   "django-choices-field>=4.0.0",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
+  # `angee.base` builds its form-spec relation validator at import time, so
+  # jsonschema is a core runtime dependency, not only an addon one.
+  "jsonschema>=4.26",
   # ASGI server: serves the composed app and addon-contributed channels WebSocket
   # and HTTP mounts. uvicorn sends the ASGI lifespan that runs mount lifespans;
   # [standard] adds WebSocket and --reload support for dev.

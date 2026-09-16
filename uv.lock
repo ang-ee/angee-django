@@ -681,6 +681,7 @@ dependencies = [
     { name = "django-yamlconf" },
     { name = "django-zed-rebac" },
     { name = "hatch-angee" },
+    { name = "jsonschema" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -756,6 +757,7 @@ requires-dist = [
     { name = "django-yamlconf", specifier = ">=1.5.0" },
     { name = "django-zed-rebac", specifier = ">=0.17.2" },
     { name = "hatch-angee", specifier = ">=0.2.3" },
+    { name = "jsonschema", specifier = ">=4.26" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
