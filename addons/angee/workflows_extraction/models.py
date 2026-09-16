@@ -64,6 +64,8 @@ class ExtractionRef:
 
 @dataclass(frozen=True, slots=True)
 class CorrectionRef:
+    """Decision authority over scalar facts changed or explicitly confirmed."""
+
     original_extraction_id: str
     original_revision: int
     decision_id: str
@@ -161,7 +163,7 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         raise ValueError("Extraction evidence is retained and cannot be deleted.")
 
     def fact_authority(self, pointer: str) -> FactAuthority:
-        """Classify retained source or Decision-backed correction provenance."""
+        """Classify source or Decision-backed changed/confirmed scalar provenance."""
 
         if not isinstance(pointer, str) or not pointer.startswith("/"):
             raise ValueError("Extraction fact authority requires a JSON pointer.")

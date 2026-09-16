@@ -437,6 +437,7 @@ class ExtractionServiceTests(TestCase):
         self, extraction: Any, *, result: Mapping[str, Any], decision: Any,
         identity_mapping: Mapping[str, str] | None = None,
         retired_identities: Mapping[str, str] | None = None,
+        confirmed_paths: tuple[str, ...] = (),
     ) -> Any:
         """Exercise the service through one exact admitted native resolution."""
 
@@ -462,6 +463,7 @@ class ExtractionServiceTests(TestCase):
                 expected_target=(target._meta.label, str(target.sqid)),
                 identity_mapping=identity_mapping,
                 retired_identities=retired_identities,
+                confirmed_paths=confirmed_paths,
             )
         consume.assert_called_once_with(
             operation_step_run,
@@ -856,6 +858,90 @@ class ExtractionServiceTests(TestCase):
         reviewed = corrected.fact_authority("/rows/0")
         self.assertEqual((reviewed.kind, reviewed.decision_id), ("correction", str(decision.sqid)))
         self.assertEqual(corrected.fact_authority("/rows").kind, "unverified")
+
+    def test_human_correction_confirms_same_scalar_through_exact_moved_identity(self) -> None:
+        def ungrounded_result(
+            sources: Any, parts: Any, schema: Any, *, config: Any,
+            recognition_used: bool = False,
+        ) -> DocumentResult:
+            del sources, schema, recognition_used
+            return DocumentResult(
+                config["result"], tuple(parts), {},
+                engine_metadata={"route": "focused-confirmation-fixture"},
+            )
+
+        with (
+            patch("tests.ocr_engines.FakeDocumentEngine.process_parts", side_effect=ungrounded_result),
+            actor_context(self.owner),
+        ):
+            original = self._retain(
+                files=self.files[:1], authorized_target=self.drive,
+                config={"result": {"number": "OLD", "rows": ["first", "second"]}},
+            )
+        document = original.document_refs[0]
+        first, second = document.lines
+        mapping = {
+            document.selector: document.identity,
+            "/rows/0": second.identity,
+            "/rows/1": first.identity,
+        }
+        decision = self._decision(original)
+        with actor_context(self.owner):
+            corrected = self._revise(
+                original,
+                result={"number": "OLD", "rows": ["second", "first"]},
+                decision=decision,
+                identity_mapping=mapping,
+                confirmed_paths=("/rows/0",),
+            )
+            repeated = self._revise(
+                original,
+                result={"number": "OLD", "rows": ["second", "first"]},
+                decision=decision,
+                identity_mapping=mapping,
+                confirmed_paths=("/rows/0",),
+            )
+        self.assertEqual(repeated.pk, corrected.pk)
+        self.assertEqual(corrected.corrections[-1].corrected_paths, ("/rows/0",))
+        self.assertEqual(
+            (corrected.fact_authority("/rows/0").kind,
+             corrected.fact_authority("/rows/0").decision_id),
+            ("correction", str(decision.sqid)),
+        )
+        self.assertEqual(corrected.fact_authority("/rows/1").kind, "unverified")
+
+        invalid_cases = (
+            (("/rows",), {"number": "OLD", "rows": ["second", "first"]}, mapping, {}, "not scalar"),
+            (("/missing",), {"number": "OLD", "rows": ["second", "first"]}, mapping, {}, "is absent"),
+            (("/number",), {"number": "NEW", "rows": ["second", "first"]}, mapping, {}, "changed value"),
+            (("/rows/0",), {"number": "OLD", "rows": ["new", "first"]}, {
+                document.selector: document.identity,
+                "/rows/0": "new",
+                "/rows/1": first.identity,
+            }, {second.identity: "Reviewed replacement"}, "new identity"),
+            (("/rows/0", "/rows/0"), {"number": "OLD", "rows": ["second", "first"]},
+             mapping, {}, "must be unique"),
+        )
+        for confirmed_paths, result, identity_mapping, retired_identities, message in invalid_cases:
+            invalid_decision = self._decision(original)
+            with actor_context(self.owner), self.assertRaisesRegex(ValidationError, message):
+                self._revise(
+                    original, result=result, decision=invalid_decision,
+                    identity_mapping=identity_mapping,
+                    retired_identities=retired_identities,
+                    confirmed_paths=confirmed_paths,
+                )
+
+        with actor_context(self.owner), self.assertRaisesRegex(
+            ValidationError, "request identity already owns different retained facts"
+        ):
+            self._revise(
+                original,
+                result={"number": "OLD", "rows": ["second", "first"]},
+                decision=decision,
+                identity_mapping=mapping,
+                confirmed_paths=("/rows/1",),
+            )
 
     def test_human_correction_maps_unchanged_claims_by_line_identity_and_marks_replacement(self) -> None:
         with actor_context(self.owner):

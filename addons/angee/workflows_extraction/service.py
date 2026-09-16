@@ -883,6 +883,7 @@ def revise(
     expected_action: str, expected_target: tuple[str, str],
     identity_mapping: Mapping[str, str] | None = None,
     retired_identities: Mapping[str, str] | None = None,
+    confirmed_paths: Sequence[str] = (),
 ) -> Any:
     """Retain a schema-valid human correction as a new evidence revision.
 
@@ -894,9 +895,12 @@ def revise(
 
     The new revision clones retained source, page, and part evidence without
     reacquiring sources or invoking an engine. Claims survive only where their
-    JSON-pointer value and every containing array element are unchanged. The
-    original revision remains immutable; exact retries reuse one result while
-    stale or competing corrections fail.
+    JSON-pointer value is unchanged through exact retained logical identity
+    correspondence. Scalar facts explicitly named by the consumed Decision and
+    confirmed without changing value share the existing Decision-backed
+    correction authority. Displayed or default values never imply confirmation.
+    The original revision remains immutable; exact retries reuse one result
+    while stale or competing corrections fail.
     """
 
     admitted_actor = current_actor()
@@ -925,6 +929,7 @@ def revise(
         return _retain_correction_revision(
             extraction, result=result, decision=authority,
             identity_mapping=identity_mapping, retired_identities=retired_identities,
+            confirmed_paths=confirmed_paths,
         )
 
 
@@ -932,6 +937,7 @@ def _retain_correction_revision(
     extraction: Any, *, result: Mapping[str, Any], decision: Any,
     identity_mapping: Mapping[str, str] | None,
     retired_identities: Mapping[str, str] | None,
+    confirmed_paths: Sequence[str],
 ) -> Any:
     """Retain one correction after native admitted authority resolves its human."""
 
@@ -1029,6 +1035,14 @@ def _retain_correction_revision(
         original_refs=original.document_refs,
         identity_mapping=effective_mapping,
     )
+    confirmed = _confirmed_fact_pointers(
+        confirmed_paths,
+        before=original.result,
+        after=normalized_result,
+        original_refs=original.document_refs,
+        identity_mapping=effective_mapping,
+        retired_identities=retirement,
+    )
     correction = {
         "kind": "human_correction",
         "original_extraction_id": original_ref.public_id,
@@ -1036,7 +1050,7 @@ def _retain_correction_revision(
         "decision_id": decision_ref.public_id,
         "decision_resolved_by": str(authority.resolved_by),
         "recorded_by": str(to_subject_ref(actor)),
-        "corrected_paths": sorted(changed_paths),
+        "corrected_paths": sorted(changed_paths | confirmed),
         "result_digest": _digest(normalized_result),
     }
     provenance = {
@@ -1279,6 +1293,81 @@ def _changed_fact_pointers(
         if before_value is _MISSING or not json_values_equal(before_value, after_value):
             changed.add(pointer)
     return changed
+
+
+def _confirmed_fact_pointers(
+    requested: Sequence[str], *, before: Any, after: Any,
+    original_refs: Any, identity_mapping: Mapping[str, str],
+    retired_identities: Mapping[str, str],
+) -> set[str]:
+    """Validate unchanged scalar facts explicitly authorized by the Decision."""
+
+    if isinstance(requested, (str, bytes)) or not isinstance(requested, Sequence):
+        raise ValidationError({"confirmed_paths": "Confirmed fact paths must be a list."})
+    paths = list(requested)
+    if not all(isinstance(pointer, str) and pointer.startswith("/") for pointer in paths):
+        raise ValidationError({"confirmed_paths": "Confirmed fact paths must be RFC 6901 pointers."})
+    if len(paths) != len(set(paths)):
+        raise ValidationError({"confirmed_paths": "Confirmed fact paths must be unique."})
+
+    original_selector_pairs = [
+        (identity, selector)
+        for ref in original_refs
+        for selector, identity in (
+            (ref.selector, ref.identity),
+            *((line.selector, line.identity) for line in ref.lines),
+        )
+    ]
+    original_selectors = dict(original_selector_pairs)
+    original_identity_counts: dict[str, int] = {}
+    for identity, _selector in original_selector_pairs:
+        original_identity_counts[identity] = original_identity_counts.get(identity, 0) + 1
+    current_selectors = list(identity_mapping.items())
+    current_identity_counts: dict[str, int] = {}
+    for identity in identity_mapping.values():
+        current_identity_counts[identity] = current_identity_counts.get(identity, 0) + 1
+    retired = set(retired_identities)
+    confirmed: set[str] = set()
+    for pointer in paths:
+        after_value = _json_pointer_value(after, pointer)
+        if after_value is _MISSING:
+            raise ValidationError({"confirmed_paths": f"Confirmed fact path {pointer!r} is absent."})
+        if isinstance(after_value, (Mapping, list)):
+            raise ValidationError({"confirmed_paths": f"Confirmed fact path {pointer!r} is not scalar."})
+        matched = _authority_identity(pointer, current_selectors)
+        if matched is None:
+            raise ValidationError({
+                "confirmed_paths": f"Confirmed fact path {pointer!r} lacks a logical identity."
+            })
+        selector, identity = matched
+        if identity == "new":
+            raise ValidationError({
+                "confirmed_paths": f"Confirmed fact path {pointer!r} belongs to a new identity."
+            })
+        if identity in retired:
+            raise ValidationError({
+                "confirmed_paths": f"Confirmed fact path {pointer!r} belongs to a retired identity."
+            })
+        if (
+            current_identity_counts.get(identity) != 1
+            or original_identity_counts.get(identity) != 1
+            or identity not in original_selectors
+        ):
+            raise ValidationError({
+                "confirmed_paths": f"Confirmed fact path {pointer!r} has ambiguous identity correspondence."
+            })
+        before_pointer = original_selectors[identity] + pointer[len(selector):]
+        before_value = _json_pointer_value(before, before_pointer)
+        if before_value is _MISSING:
+            raise ValidationError({"confirmed_paths": f"Confirmed fact path {pointer!r} is absent."})
+        if isinstance(before_value, (Mapping, list)):
+            raise ValidationError({"confirmed_paths": f"Confirmed fact path {pointer!r} is not scalar."})
+        if not json_values_equal(before_value, after_value):
+            raise ValidationError({
+                "confirmed_paths": f"Confirmed fact path {pointer!r} changed value."
+            })
+        confirmed.add(pointer)
+    return confirmed
 
 
 _MISSING = object()

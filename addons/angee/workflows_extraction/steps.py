@@ -533,12 +533,13 @@ class ReviseEvidenceInput(BaseModel):
 
 
 class GenericEvidenceCorrection(BaseModel):
-    """Policy-free correction fields owned by the exact consumed Decision."""
+    """Policy-free changed or explicitly confirmed facts from the exact Decision."""
 
     model_config = ConfigDict(extra="forbid")
     result: dict[str, Any]
     identity_mapping: dict[str, str] | None = None
     retired_identities: dict[str, str] = Field(default_factory=dict)
+    confirmed_paths: list[str] = Field(default_factory=list)
 
 
 class ReviseEvidenceConfig(BaseModel):
@@ -596,6 +597,7 @@ class ReviseEvidenceStepImpl(StepImpl):
                 expected_target=(config.expected_target_model, value.expected_target_id),
                 identity_mapping=correction.identity_mapping,
                 retired_identities=correction.retired_identities,
+                confirmed_paths=correction.confirmed_paths,
             )
         return StepResult.done(
             output=_inference_output(corrected), outcome="revised",
