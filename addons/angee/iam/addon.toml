@@ -11,6 +11,7 @@ dependencies = [
 ]
 
 [[migrations]]
+fresh_history = "baseline"
 name = "adopt_auth_groups"
 app_label = "iam"
 module = "runtime_migrations.adopt_auth_groups"

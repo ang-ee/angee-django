@@ -11,21 +11,25 @@ dependencies = [
 ]
 
 [[migrations]]
+fresh_history = "baseline"
 name = "workflow_stable_key"
 app_label = "workflows"
 module = "runtime_migrations.workflow_stable_key"
 
 [[migrations]]
+fresh_history = "baseline"
 name = "workflow_identity"
 app_label = "workflows"
 module = "runtime_migrations.workflow_identity"
 
 [[migrations]]
+fresh_history = "baseline"
 name = "decision_target"
 app_label = "workflows"
 module = "runtime_migrations.decision_target"
 
 [[migrations]]
+fresh_history = "baseline"
 name = "step_artifact_target"
 app_label = "workflows"
 module = "runtime_migrations.step_artifact_target"

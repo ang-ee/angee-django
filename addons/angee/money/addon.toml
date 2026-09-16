@@ -12,11 +12,13 @@ demo = [
 ]
 
 [[migrations]]
+fresh_history = "baseline"
 app_label = "money"
 name = "contextual_currency_rates"
 module = "runtime_migrations.contextual_currency_rates"
 
 [[migrations]]
+fresh_history = "baseline"
 app_label = "money"
 name = "canonical_shared_reader_ids"
 module = "runtime_migrations.canonical_shared_reader_ids"

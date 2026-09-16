@@ -170,14 +170,14 @@ class Runtime:
 
         return AddonDependencyGroup.from_app_configs(self.addons, project_dir=self.project_dir)
 
-    def build(self) -> AddonDependencyGroupResult:
+    def build(self, *, fresh_history: bool = False) -> AddonDependencyGroupResult:
         """Repair sources, project dependencies and materialize addon migrations."""
 
         tree = _generated_tree(self.runtime_dir, self.render_sources())
         if tree.drift():
             self._emit(tree)
         dependency_result = self.addon_dependency_group.write()
-        self.runtime_migrations().materialize(apps=apps)
+        self.runtime_migrations().materialize(apps=apps, fresh_history=fresh_history)
         return dependency_result
 
     def import_generated_models(self) -> None:

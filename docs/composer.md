@@ -177,6 +177,7 @@ model transition cannot be represented losslessly by downstream
 name = "relationship_anchor"
 app_label = "parties"
 module = "runtime_migrations.relationship_anchor"
+fresh_history = "baseline"
 ```
 
 The source module is an ordinary, self-contained Django migration with a
@@ -211,6 +212,20 @@ sources before command dispatch, so the management command as a whole is not a
 read-only filesystem probe. After a successful build, normal `makemigrations` may
 generate any remaining lossless changes and Django handles the rest of the
 migration lifecycle.
+
+`fresh_history = "baseline"` is an explicit, audited classification for a
+historical transition whose terminal model state is already represented by a
+generated final-model initial migration. `angee provision --fresh-history`
+accepts it only against an empty database and an exact all-initial migration
+graph, then records the declaration's existing origin and digest as a canonical
+empty native graph node. Unmarked declarations still run their original
+`applies()` guard and migration body, which preserves current operational SQL
+such as guard functions and triggers. A retry before `migrate` accepts only a
+complete set of validated canonical baseline nodes and resumes ordinary
+planning for operational declarations. Ordinary build and provision ignore
+baseline eligibility and retain the complete upgrade chain. Use the fresh flag
+only to create a genuinely new migration history, including a new installation
+or an explicitly approved database reset; after migration, use ordinary commands.
 
 [`angee provision`](../angee/compose/management/commands/angee.py) owns full
 runtime preparation. It builds in the initial process, then starts one fresh

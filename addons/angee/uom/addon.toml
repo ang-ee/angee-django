@@ -12,11 +12,13 @@ master = [
 ]
 
 [[migrations]]
+fresh_history = "baseline"
 app_label = "uom"
 name = "native_catalogue_shared_readers"
 module = "runtime_migrations.native_catalogue_shared_readers"
 
 [[migrations]]
+fresh_history = "baseline"
 app_label = "uom"
 name = "canonical_shared_reader_ids"
 module = "runtime_migrations.canonical_shared_reader_ids"
