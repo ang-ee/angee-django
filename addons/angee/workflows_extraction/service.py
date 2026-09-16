@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -12,15 +11,17 @@ from typing import Any
 
 from django.apps import apps
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from jsonschema import Draft202012Validator
-from rebac import current_actor, system_context, to_subject_ref
+from rebac import actor_context, current_actor, system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
+from angee.base.identity import canonical_subject_ref
 from angee.base.impl import resolve_impl_class
 from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset
-from angee.workflows.attempts import json_values_equal
+from angee.workflows.attempts import DecisionInputSource, json_values_equal
 from angee.workflows_extraction.engines import (
     DocumentPart,
     DocumentPipelineError,
@@ -876,17 +877,20 @@ def _set_json_pointer(value: Any, pointer: str, replacement: Any) -> None:
 
 
 def revise(
-    extraction: Any, *, result: Mapping[str, Any], decision: Any,
+    extraction: Any, *, result: Mapping[str, Any], operation_step_run: Any,
+    resolution_path: tuple[str | int, ...],
+    input_source: DecisionInputSource,
+    expected_action: str, expected_target: tuple[str, str],
     identity_mapping: Mapping[str, str] | None = None,
     retired_identities: Mapping[str, str] | None = None,
 ) -> Any:
     """Retain a schema-valid human correction as a new evidence revision.
 
-    The actor must be able to read the original extraction, its target and
-    sources, and a completed Decision whose payload names the exact extraction
-    id and revision. The Decision authorizes this generic evidence operation
-    only; its domain action, resolution payload, and permitted corrected fields
-    remain the caller's responsibility.
+    The current admitted operation must consume one exact completed Decision
+    resolution. Its active human resolver must be able to read the original
+    extraction, target, and sources. The Decision payload names the exact
+    extraction id and revision; its domain correction policy remains the
+    caller's responsibility.
 
     The new revision clones retained source, page, and part evidence without
     reacquiring sources or invoking an engine. Claims survive only where their
@@ -895,9 +899,45 @@ def revise(
     stale or competing corrections fail.
     """
 
+    admitted_actor = current_actor()
+    if admitted_actor is None:
+        raise PermissionDenied("Authentication required.")
+    from angee.workflows.engine import consume_decision_resolution
+
+    authority, resolution = consume_decision_resolution(
+        operation_step_run, resolution_path,
+        input_source=input_source,
+        expected_action=expected_action,
+        expected_target=expected_target,
+        expected_verdict="completed",
+        actor=admitted_actor,
+    )
+    try:
+        resolver_subject = canonical_subject_ref(resolution.resolved_by)
+    except (TypeError, ValueError) as error:
+        raise ValidationError({"decision": "The correction Decision requires a human resolver."}) from error
+    resolver = get_user_model().objects.active_person_for_subject(resolver_subject)
+    if resolver is None:
+        raise ValidationError({"decision": "The correction Decision requires an active human resolver."})
+    if to_subject_ref(resolver) != resolver_subject:
+        raise ValidationError({"decision": "The correction resolver identity is not canonical."})
+    with actor_context(resolver):
+        return _retain_correction_revision(
+            extraction, result=result, decision=authority,
+            identity_mapping=identity_mapping, retired_identities=retired_identities,
+        )
+
+
+def _retain_correction_revision(
+    extraction: Any, *, result: Mapping[str, Any], decision: Any,
+    identity_mapping: Mapping[str, str] | None,
+    retired_identities: Mapping[str, str] | None,
+) -> Any:
+    """Retain one correction after native admitted authority resolves its human."""
+
     actor = current_actor()
     if actor is None:
-        raise PermissionDenied("Authentication required.")
+        raise PermissionDenied("Correction resolver required.")
     owner_id = actor_user_id(actor)
     extraction_model = apps.get_model("workflows_extraction", "Extraction")
     decision_model = apps.get_model("workflows", "Decision")
@@ -959,16 +999,36 @@ def revise(
         raise ValidationError({"extraction": "The retained extraction source identity is invalid."})
 
     original_provenance = _json_object(original.provenance, field="extraction")
+    retirement = dict(retired_identities or {})
+    effective_mapping = extraction_model.objects.correction_identity_mapping(
+        original, normalized_result, identity_mapping=identity_mapping,
+        retired_identities=retirement,
+    )
     claims = _unchanged_claims(
         original_provenance.get("claims", {}),
         before=original.result,
         after=normalized_result,
         original_refs=original.document_refs,
-        identity_mapping=identity_mapping or {},
+        identity_mapping=effective_mapping,
+        retired_identities=retirement,
     )
     corrections = original_provenance.get("corrections", [])
     if not isinstance(corrections, list) or not all(isinstance(entry, Mapping) for entry in corrections):
         raise ValidationError({"extraction": "The retained correction provenance is invalid."})
+    carried_corrections = _unchanged_corrections(
+        corrections,
+        before=original.result,
+        after=normalized_result,
+        original_refs=original.document_refs,
+        identity_mapping=effective_mapping,
+        retired_identities=retirement,
+    )
+    changed_paths = _changed_fact_pointers(
+        original.result,
+        normalized_result,
+        original_refs=original.document_refs,
+        identity_mapping=effective_mapping,
+    )
     correction = {
         "kind": "human_correction",
         "original_extraction_id": original_ref.public_id,
@@ -976,14 +1036,14 @@ def revise(
         "decision_id": decision_ref.public_id,
         "decision_resolved_by": str(authority.resolved_by),
         "recorded_by": str(to_subject_ref(actor)),
-        "corrected_paths": list(_changed_json_pointers(original.result, normalized_result)),
+        "corrected_paths": sorted(changed_paths),
         "result_digest": _digest(normalized_result),
     }
     provenance = {
         **original_provenance,
         "claims": claims,
         "used_model_roles": [],
-        "corrections": [*corrections, correction],
+        "corrections": [*carried_corrections, correction],
     }
     reuse_key = _digest(
         {
@@ -999,8 +1059,8 @@ def revise(
         lineage_key=lineage_key,
         reuse_key=reuse_key,
         expected_base_id=original.pk,
-        identity_mapping=dict(identity_mapping or {}),
-        retired_identities=dict(retired_identities or {}),
+        identity_mapping=effective_mapping,
+        retired_identities=retirement,
         status="succeeded",
         error_code="",
         schema_id=schema_id,
@@ -1064,22 +1124,24 @@ def _retained_source_facts(sources: Sequence[Any]) -> list[dict[str, Any]]:
 def _unchanged_claims(
     claims: Any, *, before: Any, after: Any,
     original_refs: Any = (), identity_mapping: Mapping[str, str] | None = None,
+    retired_identities: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Move equal claims only where reviewed logical correspondence proves identity."""
 
     if not isinstance(claims, Mapping):
         raise ValidationError({"extraction": "The retained extraction claims are invalid."})
     retained: dict[str, Any] = {}
-    old_selectors = {
-        identity: selector
+    old_selectors = [
+        (selector, identity)
         for ref in original_refs
         for selector, identity in (
             (ref.selector, ref.identity),
             *((line.selector, line.identity) for line in ref.lines),
         )
-    }
+    ]
     new_selectors = {identity: selector for selector, identity in (identity_mapping or {}).items()
                      if identity != "new"}
+    retired = set(retired_identities or {})
     for pointer, entries in claims.items():
         if not isinstance(pointer, str) or not pointer.startswith("/") or not isinstance(entries, list):
             raise ValidationError({"extraction": "The retained extraction claims are invalid."})
@@ -1092,19 +1154,19 @@ def _unchanged_claims(
             raise ValidationError({"extraction": "The retained extraction claims are invalid."})
         old_value = _json_pointer_value(before, pointer)
         mapped_pointer = pointer
-        matched = sorted(
-            ((selector, identity) for identity, selector in old_selectors.items()
-             if selector and (pointer == selector or pointer.startswith(f"{selector}/"))),
-            key=lambda item: len(item[0]), reverse=True,
-        )
-        if matched and matched[0][1] in new_selectors:
-            selector, identity = matched[0]
+        matched = _authority_identity(pointer, old_selectors)
+        if matched is not None and matched[1] in retired:
+            continue
+        if matched is not None and matched[1] in new_selectors:
+            selector, identity = matched
             mapped_pointer = new_selectors[identity] + pointer[len(selector):]
-        elif matched and matched[0][1] not in new_selectors:
+        elif matched is not None and matched[1] not in new_selectors:
             continue
         new_value = _json_pointer_value(
             after, mapped_pointer,
-            array_element_baseline=before if mapped_pointer == pointer and not matched else _MISSING,
+            array_element_baseline=(
+                before if mapped_pointer == pointer and (matched is None or matched[0] == "") else _MISSING
+            ),
         )
         if (
             old_value is not _MISSING
@@ -1113,6 +1175,110 @@ def _unchanged_claims(
         ):
             retained[mapped_pointer] = entries
     return _json_object(retained, field="extraction")
+
+
+def _unchanged_corrections(
+    corrections: Sequence[Mapping[str, Any]], *, before: Any, after: Any,
+    original_refs: Any, identity_mapping: Mapping[str, str],
+    retired_identities: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Carry prior human authority only through exact logical identity correspondence."""
+
+    selectors = [
+        (selector, identity)
+        for ref in original_refs
+        for selector, identity in (
+            (ref.selector, ref.identity),
+            *((line.selector, line.identity) for line in ref.lines),
+        )
+    ]
+    mapped = {identity: selector for selector, identity in identity_mapping.items() if identity != "new"}
+    retired = set(retired_identities)
+    carried: list[dict[str, Any]] = []
+    for correction in corrections:
+        paths = correction.get("corrected_paths")
+        if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
+            raise ValidationError({"extraction": "The retained correction provenance is invalid."})
+        retained_paths: list[str] = []
+        for pointer in paths:
+            matched = _authority_identity(pointer, selectors)
+            if matched is not None and matched[1] in retired:
+                continue
+            destination = pointer
+            if matched is not None:
+                selector, identity = matched
+                if identity not in mapped:
+                    raise ValidationError({
+                        "extraction": "Prior correction authority needs explicit identity correspondence."
+                    })
+                destination = mapped[identity] + pointer[len(selector):]
+            old_value = _json_pointer_value(before, pointer)
+            new_value = _json_pointer_value(after, destination)
+            if (
+                old_value is not _MISSING
+                and new_value is not _MISSING
+                and json_values_equal(old_value, new_value)
+            ):
+                retained_paths.append(destination)
+        carried.append({**deepcopy(correction), "corrected_paths": retained_paths})
+    return carried
+
+
+def _leaf_json_pointers(value: Any, *, pointer: str) -> tuple[str, ...]:
+    """Return stable leaf pointers so newly reviewed identities gain Decision authority."""
+
+    if isinstance(value, Mapping):
+        return tuple(
+            child
+            for key in sorted(value)
+            for child in _leaf_json_pointers(
+                value[key], pointer=f"{pointer}/{str(key).replace('~', '~0').replace('/', '~1')}",
+            )
+        )
+    if isinstance(value, list):
+        return tuple(
+            child
+            for index, item in enumerate(value)
+            for child in _leaf_json_pointers(item, pointer=f"{pointer}/{index}")
+        )
+    return (pointer,)
+
+
+def _changed_fact_pointers(
+    before: Any, after: Any, *, original_refs: Any,
+    identity_mapping: Mapping[str, str],
+) -> set[str]:
+    """Compare retained scalar facts through logical identities, never array positions."""
+
+    original_selectors = {
+        identity: selector
+        for ref in original_refs
+        for selector, identity in (
+            (ref.selector, ref.identity),
+            *((line.selector, line.identity) for line in ref.lines),
+        )
+    }
+    current_selectors = list(identity_mapping.items())
+    changed: set[str] = set()
+    for pointer in _leaf_json_pointers(after, pointer=""):
+        matched = _authority_identity(pointer, current_selectors)
+        before_pointer = pointer
+        if matched is not None:
+            selector, identity = matched
+            if identity == "new":
+                changed.add(pointer)
+                continue
+            original_selector = original_selectors.get(identity)
+            if original_selector is None:
+                raise ValidationError({
+                    "extraction": "Correction authority needs exact identity correspondence."
+                })
+            before_pointer = original_selector + pointer[len(selector):]
+        before_value = _json_pointer_value(before, before_pointer)
+        after_value = _json_pointer_value(after, pointer)
+        if before_value is _MISSING or not json_values_equal(before_value, after_value):
+            changed.add(pointer)
+    return changed
 
 
 _MISSING = object()
@@ -1170,30 +1336,6 @@ def _json_pointer_value(
         else:
             return _MISSING
     return current
-
-
-def _changed_json_pointers(before: Any, after: Any, pointer: str = "") -> tuple[str, ...]:
-    if json_values_equal(before, after):
-        return ()
-    if isinstance(before, Mapping) and isinstance(after, Mapping):
-        changed: list[str] = []
-        for key in sorted(set(before) | set(after)):
-            child = f"{pointer}/{str(key).replace('~', '~0').replace('/', '~1')}"
-            if key not in before or key not in after:
-                changed.append(child)
-            else:
-                changed.extend(_changed_json_pointers(before[key], after[key], child))
-        return tuple(changed)
-    if isinstance(before, list) and isinstance(after, list):
-        changed = []
-        for index in range(max(len(before), len(after))):
-            child = f"{pointer}/{index}"
-            if index >= len(before) or index >= len(after):
-                changed.append(child)
-            else:
-                changed.extend(_changed_json_pointers(before[index], after[index], child))
-        return tuple(changed)
-    return (pointer,)
 
 
 def authored_engine_config(config: Mapping[str, Any]) -> dict[str, Any]:

@@ -30,6 +30,7 @@ from angee.workflows.attempts import (
 )
 from angee.workflows.definitions import StaleDefinitionError
 from angee.workflows.dispatch import WorkflowDispatchKind
+from angee.workflows.managers import _admitted_decision_input
 from angee.workflows.models import RunOrigin, WorkflowStatus
 from angee.workflows.steps import StepImpl, StepResult
 from angee.workflows.testing import FixtureRole, FixtureSpec
@@ -1563,6 +1564,7 @@ def _published_wait_workflow(*, actor: object) -> Workflow:
         Step.objects.create(
             workflow=workflow, key="entry", name="Entry", step_class="wait",
             config={"until": (timezone.now() + timedelta(hours=1)).isoformat()},
+            input_binding={"kind": "workflow_input", "path": []},
             is_entry=True,
         )
         workflow.publish()
@@ -1641,6 +1643,18 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
             current = StepRun.objects.get(run=child)
             attempt = current.current_attempt
             execute = WorkflowDispatch.objects.get(step_attempt=attempt)
+            if not child_finishes_before_recovery:
+                admitted, provenance, admitted_run, admitted_path = _admitted_decision_input(
+                    input_source="owned_call_input",
+                    path=("child",),
+                    step_run=current,
+                    attempt=attempt,
+                    using="default",
+                )
+                assert admitted["input"]["child"] == "retained"
+                assert provenance == {"kind": "run_input"}
+                assert admitted_run.pk == source_run.pk
+                assert admitted_path == ("input", "child")
         assert engine.execute_dispatch(execute.pk, attempt.pk, attempt.lease_token)["executed"] == 1
         future = timezone.now() + timedelta(hours=2)
         assert engine.advance(child.pk, now=future)["claimed"] == 1

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import tempfile
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 from unittest import TestCase
@@ -22,6 +23,7 @@ from rebac import (
     PermissionDenied,
     RelationshipTuple,
     actor_context,
+    current_actor,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -29,7 +31,7 @@ from rebac import (
 )
 
 from angee.messaging.backends import ParsedMessage, ParsedPart
-from angee.workflows_extraction.engines import DocumentPart, DocumentPipelineError, PageImage, PageResult
+from angee.workflows_extraction.engines import DocumentPart, DocumentPipelineError, DocumentResult, PageImage
 from angee.workflows_extraction.managers import _document_mapping, _result_selectors
 from angee.workflows_extraction.models import DocumentRef, LineRef
 from angee.workflows_extraction.routing import (
@@ -42,6 +44,7 @@ from angee.workflows_extraction.service import (
     PreparedDocument,
     PreparedPage,
     _document_sources,
+    _preserve_retained_authority,
     _unchanged_claims,
     collect_carriers,
     infer,
@@ -49,9 +52,10 @@ from angee.workflows_extraction.service import (
     model_deployment_identity,
     prepare_pages,
     process,
-    _preserve_retained_authority,
     require_approved_model_deployment,
-    revise,
+)
+from angee.workflows_extraction.service import (
+    revise as retain_revision,
 )
 from angee.workflows_extraction.steps import OcrExtractConfig
 from angee.workflows_extraction_glm.engine import GlmOllamaEngine
@@ -391,7 +395,10 @@ class ExtractionServiceTests(TestCase):
         *,
         payload: dict[str, Any] | None = None,
         verdict: str = "completed",
+        resolver: Any | None = None,
+        grant_resolver: bool = True,
     ) -> Any:
+        resolver = resolver or self.owner
         with system_context(reason="workflows_extraction correction authority"):
             workflow = Workflow.objects.create(name="OCR correction authority")
             step = Step.objects.create(
@@ -417,13 +424,55 @@ class ExtractionServiceTests(TestCase):
                 },
                 verdict=verdict,
                 resolution={"note": "Reviewed source facts"},
-                resolved_by=str(to_subject_ref(self.owner)) if verdict == "completed" else "",
+                resolved_by=str(to_subject_ref(resolver)) if verdict == "completed" else "",
                 created_by=self.owner,
             )
-            write_relationships([
-                RelationshipTuple(to_object_ref(decision), "assignee", to_subject_ref(self.owner))
-            ])
+            if grant_resolver:
+                write_relationships([
+                    RelationshipTuple(to_object_ref(decision), "assignee", to_subject_ref(resolver))
+                ])
         return decision
+
+    def _revise(
+        self, extraction: Any, *, result: Mapping[str, Any], decision: Any,
+        identity_mapping: Mapping[str, str] | None = None,
+        retired_identities: Mapping[str, str] | None = None,
+    ) -> Any:
+        """Exercise the service through one exact admitted native resolution."""
+
+        resolution = SimpleNamespace(resolved_by=str(decision.resolved_by))
+        target = extraction.target
+        admitted_actor = current_actor()
+        operation_step_run = SimpleNamespace()
+        with patch(
+            "angee.workflows.engine.consume_decision_resolution",
+            return_value=(decision, resolution),
+        ) as consume:
+            if str(decision.verdict) != "completed":
+                consume.side_effect = ValidationError({
+                    "decision": "The correction Decision must be completed."
+                })
+            revised = retain_revision(
+                extraction,
+                result=result,
+                operation_step_run=operation_step_run,
+                resolution_path=("review", "resolutions", 0),
+                input_source="attempt_input",
+                expected_action=str(decision.action),
+                expected_target=(target._meta.label, str(target.sqid)),
+                identity_mapping=identity_mapping,
+                retired_identities=retired_identities,
+            )
+        consume.assert_called_once_with(
+            operation_step_run,
+            ("review", "resolutions", 0),
+            input_source="attempt_input",
+            expected_action=str(decision.action),
+            expected_target=(target._meta.label, str(target.sqid)),
+            expected_verdict="completed",
+            actor=admitted_actor,
+        )
+        return revised
 
     def test_deployment_allowlist_blocks_unapproved_models_and_endpoint_repointing(self) -> None:
         with actor_context(self.owner):
@@ -544,7 +593,7 @@ class ExtractionServiceTests(TestCase):
         }
         decision = self._decision(original)
         with actor_context(self.owner):
-            authoritative = revise(
+            authoritative = self._revise(
                 original,
                 result={"number": "HUMAN", "rows": ["source row"]},
                 decision=decision,
@@ -711,12 +760,12 @@ class ExtractionServiceTests(TestCase):
             patch("angee.workflows_extraction.service._engine_class") as engine_class,
             patch("angee.workflows_extraction.service._document_sources") as acquire_sources,
         ):
-            corrected = revise(
+            corrected = self._revise(
                 original,
                 result={"number": "NEW", "rows": ["same"]},
                 decision=decision,
             )
-            repeated = revise(
+            repeated = self._revise(
                 original,
                 result={"number": "NEW", "rows": ["same"]},
                 decision=decision,
@@ -772,7 +821,7 @@ class ExtractionServiceTests(TestCase):
         original = self._extract(config={"result": {"number": "OLD", "rows": ["row"]}})
         decision = self._decision(original)
         with actor_context(self.owner):
-            corrected = revise(
+            corrected = self._revise(
                 original,
                 result={"number": "NEW", "rows": ["row"]},
                 decision=decision,
@@ -797,7 +846,7 @@ class ExtractionServiceTests(TestCase):
             )
         decision = self._decision(original)
         with actor_context(self.owner):
-            corrected = revise(
+            corrected = self._revise(
                 original,
                 result={"number": "OLD", "rows": ["reviewed"]},
                 decision=decision,
@@ -807,6 +856,172 @@ class ExtractionServiceTests(TestCase):
         reviewed = corrected.fact_authority("/rows/0")
         self.assertEqual((reviewed.kind, reviewed.decision_id), ("correction", str(decision.sqid)))
         self.assertEqual(corrected.fact_authority("/rows").kind, "unverified")
+
+    def test_human_correction_maps_unchanged_claims_by_line_identity_and_marks_replacement(self) -> None:
+        with actor_context(self.owner):
+            original = self._retain(
+                files=self.files, authorized_target=self.drive, config={
+                    "result": {"number": "OLD", "rows": ["first", "second"]},
+                    "source_text": "OLD first second",
+                },
+            )
+        document = original.document_refs[0]
+        first, second = document.lines
+        first_decision = self._decision(original)
+        with actor_context(self.owner):
+            first_corrected = self._revise(
+                original,
+                result={"number": "OLD", "rows": ["reviewed", "second"]},
+                decision=first_decision,
+                identity_mapping={
+                    document.selector: document.identity,
+                    "/rows/0": first.identity,
+                    "/rows/1": second.identity,
+                },
+            )
+        decision = self._decision(first_corrected)
+        mapping = {
+            document.selector: document.identity,
+            "/rows/0": second.identity,
+            "/rows/1": first.identity,
+        }
+        with actor_context(self.owner):
+            reordered = self._revise(
+                first_corrected,
+                result={"number": "OLD", "rows": ["second", "reviewed"]},
+                decision=decision,
+                identity_mapping=mapping,
+            )
+        self.assertEqual(
+            [(line.identity, line.selector) for line in reordered.document_refs[0].lines],
+            [(second.identity, "/rows/0"), (first.identity, "/rows/1")],
+        )
+        self.assertEqual(reordered.claims, {
+            "/number": [{"part_position": 0}],
+            "/rows/0": [{"part_position": 0}],
+        })
+        self.assertEqual(reordered.fact_authority("/rows/0").kind, "source")
+        self.assertEqual(
+            reordered.fact_authority("/rows/1").decision_id,
+            str(first_decision.sqid),
+        )
+        self.assertEqual(reordered.corrections[-1].corrected_paths, ())
+        with actor_context(self.owner):
+            repeated = self._revise(
+                first_corrected,
+                result={"number": "OLD", "rows": ["second", "reviewed"]},
+                decision=decision,
+                identity_mapping=mapping,
+            )
+            self.assertEqual(repeated.pk, reordered.pk)
+            with self.assertRaisesRegex(ValidationError, "different retained facts"):
+                self._revise(
+                    first_corrected,
+                    result={"number": "OLD", "rows": ["second", "reviewed"]},
+                    decision=decision,
+                    identity_mapping={
+                        document.selector: document.identity,
+                        "/rows/0": first.identity,
+                        "/rows/1": second.identity,
+                    },
+                )
+
+        replacement_decision = self._decision(reordered)
+        replacement_mapping = {
+            document.selector: document.identity,
+            "/rows/0": "new",
+            "/rows/1": first.identity,
+        }
+        with actor_context(self.owner):
+            replaced = self._revise(
+                reordered,
+                result={"number": "OLD", "rows": ["second", "reviewed"]},
+                decision=replacement_decision,
+                identity_mapping=replacement_mapping,
+                retired_identities={second.identity: "Reviewed source-line replacement"},
+            )
+        self.assertNotEqual(replaced.document_refs[0].lines[0].identity, second.identity)
+        self.assertNotIn("/rows/0", replaced.claims)
+        replaced_authority = replaced.fact_authority("/rows/0")
+        self.assertEqual(
+            (replaced_authority.kind, replaced_authority.decision_id),
+            ("correction", str(replacement_decision.sqid)),
+        )
+        self.assertEqual(
+            replaced.retired_identities,
+            [{"identity": second.identity, "kind": "line", "reason": "Reviewed source-line replacement"}],
+        )
+
+        root_replacement_decision = self._decision(replaced)
+        current_document = replaced.document_refs[0]
+        current_lines = current_document.lines
+        with actor_context(self.owner):
+            root_replaced = self._revise(
+                replaced,
+                result={"number": "OLD", "rows": ["second", "reviewed"]},
+                decision=root_replacement_decision,
+                identity_mapping={"": "new", "/rows/0": "new", "/rows/1": "new"},
+                retired_identities={
+                    current_document.identity: "Reviewed document replacement",
+                    current_lines[0].identity: "Reviewed first-line replacement",
+                    current_lines[1].identity: "Reviewed second-line replacement",
+                },
+            )
+        self.assertNotEqual(root_replaced.document_refs[0].identity, current_document.identity)
+        self.assertEqual(root_replaced.claims, {})
+        self.assertEqual(
+            root_replaced.fact_authority("/number").decision_id,
+            str(root_replacement_decision.sqid),
+        )
+        self.assertEqual(
+            {item["identity"] for item in root_replaced.retired_identities[-3:]},
+            {current_document.identity, *(line.identity for line in current_lines)},
+        )
+
+        def ungrounded_result(
+            sources: Any, parts: Any, schema: Any, *, config: Any,
+            recognition_used: bool = False,
+        ) -> DocumentResult:
+            del sources, schema, config, recognition_used
+            return DocumentResult(
+                {"number": "OLD", "rows": ["ungrounded"]},
+                tuple(parts),
+                {"/number": [{"part_position": 0}]},
+                engine_metadata={"route": "focused-ungrounded-fixture"},
+            )
+
+        with (
+            patch(
+                "tests.ocr_engines.FakeDocumentEngine.process_parts",
+                side_effect=ungrounded_result,
+            ),
+            actor_context(self.owner),
+        ):
+            insertion_base = self._retain(
+                files=self.files[1:], authorized_target=self.files[1], config={
+                    "result": {"number": "OLD", "rows": ["ungrounded"]},
+                },
+            )
+        insertion_document = insertion_base.document_refs[0]
+        insertion_line = insertion_document.lines[0]
+        insertion_decision = self._decision(insertion_base)
+        with actor_context(self.owner):
+            inserted = self._revise(
+                insertion_base,
+                result={"number": "OLD", "rows": ["reviewed new", "ungrounded"]},
+                decision=insertion_decision,
+                identity_mapping={
+                    "": insertion_document.identity,
+                    "/rows/0": "new",
+                    "/rows/1": insertion_line.identity,
+                },
+            )
+        self.assertEqual(
+            inserted.fact_authority("/rows/0").decision_id,
+            str(insertion_decision.sqid),
+        )
+        self.assertEqual(inserted.fact_authority("/rows/1").kind, "unverified")
+        self.assertNotIn("/rows/1", inserted.corrections[-1].corrected_paths)
 
     def test_human_correction_rejects_invalid_authority_schema_result_and_stale_reuse(self) -> None:
         with actor_context(self.owner):
@@ -822,17 +1037,17 @@ class ExtractionServiceTests(TestCase):
         decision = self._decision(original)
         with actor_context(self.owner):
             with self.assertRaisesRegex(ValidationError, "different extraction revision"):
-                revise(original, result={"number": "NEW", "rows": []}, decision=wrong_revision)
+                self._revise(original, result={"number": "NEW", "rows": []}, decision=wrong_revision)
             with self.assertRaisesRegex(ValidationError, "must be completed"):
-                revise(original, result={"number": "NEW", "rows": []}, decision=pending)
+                self._revise(original, result={"number": "NEW", "rows": []}, decision=pending)
             with self.assertRaisesRegex(ValidationError, "does not match"):
-                revise(original, result={"number": 1, "rows": []}, decision=decision)
-            corrected = revise(original, result={"number": "NEW", "rows": []}, decision=decision)
+                self._revise(original, result={"number": 1, "rows": []}, decision=decision)
+            corrected = self._revise(original, result={"number": "NEW", "rows": []}, decision=decision)
             with self.assertRaisesRegex(ValidationError, "different correction revision"):
-                revise(original, result={"number": "OTHER", "rows": []}, decision=decision)
+                self._revise(original, result={"number": "OTHER", "rows": []}, decision=decision)
             stale_decision = self._decision(original)
             with self.assertRaisesRegex(ValidationError, "no longer the current"):
-                revise(original, result={"number": "OTHER", "rows": []}, decision=stale_decision)
+                self._revise(original, result={"number": "OTHER", "rows": []}, decision=stale_decision)
         self.assertEqual(corrected.revision, original.revision + 1)
         self.assertEqual(Extraction._base_manager.count(), 2)
 
@@ -842,35 +1057,39 @@ class ExtractionServiceTests(TestCase):
                 files=self.files[:1], authorized_target=self.files[1],
                 config={"result": {"number": "OLD", "rows": []}, "source_text": "OLD"},
             )
-        decision = self._decision(original)
+        decision = self._decision(original, resolver=self.stranger, grant_resolver=False)
         with actor_context(self.stranger), self.assertRaisesRegex(
             DjangoPermissionDenied, "extraction is required"
         ):
-            revise(original, result={"number": "NEW", "rows": []}, decision=decision)
+            self._revise(original, result={"number": "NEW", "rows": []}, decision=decision)
         with system_context(reason="grant correction extraction read"):
             write_relationships([
                 RelationshipTuple(to_object_ref(original), "viewer", to_subject_ref(self.stranger)),
             ])
         with actor_context(self.stranger), self.assertRaisesRegex(DjangoPermissionDenied, "target"):
-            revise(original, result={"number": "NEW", "rows": []}, decision=decision)
+            self._revise(original, result={"number": "NEW", "rows": []}, decision=decision)
         with system_context(reason="grant correction target read"):
             write_relationships([
                 RelationshipTuple(to_object_ref(self.files[1]), "viewer", to_subject_ref(self.stranger)),
             ])
         with actor_context(self.stranger), self.assertRaisesRegex(DjangoPermissionDenied, "source"):
-            revise(original, result={"number": "NEW", "rows": []}, decision=decision)
+            self._revise(original, result={"number": "NEW", "rows": []}, decision=decision)
         with system_context(reason="grant correction source read"):
             write_relationships([
                 RelationshipTuple(to_object_ref(self.files[0]), "viewer", to_subject_ref(self.stranger)),
             ])
         with actor_context(self.stranger), self.assertRaisesRegex(DjangoPermissionDenied, "Decision"):
-            revise(original, result={"number": "NEW", "rows": []}, decision=decision)
+            self._revise(original, result={"number": "NEW", "rows": []}, decision=decision)
+        with system_context(reason="grant correction Decision read"):
+            write_relationships([
+                RelationshipTuple(to_object_ref(decision), "assignee", to_subject_ref(self.stranger)),
+            ])
 
         file_model = apps.get_model("storage", "File")
         with system_context(reason="workflows_extraction correction source mismatch"):
             file_model._base_manager.filter(pk=self.files[0].pk).update(content_hash="0" * 64)
         with actor_context(self.owner), self.assertRaisesRegex(ValidationError, "file source identity"):
-            revise(original, result={"number": "NEW", "rows": []}, decision=decision)
+            self._revise(original, result={"number": "NEW", "rows": []}, decision=decision)
 
     def test_retained_message_part_expansion_preserves_evidence_and_is_idempotent(self) -> None:
         channel = make_integration("retained-part-repair")

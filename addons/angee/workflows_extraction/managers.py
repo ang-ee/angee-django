@@ -9,11 +9,10 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DEFAULT_DB_ALIAS, IntegrityError, transaction
 from rebac import system_context
 
-from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.authority import TransactionBoundAuthority
+from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.workflows.attempts import json_values_equal
 from angee.workflows_extraction.engines import DocumentPart, DocumentSource, PageImage, PageResult
-
 
 _evidence_insertion = TransactionBoundAuthority[None](
     "extraction_retention_transaction",
@@ -87,6 +86,30 @@ class ExtractionManager(ImmutableEvidenceManager):
                 "inference": "Automatic inference cannot replace the retained root document."
             })
         return {**mapping, **{selector: "new" for selector in selectors - set(mapping)}}
+
+    def correction_identity_mapping(
+        self, original: Any, result: Any, *, identity_mapping: Any,
+        retired_identities: Any,
+    ) -> dict[str, str]:
+        """Resolve omission through the one safe matcher; keep explicit mapping explicit."""
+
+        if identity_mapping is None:
+            implicit = _implicit_identity_correspondence(
+                result, layout=original.engine_config.get("evidence_layout", {}),
+                original=original,
+            )
+            if implicit is None:
+                raise ValidationError({
+                    "extraction": "Changed document or line structure requires explicit correspondence."
+                })
+            return implicit
+        mapping = dict(identity_mapping)
+        if not mapping and not retired_identities:
+            mapping = _implicit_identity_correspondence(
+                result, layout=original.engine_config.get("evidence_layout", {}),
+                original=original,
+            ) or {}
+        return mapping
 
     def inference_current_head(self, base: Any, *, actor: Any) -> Any:
         """Resolve the exact actor-readable lineage head without selecting another lineage."""
@@ -562,7 +585,11 @@ def _document_mapping(
             identity = uuid4().hex
         if identity is None:
             raise ValidationError({"extraction": "A new logical document must be explicitly mapped."})
-        if identity in carried_docs or identity in old_lines or (previous and identity not in old_docs and selector not in mapping):
+        if (
+            identity in carried_docs
+            or identity in old_lines
+            or (previous and identity not in old_docs and selector not in mapping)
+        ):
             raise ValidationError({"extraction": "The document identity correspondence is invalid."})
         if previous and identity not in old_docs and mapping.get(selector) != "new":
             raise ValidationError({"extraction": "A newly introduced document must be declared new."})

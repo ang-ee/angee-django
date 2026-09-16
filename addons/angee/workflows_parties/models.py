@@ -24,21 +24,20 @@ class PartyHandle(models.Model):
     class Meta:
         abstract = True
 
-    def _deliver_artifact_runs_on_commit(self) -> None:
-        from angee.workflows import engine
-
-        transaction.on_commit(lambda: engine.deliver_artifact(self))
-
     def confirm(self) -> None:
         """Confirm the association and notify exact artifact-linked workflows."""
 
+        from angee.workflows import engine
+
         with transaction.atomic():
             super().confirm()
-            self._deliver_artifact_runs_on_commit()
+            engine.schedule_artifact_delivery(self)
 
     def dismiss(self) -> None:
         """Dismiss the association and notify exact artifact-linked workflows."""
 
+        from angee.workflows import engine
+
         with transaction.atomic():
             super().dismiss()
-            self._deliver_artifact_runs_on_commit()
+            engine.schedule_artifact_delivery(self)

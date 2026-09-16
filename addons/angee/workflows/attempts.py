@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import (
     AwareDatetime,
@@ -222,6 +222,29 @@ class AttemptClaim:
     newly_claimed: bool
 
 
+DecisionInputSource = Literal["attempt_input", "owned_call_input"]
+
+
+class AdmittedInputPath(BaseModel):
+    """One exact value carried by the current attempt or its owned-call input."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    source: DecisionInputSource
+    path: tuple[StrictStr | StrictInt, ...]
+    proposal_gate_path: tuple[StrictStr | StrictInt, ...] = ()
+
+    @model_validator(mode="after")
+    def complete_path(self) -> Self:
+        """Require a concrete typed path and reject empty object-field names."""
+
+        if not self.path or any(isinstance(part, str) and not part for part in self.path):
+            raise ValueError("Admitted input authority requires a nonempty typed path.")
+        if any(isinstance(part, str) and not part for part in self.proposal_gate_path):
+            raise ValueError("Proposal gate authority path cannot contain empty fields.")
+        return self
+
+
 class DecisionRecordAccess(BaseModel):
     """One exact record opened only while its owning Decision is pending."""
 
@@ -229,6 +252,7 @@ class DecisionRecordAccess(BaseModel):
 
     model: StrictStr
     id: StrictStr
+    authority_input: AdmittedInputPath | None = None
 
 
 class DecisionSpec(BaseModel):

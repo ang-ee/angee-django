@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import hashlib
 import json
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from django.apps import apps
@@ -16,15 +16,26 @@ from rebac import actor_context
 from angee.base.actors import actor_user_id
 from angee.base.impl import resolve_impl_class
 from angee.base.refs import canonical_record_target
-from angee.workflows.attempts import ArtifactSpec, ExternalOperationPolicy, RecoveryCapability, RecoveryMode
+from angee.workflows.attempts import (
+    ArtifactSpec,
+    DecisionGateOutput,
+    ExternalOperationPolicy,
+    RecoveryCapability,
+    RecoveryMode,
+)
 from angee.workflows.engine import external_operation_request
 from angee.workflows.steps import StepEffect, StepExecutionMode, StepImpl, StepOutcome, StepResult
 from angee.workflows_extraction.engines import OcrEngine, PageImage
 from angee.workflows_extraction.service import (
-    SupersededInference, collect_carriers, infer, prepare_pages, process,
-    require_approved_model_deployment, restore_prepared_pages,
+    SupersededInference,
+    collect_carriers,
+    infer,
+    prepare_pages,
+    process,
+    require_approved_model_deployment,
+    restore_prepared_pages,
+    revise,
 )
-
 
 EngineConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
 
@@ -511,6 +522,87 @@ def _inference_output(extraction: Any) -> dict[str, Any]:
     }
 
 
+class ReviseEvidenceInput(BaseModel):
+    """Exact retained base, corrected value, and admitted native gate projection."""
+
+    model_config = ConfigDict(extra="forbid")
+    base_extraction_id: str
+    base_revision: int = Field(ge=1)
+    expected_target_id: str
+    review: DecisionGateOutput
+
+
+class GenericEvidenceCorrection(BaseModel):
+    """Policy-free correction fields owned by the exact consumed Decision."""
+
+    model_config = ConfigDict(extra="forbid")
+    result: dict[str, Any]
+    identity_mapping: dict[str, str] | None = None
+    retired_identities: dict[str, str] = Field(default_factory=dict)
+
+
+class ReviseEvidenceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_action: str = Field(min_length=1)
+    expected_target_model: str = Field(min_length=1)
+
+
+class ReviseEvidenceStepImpl(StepImpl):
+    """Retain a generic correction from one exact local native Decision gate."""
+
+    key = "revise_evidence"
+    label = "Retain corrected evidence"
+    category = "Activity"
+    deterministic = False
+    idempotent = True
+    effect = StepEffect.WRITE
+    execution_mode = StepExecutionMode.DATABASE_COMMAND
+    effect_description = "Consumes one exact Decision resolution and clones immutable evidence once."
+    input_model = ReviseEvidenceInput
+    output_model = ProcessEvidenceOutput
+    config_model = ReviseEvidenceConfig
+    outcomes = (StepOutcome("revised", "Revised"),)
+
+    @classmethod
+    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
+        del attempt
+        return RecoveryCapability(RecoveryMode.FRESH)
+
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        del now
+        value = self.validate_input(step_run.input)
+        config = ReviseEvidenceConfig.model_validate(step_run.step.config)
+        if len(value.review.resolutions) != 1:
+            raise ValidationError({"review": "Generic evidence correction requires one resolution."})
+        correction = GenericEvidenceCorrection.model_validate_json(
+            json.dumps(value.review.resolutions[0].resolution, allow_nan=False),
+        )
+        actor = step_run.run.created_by
+        if actor is None:
+            raise PermissionDenied("Evidence correction requires the workflow actor.")
+        with actor_context(actor):
+            extraction = apps.get_model("workflows_extraction", "Extraction").objects.get(
+                sqid=value.base_extraction_id,
+            )
+            if extraction.revision != value.base_revision:
+                raise ValidationError({"base_revision": "The retained extraction revision differs."})
+            corrected = revise(
+                extraction,
+                result=correction.result,
+                operation_step_run=step_run,
+                resolution_path=("review", "resolutions", 0),
+                input_source="attempt_input",
+                expected_action=config.expected_action,
+                expected_target=(config.expected_target_model, value.expected_target_id),
+                identity_mapping=correction.identity_mapping,
+                retired_identities=correction.retired_identities,
+            )
+        return StepResult.done(
+            output=_inference_output(corrected), outcome="revised",
+            artifacts=(ArtifactSpec(corrected, "Corrected extraction evidence"),),
+        )
+
+
 def _restore_prepared(
     value: dict[str, Any], options: dict[str, Any],
 ) -> tuple[Any, PreparePagesOutput]:
@@ -555,7 +647,9 @@ def _resolve_sources(value: OcrExtractInput) -> tuple[list[Any], list[Any], Any]
     files_by_id = {str(file.sqid): file for file in requested_files}
     if any(file_id not in files_by_id for file_id in value.files):
         raise ValidationError({"files": "One or more source Files are unavailable."})
-    requested_parts = list(part_model.objects.filter(sqid__in=value.message_parts).select_related("message", "fragment"))
+    requested_parts = list(
+        part_model.objects.filter(sqid__in=value.message_parts).select_related("message", "fragment")
+    )
     parts_by_id = {str(part.sqid): part for part in requested_parts}
     if any(part_id not in parts_by_id for part_id in value.message_parts):
         raise ValidationError({"message_parts": "One or more Message Parts are unavailable."})

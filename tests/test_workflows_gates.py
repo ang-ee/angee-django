@@ -341,6 +341,87 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
     ]
 
 
+def test_owned_call_consumes_exact_parent_gate_without_target_reread(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A child consumes only the exact gate value carried by its owned call."""
+
+    del workflow_gate_tables, no_workflow_queue
+    requester = User.objects.create_user(username="owned-call-consume-requester")
+    resolver = User.objects.create_user(username="owned-call-consume-resolver")
+    consumed: list[int] = []
+    with system_context(reason="owned-call target fixture"):
+        target = Workflow.objects.create(name="Owned call unread target", created_by=requester)
+    assert not target.with_actor(resolver).has_access("read")
+
+    def gate_then_consume(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, now
+        if step_run.step.key == "gate":
+            return StepResult.suspend(
+                resume_state={"gate": {"policy": "one_done"}},
+                decisions=(DecisionSpec(
+                    assignees=(str(to_subject_ref(resolver)),),
+                    action="approve-owned-call-input",
+                    target_model=target._meta.label,
+                    target_id=str(target.sqid),
+                ),),
+            )
+        with pytest.raises(ValidationError, match="retained Decision gate"):
+            engine.consume_decision_resolution(
+                step_run, ("resolutions", 0),
+                expected_action="approve-owned-call-input",
+                expected_target=(target._meta.label, str(target.sqid)),
+                expected_verdict="completed", actor=resolver,
+            )
+        decision, resolution = engine.consume_decision_resolution(
+            step_run, ("resolutions", 0), input_source="owned_call_input",
+            expected_action="approve-owned-call-input",
+            expected_target=(target._meta.label, str(target.sqid)),
+            expected_verdict="completed", actor=resolver,
+        )
+        consumed.append(decision.pk)
+        return StepResult.done(output={"decision_id": resolution.decision_id})
+
+    monkeypatch.setattr(HandlerStep, "run", gate_then_consume)
+    child_workflow = workflow_with_steps(
+        name="Owned call gate consumer",
+        steps=({
+            "key": "consume", "step_class": "handler", "config": {},
+            "input_binding": {"kind": "workflow_input", "path": []},
+        },), edges=(),
+    )
+    parent_workflow = workflow_with_steps(
+        name="Owned call gate producer",
+        steps=(
+            {"key": "gate", "step_class": "handler", "config": {}},
+            {
+                "key": "call", "step_class": "call_workflow",
+                "config": {"publication": str(child_workflow.sqid)},
+                "input_binding": {
+                    "kind": "object",
+                    "fields": {"input": {"kind": "step_output", "step_key": "gate", "path": []}},
+                },
+            },
+        ), edges=(("gate", "call", "completed"),),
+    )
+    parent = engine.start(parent_workflow, subject=None, actor=requester)
+    advance_once(parent)
+    execute_started(parent)
+    gate = _decision_for(parent, "gate")
+    assert engine.decide(gate, "complete", actor=resolver).validation_error is None
+    advance_once(parent)
+    execute_started(parent)
+    with system_context(reason="owned-call consume child fixture"):
+        child = WorkflowRun.objects.get(parent_step_run__run=parent)
+    advance_once(child)
+    execute_started(child)
+
+    assert consumed == [gate.pk]
+    assert _step_run(child, "consume").output == {"decision_id": str(gate.sqid)}
+
+
 def test_force_expiry_wakes_retained_decision_continuation(
     workflow_gate_tables: None,
     no_workflow_queue: None,

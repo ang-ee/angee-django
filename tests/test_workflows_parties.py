@@ -11,11 +11,22 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
-from rebac import system_context, to_subject_ref
+from rebac import RelationshipTuple, system_context, to_subject_ref, write_relationships
+from rebac.resources import to_object_ref
 
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
-from angee.workflows.attempts import ArtifactSpec, AttemptResult, AttemptResultKind, JsonPresence, RecoveryMode
+from angee.workflows.attempts import (
+    AdmittedInputPath,
+    ArtifactSpec,
+    AttemptResult,
+    AttemptResultKind,
+    DecisionRecordAccess,
+    JsonPresence,
+    RecoveryMode,
+)
+from angee.workflows.dispatch import WorkflowDispatchKind
+from angee.workflows.steps import DecisionSpec, HandlerStep, StepResult
 from angee.workflows_parties.autoconfig import SETTINGS as WORKFLOWS_PARTIES_SETTINGS
 from angee.workflows_parties.steps import DedupeExecuteStepImpl, IdentityApplyStepImpl, IdentityReviewStepImpl
 from tests.test_messaging import (
@@ -32,6 +43,7 @@ from tests.workflows import (
     StepAttempt,
     StepRun,
     WorkflowDispatch,
+    WorkflowRun,
     advance_once,
     execute_started,
     run_to_terminal,
@@ -41,6 +53,111 @@ from tests.workflows import (
 )
 
 User = get_user_model()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_owned_call_gate_delegates_exact_pending_record_access(
+    workflows_parties_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A child Decision may delegate only through its exact admitted parent gate."""
+
+    del workflows_parties_tables, no_workflow_queue
+    requester = User.objects.create_user(username="owned-call-requester")
+    resolver = User.objects.create_user(username="owned-call-resolver")
+    reviewer = User.objects.create_user(username="owned-call-reviewer")
+    target_workflow = workflow_with_steps(
+        name="Delegated record fixture",
+        steps=({"key": "hold", "step_class": "wait", "config": {"until": "2099-01-01T00:00:00Z"}},),
+        edges=(),
+    )
+    target_run = engine.start(target_workflow, subject=None, actor=resolver)
+    advance_once(target_run)
+    with system_context(reason="owned-call delegation fixture"):
+        target_step = StepRun.objects.get(run=target_run)
+        target = Decision.objects.create(
+            step_run=target_step, action="retained-evidence", created_by=resolver,
+        )
+        write_relationships((RelationshipTuple(
+            resource=to_object_ref(target), relation="requester", subject=to_subject_ref(resolver),
+        ),))
+    monkeypatch.setattr(Decision, "rebac_grantable", {"reader": "share", "pending_decision": "share"})
+
+    def suspend(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, now
+        if step_run.step.key == "gate":
+            return StepResult.suspend(
+                resume_state={"gate": {"policy": "one_done"}},
+                decisions=(DecisionSpec(
+                    assignees=(str(to_subject_ref(resolver)),), action="select-delegation-authority",
+                ),),
+            )
+        return StepResult.suspend(
+            resume_state={"gate": {"policy": "one_done"}},
+            decisions=(DecisionSpec(
+                assignees=(str(to_subject_ref(reviewer)),),
+                action="review-delegated-record",
+                record_access=(DecisionRecordAccess(
+                    model=target._meta.label,
+                    id=str(target.sqid),
+                    authority_input=AdmittedInputPath(
+                        source="owned_call_input",
+                        path=("resolutions", 0, "decision_id"),
+                    ),
+                ),),
+            ),),
+        )
+
+    monkeypatch.setattr(HandlerStep, "run", suspend)
+    child_workflow = workflow_with_steps(
+        name="Owned call delegated review",
+        steps=({
+            "key": "review", "step_class": "handler", "config": {},
+            "input_binding": {"kind": "workflow_input", "path": []},
+        },),
+        edges=(),
+    )
+    parent_workflow = workflow_with_steps(
+        name="Owned call delegation parent",
+        steps=(
+            {"key": "gate", "step_class": "handler", "config": {}},
+            {
+                "key": "call", "step_class": "call_workflow",
+                "config": {"publication": str(child_workflow.sqid)},
+                "input_binding": {
+                    "kind": "object",
+                    "fields": {"input": {"kind": "step_output", "step_key": "gate", "path": []}},
+                },
+            },
+        ),
+        edges=(("gate", "call", "completed"),),
+    )
+    parent = engine.start(parent_workflow, subject=None, actor=requester)
+    advance_once(parent)
+    execute_started(parent)
+    with system_context(reason="owned-call parent gate fixture"):
+        gate = Decision._base_manager.get(step_run__run=parent, action="select-delegation-authority")
+    assert engine.decide(gate, "complete", actor=resolver).validation_error is None
+    advance_once(parent)
+    execute_started(parent)
+    with system_context(reason="owned-call child fixture"):
+        child = WorkflowRun.objects.get(parent_step_run__run=parent)
+    advance_once(child)
+    execute_started(child)
+
+    with system_context(reason="owned-call delegated review assertion"):
+        review = Decision._base_manager.get(
+            step_run__run=child, action="review-delegated-record",
+        )
+    assert review.record_access == [{
+        "resource_type": "workflows/decision",
+        "resource_id": str(target.pk),
+        "authority_decision_id": str(gate.sqid),
+    }]
+    assert target.with_actor(reviewer).has_access("read")
+    assert engine.decide(review, "complete", actor=reviewer).validation_error is None
+    assert not target.with_actor(reviewer).has_access("read")
 
 
 @pytest.fixture
@@ -161,7 +278,15 @@ def test_party_handle_review_delivers_exact_nonterminal_artifact_runs(
     with system_context(reason="review retained handle"):
         getattr(link, disposition)()
 
-    # deliver_artifact bumps the run-scoped generation only for the exact
+    with system_context(reason="inspect retained handle delivery intent"):
+        delivery = WorkflowDispatch.objects.get(
+            kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
+            artifact_object_id=link.pk,
+        )
+    assert delivery.consumed_at is None
+    assert engine.deliver_artifact_dispatch(delivery.pk) == {"runs": 2, "woken": 2}
+
+    # The durable artifact delivery bumps the run-scoped generation only for the exact
     # external waits retaining this link; terminal and unrelated holds are left
     # parked, and no unrelated approval or timer row in those runs is touched.
     for woken in (first, second):

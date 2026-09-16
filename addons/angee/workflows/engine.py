@@ -43,6 +43,7 @@ from angee.workflows.attempts import (
     AttemptInput,
     AttemptResult,
     AttemptResultKind,
+    DecisionInputSource,
     DecisionResolution,
     ExternalOperationPolicy,
     ExternalOperationRequest,
@@ -60,12 +61,13 @@ from angee.workflows.bindings import (
     evaluate_binding,
     parse_binding,
 )
+from angee.workflows.decision_actions import compile_decision_action_schema
 from angee.workflows.dispatch import (
     DispatchPreflightDisposition,
     WorkflowDispatchKind,
     enqueue_dispatch_publisher,
 )
-from angee.workflows.decision_actions import compile_decision_action_schema
+from angee.workflows.managers import decision_gate_output, retained_gate_output
 from angee.workflows.models import (
     JoinRule,
     RunOrigin,
@@ -74,7 +76,6 @@ from angee.workflows.models import (
     Verdict,
     WaitingKind,
 )
-from angee.workflows.managers import decision_gate_output, retained_gate_output
 from angee.workflows.steps import DecisionSpec, MapStep, StepExecutionMode, StepResult, TransientStepError
 from angee.workflows.testing import FixtureRole, WorkflowScope
 
@@ -491,6 +492,7 @@ def consume_decision_resolution(
     consumer_step_run: Any,
     resolution_path: tuple[str | int, ...],
     *,
+    input_source: DecisionInputSource = "attempt_input",
     expected_action: str,
     expected_target: tuple[str, str],
     expected_verdict: str,
@@ -505,6 +507,7 @@ def consume_decision_resolution(
         consumer_step_run.pk,
         resolution_path,
         lease_token=lease_token,
+        input_source=input_source,
         expected_action=expected_action,
         expected_target=expected_target,
         expected_verdict=expected_verdict,

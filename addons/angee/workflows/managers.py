@@ -23,17 +23,30 @@ from django.utils import timezone
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError as PydanticValidationError
 from pydantic_core import PydanticSerializationError
-from rebac import LocalBackend, ObjectRef, RelationshipTuple, SubjectRef, actor_context, current_actor, system_context, write_relationships
+from rebac import (
+    LocalBackend,
+    ObjectRef,
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    system_context,
+    write_relationships,
+)
 from rebac.actors import NoActorResolvedError, to_subject_ref
 from rebac.backends import backend as rebac_backend
 from rebac.relationships import delete_relationship
 from rebac.resources import to_object_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.identity import canonical_subject_ref, instance_from_public_id, public_id_for
+from angee.base.identity import (
+    canonical_subject_ref,
+    instance_from_public_id,
+    public_data_id_field,
+    public_id_for,
+)
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import canonical_record_target
+from angee.base.refs import canonical_record_model, canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.workflows.attempts import (
     ArtifactSpec,
@@ -43,12 +56,13 @@ from angee.workflows.attempts import (
     AttemptInput,
     AttemptResult,
     AttemptResultKind,
-    DecisionSpec,
-    DecisionResolution,
     DecisionGateOutput,
-    ExternalOperationPolicy,
+    DecisionInputSource,
+    DecisionResolution,
+    DecisionSpec,
     DecisionTimerIntent,
     DecisionTimerKind,
+    ExternalOperationPolicy,
     InvocationAdmission,
     JsonPresence,
     LeaseRevocation,
@@ -65,8 +79,8 @@ from angee.workflows.attempts import (
     serialize_decision_specs,
     validate_json_presence,
 )
-from angee.workflows.definitions import StaleDefinitionError, WorkflowDefinitionManagerMixin
 from angee.workflows.decision_actions import compile_decision_action_schema
+from angee.workflows.definitions import StaleDefinitionError, WorkflowDefinitionManagerMixin
 from angee.workflows.dispatch import (
     DispatchConsumption,
     DispatchPreflight,
@@ -110,7 +124,6 @@ from angee.workflows.manager_authority import (
 )
 from angee.workflows.states import (
     CURRENT_PUBLICATION_STATUSES,
-    DecisionGate,
     ParentRelation,
     RunOrigin,
     RunStatus,
@@ -2780,6 +2793,129 @@ def _canonical_decision_target(
     return canonical_model._meta.label, public_id_for(canonical_model, canonical.object_id)
 
 
+def _canonical_declared_target(model_label: str, public_id: str) -> tuple[str, str]:
+    """Canonicalize a declared target identity without reading the target record."""
+
+    if not model_label and not public_id:
+        return "", ""
+    if not model_label or not public_id:
+        raise ValidationError({"target": "Decision target model and id must be supplied together."})
+    try:
+        model = apps.get_model(model_label)
+    except (LookupError, ValueError) as error:
+        raise ValidationError({"target": "Decision target model is not installed."}) from error
+    field = public_data_id_field(model)
+    try:
+        object_id = (
+            field.public_id_to_value(public_id)
+            if field is not None
+            else model._meta.pk.to_python(public_id)
+        )
+    except (TypeError, ValueError, ValidationError) as error:
+        raise ValidationError({"target": "Decision target id is invalid."}) from error
+    if object_id in (None, ""):
+        raise ValidationError({"target": "Decision target id is invalid."})
+    canonical = canonical_record_model(model)
+    return canonical._meta.label, public_id_for(canonical, object_id)
+
+
+def _admitted_decision_input(
+    *, input_source: DecisionInputSource, path: tuple[str | int, ...],
+    step_run: Any, attempt: Any, using: str,
+) -> tuple[Any, dict[str, Any] | None, Any, tuple[str | int, ...]]:
+    """Return one input path and the immutable provenance that admitted it.
+
+    Owned calls prove the original child slot and parent call attempt without
+    taking parent locks.  The caller already holds the child invocation locks,
+    so immutable evidence reads preserve the engine's parent-before-child lock
+    order.
+    """
+
+    if input_source == "attempt_input":
+        return attempt.input, attempt.input_provenance, step_run.run, path
+    if input_source != "owned_call_input":
+        raise ValidationError({"input_source": "Unknown admitted input source."})
+
+    run_model = step_run._meta.get_field("run").remote_field.model
+    original_child_id = step_run.run.execution_lineage_root_id()
+    original_child = system_queryset(run_model, using=using, lock=None).select_related(
+        "workflow", "parent_step_run__run__created_by", "parent_step_run__step",
+    ).filter(pk=original_child_id).first()
+    parent_step = None if original_child is None else original_child.parent_step_run
+    if (
+        original_child is None
+        or original_child.parent_relation != ParentRelation.OWNED_CALL
+        or parent_step is None
+        or parent_step.step_id is None
+        or parent_step.step.step_class != "call_workflow"
+        or not step_run.run.input_present
+        or not original_child.input_present
+        or not json_values_equal(step_run.run.input, original_child.input)
+    ):
+        raise ValidationError({"decision": "The active run is not this exact admitted owned call."})
+
+    parent_attempt = (
+        system_queryset(type(attempt), using=using, lock=None)
+        .select_related("step_run__run")
+        .filter(pk=parent_step.current_attempt_id, step_run_id=parent_step.pk)
+        .first()
+    )
+    retained_wait = (
+        parent_attempt is not None
+        and parent_step.status == StepRunStatus.WAITING
+        and parent_attempt.result_kind == str(AttemptResultKind.SUSPEND)
+    )
+    failed_source = (
+        parent_attempt is not None
+        and parent_step.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
+        and parent_attempt.result_kind in {
+            str(AttemptResultKind.ERROR),
+            str(AttemptResultKind.NO_RESULT),
+            str(AttemptResultKind.PREPARATION_ERROR),
+            str(AttemptResultKind.TRANSIENT_ERROR),
+        }
+    )
+    if (
+        parent_attempt is None
+        or not (retained_wait or failed_source)
+        or parent_attempt.result_recorded_at is None
+        or parent_attempt.applied_at is None
+        or parent_attempt.lease_revoked_at is not None
+        or original_child.created_by_id != parent_step.run.created_by_id
+    ):
+        raise ValidationError({"decision": "The owned call is not the exact retained parent invocation."})
+    child_target = canonical_record_target(original_child)
+    retained_target = (
+        parent_attempt.external_content_type_id, parent_attempt.external_object_id,
+    )
+    if retained_target != (child_target.content_type.pk, original_child.pk) and not (
+        failed_source and retained_target == (None, None)
+    ):
+        raise ValidationError({"decision": "The retained parent invocation names another child."})
+
+    payload = parent_attempt.input
+    child_input = payload.get("input") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or "input" not in payload or not json_values_equal(
+        child_input, original_child.input,
+    ):
+        raise ValidationError({"decision": "The owned child input differs from its retained call input."})
+    publication_id = parent_step.step.config.get("publication")
+    if not publication_id:
+        publication_id = payload.get("publication")
+    if publication_id != public_id_for(type(original_child.workflow), original_child.workflow_id):
+        raise ValidationError({"decision": "The owned child publication differs from its retained call."})
+
+    child_value = _decision_value_at(attempt.input, path)
+    original_value = _decision_value_at(original_child.input, path)
+    parent_path = ("input", *path)
+    parent_value = _decision_value_at(parent_attempt.input, parent_path)
+    if not json_values_equal(child_value, original_value) or not json_values_equal(
+        original_value, parent_value,
+    ):
+        raise ValidationError({"decision": "The child input path differs from its exact owned-call source."})
+    return parent_attempt.input, parent_attempt.input_provenance, parent_step.run, parent_path
+
+
 class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: ignore[misc]
     """Manager preserving existing StepRun creation with guarded attempt facts."""
 
@@ -3188,7 +3324,8 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 or attempt.lease_revoked_at is not None
             ):
                 raise ValidationError({"attempt": "Target authority requires the current invocation lease."})
-            actor, prior = step_run.decisions.model.objects._resolve_target_authority(
+            actor, prior = step_run.decisions.model.objects._resolve_admitted_input_authority(
+                input_source="attempt_input",
                 authority_path=authority_path, proposal_gate_path=proposal_gate_path,
                 step_run=step_run, attempt=attempt, using=alias,
             )
@@ -3202,6 +3339,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         resolution_path: tuple[str | int, ...],
         *,
         lease_token: uuid.UUID,
+        input_source: DecisionInputSource = "attempt_input",
         expected_action: str,
         expected_target: tuple[str, str],
         expected_verdict: str,
@@ -3246,13 +3384,17 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 or attempt.lease_revoked_at is not None
             ):
                 raise ValidationError({"attempt": "Decision consumption requires the current admitted lease."})
+            admitted_input, provenance, admitted_run, admitted_path = _admitted_decision_input(
+                input_source=input_source, path=resolution_path,
+                step_run=step_run, attempt=attempt, using=alias,
+            )
             leaf, remaining = _decision_source_leaf(
-                attempt.input_provenance,
-                resolution_path,
-                recovery_source_attempt_id=run.recovery_source_attempt_id,
+                provenance,
+                admitted_path,
+                recovery_source_attempt_id=admitted_run.recovery_source_attempt_id,
             )
             source_attempt, source_step_run = _admitted_source_attempt(
-                leaf, run=run, alias=alias, attempt_model=self.model,
+                leaf, run=admitted_run, alias=alias, attempt_model=self.model,
             )
             if source_attempt.result_kind != str(AttemptResultKind.SUSPEND):
                 raise ValidationError({"decision": "The admitted source is not a retained Decision gate."})
@@ -3276,7 +3418,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             if not isinstance(selected_path, list) or any(type(part) not in {str, int} for part in selected_path):
                 raise ValidationError({"decision": "The admitted gate source path is invalid."})
             retained_value = _decision_value_at(projected, (*selected_path, *remaining))
-            admitted_value = _decision_value_at(attempt.input, resolution_path)
+            admitted_value = _decision_value_at(admitted_input, admitted_path)
             if not json_values_equal(admitted_value, retained_value):
                 raise ValidationError({"decision": "The input resolution differs from its retained gate source."})
             try:
@@ -3288,9 +3430,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 resolution.decision_id,
                 queryset=system_queryset(decision_model, using=alias, lock=None),
             )
-            canonical_expected_target = _canonical_decision_target(
-                *expected_target, actor=actor,
-            )
+            canonical_expected_target = _canonical_declared_target(*expected_target)
             if (
                 decision is None
                 or decision.pk not in {row.pk for row in source_decisions}
@@ -5969,7 +6109,9 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 canonical_subject_ref(spec.requester) if spec.requester else None,
                 tuple(canonical_subject_ref(subject) for subject in spec.escalation),
                 self._validated_target(spec, actor=delegated_actor or grant_actor),
-                self._validated_record_access(spec, actor=grant_actor),
+                self._validated_record_access(
+                    spec, actor=grant_actor, step_run=step_run, attempt=attempt, using=using,
+                ),
                 grant_actor,
                 target_authority,
             ))
@@ -6012,10 +6154,14 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                         target_id=target[1],
                         target_tab=spec.target_tab,
                         target_authority_decision=target_authority,
-                        record_access=[
-                            {"resource_type": ref.resource_type, "resource_id": ref.resource_id}
-                            for _, ref in record_access
-                        ],
+                        record_access=[{
+                            "resource_type": ref.resource_type,
+                            "resource_id": ref.resource_id,
+                            **(
+                                {"authority_decision_id": prior.sqid}
+                                if prior is not None else {}
+                            ),
+                        } for _, ref, _, prior in record_access],
                         max_attempts=spec.max_attempts,
                         expires_at=spec.expires_at,
                         escalate_at=spec.escalate_at,
@@ -6038,8 +6184,8 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 if relationships:
                     write_relationships(relationships)
                 decision_subject = self._pending_decision_subject(decision)
-                for record, _ in record_access:
-                    with actor_context(grant_actor):
+                for record, _, record_actor, _ in record_access:
+                    with actor_context(record_actor):
                         record.grant_record_access("pending_decision", decision_subject)
                 decisions.append(decision)
                 if spec.escalate_at is not None:
@@ -6062,18 +6208,32 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         return SubjectRef.of(ref.resource_type, ref.resource_id)
 
     @staticmethod
-    def _validated_record_access(spec: DecisionSpec, *, actor: Any) -> tuple[tuple[Any, Any], ...]:
+    def _validated_record_access(
+        spec: DecisionSpec, *, actor: Any, step_run: Any, attempt: Any, using: str,
+    ) -> tuple[tuple[Any, Any, Any, Any | None], ...]:
         """Resolve and deduplicate the exact opting-in review records."""
 
-        selected: dict[tuple[str, str], tuple[Any, Any]] = {}
+        selected: dict[tuple[str, str], tuple[Any, Any, Any, Any | None]] = {}
         for declared in spec.record_access:
+            record_actor, prior = (
+                DecisionManager._resolve_admitted_input_authority(
+                    input_source=declared.authority_input.source,
+                    authority_path=declared.authority_input.path,
+                    proposal_gate_path=declared.authority_input.proposal_gate_path,
+                    step_run=step_run, attempt=attempt, using=using,
+                )
+                if declared.authority_input is not None
+                else (actor, None)
+            )
+            if record_actor is None:
+                raise ValidationError({"record_access": "Decision review delegation has no admitted actor."})
             try:
                 model = apps.get_model(declared.model)
             except (LookupError, ValueError) as error:
                 raise ValidationError({"record_access": "Decision review record model is not installed."}) from error
-            queryset = read_scoped_queryset(model, actor, action="read")
+            queryset = read_scoped_queryset(model, record_actor, action="read")
             if queryset is None:
-                raise PermissionDenied("Decision review record is not readable by the execution actor.")
+                raise PermissionDenied("Decision review record is not readable by its admitted delegating actor.")
             record = instance_from_public_id(model, declared.id, queryset=queryset)
             if record is None:
                 raise ValidationError({"record_access": "Decision review record was not found."})
@@ -6082,7 +6242,21 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                     "record_access": "Decision review record has no pending_decision delegation owner."
                 })
             ref = to_object_ref(record)
-            selected[(ref.resource_type, ref.resource_id)] = (record, ref)
+            key = (ref.resource_type, ref.resource_id)
+            existing = selected.get(key)
+            actor_ref = canonical_subject_ref(str(to_subject_ref(record_actor)))
+            prior_id = None if prior is None else prior.pk
+            if existing is not None and (
+                canonical_subject_ref(str(to_subject_ref(existing[2]))) != actor_ref
+                or (None if existing[3] is None else existing[3].pk) != prior_id
+            ):
+                raise ValidationError({
+                    "record_access": "One record cannot use competing Decision delegation authority."
+                })
+            with actor_context(record_actor):
+                record.validate_record_access_target()
+                record._require_record_access(type(record).record_access_permission("pending_decision"))
+            selected[key] = (record, ref, record_actor, prior)
         return tuple(selected[key] for key in sorted(selected))
 
     @classmethod
@@ -6091,11 +6265,25 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
 
         subject = cls._pending_decision_subject(decision)
         for raw in decision.record_access:
-            if not isinstance(raw, dict) or set(raw) != {"resource_type", "resource_id"}:
+            if (
+                not isinstance(raw, dict)
+                or set(raw) not in (
+                    {"resource_type", "resource_id"},
+                    {"resource_type", "resource_id", "authority_decision_id"},
+                )
+            ):
                 raise ValidationError({"record_access": "Retained Decision delegation identity is invalid."})
             resource_type = raw["resource_type"]
             resource_id = raw["resource_id"]
-            if not isinstance(resource_type, str) or not isinstance(resource_id, str):
+            authority_id = raw.get("authority_decision_id")
+            if (
+                not isinstance(resource_type, str)
+                or not isinstance(resource_id, str)
+                or (
+                    "authority_decision_id" in raw
+                    and (not isinstance(authority_id, str) or not authority_id)
+                )
+            ):
                 raise ValidationError({"record_access": "Retained Decision delegation identity is invalid."})
             delete_relationship(RelationshipTuple(
                 resource=ObjectRef(resource_type, resource_id),
@@ -6107,30 +6295,36 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
     def _target_actor(
         spec: DecisionSpec, *, step_run: Any, attempt: Any, using: str
     ) -> tuple[Any | None, Any | None]:
-        return DecisionManager._resolve_target_authority(
+        return DecisionManager._resolve_admitted_input_authority(
+            input_source="attempt_input",
             authority_path=spec.target_authority_path,
             proposal_gate_path=spec.target_authority_gate_path,
             step_run=step_run, attempt=attempt, using=using,
         )
 
     @staticmethod
-    def _resolve_target_authority(
-        *, authority_path: tuple[str | int, ...], proposal_gate_path: tuple[str | int, ...],
+    def _resolve_admitted_input_authority(
+        *, input_source: DecisionInputSource,
+        authority_path: tuple[str | int, ...], proposal_gate_path: tuple[str | int, ...],
         step_run: Any, attempt: Any, using: str,
     ) -> tuple[Any | None, Any | None]:
         """Prove one explicitly forwarded, exact settled gate Decision for target read."""
 
         if not authority_path:
             return None, None
-        selected_id = _decision_value_at(attempt.input, authority_path)
+        admitted_input, provenance, admitted_run, admitted_path = _admitted_decision_input(
+            input_source=input_source, path=authority_path,
+            step_run=step_run, attempt=attempt, using=using,
+        )
+        selected_id = _decision_value_at(admitted_input, admitted_path)
         if not isinstance(selected_id, str) or not selected_id:
             raise ValidationError({"target": "Admitted target authority ID is missing."})
         leaf, remaining = _decision_source_leaf(
-            attempt.input_provenance, authority_path,
-            recovery_source_attempt_id=step_run.run.recovery_source_attempt_id,
+            provenance, admitted_path,
+            recovery_source_attempt_id=admitted_run.recovery_source_attempt_id,
         )
         producer_attempt, producer_step = _admitted_source_attempt(
-            leaf, run=step_run.run, alias=using, attempt_model=type(attempt),
+            leaf, run=admitted_run, alias=using, attempt_model=type(attempt),
         )
         source_path = leaf.get("path", [])
         if not isinstance(source_path, list) or any(type(part) not in {str, int} for part in source_path):
