@@ -105,8 +105,10 @@ class HasuraLines:
     for on the wire. ``writable`` overrides the child's editable-column allowlist;
     ``public_id_fields`` names the child relation columns exposed as public ids
     (decoded on write). ``node`` is the child GraphQL node, used only to name the
-    child field metadata the frontend line cells render. ``position_field`` names
-    the integer order column (advertised so the composer maintains it).
+    child field metadata the frontend line cells render. ``defaults`` seeds scalar
+    cells on a newly added row and may name only writable child fields.
+    ``position_field`` names the integer order column (advertised so the composer
+    maintains it).
 
     Completeness contract: ``<res>_save(lines=…)`` takes the **full desired child
     set** — deletion is by omission, so an id absent from the set is deleted. The
@@ -126,6 +128,7 @@ class HasuraLines:
     writable: Sequence[str] | None = None
     public_id_fields: Sequence[str] = ()
     position_field: str = "position"
+    defaults: Mapping[str, str | int | float | bool | None] = dataclasses.field(default_factory=dict)
 
 
 def _child_back_fk(parent_model: type[models.Model], relation: str) -> str:
@@ -1066,12 +1069,20 @@ def _line_metadata(
         input_name,
         accepted=resource_wire_field_names(line_input, exclude=("id",)),
     )
+    unknown_defaults = set(lines.defaults) - set(child_fields)
+    if unknown_defaults:
+        names = ", ".join(sorted(unknown_defaults))
+        raise ImproperlyConfigured(
+            f"editable lines {lines.model._meta.label}.{lines.field} declare defaults for "
+            f"non-writable fields: {names}."
+        )
     return DataLinesMetadata(
         field=lines.field,
         model_label=lines.model._meta.label,
         input_type=input_name,
         fields=_line_child_fields(lines, child_fields, schema, input_name),
         position_field=lines.position_field if _has_model_field(lines.model, lines.position_field) else None,
+        defaults=dict(lines.defaults),
     )
 
 

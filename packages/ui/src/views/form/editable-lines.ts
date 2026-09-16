@@ -25,6 +25,7 @@ export interface LineDiffConfig {
   multiRelationFields: ReadonlySet<string>;
   enumFields: ReadonlySet<string>;
   stringFields: ReadonlySet<string>;
+  defaultValues: Readonly<Record<string, string | number | boolean | null>>;
 }
 
 /** Derive the diff config from a resource's editable-lines metadata. */
@@ -54,6 +55,7 @@ export function lineDiffConfig(lines: DataResourceLinesMetadata): LineDiffConfig
         .filter((field) => field.kind === "scalar" && (field.scalar ?? "String") === "String")
         .map((field) => field.name),
     ),
+    defaultValues: lines.defaults ?? {},
   };
 }
 
@@ -184,6 +186,7 @@ export function emptyLineRow(index: number, config: LineDiffConfig): Row {
 }
 
 function emptyCellValue(name: string, config: LineDiffConfig): unknown {
+  if (Object.hasOwn(config.defaultValues, name)) return config.defaultValues[name];
   if (config.multiRelationFields.has(name)) return [];
   if (config.relationFields.has(name)) return null;
   return "";

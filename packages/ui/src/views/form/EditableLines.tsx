@@ -401,8 +401,10 @@ function lineColumns(
       const widget = defaultWidgetForModelField(field);
       const customWidget = Boolean(field.widget && !["many2one", "many2many"].includes(field.widget));
       const options = enumOptions(field);
+      const header = titleCase(field.name);
       const descriptor: FieldDescriptor = {
         name: field.name,
+        label: header,
         ...(widget ? { widget } : {}),
         ...(options.length > 0 ? { options } : {}),
         ...(field.currencyField ? { currencyField: field.currencyField } : {}),
@@ -412,7 +414,7 @@ function lineColumns(
         descriptor,
         relation: customWidget ? null : relationFieldInfoForField(field, schemaMetadata),
         relationMulti: customWidget ? null : relationListFieldInfoForField(field, schemaMetadata),
-        header: titleCase(field.name),
+        header,
       };
     });
 }

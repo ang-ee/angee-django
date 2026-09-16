@@ -243,6 +243,13 @@ describe("emptyLineRow / duplicateLineRow", () => {
     });
   });
 
+  test("an authored line default seeds a new row and is submitted", () => {
+    const defaulted = lineDiffConfig({ ...LINES, defaults: { quantity: "1" } });
+    const row = emptyLineRow(2, defaulted);
+    expect(row).toEqual({ product: null, label: "", quantity: "1", position: 2 });
+    expect(lineToInput(row, 2, defaulted)).toEqual({ label: "", quantity: "1", position: 2 });
+  });
+
   test("a duplicate drops the identity so it saves as a create", () => {
     const duplicate = duplicateLineRow(
       { id: "ln_a", product: "p1", label: "A", quantity: 1, position: 0 },

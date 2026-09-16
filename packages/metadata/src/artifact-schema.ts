@@ -44,6 +44,9 @@ const LinesSchema = v.looseObject({
   inputType: OptionalString,
   positionField: OptionalString,
   fields: v.optional(Fields),
+  defaults: v.optional(v.record(v.string(), v.union([
+    v.string(), v.number(), v.boolean(), v.null(),
+  ]))),
 });
 /** Keep extension roots while validating their string/null wire contract. */
 const RootsSchema = v.objectWithRest({

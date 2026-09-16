@@ -185,7 +185,7 @@ describe("EditableLines", () => {
     const f = rowPatchFixture();
     fireEvent.click(screen.getByRole("button", { name: "Preview Gadget" }));
     const pending = f.callbacks.get("Gadget")!;
-    const focusTarget = screen.getAllByRole("textbox", { name: "Decimal number" })[1]!;
+    const focusTarget = screen.getAllByRole("textbox", { name: "Quantity" })[1]!;
     focusTarget.focus();
     expect(document.activeElement).toBe(focusTarget);
     act(() => pending({ label: "Resolved preview" }));
@@ -218,6 +218,8 @@ describe("EditableLines", () => {
     expect(screen.queryByText("Position")).toBeNull();
     expect(screen.getByText("Label")).toBeTruthy();
     expect(screen.getByText("Quantity")).toBeTruthy();
+    expect(screen.getAllByRole("textbox", { name: "Label" })).toHaveLength(2);
+    expect(screen.getAllByRole("textbox", { name: "Quantity" })).toHaveLength(2);
   });
 
   test("adds a blank row and removes a row", () => {
