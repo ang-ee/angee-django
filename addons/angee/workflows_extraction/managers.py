@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DEFAULT_DB_ALIAS, IntegrityError, transaction
 from rebac import system_context
 
@@ -57,6 +57,35 @@ ImmutableEvidenceManager: Any = AngeeManager.from_queryset(ImmutableEvidenceQuer
 
 class ExtractionManager(ImmutableEvidenceManager):
     """Persist one authorized result and all of its ordered evidence atomically."""
+
+    def inference_authority_base(self, base: Any, *, actor: Any) -> Any:
+        """Resolve the exact successful fact owner retained by a correspondence hold."""
+
+        if base.status == "succeeded":
+            return base
+        correspondence = base.provenance.get("identity_correspondence", {})
+        revision = correspondence.get("last_known_revision")
+        if type(revision) is not int or revision < 1 or revision >= base.revision:
+            raise ValidationError({"inference": "The correspondence hold lacks a valid authority base."})
+        with system_context(reason="workflows_extraction.infer.authority_base"):
+            authority = self.model._base_manager.using(self.db).filter(
+                lineage_key=base.lineage_key, revision=revision,
+            ).first()
+        if authority is None or authority.status != "succeeded":
+            raise ValidationError({"inference": "The retained authority base is unavailable."})
+        if not authority.with_actor(actor).has_access("read"):
+            raise PermissionDenied("Read access to the retained authority base is required.")
+        if (
+            authority.content_type_id != base.content_type_id
+            or str(authority.object_id) != str(base.object_id)
+            or authority.schema_id != base.schema_id
+            or authority.schema_digest != base.schema_digest
+            or authority.document_map != base.document_map
+        ):
+            raise ValidationError({
+                "inference": "The retained authority base differs from the correspondence hold."
+            })
+        return authority
 
     def create_revision(
         self,
@@ -456,15 +485,12 @@ def _document_mapping(
     previous = tuple(original.document_refs) if original is not None else ()
     mapping = dict(identity_mapping or {})
     retirement = dict(retired_identities or {})
-    if original is not None and previous and not mapping and json_values_equal(original.result, result):
-        mapping = {
-            selector: identity
-            for ref in previous
-            for selector, identity in (
-                (ref.selector, ref.identity),
-                *((line.selector, line.identity) for line in ref.lines),
-            )
-        }
+    if original is not None and previous and not mapping:
+        implicit = _implicit_identity_correspondence(
+            result, layout=layout, original=original,
+        )
+        if implicit is not None:
+            mapping = implicit
     old_docs = {ref.identity: ref for ref in previous}
     old_lines = {line.identity: line for ref in previous for line in ref.lines}
     if original is not None and len(previous) > 1 and mapping == {} and requested:
@@ -523,3 +549,39 @@ def _document_mapping(
         for identity, reason in sorted(retirement.items())
     ]
     return rows, retired
+
+
+def _implicit_identity_correspondence(
+    result: Any, *, layout: Any, original: Any,
+) -> dict[str, str] | None:
+    """Return the complete correspondence only for the proven safe carry cases."""
+
+    requested = _result_selectors(result, layout)
+    previous = tuple(original.document_refs)
+    if not previous:
+        return {}
+    if json_values_equal(original.result, result):
+        return {
+            selector: identity
+            for ref in previous
+            for selector, identity in (
+                (ref.selector, ref.identity),
+                *((line.selector, line.identity) for line in ref.lines),
+            )
+        }
+    if len(previous) != 1 or len(requested) != 1:
+        return None
+    document = previous[0]
+    selector, line_selectors = requested[0]
+    if document.selector != selector:
+        return None
+    mapping = {selector: document.identity}
+    if not document.lines and not line_selectors:
+        return mapping
+    if (
+        len(document.lines) == len(line_selectors) == 1
+        and document.lines[0].selector == line_selectors[0]
+    ):
+        mapping[line_selectors[0]] = document.lines[0].identity
+        return mapping
+    return None

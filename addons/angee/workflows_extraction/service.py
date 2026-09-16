@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import time
 from collections.abc import Mapping, Sequence
@@ -11,12 +10,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-import pypdfium2 as pdfium
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from jsonschema import Draft202012Validator
-from PIL import Image
 from rebac import current_actor, system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
@@ -381,20 +378,12 @@ def process(
         existing.provenance.get("identity_correspondence", {}).get("expected_base_id")
         if existing is not None else base.pk if base is not None else None
     )
-    correspondence_hold = bool(
-        base is not None and (
-            len(base.document_refs) > 1
-            or any(len(document.lines) > 1 for document in base.document_refs)
-        ) and not requested_mapping and not requested_retirement
-    )
     status, error_code = "succeeded", ""
     result: dict[str, Any] = {}
     claims: dict[str, list[dict[str, Any]]] = {}
     metadata: dict[str, Any] = {}
     roles: tuple[str, ...] = ()
     hold_reasons = [*collected.hold_reasons]
-    if correspondence_hold:
-        hold_reasons.append("identity_correspondence_required")
     if hold_reasons:
         status = "failed"
         error_code = (
@@ -418,6 +407,19 @@ def process(
                             key=lambda error: list(error.path))
             if errors:
                 raise ValidationError({"result": "Processing output does not match the declared schema."})
+            if base is not None and not requested_mapping and not requested_retirement:
+                from angee.workflows_extraction.managers import _implicit_identity_correspondence
+
+                if _implicit_identity_correspondence(
+                    result,
+                    layout=normalized_config.get("evidence_layout", {}),
+                    original=base,
+                ) is None:
+                    status = "failed"
+                    error_code = "source_hold:identity_correspondence_required"
+                    result, claims, roles = {}, {}, ()
+                    hold_reasons.append("identity_correspondence_required")
+                    metadata = {"source_hold_reasons": list(hold_reasons)}
         except DocumentPipelineError as error:
             status = "failed"
             error_code = ":".join(value for value in (error.stage, error.code) if value) or type(error).__name__
@@ -463,8 +465,17 @@ def infer(
     if actor is None:
         raise PermissionDenied("Authentication required.")
     extraction_model = apps.get_model("workflows_extraction", "Extraction")
-    if not isinstance(base, extraction_model) or base.pk is None or base.status != "succeeded":
-        raise ValidationError({"inference": "A successful retained base extraction is required."})
+    correspondence_hold = (
+        isinstance(base, extraction_model)
+        and base.status == "failed"
+        and base.error_code == "source_hold:identity_correspondence_required"
+    )
+    if not isinstance(base, extraction_model) or base.pk is None or (
+        base.status != "succeeded" and not correspondence_hold
+    ):
+        raise ValidationError({
+            "inference": "A successful retained base or exact correspondence hold is required."
+        })
     from angee.workflows.engine import external_operation_request
 
     operation_request = external_operation_request(operation_step_run)
@@ -504,8 +515,23 @@ def infer(
         for document in base.document_refs
         for identity in (document.identity, *(line.identity for line in document.lines))
     }
-    if prior_identities and not prior_identities.issubset(set(requested_mapping.values())):
-        raise ValidationError({"inference": "Reviewed document and line correspondence is required before provider inference."})
+    mapped_identities = [
+        identity for identity in requested_mapping.values() if identity != "new"
+    ]
+    if (
+        len(mapped_identities) != len(set(mapped_identities))
+        or set(mapped_identities) - prior_identities
+        or set(requested_retirement) - prior_identities
+        or set(mapped_identities).intersection(requested_retirement)
+        or set(mapped_identities).union(requested_retirement) != prior_identities
+    ):
+        raise ValidationError({
+            "inference": "Reviewed correspondence must account for every prior document and line identity."
+        })
+    if correspondence_hold and not (requested_mapping or requested_retirement):
+        raise ValidationError({
+            "inference": "The retained correspondence hold requires an explicit reviewed mapping."
+        })
     target = canonical_record_target(authorized_target)
     if target.content_type.pk != base.content_type_id or str(target.object_id) != str(base.object_id):
         raise ValidationError({"inference": "The target differs from the retained base."})
@@ -536,34 +562,28 @@ def infer(
         raise ValidationError({"inference": "The retained lineage is unavailable."})
     if head.pk != base.pk:
         return SupersededInference(str(base.sqid), str(head.sqid))
-    with system_context(reason="workflows_extraction.infer.evidence"):
-        source_rows = list(base.sources.select_related("file__mime_type", "message_part__fragment", "message_part__message")
-                           .order_by("position"))
-        part_rows = list(base.parts.order_by("position"))
-    sources = tuple(
-        DocumentSource(
-            row.position, str(row.content_hash),
-            str(row.file.mime_type.mime_type) if row.file_id is not None else str(row.message_part.type),
-            b"" if row.file_id is not None else "",
-            file=row.file, message_part=row.message_part,
-        )
-        for row in source_rows
-    )
-    files = tuple(row.file for row in source_rows if row.file_id is not None)
-    message_parts = tuple(row.message_part for row in source_rows if row.message_part_id is not None)
-    _authorize(files, message_parts, authorized_target, actor=actor)
-    parts = tuple(
-        DocumentPart(
-            row.source.position, row.source_page, row.mime_type, row.kind, row.value,
-            row.method, row.content_hash, row.width, row.height, row.dpi,
-            row.duration_ms, row.metadata,
-        )
-        for row in part_rows
+    sources, parts = _retained_evidence(
+        base, authorized_target=authorized_target, actor=actor,
     )
     if not parts:
         raise ValidationError({"inference": "The base has no complete retained carriers."})
     if any(row.result.get("status") == "held" for row in base.pages.order_by("position")):
         raise ValidationError({"inference": "Incomplete page carriers cannot be inferred."})
+    authority_base = extraction_model.objects.inference_authority_base(base, actor=actor)
+    if authority_base.pk == base.pk:
+        authority_sources, authority_parts = sources, parts
+    else:
+        authority_sources, authority_parts = _retained_evidence(
+            authority_base, authorized_target=authorized_target, actor=actor,
+        )
+    claim_part_positions = _retained_claim_part_positions(
+        authority_base,
+        authority_sources=authority_sources,
+        authority_parts=authority_parts,
+        current_sources=sources,
+        current_parts=parts,
+        retired_identities=requested_retirement,
+    )
     mapping_key = str(config.get("mapping_engine") or "inference")
     mapping_engine = _engine_class(mapping_key)()
     mapping_engine.validate_model(model, role="mapping")
@@ -572,14 +592,26 @@ def infer(
         parts, _validated_schema(base.schema), model=model,
         config=dict(config.get("mapping_config") or config), timeout=timeout,
     )
-    candidate, candidate_claims = _preserve_retained_authority(
-        base, candidate, candidate_claims, identity_mapping=requested_mapping,
-    )
     recognition_used = "recognition" in base.provenance.get("used_model_roles", ())
     profile = _engine_class(str(base.engine))()
     document_result = profile.normalize_inference_candidate(
         sources, parts, base.schema, value=candidate, claims=candidate_claims,
         metadata=request_metadata, config=config, recognition_used=recognition_used,
+    )
+    if document_result.parts != parts:
+        raise ValidationError({"inference": "The profile changed the retained carrier ordering."})
+    final_value, final_claims = _preserve_retained_authority(
+        authority_base, document_result.value, document_result.claims,
+        identity_mapping=requested_mapping, retired_identities=requested_retirement,
+        claim_part_positions=claim_part_positions,
+    )
+    document_result = DocumentResult(
+        final_value,
+        document_result.parts,
+        final_claims,
+        document_result.used_model_roles,
+        document_result.duration_ms,
+        document_result.engine_metadata,
     )
     _validate_document_result(document_result, source_count=len(sources), has_model=True,
                               has_recognition_model=base.recognition_model_id is not None)
@@ -597,6 +629,8 @@ def infer(
             "stages": ["prepare_pages", "collect_carriers", "process_parts", "infer"],
             "inference": {
                 "base_extraction_id": str(base.sqid), "base_revision": base.revision,
+                "authority_extraction_id": str(authority_base.sqid),
+                "authority_revision": authority_base.revision,
                 "request_key": request_key, "mapping_config_digest": _digest(config.get("mapping_config") or config),
                 "requested_identity_mapping": requested_mapping,
                 "requested_retirement": requested_retirement,
@@ -624,9 +658,61 @@ def infer(
         raise
 
 
+def _retained_evidence(
+    base: Any, *, authorized_target: Any, actor: Any,
+) -> tuple[tuple[DocumentSource, ...], tuple[DocumentPart, ...]]:
+    """Reconstruct profile inputs from immutable retained rows under actor reads."""
+
+    with system_context(reason="workflows_extraction.retained_evidence"):
+        source_rows = list(
+            base.sources.select_related(
+                "file__mime_type", "message_part__fragment", "message_part__message"
+            ).order_by("position")
+        )
+        part_rows = list(base.parts.select_related("source").order_by("position"))
+    files = tuple(row.file for row in source_rows if row.file_id is not None)
+    message_parts = tuple(
+        row.message_part for row in source_rows if row.message_part_id is not None
+    )
+    _authorize(files, message_parts, authorized_target, actor=actor)
+    sources = tuple(
+        DocumentSource(
+            row.position,
+            str(row.content_hash),
+            str(row.file.mime_type.mime_type)
+            if row.file_id is not None
+            else str(row.message_part.type),
+            b"" if row.file_id is not None else "",
+            file=row.file,
+            message_part=row.message_part,
+        )
+        for row in source_rows
+    )
+    sources_by_id = {row.pk: source for row, source in zip(source_rows, sources, strict=True)}
+    parts = tuple(
+        DocumentPart(
+            sources_by_id[row.source_id].source_position,
+            row.source_page,
+            row.mime_type,
+            row.kind,
+            row.value,
+            row.method,
+            row.content_hash,
+            row.width,
+            row.height,
+            row.dpi,
+            row.duration_ms,
+            row.metadata,
+        )
+        for row in part_rows
+    )
+    return sources, parts
+
+
 def _preserve_retained_authority(
     base: Any, candidate: dict[str, Any], claims: dict[str, list[dict[str, Any]]], *,
-    identity_mapping: Mapping[str, str],
+    identity_mapping: Mapping[str, str], retired_identities: Mapping[str, str],
+    claim_part_positions: Mapping[int, int],
 ) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]]]:
     """Provider output can only fill paths lacking source or Decision authority."""
 
@@ -643,20 +729,25 @@ def _preserve_retained_authority(
     for pointer in sorted(protected, key=lambda item: (len(item), item)):
         if not isinstance(pointer, str) or not pointer.startswith("/"):
             raise ValidationError({"inference": "The retained authority pointers are invalid."})
+        matched = _authority_identity(pointer, old_selectors)
+        if matched is not None and matched[1] in retired_identities:
+            continue
+        if any(
+            selector and selector.startswith(f"{pointer}/")
+            for selector, _identity in old_selectors
+        ):
+            raise ValidationError({
+                "inference": "Authoritative facts cannot cover a document or line identity container."
+            })
         old_value = _json_pointer_value(base.result, pointer)
         if old_value is _MISSING:
             raise ValidationError({"inference": "A retained authoritative fact is absent."})
-        matched = sorted(
-            ((selector, identity) for selector, identity in old_selectors
-             if selector and (pointer == selector or pointer.startswith(f"{selector}/"))),
-            key=lambda item: len(item[0]), reverse=True,
-        )
         destination = pointer
-        if matched:
-            selector, identity = matched[0]
-            if identity not in mapped and selector not in identity_mapping:
+        if matched is not None:
+            selector, identity = matched
+            if identity not in mapped:
                 raise ValidationError({"inference": "Authoritative facts need explicit document correspondence."})
-            destination = mapped.get(identity, selector) + pointer[len(selector):]
+            destination = mapped[identity] + pointer[len(selector):]
         if _json_pointer_value(result, destination) is _MISSING:
             raise ValidationError({"inference": "The candidate omitted an authoritative fact path."})
         _set_json_pointer(result, destination, deepcopy(old_value))
@@ -665,8 +756,101 @@ def _preserve_retained_authority(
             if path != destination and not path.startswith(f"{destination}/")
         }
         if pointer in base.claims:
-            retained_claims[destination] = deepcopy(base.claims[pointer])
+            retained_claims[destination] = [
+                {
+                    **deepcopy(claim),
+                    "part_position": claim_part_positions[claim["part_position"]],
+                }
+                for claim in base.claims[pointer]
+            ]
     return result, retained_claims
+
+
+def _retained_claim_part_positions(
+    authority_base: Any, *,
+    authority_sources: Sequence[DocumentSource],
+    authority_parts: Sequence[DocumentPart],
+    current_sources: Sequence[DocumentSource],
+    current_parts: Sequence[DocumentPart],
+    retired_identities: Mapping[str, str],
+) -> dict[int, int]:
+    """Map retained source claims through immutable carrier facts, never positions."""
+
+    selectors = [
+        (item.selector, item.identity)
+        for document in authority_base.document_refs
+        for item in (document, *document.lines)
+    ]
+    required_positions: set[int] = set()
+    for pointer, entries in authority_base.claims.items():
+        matched = _authority_identity(pointer, selectors)
+        if matched is not None and matched[1] in retired_identities:
+            continue
+        for claim in entries:
+            position = claim.get("part_position")
+            if type(position) is not int or position < 0 or position >= len(authority_parts):
+                raise ValidationError({"inference": "A retained source claim references unavailable evidence."})
+            required_positions.add(position)
+    if authority_parts is current_parts:
+        return {position: position for position in required_positions}
+
+    current_positions: dict[tuple[Any, ...], list[int]] = {}
+    for position, part in enumerate(current_parts):
+        current_positions.setdefault(
+            _carrier_identity(current_sources, part), [],
+        ).append(position)
+    mapped: dict[int, int] = {}
+    for position in required_positions:
+        matches = current_positions.get(
+            _carrier_identity(authority_sources, authority_parts[position]), (),
+        )
+        if len(matches) != 1:
+            raise ValidationError({
+                "inference": "A retained source claim has no unambiguous current carrier."
+            })
+        mapped[position] = matches[0]
+    return mapped
+
+
+def _carrier_identity(
+    sources: Sequence[DocumentSource], part: DocumentPart,
+) -> tuple[Any, ...]:
+    """Return physical source/part facts that survive source ordering changes."""
+
+    by_position = {source.source_position: source for source in sources}
+    source = by_position.get(part.source_position)
+    if source is None:
+        raise ValidationError({"inference": "Retained evidence references an unavailable source."})
+    if source.file is not None:
+        source_identity = ("file", str(source.file.sqid))
+    elif source.message_part is not None:
+        source_identity = ("message_part", str(source.message_part.sqid))
+    else:
+        raise ValidationError({"inference": "Retained evidence lacks an immutable source identity."})
+    return (
+        *source_identity,
+        source.content_hash,
+        part.source_page,
+        part.mime_type,
+        part.kind,
+        part.method,
+        part.content_hash,
+        part.width,
+        part.height,
+        part.dpi,
+        _digest({"value": part.value}),
+    )
+
+
+def _authority_identity(
+    pointer: str, selectors: Sequence[tuple[str, str]],
+) -> tuple[str, str] | None:
+    matched = sorted(
+        ((selector, identity) for selector, identity in selectors
+         if selector == "" or pointer == selector or pointer.startswith(f"{selector}/")),
+        key=lambda item: len(item[0]), reverse=True,
+    )
+    return matched[0] if matched else None
 
 
 def _set_json_pointer(value: Any, pointer: str, replacement: Any) -> None:
@@ -679,248 +863,6 @@ def _set_json_pointer(value: Any, pointer: str, replacement: Any) -> None:
         parent[int(last)] = replacement
     else:
         parent[last] = replacement
-
-
-def extract(
-    *,
-    files: Sequence[Any],
-    schema: dict[str, Any],
-    model: Any | None,
-    authorized_target: Any,
-    message_parts: Sequence[Any] = (),
-    recognition_model: Any | None = None,
-    engine: str,
-    config: Mapping[str, Any] | None = None,
-) -> Any:
-    """Extract ordered files into immutable evidence scoped to ``authorized_target``.
-
-    The caller must be able to read every source and the target before the
-    narrow system write begins. Exact source/model/schema/config/scope repeats
-    reuse an existing extraction; any changed fact creates the next revision.
-    """
-
-    ordered_files = tuple(files)
-    ordered_message_parts = tuple(message_parts)
-    actor = current_actor()
-    if actor is None:
-        raise PermissionDenied("Authentication required.")
-    owner_id = actor_user_id(actor)
-    if not ordered_files and not ordered_message_parts:
-        raise ValidationError({"files": "At least one file or message part is required."})
-    if len({file.pk for file in ordered_files}) != len(ordered_files):
-        raise ValidationError({"files": "Each source file may appear only once in an extraction."})
-    if len({part.pk for part in ordered_message_parts}) != len(ordered_message_parts):
-        raise ValidationError({"message_parts": "Each message part may appear only once in an extraction."})
-    _authorize(ordered_files, ordered_message_parts, authorized_target, actor=actor)
-    for candidate in (model, recognition_model):
-        if candidate is not None and not candidate.with_actor(actor).has_access("read"):
-            raise PermissionDenied("Read access to every inference model is required.")
-    require_approved_model_deployment(model, role="mapping")
-    require_approved_model_deployment(recognition_model, role="recognition")
-    normalized_schema = _validated_schema(schema)
-    normalized_config = _json_object(config or {}, field="config")
-    schema_id = str(normalized_schema.get("$id") or normalized_schema.get("x-version") or "")
-    if not schema_id:
-        raise ValidationError({"schema": "Extraction schemas require a stable $id or x-version."})
-
-    document_sources = _document_sources(ordered_files, ordered_message_parts)
-    source_facts = [_source_fact(source) for source in document_sources]
-    target_ref = record_ref_for(authorized_target)
-    lineage_key = _lineage_key(source_facts=source_facts, target_ref=target_ref)
-    engine_class = _engine_class(engine)
-    reuse_key = _digest(
-        {
-            "lineage": lineage_key,
-            "source_facts": source_facts,
-            "schema": normalized_schema,
-            "engine": engine,
-            "pipeline_version": str(engine_class.pipeline_version),
-            "model": _model_fingerprint(model),
-            "recognition_model": _model_fingerprint(recognition_model),
-            "config": normalized_config,
-        }
-    )
-    extraction_model = apps.get_model("workflows_extraction", "Extraction")
-    with system_context(reason="workflows_extraction.extract.reuse"):
-        existing = extraction_model._base_manager.filter(reuse_key=reuse_key).first()
-        base = extraction_model._base_manager.filter(lineage_key=lineage_key).order_by("-revision").first()
-    if existing is not None:
-        return existing
-
-    pages: list[PageImage] = []
-    page_results: list[PageResult] = []
-    document_result: DocumentResult | None = None
-    document_claims: dict[str, list[dict[str, Any]]] = {}
-    document_metadata: dict[str, Any] = {}
-    used_model_roles: tuple[str, ...] = ()
-    retained_parts: tuple[DocumentPart, ...] = ()
-    result: dict[str, Any] = {}
-    conflicts: dict[str, list[Any]] = {}
-    status = "succeeded"
-    error_code = ""
-    try:
-        engine_impl = engine_class()
-        timeout = float(normalized_config.get("timeout") or settings.ANGEE_OCR_TIMEOUT_SECONDS)
-        if engine_impl.document_engine:
-            document_result = engine_impl.extract_document(
-                document_sources,
-                normalized_schema,
-                model=model,
-                recognition_model=recognition_model,
-                config=normalized_config,
-                timeout=timeout,
-            )
-            _validate_document_result(
-                document_result,
-                source_count=len(document_sources),
-                has_model=model is not None,
-                has_recognition_model=recognition_model is not None,
-            )
-            result = document_result.value
-            retained_parts = document_result.parts
-            document_claims = document_result.claims
-            document_metadata = dict(document_result.engine_metadata or {})
-            document_metadata["pipeline_duration_ms"] = document_result.duration_ms
-            used_model_roles = document_result.used_model_roles
-        else:
-            if model is None:
-                raise ValidationError({"model": "Legacy page extraction requires an inference model."})
-            if ordered_message_parts:
-                raise ValidationError({"message_parts": "The selected legacy page engine accepts files only."})
-            pages = _rasterize(document_sources)
-            started = time.monotonic()
-            for page in pages:
-                remaining = timeout - (time.monotonic() - started)
-                if remaining <= 0:
-                    raise TimeoutError("Document extraction exceeded its configured timeout.")
-                page_results.append(
-                    engine_impl.extract_page(
-                        page,
-                        normalized_schema,
-                        model=model,
-                        config=normalized_config,
-                        timeout=remaining,
-                    )
-                )
-            result, conflicts = _merge(page_results, schema=normalized_schema)
-        errors = sorted(
-            Draft202012Validator(normalized_schema).iter_errors(result),
-            key=lambda error: list(error.path),
-        )
-        if errors:
-            raise ValidationError({"result": "OCR output does not match the declared schema."})
-    except DocumentPipelineError as error:
-        retained_parts = error.parts
-        _validate_parts(retained_parts, source_count=len(source_facts))
-        status = "failed"
-        error_code = ":".join(value for value in (error.stage, error.code) if value) or type(error).__name__
-        document_metadata = {
-            **error.metadata,
-            "failure": {
-                "stage": error.stage or "document_pipeline",
-                "code": error.code or type(error).__name__,
-            },
-        }
-    except (RuntimeError, TimeoutError, ValidationError) as error:
-        # The retained code is actionable without copying document values or a
-        # provider response into an exception or workflow journal.
-        status = "failed"
-        stage = "result_validation" if isinstance(error, ValidationError) else "document_pipeline"
-        code = type(error).__name__
-        error_code = f"{stage}:{code}"
-        document_metadata = {**document_metadata, "failure": {"stage": stage, "code": code}}
-
-    target = canonical_record_target(authorized_target)
-    return extraction_model.objects.create_revision(
-        sources=document_sources,
-        pages=pages,
-        page_results=page_results,
-        parts=retained_parts,
-        lineage_key=lineage_key,
-        reuse_key=reuse_key,
-        expected_base_id=base.pk if base is not None else None,
-        status=status,
-        error_code=error_code,
-        schema_id=schema_id,
-        schema=normalized_schema,
-        schema_digest=_digest(normalized_schema),
-        engine=engine,
-        model=model,
-        recognition_model=recognition_model,
-        engine_config=normalized_config,
-        result=result,
-        provenance={
-            "source_count": len(source_facts),
-            "page_count": len(pages) or sum(part.source_page is not None for part in retained_parts),
-            "conflicts": conflicts,
-            "completed_page_count": len(page_results) or sum(part.source_page is not None for part in retained_parts),
-            "claims": document_claims,
-            "document": document_metadata,
-            "configured_model_roles": [
-                role
-                for role, configured in (
-                    ("mapping", model is not None),
-                    ("recognition", recognition_model is not None),
-                )
-                if configured
-            ],
-            "used_model_roles": list(used_model_roles),
-            "target": {"resource_type": target_ref.resource_type, "public_id": target_ref.public_id},
-        },
-        content_type=target.content_type,
-        object_id=target.object_id,
-        created_by_id=owner_id,
-    )
-
-
-def reextract(extraction: Any) -> Any:
-    """Return the newest compatible success or retry its newest failure."""
-
-    if extraction.status != "failed":
-        raise ValidationError({"extraction": "Only failed extraction evidence can be retried."})
-    extraction_model = apps.get_model("workflows_extraction", "Extraction")
-    with system_context(reason="workflows_extraction.reextract.latest"):
-        candidates = extraction_model._base_manager.filter(
-            lineage_key=extraction.lineage_key,
-        ).order_by("-revision")
-        latest = next(
-            (
-                candidate
-                for candidate in candidates
-                if _same_retry_policy(candidate, extraction)
-            ),
-            None,
-        )
-    if latest is None:
-        raise ValidationError({"extraction": "The retained extraction lineage is unavailable."})
-    sources = list(
-        latest.sources.select_related("file", "message_part__fragment", "message_part__message").order_by(
-            "position"
-        )
-    )
-    files = [source.file for source in sources if source.file_id is not None]
-    message_parts = [source.message_part for source in sources if source.message_part_id is not None]
-    actor = current_actor()
-    if actor is None:
-        raise PermissionDenied("Authentication required.")
-    _authorize(files, message_parts, latest.target, actor=actor)
-    for candidate in (latest.model, latest.recognition_model):
-        if candidate is not None and not candidate.with_actor(actor).has_access("read"):
-            raise PermissionDenied("Read access to every inference model is required.")
-    if latest.status == "succeeded":
-        return latest
-    config = authored_engine_config(latest.engine_config)
-    config["retry_of_revision"] = latest.revision
-    return extract(
-        files=files,
-        message_parts=message_parts,
-        schema=latest.schema,
-        model=latest.model,
-        recognition_model=latest.recognition_model,
-        authorized_target=latest.target,
-        engine=str(latest.engine),
-        config=config,
-    )
 
 
 def revise(
@@ -1250,16 +1192,6 @@ def authored_engine_config(config: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in dict(config).items() if key != "retry_of_revision"}
 
 
-def _same_retry_policy(candidate: Any, original: Any) -> bool:
-    return (
-        str(candidate.engine) == str(original.engine)
-        and candidate.model_id == original.model_id
-        and candidate.recognition_model_id == original.recognition_model_id
-        and str(candidate.schema_digest) == str(original.schema_digest)
-        and authored_engine_config(candidate.engine_config) == authored_engine_config(original.engine_config)
-    )
-
-
 def _authorize(files: Sequence[Any], message_parts: Sequence[Any], target: Any, *, actor: Any) -> None:
     if not target.with_actor(actor).has_access("read"):
         raise PermissionDenied("Read access to the extraction target is required.")
@@ -1486,88 +1418,3 @@ def _digest(value: Any) -> str:
 
 def _engine_class(key: str) -> type[Any]:
     return resolve_impl_class("ANGEE_OCR_ENGINE_CLASSES", key, base_class=OcrEngine)
-
-
-def _rasterize(sources: Sequence[DocumentSource]) -> list[PageImage]:
-    pages: list[PageImage] = []
-    max_pages = int(settings.ANGEE_OCR_MAX_PAGES)
-    dpi = int(settings.ANGEE_OCR_DPI)
-    for source in sources:
-        if source.file is None or not isinstance(source.content, bytes):
-            raise ValidationError({"files": "Legacy page extraction accepts stored files only."})
-        content = source.content
-        mime = source.mime_type
-        images = _pdf_images(content, dpi=dpi) if mime == "application/pdf" else [_load_image(content)]
-        for source_page, image in enumerate(images):
-            if len(pages) >= max_pages:
-                raise ValidationError({"files": "The document exceeds the configured page limit."})
-            image.thumbnail((int(settings.ANGEE_OCR_MAX_EDGE), int(settings.ANGEE_OCR_MAX_EDGE)))
-            output = io.BytesIO()
-            image.convert("RGB").save(output, format="JPEG", quality=90)
-            pages.append(
-                PageImage(
-                    source.source_position,
-                    source_page,
-                    "image/jpeg",
-                    output.getvalue(),
-                    image.width,
-                    image.height,
-                    dpi,
-                )
-            )
-    return pages
-
-
-def _load_image(content: bytes) -> Image.Image:
-    try:
-        image = Image.open(io.BytesIO(content))
-        image.load()
-        return image
-    except Exception as error:
-        raise ValidationError({"files": "Extraction sources must be PDF or supported image files."}) from error
-
-
-def _pdf_images(content: bytes, *, dpi: int) -> list[Image.Image]:
-    try:
-        document = pdfium.PdfDocument(content)
-        scale = dpi / 72
-        return [page.render(scale=scale).to_pil() for page in document]
-    except Exception as error:
-        raise ValidationError({"files": "The PDF could not be rasterized."}) from error
-
-
-def _merge(
-    results: Sequence[PageResult],
-    *,
-    schema: Mapping[str, Any] | None = None,
-) -> tuple[dict[str, Any], dict[str, list[Any]]]:
-    """Merge page evidence, preserving schema-valid required empty values.
-
-    An explicitly empty required collection or nullable field is still a claim.
-    Later substantive evidence replaces it; absent optional values add no claim.
-    """
-
-    merged: dict[str, Any] = {}
-    conflicts: dict[str, list[Any]] = {}
-    required = set(schema.get("required", ())) if isinstance(schema, Mapping) else set()
-    properties = schema.get("properties", {}) if isinstance(schema, Mapping) else {}
-    validator = Draft202012Validator(schema or {})
-    for page in results:
-        for key, value in page.value.items():
-            if value in (None, "", []):
-                if (
-                    key in required
-                    and key not in merged
-                    and validator.evolve(schema=properties.get(key, {})).is_valid(value)
-                ):
-                    merged[key] = value
-                continue
-            if key not in merged:
-                merged[key] = value
-            elif merged[key] in (None, ""):
-                merged[key] = value
-            elif isinstance(merged[key], list) and isinstance(value, list):
-                merged[key] = [*merged[key], *value]
-            elif merged[key] != value:
-                conflicts.setdefault(key, [merged[key]]).append(value)
-    return merged, conflicts

@@ -181,11 +181,16 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "parties_identity_apply": "angee.workflows_parties.steps.IdentityApplyStepImpl",
     "parties_dedupe_gate": "angee.workflows_parties.steps.DedupeGateStepImpl",
     "parties_dedupe_execute": "angee.workflows_parties.steps.DedupeExecuteStepImpl",
-    "ocr_extract": "angee.workflows_extraction.steps.OcrExtractStepImpl",
+    "prepare_pages": "angee.workflows_extraction.steps.PreparePagesStepImpl",
+    "recognize_page": "angee.workflows_extraction.steps.RecognizePageStepImpl",
+    "collect_carriers": "angee.workflows_extraction.steps.CollectCarriersStepImpl",
+    "process_evidence": "angee.workflows_extraction.steps.ProcessEvidenceStepImpl",
+    "infer_evidence": "angee.workflows_extraction.steps.InferEvidenceStepImpl",
 }
 ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
 ANGEE_OCR_ENGINE_CLASSES = {
     "none": "angee.workflows_extraction.engines.NoOcrEngine",
+    "inference": "angee.workflows_extraction.engines.InferenceMappingEngine",
     "fake": "tests.ocr_engines.FakeOcrEngine",
     "fake_document": "tests.ocr_engines.FakeDocumentEngine",
     "glm": "angee.workflows_extraction_glm.engine.GlmOllamaEngine",

@@ -20,7 +20,7 @@ from angee.workflows.engine import external_operation_request
 from angee.workflows.steps import StepEffect, StepExecutionMode, StepImpl, StepOutcome, StepResult
 from angee.workflows_extraction.engines import OcrEngine, PageImage
 from angee.workflows_extraction.service import (
-    SupersededInference, collect_carriers, extract, infer, prepare_pages, process, reextract,
+    SupersededInference, collect_carriers, infer, prepare_pages, process,
     require_approved_model_deployment, restore_prepared_pages,
 )
 
@@ -58,83 +58,6 @@ class OcrExtractConfig(BaseModel):
     retained_failure_outcome: Literal["failed", "retained_failure"] = "failed"
 
 
-class OcrExtractStepImpl(StepImpl):
-    """Create extraction evidence without copying its raw result into journals."""
-
-    key = "ocr_extract"
-    label = "Extract document evidence"
-    category = "Activity"
-    description = "Extract ordered stored files into schema-validated evidence."
-    deterministic = False
-    idempotent = True
-    effect = StepEffect.EXTERNAL
-    effect_description = "Reads files, calls the selected OCR engine, and writes evidence."
-    input_model = OcrExtractInput
-    output_model = OcrExtractOutput
-    config_model = OcrExtractConfig
-    outcomes = (
-        StepOutcome("extracted", "Extracted"),
-        StepOutcome("failed", "Failed", "Extraction evidence records a bounded processing failure."),
-        StepOutcome(
-            "retained_failure",
-            "Retained failure",
-            "Extraction evidence records a bounded processing failure without matching a hard step failure.",
-        ),
-    )
-
-    @classmethod
-    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
-        del attempt
-        return RecoveryCapability(RecoveryMode.FRESH)
-
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        del now
-        input_value = OcrExtractInput.model_validate(step_run.input)
-        config = OcrExtractConfig.model_validate(step_run.step.config)
-        actor = step_run.run.created_by
-        if actor is None:
-            raise ValueError("OCR extraction requires the workflow run actor.")
-        with actor_context(actor):
-            file_model = apps.get_model("storage", "File")
-            part_model = apps.get_model("messaging", "Part")
-            model_model = apps.get_model("agents", "InferenceModel")
-            requested = list(file_model.objects.filter(sqid__in=input_value.files))
-            by_id = {str(item.sqid): item for item in requested}
-            if any(file_id not in by_id for file_id in input_value.files):
-                raise ValueError("One or more extraction files are unavailable.")
-            files = [by_id[file_id] for file_id in input_value.files]
-            requested_parts = list(
-                part_model.objects.filter(sqid__in=input_value.message_parts).select_related("message", "fragment")
-            )
-            parts_by_id = {str(item.sqid): item for item in requested_parts}
-            if any(part_id not in parts_by_id for part_id in input_value.message_parts):
-                raise ValueError("One or more extraction message parts are unavailable.")
-            message_parts = [parts_by_id[part_id] for part_id in input_value.message_parts]
-            if not files and not message_parts:
-                raise ValueError("At least one extraction source is required.")
-            target_model = apps.get_model(input_value.target_model)
-            target = target_model.objects.get(sqid=input_value.target_id)
-            inference_model = model_model.objects.get(sqid=input_value.model) if input_value.model else None
-            recognition_model = (
-                model_model.objects.get(sqid=input_value.recognition_model) if input_value.recognition_model else None
-            )
-            evidence = extract(
-                files=files,
-                message_parts=message_parts,
-                schema=config.schema_,
-                model=inference_model,
-                recognition_model=recognition_model,
-                authorized_target=target,
-                engine=config.engine,
-                config=config.engine_config,
-            )
-        return StepResult.done(
-            output={"extraction_id": str(evidence.sqid), "revision": evidence.revision},
-            outcome=("extracted" if evidence.status == "succeeded" else config.retained_failure_outcome),
-            artifacts=(ArtifactSpec(evidence, "Document extraction evidence"),),
-        )
-
-
 class PreparePagesInput(OcrExtractInput):
     """The original source/target refs; provider work happens later."""
 
@@ -165,7 +88,7 @@ class PreparePagesStepImpl(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
-        value = PreparePagesInput.model_validate(step_run.input)
+        value = self.validate_input(step_run.input)
         options = OcrExtractConfig.model_validate(step_run.step.config).engine_config
         actor = step_run.run.created_by
         if actor is None:
@@ -280,7 +203,7 @@ class RecognizePageStepImpl(StepImpl):
 
     def _recognize(self, step_run: Any) -> StepResult:
         request = external_operation_request(step_run)
-        value = RecognizePageInput.model_validate(request.input)
+        value = self.validate_input(request.input)
         config = RecognizePageConfig.model_validate(step_run.step.config)
         if value.config_digest != _json_digest(config.engine_config):
             raise ValidationError({"recognition": "The page item names a different published recognizer config."})
@@ -366,7 +289,7 @@ class CollectCarriersStepImpl(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
-        value = CollectCarriersInput.model_validate(step_run.input)
+        value = self.validate_input(step_run.input)
         options = OcrExtractConfig.model_validate(step_run.step.config).engine_config
         actor = step_run.run.created_by
         if actor is None:
@@ -419,7 +342,7 @@ class ProcessEvidenceStepImpl(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
-        value = ProcessEvidenceInput.model_validate(step_run.input)
+        value = self.validate_input(step_run.input)
         config = OcrExtractConfig.model_validate(step_run.step.config)
         actor = step_run.run.created_by
         if actor is None:
@@ -515,7 +438,7 @@ class InferEvidenceStepImpl(StepImpl):
 
     def _infer(self, step_run: Any) -> StepResult:
         request = external_operation_request(step_run)
-        value = InferEvidenceInput.model_validate(request.input)
+        value = self.validate_input(request.input)
         actor = step_run.run.created_by
         if actor is None:
             raise PermissionDenied("Bound inference requires the workflow actor.")
@@ -584,20 +507,3 @@ def _resolve_sources(value: OcrExtractInput) -> tuple[list[Any], list[Any], Any]
         raise ValidationError({"message_parts": "One or more Message Parts are unavailable."})
     target = apps.get_model(value.target_model).objects.get(sqid=value.target_id)
     return [files_by_id[item] for item in value.files], [parts_by_id[item] for item in value.message_parts], target
-
-    def run_recovery(self, step_run: Any, *, now: datetime, source_attempt: Any, mode: RecoveryMode) -> StepResult:
-        del now
-        if mode is not RecoveryMode.FRESH or not isinstance(source_attempt.output, dict):
-            raise ValueError("OCR recovery requires retained failed extraction output.")
-        actor = step_run.run.created_by
-        if actor is None:
-            raise ValueError("OCR recovery requires the workflow run actor.")
-        extraction_model = apps.get_model("workflows_extraction", "Extraction")
-        config = OcrExtractConfig.model_validate(step_run.step.config)
-        with actor_context(actor):
-            evidence = reextract(extraction_model.objects.get(sqid=source_attempt.output["extraction_id"]))
-        return StepResult.done(
-            output={"extraction_id": str(evidence.sqid), "revision": evidence.revision},
-            outcome=("extracted" if evidence.status == "succeeded" else config.retained_failure_outcome),
-            artifacts=(ArtifactSpec(evidence, "Document extraction evidence"),),
-        )

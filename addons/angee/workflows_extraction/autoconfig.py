@@ -3,10 +3,8 @@
 SETTINGS = {
     "ANGEE_OCR_ENGINE_CLASSES": {
         "inference": "angee.workflows_extraction.engines.InferenceMappingEngine",
-        "inference_document": "angee.workflows_extraction.engines.InferenceDocumentEngine",
         "none": "angee.workflows_extraction.engines.NoOcrEngine",
     },
-    "ANGEE_WORKFLOW_STEP_CLASSES.ocr_extract": "angee.workflows_extraction.steps.OcrExtractStepImpl",
     "ANGEE_WORKFLOW_STEP_CLASSES.prepare_pages": "angee.workflows_extraction.steps.PreparePagesStepImpl",
     "ANGEE_WORKFLOW_STEP_CLASSES.recognize_page": "angee.workflows_extraction.steps.RecognizePageStepImpl",
     "ANGEE_WORKFLOW_STEP_CLASSES.collect_carriers": "angee.workflows_extraction.steps.CollectCarriersStepImpl",

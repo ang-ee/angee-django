@@ -16,10 +16,8 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, connection, models
+from django.db import IntegrityError, models
 from django.test import SimpleTestCase, override_settings
-from django.utils import timezone
-from PIL import Image, ImageDraw
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -31,7 +29,6 @@ from rebac import (
 )
 
 from angee.messaging.backends import ParsedMessage, ParsedPart
-from angee.workflows.attempts import RecoveryMode
 from angee.workflows_extraction.engines import DocumentPart, DocumentPipelineError, PageImage, PageResult
 from angee.workflows_extraction.managers import _document_mapping, _result_selectors
 from angee.workflows_extraction.models import DocumentRef, LineRef
@@ -45,19 +42,20 @@ from angee.workflows_extraction.service import (
     PreparedDocument,
     PreparedPage,
     _document_sources,
-    _merge,
     _unchanged_claims,
     collect_carriers,
-    extract,
+    infer,
     json_pointer_value,
     model_deployment_identity,
-    reextract,
+    prepare_pages,
+    process,
+    _preserve_retained_authority,
+    require_approved_model_deployment,
     revise,
 )
-from angee.workflows_extraction.steps import OcrExtractConfig, OcrExtractStepImpl
+from angee.workflows_extraction.steps import OcrExtractConfig
 from angee.workflows_extraction_glm.engine import GlmOllamaEngine
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
-from tests.ocr_engines import FakeOcrEngine
 from tests.ocr_models import OCR_MODELS, Extraction, ExtractionPage, ExtractionSource
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
 from tests.test_integrate_vcs import VCS_TEST_MODELS
@@ -167,28 +165,6 @@ class PageAggregationTests(SimpleTestCase):
             "reason": "Reviewed line retirement after split",
         }])
 
-    def test_preserves_required_nullable_value_until_substantive_evidence_replaces_it(self) -> None:
-        schema = {
-            "type": "object",
-            "required": ["invoice_date", "reference"],
-            "properties": {
-                "invoice_date": {"type": ["string", "null"]},
-                "reference": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                "optional_note": {"type": ["string", "null"]},
-            },
-        }
-
-        merged, conflicts = _merge(
-            [
-                PageResult({"invoice_date": None, "reference": None, "optional_note": None}),
-                PageResult({"invoice_date": "2026-09-09", "reference": None}),
-            ],
-            schema=schema,
-        )
-
-        self.assertEqual(merged, {"invoice_date": "2026-09-09", "reference": None})
-        self.assertEqual(conflicts, {})
-
     def test_derives_claim_spans_only_for_values_present_in_retained_text(self) -> None:
         parts = (DocumentPart(0, 0, "text/plain", "native_text", "Invoice 22121 total 174.20", "test", "a" * 64),)
         claims = derive_text_claims({"reference": "22121", "total": "174.20", "bank": "invented"}, parts)
@@ -297,14 +273,6 @@ class PageAggregationTests(SimpleTestCase):
         self.assertEqual(source.mime_type, "")
 
 
-def _png(text: str) -> bytes:
-    image = Image.new("RGB", (320, 160), "white")
-    ImageDraw.Draw(image).text((20, 60), text, fill="black")
-    output = io.BytesIO()
-    image.save(output, format="PNG")
-    return output.getvalue()
-
-
 @pytest.mark.usefixtures("ocr_tables", "workflow_engine_tables")
 class ExtractionServiceTests(TestCase):
     """Exercise the service against the concrete composed runtime models."""
@@ -331,8 +299,8 @@ class ExtractionServiceTests(TestCase):
         inference_model = apps.get_model("agents", "InferenceModel")
         with system_context(reason="workflows_extraction tests setup"):
             mime_model.objects.get_or_create(
-                mime_type="image/png",
-                defaults={"category": "image", "label": "PNG image", "icon_key": "file-image"},
+                mime_type="text/plain",
+                defaults={"category": "document", "label": "Plain text", "icon_key": "file-text"},
             )
             backend = backend_model.objects.create(
                 slug="ocr-tests",
@@ -376,14 +344,14 @@ class ExtractionServiceTests(TestCase):
             file_model = apps.get_model("storage", "File")
             self.files = [
                 file_model.objects.ingest_bytes(
-                    _png("FIRST"),
-                    filename="first.png",
+                    b"FIRST retained source evidence",
+                    filename="first.txt",
                     owner_id=self.owner.pk,
                     drive_id=str(self.drive.sqid),
                 ),
                 file_model.objects.ingest_bytes(
-                    _png("SECOND"),
-                    filename="second.png",
+                    b"SECOND retained source evidence",
+                    filename="second.txt",
                     owner_id=self.owner.pk,
                     drive_id=str(self.drive.sqid),
                 ),
@@ -394,14 +362,28 @@ class ExtractionServiceTests(TestCase):
 
     def _extract(self, *, config: dict[str, Any]) -> Any:
         with actor_context(self.owner):
-            return extract(
-                files=self.files,
-                schema=SCHEMA,
-                model=self.model,
-                authorized_target=self.drive,
-                engine="fake",
-                config=config,
+            prepared = prepare_pages(
+                files=self.files, message_parts=(), authorized_target=self.drive, config=config,
             )
+            return process(
+                prepared, (), schema=SCHEMA, model=self.model,
+                authorized_target=self.drive, engine="fake_document", config=config,
+            )
+
+    def _retain(
+        self, *, files: Any, authorized_target: Any, config: dict[str, Any],
+        model: Any | None = None, recognition_model: Any | None = None,
+        message_parts: Any = (),
+    ) -> Any:
+        prepared = prepare_pages(
+            files=files, message_parts=message_parts,
+            authorized_target=authorized_target, config=config,
+        )
+        return process(
+            prepared, (), schema=SCHEMA, model=model,
+            recognition_model=recognition_model, authorized_target=authorized_target,
+            engine="fake_document", config=config,
+        )
 
     def _decision(
         self,
@@ -458,31 +440,18 @@ class ExtractionServiceTests(TestCase):
                 config={"provider_model": "unapproved"}, created_by=self.owner,
             )
         with actor_context(self.owner), override_settings(ANGEE_OCR_APPROVED_MODEL_DEPLOYMENTS=policy):
-            with patch("angee.workflows_extraction.service._document_sources") as acquire_sources:
-                with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
-                    extract(
-                        files=self.files, schema=SCHEMA, model=unapproved,
-                        authorized_target=self.drive, engine="fake", config={},
-                    )
-                acquire_sources.assert_not_called()
-
-            with patch("angee.workflows_extraction.service._document_sources") as acquire_sources:
-                with self.assertRaisesRegex(DjangoPermissionDenied, "recognition model deployment is not approved"):
-                    extract(
-                        files=self.files, schema=SCHEMA, model=self.model, recognition_model=self.model,
-                        authorized_target=self.drive, engine="fake", config={},
-                    )
-                acquire_sources.assert_not_called()
+            with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
+                require_approved_model_deployment(unapproved, role="mapping")
+            with self.assertRaisesRegex(DjangoPermissionDenied, "recognition model deployment is not approved"):
+                require_approved_model_deployment(self.model, role="recognition")
 
         provider = self.model.provider
         with system_context(reason="test repointed OCR deployment"):
             provider.base_url = "https://external.invalid/v1"
             provider.save(update_fields=("base_url", "updated_at"))
         with override_settings(ANGEE_OCR_APPROVED_MODEL_DEPLOYMENTS=policy):
-            with patch("angee.workflows_extraction.service._document_sources") as acquire_sources:
-                with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
-                    self._extract(config={})
-                acquire_sources.assert_not_called()
+            with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
+                require_approved_model_deployment(self.model, role="mapping")
 
     def test_persists_ordered_evidence_reuses_exact_scope_and_revises_changed_config(self) -> None:
         config = {
@@ -562,21 +531,140 @@ class ExtractionServiceTests(TestCase):
             self.assertEqual(held.provenance["identity_correspondence"]["last_known_revision"], 1)
             self.assertEqual(first.result, {"number": "SYN-1", "rows": ["first", "second"]})
 
+    def test_correspondence_hold_inference_uses_exact_last_known_fact_authority(self) -> None:
+        original = self._extract(config={
+            "result": {"number": "SOURCE", "rows": ["source row"]},
+            "inference_mode": "permitted",
+        })
+        original_document = original.document_refs[0]
+        original_line = original_document.lines[0]
+        correction_mapping = {
+            original_document.selector: original_document.identity,
+            original_line.selector: original_line.identity,
+        }
+        decision = self._decision(original)
+        with actor_context(self.owner):
+            authoritative = revise(
+                original,
+                result={"number": "HUMAN", "rows": ["source row"]},
+                decision=decision,
+                identity_mapping=correction_mapping,
+            )
+            held_config = {
+                "result": {"number": "REPROCESSED", "rows": ["first", "second"]},
+                "inference_mode": "permitted",
+            }
+            held = self._retain(
+                files=tuple(reversed(self.files)), authorized_target=self.drive,
+                config=held_config, model=self.model,
+            )
+        self.assertEqual(held.error_code, "source_hold:identity_correspondence_required")
+        self.assertEqual(
+            held.parts.with_actor(self.owner).select_related("source").get(position=0).source.file_id,
+            authoritative.parts.with_actor(self.owner).select_related("source").get(position=1).source.file_id,
+        )
+
+        document = authoritative.document_refs[0]
+        line = document.lines[0]
+        continuing = {document.selector: document.identity, line.selector: line.identity}
+        admitted = SimpleNamespace(
+            request_key="held-authority-request",
+            input={
+                "base_extraction_id": str(held.sqid),
+                "model_id": str(self.model.sqid),
+                "identity_mapping": continuing,
+                "retired_identities": {},
+            },
+        )
+        provider_claims = {
+            "/number": [{"part_position": 0}],
+            "/rows/0": [{"part_position": 0}],
+        }
+        with (
+            actor_context(self.owner),
+            patch("angee.workflows.engine.external_operation_request", return_value=admitted),
+            patch(
+                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                return_value=(
+                    {"number": "PROVIDER", "rows": ["provider row"]},
+                    provider_claims,
+                    {"route": "test"},
+                ),
+            ),
+        ):
+            inferred = infer(
+                held, model=self.model, authorized_target=self.drive,
+                operation_step_run=SimpleNamespace(), identity_mapping=continuing,
+            )
+        self.assertEqual(inferred.result, {"number": "HUMAN", "rows": ["source row"]})
+        self.assertEqual(inferred.stage_provenance["inference"]["authority_revision"], 2)
+        self.assertEqual(
+            inferred.stage_provenance["inference"]["authority_extraction_id"],
+            str(authoritative.sqid),
+        )
+        self.assertEqual(inferred.claims["/rows/0"][0]["part_position"], 1)
+        self.assertEqual(
+            inferred.parts.with_actor(self.owner).select_related("source").get(position=1).source.file_id,
+            authoritative.parts.with_actor(self.owner).select_related("source").get(position=0).source.file_id,
+        )
+
+        retired_result, retired_claims = _preserve_retained_authority(
+            authoritative,
+            {"number": "PROVIDER", "rows": ["new identity row"]},
+            provider_claims,
+            identity_mapping={document.selector: document.identity, line.selector: "new"},
+            retired_identities={line.identity: "Reviewed replacement line"},
+            claim_part_positions={0: 0},
+        )
+        self.assertEqual(retired_result, {"number": "HUMAN", "rows": ["new identity row"]})
+        self.assertIn("/rows/0", retired_claims)
+
+        replaced_result, replaced_claims = _preserve_retained_authority(
+            authoritative,
+            {"number": "new identity number", "rows": ["new identity row"]},
+            provider_claims,
+            identity_mapping={document.selector: "new", line.selector: "new"},
+            retired_identities={
+                document.identity: "Reviewed replacement document",
+                line.identity: "Retired with its document",
+            },
+            claim_part_positions={0: 0},
+        )
+        self.assertEqual(replaced_result, {
+            "number": "new identity number", "rows": ["new identity row"],
+        })
+        self.assertEqual(replaced_claims, provider_claims)
+
+        structural = SimpleNamespace(
+            claims={"/rows": [{"part_position": 0}]}, corrections=(),
+            document_refs=authoritative.document_refs, result=authoritative.result,
+        )
+        with self.assertRaisesRegex(ValidationError, "identity container"):
+            _preserve_retained_authority(
+                structural,
+                {"number": "PROVIDER", "rows": ["provider row"]},
+                provider_claims,
+                identity_mapping=continuing,
+                retired_identities={},
+                claim_part_positions={0: 0},
+            )
+
     def test_retains_failed_evidence_and_scopes_raw_values_to_authorized_readers(self) -> None:
-        failed = self._extract(config={"result": {"unvalidated_raw": "private synthetic value"}})
+        failed = self._extract(config={"failure": True})
         self.assertEqual(failed.status, "failed")
-        self.assertEqual(failed.error_code, "result_validation:ValidationError")
-        self.assertEqual(failed.result, {"unvalidated_raw": "private synthetic value"})
+        self.assertEqual(failed.error_code, "processing:SyntheticFailure")
+        self.assertEqual(failed.result, {})
         with actor_context(self.owner):
             self.assertEqual(failed.sources.count(), 2)
             self.assertEqual(failed.pages.count(), 2)
+            self.assertEqual(failed.parts.count(), 2)
 
         extraction_model = apps.get_model("workflows_extraction", "Extraction")
         with actor_context(self.stranger):
             self.assertFalse(extraction_model.objects.filter(pk=failed.pk).exists())
         with actor_context(self.owner):
             visible = extraction_model.objects.get(pk=failed.pk)
-            self.assertEqual(visible.result["unvalidated_raw"], "private synthetic value")
+            self.assertEqual(visible.parts.get(position=0).value, "FIRST retained source evidence")
 
     def test_document_engine_persists_model_free_raw_parts_and_fingerprints_recognizer(self) -> None:
         config = {
@@ -584,26 +672,18 @@ class ExtractionServiceTests(TestCase):
             "source_text": "Synthetic invoice attachment",
         }
         with actor_context(self.owner):
-            first = extract(
-                files=self.files[:1],
-                schema=SCHEMA,
-                model=None,
-                authorized_target=self.drive,
-                engine="fake_document",
-                config=config,
-            )
-            revised = extract(
-                files=self.files[:1],
-                schema=SCHEMA,
-                model=None,
+            first = self._retain(files=self.files[:1], authorized_target=self.drive, config=config)
+            revised = self._retain(
+                files=self.files[:1], authorized_target=self.drive, config=config,
                 recognition_model=self.model,
-                authorized_target=self.drive,
-                engine="fake_document",
-                config=config,
             )
             self.assertEqual(first.result, config["result"])
             self.assertIsNone(first.model_id)
-            self.assertEqual(first.provenance["document"], {"route": "fake", "pipeline_duration_ms": 0})
+            self.assertEqual(first.stage_provenance["route"], "fake")
+            self.assertEqual(
+                first.stage_provenance["stages"],
+                ["prepare_pages", "collect_carriers", "process_parts"],
+            )
             self.assertEqual(first.parts.count(), 1)
             self.assertEqual(first.parts.get().claims["/number"], [{"part_position": 0}])
             self.assertEqual(revised.revision, first.revision + 1)
@@ -613,13 +693,8 @@ class ExtractionServiceTests(TestCase):
 
     def test_human_correction_clones_parts_retains_unchanged_claims_and_reuses_without_engine(self) -> None:
         with actor_context(self.owner):
-            original = extract(
-                files=self.files,
-                schema=SCHEMA,
-                model=None,
-                authorized_target=self.drive,
-                engine="fake_document",
-                config={
+            original = self._retain(
+                files=self.files, authorized_target=self.drive, config={
                     "result": {"number": "OLD", "rows": ["same"]},
                     "source_text": "OLD same",
                 },
@@ -646,18 +721,18 @@ class ExtractionServiceTests(TestCase):
         engine_class.assert_not_called()
         acquire_sources.assert_not_called()
         self.assertEqual(original.fact_authority("/number").kind, "source")
-        self.assertEqual(original.fact_authority("/rows").kind, "source")
+        self.assertEqual(original.fact_authority("/rows/0").kind, "source")
         self.assertEqual(repeated.pk, corrected.pk)
         self.assertEqual(corrected.revision, original.revision + 1)
         self.assertEqual(corrected.result, {"number": "NEW", "rows": ["same"]})
-        self.assertEqual(corrected.provenance["claims"], {"/rows": [{"part_position": 0}]})
+        self.assertEqual(corrected.provenance["claims"], {"/rows/0": [{"part_position": 0}]})
         self.assertEqual(corrected.provenance["used_model_roles"], [])
         corrected_number = corrected.fact_authority("/number")
         self.assertEqual(
             (corrected_number.kind, corrected_number.decision_id),
             ("correction", str(decision.sqid)),
         )
-        self.assertEqual(corrected.fact_authority("/rows").kind, "source")
+        self.assertEqual(corrected.fact_authority("/rows/0").kind, "source")
         self.assertEqual(
             corrected.provenance["corrections"][-1],
             {
@@ -684,7 +759,7 @@ class ExtractionServiceTests(TestCase):
                 list(original.parts.values_list(*part_fields)),
                 list(corrected.parts.values_list(*part_fields)),
             )
-            self.assertEqual(corrected.parts.get(position=0).claims, {"/rows": [{"part_position": 0}]})
+            self.assertEqual(corrected.parts.get(position=0).claims, {"/rows/0": [{"part_position": 0}]})
         original.refresh_from_db()
         self.assertEqual(original.result, original_result)
         self.assertEqual(original.provenance, original_provenance)
@@ -711,13 +786,8 @@ class ExtractionServiceTests(TestCase):
 
     def test_human_correction_classifies_changed_array_element_without_source_authority(self) -> None:
         with actor_context(self.owner):
-            original = extract(
-                files=self.files,
-                schema=SCHEMA,
-                model=None,
-                authorized_target=self.drive,
-                engine="fake_document",
-                config={
+            original = self._retain(
+                files=self.files, authorized_target=self.drive, config={
                     "result": {"number": "OLD", "rows": ["same"]},
                     "source_text": "OLD same",
                 },
@@ -730,19 +800,15 @@ class ExtractionServiceTests(TestCase):
                 decision=decision,
             )
 
-        self.assertEqual(original.fact_authority("/rows").kind, "source")
+        self.assertEqual(original.fact_authority("/rows/0").kind, "source")
         reviewed = corrected.fact_authority("/rows/0")
         self.assertEqual((reviewed.kind, reviewed.decision_id), ("correction", str(decision.sqid)))
         self.assertEqual(corrected.fact_authority("/rows").kind, "unverified")
 
     def test_human_correction_rejects_invalid_authority_schema_result_and_stale_reuse(self) -> None:
         with actor_context(self.owner):
-            original = extract(
-                files=self.files[:1],
-                schema=SCHEMA,
-                model=None,
-                authorized_target=self.drive,
-                engine="fake_document",
+            original = self._retain(
+                files=self.files[:1], authorized_target=self.drive,
                 config={"result": {"number": "OLD", "rows": []}, "source_text": "OLD"},
             )
         wrong_revision = self._decision(
@@ -769,12 +835,8 @@ class ExtractionServiceTests(TestCase):
 
     def test_human_correction_requires_all_reads_and_current_source_identity(self) -> None:
         with actor_context(self.owner):
-            original = extract(
-                files=self.files[:1],
-                schema=SCHEMA,
-                model=None,
-                authorized_target=self.files[1],
-                engine="fake_document",
+            original = self._retain(
+                files=self.files[:1], authorized_target=self.files[1],
                 config={"result": {"number": "OLD", "rows": []}, "source_text": "OLD"},
             )
         decision = self._decision(original)
@@ -841,9 +903,8 @@ class ExtractionServiceTests(TestCase):
                 RelationshipTuple(to_object_ref(self.drive), "viewer", to_subject_ref(repair_actor)),
             ])
         with actor_context(repair_actor):
-            evidence = extract(
-                files=(retained.file,), message_parts=(outer_text,), schema=SCHEMA, model=None,
-                authorized_target=self.drive, engine="fake_document",
+            evidence = self._retain(
+                files=(retained.file,), message_parts=(outer_text,), authorized_target=self.drive,
                 config={"result": {"number": "OLD", "rows": []}, "source_text": "retained context"},
             )
             source_facts = tuple(
@@ -876,32 +937,12 @@ class ExtractionServiceTests(TestCase):
         with actor_context(repair_actor):
             self.assertEqual(retained.children.count(), 1)
 
-    def test_document_engine_retains_validation_failure_before_postgres_json_null_error(self) -> None:
-        with actor_context(self.owner):
-            failed = extract(
-                files=self.files[:1],
-                schema=SCHEMA,
-                model=None,
-                authorized_target=self.drive,
-                engine="fake_document",
-                config={"nul_result": True},
+    def test_profile_programming_error_does_not_persist_invalid_json(self) -> None:
+        with actor_context(self.owner), self.assertRaises(ValidationError):
+            self._retain(
+                files=self.files[:1], authorized_target=self.drive, config={"nul_result": True},
             )
-            self.assertEqual(failed.status, "failed")
-            self.assertEqual(failed.error_code, "result_validation:ValidationError")
-            self.assertEqual(failed.result, {})
-            self.assertEqual(failed.sources.count(), 1)
-            self.assertEqual(failed.parts.count(), 0)
-
-    def test_engine_io_finishes_before_atomic_persistence_and_exact_reuse_skips_engine(self) -> None:
-        def page(engine, image, schema, **kwargs):
-            self.assertFalse(connection.in_atomic_block)
-            return PageResult({"number": "IO-1", "rows": ["row"]})
-
-        with patch.object(FakeOcrEngine, "extract_page", autospec=True, side_effect=page) as recognize:
-            first = self._extract(config={})
-            reused = self._extract(config={})
-        self.assertEqual(first.pk, reused.pk)
-        self.assertEqual(recognize.call_count, len(self.files))
+        self.assertEqual(Extraction._base_manager.count(), 0)
 
     def test_revision_retry_rolls_back_partial_children_before_recreating_whole_evidence(self) -> None:
         original = models.QuerySet.bulk_create
@@ -935,31 +976,6 @@ class ExtractionServiceTests(TestCase):
         self.assertEqual(Extraction._base_manager.count(), 0)
         self.assertEqual(ExtractionSource._base_manager.count(), 0)
         self.assertEqual(ExtractionPage._base_manager.count(), 0)
-
-    def test_recovery_retains_failed_revision_and_journals_only_the_new_reference(self) -> None:
-        failed = self._extract(config={"result": {"private": "unvalidated"}})
-        run = SimpleNamespace(
-            run=SimpleNamespace(created_by=self.owner),
-            step=SimpleNamespace(config={"schema": {"type": "object"}, "engine": "fake"}),
-        )
-        source_attempt = SimpleNamespace(output={"extraction_id": str(failed.sqid), "revision": 1})
-        with patch.object(FakeOcrEngine, "extract_page", return_value=PageResult({"number": "RECOVERED", "rows": []})):
-            outcome = OcrExtractStepImpl().run_recovery(
-                run,
-                now=timezone.now(),
-                source_attempt=source_attempt,
-                mode=RecoveryMode.FRESH,
-            )
-            with actor_context(self.owner):
-                repeated = reextract(failed)
-        self.assertEqual(outcome.outcome, "extracted")
-        self.assertEqual(outcome.output, {"extraction_id": str(repeated.sqid), "revision": 2})
-        self.assertEqual(Extraction._base_manager.count(), 2)
-        failed.refresh_from_db()
-        self.assertEqual(failed.result, {"private": "unvalidated"})
-        self.assertEqual(failed.status, "failed")
-        with self.assertRaises(ValidationError), actor_context(self.owner):
-            reextract(repeated)
 
     def test_retained_failure_outcome_is_frozen_by_step_config(self) -> None:
         legacy = OcrExtractConfig.model_validate({"schema": {}, "engine": "fake"})

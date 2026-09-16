@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
-from contextlib import nullcontext
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -23,8 +21,8 @@ from angee.workflows_extraction.engines import (
     PageResult,
 )
 from angee.workflows_extraction.routing import acquire_native_parts
-from angee.workflows_extraction.service import _merge, _validated_schema
-from angee.workflows_extraction.steps import OcrExtractStepImpl, RecognizePageStepImpl
+from angee.workflows_extraction.service import _validated_schema
+from angee.workflows_extraction.steps import PreparePagesStepImpl, RecognizePageStepImpl
 from angee.workflows_extraction_glm.engine import GlmOllamaEngine
 from tests.ocr_engines import FakeOcrEngine
 
@@ -55,7 +53,7 @@ def _message_part(
     )
 
 
-@pytest.mark.parametrize("step_impl", [OcrExtractStepImpl, RecognizePageStepImpl])
+@pytest.mark.parametrize("step_impl", [PreparePagesStepImpl, RecognizePageStepImpl])
 def test_extraction_step_engine_config_is_authored_as_json(step_impl: type) -> None:
     """Provider/profile options remain editable without weakening structured config projection."""
 
@@ -69,7 +67,7 @@ def test_extraction_step_engine_config_is_authored_as_json(step_impl: type) -> N
         "omittable": True,
     }
     assert step_impl.normalize_config({
-        **({"schema": {}, "engine": "profile"} if step_impl is OcrExtractStepImpl else {}),
+        **({"schema": {}, "engine": "profile"} if step_impl is PreparePagesStepImpl else {}),
         "engine_config": {"nested": {"enabled": False}, "limit": 0, "nullable": None},
     })["engine_config"] == {
         "nested": {"enabled": False}, "limit": 0, "nullable": None,
@@ -155,83 +153,10 @@ def test_fake_engine_addresses_pages_by_source_and_page_without_collisions() -> 
     assert engine.extract_page(_page(1, 0), SCHEMA, model=None, config=config, timeout=1).value == {"number": "second"}
 
 
-def test_merge_preserves_repeated_rows_and_records_conflicting_claims() -> None:
-    result, conflicts = _merge(
-        [
-            PageResult({"number": "A", "lines": [{"description": "same"}]}),
-            PageResult({"number": "B", "lines": [{"description": "same"}]}),
-        ]
-    )
-    assert result == {
-        "number": "A",
-        "lines": [{"description": "same"}, {"description": "same"}],
-    }
-    assert conflicts == {"number": ["A", "B"]}
-
-
 def test_schema_owner_requires_object_root() -> None:
     assert _validated_schema(SCHEMA) == SCHEMA
     with pytest.raises(ValidationError, match="root must have type object"):
         _validated_schema({"$id": "bad", "type": "array"})
-
-
-def test_reextract_uses_newest_lineage_revision_and_reuses_newest_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Recovery advances only within the original frozen extraction policy."""
-
-    assert service.authored_engine_config({"timeout": 30, "retry_of_revision": 2}) == {"timeout": 30}
-
-    target = SimpleNamespace(has_access=lambda _permission: True)
-    original = SimpleNamespace(
-        status="failed",
-        lineage_key="lineage",
-        engine="inference_document",
-        model_id=1,
-        recognition_model_id=2,
-        schema_digest="schema",
-        engine_config={"timeout": 30},
-    )
-    sources = MagicMock()
-    sources.select_related.return_value.order_by.return_value = []
-    different_model = SimpleNamespace(
-        status="succeeded",
-        revision=4,
-        engine="inference_document",
-        model_id=99,
-        recognition_model_id=2,
-        schema_digest="schema",
-        engine_config={"timeout": 30},
-    )
-    latest = SimpleNamespace(
-        status="succeeded",
-        revision=3,
-        engine="inference_document",
-        model_id=1,
-        recognition_model_id=2,
-        schema_digest="schema",
-        engine_config={"timeout": 30, "retry_of_revision": 2},
-        sources=sources,
-        target=target,
-        model=None,
-        recognition_model=None,
-    )
-    manager = MagicMock()
-    manager.filter.return_value.order_by.return_value = [different_model, latest]
-    extraction_model = SimpleNamespace(_base_manager=manager)
-    monkeypatch.setattr(service.apps, "get_model", lambda *_args: extraction_model)
-    monkeypatch.setattr(service, "system_context", lambda **_kwargs: nullcontext())
-    extract_call = MagicMock()
-    monkeypatch.setattr(service, "extract", extract_call)
-
-    assert service.reextract(original) is latest
-    extract_call.assert_not_called()
-
-    latest.status = "failed"
-    latest.schema = SCHEMA
-    retried = SimpleNamespace(status="succeeded")
-    extract_call.return_value = retried
-
-    assert service.reextract(original) is retried
-    assert extract_call.call_args.kwargs["config"] == {"timeout": 30, "retry_of_revision": 3}
 
 
 def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -> None:
