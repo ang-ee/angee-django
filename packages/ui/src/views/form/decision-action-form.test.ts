@@ -84,3 +84,50 @@ test("native terms, bank, and source action schemas retain exact branch values a
   expect(source.validate(source.project("link_existing", { invoice_id: "inv_current", reason: "Source reviewed", approved: false, count: 0 })).valid).toBe(true);
   expect(source.validate({ action: "keep_separate", reason: "   " }).valid).toBe(false);
 });
+
+test("alternative correction fields produce one labelled instruction without duplicate branch errors", () => {
+  const form = compileDecisionActionFormSpec({
+    type: "object", required: ["action"], properties: {
+      action: { type: "string", enum: ["correct", "reject"], options: [
+        { value: "correct", label: "Correct source facts", verdict: "COMPLETE" },
+        { value: "reject", label: "Reject document", verdict: "REJECT" },
+      ] },
+      note: { type: "string", label: "Review explanation", minLength: 1 },
+      currency: { type: ["string", "null"], label: "Invoice currency", omittable: true },
+      invoice_date: { type: ["string", "null"], label: "Invoice date", omittable: true },
+      vendor_name: { type: ["string", "null"], label: "Supplier name", omittable: true },
+    },
+    oneOf: [
+      { type: "object", required: ["action", "note"], properties: {
+        action: { const: "correct" }, note: { type: "string", minLength: 1 },
+        currency: { type: ["string", "null"] }, invoice_date: { type: ["string", "null"] },
+        vendor_name: { type: ["string", "null"] },
+      }, anyOf: [
+        { required: ["currency"], properties: { currency: { type: "string", minLength: 1 } } },
+        { required: ["invoice_date"], properties: { invoice_date: { type: "string", minLength: 1 } } },
+        { required: ["vendor_name"], properties: { vendor_name: { type: "string", minLength: 1 } } },
+      ], additionalProperties: false },
+      { type: "object", required: ["action", "note"], properties: {
+        action: { const: "reject" }, note: { type: "string", minLength: 1 },
+      }, additionalProperties: false },
+    ],
+  }, widgets);
+
+  expect(form.validate({
+    action: "correct", note: "", currency: null, invoice_date: null, vendor_name: null,
+  })).toEqual({
+    valid: false,
+    messages: {
+      note: ["Review explanation must contain at least 1 character."],
+      root: ["Complete at least one of: Invoice currency, Invoice date, or Supplier name."],
+    },
+  });
+  expect(form.validate({
+    action: "correct", note: "Reviewed", currency: null, invoice_date: null, vendor_name: null,
+  }).messages).toEqual({
+    root: ["Complete at least one of: Invoice currency, Invoice date, or Supplier name."],
+  });
+  expect(form.validate({
+    action: "correct", note: "Reviewed", currency: null, invoice_date: "2026-08-31", vendor_name: null,
+  })).toEqual({ valid: true, messages: {} });
+});

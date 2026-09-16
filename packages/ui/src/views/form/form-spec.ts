@@ -82,7 +82,8 @@ export function compileDecisionActionFormSpec(value: unknown, widgets: WidgetMap
       return name;
     }));
   const byBranch = new Map<string, Set<string>>();
-  for (const branch of branches) {
+  const branchIndex = new Map<string, number>();
+  for (const [index, branch] of branches.entries()) {
     const selected = branch.properties?.action?.const;
     const names = new Set(Object.keys(branch.properties ?? {}));
     if (branch.type !== "object" || branch.additionalProperties !== false
@@ -94,6 +95,7 @@ export function compileDecisionActionFormSpec(value: unknown, widgets: WidgetMap
       throw new Error("Decision branches need distinct closed action input scopes.");
     }
     byBranch.set(selected, names);
+    branchIndex.set(selected, index);
   }
   if (byBranch.size !== values.length || contextNames.has("action")
       || [...contextNames].some((name) => presented.required?.includes(name))) {
@@ -139,7 +141,18 @@ export function compileDecisionActionFormSpec(value: unknown, widgets: WidgetMap
       return { ...normalizeFormSpecValues(this.fieldsFor(selected), current), action: selected };
     },
     validate(candidate) {
-      return { valid: Boolean(validate(candidate)), messages: ajvErrorMessages(validate.errors) };
+      const valid = Boolean(validate(candidate));
+      const selected = candidate && typeof candidate === "object" && !Array.isArray(candidate)
+        ? (candidate as Record<string, unknown>).action : undefined;
+      return {
+        valid,
+        messages: ajvErrorMessages(
+          validate.errors,
+          candidate,
+          typeof selected === "string" ? branchIndex.get(selected) : undefined,
+          inputFields,
+        ),
+      };
     },
     validateContext(payload) {
       const seeds = parseFormSpecPayload(payload);
@@ -157,17 +170,116 @@ export function compileDecisionActionFormSpec(value: unknown, widgets: WidgetMap
   };
 }
 
-function ajvErrorMessages(errors: readonly ErrorObject[] | null | undefined): Record<string, string[]> {
+function ajvErrorMessages(
+  errors: readonly ErrorObject[] | null | undefined,
+  candidate: unknown,
+  selectedBranch: number | undefined,
+  fields: readonly FormSpecFieldDescriptor[],
+): Record<string, string[]> {
   const messages: Record<string, string[]> = {};
-  for (const error of errors ?? []) {
+  const labels = new Map(fields.map((field) => [field.name, field.label ?? field.name]));
+  const relevant = (errors ?? []).filter((error) => {
+    if (error.keyword === "oneOf" && error.schemaPath === "#/oneOf") return false;
+    const branch = /^#\/oneOf\/(\d+)(?:\/|$)/.exec(error.schemaPath);
+    return !branch || selectedBranch === undefined || Number(branch[1]) === selectedBranch;
+  });
+  const alternatives = relevant.filter((error) => error.keyword === "anyOf");
+  const discarded = new Set<ErrorObject>();
+  const synthetic: Array<{ name: string; message: string }> = [];
+  for (const alternative of alternatives) {
+    const prefix = `${alternative.schemaPath}/`;
+    const children = relevant.filter((error) => error !== alternative && error.schemaPath.startsWith(prefix));
+    const active = children.filter((error) => {
+      const pointer = error.keyword === "required" && typeof error.params.missingProperty === "string"
+        ? `${error.instancePath}/${escapeJsonPointer(error.params.missingProperty)}`
+        : error.instancePath;
+      return hasMeaningfulValue(candidate, pointer);
+    });
+    discarded.add(alternative);
+    for (const child of children) {
+      if (!active.includes(child)) discarded.add(child);
+    }
+    if (active.length === 0) {
+      const names = [...new Set(children.map((error) => error.keyword === "required"
+        && typeof error.params.missingProperty === "string"
+        ? error.params.missingProperty : jsonPointerSegments(error.instancePath).at(-1) ?? "")
+        .filter(Boolean))];
+      const alternativesLabel = formatList(names.map((name) => labels.get(name) ?? name));
+      synthetic.push({
+        name: jsonPointerName(alternative.instancePath) || "root",
+        message: alternativesLabel
+          ? `Complete at least one of: ${alternativesLabel}.`
+          : "Complete at least one of the available fields.",
+      });
+    }
+  }
+  const seen = new Set<string>();
+  for (const error of relevant) {
+    if (discarded.has(error)) continue;
     const missing = error.keyword === "required" && typeof error.params.missingProperty === "string"
       ? error.params.missingProperty : "";
-    const pointer = error.instancePath.replace(/^\//, "").replace(/\//g, ".")
-      .replace(/~1/g, "/").replace(/~0/g, "~");
-    const name = pointer || missing || "root";
-    (messages[name] ??= []).push(error.message ?? "Value does not satisfy this Decision action.");
+    const name = jsonPointerName(error.instancePath) || missing || "root";
+    const label = labels.get(name) ?? name;
+    const message = decisionValidationMessage(error, label);
+    const key = `${name}\u0000${message}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      (messages[name] ??= []).push(message);
+    }
+  }
+  for (const entry of synthetic) {
+    const key = `${entry.name}\u0000${entry.message}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      (messages[entry.name] ??= []).push(entry.message);
+    }
   }
   return messages;
+}
+
+function decisionValidationMessage(error: ErrorObject, label: string): string {
+  if (error.keyword === "required") return `${label} is required.`;
+  if (error.keyword === "minLength" && typeof error.params.limit === "number") {
+    const count = error.params.limit;
+    return `${label} must contain at least ${count} character${count === 1 ? "" : "s"}.`;
+  }
+  if (error.keyword === "maxLength" && typeof error.params.limit === "number") {
+    const count = error.params.limit;
+    return `${label} must contain at most ${count} character${count === 1 ? "" : "s"}.`;
+  }
+  if (error.keyword === "format") return `${label} has an invalid format.`;
+  if (error.keyword === "pattern" || error.keyword === "type" || error.keyword === "enum"
+      || error.keyword === "const") return `${label} has an invalid value.`;
+  return `${label}: ${error.message ?? "value does not satisfy this Decision action."}`;
+}
+
+function jsonPointerSegments(pointer: string): string[] {
+  return pointer.split("/").slice(1).map((part) => part.replace(/~1/g, "/").replace(/~0/g, "~"));
+}
+
+function jsonPointerName(pointer: string): string {
+  return jsonPointerSegments(pointer).join(".");
+}
+
+function escapeJsonPointer(value: string): string {
+  return value.replace(/~/g, "~0").replace(/\//g, "~1");
+}
+
+function hasMeaningfulValue(value: unknown, pointer: string): boolean {
+  let current = value;
+  for (const part of jsonPointerSegments(pointer)) {
+    if (!current || typeof current !== "object" || Array.isArray(current) || !Object.hasOwn(current, part)) {
+      return false;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current !== null && current !== undefined && current !== "";
+}
+
+function formatList(values: readonly string[]): string {
+  if (values.length < 2) return values[0] ?? "";
+  if (values.length === 2) return `${values[0]} or ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
 }
 
 export type FormSpecRelationCreate = Pick<RelationCreateConfig, "resource" | "defaultValues">;

@@ -68,6 +68,33 @@ const titleActionSchema = {
   }, additionalProperties: false }],
 };
 
+const correctionActionSchema = {
+  type: "object", required: ["action"], properties: {
+    action: { type: "string", enum: ["correct", "reject"], options: [
+      { value: "correct", label: "Correct source facts", verdict: "COMPLETE" },
+      { value: "reject", label: "Reject document", verdict: "REJECT" },
+    ] },
+    note: { type: "string", label: "Review explanation", minLength: 1 },
+    currency: { type: ["string", "null"], label: "Invoice currency", omittable: true },
+    invoice_date: { type: ["string", "null"], label: "Invoice date", widget: "date", omittable: true },
+    vendor_name: { type: ["string", "null"], label: "Supplier name", omittable: true },
+  },
+  oneOf: [
+    { type: "object", required: ["action", "note"], properties: {
+      action: { const: "correct" }, note: { type: "string", minLength: 1 },
+      currency: { type: ["string", "null"] }, invoice_date: { type: ["string", "null"] },
+      vendor_name: { type: ["string", "null"] },
+    }, anyOf: [
+      { required: ["currency"], properties: { currency: { type: "string", minLength: 1 } } },
+      { required: ["invoice_date"], properties: { invoice_date: { type: "string", minLength: 1 } } },
+      { required: ["vendor_name"], properties: { vendor_name: { type: "string", minLength: 1 } } },
+    ], additionalProperties: false },
+    { type: "object", required: ["action", "note"], properties: {
+      action: { const: "reject" }, note: { type: "string", minLength: 1 },
+    }, additionalProperties: false },
+  ],
+};
+
 afterEach(() => {
   cleanup();
   mocks.decide.mockClear();
@@ -269,6 +296,24 @@ describe("ApprovalTask", () => {
     await waitFor(() => expect(mocks.decide).toHaveBeenCalledWith({
       decision: "decision-1", verdict: "REJECT", payload: { action: "reject", note: "Wrong source" },
     }));
+  });
+
+  test("keeps an explanation-only alternative action pending with one actionable group error", async () => {
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ApprovalTask approval={{
+      ...approval, payload: {}, decision_schema: correctionActionSchema,
+    }} onResolved={() => undefined} /></AppRuntimeProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Correct source facts" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Correct source facts" })[1]!);
+    expect(await screen.findByText("Review explanation must contain at least 1 character.")).toBeTruthy();
+    expect(screen.getByText("Complete at least one of: Invoice currency, Invoice date, or Supplier name.")).toBeTruthy();
+    expect(mocks.decide).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Review explanation"), { target: { value: "Browser form validation only." } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Correct source facts" })[1]!);
+    expect(screen.queryByText("Review explanation must contain at least 1 character.")).toBeNull();
+    expect(screen.getByText("Complete at least one of: Invoice currency, Invoice date, or Supplier name.")).toBeTruthy();
+    expect(mocks.decide).not.toHaveBeenCalled();
   });
 
   test.each([
