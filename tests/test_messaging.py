@@ -1722,6 +1722,41 @@ def test_threaded_model_post_accepts_storage_attachments(messaging_tables: None,
 
 
 @pytest.mark.django_db(transaction=True)
+def test_unnamed_media_ingest_names_the_file_from_its_mime(messaging_tables: None, tmp_path: Path) -> None:
+    """Media that arrives without a name lands under a MIME-derived filename.
+
+    A WhatsApp image/video/audio node carries only a MIME type, so the ingest
+    fallback must derive ``attachment{ext}`` from the part's MIME instead of the
+    opaque ``attachment.bin``. Only the display name is derived; storage still
+    content-addresses and sniffs the stored bytes.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test unnamed media ingest setup"):
+        user = user_model.objects.create_user(username="wa-media", email="wa-media@example.com")
+        _storage_drive(tmp_path, owner=user)
+    channel = make_integration("wa-media-chan")
+
+    parsed = ParsedMessage(
+        external_id="wa-media/1",
+        platform="whatsapp",
+        sender=ParsedHandle(platform="whatsapp", value="+4917000009"),
+        body=ParsedPart(
+            type="image/jpeg",
+            disposition="attachment",
+            name="",
+            content=b"\xff\xd8\xff\xe0\x00\x10JFIF not a real jpeg body",
+        ),
+    )
+    with system_context(reason="test unnamed media ingest"):
+        Message.objects.ingest([parsed], channel=channel, quote_edges=False)
+
+    attachment_part = Part._base_manager.select_related("file").get(file__isnull=False)
+    assert attachment_part.file.filename == "attachment.jpg"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_threaded_model_tracks_structured_field_values(messaging_tables: None) -> None:
     """A threaded model can log Odoo-style tracking values without a free-text body."""
 
@@ -3179,3 +3214,38 @@ def test_handle_upsert_resolves_external_id_before_value(messaging_tables: None)
         by_value = Handle.objects.upsert(platform=Handle.Platform.WHATSAPP, value="+4917999999")
         assert by_value.pk == original.pk
         assert Handle._base_manager.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_upsert_converges_a_value_collision_across_external_ids(messaging_tables: None) -> None:
+    """A second source identity claiming an existing value converges, never crashes.
+
+    A WhatsApp contact reachable both by phone JID and by a hidden ``@lid`` that
+    resolves to the same E.164 must land on one handle: the external-id create
+    collides on ``(platform, value)``, and the upsert resolves to the row that
+    owns the value — keeping that row's own external id — instead of forking a
+    duplicate or raising ``IntegrityError``.
+    """
+
+    del messaging_tables
+    with system_context(reason="test handle value-collision upsert"):
+        phone = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="+4917000123",
+            external_id="4917000123@s.whatsapp.net",
+            display_name="Ada",
+        )
+        resolved_lid = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="+4917000123",
+            external_id="99887766@lid",
+            display_name="Ada Lovelace",
+            metadata={"lid": "99887766@lid"},
+        )
+
+    assert resolved_lid.pk == phone.pk
+    assert Handle._base_manager.count() == 1
+    phone.refresh_from_db()
+    assert phone.external_id == "4917000123@s.whatsapp.net"
+    assert phone.metadata.get("lid") == "99887766@lid"
+    assert phone.display_name == "Ada Lovelace"

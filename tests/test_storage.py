@@ -156,6 +156,30 @@ def test_detect_mime_falls_back_to_the_filename_when_libmagic_is_unsure() -> Non
     assert detect_mime(b"\x00\x01\x02\x03") == "application/octet-stream"
 
 
+def test_fallback_attachment_name_derives_extension_from_mime() -> None:
+    """An unnamed byte payload reads as its kind, not the opaque ``attachment.bin``.
+
+    The rule is the single owner shared by the messaging ingest fallback and the
+    storage ``attachment.bin`` backfill: ``attachment{ext}`` from the MIME, the
+    ``.jpe`` oddity normalised, and ``.bin`` for the unknown or empty type.
+    """
+
+    from angee.storage.uploads import attachment_extension, fallback_attachment_name
+
+    assert fallback_attachment_name("image/jpeg") == "attachment.jpg"
+    assert fallback_attachment_name("image/png") == "attachment.png"
+    assert fallback_attachment_name("application/pdf") == "attachment.pdf"
+    # A MIME parameter is ignored; the primary type drives the extension.
+    assert fallback_attachment_name("audio/ogg; codecs=opus") == "attachment.ogg"
+    # Unknown, empty, and the generic catch-all all stay ``.bin``.
+    assert fallback_attachment_name("application/octet-stream") == "attachment.bin"
+    assert fallback_attachment_name("application/x-not-a-real-type") == "attachment.bin"
+    assert fallback_attachment_name("") == "attachment.bin"
+    # The oddity fixup is applied to the bare extension helper too.
+    assert attachment_extension("image/jpeg") == ".jpg"
+    assert attachment_extension("") == ".bin"
+
+
 @pytest.fixture
 def storage_tables() -> Iterator[None]:
     """Provide the concrete storage tables for one test."""

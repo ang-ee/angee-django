@@ -220,16 +220,34 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         normalized_value = self.model.normalize_value(platform, value)
         external_id = str(fields.get("external_id") or "")
         if external_id:
-            handle, created = self.get_or_create(
-                platform=platform,
-                external_id=external_id,
-                defaults={
-                    "created_by_id": created_by_id,
-                    "value": value,
-                    "normalized_value": normalized_value,
-                    **fields,
-                },
-            )
+            try:
+                handle, created = self.get_or_create(
+                    platform=platform,
+                    external_id=external_id,
+                    defaults={
+                        "created_by_id": created_by_id,
+                        "value": value,
+                        "normalized_value": normalized_value,
+                        **fields,
+                    },
+                )
+            except IntegrityError:
+                # The external-id create can still collide on ``(platform, value)``
+                # when a second source identity already holds this contact point —
+                # e.g. a WhatsApp contact reached both by phone JID and by a hidden
+                # ``@lid`` that resolves to the same E.164. The value *is* the
+                # contact point, so converge on the row that owns it instead of
+                # forking or crashing; it keeps its own ``external_id`` (the other
+                # source's idempotency key). ``get_or_create`` isolates its insert
+                # in a savepoint, so the surrounding transaction stays usable.
+                existing = self.filter(platform=platform, value=value).first()
+                if existing is None:
+                    raise
+                self._refresh(
+                    existing,
+                    {name: val for name, val in fields.items() if name != "external_id"},
+                )
+                return existing
             if not created:
                 self._refresh(handle, {"value": value, "normalized_value": normalized_value, **fields})
             return handle

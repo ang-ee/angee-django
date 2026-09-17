@@ -50,6 +50,7 @@ from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
 from angee.parties.mixins import LinkSource
+from angee.storage.uploads import fallback_attachment_name
 
 if TYPE_CHECKING:
     from angee.messaging.backends import ParsedMessage, ParsedPart, ParsedThread
@@ -2941,7 +2942,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         file_model = apps.get_model("storage", "File")
         return file_model.objects.ingest_bytes(
             parsed.content,
-            filename=parsed.name or "attachment.bin",
+            filename=parsed.name or fallback_attachment_name(parsed.type),
             owner_id=owner_id,
         )
 
