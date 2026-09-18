@@ -51,7 +51,7 @@ from angee.messaging.backends import (
     ParsedRecipient,
     ParsedThread,
 )
-from angee.messaging.managers import normalize_subject, strip_null_bytes
+from angee.messaging.managers import derived_part_name, normalize_subject, strip_null_bytes
 from angee.messaging.models import MessageEdge as AbstractMessageEdge
 from angee.messaging.models import MessageStar as AbstractMessageStar
 from angee.messaging.models import Participant as AbstractParticipant
@@ -518,6 +518,51 @@ def test_normalize_subject_strips_reply_prefixes() -> None:
     assert normalize_subject("Re: Fwd: Hello") == "Hello"
     assert normalize_subject("  RE: re: Status  ") == "Status"
     assert normalize_subject("No prefix") == "No prefix"
+
+
+def test_derived_part_name_covers_chat_email_and_fallback() -> None:
+    """The one naming rule: chat id, email Content-ID, else the shared fallback."""
+
+    # A chat message names the part from the id after the last ``/`` in its
+    # external id; the first nameless part has no suffix, later ones get ``-index``.
+    assert (
+        derived_part_name(mime="image/jpeg", cid="", external_id="4917000001@s.whatsapp.net/3EB0AF", is_email=False)
+        == "3EB0AF.jpg"
+    )
+    assert (
+        derived_part_name(mime="video/mp4", cid="", external_id="chat/STANZA", is_email=False, index=0)
+        == "STANZA.mp4"
+    )
+    assert (
+        derived_part_name(mime="video/mp4", cid="", external_id="chat/STANZA", is_email=False, index=2)
+        == "STANZA-2.mp4"
+    )
+    # An email part with a Content-ID becomes ``inline-{slug}{ext}``; the cid drives
+    # the name whether or not the message id has a ``/`` shape.
+    assert (
+        derived_part_name(mime="image/png", cid="<hero7>", external_id="msgid@host", is_email=True)
+        == "inline-hero7.png"
+    )
+    # A ``local@domain`` cid keeps only the safe characters (``@`` is dropped).
+    assert (
+        derived_part_name(mime="image/gif", cid="<logo.gif@mail.example>", external_id="x", is_email=True)
+        == "inline-logo.gifmail.example.gif"
+    )
+    # Neither a chat message nor a Content-ID: storage's shared ``attachment{ext}``.
+    assert derived_part_name(mime="application/pdf", cid="", external_id="mid@host", is_email=True) == "attachment.pdf"
+    assert derived_part_name(mime="application/octet-stream", cid="", external_id="", is_email=True) == "attachment.bin"
+    # A chat message with an unusable (empty) id degrades to the same fallback.
+    assert derived_part_name(mime="image/jpeg", cid="", external_id="", is_email=False) == "attachment.jpg"
+
+
+def test_derived_part_name_slugs_and_caps_the_content_id() -> None:
+    """The cid slug drops ``<>`` and unsafe chars and caps its length."""
+
+    from angee.messaging.managers import _cid_slug
+
+    assert _cid_slug("<abc.def_ghi-1>") == "abc.def_ghi-1"
+    assert _cid_slug("plain@no-brackets") == "plainno-brackets"
+    assert len(_cid_slug("<" + "a" * 200 + ">")) == 80
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1719,6 +1764,150 @@ def test_threaded_model_post_accepts_storage_attachments(messaging_tables: None,
     assert attachment_part.name == "brief.txt"
     assert attachment_part.file_id == file.pk
     assert attachment_part.file.size_bytes == len(b"Attachment body")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unnamed_media_ingest_names_the_file_from_its_mime(messaging_tables: None, tmp_path: Path) -> None:
+    """A nameless part that is neither chat nor a Content-ID lands on the MIME fallback.
+
+    With no source-named conversation (so the message is an ``EMAIL`` kind) and no
+    Content-ID, the ingest owner derives storage's shared ``attachment{ext}`` from
+    the part's MIME instead of the opaque ``attachment.bin`` — the naming rule's
+    fallback branch. Only the display name is derived; storage still content-
+    addresses and sniffs the stored bytes.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test unnamed media ingest setup"):
+        user = user_model.objects.create_user(username="wa-media", email="wa-media@example.com")
+        _storage_drive(tmp_path, owner=user)
+    channel = make_integration("wa-media-chan")
+
+    parsed = ParsedMessage(
+        external_id="wa-media/1",
+        platform="whatsapp",
+        sender=ParsedHandle(platform="whatsapp", value="+4917000009"),
+        body=ParsedPart(
+            type="image/jpeg",
+            disposition="attachment",
+            name="",
+            content=b"\xff\xd8\xff\xe0\x00\x10JFIF not a real jpeg body",
+        ),
+    )
+    with system_context(reason="test unnamed media ingest"):
+        Message.objects.ingest([parsed], channel=channel, quote_edges=False)
+
+    attachment_part = Part._base_manager.select_related("file").get(file__isnull=False)
+    assert attachment_part.name == "attachment.jpg"
+    assert attachment_part.file.filename == "attachment.jpg"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_nameless_chat_part_names_from_the_message_id(messaging_tables: None, tmp_path: Path) -> None:
+    """A chat message's nameless media takes the message id after the last ``/``."""
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test chat media ingest setup"):
+        user = user_model.objects.create_user(username="chat-media", email="chat-media@example.com")
+        _storage_drive(tmp_path, owner=user)
+    channel = make_integration("chat-media-chan")
+
+    parsed = ParsedMessage(
+        external_id="4917000001@s.whatsapp.net/3EB0STANZA",
+        platform="whatsapp",
+        thread=ParsedThread(external_id="4917000001@s.whatsapp.net"),
+        sender=ParsedHandle(platform="whatsapp", value="+4917000001"),
+        body=ParsedPart(
+            type="image/jpeg",
+            disposition="attachment",
+            name="",
+            content=b"\xff\xd8\xff\xe0\x00\x10JFIF chat body",
+        ),
+    )
+    with system_context(reason="test chat media ingest"):
+        Message.objects.ingest([parsed], channel=channel, quote_edges=False)
+
+    message = Message._base_manager.get(external_id="4917000001@s.whatsapp.net/3EB0STANZA")
+    assert message.message_type == Message.MessageKind.CHAT
+    attachment_part = Part._base_manager.select_related("file").get(message=message, file__isnull=False)
+    assert attachment_part.name == "3EB0STANZA.jpg"
+    assert attachment_part.file.filename == "3EB0STANZA.jpg"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_nameless_email_inline_part_names_from_the_content_id(messaging_tables: None, tmp_path: Path) -> None:
+    """An email inline part with a Content-ID and no name takes ``inline-{cid-slug}{ext}``."""
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test inline media ingest setup"):
+        user = user_model.objects.create_user(username="mail-inline", email="mail-inline@example.com")
+        _storage_drive(tmp_path, owner=user)
+    channel = make_integration("mail-inline-chan")
+
+    parsed = ParsedMessage(
+        external_id="cafe1234@mail.example.com",
+        platform="email",
+        sender=ParsedHandle(platform="email", value="sender@example.com"),
+        body=ParsedPart(
+            type="image/png",
+            disposition="inline",
+            name="",
+            cid="<hero7@mail.example.com>",
+            content=b"\x89PNG\r\n\x1a\n inline body",
+        ),
+    )
+    with system_context(reason="test inline media ingest"):
+        Message.objects.ingest([parsed], channel=channel, quote_edges=False)
+
+    message = Message._base_manager.get(external_id="cafe1234@mail.example.com")
+    assert message.message_type == Message.MessageKind.EMAIL
+    attachment_part = Part._base_manager.select_related("file").get(message=message, file__isnull=False)
+    assert attachment_part.name == "inline-hero7mail.example.com.png"
+    assert attachment_part.file.filename == "inline-hero7mail.example.com.png"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(
+    messaging_tables: None, tmp_path: Path
+) -> None:
+    """One content-addressed File keeps its first name; each nameless Part gets its own."""
+
+    del messaging_tables
+    shared_bytes = b"\xff\xd8\xff\xe0 shared chat media bytes"
+    user_model = get_user_model()
+    with system_context(reason="test dedup media ingest setup"):
+        user = user_model.objects.create_user(username="dedup-media", email="dedup-media@example.com")
+        _storage_drive(tmp_path, owner=user)
+    channel = make_integration("dedup-media-chan")
+
+    def _chat_message(external_id: str) -> ParsedMessage:
+        return ParsedMessage(
+            external_id=external_id,
+            platform="whatsapp",
+            thread=ParsedThread(external_id="group@g.us"),
+            sender=ParsedHandle(platform="whatsapp", value="+4917000002"),
+            body=ParsedPart(type="image/jpeg", disposition="attachment", name="", content=shared_bytes),
+        )
+
+    with system_context(reason="test dedup media ingest"):
+        Message.objects.ingest([_chat_message("group@g.us/FIRST")], channel=channel, quote_edges=False)
+        Message.objects.ingest([_chat_message("group@g.us/SECOND")], channel=channel, quote_edges=False)
+
+    first_part = Part._base_manager.select_related("file").get(
+        message__external_id="group@g.us/FIRST", file__isnull=False
+    )
+    second_part = Part._base_manager.select_related("file").get(
+        message__external_id="group@g.us/SECOND", file__isnull=False
+    )
+    # Same content-addressed File backs both parts; it keeps the first part's name.
+    assert first_part.file_id == second_part.file_id
+    assert first_part.file.filename == "FIRST.jpg"
+    # Each part carries its own reliable per-message name.
+    assert first_part.name == "FIRST.jpg"
+    assert second_part.name == "SECOND.jpg"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -3179,3 +3368,87 @@ def test_handle_upsert_resolves_external_id_before_value(messaging_tables: None)
         by_value = Handle.objects.upsert(platform=Handle.Platform.WHATSAPP, value="+4917999999")
         assert by_value.pk == original.pk
         assert Handle._base_manager.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_upsert_converges_a_value_collision_across_external_ids(messaging_tables: None) -> None:
+    """A second source identity claiming an existing value converges, never crashes.
+
+    A WhatsApp contact reachable both by phone JID and by a hidden ``@lid`` that
+    resolves to the same E.164 must land on one handle: the external-id create
+    collides on ``(platform, value)``, and the upsert resolves to the row that
+    owns the value — keeping that row's own external id — instead of forking a
+    duplicate or raising ``IntegrityError``.
+    """
+
+    del messaging_tables
+    with system_context(reason="test handle value-collision upsert"):
+        phone = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="+4917000123",
+            external_id="4917000123@s.whatsapp.net",
+            display_name="Ada",
+        )
+        resolved_lid = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="+4917000123",
+            external_id="99887766@lid",
+            display_name="Ada Lovelace",
+            metadata={"lid": "99887766@lid"},
+        )
+
+    assert resolved_lid.pk == phone.pk
+    assert Handle._base_manager.count() == 1
+    phone.refresh_from_db()
+    assert phone.external_id == "4917000123@s.whatsapp.net"
+    assert phone.metadata.get("lid") == "99887766@lid"
+    assert phone.display_name == "Ada Lovelace"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_upsert_converges_a_value_collision_on_the_external_id_refresh_path(
+    messaging_tables: None,
+) -> None:
+    """A resolved ``@lid`` whose refreshed value hits an existing phone row converges.
+
+    The dual of :func:`test_handle_upsert_converges_a_value_collision_across_external_ids`:
+    here the external-id row already exists (a legacy ``@lid`` handle keyed on the
+    LID), and the drift that would collide surfaces on the *refresh* path, not the
+    create path. The upsert must resolve to the phone row that owns the value —
+    without a failed save escaping into the caller's transaction — and leave the
+    LID row untouched for the offline backfill to merge.
+    """
+
+    del messaging_tables
+    with system_context(reason="test handle external-id refresh collision"):
+        phone = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="+18583421935",
+            external_id="18583421935@s.whatsapp.net",
+            display_name="Bob",
+        )
+        lid = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="113352894324870@lid",
+            external_id="113352894324870@lid",
+            display_name="Bob LID",
+        )
+        resolved = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="+18583421935",
+            external_id="113352894324870@lid",
+            display_name="Bob Business",
+            metadata={"lid": "113352894324870@lid"},
+        )
+
+    # Converged on the phone row; no IntegrityError escaped and both rows survive.
+    assert resolved.pk == phone.pk
+    assert Handle._base_manager.count() == 2
+    phone.refresh_from_db()
+    assert phone.external_id == "18583421935@s.whatsapp.net"
+    assert phone.metadata.get("lid") == "113352894324870@lid"
+    assert phone.display_name == "Bob Business"
+    # The LID row is left for the offline backfill to merge, keeping its old value.
+    lid.refresh_from_db()
+    assert lid.value == "113352894324870@lid"
+    assert lid.external_id == "113352894324870@lid"

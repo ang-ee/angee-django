@@ -25,3 +25,9 @@ module = "runtime_migrations.alter_message_status"
 name = "thread_attachment_source_edges"
 app_label = "messaging"
 module = "runtime_migrations.thread_attachment_source_edges"
+
+[[migrations]]
+name = "name_unnamed_attachment_parts"
+app_label = "messaging"
+module = "runtime_migrations.name_unnamed_attachment_parts"
+compatible_source_sha256 = ["a02e643dbe9edde2e7805c8ac24c01a251edfd63f98db0ce3656f2bbcec7e7d8"]

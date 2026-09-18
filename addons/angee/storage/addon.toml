@@ -15,6 +15,12 @@ name = "file_attachment_unique_edge"
 app_label = "storage"
 module = "runtime_migrations.file_attachment_unique_edge"
 
+[[migrations]]
+name = "rename_attachment_bin"
+app_label = "storage"
+module = "runtime_migrations.rename_attachment_bin"
+compatible_source_sha256 = ["2c5311290be4a43927e6af39ced34bac4c9355b1bf97f52134863d2bd52dac03"]
+
 [resources]
 master = [
   { path = "resources/master/010_storage.mimetype.yaml", adopt = "mime_type" },

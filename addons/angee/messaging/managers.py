@@ -50,6 +50,7 @@ from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
 from angee.parties.mixins import LinkSource
+from angee.storage.uploads import attachment_extension, fallback_attachment_name
 
 if TYPE_CHECKING:
     from angee.messaging.backends import ParsedMessage, ParsedPart, ParsedThread
@@ -95,6 +96,67 @@ def normalize_subject(subject: str) -> str:
     # normalized subject still reads naturally and two subjects differing only in
     # case stay distinct conversations.
     return text.strip()
+
+
+# One rule for naming a message part that arrived without its own filename. It lives
+# here beside the ingest write path — its only live caller — because the facts that
+# select the name stem are messaging's: a chat message's id (carried in the message
+# ``external_id`` a chat backend composes as ``<chat>/<id>``) and an email part's
+# Content-ID. Storage's ``uploads`` module is ORM-free and messaging-agnostic, so the
+# rule cannot live there; it composes storage's ``attachment_extension`` for the
+# extension and ``fallback_attachment_name`` for the shared floor instead, keeping the
+# byte→extension map owned once by storage. The backfill migration freezes its own copy.
+_CID_SLUG_DISALLOWED_RE = re.compile(r"[^A-Za-z0-9._-]")
+_CID_SLUG_MAX = 80
+
+
+def _cid_slug(cid: str) -> str:
+    """Slug an email Content-ID into a filename stem.
+
+    Strips the ``<>`` delimiters, keeps only ``[A-Za-z0-9._-]`` (dropping the rest,
+    so a ``local@domain`` cid concatenates), and caps the length so a long cid never
+    blows past the ``Part.name``/``File.filename`` column width.
+    """
+
+    core = (cid or "").strip().strip("<>")
+    return _CID_SLUG_DISALLOWED_RE.sub("", core)[:_CID_SLUG_MAX]
+
+
+def derived_part_name(*, mime: str, cid: str, external_id: str, is_email: bool, index: int = 0) -> str:
+    """Return the display filename for a message part that arrived without its own name.
+
+    One rule, applied at ingest for every backend and frozen into the backfill:
+
+    - an **email** part (``is_email`` — the message's ``EMAIL`` kind) carrying a
+      ``Content-ID`` (an inline image — the near-universal nameless email part)
+      takes ``inline-{cid-slug}{ext}``;
+    - any **other** message part takes the vendor message id — the segment after
+      the last ``/`` of the ``<chat>/<id>`` ``external_id`` every chat backend
+      composes — as ``{id}{ext}``, with a ``-{index}`` suffix distinguishing the
+      second and later nameless parts of one message. This covers every chat
+      kind, not just ``CHAT``: a Telegram broadcast post lands as a ``COMMENT``
+      yet carries the same id-shaped ``external_id``;
+    - anything left keeps storage's shared ``attachment{ext}`` fallback.
+
+    ``is_email`` is the discriminator because ``Message.message_type`` is the
+    framework's own classification — derived at ingest from the thread shape and
+    denormalised onto every row — so the identical fact drives the live rule and
+    the historical backfill, while ``external_id``'s ``/`` shape only *carries*
+    the id the non-email branch reads. The extension is storage's
+    ``attachment_extension``.
+    """
+
+    extension = attachment_extension(mime)
+    if is_email:
+        slug = _cid_slug(cid)
+        if slug:
+            return f"inline-{slug}{extension}"
+    else:
+        message_id = (external_id or "").rsplit("/", 1)[-1]
+        if message_id:
+            suffix = f"-{index}" if index else ""
+            return f"{message_id}{suffix}{extension}"
+    return fallback_attachment_name(mime)
 
 
 # The text-search configuration for fragment vectors: mail is multilingual, so the
@@ -2637,6 +2699,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 return existing
             if not children:
                 return ()
+            # One counter across the expanded children so a retained part exploding
+            # into several nameless byte parts derives distinct ``-{index}`` names.
+            nameless: list[int] = [0]
             for position, child in enumerate(children):
                 self._build_parts(
                     retained.message,
@@ -2644,6 +2709,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     parent=retained,
                     position=position,
                     owner_id=retained.created_by_id,
+                    nameless=nameless,
                 )
             return tuple(
                 part_model._base_manager.filter(parent=retained).order_by("position", "sqid")
@@ -2890,13 +2956,40 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             position += 1
         return position
 
-    def _build_parts(self, message: Any, parsed: ParsedPart, *, parent: Any, position: int, owner_id: Any) -> None:
+    def _build_parts(
+        self,
+        message: Any,
+        parsed: ParsedPart,
+        *,
+        parent: Any,
+        position: int,
+        owner_id: Any,
+        nameless: list[int] | None = None,
+    ) -> None:
         part_model = apps.get_model("messaging", "Part")
         fragment_model = apps.get_model("messaging", "Fragment")
+        if nameless is None:
+            # Per-message running count of byte parts that arrived without a name, so a
+            # message with several unnamed attachments derives distinct ``-{index}``
+            # names. One counter threads through the whole recursive body tree.
+            nameless = [0]
         file_ref = None
         fragment = None
+        part_name = parsed.name
         if parsed.content is not None:
-            file_ref = self._ingest_file(parsed, owner_id)
+            if not part_name:
+                # The source gave this attachment no name: derive one from the owning
+                # message's kind/external-id and this part's mime/Content-ID, so every
+                # backend shares one rule and the stored File gets a meaningful name.
+                part_name = derived_part_name(
+                    mime=parsed.type,
+                    cid=parsed.cid,
+                    external_id=message.external_id,
+                    is_email=message.message_type == self.model.MessageKind.EMAIL,
+                    index=nameless[0],
+                )
+                nameless[0] += 1
+            file_ref = self._ingest_file(parsed, owner_id, filename=part_name)
         elif parsed.text and not parsed.children:
             part_role = part_model.PartRole
             fragment_kind = fragment_model.FragmentKind
@@ -2919,21 +3012,24 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             disposition=parsed.disposition,
             role=parsed.role,
             cid=parsed.cid,
-            name=parsed.name,
+            name=part_name,
             fragment=fragment,
             file=file_ref,
             created_by_id=owner_id,
         )
         for index, child in enumerate(parsed.children):
-            self._build_parts(message, child, parent=part, position=index, owner_id=owner_id)
+            self._build_parts(message, child, parent=part, position=index, owner_id=owner_id, nameless=nameless)
 
-    def _ingest_file(self, parsed: ParsedPart, owner_id: Any) -> Any:
+    def _ingest_file(self, parsed: ParsedPart, owner_id: Any, *, filename: str) -> Any:
         """Persist attachment bytes through the storage File owner; returns the File or None.
 
         Delegates to ``File.objects.ingest_bytes`` — the storage owner's
         server-side byte intake (draft → write → finalize) — so the attachment
         lands content-addressed and ``Part.file`` resolves. The owner stamps the
         file's ``created_by`` so the channel owner can read its own attachments.
+        ``filename`` is the resolved part name (the caller derives one when the
+        source gave none); on a content-addressed dedup hit the existing File keeps
+        its first name, so the reliable per-message name lives on ``Part.name``.
         """
 
         if parsed.content is None:
@@ -2941,7 +3037,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         file_model = apps.get_model("storage", "File")
         return file_model.objects.ingest_bytes(
             parsed.content,
-            filename=parsed.name or "attachment.bin",
+            filename=filename or fallback_attachment_name(parsed.type),
             owner_id=owner_id,
         )
 
