@@ -240,6 +240,7 @@ export function MeasureFooter<TRow extends Row>({
   measures,
   aggregate,
   selectable,
+  reserveLeadingColumn = false,
   labelInSelectionColumn = false,
   trailingColumn = false,
 }: {
@@ -247,6 +248,13 @@ export function MeasureFooter<TRow extends Row>({
   measures: readonly GroupMeasure[];
   aggregate: AggregateBucket;
   selectable: boolean;
+  /**
+   * Emit the leading column cell even when not `selectable`. The grouped body's
+   * `<colgroup>`/header reserve that column for the chevron on every row, so its
+   * footer keeps it too (and hosts the `labelInSelectionColumn` total); the flat
+   * body has no leading column unless selectable and leaves this unset.
+   */
+  reserveLeadingColumn?: boolean;
   labelInSelectionColumn?: boolean;
   trailingColumn?: boolean;
 }): React.ReactElement {
@@ -255,7 +263,7 @@ export function MeasureFooter<TRow extends Row>({
   return (
     <TableFooter>
       <TableRow>
-        {selectable ? (
+        {selectable || reserveLeadingColumn ? (
           <TableCell className="w-8 text-fg-muted">
             {labelInSelectionColumn ? t("list.total") : null}
           </TableCell>

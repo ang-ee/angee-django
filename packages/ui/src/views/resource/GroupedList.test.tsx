@@ -2,14 +2,14 @@
 
 import * as React from "react";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { getCoreRowModel, useReactTable, type Row as TableRowModel } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Row } from "@angee/metadata";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { GroupedListBody } from "./GroupedList";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
-import { estimateGroupedItemSize, groupMeasuresFromColumns, type GroupedListItem } from "./resource-view-list-body";
+import { estimateGroupedItemSize, groupMeasuresFromColumns, RecordRow, type GroupedListItem } from "./resource-view-list-body";
 import type { ColumnDescriptor } from "../page";
 
 afterEach(cleanup);
@@ -133,4 +133,78 @@ test.each(["records", "groups"] as const)("%s header reuses the native page-size
   fireEvent.click(screen.getByRole("button", { name: "Apply" }));
   expect(onPageSizeChange).toHaveBeenCalledWith("january", 100);
   expect(onToggle).not.toHaveBeenCalled();
+});
+
+function GroupedRecordHarness({ selectable }: { selectable: boolean }): React.ReactElement {
+  const resourceView = useResourceView();
+  const tableColumns = defaultColumns.map((column) => ({ id: column.field, accessorKey: column.field, header: column.field }));
+  const table = useReactTable<Row>({ data: [{ id: "r1", title: "Hello" }], columns: tableColumns, getCoreRowModel: getCoreRowModel() });
+  const row = table.getRowModel().rows[0]!;
+  const tableScrollRef = React.useRef<HTMLDivElement>(null);
+  const listItems: GroupedListItem<Row>[] = [
+    {
+      kind: "groupHeader", bucketKey: "january", depth: 0, label: "January",
+      count: 1, expandable: true, expanded: true, bucket: { key: { month: "January" }, count: 1 },
+    },
+    {
+      kind: "record", itemKey: "january:r1", row,
+      nav: { filter: undefined, order: undefined, page: 1, pageSize: 20, rows: [], total: 1, fetching: false },
+    },
+  ];
+  const rowVirtualizer = useVirtualizer({
+    count: listItems.length,
+    getScrollElement: () => tableScrollRef.current,
+    estimateSize: (index) => estimateGroupedItemSize(listItems[index]),
+  });
+  return (
+    <GroupedListBody
+      tableLayout="fixed" selectable={selectable}
+      table={table} tableColumns={tableColumns} visibleColumnCount={defaultColumns.length}
+      resourceView={resourceView} listItems={listItems} tableScrollRef={tableScrollRef}
+      rowVirtualizer={rowVirtualizer} footerAggregate={null} measures={[]} expandedKeys={new Set(["january"])}
+      toggleGroup={() => undefined} setScopePage={() => undefined} setScopePageSize={() => undefined}
+      selectedIds={new Set()} interactive emptyContent="Empty" fetching={false} error={null}
+    />
+  );
+}
+
+test("a grouped record row reserves the leading chevron column when selection is off", () => {
+  const { container } = render(
+    <ResourceViewProvider scope="local">
+      <GroupedRecordHarness selectable={false} />
+    </ResourceViewProvider>,
+  );
+  const headerCells = container.querySelector("thead tr")!.querySelectorAll("th");
+  const recordCells = screen.getByText("Hello").closest("tr")!.querySelectorAll("td");
+  // The grouped colgroup/header reserve a leading chevron column on every row, so a
+  // record row must match the header's cell count even when it is not selectable.
+  expect(recordCells.length).toBe(headerCells.length);
+  // The first record cell is the empty leading spacer (no checkbox), not the content.
+  const [leading, content] = recordCells;
+  expect(leading!.className).toContain("w-8");
+  expect(leading!.childElementCount).toBe(0);
+  expect(leading!.textContent).toBe("");
+  expect(content!.textContent).toContain("Hello");
+});
+
+function FlatRecordRow({ selectable }: { selectable: boolean }): React.ReactElement {
+  const tableColumns = defaultColumns.map((column) => ({ id: column.field, accessorKey: column.field, header: column.field }));
+  const table = useReactTable<Row>({ data: [{ id: "r1", title: "Hello" }], columns: tableColumns, getCoreRowModel: getCoreRowModel() });
+  const row = table.getRowModel().rows[0] as TableRowModel<Row>;
+  return (
+    <table>
+      <tbody>
+        <RecordRow row={row} selected={false} onToggleSelected={() => undefined} interactive selectable={selectable} />
+      </tbody>
+    </table>
+  );
+}
+
+test("a non-selectable flat record row emits no leading column cell", () => {
+  render(<FlatRecordRow selectable={false} />);
+  const cells = screen.getByText("Hello").closest("tr")!.querySelectorAll("td");
+  // The flat body never reserves the leading column: with selection off the row is
+  // its content cells alone — no leading spacer or checkbox (unlike the grouped body).
+  expect(cells.length).toBe(defaultColumns.length);
+  expect(cells[0]!.textContent).toContain("Hello");
 });
