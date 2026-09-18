@@ -1900,6 +1900,117 @@ class ExtractionServiceTests(TestCase):
             )
         second_provider.assert_not_called()
 
+    def test_schema_upgrade_hold_retains_prior_fact_identity_authority(self) -> None:
+        target = self.files[0]
+        base_schema = {
+            **SCHEMA,
+            "$id": "test.invoice.v1",
+            "properties": {
+                **SCHEMA["properties"],
+                "routing_review_reasons": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+        }
+        upgraded_schema = {
+            **base_schema,
+            "$id": "test.invoice.v2",
+            "properties": {
+                **base_schema["properties"],
+                "source_payment_claims": {"type": "array", "items": {"type": "object"}},
+            },
+        }
+        authority_config = {
+            "result": {"number": "SOURCE", "rows": ["retained line"]},
+            "inference_mode": "permitted",
+            "evidence_layout": {"line_collection": "/rows"},
+        }
+        preliminary_config = {
+            "result": {
+                "number": "",
+                "rows": [],
+                "routing_review_reasons": ["missing facts"],
+            },
+            "inference_mode": "permitted",
+            "evidence_layout": {"line_collection": "/rows"},
+        }
+
+        def retain(config: dict[str, Any], schema: dict[str, Any]) -> Any:
+            prepared = prepare_pages(
+                files=(target,), message_parts=(), authorized_target=target,
+                config=config,
+            )
+            return process(
+                prepared, (), schema=schema, model=self.model,
+                authorized_target=target, engine="fake_document", config=config,
+            )
+
+        with actor_context(self.owner):
+            authority = retain(authority_config, base_schema)
+            preliminary = retain(preliminary_config, base_schema)
+            upgraded_hold = retain(preliminary_config, upgraded_schema)
+            exact_retry = retain(preliminary_config, upgraded_schema)
+
+        self.assertEqual(
+            preliminary.error_code,
+            "source_hold:identity_correspondence_required",
+        )
+        self.assertEqual(preliminary.document_refs, authority.document_refs)
+        self.assertEqual(
+            upgraded_hold.error_code,
+            "source_hold:identity_correspondence_required",
+        )
+        self.assertEqual(upgraded_hold.document_refs, authority.document_refs)
+        self.assertNotEqual(upgraded_hold.schema_digest, authority.schema_digest)
+        self.assertEqual(
+            upgraded_hold.provenance["identity_correspondence"]["expected_base_id"],
+            authority.pk,
+        )
+        self.assertEqual(
+            upgraded_hold.provenance["identity_correspondence"]["last_known_revision"],
+            authority.revision,
+        )
+        self.assertEqual(exact_retry.pk, upgraded_hold.pk)
+        with actor_context(self.owner):
+            self.assertEqual(
+                type(upgraded_hold).objects.inference_authority_base(
+                    upgraded_hold, actor=self.owner,
+                ).pk,
+                authority.pk,
+            )
+
+        admitted = SimpleNamespace(
+            request_key="infer-upgraded-preliminary-hold",
+            input={
+                "base_extraction_id": str(upgraded_hold.sqid),
+                "base_revision": upgraded_hold.revision,
+                "model_id": str(self.model.sqid),
+                "identity_mapping": {},
+                "retired_identities": {},
+            },
+        )
+        with (
+            actor_context(self.owner),
+            patch("angee.workflows.engine.external_operation_request", return_value=admitted),
+            patch(
+                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                return_value=(authority.result, {}, {"route": "test"}),
+            ) as provider,
+        ):
+            inferred = infer(
+                upgraded_hold, model=self.model, authorized_target=target,
+                operation_step_run=SimpleNamespace(),
+            )
+
+        self.assertEqual(inferred.status, "succeeded")
+        self.assertEqual(inferred.document_refs, authority.document_refs)
+        self.assertEqual(
+            inferred.stage_provenance["inference"]["authority_extraction_id"],
+            str(authority.sqid),
+        )
+        provider.assert_called_once()
+
     def test_correspondence_hold_inference_uses_exact_last_known_fact_authority(self) -> None:
         original = self._extract(
             config={

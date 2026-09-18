@@ -27,13 +27,19 @@ def evidence_insert_allowed(alias: str | None = None) -> bool:
     return _evidence_insertion.is_active(alias or DEFAULT_DB_ALIAS)
 
 
-def _same_identity_basis(authority: Any, evidence: Any) -> bool:
+def _same_fact_identity(authority: Any, evidence: Any) -> bool:
     return (
         authority.content_type_id == evidence.content_type_id
         and str(authority.object_id) == str(evidence.object_id)
+        and authority.document_map == evidence.document_map
+    )
+
+
+def _same_identity_basis(authority: Any, evidence: Any) -> bool:
+    return (
+        _same_fact_identity(authority, evidence)
         and authority.schema_id == evidence.schema_id
         and authority.schema_digest == evidence.schema_digest
-        and authority.document_map == evidence.document_map
     )
 
 
@@ -174,7 +180,7 @@ class ExtractionManager(ImmutableEvidenceManager):
         if authority is None or authority.status != "succeeded":
             raise ValidationError({"inference": "The retained authority base is unavailable."})
         if (
-            not _same_identity_basis(authority, base)
+            not _same_fact_identity(authority, base)
             or type(expected_base_id) is not int
             or expected_base_id != authority.pk
         ):
@@ -209,7 +215,7 @@ class ExtractionManager(ImmutableEvidenceManager):
             raise ValidationError({"inference": "The lineage has no successful identity authority."})
         if not authority.with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to the retained identity authority is required.")
-        if not _same_identity_basis(authority, head):
+        if not _same_fact_identity(authority, head):
             raise ValidationError({
                 "inference": "The retained identity authority differs from the current extraction."
             })
@@ -657,7 +663,7 @@ class ExtractionManager(ImmutableEvidenceManager):
                                     authority is None
                                     or previous is None
                                     or authority.revision > previous.revision
-                                    or not _same_identity_basis(authority, previous)
+                                    or not _same_fact_identity(authority, previous)
                                 ):
                                     raise ValidationError({
                                         "extraction": "The request lacks a valid identity authority."
