@@ -104,28 +104,24 @@ export function useTaskFormDeclaration(): React.ReactElement {
   );
 
   return (
-    <Form resource={TASK_MODEL} layout="tabs">
+    <Form resource={TASK_MODEL} layout="sidebar">
       <Field name="title" title />
       <Field name="status" widget="statusbar" options={statusOptions} createOnly />
-      <Group label={t("task.group.placement")} columns={2}>
+      {/* The standing column: what a reader checks and changes on every visit.
+          The work addon contributes queue, stage, cycle and estimate into the
+          same column from its own manifest. */}
+      <Group label={t("task.group.properties")} columns={1} placement="properties">
+        <Field name="priority" widget="angee.projects.priority" options={priorityOptions} />
+        <Field name="assignee" />
+        <Field name="due_date" />
         <Field name="project" />
+      </Group>
+      {/* Everything a reader does not need on every visit sits behind one tab. */}
+      <Group label={t("task.group.more")} columns={2}>
+        <Field name="delegate" />
+        <Field name="recurrence" />
         <Field name="milestone" />
         <Field name="parent" />
-      </Group>
-      <Group label={t("task.group.assignment")} columns={2}>
-        <Field name="assignee" />
-        <Field name="delegate" />
-        <Field name="priority" options={priorityOptions} />
-        <Field name="due_date" />
-        <Field name="recurrence" />
-      </Group>
-      <Group label={t("task.group.ordering")} columns={2}>
-        <Field name="sort_order" label={t("common.order")} createOnly />
-        <Field
-          name="sub_sort_order"
-          label={t("common.subtaskOrder")}
-          createOnly
-        />
         <Field name="dropped_reason" readOnly />
         <Field name="done_at" readOnly />
         <Field name="dropped_at" readOnly />
@@ -133,6 +129,7 @@ export function useTaskFormDeclaration(): React.ReactElement {
       <Field name="note" widget="markdown.editor" body />
       <Action
         id="complete"
+        placement="properties"
         label={t("task.action.complete")}
         icon="check"
         run={complete}
@@ -140,6 +137,7 @@ export function useTaskFormDeclaration(): React.ReactElement {
       />
       <Action
         id="drop"
+        placement="properties"
         label={t("task.action.drop")}
         icon="circle-x"
         danger
@@ -156,6 +154,7 @@ export function useTaskFormDeclaration(): React.ReactElement {
       />
       <Action
         id="reopen"
+        placement="properties"
         label={t("task.action.reopen")}
         icon="activity"
         run={reopen}

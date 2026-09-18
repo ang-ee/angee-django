@@ -19,7 +19,7 @@ import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import { useWorkT } from "../i18n";
-import { QUEUE_MODEL, STAGE_MODEL } from "../resources";
+import { QUEUE_MODEL, STAGE_CATEGORY_TONES, STAGE_MODEL } from "../resources";
 
 const CUSTOM_STAGE_CATEGORIES = [
   "BACKLOG",
@@ -142,7 +142,7 @@ function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
           order={{ position: "ASC" }}
         >
           <Column field="name" header={t("common.name")} />
-          <Column field="category" header={t("common.category")} />
+          <Column field="category" header={t("common.category")} widget="statusBadge" tone={STAGE_CATEGORY_TONES} />
           <Column field="tone" header={t("common.tone")} />
           <Column field="position" header={t("common.order")} />
         </List>
@@ -164,7 +164,7 @@ function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
             order={{ position: "ASC" }}
           >
             <Column field="name" header={t("common.name")} />
-            <Column field="category" header={t("common.category")} />
+            <Column field="category" header={t("common.category")} widget="statusBadge" tone={STAGE_CATEGORY_TONES} />
             <Column field="tone" header={t("common.tone")} />
             <Column field="position" header={t("common.order")} />
           </List>

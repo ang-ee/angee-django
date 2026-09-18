@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { describe, expect, test } from "vitest";
 
-import { optionLabel, optionTextLabel, relationValueId } from "./types";
+import { optionLabel } from "./index";
+import { optionTextLabel, relationValueId } from "./types";
 
 describe("widget option helpers", () => {
   test("resolves option labels and falls back to the raw value", () => {

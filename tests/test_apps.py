@@ -194,6 +194,17 @@ def test_iam_config_owns_shared_demo_users() -> None:
     assert wildcard_grant.subject == "auth/user:*"
 
 
+def test_projects_demo_task_retains_its_milestone() -> None:
+    """The rollout demo task belongs to its project's seeded milestone."""
+
+    config = apps.get_app_config("projects")
+    tasks = _resource_rows(config, "demo", "resources/demo/030_projects.task.yaml")
+    milestones = _resource_rows(config, "demo", "resources/demo/020_projects.milestone.yaml")
+
+    assert tasks["map_plots"]["milestone"] == "projects.plots_ready"
+    assert milestones["plots_ready"]["project"] == tasks["map_plots"]["project"]
+
+
 def test_agents_config_owns_builtin_mcp_demo_seed() -> None:
     """The built-in MCP catalogue seed belongs to the agents addon."""
 

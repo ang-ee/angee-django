@@ -34,7 +34,7 @@ export function TaskBoardPage(): React.ReactElement {
       >
         <Column field="title" />
         <Column field="project.title" header={t("common.project")} />
-        <Column field="priority" header={t("common.priority")} />
+        <Column field="priority" header={t("common.priority")} widget="angee.projects.priority" />
         <Column field="due_date" header={t("common.dueDate")} />
       </List>
     </TaskBoardSurface>

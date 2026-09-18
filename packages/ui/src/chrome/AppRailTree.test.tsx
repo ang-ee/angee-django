@@ -106,4 +106,38 @@ describe("AppRailTree", () => {
     fireEvent.click(inactiveLink);
     expect(onActiveRootToggle).toHaveBeenCalledTimes(1);
   });
+
+  test("lights only the most specific child when sibling paths nest", async () => {
+    const tree = MenuTree.from([
+      {
+        id: "projects",
+        label: "Projects",
+        to: "/projects",
+        children: [
+          { id: "projects.all", label: "All projects", to: "/projects" },
+          { id: "projects.tasks", label: "Tasks", to: "/projects/tasks" },
+        ],
+      },
+    ]);
+    const rootRoute = createRootRoute({ component: () => <Outlet /> });
+    const tasksRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/projects/tasks",
+      component: () => (
+        <AppRailTree scope="apps" roots={tree.railMenuItems()} activeRootId="projects" />
+      ),
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([tasksRoute]),
+      history: createMemoryHistory({ initialEntries: ["/projects/tasks"] }),
+    });
+    const view = within(render(<RouterProvider router={router} />).container);
+
+    // `/projects/tasks` sits under the list's `/projects` too; only the page
+    // actually open reads as current.
+    const tasks = (await view.findByText("Tasks")).closest("a")!;
+    const all = view.getByText("All projects").closest("a")!;
+    expect(tasks.getAttribute("data-active")).toBe("true");
+    expect(all.getAttribute("data-active")).toBe("false");
+  });
 });

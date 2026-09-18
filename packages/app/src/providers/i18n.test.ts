@@ -37,6 +37,34 @@ describe("Angee app i18n runtime", () => {
     expect(provider.translate("missing.title")).toBe("missing.title");
   });
 
+  test("reads a string second argument as refine's default message", () => {
+    const { provider } = createAngeeI18nRuntime(resources);
+
+    // refine's own `safeTranslate` calls `translate(key, defaultMessage)` when
+    // it has no interpolation values, which is how every success toast asks for
+    // its description. Read as options, the default is dropped and the key
+    // itself reaches the screen.
+    expect(provider.translate("notifications.success", "Success")).toBe("Success");
+    expect(provider.translate("greeting", { namespace: "ui", name: "Ada" })).toBe(
+      "Hello Ada",
+    );
+  });
+
+  test("keeps a colon in a key instead of reading it as a namespace", () => {
+    // Resource identifiers are `<schema>:<modelLabel>` and refine builds label
+    // keys out of them, so ":" must not split off a namespace.
+    const { provider } = createAngeeI18nRuntime({
+      ui: { "console:projects.Project.console:projects.Project": "Project" },
+    });
+
+    expect(
+      provider.translate(
+        "console:projects.Project.console:projects.Project",
+        "console:projects.Project",
+      ),
+    ).toBe("Project");
+  });
+
   test("tracks Refine locale state", async () => {
     const { provider } = createAngeeI18nRuntime(resources);
 

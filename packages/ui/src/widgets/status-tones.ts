@@ -55,10 +55,15 @@ export interface StatusToneOptions {
 }
 
 /**
- * Resolve a status value's tone. The caller's explicit `<Column tone>` entry wins —
- * keyed on the value exactly as it reads (the same exact-case lookup the cells apply) —
+ * Resolve a status value's tone. The caller's explicit `<Column tone>` entry wins,
  * then the shared `STATUS_TONES` convention, else `brand`. Shared by the status widgets
  * and `StateTag` so a value colors the same wherever it renders.
+ *
+ * The override is matched exactly first, then on the {@link optionToken} — the same
+ * two-step {@link canonicalOptionValue} applies to options, and for the same reason: a
+ * GraphQL enum reads back as its member *name* (`OPEN`), while an author writing a tone
+ * map spells the backend's own token (`open`). Matching only exactly made the override
+ * silently inert for every enum field read over GraphQL.
  */
 export function statusTone(
   value: string | null | undefined,
@@ -69,6 +74,8 @@ export function statusTone(
   if (mapped) return mapped;
   const normalized = optionToken(value);
   if (!normalized) return options.emptyTone ?? "neutral";
+  const normalizedOverride = override?.[normalized];
+  if (normalizedOverride) return normalizedOverride;
   const tone = stateToneFromValue(normalized, STATUS_TONES);
   return tone === "brand" ? (options.unknownTone ?? "brand") : tone;
 }

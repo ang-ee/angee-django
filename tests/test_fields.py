@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
-from django.db import connection, models
+from django.db import IntegrityError, connection, models
 from django.db.models import F, Value
 from django.db.models.functions import Concat
 
@@ -625,6 +625,172 @@ def test_fractional_rank_appends_within_its_unique_context() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_fractional_rank_bare_save_leaves_placement_to_the_constraint() -> None:
+    """An unvalidated move keeps its held rank; the unique constraint rejects a collision."""
+
+    class RankedMove(models.Model):
+        """Concrete model whose rows move between lanes."""
+
+        lane = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_move_lane_rank"),
+            )
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankedMove)
+    try:
+        RankedMove.objects.create(lane="a")
+        moved = RankedMove.objects.create(lane="b")
+        free = RankedMove.objects.create(lane="b", rank=512.0)
+
+        moved.lane = "a"
+        with pytest.raises(IntegrityError):
+            moved.save()
+        free.lane = "a"
+        free.save()
+
+        assert moved.rank == FractionalRankField.STEP
+        assert free.rank == 512.0
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedMove)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_full_clean_places_a_lane_midpoint_that_another_lane_holds(
+    django_assert_num_queries: Any,
+) -> None:
+    """Validation places a lane-local midpoint before checking board-wide uniqueness."""
+
+    class ValidatedBoardCard(models.Model):
+        """Concrete model whose rows are ranked per board and validated on write."""
+
+        board = models.CharField(max_length=8)
+        stage = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(
+                    fields=("board", "rank"), name="validated_board_card_board_rank"
+                ),
+            )
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(ValidatedBoardCard)
+    try:
+        todo = ValidatedBoardCard.objects.create(board="b1", stage="todo", rank=1024.0)
+        done = ValidatedBoardCard.objects.create(board="b1", stage="done", rank=2048.0)
+
+        dropped = ValidatedBoardCard.objects.create(board="b1", stage="backlog", rank=512.0)
+        dropped.stage = "todo"
+        dropped.rank = FractionalRankField.get_append_rank(todo.rank)
+        assert dropped.rank == done.rank
+
+        field = ValidatedBoardCard._meta.get_field("rank")
+        with django_assert_num_queries(1):
+            assert field.clean(1536.0, dropped) == 1536.0
+        with django_assert_num_queries(3):
+            assert field.clean(dropped.rank, dropped) == 3072.0
+
+        dropped.full_clean()
+        dropped.save()
+
+        dropped.refresh_from_db()
+        assert done.rank < dropped.rank
+        assert ValidatedBoardCard.objects.filter(board="b1").count() == 3
+        assert ValidatedBoardCard.objects.filter(board="b1", rank=done.rank).count() == 1
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(ValidatedBoardCard)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_full_clean_releases_a_rank_carried_onto_a_taken_one() -> None:
+    """Validation lets a moved row through, and its save appends it in the new context."""
+
+    class RankedCleanMove(models.Model):
+        """Concrete model validated before it moves between lanes."""
+
+        lane = models.CharField(max_length=8)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_clean_move_lane_rank"),
+            )
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankedCleanMove)
+    try:
+        RankedCleanMove.objects.create(lane="a")
+        moved = RankedCleanMove.objects.create(lane="b")
+
+        moved.lane = "a"
+        moved.full_clean()
+        moved.save()
+
+        assert moved.rank == FractionalRankField.STEP * 2
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedCleanMove)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fractional_rank_release_honours_the_constraint_condition() -> None:
+    """Rows outside the constraint's condition keep a shared rank; a move into it still re-appends."""
+
+    class RankedConditional(models.Model):
+        """Concrete model whose rank is unique only inside a lane."""
+
+        lane = models.CharField(max_length=8, null=True, blank=True)
+        rank = FractionalRankField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+            constraints = (
+                models.UniqueConstraint(
+                    fields=("lane", "rank"),
+                    condition=models.Q(lane__isnull=False),
+                    name="ranked_conditional_lane_rank",
+                ),
+            )
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RankedConditional)
+    try:
+        RankedConditional.objects.create(lane="x")
+        RankedConditional.objects.create(lane=None, rank=FractionalRankField.STEP)
+        unplaced = RankedConditional.objects.create(lane=None, rank=FractionalRankField.STEP)
+
+        unplaced.full_clean()
+        unplaced.save()
+        assert unplaced.rank == FractionalRankField.STEP
+
+        unplaced.lane = "x"
+        unplaced.full_clean()
+        unplaced.save()
+        assert unplaced.rank == FractionalRankField.STEP * 2
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RankedConditional)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_fractional_rank_full_clean_allows_the_pending_none() -> None:
     """``full_clean`` before save passes with the rank still unallocated."""
 
@@ -710,6 +876,7 @@ def test_fractional_rank_has_default_exposes_the_server_allocator() -> None:
 
     assert field.has_default() is True
     assert field.get_default() is None
+    assert field.has_db_default() is False
 
 
 def test_get_append_rank_steps_and_exhausts() -> None:

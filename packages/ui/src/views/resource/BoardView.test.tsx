@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BoardView } from "./BoardView";
@@ -19,15 +19,22 @@ const dndMocks = vi.hoisted(() => {
       sensors?: unknown;
       collisionDetection?: (args: unknown) => unknown;
       onDragEnd?: (event: unknown) => void;
+      onDragCancel?: (event: unknown) => void;
     } | null,
     pointerWithin: vi.fn((): unknown[] => []),
     rectIntersection: vi.fn((): unknown[] => []),
     setActivatorNodeRef: vi.fn(),
+    onDragPointerDown: vi.fn(),
+    onDragKeyDown: vi.fn(),
+    navigate: vi.fn(),
     useSensor: vi.fn((sensor: unknown, options?: unknown) => ({ sensor, options })),
     useSensors: vi.fn((...sensors: unknown[]) => sensors),
     useDraggable: vi.fn(() => ({
       attributes: { "data-draggable": "true" },
-      listeners: { onKeyDown: vi.fn() },
+      listeners: {
+        onPointerDown: (event: unknown) => dndMocks.onDragPointerDown(event),
+        onKeyDown: (event: unknown) => dndMocks.onDragKeyDown(event),
+      },
       setNodeRef: vi.fn(),
       setActivatorNodeRef: vi.fn((node) => dndMocks.setActivatorNodeRef(node)),
       transform: null,
@@ -35,7 +42,10 @@ const dndMocks = vi.hoisted(() => {
     })),
     useSortable: vi.fn(() => ({
       attributes: { "data-sortable": "true" },
-      listeners: { onKeyDown: vi.fn() },
+      listeners: {
+        onPointerDown: (event: unknown) => dndMocks.onDragPointerDown(event),
+        onKeyDown: (event: unknown) => dndMocks.onDragKeyDown(event),
+      },
       setNodeRef: vi.fn(),
       setActivatorNodeRef: vi.fn((node) => dndMocks.setActivatorNodeRef(node)),
       transform: null,
@@ -49,7 +59,7 @@ const dndMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => dndMocks.navigate }));
 vi.mock("../../i18n", () => ({ useUiT: () => (key: string) => key }));
 vi.mock("@dnd-kit/core", () => ({
   DndContext: (props: {
@@ -57,6 +67,7 @@ vi.mock("@dnd-kit/core", () => ({
     sensors?: unknown;
     collisionDetection?: (args: unknown) => unknown;
     onDragEnd?: (event: unknown) => void;
+    onDragCancel?: (event: unknown) => void;
   }) => {
     dndMocks.contextProps = props;
     return props.children;
@@ -90,6 +101,9 @@ beforeEach(() => {
   dndMocks.pointerWithin.mockReturnValue([]);
   dndMocks.rectIntersection.mockReturnValue([]);
   dndMocks.setActivatorNodeRef.mockClear();
+  dndMocks.navigate.mockClear();
+  dndMocks.onDragPointerDown.mockClear();
+  dndMocks.onDragKeyDown.mockClear();
 });
 afterEach(() => cleanup());
 
@@ -139,6 +153,32 @@ describe("BoardView", () => {
   test("renders the default key/value body from columns", () => {
     renderBoard();
     expect(screen.getByText("Notes")).toBeTruthy();
+  });
+
+  test("makes the whole column a drop target, not just its cards", () => {
+    renderBoard({
+      groups: [
+        lane([{ id: "1", label: "First" }]),
+        { ...lane([]), key: "empty", label: "Empty" },
+      ],
+      dragEnabled: true,
+      onCardMove: vi.fn(),
+    });
+
+    // The lane's droppable node is its frame, so a frame that stops at its last
+    // card leaves the space below it belonging to nobody -- which is why a drop
+    // into an empty column, or below a short one's cards, did nothing.
+    const laneRegion = screen.getByRole("region", { name: "Empty" });
+    const surface = laneRegion.parentElement;
+    expect(surface?.className).toContain("items-stretch");
+    expect(surface?.className).not.toContain("items-start");
+
+    // Every lane is a droppable, the empty one included.
+    const droppableIds = dndMocks.useDroppable.mock.calls.map(
+      (call) => (call as unknown as readonly [{ id: string }])[0].id,
+    );
+    expect(droppableIds).toContain("board-lane:empty");
+    expect(laneRegion.className).not.toContain("self-start");
   });
 
   test("lets the browser own board overflow instead of internal board scrollbars", () => {
@@ -266,6 +306,96 @@ describe("BoardView", () => {
     expect(dndMocks.contextProps?.collisionDetection?.({})).toBe(pointerHit);
     dndMocks.pointerWithin.mockReturnValueOnce([]);
     expect(dndMocks.contextProps?.collisionDetection?.({})).toBe(rectHit);
+  });
+
+  test("makes the whole card the drag activator, not the grip alone", () => {
+    renderBoard({
+      dragEnabled: true,
+      onCardMove: vi.fn(),
+      rowHref: () => "/records/1",
+    });
+
+    // dnd-kit hears the gesture through its listeners, and those must be on the
+    // card: with them on the grip alone the card body is a plain link, which the
+    // browser drags natively, so the card never moves and the drag looks dead.
+    const card = document.querySelector("article");
+    expect(card).toBeTruthy();
+    fireEvent.pointerDown(card as Element);
+    expect(dndMocks.onDragPointerDown).toHaveBeenCalledTimes(1);
+
+    // The a11y attributes stay on the grip. On the card they would make every
+    // card a focusable role=button wrapping a link and a button, and the card
+    // and the grip would then claim the same aria-describedby.
+    expect(card?.getAttribute("data-draggable")).toBe(null);
+    expect(document.querySelectorAll("[data-draggable='true']").length).toBe(1);
+    expect(
+      screen.getByRole("button", { name: "board.dragCard" }).getAttribute("data-draggable"),
+    ).toBe("true");
+
+    // The grip has no listeners of its own; its keydown reaches dnd-kit by
+    // bubbling to the card, which is what keeps keyboard drag working.
+    fireEvent.keyDown(screen.getByRole("button", { name: "board.dragCard" }), { code: "Space" });
+    expect(dndMocks.onDragKeyDown).toHaveBeenCalledTimes(1);
+
+    // A touch drag must not scroll the lane instead of moving the card.
+    expect(card?.className).toContain("touch-none");
+
+    // And the body link must not start a native drag that steals the gesture.
+    expect(card?.querySelector("a")?.getAttribute("draggable")).toBe("false");
+  });
+
+  test("makes a sortable card the drag activator too", () => {
+    renderBoard({
+      groups: [lane([{ id: "1", label: "First", sort_order: 1024 }])],
+      dragEnabled: true,
+      rankField: "sort_order",
+      onCardMove: vi.fn(),
+      rowHref: () => "/records/1",
+    });
+
+    const card = document.querySelector("article");
+    expect(card).toBeTruthy();
+    fireEvent.pointerDown(card as Element);
+    expect(dndMocks.onDragPointerDown).toHaveBeenCalledTimes(1);
+
+    expect(card?.getAttribute("data-sortable")).toBe(null);
+    expect(document.querySelectorAll("[data-sortable='true']").length).toBe(1);
+    expect(card?.querySelector("a")?.getAttribute("draggable")).toBe("false");
+  });
+
+  test("the click a drop leaves behind does not follow the card link", async () => {
+    renderBoard({
+      groups: [lane([{ id: "1", label: "First", sort_order: 1024 }])],
+      dragEnabled: true,
+      rankField: "sort_order",
+      onCardMove: vi.fn(),
+      rowHref: () => "/records/1",
+    });
+    const link = screen.getByRole("link");
+
+    // dnd-kit stops an activated drag's trailing click from propagating, so no
+    // React handler sees it; only its default action is left, and on a card link
+    // that default would follow the href and reload into the record.
+    act(() => {
+      dndMocks.contextProps?.onDragEnd?.({ active: { id: "1", data: { current: undefined } }, over: null });
+    });
+    const trailing = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
+    link.dispatchEvent(trailing);
+    expect(trailing.defaultPrevented).toBe(true);
+    expect(dndMocks.navigate).not.toHaveBeenCalled();
+
+    // The guard lasts one turn: a later click opens the record.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent.click(link);
+    expect(dndMocks.navigate).toHaveBeenCalledWith({ to: "/records/1" });
+
+    // A drag cancelled with Escape still ends in pointerup and a click.
+    act(() => {
+      dndMocks.contextProps?.onDragCancel?.({ active: { id: "1", data: { current: undefined } }, over: null });
+    });
+    const afterCancel = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
+    link.dispatchEvent(afterCancel);
+    expect(afterCancel.defaultPrevented).toBe(true);
   });
 
   test("wires a card drag handle as the keyboard activator", () => {
