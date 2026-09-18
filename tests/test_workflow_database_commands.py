@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
 from django.utils import timezone
 from rebac import system_context, to_subject_ref
@@ -174,42 +173,6 @@ def _scheduled_run_cancel_command(
     _RunCancelDatabaseCommand.actor = actor
     _RunCancelDatabaseCommand.target_run_id = target.pk
     return step_run, attempt, dispatch
-
-
-@pytest.mark.django_db(transaction=True)
-def test_legacy_step_run_cannot_execute_a_database_command_without_a_fence(
-    workflow_engine_tables: None,
-    no_workflow_queue: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    del workflow_engine_tables, no_workflow_queue
-    user = User.objects.create_user(username="wf-command-legacy", first_name="original")
-    with system_context(reason="legacy command guard setup"):
-        workflow = Workflow.objects.create(name="Legacy command guard", max_steps=10)
-        step = Step.objects.create(
-            workflow=workflow,
-            key="apply",
-            name="Apply",
-            step_class="agent_session",
-            is_entry=True,
-        )
-        run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
-        step_run = StepRun.objects.create(
-            run=run,
-            step=step,
-            status=StepRunStatus.STARTED,
-            input={"user_id": user.pk},
-        )
-    monkeypatch.setattr(type(step), "resolve_impl", lambda self, field: _DatabaseCommandImpl)
-
-    with pytest.raises(ValidationError, match="retained attempt"):
-        engine.execute(step_run.pk)
-
-    user.refresh_from_db()
-    with system_context(reason="verify legacy command guard"):
-        step_run.refresh_from_db()
-    assert user.first_name == "original"
-    assert step_run.attempt == 0
 
 
 @pytest.mark.django_db(transaction=True)

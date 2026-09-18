@@ -9,7 +9,7 @@ import { beforeEach, expect, test, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   loading: true,
   wide: false,
-  legacy: false,
+  noAttempts: false,
   missingCurrent: false,
   executionStatus: "FAILED",
   runStatus: "RUNNING",
@@ -47,20 +47,6 @@ vi.mock("@angee/refine", async (importOriginal) => {
       if (operation === "WorkflowTestRepairContext") return {
         data: { workflow_test_repair_context: null }, isFetching: false, error: null,
       };
-      if (Object.hasOwn(variables, "includeInput") && !Object.hasOwn(variables, "includeCheckpoint")) {
-        mocks.payloadVariables.push(variables);
-        return {
-          data: { workflow_step_runs: [{
-            id: variables.execution,
-            input: { legacy: "input" },
-            output: { legacy: "output" },
-            error: "legacy failed",
-            stacktrace: "legacy trace",
-          }] },
-          isFetching: false,
-          error: null,
-        };
-      }
       if (Object.hasOwn(variables, "includeInput")) {
         mocks.payloadVariables.push(variables);
         return {
@@ -79,9 +65,9 @@ vi.mock("@angee/refine", async (importOriginal) => {
       }
       if (Object.hasOwn(variables, "execution")) return {
         data: {
-          workflow_step_runs: variables.run !== "run-2" && variables.execution && variables.execution !== "foreign-execution" ? [{ id: variables.execution, step: { id: "step-1", key: "first", name: "First" }, system_kind: "", map_index: 3, status: mocks.executionStatus, outcome: "failed", current_attempt: mocks.legacy || mocks.missingCurrent ? null : { id: "attempt-current" } }] : [],
+          workflow_step_runs: variables.run !== "run-2" && variables.execution && variables.execution !== "foreign-execution" ? [{ id: variables.execution, step: { id: "step-1", key: "first", name: "First" }, system_kind: "", map_index: 3, status: mocks.executionStatus, outcome: "failed", current_attempt: mocks.noAttempts || mocks.missingCurrent ? null : { id: "attempt-current" } }] : [],
           workflow_step_attempts: variables.attempt && variables.attempt !== "foreign-attempt" ? [{ id: variables.attempt }] : [],
-          workflow_step_attempts_aggregate: { aggregate: { count: mocks.legacy ? 0 : 1 } },
+          workflow_step_attempts_aggregate: { aggregate: { count: mocks.noAttempts ? 0 : 1 } },
         },
         isFetching: false,
         error: null,
@@ -176,7 +162,7 @@ beforeEach(() => {
   cleanup();
   mocks.loading = true;
   mocks.wide = false;
-  mocks.legacy = false;
+  mocks.noAttempts = false;
   mocks.missingCurrent = false;
   mocks.executionStatus = "FAILED";
   mocks.runStatus = "RUNNING";
@@ -297,48 +283,36 @@ test("a Map recovery can name the exact retained prior recovery basis", async ()
   })));
 });
 
-test("a legacy execution shows parent-scoped recorded data instead of an empty attempt list", async () => {
+test("a terminal execution without retained attempts reports missing history without querying payloads", async () => {
   mocks.loading = false;
-  mocks.legacy = true;
+  mocks.noAttempts = true;
   const router = createRouter({ routeTree: createRootRoute({ component: () => <RunTimelinePanel runId="run-1" /> }), history: createMemoryHistory({ initialEntries: ["/?step=step-1&execution=execution-1"] }) });
   await router.load();
   const view = render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><RouterProvider router={router} /></AppRuntimeProvider>);
 
-  expect(await screen.findByText("Execution data")).toBeTruthy();
-  expect(screen.getByText("No attempt history was retained for this execution.")).toBeTruthy();
-  expect(await screen.findByText(/"legacy":\s*"input"/)).toBeTruthy();
+  expect(await screen.findByText("No attempt history was retained for this execution.")).toBeTruthy();
+  expect(screen.queryByText("Awaiting first attempt")).toBeNull();
   expect(mocks.resources.some((props) => props.resource === "workflows.StepAttempt")).toBe(false);
-  expect(mocks.payloadVariables.at(-1)).toEqual(expect.objectContaining({
-    run: "run-1", execution: "execution-1", includeInput: true,
-    includeOutput: false, includeFailure: false,
-  }));
-
-  fireEvent.click(screen.getByRole("button", { name: "Failure" }));
-  expect(await screen.findByText("legacy failed")).toBeTruthy();
-  await waitFor(() => expect((router.state.location.search as Record<string, unknown>).payload).toBe("failure"));
-  expect(mocks.payloadVariables.at(-1)).toEqual(expect.objectContaining({
-    includeInput: false, includeOutput: false, includeFailure: true,
-  }));
+  expect(mocks.payloadVariables).toEqual([]);
 
   mocks.wide = true;
   view.rerender(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><RouterProvider router={router} /></AppRuntimeProvider>);
-  expect(await screen.findByText("legacy failed")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Failure" }).className).toContain("bg-inset");
+  expect(await screen.findByText("No attempt history was retained for this execution.")).toBeTruthy();
   expect(router.state.location.search).toMatchObject({
-    step: "step-1", execution: "execution-1", payload: "failure",
+    step: "step-1", execution: "execution-1",
   });
 });
 
-test("a new queued execution without evidence is not labeled legacy", async () => {
+test("a new queued execution awaits its first attempt", async () => {
   mocks.loading = false;
-  mocks.legacy = true;
+  mocks.noAttempts = true;
   mocks.executionStatus = "SCHEDULED";
   const router = createRouter({ routeTree: createRootRoute({ component: () => <RunTimelinePanel runId="run-1" /> }), history: createMemoryHistory({ initialEntries: ["/?step=step-1&execution=execution-1"] }) });
   await router.load();
   render(<RouterProvider router={router} />);
 
   expect(await screen.findByText("Awaiting first attempt")).toBeTruthy();
-  expect(screen.queryByText("Execution data")).toBeNull();
+  expect(screen.queryByText("No attempt history was retained for this execution.")).toBeNull();
   expect(mocks.payloadVariables).toEqual([]);
 });
 
@@ -350,7 +324,7 @@ test("retained attempts remain available when an old current pointer is absent",
   render(<RouterProvider router={router} />);
 
   expect(await screen.findByTestId("resource-workflows.StepAttempt")).toBeTruthy();
-  expect(screen.queryByText("Execution data")).toBeNull();
+  expect(screen.queryByText("No attempt history was retained for this execution.")).toBeNull();
 });
 
 test("foreign execution and attempt URL identities never reach a record pane", async () => {

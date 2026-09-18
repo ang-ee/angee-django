@@ -133,11 +133,7 @@ class AgentStepImpl(StepImpl):
                 credential=target.agent.inference_credential_for_runtime() if target.agent is not None else None,
             )
             with system_context(reason="workflows_agents.agent_step.budget"), transaction.atomic():
-                step_run.run.debit_budget(
-                    _usage_delta(
-                        response.usage, legacy_keys=set(step_run.run.workflow.budget) | set(step_run.run.budget_spent)
-                    )
-                )
+                step_run.run.debit_budget(_usage_delta(response.usage))
             return StepResult.done(
                 output=_bounded_summary(_success_summary(target=target, request=request, response=response)),
                 outcome="completed",
@@ -639,17 +635,10 @@ def _float(value: Any, *, name: str) -> float:
         raise ValidationError({"config": f"Agent step {name} must be a number."}) from error
 
 
-def _usage_delta(usage: RequestUsage, *, legacy_keys: set[str]) -> dict[str, int]:
-    """Account native usage while honoring already-persisted legacy budget axes."""
+def _usage_delta(usage: RequestUsage) -> dict[str, int]:
+    """Map native request usage to the workflow budget vocabulary."""
 
     delta = {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens, "tokens": usage.total_tokens}
-    for key, value in (
-        ("prompt_tokens", usage.input_tokens),
-        ("completion_tokens", usage.output_tokens),
-        ("total_tokens", usage.total_tokens),
-    ):
-        if key in legacy_keys:
-            delta[key] = value
     return {key: int(value) for key, value in delta.items() if value}
 
 

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils import timezone
 from pydantic import BaseModel
 from rebac import system_context
@@ -142,37 +143,34 @@ def test_empty_exception_message_retains_class_and_traceback(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_legacy_execute_payload_cannot_select_initialized_attempt(
+@pytest.mark.parametrize("delay", [0, 60])
+def test_advance_wake_is_durable_before_transport_publication(
     workflow_engine_tables: None,
     monkeypatch: pytest.MonkeyPatch,
+    delay: int,
 ) -> None:
+    """Immediate and timer wakes commit their intent before notifying transport."""
+
     del workflow_engine_tables
-    with system_context(reason="retained legacy fence setup"):
-        workflow = Workflow.objects.create(name="Legacy fence")
-        step = Step.objects.create(
-            workflow=workflow,
-            key="start",
-            name="Start",
-            step_class="agent_session",
-            is_entry=True,
-        )
+    now = timezone.now()
+    published: list[int] = []
+    with system_context(reason="durable wake setup"):
+        workflow = Workflow.objects.create(name="Durable wake")
         run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
-        step_run = StepRun.objects.create(run=run, step=step, status=StepRunStatus.SCHEDULED)
-    attempt = StepAttempt.objects.claim(step_run, claimed_at=timezone.now()).attempt
-    called = False
+    monkeypatch.setattr(engine.timezone, "now", lambda: now)
+    monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda: published.append(run.pk))
 
-    def forbidden(_step_run_id: int) -> None:
-        nonlocal called
-        called = True
-
-    monkeypatch.setattr(engine, "execute", forbidden)
-    from angee.workflows.tasks import execute_workflow_step
-
-    execute_workflow_step.run(step_run.pk)
-    assert not called
-    with system_context(reason="retained legacy fence verify"):
-        attempt.refresh_from_db()
-    assert attempt.started_at is None
+    with transaction.atomic():
+        if delay:
+            engine.enqueue_advance_at(run.pk, now + timedelta(seconds=delay))
+        else:
+            engine.enqueue_advance(run.pk)
+        with system_context(reason="inspect durable wake before commit"):
+            dispatch = WorkflowDispatch.objects.get(run=run)
+        assert dispatch.kind == WorkflowDispatchKind.ADVANCE
+        assert dispatch.available_at == now + timedelta(seconds=delay)
+        assert published == []
+    assert published == [run.pk]
 
 
 @pytest.mark.django_db(transaction=True)

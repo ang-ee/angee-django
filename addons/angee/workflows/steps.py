@@ -27,21 +27,21 @@ from typing import Any, ClassVar, Literal, Self
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models
-from jsonschema import Draft202012Validator
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 from rebac import system_context
 
-from angee.base.impl import ImplBase, ImplChoice
 from angee.base.identity import instance_from_public_id
+from angee.base.impl import ImplBase, ImplChoice
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.workflows.attempts import (
     ArtifactSpec,
     AttemptResult,
     AttemptResultKind,
-    DecisionSpec,
     DecisionGateOutput,
+    DecisionSpec,
     ExternalOperationPolicy,
     JsonPresence,
     RecoveryCapability,
@@ -289,12 +289,8 @@ class StepImpl(ImplBase):
         """Parse one retained JSON value through the operation's input contract."""
 
         if cls.input_model is None:
-            raise ImproperlyConfigured(
-                f"{cls.__name__} does not declare an input model."
-            )
-        return cls.input_model.model_validate_json(
-            json.dumps(value, allow_nan=False)
-        )
+            raise ImproperlyConfigured(f"{cls.__name__} does not declare an input model.")
+        return cls.input_model.model_validate_json(json.dumps(value, allow_nan=False))
 
     @classmethod
     def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
@@ -463,9 +459,7 @@ class StepImpl(ImplBase):
             attempt_model = apps.get_model("workflows", "StepAttempt")
             with system_context(reason="workflows.step.heartbeat.load"):
                 attempt = attempt_model.objects.get(pk=step_run.current_attempt_id)
-            attempt_model.objects.heartbeat(
-                attempt.pk, lease_token=attempt.lease_token, at=timestamp
-            )
+            attempt_model.objects.heartbeat(attempt.pk, lease_token=attempt.lease_token, at=timestamp)
             return
         step_run.heartbeat_at = timestamp
         with system_context(reason="workflows.step.heartbeat"):
@@ -478,30 +472,20 @@ def retry_policy_from_config(config: Any) -> StepRetryPolicy:
     if not isinstance(config, Mapping):
         raise ValidationError({"config": "Step config must be a JSON object."})
     retry = config.get("retry")
-    if retry in (None, "", False):
+    if retry is None:
         return StepRetryPolicy()
     if not isinstance(retry, Mapping):
         raise ValidationError({"config": "Step retry must be a JSON object."})
 
     max_attempts = positive_int(retry.get("max_attempts", 1), "Step retry max_attempts")
-    wait = 0
-    linear_wait = 0
-    exponential_wait = 0
-    backoff = retry.get("backoff", 0)
-    if isinstance(backoff, Mapping):
-        wait = non_negative_int(backoff.get("wait", 0), "Step retry backoff.wait")
-        linear_wait = non_negative_int(backoff.get("linear_wait", 0), "Step retry backoff.linear_wait")
-        exponential_wait = non_negative_int(
-            backoff.get("exponential_wait", 0),
-            "Step retry backoff.exponential_wait",
-        )
-    else:
-        wait = non_negative_int(backoff, "Step retry backoff")
+    backoff = retry.get("backoff", {})
+    if not isinstance(backoff, Mapping):
+        raise ValidationError({"config": "Step retry backoff must be a JSON object."})
     return StepRetryPolicy(
         max_attempts=max_attempts,
-        wait=wait,
-        linear_wait=linear_wait,
-        exponential_wait=exponential_wait,
+        wait=non_negative_int(backoff.get("wait", 0), "Step retry backoff.wait"),
+        linear_wait=non_negative_int(backoff.get("linear_wait", 0), "Step retry backoff.linear_wait"),
+        exponential_wait=non_negative_int(backoff.get("exponential_wait", 0), "Step retry backoff.exponential_wait"),
     )
 
 
@@ -559,16 +543,12 @@ class CallWorkflow(StepImpl):
             raise ValidationError({"input": "CallWorkflow input must be an object."})
         selected_id = config.get("publication") or payload.get("publication")
         if not isinstance(selected_id, str):
-            raise ValidationError(
-                {"publication": "CallWorkflow input must select a published workflow."}
-            )
+            raise ValidationError({"publication": "CallWorkflow input must select a published workflow."})
         if config.get("publication") and payload.get("publication") not in (
             None,
             selected_id,
         ):
-            raise ValidationError(
-                {"publication": "Call input cannot replace its declared static publication."}
-            )
+            raise ValidationError({"publication": "Call input cannot replace its declared static publication."})
         return selected_id
 
     @classmethod
@@ -586,18 +566,25 @@ class CallWorkflow(StepImpl):
             if not isinstance(static, str):
                 raise ValidationError({"publication": "Static publication must be a public id."})
             cls._publication(static)
-            if any(key in config for key in (
-                "expected_input_schema", "expected_output_schema", "expected_subject", "expected_outcomes"
-            )):
+            if any(
+                key in config
+                for key in ("expected_input_schema", "expected_output_schema", "expected_subject", "expected_outcomes")
+            ):
                 raise ValidationError({"config": "A static call derives its contract from its publication."})
         else:
             input_schema = config.get("expected_input_schema")
             schema = config.get("expected_output_schema")
             outcomes = config.get("expected_outcomes")
             subject = config.get("expected_subject")
-            if (not isinstance(input_schema, Mapping) or not isinstance(schema, Mapping)
-                    or not isinstance(outcomes, list) or not isinstance(subject, str)):
-                raise ValidationError({"config": "A dynamic call requires expected input, output, subject and outcomes."})
+            if (
+                not isinstance(input_schema, Mapping)
+                or not isinstance(schema, Mapping)
+                or not isinstance(outcomes, list)
+                or not isinstance(subject, str)
+            ):
+                raise ValidationError(
+                    {"config": "A dynamic call requires expected input, output, subject and outcomes."}
+                )
             try:
                 Draft202012Validator.check_schema(dict(input_schema))
                 Draft202012Validator.check_schema(dict(schema))
@@ -644,8 +631,7 @@ class CallWorkflow(StepImpl):
             actual_outcomes = {rule["outcome"] for rule in publication.result_rules} or {"completed"}
             if (
                 not json_values_equal(type(self)._input_schema(publication), expected_input)
-                or
-                not json_values_equal(publication.output_schema, expected)
+                or not json_values_equal(publication.output_schema, expected)
                 or publication.subject_declaration != config["expected_subject"].strip().lower()
                 or not actual_outcomes.issubset(set(config["expected_outcomes"]))
             ):
@@ -678,8 +664,12 @@ class CallWorkflow(StepImpl):
         else:
             raise ValidationError({"subject": "Child subject must be an exact record reference or null."})
         child = engine.start(
-            publication, subject, actor,
-            parent_step_run=step_run, parent_relation="owned_call", origin=RunOrigin.WORKFLOW,
+            publication,
+            subject,
+            actor,
+            parent_step_run=step_run,
+            parent_relation="owned_call",
+            origin=RunOrigin.WORKFLOW,
             input=JsonPresence("input" in payload, payload.get("input")),
         )
         attempt_model = apps.get_model("workflows", "StepAttempt")
@@ -702,6 +692,8 @@ class CallWorkflow(StepImpl):
             output_present=False,
             outcome="child_canceled" if current.status == RunStatus.CANCELED else "child_failed",
         )
+
+
 class WaitStep(StepImpl):
     """Built-in timer wait step."""
 
@@ -834,7 +826,7 @@ class MapStep(StepImpl):
         mapping = config if isinstance(config, Mapping) else {}
         if bool(mapping.get("all_must_succeed", False)):
             return failures == 0 and successes == total
-        ratio = optional_number(mapping.get("min_success_ratio", mapping.get("min_success")), "Map min_success_ratio")
+        ratio = optional_number(mapping.get("min_success_ratio"), "Map min_success_ratio")
         if ratio is None:
             return failures == 0 and successes == total
         if total == 0:
@@ -954,7 +946,7 @@ def optional_non_negative_int(value: Any) -> int | None:
         return None
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return parsed if parsed >= 0 else None
 
@@ -963,8 +955,6 @@ def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec
     """Return gate decision specs from declarative config."""
 
     slots = config.get("slots")
-    if slots is None:
-        slots = [{"assignee": subject} for subject in config.get("assignees", ())]
     action = str(config.get("action", "") or "")
     payload = dict(config.get("payload") or {})
     requester = str(config.get("requester", "") or "")

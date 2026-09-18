@@ -357,10 +357,11 @@ def test_crash_replay_does_not_reexecute_completed_steps(
     run = start_run(workflow)
 
     start_row = advance_once(run)[0]
+    with system_context(reason="test workflows capture execution dispatch"):
+        attempt = start_row.current_attempt
+        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
     execute_started(run)
-    from angee.workflows import engine
-
-    engine.execute(start_row.pk)
+    engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)
     engine.advance(run.pk)
     engine.advance(run.pk)
     execute_started(run)
@@ -952,7 +953,7 @@ def test_cancellation_propagates_to_journal_and_child_runs(
     assert child.status == run_status.CANCELED
     assert scheduled.status == step_run_status.CANCELED
     assert waiting_row.status == step_run_status.CANCELED
-    assert started.status == step_run_status.STARTED
+    assert started.status == step_run_status.CANCELED
     assert started.resume_state["cancel_requested"] is True
 
 
@@ -973,7 +974,7 @@ def test_transient_step_error_uses_configured_retry_backoff(
         steps=(
             {
                 "key": "start",
-                "config": {"retry": {"max_attempts": 3, "backoff": 7}},
+                "config": {"retry": {"max_attempts": 3, "backoff": {"wait": 7}}},
             },
         ),
         edges=(),
@@ -987,7 +988,7 @@ def test_transient_step_error_uses_configured_retry_backoff(
 
     monkeypatch.setattr(HandlerStep, "run", run_transient)
 
-    from angee.workflows import engine, tasks
+    from angee.workflows import engine
 
     with system_context(reason="test transient dispatch"):
         attempt = step_run.current_attempt
@@ -1000,7 +1001,7 @@ def test_transient_step_error_uses_configured_retry_backoff(
     with system_context(reason="test transient successor"):
         assert step_run.current_attempt.retry_of_id == attempt.pk
 
-    policy = tasks._retry_policy_for_step_run(step_run)
+    policy = workflow_steps.retry_policy_from_config(step_run.step.config)
     assert policy.max_attempts == 3
     assert policy.delay_for(1) == 7
 
@@ -1076,7 +1077,6 @@ def test_heartbeat_timeout_reaps_started_rows_and_routes_failed_outcome(
     workflow_engine_tables: None,
     no_workflow_queue: None,
     settings: Any,
-    monkeypatch: pytest.MonkeyPatch,
     handler_calls: list[dict[str, Any]],
 ) -> None:
     """The reaper fails stale started rows, enqueues advance, and failed edges route."""
@@ -1086,7 +1086,6 @@ def test_heartbeat_timeout_reaps_started_rows_and_routes_failed_outcome(
     step_run_status = workflow_models.StepRunStatus
     now = timezone.now()
     stale_at = now - timedelta(seconds=61)
-    enqueued: list[int] = []
     workflow = workflow_with_steps(
         steps=(
             {"key": "start", "config": {"outcome": "done"}},
@@ -1104,19 +1103,12 @@ def test_heartbeat_timeout_reaps_started_rows_and_routes_failed_outcome(
 
     from angee.workflows import engine
 
-    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: enqueued.append(run_id))
-    monkeypatch.setattr(
-        engine,
-        "_defer",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("broker unavailable")),
-    )
     assert engine.reap(now=now) == {"reaped": 1}
 
     failed = step_run_for(run, "start")
     assert failed.status == step_run_status.FAILED
     assert failed.outcome == "failed"
     assert "heartbeat" in failed.error
-    assert enqueued == []
     with system_context(reason="test retained timeout advance"):
         assert WorkflowDispatch.objects.filter(run=run, consumed_at__isnull=True).exists()
 

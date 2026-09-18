@@ -46,6 +46,8 @@ The persisted request summary keeps its vocabulary. New response summaries use
 `format_version: 2`, native serialized message parts and native usage. Existing saved
 journals remain stored in their original shape; this change adds no journal replay
 adapter. The bounded journal limit remains 4096 bytes.
-Budgets use `input_tokens`, `output_tokens` and `tokens`; existing persisted
-`prompt_tokens`, `completion_tokens` and `total_tokens` budget axes remain
-charged and enforced without double-counting the canonical total.
+Budgets use `input_tokens`, `output_tokens` and `tokens`. Before upgrading a
+deployment with `prompt_tokens`, `completion_tokens` or `total_tokens` budget
+axes, republish those definitions with the corresponding canonical axes. Active
+runs pinned to old publications need an explicit publication and spent-ledger
+transition before resuming; runtime accounting does not translate old axes.

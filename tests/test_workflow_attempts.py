@@ -775,7 +775,7 @@ def test_terminal_run_rejects_claim(scheduled_step_run: StepRun) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_legacy_attempt_counter_allocates_next_without_fabricating_history(scheduled_step_run: StepRun) -> None:
+def test_attempt_counter_allocates_next_without_fabricating_history(scheduled_step_run: StepRun) -> None:
     with system_context(reason="test legacy attempt counter"):
         models.QuerySet.update(StepRun.objects.filter(pk=scheduled_step_run.pk), attempt=3)
     with system_context(reason="test attempt refresh"):
@@ -785,11 +785,6 @@ def test_legacy_attempt_counter_allocates_next_without_fabricating_history(sched
     assert attempt.ordinal == 4
     with system_context(reason="test attempt history"):
         assert StepAttempt.objects.filter(step_run=scheduled_step_run).count() == 1
-
-    with system_context(reason="test retained counter guard"):
-        retained = StepRun.objects.get(pk=scheduled_step_run.pk)
-        with pytest.raises(TypeError, match="manager owner"):
-            retained.record_attempt()
 
 
 @pytest.mark.django_db(transaction=True)

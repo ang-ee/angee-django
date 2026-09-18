@@ -2,8 +2,8 @@
 
 This module is the single owner of workflow advancement. It creates and replays
 the step-run journal, evaluates join rules, routes outcomes, claims work, and
-records cancellation. Step implementations run only through ``execute()``, never
-inside ``advance()``.
+records cancellation. Step implementations run only through retained
+``execute_dispatch()`` deliveries, never inside ``advance_dispatch()``.
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from angee.base.actors import actor_user_id
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
 from angee.base.refs import CanonicalRecordTarget, canonical_record_target
 from angee.base.scoping import read_scoped_queryset
-from angee.jobs.enqueue import enqueue_task
 from angee.workflows.attempts import (
     AttemptCause,
     AttemptInput,
@@ -62,16 +61,13 @@ from angee.workflows.bindings import (
     evaluate_binding,
     parse_binding,
 )
-from angee.workflows.decision_actions import (
-    compile_decision_action_schema,
-    retained_decision_form_schema,
-)
+from angee.workflows.decision_actions import compile_decision_action_schema
 from angee.workflows.dispatch import (
     DispatchPreflightDisposition,
     WorkflowDispatchKind,
     enqueue_dispatch_publisher,
 )
-from angee.workflows.managers import decision_gate_output, retained_gate_output
+from angee.workflows.managers import retained_gate_output
 from angee.workflows.models import (
     JoinRule,
     RunOrigin,
@@ -80,7 +76,7 @@ from angee.workflows.models import (
     Verdict,
     WaitingKind,
 )
-from angee.workflows.steps import DecisionSpec, MapStep, StepExecutionMode, StepResult, TransientStepError
+from angee.workflows.steps import MapStep, StepExecutionMode, TransientStepError
 from angee.workflows.testing import FixtureRole, WorkflowScope
 
 VERDICT_PENDING = cast(Verdict, Verdict.PENDING)
@@ -175,8 +171,7 @@ def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     This is the workflow engine's event-delivery seam. Every delivery advances
     the run-scoped generation under the same short row lock as :func:`advance`,
     even when no row is waiting. A step that parks after observing an older
-    generation is made immediately due by :func:`execute`; the existing
-    advance/execute tasks still own claiming and running implementations.
+    generation is made immediately due by the retained dispatch path.
     """
 
     timestamp = now or timezone.now()
@@ -195,10 +190,7 @@ def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
             .order_by("pk")
         )
         for step_run in waiting:
-            if _is_retained_step_run(step_run):
-                _model("StepAttempt").objects.wake_current(step_run.pk, at=timestamp)
-            else:
-                step_run.wake(at=timestamp)
+            _model("StepAttempt").objects.wake_current(step_run.pk, at=timestamp)
             woken += 1
         if run.status == RunStatus.WAITING and waiting:
             run.resume()
@@ -298,10 +290,7 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
             if step_run.status == StepRunStatus.WAITING:
                 if step_run.waiting_kind != WaitingKind.EXTERNAL:
                     continue
-                if _is_retained_step_run(step_run):
-                    attempt_model.objects.wake_current(step_run.pk, at=timestamp)
-                else:
-                    step_run.wake(at=timestamp)
+                attempt_model.objects.wake_current(step_run.pk, at=timestamp)
                 woken += 1
                 touched.add(run.pk)
             elif not subscribed or attempt.result_recorded_at is not None:
@@ -460,7 +449,7 @@ def advance_dispatch(
                     if _process_map_steps(run, timestamp=timestamp):
                         _route_completed_steps(run)
                         if not _fail_if_budget_exceeded(run):
-                            claimed_ids = _claim_due_steps(run, timestamp=timestamp, retained=True)
+                            claimed_ids = _claim_due_steps(run, timestamp=timestamp)
                             _update_run_status(run, timestamp=timestamp)
                 dispatch_model.objects._consume_locked(dispatch_id, at=timestamp)
     except Exception as error:
@@ -471,76 +460,6 @@ def advance_dispatch(
                 logger.exception("Could not retain workflow ADVANCE failure visibility.")
         raise
     return {"claimed": len(claimed_ids)}
-
-
-def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
-    """Run one claimed StepRun outside any advance lock and enqueue replay."""
-
-    step_run_model = _model("StepRun")
-    timestamp = now or timezone.now()
-    with system_context(reason="workflows.engine.execute.load"):
-        step_run = step_run_model.objects.select_related("run", "step", "run__workflow").filter(pk=step_run_id).first()
-        if step_run is None or step_run.status in StepRunStatus.TERMINAL:
-            return {"executed": 0}
-        if step_run.is_retained:
-            return {"executed": 0}
-        if step_run.status != StepRunStatus.STARTED or step_run.run.status in RunStatus.TERMINAL:
-            return {"executed": 0}
-        impl_class = step_run.step.resolve_impl("step_class")
-        if impl_class.execution_mode == StepExecutionMode.DATABASE_COMMAND:
-            raise ValidationError({"step": "Database commands require a retained attempt."})
-    with system_context(reason="workflows.engine.execute.attempt"), transaction.atomic():
-        locked = step_run_model.objects.lock_if_supported().select_related("run").get(pk=step_run_id)
-        if locked.is_retained:
-            return {"executed": 0}
-        if locked.status != StepRunStatus.STARTED or locked.run.status in RunStatus.TERMINAL:
-            return {"executed": 0}
-        locked.record_attempt(heartbeat_at=timestamp)
-        step_run.attempt = locked.attempt
-        step_run.heartbeat_at = locked.heartbeat_at
-
-    result: StepResult | None = None
-    error = ""
-    stack = ""
-    try:
-        result = cast(Any, impl_class)().run(step_run, now=timestamp)
-    except TransientStepError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - impl failure is journaled as a step result.
-        error = _exception_message(exc)
-        stack = traceback.format_exc()
-
-    wait_until: datetime | None = None
-    run_id: int | None = step_run.run_id
-    with system_context(reason="workflows.engine.execute.persist"), transaction.atomic():
-        locked_run = _model("WorkflowRun").objects.lock_if_supported().get(pk=run_id)
-        locked = step_run_model.objects.lock_if_supported().get(pk=step_run_id)
-        if locked.status != StepRunStatus.STARTED or locked_run.status in RunStatus.TERMINAL:
-            return {"executed": 0}
-        if error:
-            locked.mark_failed(error=error, stacktrace=stack)
-        elif result is None:
-            locked.mark_failed(error="Step implementation returned no result.", stacktrace="")
-        elif result.kind == "done":
-            locked.mark_succeeded(output=result.output, output_present=result.output_present, outcome=result.outcome)
-        elif result.kind == "wait":
-            wait_until = timezone.now() if locked_run.deliveries > locked.claimed_deliveries else result.until
-            locked.mark_waiting(
-                until=wait_until,
-                resume_state=result.resume_state,
-                waiting_kind=result.waiting_kind,
-            )
-        elif result.kind == "suspend":
-            _suspend_step_run(locked, result)
-        else:
-            locked.mark_failed(error=f"Unknown step result kind {result.kind!r}.", stacktrace="")
-        transaction.on_commit(lambda run_id=run_id: enqueue_advance(cast(int, run_id)))
-        if wait_until is not None:
-            transaction.on_commit(
-                lambda run_id=run_id, wait_until=wait_until: enqueue_advance_at(cast(int, run_id), wait_until)
-            )
-
-    return {"executed": 1}
 
 
 def external_operation_request(step_run: Any) -> ExternalOperationRequest:
@@ -791,24 +710,12 @@ def cancel(run: Any) -> None:
             status__in=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
         ).order_by("pk"))
         for step_run in step_run_model.objects.lock_if_supported().filter(run=locked).order_by("pk"):
-            if _is_retained_step_run(step_run):
-                was_waiting = step_run.status == StepRunStatus.WAITING
-                _model("StepAttempt").objects.cancel_current(step_run.pk, at=timezone.now())
-                if was_waiting:
-                    _model("Decision").objects.expire_canceled_suspension(
-                        step_run.pk, resolved_by="workflows/cancel"
-                    )
-            elif step_run.status == StepRunStatus.SCHEDULED:
-                step_run.mark_canceled()
-            elif step_run.status == StepRunStatus.WAITING:
-                _expire_pending_decisions(step_run, resolved_by="workflows/cancel")
-                step_run.mark_canceled()
-            elif step_run.status == StepRunStatus.STARTED:
-                state = dict(step_run.resume_state)
-                state["cancel_requested"] = True
-                step_run.resume_state = state
-                step_run.error = "Cancellation requested; running worker result will be ignored."
-                step_run.save(update_fields=["resume_state", "error", "updated_at"])
+            was_waiting = step_run.status == StepRunStatus.WAITING
+            _model("StepAttempt").objects.cancel_current(step_run.pk, at=timezone.now())
+            if was_waiting:
+                _model("Decision").objects.expire_canceled_suspension(
+                    step_run.pk, resolved_by="workflows/cancel"
+                )
         locked.mark_canceled()
         dispatch_model = _model("WorkflowDispatch")
         for child in owned_children:
@@ -884,7 +791,6 @@ def reap(*, now: datetime | None = None) -> dict[str, int]:
     timestamp = now or timezone.now()
     deadline = timestamp - _heartbeat_timeout()
     step_run_model = _model("StepRun")
-    run_ids: list[int] = []
     reaped = 0
     with system_context(reason="workflows.engine.reap.discover"):
         stale_ids = list(
@@ -900,37 +806,15 @@ def reap(*, now: datetime | None = None) -> dict[str, int]:
     for step_run_id in stale_ids:
         with system_context(reason="workflows.engine.reap"), transaction.atomic():
             step_run = step_run_model.objects.select_related("run").get(pk=step_run_id)
-            if _is_retained_step_run(step_run):
-                if _model("StepAttempt").objects.timeout_current(
-                    step_run.pk, heartbeat_before=deadline, at=timestamp
-                ):
-                    _model("WorkflowDispatch").objects.schedule_advance(
-                        step_run.run, available_at=timestamp
-                    )
-                    transaction.on_commit(enqueue_dispatch_publisher)
-                    reaped += 1
-                continue
-            _model("WorkflowRun").objects.lock_if_supported().get(pk=step_run.run_id)
-            step_run = step_run_model.objects.lock_if_supported().get(pk=step_run_id)
-            if step_run.status != StepRunStatus.STARTED or step_run.heartbeat_at is None:
-                continue
-            if step_run.heartbeat_at >= deadline or _is_retained_step_run(step_run):
-                continue
-            message = "Step heartbeat timed out."
-            if step_run.resume_state.get("cancel_requested"):
-                message = "Cancellation requested; heartbeat timed out."
-            step_run.mark_failed(error=message, stacktrace="")
-            run_ids.append(step_run.run_id)
-            reaped += 1
-    for run_id in sorted(set(run_ids)):
-        enqueue_advance(run_id)
+            if _model("StepAttempt").objects.timeout_current(
+                step_run.pk, heartbeat_before=deadline, at=timestamp
+            ):
+                _model("WorkflowDispatch").objects.schedule_advance(
+                    step_run.run, available_at=timestamp
+                )
+                transaction.on_commit(enqueue_dispatch_publisher)
+                reaped += 1
     return {"reaped": reaped}
-
-
-def _is_retained_step_run(step_run: Any) -> bool:
-    """Return the permanent initialized execution boundary for one logical slot."""
-
-    return step_run.is_retained
 
 
 def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = None) -> DecisionAttemptResult:
@@ -944,93 +828,45 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
         current = decision_model.objects.get(pk=decision_id)
     _check_decision_act(current, actor_ref)
 
-    if current.suspension_attempt_id is not None:
-        retained_validation_error: ValidationError | None = None
-        with (
-            system_context(reason="workflows.engine.decide.retained"),
-            transaction.atomic(),
-            decision_model.objects._resolution_owner(decision_id),
-        ):
-            try:
-                resolution = _validate_resolution(current, payload, actor=actor_ref)
-                _assert_selected_action_verdict(current, resolution, target)
-            except ValidationError as resolution_error:
-                locked, exhausted = decision_model.objects.record_invalid_retained(decision_id)
-                retained_validation_error = resolution_error
-                if exhausted:
-                    locked.step_run.__class__.objects.fail_retained_decisions(
-                        locked.step_run_id,
-                        error=f"Decision resolution failed validation: {resolution_error}",
-                    )
-                else:
-                    _schedule_decision_timers(locked)
-            else:
-                locked = decision_model.objects.resolve_retained(
-                    decision_id,
-                    verdict=target,
-                    resolution=resolution,
-                    resolved_by=str(actor_ref),
-                    at=timezone.now(),
-                )
-                if locked is None:
-                    decision_model.objects.complete_retained_resolution(decision_id)
-                    return DecisionAttemptResult(current)
-                _apply_decision_policy(locked.step_run)
-            _model("WorkflowDispatch").objects.schedule_advance(
-                locked.step_run.run, available_at=timezone.now()
-            )
-            transaction.on_commit(enqueue_dispatch_publisher)
-            decision_model.objects.complete_retained_resolution(decision_id)
-        return DecisionAttemptResult(locked, retained_validation_error)
-
-    run_id: int | None = None
-    legacy_validation_error: ValidationError | None = None
-    with system_context(reason="workflows.engine.decide"), transaction.atomic():
-        locked = (
-            decision_model.objects.lock_if_supported()
-            .select_related("step_run", "step_run__run", "step_run__step")
-            .get(pk=decision_id)
-        )
-        if locked.verdict != VERDICT_PENDING:
-            return DecisionAttemptResult(locked)
-        decision_model.objects.ensure_sequential_turn(locked)
+    if current.suspension_attempt_id is None:
+        raise ValidationError({"decision": "Decision resolution requires retained suspension evidence."})
+    validation_error: ValidationError | None = None
+    with (
+        system_context(reason="workflows.engine.decide.retained"),
+        transaction.atomic(),
+        decision_model.objects._resolution_owner(decision_id),
+    ):
         try:
-            resolution = _validate_resolution(locked, payload, actor=actor_ref)
-            _assert_selected_action_verdict(locked, resolution, target)
-        except ValidationError as error:
-            _record_invalid_resolution(locked, error)
-            legacy_validation_error = error
-            run_id = locked.step_run.run_id
+            resolution = _validate_resolution(current, payload, actor=actor_ref)
+            _assert_selected_action_verdict(current, resolution, target)
+        except ValidationError as resolution_error:
+            locked, exhausted = decision_model.objects.record_invalid_retained(decision_id)
+            validation_error = resolution_error
+            if exhausted:
+                locked.step_run.__class__.objects.fail_retained_decisions(
+                    locked.step_run_id,
+                    error=f"Decision resolution failed validation: {resolution_error}",
+                )
+            else:
+                _schedule_decision_timers(locked)
         else:
-            locked.resolve(target, resolution=resolution, resolved_by=str(actor_ref))
+            locked = decision_model.objects.resolve_retained(
+                decision_id,
+                verdict=target,
+                resolution=resolution,
+                resolved_by=str(actor_ref),
+                at=timezone.now(),
+            )
+            if locked is None:
+                decision_model.objects.complete_retained_resolution(decision_id)
+                return DecisionAttemptResult(current)
             _apply_decision_policy(locked.step_run)
-            run_id = locked.step_run.run_id
-        transaction.on_commit(lambda run_id=run_id: enqueue_advance(cast(int, run_id)))
-    return DecisionAttemptResult(locked, legacy_validation_error)
-
-
-def escalate_decision(decision_id: int, attempt: int, *, now: datetime | None = None) -> dict[str, int]:
-    """Resolve a pending decision as escalated when its timer is still current."""
-
-    return _resolve_timed_decision(
-        decision_id,
-        attempt,
-        VERDICT_ESCALATED,
-        resolved_by="workflows/timer:escalate",
-        timestamp=now or timezone.now(),
-    )
-
-
-def expire_decision(decision_id: int, attempt: int, *, now: datetime | None = None) -> dict[str, int]:
-    """Resolve a pending decision as expired when its timer is still current."""
-
-    return _resolve_timed_decision(
-        decision_id,
-        attempt,
-        VERDICT_EXPIRED,
-        resolved_by="workflows/timer:expire",
-        timestamp=now or timezone.now(),
-    )
+        _model("WorkflowDispatch").objects.schedule_advance(
+            locked.step_run.run, available_at=timezone.now()
+        )
+        transaction.on_commit(enqueue_dispatch_publisher)
+        decision_model.objects.complete_retained_resolution(decision_id)
+    return DecisionAttemptResult(locked, validation_error)
 
 
 def escalate_decision_dispatch(
@@ -1091,24 +927,47 @@ def _consume_decision_dispatch(
 
 
 def sweep_decisions(*, now: datetime | None = None) -> dict[str, int]:
-    """Resolve pending decisions whose durable deadlines are due."""
+    """Retain and consume dispatches for pending decisions whose deadlines are due."""
 
     timestamp = now or timezone.now()
     decision_model = _model("Decision")
-    with system_context(reason="workflows.engine.decision_sweep"):
+    dispatches: list[tuple[int, WorkflowDispatchKind, int, int]] = []
+    with system_context(reason="workflows.engine.decision_sweep"), transaction.atomic():
         expired = list(
             decision_model.objects.filter(verdict=VERDICT_PENDING, expires_at__lte=timestamp)
             .order_by("pk")
-            .values_list("pk", "attempts")
+            .select_related("step_run__run")
         )
         escalated = list(
             decision_model.objects.filter(verdict=VERDICT_PENDING, escalate_at__lte=timestamp)
             .filter(models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=timestamp))
             .order_by("pk")
-            .values_list("pk", "attempts")
+            .select_related("step_run__run")
         )
-    expired_count = sum(expire_decision(pk, attempt, now=timestamp)["resolved"] for pk, attempt in expired)
-    escalated_count = sum(escalate_decision(pk, attempt, now=timestamp)["resolved"] for pk, attempt in escalated)
+        dispatch_model = _model("WorkflowDispatch")
+        for kind, decisions in (
+            (WorkflowDispatchKind.DECISION_EXPIRE, expired),
+            (WorkflowDispatchKind.DECISION_ESCALATE, escalated),
+        ):
+            for decision in decisions:
+                if decision.suspension_attempt_id is None:
+                    raise ValidationError({"decision": "Decision timers require retained suspension evidence."})
+                dispatch, _created = dispatch_model.objects.schedule_decision(kind, decision)
+                dispatches.append((dispatch.pk, kind, decision.pk, decision.attempts))
+    expired_count = 0
+    escalated_count = 0
+    for dispatch_id, kind, decision_id, generation in dispatches:
+        result = _consume_decision_dispatch(
+            dispatch_id,
+            kind,
+            expected_decision_id=decision_id,
+            expected_generation=generation,
+            now=timestamp,
+        )
+        if kind == WorkflowDispatchKind.DECISION_EXPIRE:
+            expired_count += result["resolved"]
+        else:
+            escalated_count += result["resolved"]
     return {"expired": expired_count, "escalated": escalated_count}
 
 
@@ -1130,12 +989,12 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
             run=locked,
             status__in=list(StepRunStatus.ACTIVE),
         ):
-            if _is_retained_step_run(step_run) and step_run.step_id in step_ids:
+            if step_run.step_id in step_ids:
                 step_run_model.objects.reschedule_for_override(step_run.pk, input={}, at=timezone.now())
-            elif _is_retained_step_run(step_run):
-                _model("StepAttempt").objects.cancel_current(step_run.pk, at=timezone.now())
-            else:
+            elif step_run.status == StepRunStatus.SCHEDULED:
                 step_run.mark_canceled()
+            else:
+                _model("StepAttempt").objects.cancel_current(step_run.pk, at=timezone.now())
         override = step_run_model.objects.create(
             run=locked,
             step=None,
@@ -1157,12 +1016,9 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
                     input={},
                 )
             elif row.status in StepRunStatus.TERMINAL:
-                if _is_retained_step_run(row):
-                    row = step_run_model.objects.reschedule_for_override(
-                        row.pk, input={}, at=timezone.now()
-                    )
-                else:
-                    row.reschedule_for_override(input={})
+                row = step_run_model.objects.reschedule_for_override(
+                    row.pk, input={}, at=timezone.now()
+                )
             row.previous.set([override])
         if locked.status == RunStatus.WAITING:
             locked.resume()
@@ -1173,111 +1029,26 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
 
 
 def enqueue_advance(run_id: int) -> None:
-    """Enqueue an advance job."""
+    """Retain an immediate advance and request transport publication."""
 
-    _defer("workflows.advance", run_id=run_id)
+    enqueue_advance_at(run_id, timezone.now())
 
 
 def enqueue_advance_at(run_id: int, when: datetime) -> None:
-    """Enqueue a deferred advance job for a durable timer wake."""
+    """Retain a timer wake before asking the transport to publish it."""
 
-    _defer(
-        "workflows.advance",
-        schedule_at=when,
-        run_id=run_id,
-    )
-
-
-def enqueue_decision_escalation_at(decision_id: int, attempt: int, when: datetime) -> None:
-    """Enqueue a deferred escalation timer for one decision attempt."""
-
-    _defer(
-        "workflows.decision_escalate",
-        schedule_at=when,
-        decision_id=decision_id,
-        attempt=attempt,
-    )
-
-
-def enqueue_decision_expiry_at(decision_id: int, attempt: int, when: datetime) -> None:
-    """Enqueue a deferred expiry timer for one decision attempt."""
-
-    _defer(
-        "workflows.decision_expire",
-        schedule_at=when,
-        decision_id=decision_id,
-        attempt=attempt,
-    )
-
-
-def enqueue_execute(step_run_id: int) -> None:
-    """Enqueue one step execution job."""
-
-    _defer("workflows.execute", step_run_id=step_run_id)
-
-
-def _defer(
-    task_name: str,
-    *,
-    schedule_at: datetime | None = None,
-    **kwargs: Any,
-) -> None:
-    """Send one Celery task by registered name."""
-
-    enqueue_task(task_name, kwargs=kwargs, eta=schedule_at)
+    with system_context(reason="workflows.engine.schedule_advance"), transaction.atomic():
+        run = _model("WorkflowRun").objects.filter(pk=run_id).first()
+        if run is None:
+            return
+        _model("WorkflowDispatch").objects.schedule_advance(run, available_at=when)
+        transaction.on_commit(enqueue_dispatch_publisher)
 
 
 def _model(name: str) -> type[Any]:
     """Return a concrete workflows model from the Django app registry."""
 
     return apps.get_model("workflows", name)
-
-
-def _suspend_step_run(step_run: Any, result: StepResult) -> None:
-    """Persist a suspended result and create its awaited decisions."""
-
-    resume_state = dict(result.resume_state or {})
-    decisions = tuple(result.decisions)
-    decision_ids: list[int] = []
-    decision_schemas: dict[str, dict[str, Any]] = {}
-    for spec in decisions:
-        decision = _create_decision(step_run, spec)
-        decision_ids.append(decision.pk)
-        if spec.decision_schema:
-            decision_schemas[str(decision.pk)] = retained_decision_form_schema(
-                spec.decision_schema
-            )
-    if decision_ids:
-        resume_state["_decision_ids"] = decision_ids
-    if decision_schemas:
-        resume_state["_decision_schemas"] = decision_schemas
-    step_run.mark_waiting(resume_state=resume_state, waiting_kind=result.waiting_kind)
-
-
-def _create_decision(step_run: Any, spec: DecisionSpec) -> Any:
-    """Create one decision row and its explicit REBAC relationship tuples."""
-
-    decision_model = _model("Decision")
-    decision = decision_model.objects.create(
-        step_run=step_run,
-        priority=spec.priority,
-        action=spec.action,
-        payload=spec.payload,
-        target_model=spec.target_model,
-        target_id=spec.target_id,
-        target_tab=spec.target_tab,
-        max_attempts=spec.max_attempts,
-        expires_at=spec.expires_at,
-        escalate_at=spec.escalate_at,
-    )
-    _write_decision_relationships(
-        decision,
-        assignees=spec.assignees,
-        requester=spec.requester,
-        escalation=spec.escalation,
-    )
-    _schedule_decision_timers(decision)
-    return decision
 
 
 def _write_decision_relationships(
@@ -1304,27 +1075,14 @@ def _write_decision_relationships(
 def _schedule_decision_timers(decision: Any) -> None:
     """Schedule deadline jobs for the decision's current attempt."""
 
-    if decision.suspension_attempt_id is not None:
-        dispatch_model = _model("WorkflowDispatch")
-        if decision.escalate_at is not None:
-            dispatch_model.objects.schedule_decision(WorkflowDispatchKind.DECISION_ESCALATE, decision)
-        if decision.expires_at is not None:
-            dispatch_model.objects.schedule_decision(WorkflowDispatchKind.DECISION_EXPIRE, decision)
-        transaction.on_commit(enqueue_dispatch_publisher)
-        return
-
+    if decision.suspension_attempt_id is None:
+        raise ValidationError({"decision": "Decision timers require retained suspension evidence."})
+    dispatch_model = _model("WorkflowDispatch")
     if decision.escalate_at is not None:
-        transaction.on_commit(
-            lambda decision_id=decision.pk, attempt=decision.attempts, when=decision.escalate_at: (
-                enqueue_decision_escalation_at(decision_id, attempt, when)
-            )
-        )
+        dispatch_model.objects.schedule_decision(WorkflowDispatchKind.DECISION_ESCALATE, decision)
     if decision.expires_at is not None:
-        transaction.on_commit(
-            lambda decision_id=decision.pk, attempt=decision.attempts, when=decision.expires_at: (
-                enqueue_decision_expiry_at(decision_id, attempt, when)
-            )
-        )
+        dispatch_model.objects.schedule_decision(WorkflowDispatchKind.DECISION_EXPIRE, decision)
+    transaction.on_commit(enqueue_dispatch_publisher)
 
 
 def _subject_ref(subject: str | SubjectRef) -> SubjectRef:
@@ -1647,56 +1405,23 @@ def _annotation_for_field_schema(schema: dict[str, Any]) -> Any:
     }.get(str(field_type), Any)
 
 
-def _record_invalid_resolution(decision: Any, error: ValidationError) -> None:
-    """Re-open an invalid decision attempt or fail the suspended step at max."""
-
-    decision.record_invalid_resolution()
-    if decision.max_attempts is not None and decision.attempts >= decision.max_attempts:
-        message = f"Decision resolution failed validation: {error}"
-        if _is_retained_step_run(decision.step_run):
-            _model("StepRun").objects.fail_retained_decisions(
-                decision.step_run_id, error=message
-            )
-        else:
-            decision.step_run.mark_failed(error=message, stacktrace="")
-        return
-    _schedule_decision_timers(decision)
-
-
 def _apply_decision_policy(step_run: Any) -> None:
     """Complete ``step_run`` when its decision collection satisfies its policy."""
 
     if step_run.status != StepRunStatus.WAITING:
         return
-    # Decision policy is scoped to this suspension's ``_decision_ids``. Keep both
-    # the legacy mark-succeeded path and resume-after-decisions path covered when
-    # changing this shared surface (regression tests follow in the next phase).
-    decision_ids = step_run.resume_state.get("_decision_ids")
-    queryset = step_run.decisions
-    if isinstance(decision_ids, list):
-        queryset = queryset.filter(pk__in=decision_ids)
-    decisions = list(queryset.order_by("priority", "pk"))
+    decisions = list(
+        step_run.decisions.filter(suspension_attempt_id=step_run.current_attempt_id)
+        .order_by("priority", "pk")
+    )
     outcome = step_run.decision_gate.outcome(decisions)
     if outcome is None:
         return
-    if _is_retained_step_run(step_run):
-        _model("StepRun").objects.settle_retained_decisions(
-            step_run.pk,
-            outcome=outcome,
-            decision_ids=tuple(decision.pk for decision in decisions),
-            at=timezone.now(),
-        )
-        return
-    if step_run.resume_state.get("_resume_after_decisions"):
-        state = dict(step_run.resume_state)
-        state["_decision_outcome"] = outcome
-        step_run.resume_state = state
-        step_run.save(update_fields=["resume_state", "updated_at"])
-        step_run.wake(at=timezone.now())
-        return
-    step_run.mark_succeeded(
-        output=decision_gate_output(decisions, outcome=outcome),
+    _model("StepRun").objects.settle_retained_decisions(
+        step_run.pk,
         outcome=outcome,
+        decision_ids=tuple(decision.pk for decision in decisions),
+        at=timezone.now(),
     )
 
 
@@ -1713,49 +1438,33 @@ def _resolve_timed_decision(
     decision_model = _model("Decision")
     with system_context(reason="workflows.engine.decision_timer"), transaction.atomic():
         discovered = decision_model.objects.filter(pk=decision_id).first()
-        if discovered is not None and discovered.suspension_attempt_id is not None:
-            with decision_model.objects._resolution_owner(decision_id):
-                deadline = "escalate_at" if verdict == VERDICT_ESCALATED else "expires_at"
-                decision = decision_model.objects.resolve_retained(
-                    decision_id,
-                    verdict=verdict,
-                    resolution={},
-                    resolved_by=resolved_by,
-                    at=timestamp,
-                    expected_attempts=attempt,
-                    deadline=deadline,
-                )
-                if decision is None:
-                    decision_model.objects.complete_retained_resolution(decision_id)
-                    return {"resolved": 0}
-                if verdict == VERDICT_ESCALATED:
-                    _write_decision_relationships(decision, escalation=_escalation_subjects(decision))
-                _apply_decision_policy(decision.step_run)
-                _model("WorkflowDispatch").objects.schedule_advance(
-                    decision.step_run.run, available_at=timestamp
-                )
-                transaction.on_commit(enqueue_dispatch_publisher)
+        if discovered is None:
+            return {"resolved": 0}
+        if discovered.suspension_attempt_id is None:
+            raise ValidationError({"decision": "Decision timers require retained suspension evidence."})
+        with decision_model.objects._resolution_owner(decision_id):
+            deadline = "escalate_at" if verdict == VERDICT_ESCALATED else "expires_at"
+            decision = decision_model.objects.resolve_retained(
+                decision_id,
+                verdict=verdict,
+                resolution={},
+                resolved_by=resolved_by,
+                at=timestamp,
+                expected_attempts=attempt,
+                deadline=deadline,
+            )
+            if decision is None:
                 decision_model.objects.complete_retained_resolution(decision_id)
-                return {"resolved": 1}
-        decision = (
-            decision_model.objects.lock_if_supported()
-            .select_related("step_run", "step_run__run", "step_run__step")
-            .filter(pk=decision_id)
-            .first()
-        )
-        if decision is None or decision.verdict != VERDICT_PENDING or decision.attempts != attempt:
-            return {"resolved": 0}
-        if verdict == VERDICT_ESCALATED and (decision.escalate_at is None or decision.escalate_at > timestamp):
-            return {"resolved": 0}
-        if verdict == VERDICT_EXPIRED and (decision.expires_at is None or decision.expires_at > timestamp):
-            return {"resolved": 0}
-        if verdict == VERDICT_ESCALATED:
-            _write_decision_relationships(decision, escalation=_escalation_subjects(decision))
-        decision.resolve(verdict, resolution={}, resolved_by=resolved_by)
-        _apply_decision_policy(decision.step_run)
-        run_id = decision.step_run.run_id
-        transaction.on_commit(lambda run_id=run_id: enqueue_advance(run_id))
-    return {"resolved": 1}
+                return {"resolved": 0}
+            if verdict == VERDICT_ESCALATED:
+                _write_decision_relationships(decision, escalation=_escalation_subjects(decision))
+            _apply_decision_policy(decision.step_run)
+            _model("WorkflowDispatch").objects.schedule_advance(
+                decision.step_run.run, available_at=timestamp
+            )
+            transaction.on_commit(enqueue_dispatch_publisher)
+            decision_model.objects.complete_retained_resolution(decision_id)
+            return {"resolved": 1}
 
 
 def _escalation_subjects(decision: Any) -> tuple[str, ...]:
@@ -1771,38 +1480,29 @@ def _expire_pending_decisions(step_run: Any, *, resolved_by: str) -> int:
     """Expire pending decisions attached to one step-run."""
 
     decision_model = _model("Decision")
-    if _is_retained_step_run(step_run):
-        pending = decision_model.objects.filter(
-            step_run_id=step_run.pk,
-            suspension_attempt_id=step_run.current_attempt_id,
-            verdict=VERDICT_PENDING,
-        )
-        pending_count = pending.count()
-        pending_id = pending.order_by("priority", "pk").values_list("pk", flat=True).first()
-        if pending_id is None:
-            return 0
-        with decision_model.objects._resolution_owner(pending_id):
-            decision = decision_model.objects.expire_retained_suspension(
-                pending_id, resolved_by=resolved_by
-            )
-            if decision is None:
-                decision_model.objects.complete_retained_resolution(pending_id)
-                return 0
-            _apply_decision_policy(decision.step_run)
-            _model("WorkflowDispatch").objects.schedule_advance(
-                decision.step_run.run, available_at=timezone.now()
-            )
-            transaction.on_commit(enqueue_dispatch_publisher)
-            decision_model.objects.complete_retained_resolution(pending_id)
-        return pending_count
-    pending = list(
-        decision_model.objects.lock_if_supported().filter(
-            step_run=step_run, verdict=VERDICT_PENDING
-        )
+    pending = decision_model.objects.filter(
+        step_run_id=step_run.pk,
+        suspension_attempt_id=step_run.current_attempt_id,
+        verdict=VERDICT_PENDING,
     )
-    for decision in pending:
-        decision.resolve(VERDICT_EXPIRED, resolution={}, resolved_by=resolved_by)
-    return len(pending)
+    pending_count = pending.count()
+    pending_id = pending.order_by("priority", "pk").values_list("pk", flat=True).first()
+    if pending_id is None:
+        return 0
+    with decision_model.objects._resolution_owner(pending_id):
+        decision = decision_model.objects.expire_retained_suspension(
+            pending_id, resolved_by=resolved_by
+        )
+        if decision is None:
+            decision_model.objects.complete_retained_resolution(pending_id)
+            return 0
+        _apply_decision_policy(decision.step_run)
+        _model("WorkflowDispatch").objects.schedule_advance(
+            decision.step_run.run, available_at=timezone.now()
+        )
+        transaction.on_commit(enqueue_dispatch_publisher)
+        decision_model.objects.complete_retained_resolution(pending_id)
+    return pending_count
 
 
 def _activate_run_if_needed(run: Any, *, timestamp: datetime) -> None:
@@ -1900,10 +1600,7 @@ def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
             if not _expand_retained_map_step(run, step_run, timestamp=timestamp):
                 return False
         if step_run.status == StepRunStatus.WAITING:
-            if step_run.is_retained:
-                if not _complete_retained_map_step_if_ready(run, step_run, timestamp=timestamp):
-                    return False
-            elif not _complete_map_step_if_ready(run, step_run):
+            if not _complete_retained_map_step_if_ready(run, step_run, timestamp=timestamp):
                 return False
     return True
 
@@ -1951,34 +1648,6 @@ def _complete_retained_map_step_if_ready(
         expansion_attempt_id=expansion_id,
         at=timestamp,
     )
-    return True
-
-
-def _complete_map_step_if_ready(run: Any, step_run: Any) -> bool:
-    state = dict(step_run.resume_state.get("map", {}))
-    target_id = state.get("target_step_id")
-    items = list(state.get("items", ()))
-    if target_id is None:
-        return True
-    target = _model("Step").objects.get(pk=target_id)
-    children = list(run.step_runs.lock_if_supported().filter(step=target, map_index__gte=0).order_by("map_index"))
-    if len(children) < len(items):
-        if not _map_capacity_allows(run, target=target, items=items):
-            return False
-        _ensure_map_children(run, step_run, target=target, items=items)
-        return True
-    if any(child.status not in StepRunStatus.TERMINAL for child in children):
-        return True
-
-    output = _map_output(children)
-    outcome = "succeeded" if MapStep.policy_passes(step_run.step.config, output) else "failed"
-    updated_state = dict(step_run.resume_state)
-    map_state = dict(updated_state.get("map", {}))
-    map_state["results"] = output["results"]
-    updated_state["map"] = map_state
-    step_run.resume_state = updated_state
-    step_run.save(update_fields=["resume_state", "updated_at"])
-    step_run.mark_succeeded(output=output, outcome=outcome)
     return True
 
 
@@ -2208,7 +1877,7 @@ def _same_step_run(left: Any | None, right: Any | None) -> bool:
     return left is not None and right is not None and left.pk == right.pk
 
 
-def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -> list[int]:
+def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
     locked_rows = list(
         run.step_runs.lock_if_supported()
         .select_related("step", "current_attempt", "current_map_expansion")
@@ -2230,12 +1899,12 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -
             and row.step.step_class == MapStep.key
             and row.map_index == -1
         )
-        and (not retained or run.allows_test_step(row.step))
+        and run.allows_test_step(row.step)
     ]
     if not due:
         return []
     fixture_by_slot: dict[tuple[int, int | None], Any] = {}
-    if retained and run.origin == RunOrigin.TEST:
+    if run.origin == RunOrigin.TEST:
         fixture_by_slot = {
             (fixture.step_id, fixture.item_index): fixture
             for fixture in run.test_fixtures.filter(role=FixtureRole.OUTPUT)
@@ -2265,54 +1934,46 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, retained: bool = False) -
         return claimed
 
     preparations = [
-        (_prepare_attempt_input(run, step_run, source_rows=locked_rows) if retained else None)
+        _prepare_attempt_input(run, step_run, source_rows=locked_rows)
         for step_run in due
     ]
     for step_run, preparation in zip(due, preparations, strict=True):
-        if retained:
-            cause = (
-                AttemptCause.CONTINUATION
-                if step_run.status == StepRunStatus.WAITING
-                else (
-                    AttemptCause.MANUAL_RETRY
-                    if run.origin == RunOrigin.RECOVERY
-                    and run.recovery_source_attempt_id is not None
-                    and run.recovery_source_attempt.step_run.step_id == step_run.step_id
-                    else AttemptCause.INITIAL
-                )
+        cause = (
+            AttemptCause.CONTINUATION
+            if step_run.status == StepRunStatus.WAITING
+            else (
+                AttemptCause.MANUAL_RETRY
+                if run.origin == RunOrigin.RECOVERY
+                and run.recovery_source_attempt_id is not None
+                and run.recovery_source_attempt.step_run.step_id == step_run.step_id
+                else AttemptCause.INITIAL
             )
-            prepared = cast(_AttemptPreparation, preparation)
-            if prepared.failure is not None:
-                _model("StepAttempt").objects.fail_preparation(
-                    step_run,
-                    cause=cause,
-                    input=prepared.input,
-                    map_item=prepared.map_item,
-                    test_fixture=prepared.test_fixture,
-                    result=prepared.failure,
-                    claimed_at=timestamp,
-                    recorded_at=timestamp,
-                )
-                _model("WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
-                claimed.append(step_run.pk)
-                continue
-            attempt_input = prepared.input
-            claim = _model("StepAttempt").objects.claim(
+        )
+        if preparation.failure is not None:
+            _model("StepAttempt").objects.fail_preparation(
                 step_run,
                 cause=cause,
-                input=attempt_input,
-                map_item=prepared.map_item,
-                test_fixture=prepared.test_fixture,
+                input=preparation.input,
+                map_item=preparation.map_item,
+                test_fixture=preparation.test_fixture,
+                result=preparation.failure,
                 claimed_at=timestamp,
+                recorded_at=timestamp,
             )
-            _model("WorkflowDispatch").objects.schedule_execute(claim.attempt)
-        else:
-            step_run.mark_started(heartbeat_at=timestamp, claimed_deliveries=run.deliveries)
+            _model("WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
+            claimed.append(step_run.pk)
+            continue
+        claim = _model("StepAttempt").objects.claim(
+            step_run,
+            cause=cause,
+            input=preparation.input,
+            map_item=preparation.map_item,
+            test_fixture=preparation.test_fixture,
+            claimed_at=timestamp,
+        )
+        _model("WorkflowDispatch").objects.schedule_execute(claim.attempt)
         claimed.append(step_run.pk)
-    if not retained:
-        run.steps_taken += len(claimed)
-        run.save(update_fields=["steps_taken", "updated_at"])
-    elif claimed:
+    if claimed:
         transaction.on_commit(enqueue_dispatch_publisher)
     return claimed
 

@@ -33,7 +33,11 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import AttemptResultKind, DecisionRecordAccess
-from angee.workflows.decision_actions import compile_decision_action_schema
+from angee.workflows.decision_actions import (
+    compile_decision_action_schema,
+    retained_decision_form_schema,
+)
+from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.managers import _retained_record_access_refs
 from angee.workflows.steps import DecisionSpec, HandlerStep, StepResult
 from tests.conftest import SchemaAddon, execute_schema, result_data
@@ -44,6 +48,7 @@ from tests.workflows import (
     Decision,
     StepRun,
     Workflow,
+    WorkflowDispatch,
     WorkflowRun,
     advance_once,
     execute_started,
@@ -1123,11 +1128,27 @@ def test_escalation_timeout_writes_tuple_and_routes_escalated(
     run = _open_gate_run(workflow, now=now)
     decision = _decision_for(run, "gate")
 
-    engine.escalate_decision(decision.pk, decision.attempts + 1, now=now + timedelta(minutes=10))
+    with system_context(reason="test workflows read escalation dispatch"):
+        dispatch = WorkflowDispatch.objects.get(
+            decision=decision,
+            kind=WorkflowDispatchKind.DECISION_ESCALATE,
+        )
+    with pytest.raises(ValidationError, match="durable intent"):
+        engine.escalate_decision_dispatch(
+            dispatch.pk,
+            expected_decision_id=decision.pk,
+            expected_generation=decision.attempts + 1,
+            now=now + timedelta(minutes=10),
+        )
     _refresh_decision(decision)
     assert decision.verdict == workflow_models.Verdict.PENDING
 
-    engine.escalate_decision(decision.pk, decision.attempts, now=now + timedelta(minutes=10))
+    engine.escalate_decision_dispatch(
+        dispatch.pk,
+        expected_decision_id=decision.pk,
+        expected_generation=decision.attempts,
+        now=now + timedelta(minutes=10),
+    )
     _refresh_decision(decision)
     gate = _step_run(run, "gate")
     assert decision.verdict == workflow_models.Verdict.ESCALATED
@@ -1153,7 +1174,17 @@ def test_expiry_timeout_routes_expired(
     run = _open_gate_run(workflow, now=now)
     decision = _decision_for(run, "gate")
 
-    engine.expire_decision(decision.pk, decision.attempts, now=now + timedelta(minutes=10))
+    with system_context(reason="test workflows read expiry dispatch"):
+        dispatch = WorkflowDispatch.objects.get(
+            decision=decision,
+            kind=WorkflowDispatchKind.DECISION_EXPIRE,
+        )
+    engine.expire_decision_dispatch(
+        dispatch.pk,
+        expected_decision_id=decision.pk,
+        expected_generation=decision.attempts,
+        now=now + timedelta(minutes=10),
+    )
 
     _refresh_decision(decision)
     gate = _step_run(run, "gate")
@@ -1366,9 +1397,10 @@ def test_decision_schema_is_exposed_narrowly_on_public_and_console_decisions(
         _execute(_schema("console"), query, {"id": str(schema_less_decision.sqid)}, user=admin)
     )
 
-    assert public_schema["workflow_decisions_by_pk"]["decision_schema"] == decision_schema
+    expected_schema = retained_decision_form_schema(decision_schema)
+    assert public_schema["workflow_decisions_by_pk"]["decision_schema"] == expected_schema
     assert public_schema_less["workflow_decisions_by_pk"]["decision_schema"] is None
-    assert console_schema["workflow_decisions_by_pk"]["decision_schema"] == decision_schema
+    assert console_schema["workflow_decisions_by_pk"]["decision_schema"] == expected_schema
     assert console_schema_less["workflow_decisions_by_pk"]["decision_schema"] is None
 
 

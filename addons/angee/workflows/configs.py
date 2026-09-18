@@ -28,13 +28,6 @@ class RetryConfig(BaseModel):
     max_attempts: int = Field(default=1, ge=1)
     backoff: RetryBackoffConfig = Field(default_factory=RetryBackoffConfig)
 
-    @field_validator("backoff", mode="before")
-    @classmethod
-    def scalar_backoff_is_wait(cls, value: Any) -> Any:
-        """Normalize the legacy scalar delay without changing its meaning."""
-
-        return {"wait": value} if not isinstance(value, dict) else value
-
 
 class WorkflowStepConfig(BaseModel):
     """Common execution settings accepted by every typed workflow operation."""
@@ -42,13 +35,6 @@ class WorkflowStepConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     retry: RetryConfig | None = None
-
-    @field_validator("retry", mode="before")
-    @classmethod
-    def empty_retry_is_absent(cls, value: Any) -> Any:
-        """Preserve the legacy empty retry spellings as no retry override."""
-
-        return None if value in (None, "", False) else value
 
 
 class WaitConfig(WorkflowStepConfig):
@@ -100,16 +86,12 @@ class GateConfig(WorkflowStepConfig):
 
     @model_validator(mode="before")
     @classmethod
-    def normalize_legacy_assignees(cls, value: Any) -> Any:
+    def default_slot_priorities(cls, value: Any) -> Any:
+        """Use declared seat order when a slot omits its priority."""
+
         if not isinstance(value, dict):
             return value
         normalized = dict(value)
-        legacy_assignees = normalized.pop("assignees", None)
-        if normalized.get("slots") is None and legacy_assignees is not None:
-            normalized.pop("slots", None)
-            normalized["slots"] = [
-                {"assignees": [subject]} for subject in legacy_assignees
-            ]
         slots = normalized.get("slots")
         if isinstance(slots, list):
             normalized["slots"] = [
@@ -140,23 +122,12 @@ class GateConfig(WorkflowStepConfig):
 
 
 class MapConfig(WorkflowStepConfig):
-    """Map configuration with its legacy expression-or-literal item source."""
+    """Map configuration with an expression-or-literal item source."""
 
     target_step: NonBlankString
     items: str | list[Any] = Field(json_schema_extra={"widget": "json"})
     min_success_ratio: float | None = Field(default=None, ge=0, le=1)
     all_must_succeed: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_min_success(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        normalized = dict(value)
-        legacy_ratio = normalized.pop("min_success", None)
-        if "min_success_ratio" not in normalized and legacy_ratio is not None:
-            normalized["min_success_ratio"] = legacy_ratio
-        return normalized
 
     @field_validator("min_success_ratio", mode="before")
     @classmethod

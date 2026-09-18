@@ -581,27 +581,6 @@ export const WorkflowAttemptPayloadDocument = graphql(`
   }
 `);
 
-export const WorkflowLegacyExecutionPayloadDocument = graphql(`
-  query WorkflowLegacyExecutionPayload(
-    $run: String!
-    $execution: String!
-    $includeInput: Boolean!
-    $includeOutput: Boolean!
-    $includeFailure: Boolean!
-  ) {
-    workflow_step_runs(
-      where: {id: {_eq: $execution}, run: {_eq: $run}}
-      limit: 1
-    ) {
-      id
-      input @include(if: $includeInput)
-      output @include(if: $includeOutput)
-      error @include(if: $includeFailure)
-      stacktrace @include(if: $includeFailure)
-    }
-  }
-`);
-
 export const WorkflowInspectionSelectionDocument = graphql(`
   query WorkflowInspectionSelection($run: String!, $execution: String!, $attempt: String!) {
     workflow_step_runs(

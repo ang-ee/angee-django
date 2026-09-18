@@ -2174,14 +2174,6 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.waiting_kind = cast(WaitingKind, "")
         self._transition_fields = {"heartbeat_at", "claimed_deliveries", "waiting_kind"}
 
-    def record_attempt(self, *, heartbeat_at: Any = None) -> None:
-        """Record one implementation invocation for this started row."""
-
-        self.attempt += 1
-        if heartbeat_at is not None:
-            self.heartbeat_at = heartbeat_at
-        self.save(update_fields=["attempt", "heartbeat_at", "updated_at"])
-
     @transition(status, source=StepRunStatus.STARTED, target=StepRunStatus.WAITING, on_success=save_state)
     def mark_waiting(
         self,

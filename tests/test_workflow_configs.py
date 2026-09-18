@@ -1,4 +1,4 @@
-"""Compatibility tests for built-in workflow operation configuration."""
+"""Tests for canonical built-in workflow operation configuration."""
 
 from __future__ import annotations
 
@@ -26,10 +26,10 @@ def normalized_twice(step: type[WaitStep | GateStep | MapStep], config: dict[str
     return first
 
 
-def test_wait_config_preserves_timer_and_legacy_scalar_retry() -> None:
+def test_wait_config_preserves_timer_and_retry_backoff() -> None:
     normalized = normalized_twice(
         WaitStep,
-        {"until": "2030-01-02T03:04:05Z", "retry": {"max_attempts": 3, "backoff": 7}},
+        {"until": "2030-01-02T03:04:05Z", "retry": {"max_attempts": 3, "backoff": {"wait": 7}}},
     )
 
     assert normalized["until"] == "2030-01-02T03:04:05Z"
@@ -40,11 +40,11 @@ def test_wait_config_preserves_timer_and_legacy_scalar_retry() -> None:
     assert retry_policy_from_config(normalized).wait == 7
 
 
-def test_gate_config_preserves_dynamic_payload_and_normalizes_legacy_seats() -> None:
-    legacy = {
+def test_gate_config_preserves_dynamic_payload_and_defaults_seat_priorities() -> None:
+    config = {
         "policy": "all_success",
         "action": "approve-note",
-        "assignees": ["auth/user:1", "auth/group:2#member"],
+        "slots": [{"assignees": ["auth/user:1"]}, {"assignees": ["auth/group:2#member"]}],
         "payload": {"nested": [1, {"kept": True}]},
         "requester": "auth/user:3",
         "escalation": ["auth/user:4"],
@@ -53,14 +53,14 @@ def test_gate_config_preserves_dynamic_payload_and_normalizes_legacy_seats() -> 
         "decision_schema": {"type": "object", "properties": {"reason": {"type": "string"}}},
         "retry": {"backoff": {"linear_wait": 4}},
     }
-    normalized = normalized_twice(GateStep, legacy)
+    normalized = normalized_twice(GateStep, config)
 
     assert normalized["slots"] == [
         {"assignees": ["auth/user:1"], "priority": 0, "requester": "", "escalation": None},
         {"assignees": ["auth/group:2#member"], "priority": 1, "requester": "", "escalation": None},
     ]
-    assert normalized["payload"] == legacy["payload"]
-    assert normalized["decision_schema"] == legacy["decision_schema"]
+    assert normalized["payload"] == config["payload"]
+    assert normalized["decision_schema"] == config["decision_schema"]
     assert normalized["max_attempts"] == 2
 
 
@@ -120,24 +120,24 @@ def test_step_canonical_config_projects_legacy_gate_without_rewriting_row(workfl
 def test_map_config_preserves_expression_and_literal_item_variants(items: object) -> None:
     normalized = normalized_twice(
         MapStep,
-        {"target_step": "publish", "items": items, "min_success": "0.5", "all_must_succeed": False},
+        {"target_step": "publish", "items": items, "min_success_ratio": "0.5", "all_must_succeed": False},
     )
 
     assert normalized["items"] == items
     assert normalized["min_success_ratio"] == 0.5
     assert "min_success" not in normalized
 
-    both = normalized_twice(
-        MapStep,
-        {"target_step": "publish", "items": items, "min_success_ratio": 0.75, "min_success": 0.25},
-    )
-    assert both["min_success_ratio"] == 0.75
-
 
 @pytest.mark.parametrize(
     ("step", "config"),
     [
         (WaitStep, {"until": "not-a-date"}),
+        (WaitStep, {"until": "2030-01-02T03:04:05Z", "retry": {"backoff": 7}}),
+        (WaitStep, {"until": "2030-01-02T03:04:05Z", "retry": ""}),
+        (WaitStep, {"until": "2030-01-02T03:04:05Z", "retry": False}),
+        (GateStep, {"action": "approve", "assignees": ["auth/user:1"]}),
+        (MapStep, {"target_step": "publish", "items": [1], "min_success": 0.5}),
+        (MapStep, {"target_step": "publish", "items": [1], "min_success_ratio": 0.75, "min_success": 0.25}),
         (GateStep, {"action": "approve", "slots": []}),
         (MapStep, {"target_step": "publish", "items": []}),
         (WaitStep, {"until": "2030-01-02T03:04:05Z", "unknown": True}),
@@ -173,11 +173,11 @@ def test_builtin_operations_own_their_typed_models() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_reapplying_legacy_config_does_not_publish_a_new_version(workflow_tables: None) -> None:
+def test_reapplying_canonical_config_does_not_publish_a_new_version(workflow_tables: None) -> None:
     """Stable normalization keeps a no-op resource-style reload from versioning again."""
 
     del workflow_tables
-    legacy = {"until": "2030-01-02T03:04:05Z", "retry": {"max_attempts": 2, "backoff": 3}}
+    config = {"until": "2030-01-02T03:04:05Z", "retry": {"max_attempts": 2, "backoff": {"wait": 3}}}
     with system_context(reason="test stable workflow config normalization"):
         workflow = Workflow.objects.create(name="Stable typed config")
         step = Step.objects.create(
@@ -185,14 +185,14 @@ def test_reapplying_legacy_config_does_not_publish_a_new_version(workflow_tables
             key="wait",
             name="Wait",
             step_class="wait",
-            config=legacy,
+            config=config,
             is_entry=True,
         )
         first = workflow.publish_if_changed()
         assert first is not None
 
-        step.config = legacy
+        step.config = config
         step.save(update_fields={"config", "updated_at"})
 
         assert workflow.publish_if_changed() is None
-    assert step.config == WaitStep.normalize_config(legacy)
+    assert step.config == WaitStep.normalize_config(config)

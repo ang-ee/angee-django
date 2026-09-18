@@ -1871,7 +1871,7 @@ def test_map_item_fixture_is_captured_on_real_body_attempt(
     with system_context(reason="claim node body fixture"):
         with transaction.atomic():
             locked = WorkflowRun.objects.select_for_update().get(pk=run.pk)
-            claimed = engine._claim_due_steps(locked, timestamp=timezone.now(), retained=True)
+            claimed = engine._claim_due_steps(locked, timestamp=timezone.now())
         assert len(claimed) == 1
         attempt = StepAttempt.objects.get(step_run__run=run, cause=AttemptCause.INITIAL)
         assert attempt.test_fixture.role == FixtureRole.MAP_ITEM

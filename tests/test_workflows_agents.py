@@ -279,7 +279,7 @@ def test_agent_step_debits_token_usage_into_run_budget_spent(
 
 
 @pytest.mark.parametrize(
-    "axis,ceiling", [("tokens", 4), ("prompt_tokens", 1), ("completion_tokens", 2), ("total_tokens", 4)]
+    "axis,ceiling", [("tokens", 4), ("input_tokens", 1), ("output_tokens", 2)]
 )
 def test_budget_ceiling_fails_run_via_engine(
     workflows_agents_tables: None,
@@ -349,9 +349,12 @@ def test_replay_does_not_reinvoke_completed_agent_step(
     )
     run = start_run(workflow)
     row = advance_once(run)[0]
+    with system_context(reason="test workflows capture agent dispatch"):
+        attempt = row.current_attempt
+        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
 
     execute_started(run)
-    engine.execute(row.pk)
+    engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)
     engine.advance(run.pk)
     engine.advance(run.pk)
 
@@ -1015,8 +1018,11 @@ def test_one_shot_journals_native_tool_response_and_uses_agent_credential(
     )
     run = start_run(workflow)
     row = advance_once(run)[0]
+    with system_context(reason="test workflows capture native agent dispatch"):
+        attempt = row.current_attempt
+        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
     execute_started(run)
-    engine.execute(row.pk)
+    engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)
     row.refresh_from_db()
     assert row.outcome == "completed"
     assert len(calls) == 1
