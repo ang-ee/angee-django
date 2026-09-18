@@ -178,9 +178,12 @@ export function GroupedListBody<TRow extends Row>({
           </TableHeader>
           <TableBody>
             {fetching && listItems.length === 0 ? (
+              // The grouped colgroup/header always reserve the leading chevron
+              // column, so the first-page skeleton keeps its leading cell too
+              // (default `selectable`) regardless of the list's selection mode —
+              // matching the per-group leaf skeleton below.
               <ListSkeletonRows
                 table={table}
-                selectable={selectable}
                 trailingColumn={hasRowActions}
                 loadingLabel={t("list.loading")}
               />
@@ -243,6 +246,9 @@ export function GroupedListBody<TRow extends Row>({
               measures={measures}
               aggregate={footerAggregate}
               selectable={selectable}
+              // Grouped colgroup reserves the leading column on every row; keep the
+              // footer's leading cell (and its total label) even when not selectable.
+              reserveLeadingColumn
               labelInSelectionColumn
               trailingColumn={hasRowActions}
             />
@@ -332,6 +338,10 @@ function GroupedItemRow<TRow extends Row>({
           selected={Boolean(resourceView.state.rowSelection[item.row.id])}
           onToggleSelected={resourceView.toggleSelectedId}
           selectable={selectable}
+          // The grouped colgroup/header reserve a leading chevron column on every
+          // row, so a record row must keep it even when selection is off — else its
+          // cells slide left into the 32px column under `table-fixed`.
+          reserveLeadingColumn
           interactive={interactive}
           rowHref={rowHref ? (row) => rowHref(row, item.nav) : undefined}
           onRowClick={onRowClick}
