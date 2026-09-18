@@ -10,7 +10,7 @@ import {
   type SchemaFieldMetadata,
 } from "./artifact";
 import { useSchemaFieldMetadata } from "./context";
-import { refineResourceName } from "./resources";
+import { refineResourceIdentifier } from "./resources";
 
 export interface ResourceInvalidationTarget {
   resource: string;
@@ -32,7 +32,7 @@ export function resourceInvalidationTargets(
       );
     }
     return {
-      resource: refineResourceName(resource),
+      resource: refineResourceIdentifier(resource),
       dataProviderName: resource.schemaName,
     };
   });
