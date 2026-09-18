@@ -29,12 +29,10 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import PermissionDenied, SubjectRef, current_actor, system_context
 from rebac.actors import to_subject_ref
 from rebac.backends import backend as rebac_backend
-from rebac.relationships import write_relationships
 from rebac.resources import to_object_ref
-from rebac.types import RelationshipTuple
 
 from angee.base.actors import actor_user_id
-from angee.base.identity import canonical_subject_ref, instance_from_public_id
+from angee.base.identity import instance_from_public_id
 from angee.base.refs import CanonicalRecordTarget, canonical_record_target
 from angee.base.scoping import read_scoped_queryset
 from angee.workflows.attempts import (
@@ -137,7 +135,7 @@ def start(
     entering this system transaction.
     """
 
-    run_model = _model("WorkflowRun")
+    run_model = apps.get_model("workflows", "WorkflowRun")
     return run_model.objects.start(
         workflow,
         subject,
@@ -157,7 +155,7 @@ def recover(
 ) -> Any:
     """Start or recover one exact same-revision retained recovery request."""
 
-    return _model("WorkflowRun").objects.start_recovery(
+    return apps.get_model("workflows", "WorkflowRun").objects.start_recovery(
         source_attempt,
         request_key=request_key,
         actor=actor,
@@ -175,8 +173,8 @@ def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     """
 
     timestamp = now or timezone.now()
-    run_model = _model("WorkflowRun")
-    step_run_model = _model("StepRun")
+    run_model = apps.get_model("workflows", "WorkflowRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
     woken = 0
     with system_context(reason="workflows.engine.deliver"), transaction.atomic():
         run = run_model.objects.lock_if_supported().get(pk=run_id)
@@ -190,11 +188,11 @@ def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
             .order_by("pk")
         )
         for step_run in waiting:
-            _model("StepAttempt").objects.wake_current(step_run.pk, at=timestamp)
+            apps.get_model("workflows", "StepAttempt").objects.wake_current(step_run.pk, at=timestamp)
             woken += 1
         if run.status == RunStatus.WAITING and waiting:
             run.resume()
-        _model("WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
         transaction.on_commit(enqueue_dispatch_publisher)
     return {"woken": woken}
 
@@ -205,7 +203,7 @@ def subscribe_external(step_run: Any, resources: Iterable[Any]) -> None:
     lease_token = getattr(step_run, "_workflow_invocation_lease_token", None)
     if step_run.current_attempt_id is None or not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("External subscription requires a retained invocation lease.")
-    _model("StepAttempt").objects.subscribe_external(
+    apps.get_model("workflows", "StepAttempt").objects.subscribe_external(
         step_run.current_attempt_id, lease_token=lease_token, resources=resources,
     )
 
@@ -213,7 +211,7 @@ def subscribe_external(step_run: Any, resources: Iterable[Any]) -> None:
 def schedule_artifact_delivery(resource: Any) -> Any:
     """Keep a domain event in its native transaction without locking a run."""
 
-    return _model("WorkflowDispatch").objects.schedule_artifact_delivery(resource)
+    return apps.get_model("workflows", "WorkflowDispatch").objects.schedule_artifact_delivery(resource)
 
 
 def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str, int]:
@@ -226,10 +224,10 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
 
     timestamp = now or timezone.now()
     target = resource if isinstance(resource, CanonicalRecordTarget) else canonical_record_target(resource)
-    run_model = _model("WorkflowRun")
-    step_run_model = _model("StepRun")
-    artifact_model = _model("StepArtifact")
-    subscription_model = _model("StepExternalSubscription")
+    run_model = apps.get_model("workflows", "WorkflowRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
+    artifact_model = apps.get_model("workflows", "StepArtifact")
+    subscription_model = apps.get_model("workflows", "StepExternalSubscription")
     woken = 0
     delivered_run_ids: list[int] = []
     with system_context(reason="workflows.engine.deliver_artifact"), transaction.atomic():
@@ -240,7 +238,7 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
             attempt__step_run__status=StepRunStatus.WAITING,
             attempt__step_run__waiting_kind=WaitingKind.EXTERNAL,
         ).order_by().values_list("attempt__step_run_id", flat=True).distinct())
-        attempt_model = _model("StepAttempt")
+        attempt_model = apps.get_model("workflows", "StepAttempt")
         subscribed_attempt_ids = set(subscription_model.objects.filter(
             target_content_type_id=target.content_type.pk,
             target_object_id=target.object_id,
@@ -303,7 +301,7 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
             if run.status == RunStatus.WAITING:
                 run.resume()
             delivered_run_ids.append(run_id)
-            _model("WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
+            apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
         if delivered_run_ids:
             transaction.on_commit(enqueue_dispatch_publisher)
     return {"runs": len(delivered_run_ids), "woken": woken}
@@ -313,7 +311,7 @@ def deliver_artifact_dispatch(dispatch_id: int, *, now: datetime | None = None) 
     """Consume one committed domain intent and deliver to current subscribers."""
 
     timestamp = now or timezone.now()
-    dispatch_model = _model("WorkflowDispatch")
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     with system_context(reason="workflows.engine.deliver_artifact_dispatch"), transaction.atomic():
         with dispatch_model.objects._owner_transition(
             dispatch_id=dispatch_id, lease_token=None, at=timestamp, using=dispatch_model.objects.db,
@@ -337,7 +335,7 @@ def deliver_artifact_dispatch(dispatch_id: int, *, now: datetime | None = None) 
 def cancel_child_dispatch(dispatch_id: int, *, expected_child_id: int | None = None) -> dict[str, int]:
     """Deliver an owned-child cancel after the parent is terminal, with parent-first locks."""
 
-    dispatch_model = _model("WorkflowDispatch")
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     canceled = 0
     with system_context(reason="workflows.engine.child_cancel_dispatch"), transaction.atomic():
         with dispatch_model.objects._owner_transition(
@@ -350,7 +348,7 @@ def cancel_child_dispatch(dispatch_id: int, *, expected_child_id: int | None = N
                 expected_child_id is not None and expected_child_id != envelope.target_id
             ):
                 raise ValidationError({"dispatch": "Owned-child cancellation envelope changed."})
-            child = _model("WorkflowRun").objects.get(pk=envelope.target_id)
+            child = apps.get_model("workflows", "WorkflowRun").objects.get(pk=envelope.target_id)
             if child.parent_relation != "owned_call":
                 raise ValidationError({"child": "Cancellation target is no longer an owned child."})
             if child.status not in RunStatus.TERMINAL:
@@ -368,7 +366,7 @@ def schedule_run_cancel(
 ) -> tuple[Any, bool]:
     """Retain one cross-run cancellation from this fenced database command."""
 
-    return _model("WorkflowDispatch").objects.schedule_run_cancel(
+    return apps.get_model("workflows", "WorkflowDispatch").objects.schedule_run_cancel(
         step_run.pk,
         run,
         actor=actor,
@@ -378,7 +376,7 @@ def schedule_run_cancel(
 def cancel_run_dispatch(dispatch_id: int, *, expected_run_id: int | None = None) -> dict[str, int]:
     """Cancel one exact run, then publish its committed terminal state."""
 
-    dispatch_model = _model("WorkflowDispatch")
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     canceled = 0
     timestamp = timezone.now()
     with system_context(reason="workflows.engine.run_cancel_dispatch"), transaction.atomic():
@@ -395,7 +393,7 @@ def cancel_run_dispatch(dispatch_id: int, *, expected_run_id: int | None = None)
                 expected_run_id is not None and expected_run_id != envelope.target_id
             ):
                 raise ValidationError({"dispatch": "Run cancellation envelope changed."})
-            run = _model("WorkflowRun").objects.get(pk=envelope.target_id)
+            run = apps.get_model("workflows", "WorkflowRun").objects.get(pk=envelope.target_id)
             if run.status not in RunStatus.TERMINAL:
                 cancel(run)
                 canceled = 1
@@ -408,10 +406,10 @@ def advance(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     """Create and synchronously consume one durable orchestration pulse."""
 
     timestamp = now or timezone.now()
-    run_model = _model("WorkflowRun")
+    run_model = apps.get_model("workflows", "WorkflowRun")
     with system_context(reason="workflows.engine.advance.schedule"), transaction.atomic():
         run = run_model.objects.get(pk=run_id)
-        dispatch = _model("WorkflowDispatch").objects.schedule_advance(
+        dispatch = apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
             run, available_at=timestamp
         )
     return advance_dispatch(dispatch.pk, expected_run_id=run_id, now=timestamp)
@@ -423,7 +421,7 @@ def advance_dispatch(
     """Apply one durable ADVANCE delivery through its exact owner preflight."""
 
     timestamp = now or timezone.now()
-    dispatch_model = _model("WorkflowDispatch")
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     admitted = False
     try:
         with system_context(reason="workflows.engine.advance_dispatch"), transaction.atomic():
@@ -437,7 +435,7 @@ def advance_dispatch(
                 if preflight.envelope.kind != WorkflowDispatchKind.ADVANCE:
                     raise ValidationError({"dispatch": "ADVANCE envelope kind does not match its durable intent."})
                 admitted = True
-                run = _model("WorkflowRun").objects.select_related("workflow").get(
+                run = apps.get_model("workflows", "WorkflowRun").objects.select_related("workflow").get(
                     pk=preflight.envelope.target_id
                 )
                 claimed_ids: list[int] = []
@@ -487,7 +485,7 @@ def consume_decision_resolution(
     lease_token = getattr(consumer_step_run, "_workflow_invocation_lease_token", None)
     if not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("Decision consumption requires the active fenced invocation lease.")
-    return _model("StepAttempt").objects.consume_decision_resolution(
+    return apps.get_model("workflows", "StepAttempt").objects.consume_decision_resolution(
         consumer_step_run.pk,
         resolution_path,
         lease_token=lease_token,
@@ -509,7 +507,7 @@ def admitted_continuation_child(
     lease_token = getattr(consumer_step_run, "_workflow_invocation_lease_token", None)
     if not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("Continuation result requires the active fenced invocation lease.")
-    return _model("StepAttempt").objects.admitted_continuation_child(
+    return apps.get_model("workflows", "StepAttempt").objects.admitted_continuation_child(
         consumer_step_run.pk, lease_token=lease_token,
         child_id_path=child_id_path, expected_starter_class=expected_starter_class,
     )
@@ -527,7 +525,7 @@ def admitted_continuation_completion(
     lease_token = getattr(consumer_step_run, "_workflow_invocation_lease_token", None)
     if not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("Continuation completion requires the active fenced invocation lease.")
-    return _model("StepAttempt").objects.admitted_continuation_completion(
+    return apps.get_model("workflows", "StepAttempt").objects.admitted_continuation_completion(
         consumer_step_run.pk,
         lease_token=lease_token,
         child_id_path=child_id_path,
@@ -545,7 +543,7 @@ def target_read_authority(
     lease_token = getattr(consumer_step_run, "_workflow_invocation_lease_token", None)
     if not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("Target authority requires the active fenced invocation lease.")
-    return _model("StepAttempt").objects.target_read_authority(
+    return apps.get_model("workflows", "StepAttempt").objects.target_read_authority(
         consumer_step_run.pk, lease_token=lease_token,
         authority_path=authority_path, proposal_gate_path=proposal_gate_path,
     )
@@ -557,8 +555,8 @@ def execute_dispatch(
     """Execute one exact retained attempt after atomic dispatch and lease admission."""
 
     timestamp = now or timezone.now()
-    dispatch_model = _model("WorkflowDispatch")
-    attempt_model = _model("StepAttempt")
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
+    attempt_model = apps.get_model("workflows", "StepAttempt")
     with system_context(reason="workflows.engine.execute_dispatch.admit"), transaction.atomic():
         with dispatch_model.objects._owner_transition(
             dispatch_id=dispatch_id,
@@ -638,7 +636,7 @@ def execute_dispatch(
             successor = attempt_model.objects.get(pk=finalization.retry_intent.attempt_id)
             dispatch_model.objects.schedule_execute(successor)
         for intent in finalization.timer_intents:
-            decision = _model("Decision").objects.get(pk=intent.decision_id)
+            decision = apps.get_model("workflows", "Decision").objects.get(pk=intent.decision_id)
             kind = (
                 WorkflowDispatchKind.DECISION_ESCALATE
                 if intent.kind.value == "escalate"
@@ -646,7 +644,7 @@ def execute_dispatch(
             )
             dispatch_model.objects.schedule_decision(kind, decision)
         if finalization.recorded and finalization.applied and finalization.retry_intent is None:
-            projected = _model("StepRun").objects.select_related("run").get(pk=attempt.step_run_id)
+            projected = apps.get_model("workflows", "StepRun").objects.select_related("run").get(pk=attempt.step_run_id)
             dispatch_model.objects.schedule_advance(projected.run, available_at=timezone.now())
             if projected.status == StepRunStatus.WAITING and projected.wait_until is not None:
                 dispatch_model.objects.schedule_advance(
@@ -697,8 +695,8 @@ def execute_dispatch(
 def cancel(run: Any) -> None:
     """Cancel a run and commit durable intents for its owned active children."""
 
-    run_model = _model("WorkflowRun")
-    step_run_model = _model("StepRun")
+    run_model = apps.get_model("workflows", "WorkflowRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
     run_id = run.pk if hasattr(run, "pk") else int(run)
     with system_context(reason="workflows.engine.cancel"), transaction.atomic():
         locked = run_model.objects.lock_if_supported().get(pk=run_id)
@@ -711,13 +709,13 @@ def cancel(run: Any) -> None:
         ).order_by("pk"))
         for step_run in step_run_model.objects.lock_if_supported().filter(run=locked).order_by("pk"):
             was_waiting = step_run.status == StepRunStatus.WAITING
-            _model("StepAttempt").objects.cancel_current(step_run.pk, at=timezone.now())
+            apps.get_model("workflows", "StepAttempt").objects.cancel_current(step_run.pk, at=timezone.now())
             if was_waiting:
-                _model("Decision").objects.expire_canceled_suspension(
+                apps.get_model("workflows", "Decision").objects.expire_canceled_suspension(
                     step_run.pk, resolved_by="workflows/cancel"
                 )
         locked.mark_canceled()
-        dispatch_model = _model("WorkflowDispatch")
+        dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
         for child in owned_children:
             dispatch_model.objects.schedule_child_cancel(child)
         if owned_children:
@@ -727,8 +725,8 @@ def cancel(run: Any) -> None:
 def expire_pending_decisions(run: Any, *, resolved_by: str) -> int:
     """Expire every pending decision for ``run`` through the engine owner."""
 
-    run_model = _model("WorkflowRun")
-    step_run_model = _model("StepRun")
+    run_model = apps.get_model("workflows", "WorkflowRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
     run_id = run.pk if hasattr(run, "pk") else int(run)
     expired = 0
     with system_context(reason="workflows.engine.expire_pending_decisions"), transaction.atomic():
@@ -736,7 +734,7 @@ def expire_pending_decisions(run: Any, *, resolved_by: str) -> int:
         step_runs = step_run_model.objects.lock_if_supported().filter(run=locked_run).order_by("pk")
         for step_run in step_runs:
             expired += _expire_pending_decisions(step_run, resolved_by=resolved_by)
-            expired += _model("Decision").objects.expire_orphaned_suspensions(
+            expired += apps.get_model("workflows", "Decision").objects.expire_orphaned_suspensions(
                 step_run.pk, resolved_by=resolved_by
             )
     return expired
@@ -745,15 +743,15 @@ def expire_pending_decisions(run: Any, *, resolved_by: str) -> int:
 def expire_orphaned_decisions(run: Any, *, resolved_by: str) -> int:
     """Expire only pending retained Decisions whose suspension is no longer active."""
 
-    run_model = _model("WorkflowRun")
-    step_run_model = _model("StepRun")
+    run_model = apps.get_model("workflows", "WorkflowRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
     run_id = run.pk if hasattr(run, "pk") else int(run)
     expired = 0
     with system_context(reason="workflows.engine.expire_orphaned_decisions"), transaction.atomic():
         locked_run = run_model.objects.lock_if_supported().get(pk=run_id)
         step_runs = step_run_model.objects.lock_if_supported().filter(run=locked_run).order_by("pk")
         for step_run in step_runs:
-            expired += _model("Decision").objects.expire_orphaned_suspensions(
+            expired += apps.get_model("workflows", "Decision").objects.expire_orphaned_suspensions(
                 step_run.pk, resolved_by=resolved_by
             )
     return expired
@@ -763,7 +761,7 @@ def sweep(*, now: datetime | None = None) -> dict[str, int]:
     """Advance runs whose durable wake time is due."""
 
     timestamp = now or timezone.now()
-    run_model = _model("WorkflowRun")
+    run_model = apps.get_model("workflows", "WorkflowRun")
     with system_context(reason="workflows.engine.sweep"):
         run_ids = list(
             run_model.objects.filter(wake_at__lte=timestamp)
@@ -771,7 +769,7 @@ def sweep(*, now: datetime | None = None) -> dict[str, int]:
             .order_by("pk")
             .values_list("pk", flat=True)
         )
-    dispatch_model = _model("WorkflowDispatch")
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     dispatch_ids: list[int] = []
     with system_context(reason="workflows.engine.sweep.schedule"), transaction.atomic():
         for run_id in run_ids:
@@ -790,7 +788,7 @@ def reap(*, now: datetime | None = None) -> dict[str, int]:
 
     timestamp = now or timezone.now()
     deadline = timestamp - _heartbeat_timeout()
-    step_run_model = _model("StepRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
     reaped = 0
     with system_context(reason="workflows.engine.reap.discover"):
         stale_ids = list(
@@ -806,10 +804,10 @@ def reap(*, now: datetime | None = None) -> dict[str, int]:
     for step_run_id in stale_ids:
         with system_context(reason="workflows.engine.reap"), transaction.atomic():
             step_run = step_run_model.objects.select_related("run").get(pk=step_run_id)
-            if _model("StepAttempt").objects.timeout_current(
+            if apps.get_model("workflows", "StepAttempt").objects.timeout_current(
                 step_run.pk, heartbeat_before=deadline, at=timestamp
             ):
-                _model("WorkflowDispatch").objects.schedule_advance(
+                apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
                     step_run.run, available_at=timestamp
                 )
                 transaction.on_commit(enqueue_dispatch_publisher)
@@ -822,7 +820,7 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
 
     target = _verdict_for_verb(verdict)
     actor_ref = _actor_ref(actor)
-    decision_model = _model("Decision")
+    decision_model = apps.get_model("workflows", "Decision")
     decision_id = decision.pk if hasattr(decision, "pk") else int(decision)
     with system_context(reason="workflows.engine.decide.load"):
         current = decision_model.objects.get(pk=decision_id)
@@ -861,7 +859,7 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
                 decision_model.objects.complete_retained_resolution(decision_id)
                 return DecisionAttemptResult(current)
             _apply_decision_policy(locked.step_run)
-        _model("WorkflowDispatch").objects.schedule_advance(
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
             locked.step_run.run, available_at=timezone.now()
         )
         transaction.on_commit(enqueue_dispatch_publisher)
@@ -898,7 +896,7 @@ def _consume_decision_dispatch(
     expected_generation: int | None, now: datetime | None
 ) -> dict[str, int]:
     timestamp = now or timezone.now()
-    dispatch_model = _model("WorkflowDispatch")
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     with system_context(reason="workflows.engine.decision_dispatch"), transaction.atomic():
         with dispatch_model.objects._owner_transition(
             dispatch_id=dispatch_id, lease_token=None, at=timestamp, using=dispatch_model.objects.db
@@ -930,7 +928,7 @@ def sweep_decisions(*, now: datetime | None = None) -> dict[str, int]:
     """Retain and consume dispatches for pending decisions whose deadlines are due."""
 
     timestamp = now or timezone.now()
-    decision_model = _model("Decision")
+    decision_model = apps.get_model("workflows", "Decision")
     dispatches: list[tuple[int, WorkflowDispatchKind, int, int]] = []
     with system_context(reason="workflows.engine.decision_sweep"), transaction.atomic():
         expired = list(
@@ -944,7 +942,7 @@ def sweep_decisions(*, now: datetime | None = None) -> dict[str, int]:
             .order_by("pk")
             .select_related("step_run__run")
         )
-        dispatch_model = _model("WorkflowDispatch")
+        dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
         for kind, decisions in (
             (WorkflowDispatchKind.DECISION_EXPIRE, expired),
             (WorkflowDispatchKind.DECISION_ESCALATE, escalated),
@@ -974,8 +972,8 @@ def sweep_decisions(*, now: datetime | None = None) -> dict[str, int]:
 def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
     """Cancel active rows, insert an override journal row, and schedule next steps."""
 
-    run_model = _model("WorkflowRun")
-    step_run_model = _model("StepRun")
+    run_model = apps.get_model("workflows", "WorkflowRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
     run_id = run.pk if hasattr(run, "pk") else int(run)
     actor_ref = _actor_ref(actor)
     actor_id = actor_user_id(actor_ref)
@@ -991,10 +989,8 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
         ):
             if step_run.step_id in step_ids:
                 step_run_model.objects.reschedule_for_override(step_run.pk, input={}, at=timezone.now())
-            elif step_run.status == StepRunStatus.SCHEDULED:
-                step_run.mark_canceled()
             else:
-                _model("StepAttempt").objects.cancel_current(step_run.pk, at=timezone.now())
+                apps.get_model("workflows", "StepAttempt").objects.cancel_current(step_run.pk, at=timezone.now())
         override = step_run_model.objects.create(
             run=locked,
             step=None,
@@ -1022,7 +1018,7 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
             row.previous.set([override])
         if locked.status == RunStatus.WAITING:
             locked.resume()
-        dispatch_model = _model("WorkflowDispatch")
+        dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
         dispatch_model.objects.schedule_advance(locked, available_at=timezone.now())
         transaction.on_commit(enqueue_dispatch_publisher)
     return override
@@ -1038,38 +1034,11 @@ def enqueue_advance_at(run_id: int, when: datetime) -> None:
     """Retain a timer wake before asking the transport to publish it."""
 
     with system_context(reason="workflows.engine.schedule_advance"), transaction.atomic():
-        run = _model("WorkflowRun").objects.filter(pk=run_id).first()
+        run = apps.get_model("workflows", "WorkflowRun").objects.filter(pk=run_id).first()
         if run is None:
             return
-        _model("WorkflowDispatch").objects.schedule_advance(run, available_at=when)
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(run, available_at=when)
         transaction.on_commit(enqueue_dispatch_publisher)
-
-
-def _model(name: str) -> type[Any]:
-    """Return a concrete workflows model from the Django app registry."""
-
-    return apps.get_model("workflows", name)
-
-
-def _write_decision_relationships(
-    decision: Any,
-    *,
-    assignees: Iterable[str | SubjectRef] = (),
-    requester: str | SubjectRef = "",
-    escalation: Iterable[str | SubjectRef] = (),
-) -> None:
-    """Write explicit decision relationship tuples through django-zed-rebac."""
-
-    resource = to_object_ref(decision)
-    tuples: list[RelationshipTuple] = []
-    for subject in assignees:
-        tuples.append(RelationshipTuple(resource=resource, relation="assignee", subject=_subject_ref(subject)))
-    if requester:
-        tuples.append(RelationshipTuple(resource=resource, relation="requester", subject=_subject_ref(requester)))
-    for subject in escalation:
-        tuples.append(RelationshipTuple(resource=resource, relation="escalation", subject=_subject_ref(subject)))
-    if tuples:
-        write_relationships(tuples)
 
 
 def _schedule_decision_timers(decision: Any) -> None:
@@ -1077,20 +1046,12 @@ def _schedule_decision_timers(decision: Any) -> None:
 
     if decision.suspension_attempt_id is None:
         raise ValidationError({"decision": "Decision timers require retained suspension evidence."})
-    dispatch_model = _model("WorkflowDispatch")
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     if decision.escalate_at is not None:
         dispatch_model.objects.schedule_decision(WorkflowDispatchKind.DECISION_ESCALATE, decision)
     if decision.expires_at is not None:
         dispatch_model.objects.schedule_decision(WorkflowDispatchKind.DECISION_EXPIRE, decision)
     transaction.on_commit(enqueue_dispatch_publisher)
-
-
-def _subject_ref(subject: str | SubjectRef) -> SubjectRef:
-    """Return a REBAC subject ref from a stored subject spelling."""
-
-    if isinstance(subject, SubjectRef):
-        return subject
-    return canonical_subject_ref(str(subject))
 
 
 def _actor_ref(actor: Any) -> SubjectRef:
@@ -1417,7 +1378,7 @@ def _apply_decision_policy(step_run: Any) -> None:
     outcome = step_run.decision_gate.outcome(decisions)
     if outcome is None:
         return
-    _model("StepRun").objects.settle_retained_decisions(
+    apps.get_model("workflows", "StepRun").objects.settle_retained_decisions(
         step_run.pk,
         outcome=outcome,
         decision_ids=tuple(decision.pk for decision in decisions),
@@ -1435,7 +1396,7 @@ def _resolve_timed_decision(
 ) -> dict[str, int]:
     """Resolve a deadline decision if the attempt and deadline are still current."""
 
-    decision_model = _model("Decision")
+    decision_model = apps.get_model("workflows", "Decision")
     with system_context(reason="workflows.engine.decision_timer"), transaction.atomic():
         discovered = decision_model.objects.filter(pk=decision_id).first()
         if discovered is None:
@@ -1456,10 +1417,8 @@ def _resolve_timed_decision(
             if decision is None:
                 decision_model.objects.complete_retained_resolution(decision_id)
                 return {"resolved": 0}
-            if verdict == VERDICT_ESCALATED:
-                _write_decision_relationships(decision, escalation=_escalation_subjects(decision))
             _apply_decision_policy(decision.step_run)
-            _model("WorkflowDispatch").objects.schedule_advance(
+            apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
                 decision.step_run.run, available_at=timestamp
             )
             transaction.on_commit(enqueue_dispatch_publisher)
@@ -1467,19 +1426,10 @@ def _resolve_timed_decision(
             return {"resolved": 1}
 
 
-def _escalation_subjects(decision: Any) -> tuple[str, ...]:
-    """Return escalation subject refs from the suspended gate config."""
-
-    gate = decision.step_run.resume_state.get("gate")
-    if not isinstance(gate, dict):
-        return ()
-    return tuple(str(subject) for subject in gate.get("escalation", ()) if str(subject))
-
-
 def _expire_pending_decisions(step_run: Any, *, resolved_by: str) -> int:
     """Expire pending decisions attached to one step-run."""
 
-    decision_model = _model("Decision")
+    decision_model = apps.get_model("workflows", "Decision")
     pending = decision_model.objects.filter(
         step_run_id=step_run.pk,
         suspension_attempt_id=step_run.current_attempt_id,
@@ -1497,7 +1447,7 @@ def _expire_pending_decisions(step_run: Any, *, resolved_by: str) -> int:
             decision_model.objects.complete_retained_resolution(pending_id)
             return 0
         _apply_decision_policy(decision.step_run)
-        _model("WorkflowDispatch").objects.schedule_advance(
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
             decision.step_run.run, available_at=timezone.now()
         )
         transaction.on_commit(enqueue_dispatch_publisher)
@@ -1559,7 +1509,7 @@ def _process_recovery_map_aggregate(run: Any, *, timestamp: datetime) -> None:
     ).first()
     if recovered is None or recovered.status != StepRunStatus.SUCCEEDED:
         return
-    _model("StepAttempt").objects.record_recovery_map_aggregate(
+    apps.get_model("workflows", "StepAttempt").objects.record_recovery_map_aggregate(
         recovered.pk, at=timestamp,
     )
 
@@ -1590,10 +1540,10 @@ def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
                 else None
             )
             if fixture is not None:
-                _model("StepAttempt").objects.record_test_fixture(
+                apps.get_model("workflows", "StepAttempt").objects.record_test_fixture(
                     fixture, at=timestamp, due_step_run_id=step_run.pk
                 )
-                _model("WorkflowDispatch").objects.schedule_advance(
+                apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
                     run, available_at=timestamp
                 )
                 continue
@@ -1608,15 +1558,15 @@ def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
 def _expand_retained_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> bool:
     """Retain one Map expansion generation before exposing any body slot."""
 
-    recorded = _model("StepAttempt").objects.record_map_expansion(step_run, at=timestamp)
+    recorded = apps.get_model("workflows", "StepAttempt").objects.record_map_expansion(step_run, at=timestamp)
     if recorded is None:
         return False
     expansion, plan = recorded
-    target = _model("Step").objects.get(pk=plan.target_id) if plan.target_id is not None else None
+    target = apps.get_model("workflows", "Step").objects.get(pk=plan.target_id) if plan.target_id is not None else None
     items = plan.items
     if target is not None:
         _ensure_map_children(run, step_run, target=target, items=items)
-        _model("StepRun").objects.bind_map_membership(
+        apps.get_model("workflows", "StepRun").objects.bind_map_membership(
             run_id=run.pk,
             target_id=target.pk,
             expansion_attempt_id=expansion.pk,
@@ -1643,7 +1593,7 @@ def _complete_retained_map_step_if_ready(
     expansion_id = expansion_attempt_id or step_run.current_attempt_id
     if expansion_id is None:
         raise ValidationError({"attempt": "Retained Map controller has no current expansion."})
-    _model("StepAttempt").objects.record_map_aggregate(
+    apps.get_model("workflows", "StepAttempt").objects.record_map_aggregate(
         step_run.pk,
         expansion_attempt_id=expansion_id,
         at=timestamp,
@@ -1700,7 +1650,7 @@ def _workflow_capacity_allows(run: Any, *, additional: int = 0) -> bool:
 
 
 def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[Any]) -> None:
-    step_run_model = _model("StepRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
     for index, item in enumerate(items):
         child, _ = step_run_model.objects.get_or_create(
             run=run,
@@ -1782,7 +1732,7 @@ def _route_done(run: Any, step_run: Any) -> None:
 
 
 def _maybe_schedule_target(run: Any, target: Any, *, routed_row: Any | None = None) -> Any | None:
-    step_run_model = _model("StepRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
     existing = step_run_model.objects.filter(run=run, step=target, map_index=-1).first()
     if existing is not None:
         return existing
@@ -1806,7 +1756,7 @@ def _maybe_schedule_target(run: Any, target: Any, *, routed_row: Any | None = No
 
 
 def _ensure_skipped(run: Any, step: Any, *, previous: list[Any]) -> Any:
-    step_run_model = _model("StepRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
     step_run = step_run_model.objects.filter(run=run, step=step, map_index=-1).first()
     if step_run is None:
         step_run = step_run_model.objects.create(
@@ -1838,7 +1788,7 @@ def _upstream_join_state(
     eventual outcome can still select the route.
     """
 
-    step_run_model = _model("StepRun")
+    step_run_model = apps.get_model("workflows", "StepRun")
     by_source: dict[int, list[Any]] = {}
     for edge in target.incoming_edges.select_related("source").order_by("pk"):
         by_source.setdefault(edge.source_id, []).append(edge)
@@ -1955,10 +1905,10 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
     claimed: list[int] = []
     for step_run in substituted:
         fixture = fixture_by_slot[(step_run.step_id, None if step_run.map_index == -1 else step_run.map_index)]
-        _model("StepAttempt").objects.record_test_fixture(
+        apps.get_model("workflows", "StepAttempt").objects.record_test_fixture(
             fixture, at=timestamp, due_step_run_id=step_run.pk
         )
-        _model("WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
         claimed.append(step_run.pk)
     due = physical_due
     if not due:
@@ -1983,7 +1933,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
             )
         )
         if preparation.failure is not None:
-            _model("StepAttempt").objects.fail_preparation(
+            apps.get_model("workflows", "StepAttempt").objects.fail_preparation(
                 step_run,
                 cause=cause,
                 input=preparation.input,
@@ -1993,10 +1943,10 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
                 claimed_at=timestamp,
                 recorded_at=timestamp,
             )
-            _model("WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
+            apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
             claimed.append(step_run.pk)
             continue
-        claim = _model("StepAttempt").objects.claim(
+        claim = apps.get_model("workflows", "StepAttempt").objects.claim(
             step_run,
             cause=cause,
             input=preparation.input,
@@ -2004,7 +1954,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
             test_fixture=preparation.test_fixture,
             claimed_at=timestamp,
         )
-        _model("WorkflowDispatch").objects.schedule_execute(claim.attempt)
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_execute(claim.attempt)
         claimed.append(step_run.pk)
     if claimed:
         transaction.on_commit(enqueue_dispatch_publisher)
@@ -2047,7 +1997,7 @@ def _prepare_attempt_input(
         )
 
     if step_run.status == StepRunStatus.WAITING and step_run.current_attempt_id is not None:
-        previous = _model("StepAttempt").objects.get(pk=step_run.current_attempt_id)
+        previous = apps.get_model("workflows", "StepAttempt").objects.get(pk=step_run.current_attempt_id)
         map_item = (
             MapItemSource(
                 previous.map_expansion_id,

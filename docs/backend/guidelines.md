@@ -1115,8 +1115,7 @@ and current contracts before applying a historical example to a new deployment.
   This runtime contract is separate from the step's `StepEffect` authoring label.
   The retained-attempt engine fences the run, step, and attempt before mutation,
   then commits the domain write, result, artifacts, and continuation dispatch
-  together. Keep provider and blob I/O outside this mode; legacy non-retained
-  execution refuses database commands.
+  together. Keep provider and blob I/O outside this mode.
 - **A fenced database command retires another Workflow run through `RUN_CANCEL`.**
   Retain the cancellation intent and target `WorkflowRun` artifact with an
   external wait in the command transaction. The dispatcher cancels the target
@@ -1126,8 +1125,8 @@ and current contracts before applying a historical example to a new deployment.
 - **External domain waits subscribe before reading their predicate.** A retained
   standard invocation calls `engine.subscribe_external(step_run, record)` for one
   target per attempt, lets that attempt-row write commit, then re-reads the domain
-  record before deciding whether to wait. Legacy non-retained execution and a
-  database command held in its atomic transaction cannot subscribe this way.
+  record before deciding whether to wait. A database command held in its atomic
+  transaction cannot subscribe this way.
   The native domain transition saves an artifact delivery intent
   in its own transaction; its signal must not lock a Workflow run. After commit,
   dispatch delivery locks the intent, then affected runs, steps, and attempts.

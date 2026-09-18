@@ -11,6 +11,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from PIL import Image
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows_extraction import service
 from angee.workflows_extraction.engines import (
     DocumentPart,
@@ -23,7 +24,10 @@ from angee.workflows_extraction.routing import acquire_native_parts
 from angee.workflows_extraction.service import _validated_schema
 from angee.workflows_extraction.steps import PreparePagesStepImpl, RecognizePageStepImpl
 from angee.workflows_extraction_glm.engine import GlmOllamaEngine
+from tests.conftest import SchemaAddon
 from tests.extraction_engines import FakePageExtractionEngine
+from tests.extraction_models import Extraction as _Extraction  # noqa: F401 - registers composed test models.
+from tests.test_agents import InferenceModel as _InferenceModel  # noqa: F401 - registers composed test models.
 
 SCHEMA = {
     "$id": "test.document.v1",
@@ -32,6 +36,20 @@ SCHEMA = {
     "required": ["number"],
     "additionalProperties": False,
 }
+
+
+def test_extraction_evidence_uses_native_closed_kind_enums() -> None:
+    from angee.workflows_extraction import schema as extraction_schema
+
+    parts = {
+        key: tuple(extraction_schema.schemas["console"].get(key, ()))
+        for key in SCHEMA_PART_KEYS
+    }
+    rendered = GraphQLSchemas([SchemaAddon({"console": parts})]).build("console").as_str()
+
+    assert "enum ExtractionPartKind" in rendered
+    assert "enum RetiredIdentityKind" in rendered
+    assert "kind: RetiredIdentityKind!" in rendered
 
 
 def _page(source: int, page: int) -> PageImage:

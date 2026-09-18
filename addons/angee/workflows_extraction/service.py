@@ -23,6 +23,7 @@ from angee.base.impl import resolve_impl_class
 from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.workflows.attempts import DecisionInputSource, json_values_equal
+from angee.workflows.engine import consume_decision_resolution, external_operation_request
 from angee.workflows_extraction.engines import (
     RETAINED_AUTHORITY_COMPLETION_REVIEW,
     DocumentPart,
@@ -30,6 +31,7 @@ from angee.workflows_extraction.engines import (
     DocumentResult,
     DocumentSource,
     ExtractionEngine,
+    ExtractionPartKind,
     PageImage,
     PageResult,
 )
@@ -169,7 +171,7 @@ def prepare_pages(
         )
         carriers: list[Any] = []
         for part in page.native_parts:
-            if part.kind == "structured":
+            if part.kind == ExtractionPartKind.STRUCTURED:
                 if source.file is None:
                     raise ValidationError({"files": "Structured evidence requires its original File."})
                 carriers.append(source.file)
@@ -321,7 +323,7 @@ def collect_carriers(
         recognized[key] = DocumentPart(
             *key,
             "text/plain",
-            "recognized_text",
+            ExtractionPartKind.RECOGNIZED_TEXT,
             text,
             str(output.get("method") or "text_recognition"),
             str(text_file.content_hash),
@@ -675,8 +677,6 @@ def infer(
         or (base.status != "succeeded" and not correspondence_hold)
     ):
         raise ValidationError({"inference": "A successful retained base or exact correspondence hold is required."})
-    from angee.workflows.engine import external_operation_request
-
     operation_request = external_operation_request(operation_step_run)
     request_key = operation_request.request_key
     input_facts = operation_request.input
@@ -1251,8 +1251,6 @@ def revise(
         raise PermissionDenied("Read access to the correction Decision is required.")
     if not connections[alias or DEFAULT_DB_ALIAS].in_atomic_block:
         raise RuntimeError("Extraction correction requires the active database-command transaction.")
-    from angee.workflows.engine import consume_decision_resolution
-
     basis = _correction_basis(
         extraction,
         decision=selected_decision,
@@ -2009,7 +2007,7 @@ def _validate_parts(parts: Sequence[Any], *, source_count: int) -> None:
             raise ValidationError({"result": "Document evidence has an unsupported shape."})
         if part.source_position < 0 or part.source_position >= source_count:
             raise ValidationError({"result": "Document evidence references an unavailable source."})
-        if part.kind not in {"structured", "native_text", "recognized_text"}:
+        if part.kind not in ExtractionPartKind.values:
             raise ValidationError({"result": "Document evidence has an unsupported kind."})
         try:
             json.dumps(part.value, allow_nan=False)

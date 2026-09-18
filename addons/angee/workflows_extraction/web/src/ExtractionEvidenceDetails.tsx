@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { DocumentType } from "@angee/gql/console";
-import { Badge, Button, CodeBlock, recordTargetHref, statusTone, TextLink, useRecordPeekContext, useResourceRecordHrefLookup, useT } from "@angee/ui";
+import { Badge, Button, CodeBlock, recordTargetHref, statusLabel, statusTone, TextLink, useRecordPeekContext, useResourceRecordHrefLookup, useT } from "@angee/ui";
 import { FileRecordPreview, filePreviewReference } from "@angee/storage";
 
 import { ExtractionRecordEvidenceDocument } from "./documents";
@@ -42,7 +42,7 @@ export function ExtractionEvidenceDetails({ evidence }: { evidence: ExtractionEv
   return <div className="grid gap-4 p-4">
     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
       <span className="font-medium">{t("revision")} {evidence.extraction.revision}</span>
-      <Badge tone={statusTone(evidence.extraction.status)}>{evidence.extraction.status}</Badge>
+      <Badge tone={statusTone(evidence.extraction.status)}>{statusLabel(evidence.extraction.status)}</Badge>
     </div>
     <section aria-label={t("sources")} className="space-y-2">
       <div className="flex flex-wrap gap-1">

@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
@@ -21,6 +22,13 @@ _evidence_insertion = TransactionBoundAuthority[None](
     atomic_error="Extraction evidence insertion requires an active transaction.",
     nested_error="Extraction evidence insertion already has an owner.",
 )
+
+
+class RetiredIdentityKind(StrEnum):
+    """Closed identity axes retained by document correspondence."""
+
+    DOCUMENT = "document"
+    LINE = "line"
 
 
 def evidence_insert_allowed(alias: str | None = None) -> bool:
@@ -46,17 +54,8 @@ def _same_identity_basis(authority: Any, evidence: Any) -> bool:
 class ImmutableEvidenceQuerySet(AngeeQuerySet[Any]):
     """Prevent post-insert mutation and deletion through bulk ORM paths."""
 
-    @staticmethod
-    def _is_audit_nullification(values: Mapping[str, Any]) -> bool:
-        audit_fields = frozenset(field.name for field in AuditMixin._meta.fields)
-        return (
-            bool(values)
-            and set(values).issubset(audit_fields)
-            and all(value is None for value in values.values())
-        )
-
     def update(self, **kwargs: Any) -> int:
-        if self._is_audit_nullification(kwargs):
+        if AuditMixin.is_audit_nullification(kwargs):
             return super().update(**kwargs)
         raise ValueError("Extraction evidence is immutable.")
 
@@ -1091,7 +1090,11 @@ def _document_mapping(
     ):
         raise ValidationError({"extraction": "Retired identities need explicit retained reasons."})
     retired = [
-        {"identity": identity, "kind": "document" if identity in absent_docs else "line", "reason": reason}
+        {
+            "identity": identity,
+            "kind": RetiredIdentityKind.DOCUMENT if identity in absent_docs else RetiredIdentityKind.LINE,
+            "reason": reason,
+        }
         for identity, reason in sorted(retirement.items())
     ]
     return rows, retired

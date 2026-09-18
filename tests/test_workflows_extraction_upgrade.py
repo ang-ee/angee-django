@@ -30,6 +30,7 @@ from angee.compose.model_composition import ModelComposition
 from angee.compose.runtime import Runtime
 from angee.workflows_extraction.managers import _evidence_insertion
 from angee.workflows_extraction.runtime_migrations import adopt_workflows_ocr as adopt
+from angee.workflows_extraction.runtime_migrations import extraction_state_enums as state_enums
 from angee.workflows_extraction.runtime_migrations import retire_workflows_ocr as retire
 from angee.workflows_extraction.runtime_migrations import stage_workflows_extraction as stage
 from angee.workflows_ocr.apps import WorkflowsOcrHistoryConfig
@@ -167,6 +168,47 @@ def test_upgrade_declarations_cover_fresh_old_only_and_complete_adoption_states(
         adopt.applies(partial)
     with pytest.raises(ImproperlyConfigured, match="partial"):
         retire.applies(partial)
+
+
+def test_extraction_state_enum_migration_accepts_only_whole_legacy_or_current_state() -> None:
+    legacy = ProjectState()
+    legacy.add_model(ModelState(
+        app_label="workflows_extraction",
+        name="Extraction",
+        fields={
+            "id": models.AutoField(primary_key=True),
+            "status": models.CharField(max_length=16, editable=False),
+        },
+    ))
+    legacy.add_model(ModelState(
+        app_label="workflows_extraction",
+        name="ExtractionPart",
+        fields={
+            "id": models.AutoField(primary_key=True),
+            "kind": models.CharField(max_length=32, editable=False),
+        },
+    ))
+    assert state_enums.applies(legacy)
+
+    current = legacy.clone()
+    current.models["workflows_extraction", "extraction"].fields["status"] = state_enums.StateField(
+        choices=state_enums.STATUS_CHOICES,
+        editable=False,
+    )
+    current.models["workflows_extraction", "extractionpart"].fields["kind"] = state_enums.StateField(
+        choices=state_enums.PART_KIND_CHOICES,
+        editable=False,
+    )
+    assert not state_enums.applies(current)
+
+    partial = current.clone()
+    partial.models["workflows_extraction", "extractionpart"].fields["kind"] = models.CharField(
+        choices=state_enums.PART_KIND_CHOICES,
+        editable=False,
+        max_length=32,
+    )
+    with pytest.raises(ImproperlyConfigured, match="partial vocabulary"):
+        state_enums.applies(partial)
 
 
 def test_legacy_selectors_preserve_only_explicit_layout_or_one_root() -> None:

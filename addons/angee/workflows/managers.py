@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import uuid
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -2791,8 +2791,7 @@ class WorkflowTestFixtureQuerySet(AngeeQuerySet[Any]):
     """Keep admitted test fixture facts append-only."""
 
     def update(self, **kwargs: Any) -> int:
-        audit_fields = frozenset(field.name for field in AuditMixin._meta.fields)
-        if kwargs and set(kwargs).issubset(audit_fields) and all(value is None for value in kwargs.values()):
+        if AuditMixin.is_audit_nullification(kwargs):
             return super().update(**kwargs)
         raise TypeError("Workflow test fixtures are immutable admission facts.")
 
@@ -3561,13 +3560,8 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
 class StepAttemptQuerySet(AngeeQuerySet[Any]):
     """Reject collection mutations that would bypass retained-evidence rules."""
 
-    @staticmethod
-    def _is_audit_nullification(values: Mapping[str, Any]) -> bool:
-        audit_fields = frozenset(field.name for field in AuditMixin._meta.fields)
-        return bool(values) and set(values).issubset(audit_fields) and all(value is None for value in values.values())
-
     def update(self, **kwargs: Any) -> int:
-        if self._is_audit_nullification(kwargs):
+        if AuditMixin.is_audit_nullification(kwargs):
             return super().update(**kwargs)
         raise TypeError("Step attempts do not support collection updates.")
 
@@ -7057,13 +7051,8 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
 class WorkflowDispatchQuerySet(AngeeQuerySet[Any]):
     """Read durable delivery intents without exposing collection mutation bypasses."""
 
-    @staticmethod
-    def _is_audit_nullification(values: Mapping[str, Any]) -> bool:
-        audit_fields = frozenset(field.name for field in AuditMixin._meta.fields)
-        return bool(values) and set(values).issubset(audit_fields) and all(value is None for value in values.values())
-
     def update(self, **kwargs: Any) -> int:
-        if self._is_audit_nullification(kwargs):
+        if AuditMixin.is_audit_nullification(kwargs):
             return super().update(**kwargs)
         raise TypeError("Workflow dispatches do not support collection updates.")
 

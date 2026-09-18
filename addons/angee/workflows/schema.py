@@ -40,7 +40,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import request_from_info, session_user
+from angee.iam.permissions import read_resource_queryset, request_from_info, session_user
 from angee.iam.schema import UserType
 from angee.workflows import engine
 from angee.workflows.attempts import JsonPresence, deserialize_decision_specs
@@ -100,16 +100,6 @@ _PROJECTED_STEP_NAME = "_workflows_step_name"
 _PROJECTED_STEP_KEY = "_workflows_step_key"
 _PROJECTED_SYSTEM_KIND = "_workflows_system_kind"
 _PROJECTED_STEP_RUN_ID = "_workflows_step_run_id"
-
-
-def _read_resource_queryset(model: type[models.Model]) -> Any:
-    """Bind one read-only resource to the model's native REBAC read scope."""
-
-    def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        scoped = read_scoped_queryset(model, session_user(info), action="read")
-        return model.objects.none() if scoped is None else scoped
-
-    return get_queryset
 
 
 def _artifact_queryset_for_actor(actor: Any) -> models.QuerySet[Any]:
@@ -1671,7 +1661,7 @@ _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_resource_queryset(WorkflowRun),
+    get_queryset=read_resource_queryset(WorkflowRun),
     field_id_decode={
         "workflow": public_pk_decoder(Workflow),
         "workflow__published_from": public_pk_decoder(Workflow),
@@ -1702,7 +1692,7 @@ _STEP_RUN_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_resource_queryset(StepRun),
+    get_queryset=read_resource_queryset(StepRun),
     field_id_decode={
         "run": public_pk_decoder(WorkflowRun),
         "step": public_pk_decoder(Step),
@@ -1737,7 +1727,7 @@ _STEP_ATTEMPT_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_resource_queryset(StepAttempt),
+    get_queryset=read_resource_queryset(StepAttempt),
     field_id_decode={
         "step_run": public_pk_decoder(StepRun),
         "retry_of": public_pk_decoder(StepAttempt),
@@ -1804,7 +1794,7 @@ _DECISION_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_resource_queryset(Decision),
+    get_queryset=read_resource_queryset(Decision),
     field_id_decode={
         "step_run": public_pk_decoder(StepRun),
         "step_run__step": public_pk_decoder(Step),
@@ -1858,7 +1848,7 @@ _PUBLIC_DECISION_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_resource_queryset(Decision),
+    get_queryset=read_resource_queryset(Decision),
     field_id_decode={
         "step_run": public_pk_decoder(StepRun),
         "step_run__step": public_pk_decoder(Step),

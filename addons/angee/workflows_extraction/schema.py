@@ -7,15 +7,18 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db import models
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.scoping import read_scoped_queryset
 from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, instance_for_id, require_public_id
 from angee.graphql.node import AngeeNode
-from angee.iam.permissions import session_user
+from angee.iam.permissions import read_resource_queryset
+from angee.workflows_extraction.engines import ExtractionPartKind
+from angee.workflows_extraction.managers import RetiredIdentityKind
+
+strawberry.enum(cast(Any, ExtractionPartKind))
+strawberry.enum(RetiredIdentityKind)
 
 Extraction = apps.get_model("workflows_extraction", "Extraction")
 ExtractionSource = apps.get_model("workflows_extraction", "ExtractionSource")
@@ -25,14 +28,6 @@ File = apps.get_model("storage", "File")
 InferenceModel = apps.get_model("agents", "InferenceModel")
 MessagePart = apps.get_model("messaging", "Part")
 Message = apps.get_model("messaging", "Message")
-
-
-def _read_queryset(model: type[models.Model]):
-    def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        scoped = read_scoped_queryset(model, session_user(info), action="read")
-        return model.objects.none() if scoped is None else scoped
-
-    return get_queryset
 
 
 @strawberry_django.type(Extraction)
@@ -107,7 +102,7 @@ class ExtractionPartEvidence:
     position: int
     source_page: int | None
     mime_type: str
-    kind: str
+    kind: ExtractionPartKind
     method: str
     content_hash: str
     width: int | None
@@ -135,7 +130,7 @@ class DocumentEvidenceRef:
 @strawberry.type
 class RetiredEvidenceRef:
     identity: str
-    kind: str
+    kind: RetiredIdentityKind
     reason: str
 
 
@@ -160,7 +155,7 @@ class ExtractionEvidenceQuery:
 
     @strawberry.field
     def extraction_evidence(self, info: strawberry.Info, id: PublicID) -> ExtractionEvidence | None:
-        queryset = _read_queryset(Extraction)(info)
+        queryset = read_resource_queryset(Extraction)(info)
         row = instance_for_id(Extraction, id, queryset=queryset)
         if row is None:
             return None
@@ -177,7 +172,14 @@ class ExtractionEvidenceQuery:
                 )
                 for ref in row.document_refs
             ],
-            retired=[RetiredEvidenceRef(**item) for item in row.retired_identities],
+            retired=[
+                RetiredEvidenceRef(
+                    identity=item["identity"],
+                    kind=RetiredIdentityKind(item["kind"]),
+                    reason=item["reason"],
+                )
+                for item in row.retired_identities
+            ],
             sources=list(row.sources.order_by("position")),
             pages=[
                 ExtractionPageEvidence(
@@ -219,7 +221,7 @@ _EXTRACTION_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_queryset(Extraction),
+    get_queryset=read_resource_queryset(Extraction),
     field_id_decode={
         "model": public_pk_decoder(InferenceModel),
         "recognition_model": public_pk_decoder(InferenceModel),
@@ -236,7 +238,7 @@ _SOURCE_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_queryset(ExtractionSource),
+    get_queryset=read_resource_queryset(ExtractionSource),
     field_id_decode={
         "extraction": public_pk_decoder(Extraction),
         "file": public_pk_decoder(File),
@@ -254,7 +256,7 @@ _PAGE_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_queryset(ExtractionPage),
+    get_queryset=read_resource_queryset(ExtractionPage),
     field_id_decode={
         "extraction": public_pk_decoder(Extraction),
         "source": public_pk_decoder(ExtractionSource),

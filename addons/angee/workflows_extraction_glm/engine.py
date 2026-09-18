@@ -21,12 +21,12 @@ from angee.workflows_extraction.engines import (
     PageImage,
     PageResult,
     RecognitionResult,
-)
-from angee.workflows_extraction.routing import (
-    acquire_native_parts,
     derive_text_claims,
     mapping_object,
     mapping_prompt,
+)
+from angee.workflows_extraction.routing import (
+    acquire_native_parts,
     recognize_pages,
 )
 

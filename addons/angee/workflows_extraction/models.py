@@ -10,11 +10,12 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
+from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
-from angee.workflows_extraction.engines import ExtractionEngine
+from angee.workflows_extraction.engines import ExtractionEngine, ExtractionPartKind, ExtractionStatus
 from angee.workflows_extraction.managers import (
     ExtractionManager,
     ExtractionSystemManager,
@@ -141,7 +142,7 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     revision = models.PositiveIntegerField(default=1, editable=False)
     lineage_key = models.CharField(max_length=64, db_index=True, editable=False)
     reuse_key = models.CharField(max_length=64, unique=True, editable=False)
-    status = models.CharField(max_length=16, editable=False)
+    status = StateField(choices_enum=ExtractionStatus, editable=False)
     error_code = models.CharField(max_length=100, blank=True, editable=False)
     schema_id = models.CharField(max_length=255, editable=False)
     schema_digest = models.CharField(max_length=64, editable=False)
@@ -398,7 +399,7 @@ class ExtractionPart(SqidMixin, AngeeModel):
     position = models.PositiveIntegerField(editable=False)
     source_page = models.PositiveIntegerField(null=True, blank=True, editable=False)
     mime_type = models.CharField(max_length=128, editable=False)
-    kind = models.CharField(max_length=32, editable=False)
+    kind = StateField(choices_enum=ExtractionPartKind, editable=False)
     method = models.CharField(max_length=128, editable=False)
     content_hash = models.CharField(max_length=64, editable=False)
     width = models.PositiveIntegerField(null=True, blank=True, editable=False)

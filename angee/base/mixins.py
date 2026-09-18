@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Self, TypeVar, cast
 
@@ -275,6 +275,17 @@ class AuditMixin(models.Model):
         """Django model options for audit-only abstract inheritance."""
 
         abstract = True
+
+    @staticmethod
+    def is_audit_nullification(values: Mapping[str, Any]) -> bool:
+        """Return whether a bulk update only clears the actor audit fields."""
+
+        audit_fields = frozenset(field.name for field in AuditMixin._meta.fields)
+        return (
+            bool(values)
+            and set(values).issubset(audit_fields)
+            and all(value is None for value in values.values())
+        )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row after stamping user audit fields."""

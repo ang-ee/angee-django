@@ -1251,19 +1251,32 @@ def test_override_run_cancels_active_steps_and_injects_synthetic_step_run(
                 "config": {"outcome": "done"},
                 "is_entry": False,
             },
+            {
+                "key": "unused",
+                "config": {"outcome": "done"},
+                "is_entry": False,
+            },
         ),
-        edges=(("active", "finish", "unreachable"),),
+        edges=(
+            ("active", "finish", "unreachable"),
+            ("active", "unused", "also_unreachable"),
+        ),
     )
     active = step_for(workflow, "active")
     finish = step_for(workflow, "finish")
+    unused = step_for(workflow, "unused")
     with system_context(reason="test workflows override setup"):
         run = WorkflowRun.objects.create(workflow=workflow, status=workflow_models.RunStatus.RUNNING)
         active_row = StepRun.objects.create(run=run, step=active, status=workflow_models.StepRunStatus.STARTED)
+        unused_row = StepRun.objects.create(run=run, step=unused, status=workflow_models.StepRunStatus.SCHEDULED)
 
     override = engine.override_run(run, [finish], actor=admin)
 
     active_row.refresh_from_db()
+    unused_row.refresh_from_db()
     assert active_row.status == workflow_models.StepRunStatus.CANCELED
+    assert unused_row.status == workflow_models.StepRunStatus.CANCELED
+    assert unused_row.resume_state == {"cancel_requested": True}
     assert override.step_id is None
     assert override.system_kind == "override"
     assert override.status == workflow_models.StepRunStatus.SUCCEEDED

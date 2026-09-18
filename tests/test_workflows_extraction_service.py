@@ -40,6 +40,7 @@ from angee.workflows_extraction.engines import (
     DocumentPipelineError,
     DocumentResult,
     PageImage,
+    derive_text_claims,
 )
 from angee.workflows_extraction.managers import (
     _document_mapping,
@@ -51,7 +52,6 @@ from angee.workflows_extraction.pointers import json_pointer_value
 from angee.workflows_extraction.routing import (
     _decode_declared_text,
     _html_text,
-    derive_text_claims,
     recognize_pages,
 )
 from angee.workflows_extraction.service import (

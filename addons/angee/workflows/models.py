@@ -737,7 +737,30 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         return self.status in {WorkflowStatus.TEST, WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}
 
 
-class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
+class WorkflowDefinitionChildMixin:
+    """Share resource-install ownership for rows belonging to a Workflow."""
+
+    @classmethod
+    def resource_import_owner(cls) -> type[Any]:
+        return cls._meta.get_field("workflow").remote_field.model
+
+    @classmethod
+    def resource_write_preparation(cls, resource: Any, dataset: Any) -> ResourceWritePreparation | None:
+        """Declare old and proposed workflow parents for a child resource batch."""
+
+        workflows = set(resource.related_instances(dataset, "workflow"))
+        workflows.update(
+            instance.workflow
+            for xref in dataset["_xref"]
+            if (instance := resource.instance_for_xref(xref)) is not None
+        )
+        if not workflows:
+            return None
+        workflow_model = cls._meta.get_field("workflow").remote_field.model
+        return ResourceWritePreparation(workflow_model, frozenset(row.pk for row in workflows))
+
+
+class Step(WorkflowDefinitionChildMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     """One node in a workflow definition graph."""
 
     runtime = True
@@ -771,25 +794,6 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         """Return the step's display label."""
 
         return self.name or self.key
-
-    @classmethod
-    def resource_import_owner(cls) -> type[Any]:
-        return cls._meta.get_field("workflow").remote_field.model
-
-    @classmethod
-    def resource_write_preparation(cls, resource: Any, dataset: Any) -> ResourceWritePreparation | None:
-        """Declare old and proposed workflow parents for a resource step batch."""
-
-        workflows = set(resource.related_instances(dataset, "workflow"))
-        workflows.update(
-            instance.workflow
-            for xref in dataset["_xref"]
-            if (instance := resource.instance_for_xref(xref)) is not None
-        )
-        if not workflows:
-            return None
-        workflow_model = cls._meta.get_field("workflow").remote_field.model
-        return ResourceWritePreparation(workflow_model, frozenset(row.pk for row in workflows))
 
     def config_projection(self) -> StepConfigProjection:
         """Project legacy config for repair without rewriting its stored value."""
@@ -909,17 +913,7 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
                 manager.mark_definition_changed(workflow_id)
             return _combined_delete_results(edges, step)
 
-    def _raise_if_workflow_immutable(self) -> None:
-        """Reject writes when this step belongs to an immutable workflow version."""
-
-        if self.workflow_id is None:
-            return
-        workflow = type(self.workflow)._base_manager.only("status").get(pk=self.workflow_id)
-        if workflow.is_immutable:
-            raise ValidationError("Published workflow versions are immutable.")
-
-
-class Edge(AuditMixin, AngeeDataModel):
+class Edge(WorkflowDefinitionChildMixin, AuditMixin, AngeeDataModel):
     """Directed edge between two workflow steps."""
 
     runtime = True
@@ -946,25 +940,6 @@ class Edge(AuditMixin, AngeeDataModel):
         """Return a compact edge label."""
 
         return f"{self.source_id}->{self.target_id}:{self.condition}"
-
-    @classmethod
-    def resource_import_owner(cls) -> type[Any]:
-        return cls._meta.get_field("workflow").remote_field.model
-
-    @classmethod
-    def resource_write_preparation(cls, resource: Any, dataset: Any) -> ResourceWritePreparation | None:
-        """Declare old and proposed workflow parents for a resource edge batch."""
-
-        workflows = set(resource.related_instances(dataset, "workflow"))
-        workflows.update(
-            instance.workflow
-            for xref in dataset["_xref"]
-            if (instance := resource.instance_for_xref(xref)) is not None
-        )
-        if not workflows:
-            return None
-        workflow_model = cls._meta.get_field("workflow").remote_field.model
-        return ResourceWritePreparation(workflow_model, frozenset(row.pk for row in workflows))
 
     def clean(self) -> None:
         """Validate that an edge is fully contained in one workflow."""
@@ -1042,16 +1017,6 @@ class Edge(AuditMixin, AngeeDataModel):
             if session is not None and workflow_id not in session.copy_target_ids:
                 manager.mark_definition_changed(workflow_id)
             return result
-
-    def _raise_if_workflow_immutable(self) -> None:
-        """Reject writes when this edge belongs to an immutable workflow version."""
-
-        if self.workflow_id is None:
-            return
-        workflow = type(self.workflow)._base_manager.only("status").get(pk=self.workflow_id)
-        if workflow.is_immutable:
-            raise ValidationError("Published workflow versions are immutable.")
-
 
 def check_event_trigger_publishers(
     app_configs: list[object] | None = None,
