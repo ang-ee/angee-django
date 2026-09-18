@@ -1753,16 +1753,25 @@ def _route_success(run: Any, step_run: Any) -> None:
     for target, edges in by_target.values():
         if any(not edge.condition or edge.condition == step_run.outcome for edge in edges):
             _maybe_schedule_target(run, target)
+        elif target.incoming_edges.exclude(source_id=step_run.step_id).exists():
+            _maybe_schedule_target(run, target)
         else:
             _ensure_skipped(run, target, previous=[step_run])
 
 
 def _route_skip(run: Any, step_run: Any) -> None:
-    for edge in step_run.step.outgoing_edges.select_related("target").order_by("pk"):
-        if edge.target.join_rule == JoinRule.ALL_SUCCESS:
-            _ensure_skipped(run, edge.target, previous=[step_run])
+    outgoing = list(step_run.step.outgoing_edges.select_related("target").order_by("pk"))
+    by_target: dict[int, tuple[Any, list[Any]]] = {}
+    for edge in outgoing:
+        target, edges = by_target.setdefault(edge.target_id, (edge.target, []))
+        edges.append(edge)
+    for target, edges in by_target.values():
+        if any(not edge.condition for edge in edges) or target.incoming_edges.exclude(
+            source_id=step_run.step_id
+        ).exists():
+            _maybe_schedule_target(run, target)
         else:
-            _maybe_schedule_target(run, edge.target)
+            _ensure_skipped(run, target, previous=[step_run])
 
 
 def _route_done(run: Any, step_run: Any) -> None:
@@ -1777,9 +1786,10 @@ def _maybe_schedule_target(run: Any, target: Any, *, routed_row: Any | None = No
     existing = step_run_model.objects.filter(run=run, step=target, map_index=-1).first()
     if existing is not None:
         return existing
-    upstream = _upstream_rows(run, target)
-    decision = _join_decision(target.join_rule, upstream, routed_row=routed_row)
-    previous = [row for row in upstream if row is not None]
+    previous, statuses = _upstream_join_state(run, target, routed_row=routed_row)
+    if not statuses:
+        return None
+    decision = _join_decision(target.join_rule, statuses)
     if decision == "skip":
         return _ensure_skipped(run, target, previous=previous)
     if decision != "run":
@@ -1812,27 +1822,50 @@ def _ensure_skipped(run: Any, step: Any, *, previous: list[Any]) -> Any:
     else:
         return step_run
 
-    for edge in step.outgoing_edges.select_related("target").order_by("pk"):
-        if edge.target.join_rule == JoinRule.ALL_SUCCESS:
-            _ensure_skipped(run, edge.target, previous=[step_run])
-        else:
-            _maybe_schedule_target(run, edge.target)
+    _route_skip(run, step_run)
     return step_run
 
 
-def _upstream_rows(run: Any, target: Any) -> list[Any | None]:
+def _upstream_join_state(
+    run: Any, target: Any, *, routed_row: Any | None = None,
+) -> tuple[list[Any], list[Any | None]]:
+    """Return one conditional route contribution per predecessor step.
+
+    Multiple edges from the same predecessor are alternatives.  A completed
+    predecessor contributes only when at least one of those edges matches its
+    outcome; an unmatched conditional route is absent rather than a skipped
+    target.  Missing or active predecessors remain pending because their
+    eventual outcome can still select the route.
+    """
+
     step_run_model = _model("StepRun")
-    rows: list[Any | None] = []
+    by_source: dict[int, list[Any]] = {}
     for edge in target.incoming_edges.select_related("source").order_by("pk"):
-        rows.append(step_run_model.objects.filter(run=run, step=edge.source, map_index=-1).first())
-    return rows
+        by_source.setdefault(edge.source_id, []).append(edge)
+    previous: list[Any] = []
+    statuses: list[Any | None] = []
+    for source_id, edges in by_source.items():
+        row = step_run_model.objects.filter(
+            run=run, step_id=source_id, map_index=-1,
+        ).first()
+        if row is None:
+            statuses.append(None)
+            continue
+        effective_status = (
+            StepRunStatus.SUCCEEDED if _same_step_run(row, routed_row) else row.status
+        )
+        if effective_status in StepRunStatus.TERMINAL:
+            route_matches = any(
+                not edge.condition or edge.condition == row.outcome for edge in edges
+            )
+            if not route_matches:
+                continue
+        previous.append(row)
+        statuses.append(effective_status)
+    return previous, statuses
 
 
-def _join_decision(rule: Any, upstream: list[Any | None], *, routed_row: Any | None = None) -> str:
-    statuses = [
-        StepRunStatus.SUCCEEDED if _same_step_run(row, routed_row) else row.status if row is not None else None
-        for row in upstream
-    ]
+def _join_decision(rule: Any, statuses: list[Any | None]) -> str:
     if not statuses:
         return "run"
 

@@ -465,6 +465,101 @@ def test_none_failed_min_one_success_join_cures_post_branch_skip(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_conditional_convergence_counts_each_predecessor_route_once(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    handler_calls: list[dict[str, Any]],
+) -> None:
+    """Inactive alternatives cannot preempt a later matching converging route."""
+
+    del workflow_engine_tables, no_workflow_queue, handler_calls
+    step_run_status = workflow_models.StepRunStatus
+    converging = workflow_with_steps(
+        key="conditional-convergence",
+        steps=(
+            {"key": "assess", "config": {"outcome": "hold"}},
+            {"key": "route_hold", "config": {"outcome": "correspondence"}},
+            {
+                "key": "prepare",
+                "join_rule": workflow_models.JoinRule.NONE_FAILED_MIN_ONE_SUCCESS,
+                "config": {"outcome": "done"},
+            },
+        ),
+        edges=(
+            ("assess", "route_hold", "hold"),
+            ("assess", "prepare", "processed"),
+            ("route_hold", "prepare", "correspondence"),
+        ),
+    )
+    converging_run = run_to_terminal(start_run(converging))
+
+    assert step_run_for(converging_run, "route_hold").status == step_run_status.SUCCEEDED
+    assert step_run_for(converging_run, "prepare").status == step_run_status.SUCCEEDED
+
+    direct = workflow_with_steps(
+        key="conditional-convergence-direct",
+        steps=(
+            {"key": "assess", "config": {"outcome": "processed"}},
+            {"key": "route_hold", "config": {"outcome": "correspondence"}},
+            {
+                "key": "prepare",
+                "join_rule": workflow_models.JoinRule.NONE_FAILED_MIN_ONE_SUCCESS,
+                "config": {"outcome": "done"},
+            },
+        ),
+        edges=(
+            ("assess", "route_hold", "hold"),
+            ("assess", "prepare", "processed"),
+            ("route_hold", "prepare", "correspondence"),
+        ),
+    )
+    direct_run = run_to_terminal(start_run(direct))
+
+    assert step_run_for(direct_run, "route_hold").status == step_run_status.SKIPPED
+    assert step_run_for(direct_run, "prepare").status == step_run_status.SUCCEEDED
+
+    alternatives = workflow_with_steps(
+        key="conditional-alternatives",
+        steps=(
+            {"key": "assess", "config": {"outcome": "processed"}},
+            {"key": "prepare", "config": {"outcome": "done"}},
+        ),
+        edges=(
+            ("assess", "prepare", "processed"),
+            ("assess", "prepare", "accepted"),
+        ),
+    )
+    alternatives_run = run_to_terminal(start_run(alternatives))
+
+    assert step_run_for(alternatives_run, "prepare").status == step_run_status.SUCCEEDED
+
+    inactive = workflow_with_steps(
+        key="conditional-inactive",
+        steps=(
+            {"key": "assess", "config": {"outcome": "other"}},
+            {
+                "key": "none_failed",
+                "join_rule": workflow_models.JoinRule.NONE_FAILED,
+                "config": {"outcome": "done"},
+            },
+            {
+                "key": "always",
+                "join_rule": workflow_models.JoinRule.ALWAYS,
+                "config": {"outcome": "done"},
+            },
+        ),
+        edges=(
+            ("assess", "none_failed", "processed"),
+            ("assess", "always", "processed"),
+        ),
+    )
+    inactive_run = run_to_terminal(start_run(inactive))
+
+    assert step_run_for(inactive_run, "none_failed").status == step_run_status.SKIPPED
+    assert step_run_for(inactive_run, "always").status == step_run_status.SKIPPED
+
+
+@pytest.mark.django_db(transaction=True)
 def test_one_success_join_runs_without_waiting_for_all_siblings(
     workflow_engine_tables: None,
     no_workflow_queue: None,
