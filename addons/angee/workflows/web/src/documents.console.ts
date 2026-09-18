@@ -21,7 +21,16 @@ export const WorkflowSubjectHistoryPaneDocument = graphql(`
         step_run { run { id } }
         target_reference { model id tab }
       }
-      artifacts { id label created_at target_reference { model id } }
+      artifacts {
+        id label created_at target_reference { model id }
+        attempt {
+          id
+          step_run {
+            id status waiting_kind run { id }
+            current_attempt { id }
+          }
+        }
+      }
     }
   }
 `);

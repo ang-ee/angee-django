@@ -37,7 +37,7 @@ export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, acti
   const query = useAuthoredQuery(
     WorkflowSubjectHistoryPaneDocument,
     { subjectDeclaration, id: subjectId },
-    { models: ["workflows.WorkflowRun", "workflows.Decision", "workflows.StepArtifact"] },
+    { models: ["workflows.WorkflowRun", "workflows.StepRun", "workflows.Decision", "workflows.StepArtifact"] },
   );
   if (query.isFetching && !query.data) {
     return <div className="space-y-4 p-3">
@@ -54,6 +54,19 @@ export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, acti
   const history = query.data?.workflow_subject_history;
   const runs = history?.runs ?? [];
   const decisions = history?.decisions ?? [];
+  const artifacts = history?.artifacts ?? [];
+  const elevatedArtifactIds = new Set(artifacts.flatMap((artifact) => {
+    const stepRun = artifact.attempt.step_run;
+    return stepRun.status === "WAITING"
+      && Boolean(stepRun.waiting_kind)
+      && stepRun.current_attempt?.id === artifact.attempt.id
+      && runs.some((run) => run.id === stepRun.run.id)
+      ? [artifact.id]
+      : [];
+  }));
+  const historicalArtifacts = artifacts.filter(
+    (artifact) => !elevatedArtifactIds.has(artifact.id),
+  );
   const selected = subjectDecision(decisionId, decisions);
   const selectedRunId = selected && subjectDecisionRunId(selected.step_run?.run?.id, runs);
   const followedReadableRunId = followedRunId && runs.some((run) => run.id === followedRunId)
@@ -141,6 +154,10 @@ export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, acti
       const childRuns = (history?.child_runs ?? [])
         .filter((edge) => edge.parent_run_id === run.id)
         .map((edge) => edge.run);
+      const waitingArtifacts = artifacts.filter((artifact) => (
+        elevatedArtifactIds.has(artifact.id)
+        && artifact.attempt.step_run.run.id === run.id
+      ));
       const runHref = routeHref("workflows.run", { id: run.id });
       return <section key={run.id} className="space-y-2 rounded-8 border border-border-subtle p-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -155,6 +172,16 @@ export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, acti
         {run.waiting_kind ? <p className="text-13 text-fg-muted">
           {t("subjectHistory.waiting", { reason: run.waiting_kind })}
         </p> : null}
+        {waitingArtifacts.length ? <div className="space-y-1 rounded-6 bg-warning-soft p-2 text-13">
+          <p className="font-medium">{t("subjectHistory.waitingForUpdate")}</p>
+          <ul className="space-y-1">{waitingArtifacts.map((artifact) => <ArtifactLink
+            key={artifact.id}
+            artifact={artifact}
+            recordHref={recordHref}
+            readableFallback={t("subjectHistory.output")}
+            unavailableFallback={t("subjectHistory.outputUnavailable")}
+          />)}</ul>
+        </div> : null}
         {failure ? <div className="space-y-1 rounded-6 bg-danger-soft p-2 text-13 text-danger-text" role="alert">
           <p className="font-medium">{t("subjectHistory.failedStep", {
             step: failure.step?.name || failure.step?.key || failure.system_kind || t("subjectHistory.systemStep"),
@@ -212,15 +239,30 @@ export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, acti
         })}
       </section>;
     })}
-    {(history?.artifacts ?? []).length ? <section className="space-y-2">
+    {historicalArtifacts.length ? <section className="space-y-2">
       <h3 className="text-13 font-medium">{t("subjectHistory.outputs")}</h3>
-      <ul className="space-y-1 text-13">{history!.artifacts.map((artifact) => {
-        const target = artifact.target_reference;
-        const href = target?.model && target.id ? recordHref(target.model, target.id) : undefined;
-        return <li key={artifact.id}>{href
-          ? <TextLink href={href}>{artifact.label || t("subjectHistory.output")}</TextLink>
-          : artifact.label || t("subjectHistory.outputUnavailable")}</li>;
-      })}</ul>
+      <ul className="space-y-1 text-13">{historicalArtifacts.map((artifact) => <ArtifactLink
+        key={artifact.id}
+        artifact={artifact}
+        recordHref={recordHref}
+        readableFallback={t("subjectHistory.output")}
+        unavailableFallback={t("subjectHistory.outputUnavailable")}
+      />)}</ul>
     </section> : null}
   </div>;
+}
+
+function ArtifactLink({ artifact, recordHref, readableFallback, unavailableFallback }: {
+  artifact: {
+    label: string;
+    target_reference?: { model: string; id: string } | null;
+  };
+  recordHref: (model: string, id: string) => string | undefined;
+  readableFallback: string;
+  unavailableFallback: string;
+}): React.ReactElement {
+  const target = artifact.target_reference;
+  const href = target?.model && target.id ? recordHref(target.model, target.id) : undefined;
+  const label = artifact.label || (href ? readableFallback : unavailableFallback);
+  return <li>{href ? <TextLink href={href}>{label}</TextLink> : label}</li>;
 }

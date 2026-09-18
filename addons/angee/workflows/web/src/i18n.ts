@@ -10,6 +10,7 @@ export const enWorkflowsMessages: Record<string, string> = {
   "subjectHistory.decisionsTruncated": "This approval history reached its display limit.",
   "subjectHistory.openApprovals": "Open approvals",
   "subjectHistory.waiting": "Waiting: {reason}",
+  "subjectHistory.waitingForUpdate": "Waiting for an update",
   "subjectHistory.activeStep": "Current step: {step}",
   "subjectHistory.failedStep": "Failed step: {step}",
   "subjectHistory.systemStep": "System execution",
