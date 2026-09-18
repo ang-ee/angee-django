@@ -21,7 +21,12 @@ export { WORKFLOW_DECISION_CONTENT_SLOT, WORKFLOW_TRIGGER_FORM_FIELDS_SLOT } fro
 
 import { CHATTER_TAB_SEARCH_KEY } from "@angee/ui";
 import { DECISION_SEARCH_KEY, WORKFLOW_RUN_SEARCH_KEY } from "./decision-navigation";
-export { DECISION_SEARCH_KEY, decisionHref, decisionSearch } from "./decision-navigation";
+export {
+  DECISION_SEARCH_KEY,
+  decisionHref,
+  decisionSearch,
+  workflowSubjectActionSearch,
+} from "./decision-navigation";
 
 const WORKFLOWS_ID = "workflows";
 
@@ -107,8 +112,14 @@ const workflows = defineBaseAddon({
 });
 
 export default workflows;
-export { ApprovalTask } from "./views/ApprovalTask";
-export type { ApprovalTaskProps, ApprovalVerdict, WorkflowDecisionContentProps, WorkflowDecisionRecordReference } from "./views/ApprovalTask";
+export {
+  ApprovalTask,
+  DecisionContextFields,
+  DecisionField,
+  DecisionReferenceAction,
+  useInitialDecisionPeek,
+} from "./views/ApprovalTask";
+export type { ApprovalTaskProps, ApprovalVerdict, WorkflowDecisionContentComponent, WorkflowDecisionContentProps, WorkflowDecisionRecordReference } from "./views/ApprovalTask";
 export { WorkflowApprovals } from "./views/WorkflowApprovals";
 export type { WorkflowApprovalsProps } from "./views/WorkflowApprovals";
 export { useWorkflowsT } from "./i18n";

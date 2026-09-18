@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import decimal
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from django.db import models
@@ -86,7 +87,7 @@ def resource_field_kind(
 def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
     """Return the GraphQL scalar a Django field's column type maps to, or None."""
 
-    declared = _declared_projection_fact(field, "angee_scalar_hint")
+    declared = _declared_projection_fact(field, None, "angee_scalar_hint")
     if declared is not None:
         return declared
     if isinstance(field, models.BooleanField):
@@ -137,18 +138,34 @@ def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
     return field is not None and getattr(field, "name", None) == ARCHIVE_FLAG_FIELD
 
 
-def money_currency_field(field: models.Field[Any, Any] | None) -> str | None:
+def money_currency_field(
+    field: models.Field[Any, Any] | None,
+    metadata: Mapping[str, object] | None = None,
+) -> str | None:
     """Return the currency path a field declares for money metadata, if any."""
 
-    return _declared_projection_fact(field, "angee_currency_field")
+    return _declared_projection_fact(field, metadata, "angee_currency_field")
 
 
-def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> str | None:
-    """Return the default rendered widget owned by the field classification."""
+def resource_field_widget(
+    field: models.Field[Any, Any] | None,
+    kind: str,
+    metadata: Mapping[str, object] | None = None,
+    *,
+    scalar: str | None = None,
+) -> str | None:
+    """Return the declared or default widget owned by field classification.
 
-    declared = _declared_projection_fact(field, "angee_widget")
+    Explicit surface or model declarations win. Without one, a plain GraphQL
+    ``ID`` scalar renders no widget, while a to-one relation projected as an ID
+    keeps Django's ``many2one`` semantics.
+    """
+
+    declared = _declared_projection_fact(field, metadata, "angee_widget")
     if declared is not None:
         return declared
+    if scalar == "ID" and not (field is not None and field.is_relation):
+        return None
     if kind == "enum":
         return "select"
     if kind == "relation":
@@ -176,8 +193,17 @@ def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> st
     return None
 
 
-def _declared_projection_fact(field: models.Field[Any, Any] | None, name: str) -> str | None:
-    """Return one field-owned projection declaration, if present."""
+def _declared_projection_fact(
+    field: models.Field[Any, Any] | None,
+    metadata: Mapping[str, object] | None,
+    name: str,
+) -> str | None:
+    """Return one projection declaration, preferring surface metadata to its model field."""
+
+    if isinstance(metadata, Mapping):
+        value = metadata.get(name)
+        if value not in (None, ""):
+            return str(value)
 
     if field is None:
         return None

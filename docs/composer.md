@@ -193,7 +193,10 @@ it to the target app's single current leaf. The footer records the stable
 `<addon>:<name>` origin and source digest. Existing materialized bodies are
 immutable and repeated builds are idempotent. Changed source digests,
 copied-body edits, duplicate origins, split leaves, and invalid graphs fail
-before any planned file is written. A source compatibility exception can declare
+before migration execution. A guarded app-label adoption may deliberately
+write reviewed staging nodes and then stop at the protected-history drop check.
+This gives downstream migrations a concrete new graph without allowing the
+following `makemigrations` command to delete retained tables. A source compatibility exception can declare
 specific accepted historical digests through `compatible_source_sha256`; it
 preserves existing copies rather than rewriting them. The exact validation
 contract belongs to [`RuntimeMigrations`](../angee/compose/migrations.py) and its
@@ -212,6 +215,17 @@ sources before command dispatch, so the management command as a whole is not a
 read-only filesystem probe. After a successful build, normal `makemigrations` may
 generate any remaining lossless changes and Django handles the rest of the
 migration lifecycle.
+
+A retired app label can opt into migration-history-only loading with the
+explicit `AppConfig.angee_runtime_migration_history` marker. It contributes no
+serving models or APIs. Phase 2 emits and binds its
+`runtime/<label>/migrations` package, whose source fallback contains only the
+fresh-install anchor; preserved deployment migrations stay first on that
+package path. Django's migration writer therefore writes into the
+composer-owned runtime tree, never into the installed addon's source package.
+The label remains protected from autodetected `DeleteModel` operations until an
+app-owned cleanup migration removes its state. See the concrete
+[`workflows_ocr` adoption guide](backend/workflows-extraction-upgrade.md).
 
 `fresh_history = "baseline"` is an explicit, audited classification for a
 historical transition whose terminal model state is already represented by a

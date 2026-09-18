@@ -14,6 +14,7 @@ import {
   useActionResultRun,
   useRecordChromeContext,
   useResourceViewUtilityContext,
+  type ManageAccessDialogProps,
   type RecordAccessEntry,
 } from "@angee/ui";
 
@@ -37,12 +38,20 @@ export function ShareListChrome(): React.ReactElement {
   />;
 }
 
-function ShareAccess({ resource, targetIds, record, label }: {
+export interface ShareAccessDialogProps extends Pick<ManageAccessDialogProps, "open" | "onOpenChange" | "trigger"> {
   resource: string;
   targetIds: readonly string[];
   record?: Row | null;
   label?: string;
-}): React.ReactElement | null {
+}
+
+function ShareAccess(props: Omit<ShareAccessDialogProps, "open" | "onOpenChange">): React.ReactElement | null {
+  const [open, setOpen] = React.useState(false);
+  return <ShareAccessDialog {...props} open={open} onOpenChange={setOpen} />;
+}
+
+/** Open the canonical IAM access surface from a record action or setup task. */
+export function ShareAccessDialog({ resource, targetIds, ...props }: ShareAccessDialogProps): React.ReactElement | null {
   const listedModel = useModelMetadata(resource);
   const accessResource = listedModel?.resource.grantable?.length
     ? resource
@@ -53,18 +62,13 @@ function ShareAccess({ resource, targetIds, record, label }: {
     key={`${accessResource}:${JSON.stringify(targetIds)}`}
     resource={model.resource}
     targetIds={targetIds}
-    record={record}
-    label={label}
+    {...props}
   />;
 }
 
-function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel }: {
+function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, open, onOpenChange, trigger }: Omit<ShareAccessDialogProps, "resource"> & {
   resource: DataResourceMetadata;
-  targetIds: readonly string[];
-  record?: Row | null;
-  label?: string;
 }): React.ReactElement {
-  const [open, setOpen] = React.useState(false);
   const stableTargetIds = useStableArray(targetIds);
   const invalidates = useResourceInvalidates([resource.modelLabel]);
   const query = useAuthoredQuery(RecordAccessDocument, {
@@ -126,7 +130,8 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel }:
       : undefined);
   return <ManageAccessDialog
     open={open}
-    onOpenChange={setOpen}
+    onOpenChange={onOpenChange}
+    {...(trigger === undefined ? {} : { trigger })}
     {...(label === undefined ? {} : { label })}
     targetIds={stableTargetIds}
     grantable={availableRelations}

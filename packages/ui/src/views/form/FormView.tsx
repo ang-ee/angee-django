@@ -9,6 +9,9 @@ import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
 import { cn } from "../../lib/cn";
 import { SlotOutlet } from "../../lib/slot-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
+import { LoadingPanel } from "../../fragments/LoadingPanel";
+import { RecordSupport } from "../../communication/Chatter";
+import { useRecordSupportPlacement } from "../../communication/chatter-context";
 import {
   RecordChrome,
   RecordChromeProvider,
@@ -32,6 +35,7 @@ import {
   FormViewOverview,
   FormViewRecordHeader,
 } from "./form-view-body";
+import type { EditableLineSupplementalColumn } from "./EditableLines";
 import { recordRepresentationValue, titleText } from "./form-view-model";
 
 export {
@@ -76,8 +80,12 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   toolbar?: React.ReactNode;
   /** Saved-record content rendered below, but outside, the form element. */
   recordExtras?: (context: RecordPanelContext) => React.ReactNode;
+  /** Keep record support in the shell's right pane, or opt into the same full chatter below the form. */
+  recordSupportPlacement?: "right" | "below";
   /** Non-form content rendered after the overview fields for both create and edit. */
   formExtras?: (context: RecordToolbarContext) => React.ReactNode;
+  /** Compact read-only content rendered with the record heading. */
+  headerExtras?: (context: RecordToolbarContext) => React.ReactNode;
   /** Group presentation; ungrouped/title/body/status placement is unchanged. */
   layout?: "stacked" | "tabs";
   /** Place the first two unlabeled groups side by side within one form overview. */
@@ -89,6 +97,10 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
     render: (context: RecordToolbarContext) => React.ReactNode;
   }[];
   linesTabLabel?: React.ReactNode;
+  /** Editable line fields shown before the user expands advanced line details. */
+  linePrimaryFields?: readonly string[];
+  /** Read-only domain projections rendered beside editable line fields. */
+  lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
   /** Record chrome density and height behavior. */
   recordPresentation?: RecordPresentation;
   /** Initial saved-record tab; invalid or unavailable ids fall back to Overview. */
@@ -105,7 +117,19 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
 export function FormView(props: FormViewProps): React.ReactElement {
   const model = useModelMetadata(props.resource);
   const identity = `${model?.resource?.schemaName ?? "default"}:${model?.resource?.modelLabel ?? props.resource}:${props.id ?? "create"}`;
-  return <FormViewInstance key={identity} {...props} />;
+  const supportKey = props.id && !props.hideRecordChrome && props.recordSupportPlacement === "below"
+    ? identity
+    : null;
+  useRecordSupportPlacement(supportKey);
+  const recordExtras = React.useCallback((context: RecordPanelContext) => <>
+    {props.recordExtras?.(context)}
+    {supportKey ? <RecordSupport recordKey={supportKey} /> : null}
+  </>, [props.recordExtras, supportKey]);
+  return <FormViewInstance
+    key={identity}
+    {...props}
+    recordExtras={props.recordExtras || supportKey ? recordExtras : undefined}
+  />;
 }
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
@@ -138,10 +162,13 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     title,
     recordExtras,
     formExtras,
+    headerExtras,
     layout = "stacked",
     groupLayout = "stacked",
     bodyTabs,
     linesTabLabel,
+    linePrimaryFields,
+    lineSupplementalColumns,
     recordPresentation = "document",
     defaultRecordTab,
     overviewTab,
@@ -190,6 +217,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     recordTabList,
     tabbed,
     visibleDeleteAction,
+    loading,
     pending,
     submitForm,
     discardChanges,
@@ -207,10 +235,16 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
-  const overview = <FormViewOverview
-    surface={surface} layout={layout} groupLayout={groupLayout} bodyTabs={bodyTabs}
-    linesTabLabel={linesTabLabel} context={recordToolbarContext}
-  />;
+  const awaitingRecord = !isCreate && displayRecord == null && loading;
+  const overview = awaitingRecord ? (
+    <LoadingPanel message={t("form.loading")} />
+  ) : (
+    <FormViewOverview
+      surface={surface} layout={layout} groupLayout={groupLayout} bodyTabs={bodyTabs}
+      linesTabLabel={linesTabLabel} linePrimaryFields={linePrimaryFields}
+      lineSupplementalColumns={lineSupplementalColumns} context={recordToolbarContext}
+    />
+  );
   const overviewLabel = overviewTab?.label ?? t("form.tabOverview");
   const orderedTabs = overviewTab?.position === "last"
     ? [...recordTabList, { id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }]
@@ -221,7 +255,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     </RecordChromeProvider>
   ) : overview;
   const recordExtrasPanel =
-    recordPanelContext && recordExtras ? (
+    !awaitingRecord && recordPanelContext && recordExtras ? (
       <div className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}>
         {recordExtras(recordPanelContext)}
       </div>
@@ -229,10 +263,13 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
   const overviewWithFormExtras = (
     <>
       {overviewBody}
-      {formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
+      {!awaitingRecord && formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
     </>
   );
-  const formTitle = typeof title === "function" ? title(recordToolbarContext) : title;
+  const formTitle = awaitingRecord
+    ? t("form.loading")
+    : typeof title === "function" ? title(recordToolbarContext) : title;
+  const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
 
   const handleFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
     if (
@@ -323,7 +360,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             : "pb-12",
         )}
       >
-        <FormViewRecordHeader surface={surface} title={formTitle} />
+        <FormViewRecordHeader surface={surface} title={formTitle} extra={headerExtra} />
         <ErrorBanner description={saveError} title={t("form.saveFailed")} />
         {tabbed ? (
           <>
@@ -368,7 +405,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 py-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} />
+            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
             <ErrorBanner description={saveError} title={t("form.saveFailed")} />
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
@@ -399,7 +436,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} />
+            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
             <ErrorBanner description={saveError} title={t("form.saveFailed")} />
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (

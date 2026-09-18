@@ -226,28 +226,49 @@ class WorkflowDefinitionManagerMixin:
         with self._definition_caller(workflow):
             return self._definition_snapshot(workflow)
 
+    def definition_graph(self, workflow: Any) -> WorkflowGraph:
+        """Read one authorized workflow and its exact owned definition rows.
+
+        Step and Edge read authority derives from their Workflow owner.  Prove
+        that owner once, then capture the owned rows through the internal
+        definition seam so graph inspection does not recursively re-evaluate
+        the same relationship policy for every row.
+        """
+
+        with self._definition_caller(workflow):
+            alias = router.db_for_write(self.model, instance=workflow)
+            self.using(alias).with_action("read").get(pk=workflow.pk)
+            with self._definition_read(workflow.pk, using=alias) as locked:
+                return self._owned_definition_graph(locked, using=alias)
+
+    @staticmethod
+    def _owned_definition_rows(workflow: Any, *, using: str) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+        """Return all rows owned by one already-authorized definition."""
+
+        step_model = workflow.steps.model
+        edge_model = workflow.edges.model
+        nodes = tuple(
+            system_queryset(step_model, using=using, lock=None)
+            .filter(workflow_id=workflow.pk)
+            .order_by("key", "pk")
+        )
+        edges = tuple(
+            system_queryset(edge_model, using=using, lock=None)
+            .filter(workflow_id=workflow.pk)
+            .select_related("source", "target")
+            .order_by("pk")
+        )
+        return nodes, edges
+
+    def _owned_definition_graph(self, workflow: Any, *, using: str) -> WorkflowGraph:
+        nodes, edges = self._owned_definition_rows(workflow, using=using)
+        return WorkflowGraph.from_rows(workflow, nodes, edges)
+
     def _definition_snapshot(self, workflow: Any) -> DefinitionSnapshot:
         alias = router.db_for_write(self.model, instance=workflow)
-        self.using(alias).with_action("read").get(pk=workflow.pk)
+        projected = self.using(alias).with_action("read").with_lineage_projection().get(pk=workflow.pk)
         with self._definition_read(workflow.pk, using=alias) as locked:
-            projected = self.using(alias).with_action("read").with_lineage_projection().get(pk=locked.pk)
-            nodes = tuple(locked.steps.order_by("key", "pk"))
-            edges = tuple(locked.edges.select_related("source", "target").order_by("pk"))
-            step_model = locked.steps.model
-            edge_model = locked.edges.model
-            if (
-                len(nodes) != system_queryset(step_model, using=alias).filter(workflow_id=locked.pk).count()
-                or len(edges) != system_queryset(edge_model, using=alias).filter(workflow_id=locked.pk).count()
-            ):
-                raise DefinitionEditError(
-                    (
-                        GraphDiagnostic(
-                            "reference_invalid",
-                            "Definition rows are missing or unavailable.",
-                            GraphLocation("workflow", GraphIdentity(existing_id=locked.pk), "definition"),
-                        ),
-                    )
-                )
+            nodes, edges = self._owned_definition_rows(locked, using=alias)
             readiness = WorkflowGraph.from_rows(locked, nodes, edges).diagnostics()
             return DefinitionSnapshot(locked.draft_revision, projected, nodes, edges, readiness)
 
@@ -328,7 +349,7 @@ class WorkflowDefinitionManagerMixin:
                 draft = self.using(alias).get(pk=workflow.pk)
                 if draft.draft_revision != expected_revision:
                     raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
-                diagnostics = WorkflowGraph.from_workflow(draft).diagnostics()
+                diagnostics = self._owned_definition_graph(draft, using=alias).diagnostics()
                 if diagnostics:
                     raise DefinitionReadinessError(diagnostics)
                 current = self.current_published_for(draft)
@@ -435,7 +456,7 @@ class WorkflowDefinitionManagerMixin:
             state.preflight()
             node_correlations, edge_correlations = state.persist()
             revision = self._definition_revision(locked.pk, locked.draft_revision)
-            readiness = WorkflowGraph.from_workflow(locked).diagnostics()
+            readiness = self._owned_definition_graph(locked, using=alias).diagnostics()
             result = DefinitionResult(revision, tuple(node_correlations), tuple(edge_correlations), readiness)
         return result
 

@@ -14,6 +14,7 @@ from angee.base.historical_relationships import (
     delete_historical_relationships,
     ensure_historical_relationships,
     retarget_historical_resource,
+    retarget_historical_resource_type,
 )
 
 
@@ -38,6 +39,51 @@ class HistoricalRelationshipTests(TransactionTestCase):
     """The helper writes exact historical tuples without a live manager."""
 
     databases = {"default", "historical_relationships_other"}
+
+    def test_resource_type_retarget_preserves_resource_and_subject_grants(self) -> None:
+        """An app rename moves both ends and deduplicates exact retained grants."""
+
+        for storage in ("denormalized", "registry"):
+            with self.subTest(storage=storage), override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+                apps = _historical_state().apps
+                old = RelationshipTuple(
+                    resource=ObjectRef("workflows_ocr/extraction", f"{storage}-row"),
+                    relation="reader",
+                    subject=SubjectRef.of("workflows_ocr/extraction", f"{storage}-subject"),
+                )
+                exact_new = RelationshipTuple(
+                    resource=ObjectRef("workflows_extraction/extraction", f"{storage}-row"),
+                    relation=old.relation,
+                    subject=SubjectRef.of("workflows_extraction/extraction", f"{storage}-subject"),
+                )
+                ensure_historical_relationships(
+                    apps,
+                    using=connection.alias,
+                    relationships=(old, exact_new),
+                )
+
+                retarget_historical_resource_type(
+                    apps,
+                    using=connection.alias,
+                    old_type="workflows_ocr/extraction",
+                    new_type="workflows_extraction/extraction",
+                )
+
+                model_name = "RelationshipRegistry" if storage == "registry" else "Relationship"
+                rows = apps.get_model("rebac", model_name)._base_manager.using(connection.alias)
+                if storage == "registry":
+                    rows = rows.filter(
+                        resource_fk__resource_type="workflows_extraction/extraction",
+                        subject_fk__resource_type="workflows_extraction/extraction",
+                    )
+                    resources = apps.get_model("rebac", "RebacResource")._base_manager.using(connection.alias)
+                    self.assertFalse(resources.filter(resource_type="workflows_ocr/extraction").exists())
+                else:
+                    rows = rows.filter(
+                        resource_type="workflows_extraction/extraction",
+                        subject_type="workflows_extraction/extraction",
+                    )
+                self.assertEqual(rows.count(), 1)
 
     def test_resource_retarget_preserves_exact_grants_and_registry_identity(self) -> None:
         """Both stores merge identical grants or retain the old FK row in place."""

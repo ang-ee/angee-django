@@ -102,6 +102,7 @@ const ResourceSchema = v.looseObject({
   typeNames: TypeNamesSchema,
   rowModel: v.optional(v.picklist(["client", "server"])),
   recordRepresentation: OptionalString,
+  recordSearchFields: v.optional(Strings),
   subtitle: v.nullish(SubtitleSchema),
   implFields: v.optional(Strings),
   capabilities: Strings,

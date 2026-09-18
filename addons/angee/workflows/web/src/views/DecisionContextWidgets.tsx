@@ -1,6 +1,6 @@
 import * as React from "react";
 import * as v from "valibot";
-import { Button, Glyph, JsonValueView, optionalTranslation, useRecordPeek,
+import { Badge, Button, Collapsible, Glyph, defaultWidgets, optionalTranslation, useRecordPeek,
   type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
 import { useWorkflowsT } from "../i18n";
 
@@ -24,22 +24,23 @@ const Difference = v.object({
 const Reason = v.object({ code: v.string(), parameters: v.optional(v.record(v.string(),
   v.union([v.string(), v.number(), v.boolean()])), {}) });
 
-function InvalidContext({ value }: WidgetRenderProps): React.ReactElement {
-  return <div className="space-y-1 text-sm text-fg-muted">
-    <p>Frozen review context is unavailable.</p>
-    <JsonValueView value={value} readOnly />
+function InvalidContext(_props: WidgetRenderProps): React.ReactElement {
+  return <div className="rounded-6 border border-warning-soft bg-warning-soft p-3 text-sm text-fg-2">
+    This saved review does not contain a supported presentation. Its frozen processing details remain available below.
   </div>;
 }
 
 function RecordLine({ record }: { record: v.InferOutput<typeof RecordRef> }): React.ReactElement {
   const open = useRecordPeek();
-  return <div className="text-sm">
+  const authoredLabel = record.label.trim();
+  const label = authoredLabel && authoredLabel !== record.model && authoredLabel !== record.id
+    ? authoredLabel : "Open record";
+  return <div className="flex flex-wrap items-center gap-x-2 text-sm">
     <Button type="button" variant="link" onClick={() => open({
       model: record.model, id: record.id, label: record.label,
       tab: record.tab, page: record.page, search: record.search,
-    })}><Glyph name="workflow-escalate" />{record.label || record.id}</Button>
-    <span className="ml-2 text-fg-muted">{record.model} · {record.id}</span>
-    {record.page != null ? <span className="ml-2 text-fg-muted">Page {record.page}</span> : null}
+    })}><Glyph name="workflow-escalate" />{label}</Button>
+    {record.page != null ? <span className="text-fg-muted">Page {record.page}</span> : null}
   </div>;
 }
 
@@ -55,10 +56,16 @@ function FactsContext({ value }: WidgetRenderProps): React.ReactElement {
   const parsed = v.safeParse(v.array(Fact), value);
   if (!parsed.success) return <InvalidContext value={value} />;
   return <div className="space-y-3">{parsed.output.map((fact, index) => <div key={`${fact.pointer}:${index}`} className="rounded-6 border border-border p-3">
-    <div className="flex justify-between gap-3 text-sm"><span className="font-medium">{fact.label}</span><span className="text-fg-muted">{fact.authority}</span></div>
-    <JsonValueView value={fact.value} readOnly />
-    {fact.subject ? <RecordLine record={fact.subject} /> : null}
-    {fact.evidence.map((ref, item) => <RecordLine key={`${ref.model}:${ref.id}:${item}`} record={ref} />)}
+    <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+      <span className="font-medium">{fact.label}</span>
+      <Badge tone={fact.authority === "unverified" ? "warning" : "neutral"}>{authorityLabel(fact.authority)}</Badge>
+    </div>
+    <div className="mt-2"><ContextValue value={fact.value} /></div>
+    {fact.subject || fact.evidence.length ? <div className="mt-3 space-y-1 border-t border-border-subtle pt-2">
+      <p className="text-xs font-medium text-fg-muted">Evidence</p>
+      {uniqueRecords([...(fact.subject ? [fact.subject] : []), ...fact.evidence])
+        .map((ref) => <RecordLine key={`${ref.model}:${ref.id}`} record={ref} />)}
+    </div> : null}
   </div>)}</div>;
 }
 
@@ -68,9 +75,13 @@ function DifferencesContext({ value }: WidgetRenderProps): React.ReactElement {
   return <div className="space-y-3">{parsed.output.map((difference, index) => <div key={`${difference.field}:${index}`} className="rounded-6 border border-border p-3">
     <div className="text-sm font-medium">{difference.label}</div>
     <div className="grid grid-cols-2 gap-3 text-xs text-fg-muted"><span>Before</span><span>After</span></div>
-    <div className="grid grid-cols-2 gap-3"><JsonValueView value={difference.left} readOnly /><JsonValueView value={difference.right} readOnly /></div>
-    {difference.leftRecord ? <RecordLine record={difference.leftRecord} /> : null}
-    {difference.rightRecord ? <RecordLine record={difference.rightRecord} /> : null}
+    <div className="grid grid-cols-2 gap-3"><ContextValue value={difference.left} /><ContextValue value={difference.right} /></div>
+    {difference.leftRecord || difference.rightRecord ? <div className="mt-2 space-y-1 border-t border-border-subtle pt-2">
+      <p className="text-xs font-medium text-fg-muted">Evidence</p>
+      {uniqueRecords([...(difference.leftRecord ? [difference.leftRecord] : []),
+        ...(difference.rightRecord ? [difference.rightRecord] : [])])
+        .map((ref) => <RecordLine key={`${ref.model}:${ref.id}`} record={ref} />)}
+    </div> : null}
   </div>)}</div>;
 }
 
@@ -82,8 +93,81 @@ function ReasonsContext({ value }: WidgetRenderProps): React.ReactElement {
     <div className="text-sm font-medium">{optionalTranslation(t, `decision.reason.${reason.code}`,
       Object.fromEntries(Object.entries(reason.parameters).map(([key, item]) =>
         [key, typeof item === "boolean" ? String(item) : item]))) ?? reason.code}</div>
-    {Object.keys(reason.parameters).length ? <JsonValueView value={reason.parameters} readOnly /> : null}
+    {Object.keys(reason.parameters).length ? <div className="mt-2"><ContextValue value={reason.parameters} /></div> : null}
   </div>)}</div>;
+}
+
+function ObjectContext({ value }: WidgetRenderProps): React.ReactElement {
+  const parsed = v.safeParse(v.record(v.string(), Json), value);
+  if (!parsed.success) return <InvalidContext value={value} />;
+  return <StructuredContextValue value={parsed.output} />;
+}
+
+function ContextValue({ value }: { value: unknown }): React.ReactElement {
+  if (value === null || value === undefined || value === "") {
+    return <span className="text-13 text-fg-muted">Not provided</span>;
+  }
+  if (typeof value === "boolean") return <span className="text-13 text-fg-2">{value ? "Yes" : "No"}</span>;
+  if (typeof value === "string" || typeof value === "number") {
+    return <span className="break-words text-13 text-fg-2">{String(value)}</span>;
+  }
+  if (Array.isArray(value)) {
+    if (!value.length) return <span className="text-13 text-fg-muted">None</span>;
+    if (value.some((item) => item !== null && typeof item === "object")) {
+      return <StructuredContextValue value={value} />;
+    }
+    return <ul className="space-y-1 pl-4 text-13 marker:text-fg-muted">
+      {value.map((item, index) => <li key={index}><ContextValue value={item} /></li>)}
+    </ul>;
+  }
+  if (typeof value === "object") {
+    return <StructuredContextValue value={value} />;
+  }
+  return <span className="text-13 text-fg-muted">Unavailable</span>;
+}
+
+/** Keep exact retained structured values available without flooding the review surface. */
+function StructuredContextValue({ value }: { value: unknown }): React.ReactElement {
+  const t = useWorkflowsT();
+  return <Collapsible variant="section">
+    <Collapsible.Trigger><Collapsible.Icon />{t("inbox.contextDetails")}</Collapsible.Trigger>
+    <Collapsible.Panel><div className="pt-2"><ExactStructuredValue value={value} /></div></Collapsible.Panel>
+  </Collapsible>;
+}
+
+function ExactStructuredValue({ value }: { value: unknown }): React.ReactElement {
+  if (value === null || value === undefined || value === "") {
+    return <span className="text-13 text-fg-muted">Not provided</span>;
+  }
+  if (typeof value === "boolean") return <span className="text-13 text-fg-2">{value ? "Yes" : "No"}</span>;
+  if (typeof value === "string" || typeof value === "number") {
+    return <span className="break-words text-13 text-fg-2">{String(value)}</span>;
+  }
+  if (Array.isArray(value)) {
+    if (!value.length) return <span className="text-13 text-fg-muted">None</span>;
+    return <ol className="space-y-2 pl-5 text-13 marker:text-fg-muted">
+      {value.map((item, index) => <li key={index}><ExactStructuredValue value={item} /></li>)}
+    </ol>;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (!entries.length) return <span className="text-13 text-fg-muted">None</span>;
+    return <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)]">
+      {entries.map(([key, item]) => <React.Fragment key={key}>
+        <dt className="break-all font-mono text-xs text-fg-muted">{key}</dt>
+        <dd className="min-w-0"><ExactStructuredValue value={item} /></dd>
+      </React.Fragment>)}
+    </dl>;
+  }
+  return <span className="text-13 text-fg-muted">Unavailable</span>;
+}
+
+function uniqueRecords(records: readonly v.InferOutput<typeof RecordRef>[]): v.InferOutput<typeof RecordRef>[] {
+  return [...new Map(records.map((record) => [`${record.model}:${record.id}`, record])).values()];
+}
+
+function authorityLabel(authority: v.InferOutput<typeof Fact>["authority"]): string {
+  return { source: "Source evidence", correction: "Reviewer confirmed", unverified: "Needs review" }[authority];
 }
 
 export const decisionContextWidgets: Readonly<Record<string, WidgetDefinition>> = {
@@ -91,4 +175,8 @@ export const decisionContextWidgets: Readonly<Record<string, WidgetDefinition>> 
   facts: { read: FactsContext },
   differences: { read: DifferencesContext },
   reasons: { read: ReasonsContext },
+  // Extend the shared structured-object widget instead of replacing its edit
+  // slot. Decision context uses the generic read projection, while typed Step
+  // config still needs the native nested object editor under the same widget id.
+  object: { ...defaultWidgets.object, read: ObjectContext },
 };

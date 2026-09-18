@@ -242,6 +242,14 @@ Use these owners instead of maintaining another contract in an addon:
   `namespace.addon.widget` (lowercase segments with digits/underscores); the
   owning web addon registers the identical key. Unknown bare built-in names
   remain schema errors.
+- A computed GraphQL field may declare presentation facts through
+  `strawberry_django.field(metadata=...)`. The shared classifiers in
+  `angee.data.field_classification` own resolution: surface metadata first,
+  Django field declarations second, then the ordinary type fallback. Money
+  projections use `MONEY_CURRENCY_FIELD_METADATA_KEY` from `angee.money.fields`
+  instead of repeating its metadata key. Presentation metadata alone grants no
+  ORM write or aggregation capability; those still come from a real model field
+  or explicit resource input policy.
 - Manually ordered rows use `FractionalRankField` (NOT NULL) plus a database
   `UniqueConstraint` over their context fields and rank. Use the field's
   append/between API; `FractionalRankExhausted` means enqueue
@@ -1109,6 +1117,12 @@ and current contracts before applying a historical example to a new deployment.
   then commits the domain write, result, artifacts, and continuation dispatch
   together. Keep provider and blob I/O outside this mode; legacy non-retained
   execution refuses database commands.
+- **A fenced database command retires another Workflow run through `RUN_CANCEL`.**
+  Retain the cancellation intent and target `WorkflowRun` artifact with an
+  external wait in the command transaction. The dispatcher cancels the target
+  outside the attempt-write session, retains artifact delivery, and consumes the
+  intent together. Continue only after the target is terminal; keep a bounded
+  timer on the wait to reconcile a missed or racing delivery.
 - **External domain waits subscribe before reading their predicate.** A retained
   standard invocation calls `engine.subscribe_external(step_run, record)` for one
   target per attempt, lets that attempt-row write commit, then re-reads the domain
@@ -1126,6 +1140,13 @@ and current contracts before applying a historical example to a new deployment.
   budget enforcement.
 - **Invalid decision resolution re-opens the decision.** It increments the
   attempt audit and leaves journal history immutable.
+- **Terminal Decision delegation is consumed only by the current fenced
+  invocation.** A database-command consumer may pass its complete locked record
+  basis to `consume_decision_resolution()`. The active human resolver must
+  either retain ordinary read access to every record or the Decision's protected
+  record delegation must exactly cover that basis for the same resource types.
+  Consumption does not restore preview access, persist a capability, or create
+  continuing grants after the Decision settles.
 - **Workflow event triggers consume the declared change feed.** A trigger's
   target model must declare `changes()`; otherwise validation tells the addon to
   declare `changes()` for the model to join the change feed.

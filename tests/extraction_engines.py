@@ -7,17 +7,17 @@ from angee.workflows_extraction.engines import (
     DocumentPipelineError,
     DocumentResult,
     DocumentSource,
-    OcrEngine,
+    ExtractionEngine,
     PageImage,
     PageResult,
 )
 
 
-class FakeOcrEngine(OcrEngine):
+class FakePageExtractionEngine(ExtractionEngine):
     """Deterministic engine for workflow and consumer integration tests."""
 
     key = "fake"
-    label = "Fake OCR"
+    label = "Fake page extraction"
 
     def extract_page(
         self,
@@ -35,11 +35,11 @@ class FakeOcrEngine(OcrEngine):
             results.get(page_key, config.get("result", {})) if isinstance(results, dict) else config.get("result", {})
         )
         if not isinstance(value, dict):
-            raise ValueError("Fake OCR page results must be JSON objects.")
+            raise ValueError("Fake page extraction results must be JSON objects.")
         return PageResult(value=dict(value))
 
 
-class FakeDocumentEngine(OcrEngine):
+class FakeDocumentEngine(ExtractionEngine):
     """Deterministic document-level engine for evidence integration tests."""
 
     key = "fake_document"

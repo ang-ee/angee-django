@@ -216,15 +216,16 @@ describe("recordLinesToRows", () => {
   test("normalizes a record's lines into seed rows, defaulting position to order", () => {
     const rows = recordLinesToRows(
       [
-        { id: "ln_a", product: { id: "p1" }, label: "A", quantity: 1, position: 0 },
+        { id: "ln_a", product: { id: "p1" }, label: "A", quantity: 1, amount_subtotal: "10.00", position: 0 },
         { id: "ln_b", product: { id: "p2" }, label: "B", quantity: 2 },
       ],
       config,
     );
     expect(rows).toEqual([
-      { id: "ln_a", product: { id: "p1" }, label: "A", quantity: 1, position: 0 },
+      { id: "ln_a", product: { id: "p1" }, label: "A", quantity: 1, amount_subtotal: "10.00", position: 0 },
       { id: "ln_b", product: { id: "p2" }, label: "B", quantity: 2, position: 1 },
     ]);
+    expect(lineToInput(rows[0]!, 0, config)).not.toHaveProperty("amount_subtotal");
   });
 
   test("returns an empty list for a missing lines collection", () => {

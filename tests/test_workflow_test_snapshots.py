@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
@@ -27,6 +28,7 @@ from angee.workflows.attempts import (
     JsonPresence,
     RecoveryCapability,
     RecoveryMode,
+    workflow_result_terminal_match_error,
 )
 from angee.workflows.definitions import StaleDefinitionError
 from angee.workflows.dispatch import WorkflowDispatchKind
@@ -91,6 +93,7 @@ def test_recovery_reuses_exact_input_and_records_nonduplicated_artifacts(
         source_run = WorkflowRun.objects.create(
             workflow=workflow,
             status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)),
             created_by=actor,
             input_present=True,
             input={"exact": None},
@@ -139,6 +142,101 @@ def test_recovery_reuses_exact_input_and_records_nonduplicated_artifacts(
     assert [(artifact.declaration_index, artifact.label) for artifact in artifacts] == [
         (0, "Recovered workflow")
     ]
+
+
+def test_admitted_continuation_completion_accepts_one_exact_successful_recovery(
+    workflow_engine_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = get_user_model().objects.create_user(username="continuation-completion-owner")
+    workflow, step = _draft(name="Recovered continuation", owner=actor)
+    actor_ref = str(to_subject_ref(actor))
+    frozen_input = {"invoice": "retained"}
+    with system_context(reason="continuation completion source fixture"):
+        original = WorkflowRun.objects.create(
+            workflow=workflow,
+            origin=RunOrigin.WORKFLOW,
+            status="running",
+            admitted_actor_ref=actor_ref,
+            created_by=actor,
+            input_present=True,
+            input=frozen_input,
+        )
+        failed_step = StepRun.objects.create(
+            run=original,
+            step=step,
+            status="scheduled",
+        )
+    failed_attempt = StepAttempt.objects.claim(
+        failed_step,
+        input=AttemptInput(True, frozen_input, {"kind": "run_input"}),
+        claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(
+        failed_attempt.pk,
+        lease_token=failed_attempt.lease_token,
+        at=timezone.now(),
+    )
+    StepAttempt.objects.finalize(
+        failed_attempt.pk,
+        lease_token=failed_attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.ERROR, error="retained failure"),
+        recorded_at=timezone.now(),
+    )
+    with system_context(reason="continuation completion recovery fixture"):
+        original.refresh_from_db()
+        original.mark_failed("Retained child failed.")
+        recovery = WorkflowRun.objects.create(
+            workflow=workflow,
+            origin=RunOrigin.RECOVERY,
+            status="running",
+            recovery_source_attempt=failed_attempt,
+            recovery_request_actor_ref=actor_ref,
+            recovery_mode=RecoveryMode.FRESH,
+            admitted_actor_ref=actor_ref,
+            created_by=actor,
+            input_present=True,
+            input=frozen_input,
+        )
+        recovery.mark_succeeded(outcome="deferred", output={"status": "deferred"})
+
+    monkeypatch.setattr(
+        type(StepAttempt.objects),
+        "admitted_continuation_child",
+        lambda self, *args, **kwargs: original,
+    )
+    retained, completion = StepAttempt.objects.admitted_continuation_completion(
+        failed_step.pk,
+        lease_token=uuid.uuid4(),
+        child_id_path=("child_run_id",),
+        expected_starter_class="starter",
+        actor=actor,
+    )
+    assert retained.pk == original.pk
+    assert completion is not None and completion.pk == recovery.pk
+
+    with system_context(reason="conflicting continuation completion fixture"):
+        conflicting = WorkflowRun.objects.create(
+            workflow=workflow,
+            origin=RunOrigin.RECOVERY,
+            status="running",
+            recovery_source_attempt=failed_attempt,
+            recovery_request_actor_ref=actor_ref,
+            recovery_mode=RecoveryMode.FRESH,
+            admitted_actor_ref=actor_ref,
+            created_by=actor,
+            input_present=True,
+            input={"invoice": "changed"},
+        )
+        conflicting.mark_succeeded(outcome="deferred", output={"status": "deferred"})
+    with pytest.raises(ValidationError, match="conflicting retained facts"):
+        StepAttempt.objects.admitted_continuation_completion(
+            failed_step.pk,
+            lease_token=uuid.uuid4(),
+            child_id_path=("child_run_id",),
+            expected_starter_class="starter",
+            actor=actor,
+        )
 
 
 def test_fresh_recovery_reuses_original_child_handoff_across_multiple_failures(
@@ -240,10 +338,11 @@ def test_fresh_recovery_child_handoff_rejects_changed_or_unrelated_identity(
         source_attempt, actor=actor, request_key="changed-child",
     )
     assert attempt.result_kind == AttemptResultKind.ERROR
-    assert "different immutable facts" in attempt.error
+    assert "different frozen input" in attempt.error
     with system_context(reason="unrelated child parent fixture"):
         unrelated_run = WorkflowRun.objects.create(
-            workflow=source_step_run.run.workflow, status="running", created_by=actor,
+            workflow=source_step_run.run.workflow, status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)), created_by=actor,
         )
         unrelated_parent = StepRun.objects.create(
             run=unrelated_run, step=source_step_run.step, status="started",
@@ -277,7 +376,8 @@ def test_fresh_recovery_keeps_new_downstream_child_on_the_recovery_run(
             workflow=source_workflow, source=recovered_step, target=downstream_step,
         )
         source_run = WorkflowRun.objects.create(
-            workflow=source_workflow, status="running", created_by=actor,
+            workflow=source_workflow, status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)), created_by=actor,
             input_present=True, input={"parent": "retained"},
         )
         recovered_step_run = StepRun.objects.create(
@@ -350,6 +450,293 @@ def test_fresh_recovery_keeps_new_downstream_child_on_the_recovery_run(
     assert attempt.result_kind == AttemptResultKind.DONE
     assert child.parent_step_run_id == downstream.pk
     assert child.parent_step_run.run.same_execution_lineage(recovery)
+
+
+def test_repeated_recovery_retains_required_original_and_current_outputs(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later recovery flattens exact predecessor evidence from the same lineage."""
+
+    del workflow_engine_tables, no_workflow_queue
+    actor = get_user_model().objects.create_user(username="repeated-recovery-owner")
+
+    class RecoverableMiddle(StepImpl):
+        @classmethod
+        def recovery_capability(cls, *, attempt: object) -> RecoveryCapability:
+            del attempt
+            return RecoveryCapability(RecoveryMode.FRESH)
+
+        def run_recovery(
+            self,
+            step_run: object,
+            *,
+            now: object,
+            source_attempt: object,
+            mode: RecoveryMode,
+        ) -> StepResult:
+            del now, source_attempt
+            assert mode is RecoveryMode.FRESH
+            assert step_run.input == {"original": "retained"}
+            return StepResult.done({"middle": "recovered"}, outcome="done")
+
+    class RecoverableEnd(StepImpl):
+        @classmethod
+        def recovery_capability(cls, *, attempt: object) -> RecoveryCapability:
+            del attempt
+            return RecoveryCapability(RecoveryMode.FRESH)
+
+        def run(self, step_run: object, *, now: object) -> StepResult:
+            del step_run, now
+            raise RuntimeError("recover downstream")
+
+        def run_recovery(
+            self,
+            step_run: object,
+            *,
+            now: object,
+            source_attempt: object,
+            mode: RecoveryMode,
+        ) -> StepResult:
+            del now, source_attempt
+            assert mode is RecoveryMode.FRESH
+            assert step_run.input == {
+                "original": {"original": "retained"},
+                "middle": {"middle": "recovered"},
+            }
+            return StepResult.done({"accepted": True}, outcome="done")
+
+    with system_context(reason="repeated recovery fixture"):
+        workflow = Workflow.objects.create(name="Repeated recovery", created_by=actor)
+        original_step = Step.objects.create(
+            workflow=workflow, key="original", name="Original", step_class="handler", is_entry=True,
+        )
+        middle_step = Step.objects.create(
+            workflow=workflow,
+            key="middle",
+            name="Middle",
+            step_class="handler",
+            input_binding={"kind": "step_output", "step_key": "original", "path": []},
+        )
+        end_step = Step.objects.create(
+            workflow=workflow,
+            key="end",
+            name="End",
+            step_class="handler",
+            input_binding={
+                "kind": "object",
+                "fields": {
+                    "original": {"kind": "step_output", "step_key": "original", "path": []},
+                    "middle": {"kind": "step_output", "step_key": "middle", "path": []},
+                },
+            },
+        )
+        Edge.objects.create(workflow=workflow, source=original_step, target=middle_step)
+        Edge.objects.create(workflow=workflow, source=middle_step, target=end_step)
+        source_run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)),
+            created_by=actor,
+        )
+        original_run = StepRun.objects.create(
+            run=source_run, step=original_step, status="scheduled",
+        )
+        middle_run = StepRun.objects.create(
+            run=source_run, step=middle_step, status="scheduled",
+        )
+    original_attempt = StepAttempt.objects.claim(
+        original_run, claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(
+        original_attempt.pk, lease_token=original_attempt.lease_token, at=timezone.now(),
+    )
+    StepAttempt.objects.finalize(
+        original_attempt.pk,
+        lease_token=original_attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.DONE,
+            output_present=True,
+            output={"original": "retained"},
+            outcome="done",
+        ),
+        recorded_at=timezone.now(),
+    )
+    middle_attempt = StepAttempt.objects.claim(
+        middle_run,
+        input=AttemptInput(
+            True,
+            {"original": "retained"},
+            {
+                "kind": "step_output",
+                "attempt_id": original_attempt.pk,
+                "step_run_id": original_run.pk,
+                "step_key": "original",
+                "path": [],
+            },
+        ),
+        claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(
+        middle_attempt.pk, lease_token=middle_attempt.lease_token, at=timezone.now(),
+    )
+    StepAttempt.objects.finalize(
+        middle_attempt.pk,
+        lease_token=middle_attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.ERROR, error="recover middle"),
+        recorded_at=timezone.now(),
+    )
+
+    original_resolve = type(middle_step).resolve_impl
+    monkeypatch.setattr(
+        type(middle_step),
+        "resolve_impl",
+        lambda self, field: (
+            RecoverableMiddle
+            if self.key == "middle"
+            else RecoverableEnd
+            if self.key == "end"
+            else original_resolve(self, field)
+        ),
+    )
+    first, recovered_middle = _execute_recovery(
+        middle_attempt, actor=actor, request_key="recover-middle",
+    )
+    assert recovered_middle.result_kind == AttemptResultKind.DONE
+    assert advance_once(first)
+    execute_started(first)
+    with system_context(reason="repeated recovery downstream failure"):
+        failed_end = StepRun.objects.get(run=first, step=end_step).current_attempt
+    assert failed_end.result_kind == AttemptResultKind.ERROR
+
+    second = WorkflowRun.objects.start_recovery(
+        failed_end, request_key="recover-end", actor=actor,
+    )
+    with system_context(reason="repeated recovery admitted evidence"):
+        evidence = {
+            row.step.key: row.source_attempt_id
+            for row in second.recovery_evidence.select_related("step")
+        }
+    assert evidence == {
+        "original": original_attempt.pk,
+        "middle": recovered_middle.pk,
+    }
+    started = advance_once(second)
+    assert [(row.step_id, row.map_index) for row in started] == [(end_step.pk, -1)]
+    execute_started(second)
+    assert advance_once(second) == []
+    second.refresh_from_db()
+    assert second.status == "succeeded"
+
+
+def test_fresh_recovery_rebinds_preparation_error_from_admitted_evidence(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed binding is prepared again from the new run's immutable basis."""
+
+    del workflow_engine_tables, no_workflow_queue
+    actor = get_user_model().objects.create_user(username="preparation-recovery-owner")
+
+    class RecoverableBoundStep(StepImpl):
+        @classmethod
+        def recovery_capability(cls, *, attempt: object) -> RecoveryCapability:
+            del attempt
+            return RecoveryCapability(RecoveryMode.FRESH)
+
+        def run_recovery(
+            self,
+            step_run: object,
+            *,
+            now: object,
+            source_attempt: object,
+            mode: RecoveryMode,
+        ) -> StepResult:
+            del now, source_attempt
+            assert mode is RecoveryMode.FRESH
+            assert step_run.input == {"retained": "source"}
+            return StepResult.done({"rebound": True}, outcome="done")
+
+    with system_context(reason="preparation recovery fixture"):
+        workflow = Workflow.objects.create(name="Preparation recovery", created_by=actor)
+        source_step = Step.objects.create(
+            workflow=workflow, key="source", name="Source", step_class="handler", is_entry=True,
+        )
+        target_step = Step.objects.create(
+            workflow=workflow,
+            key="target",
+            name="Target",
+            step_class="handler",
+            input_binding={"kind": "step_output", "step_key": "source", "path": []},
+        )
+        Edge.objects.create(workflow=workflow, source=source_step, target=target_step)
+        source_run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)),
+            created_by=actor,
+        )
+        source_row = StepRun.objects.create(
+            run=source_run, step=source_step, status="scheduled",
+        )
+        target_row = StepRun.objects.create(
+            run=source_run, step=target_step, status="scheduled",
+        )
+    retained = StepAttempt.objects.claim(source_row, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(
+        retained.pk, lease_token=retained.lease_token, at=timezone.now(),
+    )
+    StepAttempt.objects.finalize(
+        retained.pk,
+        lease_token=retained.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.DONE,
+            output_present=True,
+            output={"retained": "source"},
+            outcome="done",
+        ),
+        recorded_at=timezone.now(),
+    )
+    failed = StepAttempt.objects.fail_preparation(
+        target_row,
+        cause=AttemptCause.INITIAL,
+        input=AttemptInput(
+            False,
+            None,
+            {
+                "kind": "binding",
+                "diagnostics": [{"code": "source_missing", "path": []}],
+            },
+        ),
+        result=AttemptResult(
+            AttemptResultKind.PREPARATION_ERROR,
+            error="Source output is unavailable.",
+            outcome="failed",
+        ),
+        claimed_at=timezone.now(),
+        recorded_at=timezone.now(),
+    )
+    original_resolve = type(target_step).resolve_impl
+    monkeypatch.setattr(
+        type(target_step),
+        "resolve_impl",
+        lambda self, field: (
+            RecoverableBoundStep if self.key == "target" else original_resolve(self, field)
+        ),
+    )
+
+    recovery, attempt = _execute_recovery(
+        failed, actor=actor, request_key="rebind-preparation-error",
+    )
+    assert attempt.result_kind == AttemptResultKind.DONE
+    assert attempt.input == {"retained": "source"}
+    assert attempt.input_provenance["kind"] == "recovery_evidence"
+    assert attempt.input_provenance["attempt_id"] == retained.pk
+    assert advance_once(recovery) == []
+    recovery.refresh_from_db()
+    assert recovery.status == "succeeded"
 
 
 def test_fresh_recovery_validates_downstream_map_items_against_their_expansion(
@@ -684,6 +1071,7 @@ def test_repair_test_retains_exact_source_attempt_and_original_input(
         source_run = WorkflowRun.objects.create(
             workflow=workflow,
             status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)),
             created_by=actor,
             input_present=True,
             input=None,
@@ -759,6 +1147,7 @@ def test_repair_context_offers_retained_done_predecessor_as_fixture(
         source_run = WorkflowRun.objects.create(
             workflow=workflow,
             status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)),
             created_by=actor,
         )
         predecessor_run = StepRun.objects.create(
@@ -1527,7 +1916,8 @@ def _failed_child_handoff(
     with system_context(reason="failed child handoff fixture"):
         source_workflow, source_step = _draft(name="Recovery parent", owner=actor)
         source_run = WorkflowRun.objects.create(
-            workflow=source_workflow, status="running", created_by=actor,
+            workflow=source_workflow, status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)), created_by=actor,
             input_present=True, input={"parent": "retained"},
         )
         source_step_run = StepRun.objects.create(
@@ -1594,6 +1984,189 @@ def _execute_recovery(
     return recovery, attempt
 
 
+def test_fresh_recovery_continues_from_retained_success_blocked_by_skipped_merge(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retained successful recovery resumes after its exact skipped sibling."""
+
+    del workflow_engine_tables, no_workflow_queue
+    actor = get_user_model().objects.create_user(username="recovery-merge-continuation-owner")
+
+    class RecoverableReview(StepImpl):
+        calls = 0
+
+        @classmethod
+        def recovery_capability(cls, *, attempt: object) -> RecoveryCapability:
+            del attempt
+            return RecoveryCapability(RecoveryMode.FRESH)
+
+        def run(self, step_run: object, *, now: object) -> StepResult:
+            del step_run, now
+            type(self).calls += 1
+            return StepResult.done({"reviewed": True}, outcome="completed")
+
+    class RecoverableApply(StepImpl):
+        calls = 0
+
+        @classmethod
+        def recovery_capability(cls, *, attempt: object) -> RecoveryCapability:
+            del attempt
+            return RecoveryCapability(RecoveryMode.FRESH)
+
+        def run(self, step_run: object, *, now: object) -> StepResult:
+            del step_run, now
+            type(self).calls += 1
+            return StepResult.done({"source": "revised"}, outcome="continued")
+
+    class ContinueStep(StepImpl):
+        def run(self, step_run: object, *, now: object) -> StepResult:
+            del now
+            return StepResult.done(step_run.input, outcome="done")
+
+    with system_context(reason="recovery merge continuation fixture"):
+        workflow = Workflow.objects.create(
+            name="Recovery merge continuation",
+            created_by=actor,
+            output_schema={"type": "object"},
+            result_rules=[{
+                "outcome": "completed",
+                "producer": "terminal",
+                "when_outcome": "done",
+                "binding": {"kind": "step_output", "step_key": "terminal", "path": []},
+            }],
+        )
+        direct = Step.objects.create(
+            workflow=workflow, key="direct", name="Direct", step_class="handler", is_entry=True,
+        )
+        review = Step.objects.create(
+            workflow=workflow, key="review", name="Review", step_class="handler",
+        )
+        apply = Step.objects.create(
+            workflow=workflow, key="apply", name="Apply", step_class="handler",
+        )
+        merge = Step.objects.create(
+            workflow=workflow, key="merge", name="Merge", step_class="handler",
+            join_rule="none_failed_min_one_success",
+            input_binding={"kind": "step_output", "step_key": "apply", "path": []},
+        )
+        terminal = Step.objects.create(
+            workflow=workflow, key="terminal", name="Terminal", step_class="handler",
+            input_binding={"kind": "step_output", "step_key": "merge", "path": []},
+        )
+        Edge.objects.create(workflow=workflow, source=direct, target=merge, condition="done")
+        Edge.objects.create(workflow=workflow, source=review, target=apply, condition="completed")
+        Edge.objects.create(workflow=workflow, source=apply, target=merge, condition="continued")
+        Edge.objects.create(workflow=workflow, source=merge, target=terminal, condition="done")
+        source_run = WorkflowRun.objects.create(
+            workflow=workflow, status="running", admitted_actor_ref=str(to_subject_ref(actor)),
+            created_by=actor,
+        )
+        StepRun.objects.create(run=source_run, step=direct, status="skipped")
+        failed_review = StepRun.objects.create(run=source_run, step=review, status="scheduled")
+    failed_attempt = StepAttempt.objects.claim(failed_review, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(
+        failed_attempt.pk, lease_token=failed_attempt.lease_token, at=timezone.now(),
+    )
+    StepAttempt.objects.finalize(
+        failed_attempt.pk, lease_token=failed_attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.ERROR, error="initial apply failure"),
+        recorded_at=timezone.now(),
+    )
+    original_resolve = type(apply).resolve_impl
+    monkeypatch.setattr(
+        type(apply), "resolve_impl",
+        lambda self, field: (
+            RecoverableReview if self.pk == review.pk else RecoverableApply
+            if self.pk == apply.pk else ContinueStep
+            if self.pk in {merge.pk, terminal.pk} else original_resolve(self, field)
+        ),
+    )
+    ordinary = WorkflowRun.objects.start_recovery(
+        failed_attempt, request_key="ordinary-retained-merge", actor=actor,
+    )
+    with system_context(reason="ordinary retained merge admission"):
+        ordinary_rows = {
+            row.step.key: row for row in ordinary.step_runs.select_related("step")
+        }
+    assert ordinary_rows["direct"].status == "skipped"
+    assert ordinary_rows["review"].status == "scheduled"
+
+    with system_context(reason="failed recovery result fixture"):
+        prior = WorkflowRun.objects.create(
+            workflow=workflow, origin=RunOrigin.RECOVERY, status="running",
+            recovery_source_attempt=failed_attempt, recovery_request_actor_ref=str(to_subject_ref(actor)),
+            recovery_mode=RecoveryMode.FRESH, admitted_actor_ref=str(to_subject_ref(actor)),
+            created_by=actor,
+        )
+        prior_review = StepRun.objects.create(run=prior, step=review, status="scheduled")
+    prior_review_attempt = StepAttempt.objects.claim(
+        prior_review, claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(
+        prior_review_attempt.pk,
+        lease_token=prior_review_attempt.lease_token,
+        at=timezone.now(),
+    )
+    StepAttempt.objects.finalize(
+        prior_review_attempt.pk,
+        lease_token=prior_review_attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.DONE, output_present=True,
+            output={"reviewed": True}, outcome="completed",
+        ),
+        recorded_at=timezone.now(),
+    )
+    with system_context(reason="retained Apply success fixture"):
+        prior_apply = StepRun.objects.create(run=prior, step=apply, status="scheduled")
+    prior_apply_attempt = StepAttempt.objects.claim(
+        prior_apply, claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(
+        prior_apply_attempt.pk,
+        lease_token=prior_apply_attempt.lease_token,
+        at=timezone.now(),
+    )
+    StepAttempt.objects.finalize(
+        prior_apply_attempt.pk,
+        lease_token=prior_apply_attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.DONE, output_present=True,
+            output={"source": "revised"}, outcome="continued",
+        ),
+        recorded_at=timezone.now(),
+    )
+    with system_context(reason="retain failed recovery finalization"):
+        prior.refresh_from_db()
+        prior.mark_failed(workflow_result_terminal_match_error(0))
+
+    continuation = WorkflowRun.objects.start_recovery(
+        failed_attempt, request_key="continue-retained-merge", actor=actor,
+        prior_recovery=prior,
+    )
+    with system_context(reason="retained merge continuation admission"):
+        rows = {row.step.key: row for row in continuation.step_runs.select_related("step")}
+        assert rows["direct"].status == "skipped"
+        assert rows["merge"].status == "scheduled"
+        assert (
+            continuation.recovery_evidence.get(step=apply).source_attempt_id
+            == prior_apply_attempt.pk
+        )
+    assert RecoverableReview.calls == 0
+    assert RecoverableApply.calls == 0
+    assert len(advance_once(continuation)) == 1
+    execute_started(continuation)
+    assert len(advance_once(continuation)) == 1
+    execute_started(continuation)
+    assert advance_once(continuation) == []
+    continuation.refresh_from_db()
+    assert continuation.status == "succeeded"
+    assert continuation.result["output"] == {"source": "revised"}
+    assert RecoverableReview.calls == 0
+    assert RecoverableApply.calls == 0
+
+
 @pytest.mark.parametrize("child_finishes_before_recovery", [False, True])
 def test_native_call_recovery_retains_child_and_consumes_exact_completion(
     workflow_engine_tables: None, child_finishes_before_recovery: bool,
@@ -1610,7 +2183,8 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
         source_step.save(update_fields={"step_class", "config"})
         payload = {"publication": str(child_version.sqid), "input": {"child": "retained"}}
         source_run = WorkflowRun.objects.create(
-            workflow=source_workflow, status="running", created_by=actor,
+            workflow=source_workflow, status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)), created_by=actor,
             input_present=True, input=payload,
         )
         source_step_run = StepRun.objects.create(
@@ -2070,11 +2644,11 @@ def test_test_request_identity_is_immutable_and_survives_actor_deletion(
     run.origin = RunOrigin.MANUAL
     with pytest.raises(ValidationError, match="identity is immutable"):
         run.save(update_fields={"origin"})
-    with pytest.raises(TypeError, match="identity is immutable"):
+    with pytest.raises(TypeError, match="identity and terminal facts are immutable"):
         WorkflowRun.objects.filter(pk=run.pk).update(subject_object_id=1)
     run.refresh_from_db()
     run.workflow = workflow
-    with pytest.raises(TypeError, match="identity is immutable"):
+    with pytest.raises(TypeError, match="invocation identity and terminal facts are immutable"):
         WorkflowRun.objects.bulk_update([run], ["workflow"])
     with system_context(reason="load deferred test run"):
         deferred = WorkflowRun.objects.only("pk").get(pk=run.pk)

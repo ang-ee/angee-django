@@ -41,6 +41,8 @@ export interface RelationCreateConfig {
   prefillField?: string;
   /** Dialog title; defaults to `New <model>`. */
   title?: ReactNode;
+  /** Optional always-visible action that opens the same native create form. */
+  actionLabel?: ReactNode;
 }
 
 /** What the inline edit form needs to edit the *selected* related record. */
@@ -68,10 +70,10 @@ export interface RelationPickerProps {
   "aria-required"?: boolean;
   readOnly?: boolean;
   /**
-   * Enables the in-place "Create …" affordance: when the typed query matches no
-   * option, a "Create …" row opens this create form, and the saved record's id
-   * is selected. Permission is server-enforced — a denied create surfaces in the
-   * form's own error banner.
+   * Enables native in-place creation. A no-match typed query always offers the
+   * "Create …" row; `actionLabel` additionally exposes the same form as a visible
+   * button. The saved record is selected, and denied creates surface through the
+   * form's own server-backed error banner.
    */
   create?: RelationCreateConfig;
   /** Called with the new id after an inline create (e.g. to refetch options). */
@@ -109,8 +111,9 @@ type DialogState =
  * A `RelationField` backed by inline create/edit forms and a "follow" arrow. The
  * caller supplies the options (and, to enable an affordance, the related model +
  * its form fields); "Create …" opens a create dialog prefilled with the typed
- * name, the pencil edits the selected record, and the arrow opens its detail page
- * — all without leaving the parent surface.
+ * name, an authored create action can expose that same form directly, the pencil
+ * edits the selected record, and the arrow opens its detail page — all without
+ * leaving the parent surface.
  */
 export function RelationPicker({
   controlRef,
@@ -142,6 +145,7 @@ export function RelationPicker({
   // The open inline-form dialog; `null` means closed.
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const prefillField = create?.prefillField ?? "name";
+  const canCreate = Boolean(create?.actionLabel) && !readOnly;
   const canEdit = Boolean(edit) && !readOnly && Boolean(value);
 
   return (
@@ -174,6 +178,17 @@ export function RelationPicker({
             searchState={searchState}
           />
         </div>
+        {canCreate && create ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="shrink-0"
+            onClick={() => setDialog({ mode: "create", query: "" })}
+          >
+            {create.actionLabel}
+          </Button>
+        ) : null}
         {canEdit && value ? (
           <Button
             type="button"
@@ -223,10 +238,12 @@ export function RelationPicker({
                             fields: create.fields,
                             ...(create.submit ? { submit: create.submit } : {}),
                           }),
-                      defaultValues: {
-                        ...create.defaultValues,
-                        [prefillField]: dialog.query,
-                      },
+                      defaultValues: dialog.query
+                        ? {
+                            ...create.defaultValues,
+                            [prefillField]: dialog.query,
+                          }
+                        : create.defaultValues,
                       onSaved: (row: Row) => {
                         const id = rowPublicId(row);
                         if (id) {

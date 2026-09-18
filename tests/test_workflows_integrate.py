@@ -269,8 +269,17 @@ def test_probe_gate_map_execute_archive_end_to_end(
     assert decision.step_run.resume_state["_decision_ids"] == [decision.pk]
     expected_schema = {
         "type": "object",
-        "required": ["mappings"],
+        "required": ["action"],
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["apply_mappings"],
+                "options": [{
+                    "value": "apply_mappings",
+                    "label": "Apply mappings",
+                    "verdict": "COMPLETE",
+                }],
+            },
             "mappings": {
                 "type": "array",
                 "widget": "rows",
@@ -301,6 +310,38 @@ def test_probe_gate_map_execute_archive_end_to_end(
                 },
             }
         },
+        "oneOf": [{
+            "type": "object",
+            "required": ["action", "mappings"],
+            "properties": {
+                "action": {"const": "apply_mappings"},
+                "mappings": {
+                    "type": "array",
+                    "widget": "rows",
+                    "label": "Archive mappings",
+                    "items": {
+                        "type": "object",
+                        "required": ["extractor", "label", "target"],
+                        "properties": {
+                            "extractor": {
+                                "type": "string", "label": "Extractor key", "readOnly": True,
+                            },
+                            "label": {
+                                "type": "string", "label": "Archive type", "readOnly": True,
+                            },
+                            "target": {
+                                "type": "string", "label": "Target",
+                                "relation": {
+                                    "resource": "storage.Drive",
+                                    "create": {"resource": "storage.Drive"},
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            "additionalProperties": False,
+        }],
     }
     assert decision.form_schema == expected_schema
     assert decision.payload == {
@@ -336,13 +377,14 @@ def test_probe_gate_map_execute_archive_end_to_end(
                 "map_index": 0,
                 "status": "succeeded",
                 "outcome": "completed",
-                "output": {
-                    "extractor": "fixture_archive",
-                    "target": str(drive.sqid),
-                    "result": {"landed": 1, "target": str(drive.sqid)},
-                },
-                "error": "",
-            }
+                    "output": {
+                        "extractor": "fixture_archive",
+                        "target": str(drive.sqid),
+                        "result": {"landed": 1, "target": str(drive.sqid)},
+                    },
+                    "output_present": True,
+                    "error": "",
+                }
         ],
     }
     with system_context(reason="test workflows integrate unit"):
@@ -431,6 +473,7 @@ def test_prepare_rejects_swapped_extractors_and_blank_targets(
         swapped,
         "complete",
         payload={
+            "action": "apply_mappings",
             "mappings": [
                 {"extractor": "aux_archive", "label": "Fixture archive", "target": str(drive.sqid)}
             ]
@@ -494,6 +537,7 @@ def test_map_partial_failure_lands_only_successful_units(
         decision,
         "complete",
         payload={
+            "action": "apply_mappings",
             "mappings": [
                 {"extractor": "aux_archive", "label": "Aux archive", "target": target},
                 {"extractor": "fixture_archive", "label": "Fixture archive", "target": target},
@@ -626,6 +670,7 @@ def _resolution(*, target: str) -> dict[str, Any]:
     """Return the single-row fixture mapping resolution for ``target``."""
 
     return {
+        "action": "apply_mappings",
         "mappings": [
             {
                 "extractor": "fixture_archive",
@@ -686,6 +731,7 @@ def _archive_workflow() -> Any:
                 "key": "prepare",
                 "step_class": "archive_execute",
                 "config": {"mode": "prepare"},
+                "input_binding": {"kind": "step_output", "step_key": "gate", "path": []},
             },
             {
                 "key": "map",

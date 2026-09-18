@@ -221,7 +221,11 @@ export {
   useRecordChromeContext,
   type RecordChromeContext,
 } from "./resource/record-chrome-context";
-export { EditableLines, type EditableLinesProps } from "./form/EditableLines";
+export {
+  EditableLines,
+  type EditableLineSupplementalColumn,
+  type EditableLinesProps,
+} from "./form/EditableLines";
 export {
   BoundDescriptorField,
   BoundFormValue,

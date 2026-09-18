@@ -56,16 +56,19 @@ class RuntimeMigrations:
         *,
         runtime_dir: Path,
         labels: Iterable[str],
+        protected_history_labels: Iterable[str] = (),
     ) -> None:
         self.addons = tuple(addons)
         self.runtime_dir = runtime_dir
         self.labels = frozenset(labels)
+        self.protected_history_labels = frozenset(protected_history_labels)
 
     def plan(
         self,
         *,
         apps: Apps | None = None,
         fresh_history: bool = False,
+        defer_drop_check: bool = False,
     ) -> tuple[RuntimeMigrationPlan, ...]:
         """Plan applicable writes, guarding adopted tables against the supplied apps.
 
@@ -120,7 +123,11 @@ class RuntimeMigrations:
                     )
                 fresh_history = False
         if fresh_history:
-            target_labels = {str(declaration["app_label"]) for _, declaration in declarations}
+            target_labels = {
+                str(declaration["app_label"])
+                for _, declaration in declarations
+                if declaration["app_label"] not in self.protected_history_labels
+            }
             if target_labels and all(not loader.graph.leaf_nodes(label) for label in target_labels):
                 logger.info("fresh generated migration history has no leaves; deferring addon migrations")
                 return ()
@@ -256,12 +263,13 @@ class RuntimeMigrations:
         for addon, declaration in pending:
             origin = f"{addon.name}:{declaration['name']}"
             skipped_origins.append(origin)
-            logger.warning(
-                "%s (app label %s): runtime migration never became applicable; skipped",
-                origin,
-                declaration["app_label"],
-            )
-        if apps is not None:
+            if not defer_drop_check:
+                logger.warning(
+                    "%s (app label %s): runtime migration never became applicable; skipped",
+                    origin,
+                    declaration["app_label"],
+                )
+        if apps is not None and not defer_drop_check:
             self._check_autodetected_drops(loader, state, ProjectState.from_apps(apps), skipped_origins)
 
         return tuple(plans)
@@ -280,19 +288,40 @@ class RuntimeMigrations:
         apps: Apps | None = None,
         fresh_history: bool = False,
     ) -> tuple[Path, ...]:
-        """Copy applicable sources after planning and optional current-app drop checks."""
+        """Stage sources, then fail closed before Django can autodetect unsafe drops.
 
-        plans = self.plan(apps=apps, fresh_history=fresh_history)
+        A retained-label adoption may need to materialize its destination schema
+        and data migration before downstream model diffs can point at the new
+        graph.  Those source files are safe to persist: no database operation has
+        run.  The second plan reloads that exact staged graph and applies the
+        physical-owner/history deletion guard.  A blocked cleanup therefore
+        stops the enclosing build before its following ``makemigrations`` step,
+        while leaving the reviewed staging nodes available for the downstream
+        cutover migration.
+        """
+
+        plans = self.plan(
+            apps=apps,
+            fresh_history=fresh_history,
+            defer_drop_check=apps is not None,
+        )
         rendered = tuple((plan, self._render(plan)) for plan in plans)
         for plan, source in rendered:
             write_atomic(plan.output_path, source)
         importlib.invalidate_caches()
-        if plans:
+        if apps is not None:
+            remaining = self.plan(apps=apps, fresh_history=False)
+            if remaining:
+                origins = ", ".join(plan.origin for plan in remaining)
+                raise RuntimeError(
+                    "addon runtime migration staging did not reach a fixed point: " + origins
+                )
+        elif plans:
             MigrationLoader(None, ignore_no_migrations=True)
         return tuple(plan.output_path for plan in plans)
 
-    @staticmethod
     def _check_autodetected_drops(
+        self,
         loader: MigrationLoader,
         from_state: ProjectState,
         to_state: ProjectState,
@@ -314,6 +343,12 @@ class RuntimeMigrations:
                     if model._meta.proxy or not model._meta.managed or model._meta.swapped:
                         continue
                     table = model._meta.db_table
+                    if app_label in self.protected_history_labels:
+                        drops.append(
+                            f"{model._meta.label_lower}: DeleteModel would retire protected "
+                            f"migration-history table {table!r} before its declared cleanup"
+                        )
+                        continue
                     owners = sorted(owner for owner in table_owners.get(table, ()) if owner != model._meta.label_lower)
                     if owners:
                         drops.append(

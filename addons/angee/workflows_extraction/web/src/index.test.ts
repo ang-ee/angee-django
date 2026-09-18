@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 
 import workflowsExtraction from "./index";
 
-describe("workflows OCR addon manifest", () => {
+describe("workflows extraction addon manifest", () => {
   test("registers immutable Extraction evidence as a native resource route", () => {
     expect(() => expectValidBaseAddon(workflowsExtraction)).not.toThrow();
     const routes = workflowsExtraction.routes ?? [];

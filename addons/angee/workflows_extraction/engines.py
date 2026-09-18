@@ -1,9 +1,10 @@
-"""Registry-selected OCR engine contracts."""
+"""Registry-selected document extraction engine contracts."""
 
 from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, Sequence, cast
 
@@ -12,6 +13,10 @@ from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.output import OutputObjectDefinition
 
 from angee.base.impl import ImplBase
+
+RETAINED_AUTHORITY_COMPLETION_REVIEW = (
+    "retained_authority_completion_requires_review"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,14 +109,27 @@ class DocumentPipelineError(RuntimeError):
         self.metadata = dict(metadata or {})
 
 
-class OcrEngine(ImplBase):
+class ExtractionEngine(ImplBase):
     """Engine protocol selected by an extraction's registry-backed field."""
 
-    category = "OCR"
-    label = "OCR engine"
+    category = "Extraction"
+    label = "Extraction engine"
     pipeline_version: ClassVar[str] = "page-v1"
     document_engine: ClassVar[bool] = False
     evidence_layout: ClassVar[dict[str, Any]] = {}
+
+    def inference_required(
+        self, result: Mapping[str, Any], unresolved_reasons: Sequence[str]
+    ) -> bool:
+        """Return whether retained unresolved facts require another model call.
+
+        Domain profiles may exclude review reasons that belong to later business
+        controls.  The shared workflow still retains those reasons and forwards
+        them unchanged; this hook only owns whether mapping inference is needed.
+        """
+
+        del result
+        return bool(unresolved_reasons)
 
     def validate_model(self, model: Any | None, *, role: Literal["mapping", "recognition"]) -> None:
         """Validate a configured model using the same contract as extraction.
@@ -193,7 +211,7 @@ class OcrEngine(ImplBase):
         raise NotImplementedError
 
 
-class InferenceMappingEngine(OcrEngine):
+class InferenceMappingEngine(ExtractionEngine):
     """Map retained text with any catalogue model's native inference backend."""
 
     key = "inference"
@@ -218,6 +236,8 @@ class InferenceMappingEngine(OcrEngine):
 
         prompt = mapping_prompt(parts, schema, config)
         settings = {"timeout": timeout, "max_tokens": int(config.get("max_tokens", 8192))}
+        if "thinking" in config:
+            settings["thinking"] = config["thinking"]
         started = time.monotonic()
         try:
             response = mapping_model.chat(
@@ -298,11 +318,11 @@ def _mapping_response_metadata(
     return metadata
 
 
-class NoOcrEngine(OcrEngine):
-    """Disabled provider: fails explicitly without fabricating evidence."""
+class NoExtractionEngine(ExtractionEngine):
+    """Disabled extraction provider that never fabricates evidence."""
 
     key = "none"
-    label = "No OCR engine"
+    label = "No extraction engine"
     document_engine = True
 
     def extract_document(
@@ -315,4 +335,4 @@ class NoOcrEngine(OcrEngine):
         config: dict[str, Any],
         timeout: float,
     ) -> DocumentResult:
-        raise DocumentPipelineError("Select a configured OCR engine before extracting documents.")
+        raise DocumentPipelineError("Select a configured extraction engine before extracting documents.")

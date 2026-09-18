@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import OperationalError, transaction
+from django.db import OperationalError, models, transaction
 from django.db.models.signals import post_save
 from django.utils import timezone
 from rebac import system_context
@@ -383,8 +383,9 @@ def test_owner_preflight_rejects_ancestry_drift_during_locking(run: WorkflowRun)
         nonlocal drifted
         if model is WorkflowRun and kwargs.get("lock") == ("self",) and not drifted:
             drifted = True
-            native_system_queryset(StepRun, using="default", lock=None).filter(pk=step_run.pk).update(
-                run_id=other_run.pk
+            models.QuerySet.update(
+                native_system_queryset(StepRun, using="default", lock=None).filter(pk=step_run.pk),
+                run_id=other_run.pk,
             )
         return native_system_queryset(model, **kwargs)
 
@@ -418,5 +419,11 @@ def test_publication_telemetry_keeps_latest_attempt_facts(run: WorkflowRun) -> N
 
 def test_dispatch_kind_is_closed() -> None:
     assert {kind.value for kind in WorkflowDispatchKind} == {
-        "advance", "execute", "decision_expire", "decision_escalate",
+        "advance",
+        "execute",
+        "decision_expire",
+        "decision_escalate",
+        "artifact_delivery",
+        "child_cancel",
+        "run_cancel",
     }

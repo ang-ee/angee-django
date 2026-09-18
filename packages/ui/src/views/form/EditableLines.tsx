@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   Controller,
   useFieldArray,
+  useFormState,
   useWatch,
   type Control,
   type FieldValues,
@@ -81,6 +82,25 @@ export interface EditableLinesProps {
   footer?: (rows: readonly Row[]) => React.ReactNode;
   /** Server validation messages per line row, indexed by row position. */
   rowErrors?: readonly (ValidationErrors | undefined)[];
+  /**
+   * Editable field names shown in the compact line view. Every declared line
+   * field remains available through the details toggle and in the save diff.
+   */
+  primaryFields?: readonly string[];
+  /** Read-only columns derived by the composing domain from each live line. */
+  supplementalColumns?: readonly EditableLineSupplementalColumn[];
+}
+
+export interface EditableLineSupplementalColumn {
+  key: string;
+  header: React.ReactNode;
+  minWidth?: number;
+  render: (
+    row: Row,
+    parentRow: Row | null,
+    index: number,
+    context: { formIsDirty: boolean },
+  ) => React.ReactNode;
 }
 
 interface LineColumn {
@@ -116,20 +136,45 @@ export function EditableLines({
   readOnly,
   footer,
   rowErrors,
+  primaryFields,
+  supplementalColumns = [],
 }: EditableLinesProps): React.ReactElement {
   const t = useUiT();
   const config = React.useMemo(() => lineDiffConfig(lines), [lines]);
   const schemaMetadata = useSchemaFieldMetadata();
-  const columns = React.useMemo(
+  const allColumns = React.useMemo(
     () => lineColumns(lines, config, schemaMetadata),
     [lines, config, schemaMetadata],
   );
+  const compactColumns = React.useMemo(() => {
+    if (!primaryFields) return allColumns;
+    const names = new Set(primaryFields);
+    const selected = allColumns.filter((column) => names.has(column.field.name));
+    return selected.length > 0 ? selected : allColumns;
+  }, [allColumns, primaryFields]);
+  const hasAdvancedColumns = compactColumns.length < allColumns.length;
+  const [showAdvancedColumns, setShowAdvancedColumns] = React.useState(false);
+  React.useEffect(() => {
+    if (!hasAdvancedColumns || showAdvancedColumns) return;
+    const visible = new Set(compactColumns.map((column) => column.field.name));
+    const hiddenHasErrors = rowErrors?.some((rowError) =>
+      allColumns.some((column) =>
+        !visible.has(column.field.name)
+        && rowMessages(rowError, column.field.name).length > 0,
+      ),
+    );
+    if (hiddenHasErrors) setShowAdvancedColumns(true);
+  }, [allColumns, compactColumns, hasAdvancedColumns, rowErrors, showAdvancedColumns]);
+  const columns = showAdvancedColumns ? allColumns : compactColumns;
   // The array field lives on the parent form; a per-array keyName keeps rhf's row
   // key off the line's own `id` (which stays the public id used by the save diff).
   const { fields, append, insert, move, remove } = useFieldArray({
     control: control as unknown as Control<FieldValues>,
     name,
     keyName: "rhfKey",
+  });
+  const { isDirty: formIsDirty } = useFormState({
+    control: control as unknown as Control<FieldValues>,
   });
   const rows = (useWatch({
     control: control as unknown as Control<FieldValues>,
@@ -176,85 +221,109 @@ export function EditableLines({
   // Header and rows reserve identical drag/action tracks. Minimum cell widths
   // belong to the grid; a narrow form scrolls this region rather than overlapping
   // neighboring controls. M2M chips get enough space for their selection summary.
-  const widths = columns.map((column) => column.relationMulti ? 160 : 128);
+  const widths = [
+    ...columns.map((column) => column.relationMulti ? 160 : 128),
+    ...supplementalColumns.map((column) => column.minWidth ?? 128),
+  ];
   const gridStyle = {
     gridTemplateColumns: `32px ${widths.map((width) => `minmax(${width}px, 1fr)`).join(" ")} 68px`,
   };
-  const minWidth = widths.reduce((total, width) => total + width, 100 + 18 + 8 * (columns.length + 1));
+  const minWidth = widths.reduce((total, width) => total + width, 100 + 18 + 8 * (widths.length + 1));
 
   return (
-    <div className="min-w-0 overflow-x-auto">
-      <div className="grid gap-2" style={{ minWidth }}>
-        {fields.length > 0 ? (
-          <div
-            className="grid items-center gap-2 border border-transparent px-2 text-xs font-medium uppercase tracking-wide text-fg-muted"
-            style={gridStyle}
-            aria-hidden
+    <div className="min-w-0">
+      {hasAdvancedColumns ? (
+        <div className="mb-2 flex justify-end">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowAdvancedColumns((shown) => !shown)}
           >
-            <span />
-            {columns.map((column) => (
-              <span key={column.field.name} className="truncate">
-                {column.header}
-              </span>
-            ))}
-            <span />
-          </div>
-        ) : null}
-
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={onDragEnd}
-        >
-          <SortableContext
-            items={fields.map((row) => row.rhfKey)}
-            strategy={verticalListSortingStrategy}
-          >
-            <div className="grid gap-1">
-              {fields.length === 0 ? (
-                <p className="px-2 py-3 text-13 text-fg-muted">{t("lines.empty")}</p>
-              ) : (
-                fields.map((row, index) => (
-                  <LineRow
-                    key={row.rhfKey}
-                    id={row.rhfKey}
-                    index={index}
-                    name={name}
-                    control={control}
-                    columns={columns}
-                    row={rows[index]}
-                    parentRow={parentRow}
-                    onRowChange={(patch) => patchRow(row.rhfKey, patch)}
-                    gridStyle={gridStyle}
-                    readOnly={readOnly}
-                    rowError={rowErrors?.[index]}
-                    t={t}
-                    onDuplicate={() =>
-                      insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never)
-                    }
-                    onRemove={() => remove(index)}
-                  />
-                ))
-              )}
-            </div>
-          </SortableContext>
-        </DndContext>
-
-        {footer ? <div>{footer(rows)}</div> : null}
-
-        {readOnly ? null : (
-          <div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => append(emptyLineRow(fields.length, config) as never)}
+            {t(showAdvancedColumns ? "lines.hideDetails" : "lines.showDetails")}
+          </Button>
+        </div>
+      ) : null}
+      <div className="overflow-x-auto">
+        <div className="grid gap-2" style={{ minWidth }}>
+          {fields.length > 0 ? (
+            <div
+              className="grid items-center gap-2 border border-transparent px-2 text-xs font-medium uppercase tracking-wide text-fg-muted"
+              style={gridStyle}
+              aria-hidden
             >
-              <Glyph name="plus" size={16} />
-              {t("lines.add")}
-            </Button>
-          </div>
-        )}
+              <span />
+              {columns.map((column) => (
+                <span key={column.field.name} className="truncate">
+                  {column.header}
+                </span>
+              ))}
+              {supplementalColumns.map((column) => (
+                <span key={column.key} className="truncate">
+                  {column.header}
+                </span>
+              ))}
+              <span />
+            </div>
+          ) : null}
+
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onDragEnd}
+          >
+            <SortableContext
+              items={fields.map((row) => row.rhfKey)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="grid gap-1">
+                {fields.length === 0 ? (
+                  <p className="px-2 py-3 text-13 text-fg-muted">{t("lines.empty")}</p>
+                ) : (
+                  fields.map((row, index) => (
+                    <LineRow
+                      key={row.rhfKey}
+                      id={row.rhfKey}
+                      index={index}
+                      name={name}
+                      control={control}
+                      columns={columns}
+                      supplementalColumns={supplementalColumns}
+                      row={rows[index]}
+                      parentRow={parentRow}
+                      formIsDirty={formIsDirty}
+                      onRowChange={(patch) => patchRow(row.rhfKey, patch)}
+                      gridStyle={gridStyle}
+                      readOnly={readOnly}
+                      rowError={rowErrors?.[index]}
+                      t={t}
+                      onDuplicate={() =>
+                        insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never)
+                      }
+                      onRemove={() => remove(index)}
+                    />
+                  ))
+                )}
+              </div>
+            </SortableContext>
+          </DndContext>
+
+          {footer ? <div>{footer(rows)}</div> : null}
+
+          {readOnly ? null : (
+            <div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => append(emptyLineRow(fields.length, config) as never)}
+              >
+                <Glyph name="plus" size={16} />
+                {t("lines.add")}
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -266,8 +335,10 @@ function LineRow({
   name,
   control,
   columns,
+  supplementalColumns,
   row,
   parentRow,
+  formIsDirty,
   onRowChange,
   gridStyle,
   readOnly,
@@ -281,8 +352,10 @@ function LineRow({
   name: string;
   control: Control<Record<string, unknown>>;
   columns: readonly LineColumn[];
+  supplementalColumns: readonly EditableLineSupplementalColumn[];
   row?: Row;
   parentRow?: Row | null;
+  formIsDirty: boolean;
   onRowChange: (patch: Record<string, unknown>) => void;
   gridStyle: React.CSSProperties;
   readOnly?: boolean;
@@ -360,6 +433,12 @@ function LineRow({
               {message}
             </p>
           ))}
+        </div>
+      ))}
+
+      {supplementalColumns.map((column) => (
+        <div key={column.key} className={CELL_CLASS}>
+          {column.render(row ?? {}, parentRow ?? null, index, { formIsDirty })}
         </div>
       ))}
 

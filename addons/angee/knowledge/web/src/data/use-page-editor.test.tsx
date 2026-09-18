@@ -53,6 +53,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
 });
 
 import { usePageEditor } from "./use-page-editor";
+import { KnowledgeUpdatePageBody } from "./documents";
 
 describe("usePageEditor", () => {
   beforeEach(() => {
@@ -69,11 +70,10 @@ describe("usePageEditor", () => {
       },
     });
     sdkMocks.useAuthoredMutation.mockImplementation((document: unknown) => {
-      const operationName = graphqlOperationName(document);
-      if (operationName === "KnowledgeUpdatePageBody") {
+      if (document === KnowledgeUpdatePageBody) {
         return [sdkMocks.updateBody, { fetching: false, error: null }];
       }
-      throw new Error(`Unexpected mutation: ${operationName}`);
+      throw new Error("Unexpected authored mutation document");
     });
   });
 
@@ -208,13 +208,6 @@ describe("usePageEditor", () => {
     expect(onTitleSaved).not.toHaveBeenCalled();
   });
 });
-
-function graphqlOperationName(document: unknown): string {
-  return (
-    (document as { definitions?: Array<{ name?: { value?: string } }> })
-      .definitions?.[0]?.name?.value ?? ""
-  );
-}
 
 const PAGE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {

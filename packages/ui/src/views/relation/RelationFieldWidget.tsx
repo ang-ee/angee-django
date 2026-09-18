@@ -1,6 +1,5 @@
-import { useMemo, useState, type ReactElement, type Ref } from "react";
+import { useMemo, type ReactElement, type Ref } from "react";
 import type { CrudFilter } from "@refinedev/core";
-import { useDebounce } from "use-debounce";
 
 import {
   useResourceRecordHref,
@@ -13,7 +12,7 @@ import {
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import { RelationPicker } from "./RelationPicker";
-import { useRelationSelectedOption, useRelationOptions } from "./relation-options";
+import { useRelationPickerOptions } from "./relation-options";
 
 export interface RelationFieldWidgetProps {
   value?: string | null;
@@ -45,29 +44,7 @@ export interface RelationFieldWidgetProps {
  * typing searches that collection on the server.
  */
 export function RelationFieldWidget(
-  props: RelationFieldWidgetProps,
-): ReactElement {
-  return props.value && !props.selectedOption ? (
-    <SelectedRelationFieldWidget {...props} />
-  ) : (
-    <RelationFieldWidgetBody {...props} />
-  );
-}
-
-/** A selected relation's label is an independent record read, not an options-page fact. */
-function SelectedRelationFieldWidget(
-  props: RelationFieldWidgetProps,
-): ReactElement {
-  const selectedOption = useRelationSelectedOption(props.relation, props.value);
-  return (
-    <RelationFieldWidgetBody
-      {...props}
-      selectedOption={selectedOption}
-    />
-  );
-}
-
-function RelationFieldWidgetBody({
+  {
   value,
   onChange,
   onCommit,
@@ -79,30 +56,14 @@ function RelationFieldWidgetBody({
   placeholder,
   "aria-label": ariaLabel,
   controlRef,
-}: RelationFieldWidgetProps): ReactElement {
-  // Latch the first popover-open so the option query fires once and stays
-  // enabled (so a later relabel/refetch keeps working), but never on a
-  // read-only/show render where the popover never opens.
-  const [opened, setOpened] = useState(false);
-  const [search, setSearch] = useState("");
-  const [searchText] = useDebounce(search, 250);
-  const { list, options: fetched } = useRelationOptions(relation, {
-    enabled: opened,
+}: RelationFieldWidgetProps,
+): ReactElement {
+  const picker = useRelationPickerOptions(relation, {
+    value,
+    selectedOption,
     filters,
-    searchText,
     searchFields,
   });
-  // The selected record's own (folded) label shows immediately; once the list
-  // loads, its fresh label for the same record wins, and the selected option is
-  // kept available even for a record beyond the fetched window.
-  const options = useMemo(
-    () =>
-      selectedOption &&
-      !fetched.some((option) => option.value === selectedOption.value)
-        ? [selectedOption, ...fetched]
-        : fetched,
-    [fetched, selectedOption],
-  );
 
   const relatedMetadata = useModelMetadata(relation.resource);
   const createFields = useMemo(
@@ -121,21 +82,14 @@ function RelationFieldWidgetBody({
       value={value}
       onChange={onChange}
       onCommit={onCommit}
-      options={options}
+      options={picker.options}
       readOnly={readOnly}
       placeholder={placeholder}
       aria-label={ariaLabel}
       followHref={followHref}
-      onOpenChange={(open) => {
-        setSearch("");
-        if (open) setOpened(true);
-      }}
-      onSearchChange={setSearch}
-      searchState={{
-        pending: list.fetching || search !== searchText,
-        error: list.error,
-        retry: list.refetch,
-      }}
+      onOpenChange={picker.onOpenChange}
+      onSearchChange={picker.onSearchChange}
+      searchState={picker.searchState}
       create={
         relation.canCreate && createFields.length > 0
           ? {
@@ -145,7 +99,7 @@ function RelationFieldWidgetBody({
             }
           : undefined
       }
-      onCreated={() => list.refetch()}
+      onCreated={() => picker.list.refetch()}
       // Edit is offered whenever the resource has editable fields — intentionally
       // UX-only, not gated on a `canEdit` flag (resource metadata exposes no
       // per-relation edit capability). The server is the authorization boundary: a denied
@@ -158,8 +112,8 @@ function RelationFieldWidgetBody({
       onEdited={() => {
         // A pencil-edit relabel can happen without the dropdown ever opening;
         // enable the option query so the refetch carries the fresh label.
-        setOpened(true);
-        list.refetch();
+        picker.activate();
+        picker.list.refetch();
       }}
     />
   );

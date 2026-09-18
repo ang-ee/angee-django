@@ -16,14 +16,21 @@ import {
   useRecordChromeContext,
   useRouteSearch,
 } from "@angee/ui";
-import { DECISION_SEARCH_KEY, decisionSearch, WorkflowApprovals } from "@angee/workflows";
+import {
+  DECISION_SEARCH_KEY,
+  decisionSearch,
+  WORKFLOW_DECISION_CONTENT_SLOT,
+  WorkflowApprovals,
+} from "@angee/workflows";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
 import { RunDedupeAction } from "./RunDedupeAction";
+import { PartyIdentityDecisionContent } from "./PartyIdentityDecisionContent";
 import { enWorkflowsPartiesMessages, useWorkflowsPartiesT } from "./i18n";
 
 export { RunDedupeAction } from "./RunDedupeAction";
+export { PartyIdentityDecisionContent } from "./PartyIdentityDecisionContent";
 
 const workflowsParties = defineBaseAddon({
   id: "workflows-parties",
@@ -37,6 +44,13 @@ const workflowsParties = defineBaseAddon({
       id: "workflows-parties.dedupe",
       sequence: 10,
       content: <RunDedupeAction />,
+    },
+    {
+      slot: WORKFLOW_DECISION_CONTENT_SLOT,
+      model: "workflows.Decision",
+      impl: "review-party-identity",
+      id: "workflows-parties.review-party-identity",
+      content: PartyIdentityDecisionContent,
     },
     {
       slot: FORM_VIEW_RECORD_CHROME_SLOT,

@@ -24,6 +24,12 @@ module = "runtime_migrations.workflow_identity"
 
 [[migrations]]
 fresh_history = "baseline"
+name = "workflow_admitted_actor"
+app_label = "workflows"
+module = "runtime_migrations.workflow_admitted_actor"
+
+[[migrations]]
+fresh_history = "baseline"
 name = "decision_target"
 app_label = "workflows"
 module = "runtime_migrations.decision_target"
@@ -33,3 +39,9 @@ fresh_history = "baseline"
 name = "step_artifact_target"
 app_label = "workflows"
 module = "runtime_migrations.step_artifact_target"
+
+[[migrations]]
+fresh_history = "baseline"
+name = "step_external_subscription"
+app_label = "workflows"
+module = "runtime_migrations.step_external_subscription"

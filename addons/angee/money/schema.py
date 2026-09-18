@@ -36,6 +36,12 @@ class CurrencyType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["code", "name"])
+    def display_name(self) -> str:
+        """Return the ISO code and catalogue name used by human choosers."""
+
+        return f"{self.code} — {self.name}"
+
 
 @strawberry_django.type(CurrencyRate)
 class CurrencyRateType(AngeeNode):
@@ -63,6 +69,8 @@ _CURRENCY_RESOURCE = hasura_model_resource(
     groupable=["decimal_places", "is_archived"],
     writable=["code", "name", "symbol", "decimal_places", "is_archived"],
     id_column="sqid",
+    record_representation="display_name",
+    record_search_fields=("code", "name"),
 )
 
 _RATE_RESOURCE = hasura_model_resource(

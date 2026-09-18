@@ -167,7 +167,9 @@ def final_resource_fields(
     for name, graphql_field in node.fields.items():
         source = (graphql_field.extensions or {}).get("strawberry-definition")
         python_name = str(getattr(source, "python_name", None) or name)
-        model_field = _model_field_or_none(model, python_name)
+        model_field_name = str(getattr(source, "django_name", None) or python_name)
+        model_field = _model_field_or_none(model, model_field_name)
+        source_metadata = getattr(source, "metadata", None)
         named = get_named_type(graphql_field.type)
         is_list = _graphql_type_is_list(graphql_field.type)
         is_enum = isinstance(named, GraphQLEnumType)
@@ -187,16 +189,24 @@ def final_resource_fields(
                 kind=kind,
                 scalar=scalar,
                 values=values,
-                widget=_projected_widget(model_field, kind, scalar),
-                aggregatable=name in aggregatable or python_name in aggregatable,
-                creatable=name in creatable or python_name in creatable,
-                updatable=name in updatable or python_name in updatable,
-                required_on_create=name in required_on_create or python_name in required_on_create,
+                widget=resource_field_widget(model_field, kind, source_metadata, scalar=scalar),
+                aggregatable=(
+                    name in aggregatable or python_name in aggregatable
+                    or (model_field is not None and model_field_name in aggregatable)
+                ),
+                creatable=(name in creatable or python_name in creatable
+                           or (model_field is not None and model_field_name in creatable)),
+                updatable=(name in updatable or python_name in updatable
+                           or (model_field is not None and model_field_name in updatable)),
+                required_on_create=(
+                    name in required_on_create or python_name in required_on_create
+                    or (model_field is not None and model_field_name in required_on_create)
+                ),
                 archivable=is_archive_field(model_field),
-                currency_field=money_currency_field(model_field),
+                currency_field=money_currency_field(model_field, source_metadata),
                 relation_model_label=relation_model_label,
                 relation_object=kind == "relation" and is_object,
-                model_field_name=python_name if model_field is not None else None,
+                model_field_name=model_field_name if model_field is not None else None,
             )
         )
     return tuple(projected)
@@ -235,12 +245,15 @@ def final_input_only_resource_fields(
                 continue
             source = (graphql_field.extensions or {}).get("strawberry-definition")
             python_name = str(getattr(source, "python_name", None) or wire_name)
-            candidates.setdefault(wire_name, (python_name, graphql_field))
+            model_field_name = str(getattr(source, "django_name", None) or python_name)
+            candidates.setdefault(wire_name, (model_field_name, graphql_field))
     projected: list[data_contract.DataResourceFieldMetadata] = []
     for name, (python_name, graphql_field) in candidates.items():
         if python_name in readable_sources:
             continue
         model_field = _model_field_or_none(model, python_name)
+        source = (graphql_field.extensions or {}).get("strawberry-definition")
+        source_metadata = getattr(source, "metadata", None)
         named = get_named_type(graphql_field.type)
         is_list = _graphql_type_is_list(graphql_field.type)
         is_enum = isinstance(named, GraphQLEnumType)
@@ -258,14 +271,14 @@ def final_input_only_resource_fields(
                 kind=kind,
                 scalar=scalar,
                 values=_field_enum_values(model_field, named) if kind == "enum" else (),
-                widget=_projected_widget(model_field, kind, scalar),
+                widget=resource_field_widget(model_field, kind, source_metadata, scalar=scalar),
                 readable=False,
                 aggregatable=name in aggregatable or python_name in aggregatable,
                 creatable=name in create,
                 updatable=name in update,
                 required_on_create=name in required,
                 archivable=is_archive_field(model_field),
-                currency_field=money_currency_field(model_field),
+                currency_field=money_currency_field(model_field, source_metadata),
                 relation_model_label=_relation_model_label(model_field),
                 relation_object=False,
                 model_field_name=python_name if model_field is not None else None,
@@ -563,19 +576,6 @@ def _validate_resource_field(model_label: str, field: data_contract.DataResource
             f"resource metadata for {model_label} field '{field.name}' cannot declare "
             f"widget '{field.widget}' for enum fields."
         )
-
-
-def _projected_widget(field: models.Field[Any, Any] | None, kind: str, scalar: str | None) -> str | None:
-    """Return the rendered widget for a projected surface field.
-
-    A plain ``ID`` scalar (a record's own public id) renders no widget. A to-one
-    relation exposed as an ID leaf keeps its Django ``many2one`` widget because
-    relation semantics are independent of the GraphQL selection shape.
-    """
-
-    if scalar == "ID" and not (field is not None and field.is_relation):
-        return None
-    return resource_field_widget(field, kind)
 
 
 def _relation_model_label(

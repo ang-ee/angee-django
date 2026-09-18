@@ -21,7 +21,11 @@ import { cn } from "../../lib/cn";
 import { optionLabel, relationValueId } from "../../widgets/types";
 import { statusTone } from "../../widgets/status-tones";
 import type { RelationOption } from "../../widgets/RelationField";
-import { EditableLines, type EditableLinesProps } from "./EditableLines";
+import {
+  EditableLines,
+  type EditableLineSupplementalColumn,
+  type EditableLinesProps,
+} from "./EditableLines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import type { FieldDescriptor } from "../page";
@@ -74,10 +78,12 @@ export function FormViewRecordHeader({
   surface,
   compact = false,
   title,
+  extra,
 }: {
   surface: FormViewSurface;
   compact?: boolean;
   title?: React.ReactNode;
+  extra?: React.ReactNode;
 }): React.ReactElement {
   const {
     t,
@@ -232,6 +238,7 @@ export function FormViewRecordHeader({
           </div>
         ) : null}
       </div>
+      {extra ? <div className={compact ? "pt-1" : undefined}>{extra}</div> : null}
     </header>
   );
 }
@@ -242,6 +249,8 @@ export function FormViewOverview({
   groupLayout,
   bodyTabs,
   linesTabLabel,
+  linePrimaryFields,
+  lineSupplementalColumns,
   context,
 }: {
   surface: FormViewSurface;
@@ -249,6 +258,8 @@ export function FormViewOverview({
   groupLayout: "stacked" | "paired";
   bodyTabs?: readonly { id: string; label: React.ReactNode; render: (context: RecordToolbarContext) => React.ReactNode }[];
   linesTabLabel?: React.ReactNode;
+  linePrimaryFields?: readonly string[];
+  lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
   context: RecordToolbarContext;
 }): React.ReactElement {
   const {
@@ -297,6 +308,8 @@ export function FormViewOverview({
       parentRow={surface.displayRecord}
       readOnly={formReadOnly}
       rowErrors={lineRowErrors}
+      primaryFields={linePrimaryFields}
+      supplementalColumns={lineSupplementalColumns}
     />
   ) : null;
   const renderOverviewSections = (list: readonly FormSectionModel[]): React.ReactNode => {

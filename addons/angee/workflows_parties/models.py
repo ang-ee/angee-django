@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from django.db import models, transaction
+from django.db import models, router, transaction
 
 
 class DecisionReadableParty(models.Model):
@@ -15,8 +15,26 @@ class DecisionReadableParty(models.Model):
         abstract = True
 
 
+class Handle(models.Model):
+    """Publish the stable collection owner after its Party links resolve."""
+
+    extends = "parties.Handle"
+    rebac_grantable = {"pending_decision": "write"}
+
+    class Meta:
+        abstract = True
+
+    def _party_links_resolved(self) -> None:
+        """Retain delivery only after the parties owner completes resolution."""
+
+        from angee.workflows import engine
+
+        super()._party_links_resolved()
+        engine.schedule_artifact_delivery(self)
+
+
 class PartyHandle(models.Model):
-    """Wake workflows retaining this exact association when its review changes."""
+    """Wake workflows retaining this association or its stable Handle owner."""
 
     extends = "parties.PartyHandle"
     rebac_grantable = {"pending_decision": "write"}
@@ -24,20 +42,12 @@ class PartyHandle(models.Model):
     class Meta:
         abstract = True
 
-    def confirm(self) -> None:
-        """Confirm the association and notify exact artifact-linked workflows."""
+    def _resolve_link(self) -> None:
+        """Resolve derived authority, then retain this exact link transition."""
 
         from angee.workflows import engine
 
-        with transaction.atomic():
-            super().confirm()
-            engine.schedule_artifact_delivery(self)
-
-    def dismiss(self) -> None:
-        """Dismiss the association and notify exact artifact-linked workflows."""
-
-        from angee.workflows import engine
-
-        with transaction.atomic():
-            super().dismiss()
+        alias = self._state.db or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=alias):
+            super()._resolve_link()
             engine.schedule_artifact_delivery(self)

@@ -250,7 +250,10 @@ describe("RelationPicker edit affordance", () => {
     renderPicker(
       <RelationPicker
         options={[]}
-        create={{ resource: "integrate.OAuthClient", defaultValues: { intake_id: "inb_7" } }}
+        create={{
+          resource: "integrate.OAuthClient",
+          defaultValues: { intake_id: "inb_7" },
+        }}
         aria-label="OAuth Client"
       />,
       {
@@ -268,6 +271,36 @@ describe("RelationPicker edit affordance", () => {
     fireEvent.click(await screen.findByText("Create “Acme”"));
 
     expect(await screen.findByText("Complete registered form inb_7 Acme")).toBeTruthy();
+  });
+
+  test("keeps declared defaults for an explicit blank-query create action", async () => {
+    const CompleteForm = ({ defaultValues }: RegisteredFormProps) => (
+      <div>Complete registered form {String(defaultValues?.intake_id)} {String(defaultValues?.name)}</div>
+    );
+    renderPicker(
+      <RelationPicker
+        options={[]}
+        create={{
+          resource: "integrate.OAuthClient",
+          actionLabel: "Create client",
+          title: "Create client",
+          defaultValues: { intake_id: "inb_7", name: "Default client" },
+        }}
+        aria-label="OAuth Client"
+      />,
+      {
+        "integrate.OAuthClient": {
+          resource: "integrate.OAuthClient",
+          Component: CompleteForm,
+        },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create client" }));
+
+    expect(
+      await screen.findByText("Complete registered form inb_7 Default client"),
+    ).toBeTruthy();
   });
 });
 

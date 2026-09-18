@@ -10,6 +10,8 @@ import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
+from email import policy
+from email.parser import BytesParser
 from html.parser import HTMLParser
 from typing import Any
 
@@ -20,7 +22,7 @@ from angee.workflows_extraction.engines import (
     DocumentPart,
     DocumentPipelineError,
     DocumentSource,
-    OcrEngine,
+    ExtractionEngine,
     PageImage,
 )
 from angee.workflows_extraction.structured import extract_structured_sources
@@ -163,6 +165,14 @@ def _acquire_native_parts(
                 text_bytes = _bounded_text_size(text, text_bytes, max_text_bytes)
                 parts.append(_text_part(source, text, method="text_attachment"))
                 continue
+            if declared_type == "message/rfc822" or (
+                declared_type in {"", "application/octet-stream"}
+                and filename.lower().endswith(".eml")
+            ):
+                text = _rfc822_text(content)
+                text_bytes = _bounded_text_size(text, text_bytes, max_text_bytes)
+                parts.append(_text_part(source, text, method="message_attachment"))
+                continue
             if source.mime_type == "application/pdf":
                 native, scanned = _pdf_parts(
                     source, content, dpi=dpi, max_edge=max_edge, max_pages=max_pages - page_count
@@ -214,7 +224,7 @@ def _acquire_native_parts(
 def recognize_pages(
     pages: Sequence[PageImage],
     *,
-    engine: OcrEngine,
+    engine: ExtractionEngine,
     model: Any | None,
     config: dict[str, Any],
     timeout: float,
@@ -279,11 +289,16 @@ def derive_text_claims(value: Any, parts: Sequence[DocumentPart]) -> dict[str, l
                 visit(child, f"{pointer}/{index}")
         elif item not in (None, "") and not isinstance(item, bool):
             needle = str(item)
+            numeric_scalar = isinstance(item, (int, float, Decimal))
             matches = []
             for position, part in enumerate(parts):
                 if not isinstance(part.value, str):
                     continue
-                span = _grounded_span(needle, part.value)
+                span = _grounded_span(
+                    needle,
+                    part.value,
+                    numeric_scalar=numeric_scalar,
+                )
                 if span is not None:
                     matches.append({"part_position": position, "start": span[0], "end": span[1]})
             if matches:
@@ -293,19 +308,40 @@ def derive_text_claims(value: Any, parts: Sequence[DocumentPart]) -> dict[str, l
     return claims
 
 
-def _grounded_span(needle: str, evidence: str) -> tuple[int, int] | None:
+def _grounded_span(
+    needle: str,
+    evidence: str,
+    *,
+    numeric_scalar: bool = False,
+) -> tuple[int, int] | None:
     if not _NUMBER.fullmatch(needle):
         start = evidence.find(needle)
         return (start, start + len(needle)) if start >= 0 else None
     for match in _NUMBER_TOKEN.finditer(evidence):
         candidate = match.group()
-        if candidate == needle or _decimal_equivalent(needle, candidate):
+        if candidate == needle or _decimal_equivalent(
+            needle,
+            candidate,
+            numeric_scalar=numeric_scalar,
+        ):
             return match.span()
     return None
 
 
-def _decimal_equivalent(left: str, right: str) -> bool:
-    if not ({".", ","} & set(left)) or not ({".", ","} & set(right)):
+def _decimal_equivalent(
+    left: str,
+    right: str,
+    *,
+    numeric_scalar: bool = False,
+) -> bool:
+    if not ({".", ","} & set(right)) or (
+        not numeric_scalar and not ({".", ","} & set(left))
+    ):
+        return False
+    if numeric_scalar and not ({".", ","} & set(left)) and not re.fullmatch(
+        r"[-+]?\d+[.,]0{1,2}",
+        right,
+    ):
         return False
     try:
         return Decimal(left.replace(",", ".")) == Decimal(right.replace(",", "."))
@@ -332,6 +368,25 @@ def _decode_declared_text(content: bytes) -> str:
         return content.decode("utf-8-sig")
     except UnicodeDecodeError as error:
         raise ValueError("Declared text extraction sources must be UTF-8 encoded.") from error
+
+
+def _rfc822_text(content: bytes) -> str:
+    """Extract inert subject/body text from one retained RFC 822 attachment."""
+
+    message = BytesParser(policy=policy.default).parsebytes(content)
+    body = message.get_body(preferencelist=("plain", "html"))
+    if body is None:
+        value = message.get_content()
+        text = value if isinstance(value, str) else ""
+        media_type = message.get_content_type()
+    else:
+        value = body.get_content()
+        text = value if isinstance(value, str) else ""
+        media_type = body.get_content_type()
+    if media_type == "text/html":
+        text = _html_text(text)
+    subject = str(message.get("subject") or "").strip()
+    return "\n".join(value for value in (subject, text.strip()) if value)
 
 
 class _InertHtmlText(HTMLParser):

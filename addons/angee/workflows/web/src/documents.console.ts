@@ -3,7 +3,7 @@ import { graphql, type DocumentType } from "@angee/gql/console";
 export const WorkflowSubjectHistoryPaneDocument = graphql(`
   query WorkflowSubjectHistoryPane($subjectDeclaration: String!, $id: ID!) {
     workflow_subject_history(subject: { subject_declaration: $subjectDeclaration, id: $id }) {
-      truncated
+      truncated runs_truncated decisions_truncated
       runs {
         id status origin waiting_kind next_wake_at active_step updated_at workflow { id name }
         parent_step_run { run { id workflow { id name } } }
@@ -16,7 +16,11 @@ export const WorkflowSubjectHistoryPaneDocument = graphql(`
         step { id key name }
         current_attempt { id error }
       }
-      pending_decisions { id action priority assignees step_run { run { id } } target_reference { model id tab } }
+      decisions {
+        id action priority verdict assignees
+        step_run { run { id } }
+        target_reference { model id tab }
+      }
       artifacts { id label created_at target_reference { model id } }
     }
   }

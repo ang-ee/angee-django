@@ -22,8 +22,9 @@ from django.db import connection
 from django.test import override_settings
 from rebac import system_context
 
+from angee.graphql.schema import GraphQLSchemas, SCHEMA_PART_KEYS
 from angee.money.rounding import RoundingMode
-from tests.conftest import _clear_model_tables, _create_missing_tables
+from tests.conftest import SchemaAddon, _clear_model_tables, _create_missing_tables
 from tests.money_models import MONEY_TEST_MODELS, Currency, CurrencyRate
 
 
@@ -63,6 +64,27 @@ def _make_rate(currency: Any, on_date: date, rate: str) -> Any:
 
     with system_context(reason="money tests setup"):
         return CurrencyRate.objects.create(currency=currency, date=on_date, rate=Decimal(rate))
+
+
+def test_currency_resource_authors_human_label_and_exact_search_fields() -> None:
+    """Currency choices display code plus name and search both concrete columns."""
+
+    from angee.money import schema as money_schema
+
+    parts = {
+        key: tuple(money_schema.schemas["console"].get(key, ()))
+        for key in SCHEMA_PART_KEYS
+    }
+    schema = GraphQLSchemas([SchemaAddon({"console": parts})]).build("console")
+    resources = {item.model_label: item for item in schema.angee_resources}
+    currency = resources["money.Currency"]
+    code_filter = currency.query.fields["code"].filter
+    name_filter = currency.query.fields["name"].filter
+
+    assert currency.record_representation == "display_name"
+    assert currency.record_search_fields == ("code", "name")
+    assert code_filter is not None and "iContains" in code_filter.operators
+    assert name_filter is not None and "iContains" in name_filter.operators
 
 
 def test_round_uses_currency_exponent(money_tables: None) -> None:

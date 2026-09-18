@@ -76,7 +76,7 @@ def import_resource_groups(
     ledger_model: type[Any],
     addon_aliases: Mapping[str, str],
 ) -> LoadResult:
-    """Compare whole declarations, apply one checked edit per head, then publish."""
+    """Compare declarations, retain omitted same-impl config, then publish."""
 
     step_model = workflow_model._meta.get_field("steps").related_model
     edge_model = workflow_model._meta.get_field("edges").related_model
@@ -135,9 +135,6 @@ def import_resource_groups(
             if not isinstance(head, workflow_model) or head.published_from_id is not None:
                 raise ResourceLoadError(f"{group.entry.display}: step parent must be a draft head")
             wanted = _declared_fields(resource, row, workflow_model.objects._NODE_FIELDS)
-            candidate = step_model(workflow=head, **wanted)
-            candidate.validate_impl_configs()
-            wanted["config"] = candidate.config
             declared_nodes[head.pk].append((group, resource, row, wanted))
 
         declared_edges: dict[int, list[tuple[Any, Any, dict[str, Any]]]] = defaultdict(list)
@@ -172,6 +169,20 @@ def import_resource_groups(
                 if existing is not None and existing.workflow_id != head_id:
                     raise ResourceLoadError(f"{group.entry.display}: step xref changed workflow parent")
                 existing = existing or saved_nodes.get(key)
+                config_declared = "config" in row and row["config"] is not None
+                if (
+                    existing is not None
+                    and not config_declared
+                    and existing.step_class == wanted["step_class"]
+                ):
+                    # Omission leaves an operator-authored typed policy intact while
+                    # another declared field changes. Explicit config, including {},
+                    # remains authoritative; a changed implementation starts from its
+                    # own default instead of carrying incompatible retained config.
+                    wanted["config"] = copy.deepcopy(existing.config)
+                candidate = step_model(workflow=head, **wanted)
+                candidate.validate_impl_configs()
+                wanted["config"] = candidate.config
                 if existing is None:
                     client_key = f"node:{row['_xref']}"
                     node_creates.append(NodeCreate(client_key, wanted))

@@ -188,18 +188,18 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "infer_evidence": "angee.workflows_extraction.steps.InferEvidenceStepImpl",
 }
 ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
-ANGEE_OCR_ENGINE_CLASSES = {
-    "none": "angee.workflows_extraction.engines.NoOcrEngine",
+ANGEE_EXTRACTION_ENGINE_CLASSES = {
+    "none": "angee.workflows_extraction.engines.NoExtractionEngine",
     "inference": "angee.workflows_extraction.engines.InferenceMappingEngine",
-    "fake": "tests.ocr_engines.FakeOcrEngine",
-    "fake_document": "tests.ocr_engines.FakeDocumentEngine",
+    "fake": "tests.extraction_engines.FakePageExtractionEngine",
+    "fake_document": "tests.extraction_engines.FakeDocumentEngine",
     "glm": "angee.workflows_extraction_glm.engine.GlmOllamaEngine",
 }
-ANGEE_OCR_MAX_BYTES = 25 * 1024 * 1024
-ANGEE_OCR_MAX_PAGES = 10
-ANGEE_OCR_MAX_EDGE = 3500
-ANGEE_OCR_DPI = 200
-ANGEE_OCR_TIMEOUT_SECONDS = 120
+ANGEE_EXTRACTION_MAX_BYTES = 25 * 1024 * 1024
+ANGEE_EXTRACTION_MAX_PAGES = 10
+ANGEE_EXTRACTION_MAX_EDGE = 3500
+ANGEE_EXTRACTION_DPI = 200
+ANGEE_EXTRACTION_TIMEOUT_SECONDS = 120
 ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES = {
     "fixture_archive": "tests.test_workflows_integrate.FixtureArchiveExtractor",
 }

@@ -2,12 +2,30 @@
 [addon]
 name = "angee.workflows_extraction"
 description = "Schema-validated document extraction evidence and workflow step"
-keywords = ["workflows", "ocr", "documents", "evidence"]
+keywords = ["workflows", "extraction", "documents", "evidence"]
 category = "Workflows"
-depends_on = ["angee.workflows", "angee.agents", "angee.storage", "angee.messaging", "django.contrib.contenttypes"]
+depends_on = ["angee.workflows_ocr", "angee.workflows", "angee.agents", "angee.storage", "angee.messaging", "django.contrib.contenttypes"]
 dependencies = [
   "defusedxml>=0.7,<1",
   "jsonschema>=4.26",
   "pypdfium2>=4.30",
   "pillow>=11.0",
 ]
+
+[[migrations]]
+fresh_history = "baseline"
+app_label = "workflows_extraction"
+name = "stage_workflows_extraction"
+module = "runtime_migrations.stage_workflows_extraction"
+
+[[migrations]]
+fresh_history = "baseline"
+app_label = "workflows_extraction"
+name = "adopt_workflows_ocr"
+module = "runtime_migrations.adopt_workflows_ocr"
+
+[[migrations]]
+fresh_history = "baseline"
+app_label = "workflows_ocr"
+name = "retire_workflows_ocr"
+module = "runtime_migrations.retire_workflows_ocr"

@@ -18,13 +18,12 @@ from angee.workflows_extraction.engines import (
     DocumentSource,
     InferenceMappingEngine,
     PageImage,
-    PageResult,
 )
 from angee.workflows_extraction.routing import acquire_native_parts
 from angee.workflows_extraction.service import _validated_schema
 from angee.workflows_extraction.steps import PreparePagesStepImpl, RecognizePageStepImpl
 from angee.workflows_extraction_glm.engine import GlmOllamaEngine
-from tests.ocr_engines import FakeOcrEngine
+from tests.extraction_engines import FakePageExtractionEngine
 
 SCHEMA = {
     "$id": "test.document.v1",
@@ -133,21 +132,26 @@ def test_message_part_sources_reject_tampered_hashes_and_byte_overflow(
     with pytest.raises(ValidationError, match="no longer matches"):
         service._document_sources((), (tampered,))
 
-    monkeypatch.setattr(service.settings, "ANGEE_OCR_MAX_BYTES", 4)
+    monkeypatch.setattr(service.settings, "ANGEE_EXTRACTION_MAX_BYTES", 4)
     with pytest.raises(ValidationError, match="configured byte limit"):
         service._document_sources((), (_message_part(text="five!"),))
 
 
 def test_message_part_source_requires_actor_read_access() -> None:
+    actor = object()
     denied = _message_part()
+    denied.with_actor = lambda admitted: denied if admitted is actor else None
     denied.has_access = lambda _permission: False
+    target = SimpleNamespace()
+    target.with_actor = lambda admitted: target if admitted is actor else None
+    target.has_access = lambda _permission: True
 
     with pytest.raises(PermissionDenied, match="every extraction source"):
-        service._authorize((), (denied,), SimpleNamespace(has_access=lambda _permission: True))
+        service._authorize((), (denied,), target, actor=actor)
 
 
 def test_fake_engine_addresses_pages_by_source_and_page_without_collisions() -> None:
-    engine = FakeOcrEngine()
+    engine = FakePageExtractionEngine()
     config = {"page_results": {"0:1": {"number": "first"}, "1:0": {"number": "second"}}}
     assert engine.extract_page(_page(0, 1), SCHEMA, model=None, config=config, timeout=1).value == {"number": "first"}
     assert engine.extract_page(_page(1, 0), SCHEMA, model=None, config=config, timeout=1).value == {"number": "second"}
@@ -183,13 +187,14 @@ def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -
     part = DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-42", "native", "hash")
 
     value, claims, metadata = InferenceMappingEngine().map_text_parts(
-        (part,), SCHEMA, model=model, config={"max_tokens": 128}, timeout=5,
+        (part,), SCHEMA, model=model, config={"max_tokens": 128, "thinking": False}, timeout=5,
     )
 
     assert value == {"number": "INV-42"}
     assert claims["/number"][0]["part_position"] == 0
     assert metadata["input_tokens"] == 23
     assert metadata["output_tokens"] == 7
+    assert requested["settings"] == {"timeout": 5, "max_tokens": 128, "thinking": False}
     assert requested["parameters"].output_mode == "auto"
     assert requested["parameters"].output_object.json_schema == SCHEMA
 

@@ -15,7 +15,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
-from rebac import system_context
+from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.backends import ParsedHandle
 from angee.parties.backends import ParsedContact
@@ -35,6 +35,7 @@ from tests.test_messaging import (
     Person,
     Relationship,
     RelationshipKind,
+    _grant,
 )
 
 User = get_user_model()
@@ -63,6 +64,144 @@ def _user(username: str) -> Any:
     """Create a plain user for ownership fixtures."""
 
     return User.objects.create_user(username=username, password="x")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
+    parties_tables: None,
+) -> None:
+    """Manual contact entry creates a reviewable claim and never resurrects its anti-link."""
+
+    del parties_tables
+    owner = _user("manual-contact-owner")
+    with system_context(reason="test manual contact party"):
+        party = Party._base_manager.create(display_name="Supplier", created_by=owner)
+
+    with actor_context(owner):
+        with pytest.raises(ValidationError):
+            PartyHandle.objects.propose_manual_contact(
+                party,
+                platform="email",
+                value="not-an-email",
+                actor=owner,
+            )
+        with pytest.raises(ValidationError):
+            PartyHandle.objects.propose_manual_contact(
+                party,
+                platform="phone",
+                value="123",
+                actor=owner,
+            )
+        link = PartyHandle.objects.propose_manual_contact(
+            party,
+            platform="email",
+            value="billing@example.test",
+            label="Billing",
+            actor=owner,
+        )
+        link.dismiss()
+        repeated = PartyHandle.objects.propose_manual_contact(
+            party,
+            platform="email",
+            value="billing@example.test",
+            label="Changed label",
+            actor=owner,
+        )
+
+    repeated.refresh_from_db()
+    repeated.handle.refresh_from_db()
+    assert repeated.pk == link.pk
+    assert repeated.source == LinkSource.MANUAL
+    assert not repeated.is_confirmed
+    assert repeated.is_dismissed
+    assert repeated.handle.label == "Billing"
+    assert not repeated.handle.is_verified
+    assert not repeated.handle.party_link_confirmed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle(
+    parties_tables: None,
+) -> None:
+    """Global Handle reuse neither overwrites its label nor discloses an unreadable match."""
+
+    del parties_tables
+    owner = _user("manual-contact-reuse")
+    reader = _user("manual-contact-reader")
+    foreign = _user("manual-contact-foreign")
+    with system_context(reason="test manual contact reuse"):
+        target = Party._base_manager.create(display_name="Target supplier", created_by=owner)
+        reader_target = Party._base_manager.create(display_name="Reader target", created_by=reader)
+        confirmed_party = Party._base_manager.create(display_name="Confirmed supplier", created_by=owner)
+        shared = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="shared@example.test",
+            label="Authoritative label",
+            created_by=owner,
+        )
+        PartyHandle.objects.link(
+            confirmed_party,
+            shared,
+            source=LinkSource.MANUAL,
+            is_confirmed=True,
+            created_by_id=owner.pk,
+        )
+        reader_handle = Handle._base_manager.create(
+            platform=Handle.Platform.EMAIL,
+            value="reader-shared@example.test",
+            label="Shared read-only label",
+            created_by=owner,
+        )
+        hidden = Handle._base_manager.create(
+            platform=Handle.Platform.PHONE,
+            value="+420601123456",
+            label="Private label",
+            created_by=foreign,
+        )
+    _grant(reader_handle, "reader", reader)
+
+    with actor_context(owner):
+        proposed = PartyHandle.objects.propose_manual_contact(
+            target,
+            platform="email",
+            value="shared@example.test",
+            label="Replacement label",
+            actor=owner,
+        )
+        with pytest.raises(PermissionDenied, match="cannot add this contact point"):
+            PartyHandle.objects.propose_manual_contact(
+                target,
+                platform="phone",
+                value=hidden.value,
+                actor=owner,
+            )
+    with actor_context(reader):
+        assert reader_handle.with_actor(reader).has_access("read")
+        assert not reader_handle.has_access("write")
+        reader_proposed = PartyHandle.objects.propose_manual_contact(
+            reader_target,
+            platform="email",
+            value="reader-shared@example.test",
+            label="Reader replacement label",
+            actor=reader,
+        )
+
+    shared.refresh_from_db()
+    reader_handle.refresh_from_db()
+    proposed.refresh_from_db()
+    reader_proposed.refresh_from_db()
+    assert shared.label == "Authoritative label"
+    assert shared.party_id == confirmed_party.pk
+    assert shared.party_link_confirmed
+    assert proposed.party_id == target.pk
+    assert not proposed.is_confirmed
+    assert not proposed.is_dismissed
+    assert reader_handle.label == "Shared read-only label"
+    assert reader_handle.party_id == reader_target.pk
+    assert not reader_handle.party_link_confirmed
+    assert reader_proposed.party_id == reader_target.pk
+    assert not reader_proposed.is_confirmed
+    assert not reader_proposed.is_dismissed
 
 
 @pytest.mark.django_db(transaction=True)

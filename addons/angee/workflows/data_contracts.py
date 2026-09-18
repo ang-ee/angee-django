@@ -10,6 +10,8 @@ from pydantic import BaseModel
 SchemaMode: TypeAlias = Literal["validation", "serialization"]
 ConcretePath: TypeAlias = Sequence[str | int]
 JsonScalarType: TypeAlias = Literal["string", "integer", "number", "boolean", "null"]
+JsonNumber: TypeAlias = int | float
+NumericRange: TypeAlias = tuple[JsonNumber | None, bool, JsonNumber | None, bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +104,15 @@ class DataContract:
         if self.raw_schema is None:
             return None
         return _literal_values_at_path(
+            self.raw_schema, tuple(path), self.raw_schema, frozenset()
+        )
+
+    def numeric_ranges_at_path(self, path: ConcretePath) -> tuple[NumericRange, ...] | None:
+        """Return every declared numeric range at a bounded scalar path."""
+
+        if self.raw_schema is None:
+            return None
+        return _numeric_ranges_at_path(
             self.raw_schema, tuple(path), self.raw_schema, frozenset()
         )
 
@@ -273,6 +284,62 @@ def _literal_values_at_path(
     if schema.get("type") == "null":
         return (None,)
     return None
+
+
+def _numeric_ranges_at_path(
+    schema: Any,
+    path: tuple[str | int, ...],
+    root: Mapping[str, Any],
+    active_refs: frozenset[str],
+) -> tuple[NumericRange, ...] | None:
+    """Resolve numeric bounds through local refs and closed schema variants."""
+
+    if not isinstance(schema, Mapping):
+        return None
+    reference = schema.get("$ref")
+    if isinstance(reference, str):
+        if reference in active_refs or not reference.startswith("#/$defs/"):
+            return None
+        definitions = root.get("$defs", {})
+        target = definitions.get(reference.removeprefix("#/$defs/")) if isinstance(definitions, Mapping) else None
+        return _numeric_ranges_at_path(target, path, root, active_refs | {reference})
+    variants = schema.get("oneOf", schema.get("anyOf"))
+    if isinstance(variants, list):
+        ranges: list[NumericRange] = []
+        for choice in variants:
+            choice_ranges = _numeric_ranges_at_path(choice, path, root, active_refs)
+            if choice_ranges is None:
+                return None
+            ranges.extend(choice_ranges)
+        return tuple(ranges) if ranges else None
+    if path:
+        segment, rest = path[0], path[1:]
+        if isinstance(segment, str) and schema.get("type") == "object":
+            properties = schema.get("properties", {})
+            if isinstance(properties, Mapping):
+                return _numeric_ranges_at_path(properties.get(segment), rest, root, active_refs)
+        if (
+            isinstance(segment, int)
+            and not isinstance(segment, bool)
+            and segment >= 0
+            and schema.get("type") == "array"
+        ):
+            return _numeric_ranges_at_path(schema.get("items"), rest, root, active_refs)
+        return None
+    schema_type = schema.get("type")
+    allowed = set(schema_type) if isinstance(schema_type, list) else {schema_type}
+    if not allowed or not allowed.issubset({"integer", "number"}):
+        return None
+
+    def boundary(keyword: str) -> JsonNumber | None:
+        value = schema.get(keyword)
+        return value if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+    lower_exclusive = "exclusiveMinimum" in schema
+    upper_exclusive = "exclusiveMaximum" in schema
+    lower = boundary("exclusiveMinimum" if lower_exclusive else "minimum")
+    upper = boundary("exclusiveMaximum" if upper_exclusive else "maximum")
+    return ((lower, lower_exclusive, upper, upper_exclusive),)
 
 
 class _CatalogueProjector:

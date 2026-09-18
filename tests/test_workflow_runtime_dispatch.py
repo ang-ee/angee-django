@@ -19,7 +19,7 @@ from angee.workflows.steps import StepImpl, StepResult
 from tests.workflows import Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 
-class _DoneImpl:
+class _DoneImpl(StepImpl):
     input_model = None
 
     def run(self, step_run: Any, *, now: Any) -> StepResult:
@@ -27,7 +27,15 @@ class _DoneImpl:
         return StepResult.done({"seen": step_run.input}, outcome="ok")
 
 
-class _WaitImpl:
+class _EmptyErrorImpl(StepImpl):
+    input_model = None
+
+    def run(self, step_run: Any, *, now: Any) -> StepResult:
+        del step_run, now
+        raise StopIteration
+
+
+class _WaitImpl(StepImpl):
     input_model = None
     until = timezone.now()
 
@@ -92,6 +100,45 @@ def test_durable_advance_claims_and_exact_execute_retains_result(
     assert step_run.status == StepRunStatus.SUCCEEDED
     with system_context(reason="retained runtime pending advance"):
         assert WorkflowDispatch.objects.filter(run=run, consumed_at__isnull=True).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_empty_exception_message_retains_class_and_traceback(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del workflow_engine_tables, no_workflow_queue
+    with system_context(reason="empty exception result setup"):
+        workflow = Workflow.objects.create(name="Empty exception result", max_steps=10)
+        step = Step.objects.create(
+            workflow=workflow,
+            key="start",
+            name="Start",
+            step_class="agent_session",
+            is_entry=True,
+        )
+        run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
+        step_run = StepRun.objects.create(
+            run=run,
+            step=step,
+            status=StepRunStatus.SCHEDULED,
+        )
+    monkeypatch.setattr(type(step), "resolve_impl", lambda self, field: _EmptyErrorImpl)
+    advance = WorkflowDispatch.objects.schedule_advance(run, available_at=timezone.now())
+    assert engine.advance_dispatch(advance.pk)["claimed"] == 1
+    with system_context(reason="empty exception result execution"):
+        step_run.refresh_from_db()
+        attempt = StepAttempt.objects.get(pk=step_run.current_attempt_id)
+        execute = WorkflowDispatch.objects.get(step_attempt=attempt)
+
+    assert engine.execute_dispatch(execute.pk, attempt.pk, attempt.lease_token)["executed"] == 1
+
+    with system_context(reason="empty exception result verification"):
+        attempt.refresh_from_db()
+    assert attempt.result_kind == str(AttemptResultKind.ERROR)
+    assert attempt.error == "StopIteration"
+    assert "StopIteration" in attempt.stacktrace
 
 
 @pytest.mark.django_db(transaction=True)

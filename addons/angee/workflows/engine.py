@@ -13,7 +13,7 @@ import logging
 import re
 import traceback
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal, cast
@@ -52,6 +52,7 @@ from angee.workflows.attempts import (
     MapItemSource,
     RecoveryMode,
     map_child_input,
+    workflow_result_terminal_match_error,
 )
 from angee.workflows.bindings import (
     BindingContext,
@@ -61,7 +62,10 @@ from angee.workflows.bindings import (
     evaluate_binding,
     parse_binding,
 )
-from angee.workflows.decision_actions import compile_decision_action_schema
+from angee.workflows.decision_actions import (
+    compile_decision_action_schema,
+    retained_decision_form_schema,
+)
 from angee.workflows.dispatch import (
     DispatchPreflightDisposition,
     WorkflowDispatchKind,
@@ -90,6 +94,13 @@ DECISION_VERBS: dict[str, Verdict] = {
     "escalate": VERDICT_ESCALATED,
 }
 logger = logging.getLogger(__name__)
+
+
+def _exception_message(error: BaseException) -> str:
+    """Preserve an exception's message or fall back to its concrete class."""
+
+    message = str(error)
+    return message if message.strip() else type(error).__name__
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,14 +207,14 @@ def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     return {"woken": woken}
 
 
-def subscribe_external(step_run: Any, resource: Any) -> None:
-    """Commit this invocation's domain subscription before its predicate read."""
+def subscribe_external(step_run: Any, resources: Iterable[Any]) -> None:
+    """Commit this invocation's complete domain target set before its predicate read."""
 
     lease_token = getattr(step_run, "_workflow_invocation_lease_token", None)
     if step_run.current_attempt_id is None or not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("External subscription requires a retained invocation lease.")
     _model("StepAttempt").objects.subscribe_external(
-        step_run.current_attempt_id, lease_token=lease_token, resource=resource,
+        step_run.current_attempt_id, lease_token=lease_token, resources=resources,
     )
 
 
@@ -226,6 +237,7 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
     run_model = _model("WorkflowRun")
     step_run_model = _model("StepRun")
     artifact_model = _model("StepArtifact")
+    subscription_model = _model("StepExternalSubscription")
     woken = 0
     delivered_run_ids: list[int] = []
     with system_context(reason="workflows.engine.deliver_artifact"), transaction.atomic():
@@ -237,12 +249,22 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
             attempt__step_run__waiting_kind=WaitingKind.EXTERNAL,
         ).order_by().values_list("attempt__step_run_id", flat=True).distinct())
         attempt_model = _model("StepAttempt")
-        subscribed_step_ids = list(attempt_model.objects.filter(
+        subscribed_attempt_ids = set(subscription_model.objects.filter(
+            target_content_type_id=target.content_type.pk,
+            target_object_id=target.object_id,
+            attempt__step_run__current_attempt_id=models.F("attempt_id"),
+            attempt__step_run__status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
+            attempt__lease_revoked_at__isnull=True,
+        ).order_by().values_list("attempt_id", flat=True))
+        bound_attempt_ids = set(attempt_model.objects.filter(
             external_content_type_id=target.content_type.pk,
             external_object_id=target.object_id,
             step_run__current_attempt_id=models.F("pk"),
             step_run__status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
             lease_revoked_at__isnull=True,
+        ).order_by().values_list("pk", flat=True))
+        subscribed_step_ids = list(attempt_model.objects.filter(
+            pk__in=subscribed_attempt_ids | bound_attempt_ids,
         ).order_by().values_list("step_run_id", flat=True))
         candidate_step_ids = sorted(set(artifact_step_ids).union(subscribed_step_ids))
         candidate_run_ids = list(step_run_model.objects.filter(
@@ -264,10 +286,8 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
                 continue
             attempt = attempt_model.objects.lock_if_supported().get(pk=step_run.current_attempt_id)
             subscribed = (
-                attempt.external_content_type_id == target.content_type.pk
-                and attempt.external_object_id == target.object_id
-                and attempt.lease_revoked_at is None
-            )
+                attempt.pk in subscribed_attempt_ids or attempt.pk in bound_attempt_ids
+            ) and attempt.lease_revoked_at is None
             retained_artifact = step_run.status == StepRunStatus.WAITING and artifact_model.objects.filter(
                 attempt_id=step_run.current_attempt_id,
                 target_content_type_id=target.content_type.pk,
@@ -348,6 +368,50 @@ def cancel_child_dispatch(dispatch_id: int, *, expected_child_id: int | None = N
                 cancel(child)
                 canceled = 1
             dispatch_model.objects._consume_locked(dispatch_id, at=timezone.now(), fenced=not canceled)
+    return {"canceled": canceled}
+
+
+def schedule_run_cancel(
+    step_run: Any,
+    run: Any,
+    *,
+    actor: Any,
+) -> tuple[Any, bool]:
+    """Retain one cross-run cancellation from this fenced database command."""
+
+    return _model("WorkflowDispatch").objects.schedule_run_cancel(
+        step_run.pk,
+        run,
+        actor=actor,
+    )
+
+
+def cancel_run_dispatch(dispatch_id: int, *, expected_run_id: int | None = None) -> dict[str, int]:
+    """Cancel one exact run, then publish its committed terminal state."""
+
+    dispatch_model = _model("WorkflowDispatch")
+    canceled = 0
+    timestamp = timezone.now()
+    with system_context(reason="workflows.engine.run_cancel_dispatch"), transaction.atomic():
+        with dispatch_model.objects._owner_transition(
+            dispatch_id=dispatch_id,
+            lease_token=None,
+            at=timestamp,
+            using=dispatch_model.objects.db,
+        ) as preflight:
+            if preflight.disposition != DispatchPreflightDisposition.READY:
+                return {"canceled": 0}
+            envelope = preflight.envelope
+            if envelope.kind != WorkflowDispatchKind.RUN_CANCEL or (
+                expected_run_id is not None and expected_run_id != envelope.target_id
+            ):
+                raise ValidationError({"dispatch": "Run cancellation envelope changed."})
+            run = _model("WorkflowRun").objects.get(pk=envelope.target_id)
+            if run.status not in RunStatus.TERMINAL:
+                cancel(run)
+                canceled = 1
+            dispatch_model.objects.schedule_artifact_delivery(run)
+            dispatch_model.objects._consume_locked(dispatch_id, at=timestamp)
     return {"canceled": canceled}
 
 
@@ -443,7 +507,7 @@ def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     except TransientStepError:
         raise
     except Exception as exc:  # noqa: BLE001 - impl failure is journaled as a step result.
-        error = str(exc)
+        error = _exception_message(exc)
         stack = traceback.format_exc()
 
     wait_until: datetime | None = None
@@ -497,6 +561,7 @@ def consume_decision_resolution(
     expected_target: tuple[str, str],
     expected_verdict: str,
     actor: Any,
+    required_record_access: Collection[models.Model] = (),
 ) -> tuple[Any, DecisionResolution]:
     """Consume one exact gate value from this invocation's admitted input."""
 
@@ -512,6 +577,7 @@ def consume_decision_resolution(
         expected_target=expected_target,
         expected_verdict=expected_verdict,
         actor=actor,
+        required_record_access=required_record_access,
     )
 
 
@@ -527,6 +593,27 @@ def admitted_continuation_child(
     return _model("StepAttempt").objects.admitted_continuation_child(
         consumer_step_run.pk, lease_token=lease_token,
         child_id_path=child_id_path, expected_starter_class=expected_starter_class,
+    )
+
+
+def admitted_continuation_completion(
+    consumer_step_run: Any,
+    child_id_path: tuple[str | int, ...],
+    *,
+    expected_starter_class: str,
+    actor: Any,
+) -> tuple[Any, Any | None]:
+    """Resolve an admitted child and its one accepted successful recovery."""
+
+    lease_token = getattr(consumer_step_run, "_workflow_invocation_lease_token", None)
+    if not isinstance(lease_token, uuid.UUID):
+        raise RuntimeError("Continuation completion requires the active fenced invocation lease.")
+    return _model("StepAttempt").objects.admitted_continuation_completion(
+        consumer_step_run.pk,
+        lease_token=lease_token,
+        child_id_path=child_id_path,
+        expected_starter_class=expected_starter_class,
+        actor=actor,
     )
 
 
@@ -589,7 +676,9 @@ def execute_dispatch(
         if impl_class.execution_mode == StepExecutionMode.EXTERNAL_OPERATION:
             policy = impl_class.external_operation_policy(attempt=owned_attempt)
             if not isinstance(policy, ExternalOperationPolicy):
-                raise ValidationError({"operation": "External operation policy must be a declared provider capability."})
+                raise ValidationError({
+                    "operation": "External operation policy must be a declared provider capability."
+                })
             source = owned_attempt.recovery_source_attempt
             owned_step_run._workflow_external_operation_request = ExternalOperationRequest(
                 request_key=str(source.effect_key if source is not None else owned_attempt.effect_key),
@@ -665,13 +754,13 @@ def execute_dispatch(
     except TransientStepError as error:
         result = AttemptResult(
             AttemptResultKind.TRANSIENT_ERROR,
-            error=str(error),
+            error=_exception_message(error),
             stacktrace=traceback.format_exc(),
         )
     except Exception as error:  # noqa: BLE001 - implementation failure is retained evidence.
         result = AttemptResult(
             AttemptResultKind.ERROR,
-            error=str(error),
+            error=_exception_message(error),
             stacktrace=traceback.format_exc(),
         )
 
@@ -1155,7 +1244,9 @@ def _suspend_step_run(step_run: Any, result: StepResult) -> None:
         decision = _create_decision(step_run, spec)
         decision_ids.append(decision.pk)
         if spec.decision_schema:
-            decision_schemas[str(decision.pk)] = dict(spec.decision_schema)
+            decision_schemas[str(decision.pk)] = retained_decision_form_schema(
+                spec.decision_schema
+            )
     if decision_ids:
         resume_state["_decision_ids"] = decision_ids
     if decision_schemas:
@@ -1343,17 +1434,24 @@ def _validate_mapping_schema(
                 name: "This field is not permitted for the selected action."
                 for name in sorted(extraneous)
             })
+        try:
+            parsed = _mapping_schema_model(branch, name="DecisionActionResolution").model_validate(
+                resolution
+            )
+        except PydanticValidationError as error:
+            raise _resolution_validation_error(error) from error
+        submitted = cast(dict[str, Any], parsed.model_dump(exclude_unset=True))
         schema_errors: dict[str, list[str]] = {}
         for error in sorted(
-            Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(resolution),
+            Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(submitted),
             key=lambda item: (tuple(str(part) for part in item.path), item.message),
         ):
             field = ".".join(str(component) for component in error.path) or "payload"
             schema_errors.setdefault(field, []).append(error.message)
         if schema_errors:
             raise ValidationError(schema_errors)
-        _validate_relation_fields(schema, resolution, actor)
-        return dict(resolution)
+        _validate_relation_fields(schema, submitted, actor)
+        return submitted
     if schema.get("type", "object") != "object":
         raise ValidationError({"payload": "Decision schema root type must be object."})
     properties = schema.get("properties", {})
@@ -2229,6 +2327,11 @@ def _prepare_attempt_input(
         and run.recovery_source_attempt_id is not None
         and run.recovery_source_attempt.step_run.step_id == step_run.step_id
         and run.recovery_source_attempt.step_run.map_index == step_run.map_index
+        and not (
+            run.recovery_mode == str(RecoveryMode.FRESH)
+            and run.recovery_source_attempt.result_kind
+            == str(AttemptResultKind.PREPARATION_ERROR)
+        )
     ):
         source = run.recovery_source_attempt
         map_item = (
@@ -2661,7 +2764,7 @@ def _finish_run_result(run: Any) -> None:
         if producer.step.key == rule["producer"] and producer.outcome == rule["when_outcome"]
     ]
     if len(matches) != 1:
-        run.mark_failed(f"Workflow result contract matched {len(matches)} terminal producers; expected one.")
+        run.mark_failed(workflow_result_terminal_match_error(len(matches)))
         return
     rule, producer = matches[0]
     context = BindingContext(
@@ -2692,8 +2795,8 @@ def _input_from_previous(previous: list[Any]) -> Any:
     if not previous:
         return {}
     if len(previous) == 1:
-        return previous[0].output
-    return {_step_key(row): row.output for row in previous}
+        return previous[0].output if previous[0].output_present else {}
+    return {_step_key(row): row.output for row in previous if row.output_present}
 
 
 def _step_key(step_run: Any) -> str:

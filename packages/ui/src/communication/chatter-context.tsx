@@ -40,7 +40,10 @@ export interface ChatterContextValue {
   setCollapsed: (collapsed: boolean) => void;
   toggleCollapsed: () => void;
   activeTab: ChatterTabId;
+  /** Record a user or route-selected tab as the persistent shell intent. */
   setActiveTab: (tab: ChatterTabId) => void;
+  /** Select initial asynchronous content only before the shell has explicit tab intent. */
+  setInitialActiveTab: (tab: ChatterTabId) => void;
   content: ChatterContent | null;
   setContent: (owner: symbol, content: ChatterContent | null) => void;
   /** A record can place this same chatter below its form and reserve the aside for a native peek. */
@@ -68,6 +71,7 @@ const ChatterContext = createContext<ChatterContextValue>({
   toggleCollapsed: () => undefined,
   activeTab: "agents",
   setActiveTab: () => undefined,
+  setInitialActiveTab: () => undefined,
   content: null,
   setContent: () => undefined,
   recordSupportKey: null,
@@ -94,7 +98,17 @@ export function ChatterProvider({
   const [controllerCollapsed, setControllerCollapsed] = useState<
     boolean | null
   >(null);
-  const [activeTab, setActiveTab] = useState<ChatterTabId>(defaultTab);
+  const [activeTab, setActiveTabState] = useState<ChatterTabId>(defaultTab);
+  // The provider spans record routes, so tab intent does too. A shell remount is
+  // the only reset; late route content must not replace a user or URL choice.
+  const explicitTabIntentRef = useRef(false);
+  const setActiveTab = useCallback((tab: ChatterTabId) => {
+    explicitTabIntentRef.current = true;
+    setActiveTabState(tab);
+  }, []);
+  const setInitialActiveTab = useCallback((tab: ChatterTabId) => {
+    if (!explicitTabIntentRef.current) setActiveTabState(tab);
+  }, []);
   const [contentState, setContentState] = useState<
     readonly (ChatterContent & { owner: symbol })[]
   >([]);
@@ -203,6 +217,7 @@ export function ChatterProvider({
       recordPreview,
       registerSecondaryController,
       setActiveTab,
+      setInitialActiveTab,
       setCollapsed,
       setContent,
       setRecordSupportKey,
@@ -216,8 +231,10 @@ export function ChatterProvider({
       recordSupportKey,
       recordPreview,
       registerSecondaryController,
+      setActiveTab,
       setCollapsed,
       setContent,
+      setInitialActiveTab,
       setRecordSupportKey,
       setRecordPreview,
       toggleCollapsed,

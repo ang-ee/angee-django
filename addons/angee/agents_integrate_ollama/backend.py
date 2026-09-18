@@ -101,6 +101,7 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
             handle,
             provider=OpenAIProvider(openai_client=client),
             profile=OpenAIModelProfile(
+                supports_thinking=True,
                 supports_json_schema_output=True,
                 default_structured_output_mode="native",
                 openai_chat_supports_max_completion_tokens=(

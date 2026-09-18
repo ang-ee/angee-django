@@ -31,7 +31,8 @@ export type RecordAccessEntry = {
 export interface ManageAccessDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  trigger?: React.ReactElement;
+  /** Omit for the Share button; null when opened by an existing action. */
+  trigger?: React.ReactElement | null;
   label?: string;
   targetIds: readonly string[];
   grantable: readonly DataResourceGrantableRelation[];
@@ -47,7 +48,7 @@ export interface ManageAccessDialogProps {
 export function ManageAccessDialog(props: ManageAccessDialogProps): React.ReactElement {
   const t = useUiT();
   const label = props.label ?? t("access.selection", { count: props.targetIds.length });
-  const trigger = props.trigger ?? (
+  const trigger = props.trigger === undefined ? (
     <Button
       type="button"
       variant="icon"
@@ -57,12 +58,12 @@ export function ManageAccessDialog(props: ManageAccessDialogProps): React.ReactE
     >
       <Glyph name="share" />
     </Button>
-  );
+  ) : props.trigger;
   return (
     <DialogForm
       open={props.open}
       onOpenChange={props.onOpenChange}
-      trigger={trigger}
+      {...(trigger ? { trigger } : {})}
       title={t("access.title", { label })}
       description={t("access.directOnly")}
       size="lg"

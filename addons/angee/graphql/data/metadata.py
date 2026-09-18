@@ -76,6 +76,8 @@ class DataResourcePolicy:
     revision_fields: tuple[str, ...] | None = None
     lines_declaration: object | None = None
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None
+    record_representation: str | None = None
+    record_search_fields: tuple[str, ...] | None = None
     public_id_field: str | None = None
     subject_field: str | None = None
     row_model: str | None = None
@@ -247,6 +249,11 @@ def finalize_data_resources(
             revision_fields=_single_sequence(model_label, contributions, "revision_fields"),
             lines=lines,
             subtitle=subtitle,
+            record_representation=cast(
+                str | None,
+                _single_policy_value(model_label, contributions, "record_representation"),
+            ),
+            record_search_fields=_single_sequence(model_label, contributions, "record_search_fields"),
             public_id_field=cast(
                 str,
                 _single_policy_value(model_label, contributions, "public_id_field") or PUBLIC_ID_FIELD_NAME,
@@ -402,6 +409,8 @@ def _finalize_data_resource(
     revision_fields: tuple[str, ...] = (),
     lines: data_contract.DataLinesMetadata | None = None,
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None,
+    record_representation: str | None = None,
+    record_search_fields: tuple[str, ...] = (),
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     subject_field: str | None = None,
@@ -433,6 +442,7 @@ def _finalize_data_resource(
     order_fields = _require_unique(exposed_model_label, "order field", order_fields)
     aggregate_fields = _require_unique(exposed_model_label, "aggregate field", aggregate_fields)
     group_by_fields = _require_unique(exposed_model_label, "group axis", group_by_fields)
+    record_search_fields = _require_unique(exposed_model_label, "search field", record_search_fields)
     label_axes = _relation_label_axes(model, group_by_fields) if model is not None else {}
     if model is not None and order_fields and not default_sort:
         default_sort = _default_sort(model, order_fields)
@@ -507,7 +517,26 @@ def _finalize_data_resource(
         fields=active_fields,
         required=bool({"list", "detail"} & set(capabilities)),
     )
-    record_representation = _record_representation_field(active_fields)
+    active_record_representation = _record_representation_field(active_fields)
+    if record_representation is not None:
+        if type_names.node is None:
+            raise ImproperlyConfigured(
+                f"resource metadata for {exposed_model_label} declares record_representation without a node type."
+            )
+        active_record_representation = final_wire_field_names(
+            graphql_schema,
+            type_names.node,
+            (record_representation,),
+        )[0]
+        representation_field = next(
+            (field for field in active_fields if field.name == active_record_representation),
+            None,
+        )
+        if not _is_display_scalar(representation_field):
+            raise ImproperlyConfigured(
+                f"resource metadata for {exposed_model_label} declares record_representation "
+                f"{active_record_representation!r}, which is not a readable String field."
+            )
     active_subject_field = None
     if subject_field is not None:
         if type_names.node is None:
@@ -523,33 +552,43 @@ def _finalize_data_resource(
         fields=active_fields,
         declared=subtitle,
     )
+    query = ResourceQueryProjection(
+        schema=graphql_schema,
+        types=type_names,
+        fields=active_fields,
+        identity=projected_public_id_field,
+        filter_fields=filter_fields,
+        order_fields=order_fields,
+        axes=tuple(axis for axis in query_axes if axis.field in group_by_fields),
+        label_axes=label_axes,
+        default_sort=default_sort,
+        row_model=row_model,
+        filter_operators=filter_operators,
+        model=model,
+        identity_policies=identity_policies,
+    ).build()
+    active_record_search_fields = _validated_record_search_fields(
+        model_label=exposed_model_label,
+        graphql_schema=graphql_schema,
+        input_name=type_names.filter,
+        declared=record_search_fields,
+        fields=active_fields,
+        query=query,
+    )
     return data_contract.DataResourceMetadata(
         model=model,
         model_label=exposed_model_label,
         resource_type=model_resource_type(model) if model is not None else None,
         app_label=app_label,
         model_name=model_name,
-        query=ResourceQueryProjection(
-            schema=graphql_schema,
-            types=type_names,
-            fields=active_fields,
-            identity=projected_public_id_field,
-            filter_fields=filter_fields,
-            order_fields=order_fields,
-            axes=tuple(axis for axis in query_axes if axis.field in group_by_fields),
-            label_axes=label_axes,
-            default_sort=default_sort,
-            row_model=row_model,
-            filter_operators=filter_operators,
-            model=model,
-            identity_policies=identity_policies,
-        ).build(),
+        query=query,
         roots=roots,
         type_names=type_names,
         contributors=contributors,
         canonical_label=canonical_record_model(model)._meta.label if model is not None else None,
         row_model=row_model,
-        record_representation=record_representation,
+        record_representation=active_record_representation,
+        record_search_fields=active_record_search_fields,
         subject_field=active_subject_field,
         subtitle=active_subtitle,
         impl_fields=_impl_fields(model, active_fields),
@@ -758,6 +797,42 @@ def _is_display_scalar(field: data_contract.DataResourceFieldMetadata | None) ->
     """Return whether ``field`` is suitable as a compact record label."""
 
     return field is not None and field.kind == "scalar" and field.scalar == "String"
+
+
+def _validated_record_search_fields(
+    *,
+    model_label: str,
+    graphql_schema: GraphQLSchema,
+    input_name: str | None,
+    declared: tuple[str, ...],
+    fields: tuple[data_contract.DataResourceFieldMetadata, ...],
+    query: data_contract.DataResourceQuery,
+) -> tuple[str, ...]:
+    """Return final readable String fields supporting case-insensitive search."""
+
+    if not declared:
+        return ()
+    projected = final_input_policy_fields(graphql_schema, input_name, accepted=declared)
+    if len(projected) != len(declared):
+        raise ImproperlyConfigured(
+            f"resource metadata for {model_label} declares record_search_fields outside its filter input."
+        )
+    projected = _require_unique(model_label, "final search field", projected)
+    by_name = {field.name: field for field in fields}
+    for name in projected:
+        field = by_name.get(name)
+        filter_spec = query.fields.get(name).filter if name in query.fields else None
+        if (
+            not _is_display_scalar(field)
+            or not field.readable
+            or filter_spec is None
+            or "iContains" not in filter_spec.operators
+        ):
+            raise ImproperlyConfigured(
+                f"resource metadata for {model_label} declares search field {name!r}, "
+                "which is not a readable, filterable String with iContains."
+            )
+    return projected
 
 
 def relation_group_by_fields(

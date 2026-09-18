@@ -1,6 +1,7 @@
 import { Filter, ResourceQuery, type LocalQueryField, type ModelMetadata, type QueryFilter } from "@angee/metadata";
 import type { ColumnDescriptor } from "../page";
 import type { ResourceViewGroup } from "./resource-view-model";
+import { resolveTextFilterField, resolveTextSearchFields } from "./utils/filter-mutations";
 
 /** Resource metadata or explicit local declarations supply the same query owner. */
 export function queryForColumns<TRow extends object>(
@@ -35,4 +36,21 @@ export function filterForTextSearch(
     { OR: textSearchFields.filter((field) => query.fields[field]?.filter?.operators.includes("iContains"))
       .map((field) => ({ [field]: { iContains: text } })) },
   ));
+}
+
+/** Expand a resource's semantic text term across its backend-authored search fields. */
+export function filterForResourceTextSearch(
+  metadata: ModelMetadata | null | undefined,
+  value: unknown,
+): QueryFilter {
+  const filter = Filter.from(value);
+  if (!metadata) return filter.value;
+  const textSearchFields = resolveTextSearchFields(metadata);
+  if (textSearchFields.length === 0) return filter.value;
+  return filterForTextSearch(
+    ResourceQuery.from(metadata),
+    filter.value,
+    resolveTextFilterField(metadata) ?? undefined,
+    textSearchFields,
+  );
 }

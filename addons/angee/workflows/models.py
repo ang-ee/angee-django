@@ -33,9 +33,10 @@ from django.core.exceptions import (
 from django.db import DEFAULT_DB_ALIAS, OperationalError, ProgrammingError, connections, models, router, transaction
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from rebac import system_context
+from rebac import resolve_subjects, system_context
 
 from angee.base.fields import StateField
+from angee.base.identity import canonical_subject_ref
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel
@@ -63,8 +64,8 @@ from angee.workflows.manager_authority import (
     _artifact_write_capability,
     _attempt_save_capability,
     _attempt_write_active,
-    _decision_save_capability,
     _decision_resolution_session,
+    _decision_save_capability,
     _decision_write_active,
     _definition_write_session,
     _dispatch_save_capability,
@@ -79,6 +80,7 @@ from angee.workflows.managers import (
     StepArtifactManager,
     StepAttemptManager,
     StepAttemptSystemManager,
+    StepExternalSubscriptionManager,
     StepManager,
     StepRunManager,
     TriggerManager,
@@ -681,12 +683,12 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     def graph_diagnostics(self) -> tuple[Any, ...]:
         """Return readiness diagnostics for the currently persisted definition."""
 
-        return WorkflowGraph.from_workflow(self).diagnostics()
+        return type(self).objects.definition_graph(self).diagnostics()
 
     def validate_readiness(self) -> None:
         """Raise all readiness diagnostics for the currently persisted definition."""
 
-        WorkflowGraph.from_workflow(self).validate()
+        type(self).objects.definition_graph(self).validate()
 
     def _persisted_save_snapshot(self) -> Self | None:
         """Return the persisted status and stable key for save guards."""
@@ -1388,7 +1390,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     invocation_identity_attnames = frozenset({
         "workflow_id", "origin", "trigger_id", "parent_step_run_id", "parent_relation",
         "reprocessed_from_id", "subject_content_type_id", "subject_object_id",
-        "dedup_key", "occurrence_id", "created_by_id", "input_present", "input",
+        "dedup_key", "occurrence_id", "admitted_actor_ref", "input_present", "input",
         "test_request_actor_ref", "test_scope", "test_step_id", "test_source_step_id",
         "test_repair_source_attempt_id", "recovery_source_attempt_id",
         "recovery_request_actor_ref", "recovery_mode", "recovery_uncertainty_ack",
@@ -1429,6 +1431,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     subject = GenericForeignKey("subject_content_type", "subject_object_id")
     dedup_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
     occurrence_id = models.CharField(max_length=255, null=True, blank=True, editable=False)
+    admitted_actor_ref = models.CharField(max_length=255, blank=True, default="", editable=False)
     test_request_actor_ref = models.CharField(max_length=255, blank=True, editable=False)
     test_scope = StateField(choices_enum=WorkflowScope, blank=True, default="", editable=False)
     test_step = models.ForeignKey(
@@ -1487,6 +1490,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         base_manager_name = "system_objects"
         ordering = ("-created_at", "sqid")
         rebac_resource_type = "workflows/run"
+        indexes = (models.Index(fields=("subject_content_type", "subject_object_id"), name="idx_wfr_subject_ref"),)
         constraints = (
             models.CheckConstraint(
                 condition=(
@@ -1557,7 +1561,19 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                 name="uniq_workflows_run_parent_step_run",
             ),
         )
-        indexes = (models.Index(fields=("subject_content_type", "subject_object_id"), name="idx_wfr_subject_ref"),)
+
+    def admission_actor_subject(self) -> Any | None:
+        """Return the immutable admission subject, including historical rows."""
+
+        if self.admitted_actor_ref:
+            return canonical_subject_ref(self.admitted_actor_ref)
+        return None
+
+    def admission_actor(self) -> Any | None:
+        """Resolve the retained admission subject when that principal still exists."""
+
+        subject = self.admission_actor_subject()
+        return None if subject is None else resolve_subjects((subject,)).get(subject)
 
     @property
     def is_terminal(self) -> bool:
@@ -1752,7 +1768,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                 .get(pk=self.pk)
             )
             changed = {
-                field: "Retained workflow invocation facts are immutable."
+                field: "Retained workflow invocation identity is immutable."
                 for field in self.invocation_identity_attnames
                 if not (
                     json_values_equal(retained[field], getattr(self, field))
@@ -1800,7 +1816,11 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                     {"test_repair_source_attempt": "Only test runs retain repair source evidence."}
                 )
             if self.origin != RunOrigin.RECOVERY and self.recovery_uncertainty_ack:
-                raise ValidationError({"recovery_uncertainty_ack": "Only recovery runs can retain uncertainty acknowledgement."})
+                raise ValidationError({
+                    "recovery_uncertainty_ack": (
+                        "Only recovery runs can retain uncertainty acknowledgement."
+                    )
+                })
             if self.origin == RunOrigin.TEST:
                 if self.test_scope not in WorkflowScope.values:
                     raise ValidationError({"test_scope": "Test runs require a declared scope."})
@@ -1958,7 +1978,7 @@ class StepRun(AuditMixin, AngeeDataModel):
     map_index = models.IntegerField(default=-1)
     status = StateField(choices_enum=StepRunStatus, default=StepRunStatus.SCHEDULED)
     previous = models.ManyToManyField("self", symmetrical=False, blank=True, related_name="next_step_runs")
-    input = models.JSONField(default=dict, blank=True)
+    input = models.JSONField(default=dict, null=True, blank=True)
     output = models.JSONField(default=dict, null=True, blank=True)
     output_present = models.BooleanField(default=False)
     resume_state = models.JSONField(default=dict, blank=True)
@@ -2209,7 +2229,9 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.stacktrace = ""
         self.wait_until = None
         self.waiting_kind = cast(WaitingKind, "")
-        self._transition_fields = {"output", "output_present", "outcome", "error", "stacktrace", "wait_until", "waiting_kind"}
+        self._transition_fields = {
+            "output", "output_present", "outcome", "error", "stacktrace", "wait_until", "waiting_kind",
+        }
 
     @transition(
         status,
@@ -2546,6 +2568,51 @@ class StepAttempt(AuditMixin, AngeeDataModel):
         raise TypeError("Step attempts are retained execution evidence and cannot be deleted.")
 
 
+class StepExternalSubscription(AuditMixin, AngeeDataModel):
+    """One exact domain record observed by an attempt's external wait predicate."""
+
+    runtime = True
+    sqid_prefix = "wes_"
+    attempt = models.ForeignKey(
+        "workflows.StepAttempt",
+        on_delete=models.CASCADE,
+        related_name="external_subscriptions",
+        editable=False,
+    )
+    target_content_type = models.ForeignKey(
+        ContentType, on_delete=models.PROTECT, related_name="+", editable=False,
+    )
+    target_object_id = models.PositiveBigIntegerField(editable=False)
+    target = GenericForeignKey("target_content_type", "target_object_id")
+
+    objects = StepExternalSubscriptionManager()
+
+    class Meta:
+        abstract = True
+        ordering = ("attempt_id", "target_content_type_id", "target_object_id")
+        indexes = (
+            models.Index(
+                fields=("target_content_type", "target_object_id"),
+                name="idx_wes_target",
+            ),
+        )
+        constraints = (
+            models.UniqueConstraint(
+                fields=("attempt", "target_content_type", "target_object_id"),
+                name="uniq_wes_attempt_target",
+            ),
+        )
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        if not self._state.adding or not _attempt_write_active(alias, self.attempt.step_run_id):
+            raise TypeError("External subscriptions can only be recorded by StepAttemptManager.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise TypeError("External subscriptions are retained for their attempt lifecycle.")
+
+
 class StepArtifact(AuditMixin, AngeeDataModel):
     """Immutable ordered pointer explicitly emitted by one retained attempt result."""
 
@@ -2848,6 +2915,9 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
                     | models.Q(kind=WorkflowDispatchKind.CHILD_CANCEL, run__isnull=False,
                                step_attempt__isnull=True, decision__isnull=True, generation__isnull=True,
                                artifact_content_type__isnull=True, artifact_object_id__isnull=True)
+                    | models.Q(kind=WorkflowDispatchKind.RUN_CANCEL, run__isnull=False,
+                               step_attempt__isnull=True, decision__isnull=True, generation__isnull=True,
+                               artifact_content_type__isnull=True, artifact_object_id__isnull=True)
                 ),
                 name="chk_wfd_target_shape",
             ),
@@ -2865,6 +2935,10 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
             models.UniqueConstraint(
                 fields=("kind", "run"), condition=models.Q(kind=WorkflowDispatchKind.CHILD_CANCEL),
                 name="uniq_wfd_child_cancel",
+            ),
+            models.UniqueConstraint(
+                fields=("kind", "run"), condition=models.Q(kind=WorkflowDispatchKind.RUN_CANCEL),
+                name="uniq_wfd_run_cancel",
             ),
         )
 
@@ -2884,7 +2958,11 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
         kind = WorkflowDispatchKind(self.kind)
         target_id = (
             self.pk if kind == WorkflowDispatchKind.ARTIFACT_DELIVERY else
-            self.run_id if kind in {WorkflowDispatchKind.ADVANCE, WorkflowDispatchKind.CHILD_CANCEL} else
+            self.run_id if kind in {
+                WorkflowDispatchKind.ADVANCE,
+                WorkflowDispatchKind.CHILD_CANCEL,
+                WorkflowDispatchKind.RUN_CANCEL,
+            } else
             self.step_attempt_id if kind == WorkflowDispatchKind.EXECUTE else self.decision_id
         )
         if target_id is None:

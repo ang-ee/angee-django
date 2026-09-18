@@ -17,7 +17,7 @@ from angee.workflows_extraction.engines import (
     DocumentPipelineError,
     DocumentResult,
     DocumentSource,
-    OcrEngine,
+    ExtractionEngine,
     PageImage,
     PageResult,
     RecognitionResult,
@@ -31,7 +31,7 @@ from angee.workflows_extraction.routing import (
 )
 
 
-class GlmOllamaEngine(OcrEngine):
+class GlmOllamaEngine(ExtractionEngine):
     """Acquire native evidence, recognize scanned pages, then map the whole document."""
 
     key = "glm"
@@ -208,9 +208,9 @@ class GlmOllamaEngine(OcrEngine):
         started = time.monotonic()
         acquired = acquire_native_parts(
             sources,
-            dpi=int(settings.ANGEE_OCR_DPI),
-            max_edge=int(settings.ANGEE_OCR_MAX_EDGE),
-            max_pages=int(settings.ANGEE_OCR_MAX_PAGES),
+            dpi=int(settings.ANGEE_EXTRACTION_DPI),
+            max_edge=int(settings.ANGEE_EXTRACTION_MAX_EDGE),
+            max_pages=int(settings.ANGEE_EXTRACTION_MAX_PAGES),
         )
         recognized = recognize_pages(
             acquired.recognition_pages,

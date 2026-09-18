@@ -2,6 +2,7 @@ import { lazy, useEffect, useState, type ReactElement } from "react";
 
 import { EmptyState } from "../fragments/EmptyState";
 import { useUiT } from "../i18n";
+import { ScrollArea } from "../ui/scroll-area";
 import { formatSize, isJsonMime } from "./model";
 import { PreviewSkeleton } from "./PreviewSkeleton";
 import {
@@ -68,16 +69,39 @@ function FileText({
   return children(text);
 }
 
-function ImagePreview({ file }: PreviewProviderProps): ReactElement {
+export interface ImagePreviewSurfaceProps {
+  src: string;
+  alt: string;
+}
+
+/**
+ * The shared scrollable image surface. Its content owns centering, so when an
+ * image is taller than the viewport the content grows and scrolling still
+ * begins at the image's top edge instead of centering that edge above the
+ * reachable scroll range.
+ */
+export function ImagePreviewSurface({
+  src,
+  alt,
+}: ImagePreviewSurfaceProps): ReactElement {
   return (
-    <div className="grid h-full place-content-center overflow-auto bg-inset p-4">
+    <ScrollArea
+      className="h-full bg-inset"
+      contentClassName="grid min-h-full place-items-center p-4"
+      contentStyle={{ minWidth: "100%", width: "100%" }}
+      scrollbars="both"
+    >
       <img
-        src={file.url}
-        alt={file.name}
-        className="max-h-full max-w-full rounded-6 object-contain shadow-sm"
+        src={src}
+        alt={alt}
+        className="block max-w-full rounded-6 object-contain shadow-sm"
       />
-    </div>
+    </ScrollArea>
   );
+}
+
+function ImagePreview({ file }: PreviewProviderProps): ReactElement {
+  return <ImagePreviewSurface src={file.url} alt={file.name} />;
 }
 
 function TextPreview({ file, mime }: PreviewProviderProps): ReactElement {

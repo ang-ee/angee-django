@@ -163,13 +163,17 @@ const context: ActionFormContext = {
   selectedIds: ["inv-1", "inv-2"],
 };
 
-function Harness({ action }: { action: ActionDescriptor }): ReactElement {
+function Harness({ action, onSucceeded }: {
+  action: ActionDescriptor;
+  onSucceeded?: (outcome: { ok: boolean; message: string; id?: string }) => void;
+}): ReactElement {
   const [open, setOpen] = useState(true);
   return (
     <ActionFormDialog
       action={action}
       context={context}
       open={open}
+      onSucceeded={onSucceeded}
       onOpenChange={setOpen}
     />
   );
@@ -181,7 +185,11 @@ async function pickJournal(label: string): Promise<void> {
   fireEvent.click(await screen.findByText(label));
 }
 
-function renderDialog(action: ActionDescriptor): void {
+function renderDialog(
+  action: ActionDescriptor,
+  onSucceeded?: (outcome: { ok: boolean; message: string; id?: string }) => void,
+  onParentSubmit?: () => void,
+): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -192,13 +200,17 @@ function renderDialog(action: ActionDescriptor): void {
     routeTree: rootRoute.addChildren([indexRoute]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
+  const dialog = <Harness action={action} onSucceeded={onSucceeded} />;
   render(
     <RouterContextProvider router={router}>
       <ModalsHost>
         <ToastProvider>
           <ModelMetadataProvider metadata={metadata}>
             <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-              <Harness action={action} />
+              {onParentSubmit ? <form onSubmit={(event) => {
+                event.preventDefault();
+                onParentSubmit();
+              }}>{dialog}</form> : dialog}
             </AppRuntimeProvider>
           </ModelMetadataProvider>
         </ToastProvider>
@@ -208,6 +220,25 @@ function renderDialog(action: ActionDescriptor): void {
 }
 
 describe("ActionFormDialog", () => {
+  test("does not submit its parent record form through the dialog portal", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: false, message: "Fix the amount." });
+    const parentSubmit = vi.fn();
+    renderDialog({
+      id: "collect",
+      label: "Collect",
+      submit,
+      args: [{ name: "amount", widget: "text", label: "Amount" }],
+    }, undefined, parentSubmit);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Amount" }), {
+      target: { value: "500" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(parentSubmit).not.toHaveBeenCalled();
+  });
+
   test("prefills a saved relation from record context ahead of the fallback default", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true });
     renderDialog({
@@ -222,7 +253,9 @@ describe("ActionFormDialog", () => {
   });
 
   test("prefills scalar args from the invoking record and submits user edits", async () => {
-    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    const outcome = { ok: true, message: "Saved.", id: "result-1" };
+    const submit = vi.fn().mockResolvedValue(outcome);
+    const onSucceeded = vi.fn();
     renderDialog({
       id: "collect", label: "Collect", submit,
       args: [
@@ -230,7 +263,7 @@ describe("ActionFormDialog", () => {
         { name: "zero", widget: "text", label: "Zero", defaultValue: "99", fromContext: () => 0 },
         { name: "fallback", widget: "text", label: "Fallback", defaultValue: "Default", fromContext: () => undefined },
       ],
-    });
+    }, onSucceeded);
     expect((screen.getByLabelText("Amount") as HTMLInputElement).value).toBe("1234.56");
     expect((screen.getByLabelText("Zero") as HTMLInputElement).value).toBe("0");
     expect((screen.getByLabelText("Fallback") as HTMLInputElement).value).toBe("Default");
@@ -239,6 +272,7 @@ describe("ActionFormDialog", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledWith(
       { amount: "500.00", zero: 0, fallback: "Default" }, context,
     ));
+    expect(onSucceeded).toHaveBeenCalledWith(outcome);
   });
 
   test("serializes datetime args with the picked local UTC offset", async () => {

@@ -48,6 +48,12 @@ class RecoveryMode(StrEnum):
     RECONCILE = "reconcile"
 
 
+def workflow_result_terminal_match_error(count: int) -> str:
+    """Return the canonical diagnostic for a non-unique terminal result match."""
+
+    return f"Workflow result contract matched {count} terminal producers; expected one."
+
+
 class ExternalOperationPolicy(StrEnum):
     """Actual provider guarantees used for an admitted external request."""
 

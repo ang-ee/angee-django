@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -58,9 +59,60 @@ _CONTEXT_ADAPTERS = {
     "facts": (TypeAdapter(tuple[ReviewFact, ...]),),
     "differences": (TypeAdapter(tuple[ReviewDifference, ...]),),
     "reasons": (TypeAdapter(tuple[ReviewReason, ...]),),
+    "object": (TypeAdapter(dict[StrictStr, JsonValue]),),
 }
 _VERDICTS = {"COMPLETE": "completed", "REJECT": "rejected", "ESCALATE": "escalated"}
 _VARIANTS = {"primary", "secondary", "destructive", "ghost"}
+_FORM_SPEC_OBJECT_EDGES = ("items", "if", "then", "else", "not", "additionalProperties")
+_FORM_SPEC_ARRAY_EDGES = ("oneOf", "anyOf", "allOf")
+
+
+def retained_decision_form_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Freeze authored field order before the displayed schema enters JSONB."""
+
+    retained = copy.deepcopy(schema)
+
+    def annotate(node: Any, *, path: str) -> None:
+        if not isinstance(node, dict):
+            return
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            names = list(properties)
+            order = node.get("propertyOrder")
+            if order is None:
+                node["propertyOrder"] = names
+            elif (
+                not isinstance(order, list)
+                or any(not isinstance(name, str) or not name for name in order)
+                or len(order) != len(set(order))
+                or set(order) != set(names)
+            ):
+                raise ValidationError({
+                    "decision_schema": (
+                        f"{path}.propertyOrder must name every property exactly once."
+                    )
+                })
+            for name, field in properties.items():
+                annotate(field, path=f"{path}.properties.{name}")
+        elif "propertyOrder" in node:
+            raise ValidationError({
+                "decision_schema": f"{path}.propertyOrder requires object properties."
+            })
+
+        definitions = node.get("$defs")
+        if isinstance(definitions, dict):
+            for name, field in definitions.items():
+                annotate(field, path=f"{path}.$defs.{name}")
+        for edge in _FORM_SPEC_OBJECT_EDGES:
+            annotate(node.get(edge), path=f"{path}.{edge}")
+        for edge in _FORM_SPEC_ARRAY_EDGES:
+            choices = node.get(edge)
+            if isinstance(choices, list):
+                for index, choice in enumerate(choices):
+                    annotate(choice, path=f"{path}.{edge}.{index}")
+
+    annotate(retained, path="decision_schema")
+    return retained
 
 
 @dataclass(frozen=True, slots=True)

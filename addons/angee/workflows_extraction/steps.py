@@ -25,7 +25,11 @@ from angee.workflows.attempts import (
 )
 from angee.workflows.engine import external_operation_request
 from angee.workflows.steps import StepEffect, StepExecutionMode, StepImpl, StepOutcome, StepResult
-from angee.workflows_extraction.engines import OcrEngine, PageImage
+from angee.workflows_extraction.engines import (
+    DocumentPipelineError,
+    ExtractionEngine,
+    PageImage,
+)
 from angee.workflows_extraction.service import (
     SupersededInference,
     collect_carriers,
@@ -40,7 +44,7 @@ from angee.workflows_extraction.service import (
 EngineConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
 
 
-class OcrExtractInput(BaseModel):
+class ExtractionInput(BaseModel):
     """Stable public references needed to perform extraction."""
 
     model_config = ConfigDict(extra="forbid")
@@ -52,7 +56,7 @@ class OcrExtractInput(BaseModel):
     target_id: str
 
 
-class OcrExtractOutput(BaseModel):
+class ExtractionOutput(BaseModel):
     """Non-sensitive workflow journal projection."""
 
     model_config = ConfigDict(extra="forbid")
@@ -60,7 +64,7 @@ class OcrExtractOutput(BaseModel):
     revision: int
 
 
-class OcrExtractConfig(BaseModel):
+class ExtractionConfig(BaseModel):
     """Schema and engine policy stored on the workflow definition."""
 
     model_config = ConfigDict(extra="forbid")
@@ -70,7 +74,7 @@ class OcrExtractConfig(BaseModel):
     retained_failure_outcome: Literal["failed", "retained_failure"] = "failed"
 
 
-class PreparePagesInput(OcrExtractInput):
+class PreparePagesInput(ExtractionInput):
     """The original source/target refs; provider work happens later."""
 
 
@@ -95,14 +99,14 @@ class PreparePagesStepImpl(StepImpl):
     effect_description = "Stores bounded native and raster carriers as READY Files."
     input_model = PreparePagesInput
     output_model = PreparePagesOutput
-    config_model = OcrExtractConfig
+    config_model = ExtractionConfig
     outcomes = (StepOutcome("prepared", "Prepared"),)
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
         value = self.validate_input(step_run.input)
-        options = OcrExtractConfig.model_validate(step_run.step.config).engine_config
-        actor = step_run.run.created_by
+        options = ExtractionConfig.model_validate(step_run.step.config).engine_config
+        actor = step_run.run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page preparation requires the workflow actor.")
         with actor_context(actor):
@@ -219,7 +223,7 @@ class RecognizePageStepImpl(StepImpl):
         config = RecognizePageConfig.model_validate(step_run.step.config)
         if value.config_digest != _json_digest(config.engine_config):
             raise ValidationError({"recognition": "The page item names a different published recognizer config."})
-        actor = step_run.run.created_by
+        actor = step_run.run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page recognition requires the workflow actor.")
         with actor_context(actor):
@@ -239,7 +243,7 @@ class RecognizePageStepImpl(StepImpl):
             if hashlib.sha256(image_bytes).hexdigest() != value.image_digest:
                 raise ValidationError({"recognition": "The stored page image bytes changed."})
             engine_class = resolve_impl_class(
-                "ANGEE_OCR_ENGINE_CLASSES", config.engine, base_class=OcrEngine,
+                "ANGEE_EXTRACTION_ENGINE_CLASSES", config.engine, base_class=ExtractionEngine,
             )
             engine = engine_class()
             engine.validate_model(model, role="recognition")
@@ -296,14 +300,14 @@ class CollectCarriersStepImpl(StepImpl):
     effect = StepEffect.READ
     input_model = CollectCarriersInput
     output_model = CollectCarriersOutput
-    config_model = OcrExtractConfig
+    config_model = ExtractionConfig
     outcomes = (StepOutcome("collected", "Collected"), StepOutcome("source_hold", "Source hold"))
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
         value = self.validate_input(step_run.input)
-        options = OcrExtractConfig.model_validate(step_run.step.config).engine_config
-        actor = step_run.run.created_by
+        options = ExtractionConfig.model_validate(step_run.step.config).engine_config
+        actor = step_run.run.admission_actor()
         if actor is None:
             raise PermissionDenied("Carrier collection requires the workflow actor.")
         with actor_context(actor):
@@ -347,16 +351,17 @@ class ProcessEvidenceStepImpl(StepImpl):
     deterministic = True
     idempotent = True
     effect = StepEffect.WRITE
+    execution_mode = StepExecutionMode.DATABASE_COMMAND
     input_model = ProcessEvidenceInput
     output_model = ProcessEvidenceOutput
-    config_model = OcrExtractConfig
+    config_model = ExtractionConfig
     outcomes = (StepOutcome("processed", "Processed"), StepOutcome("source_hold", "Source hold"))
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
         value = self.validate_input(step_run.input)
-        config = OcrExtractConfig.model_validate(step_run.step.config)
-        actor = step_run.run.created_by
+        config = ExtractionConfig.model_validate(step_run.step.config)
+        actor = step_run.run.admission_actor()
         if actor is None:
             raise PermissionDenied("Evidence processing requires the workflow actor.")
         with actor_context(actor):
@@ -397,6 +402,7 @@ class InferEvidenceInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_extraction_id: str
     base_revision: int = Field(ge=1)
+    allow_inference: bool = True
     model_id: str | None = None
     target_model: str
     target_id: str
@@ -412,6 +418,7 @@ class InferEvidenceOutput(BaseModel):
     error_code: str
     unresolved_reasons: list[str]
     superseded_by: str | None = None
+    inference_failure: dict[str, str] | None = None
 
 
 class InferEvidenceStepImpl(StepImpl):
@@ -427,6 +434,8 @@ class InferEvidenceStepImpl(StepImpl):
     output_model = InferEvidenceOutput
     outcomes = (
         StepOutcome("inferred", "Inferred"), StepOutcome("unchanged", "Unchanged"),
+        StepOutcome("inference_failed", "Inference failed; source review required"),
+        StepOutcome("correspondence_required", "Correspondence required"),
         StepOutcome("superseded", "Superseded"),
     )
 
@@ -458,7 +467,7 @@ class InferEvidenceStepImpl(StepImpl):
     def _infer(self, step_run: Any) -> StepResult:
         request = external_operation_request(step_run)
         value = self.validate_input(request.input)
-        actor = step_run.run.created_by
+        actor = step_run.run.admission_actor()
         if actor is None:
             raise PermissionDenied("Bound inference requires the workflow actor.")
         with actor_context(actor):
@@ -472,18 +481,67 @@ class InferEvidenceStepImpl(StepImpl):
                 or str(target_ref.object_id) != str(base.object_id)
             ):
                 raise ValidationError({"target_id": "The target differs from the retained extraction."})
+            if not value.allow_inference:
+                if base.status != "succeeded":
+                    raise ValidationError({
+                        "base_extraction_id": "Retained-only inference requires successful evidence."
+                    })
+                current = type(base).objects.inference_current_head(base, actor=actor)
+                if current.pk != base.pk:
+                    if (
+                        current.status == "failed"
+                        and current.error_code
+                        == "source_hold:identity_correspondence_required"
+                        and type(base).objects.inference_authority_base(
+                            current, actor=actor,
+                        ).pk
+                        == base.pk
+                    ):
+                        return _retained_inference_result(
+                            current,
+                            actor=actor,
+                            success_outcome="correspondence_required",
+                            artifact_label="Current extraction evidence",
+                        )
+                    raise ValidationError({
+                        "base_extraction_id": (
+                            "The current extraction is not a correspondence hold for the retained base."
+                        )
+                    })
+                return StepResult.done(
+                    output=_inference_output(base), outcome="unchanged",
+                    artifacts=(ArtifactSpec(base, "Retained extraction evidence"),),
+                )
             current = type(base).objects.inference_current_head(base, actor=actor)
             if current.pk != base.pk:
+                if (
+                    current.status == "failed"
+                    and current.error_code
+                    == "source_hold:identity_correspondence_required"
+                ):
+                    return _retained_inference_result(
+                        current,
+                        actor=actor,
+                        success_outcome="correspondence_required",
+                        artifact_label="Current extraction evidence",
+                    )
                 return StepResult.done(
                     output={**_inference_output(current), "superseded_by": str(current.sqid)},
                     outcome="superseded",
                     artifacts=(ArtifactSpec(current, "Current extraction evidence"),),
                 )
+            profile = resolve_impl_class(
+                "ANGEE_EXTRACTION_ENGINE_CLASSES",
+                str(base.engine),
+                base_class=ExtractionEngine,
+            )()
             unchanged = (
                 base.status == "succeeded"
                 and (
                     bool(base.corrections)
-                    or not base.unresolved_reasons
+                    or not profile.inference_required(
+                        base.result, base.unresolved_reasons
+                    )
                     or "mapping" in base.provenance.get("used_model_roles", ())
                 )
             )
@@ -495,10 +553,29 @@ class InferEvidenceStepImpl(StepImpl):
             if value.model_id is None:
                 raise ValidationError({"model_id": "An admitted mapping model is required."})
             model = apps.get_model("agents", "InferenceModel").objects.get(sqid=value.model_id)
-            outcome = infer(
-                base, model=model, authorized_target=target, operation_step_run=step_run,
-                identity_mapping=value.identity_mapping, retired_identities=value.retired_identities,
-            )
+            try:
+                outcome = infer(
+                    base,
+                    model=model,
+                    authorized_target=target,
+                    operation_step_run=step_run,
+                    identity_mapping=value.identity_mapping,
+                    retired_identities=value.retired_identities,
+                )
+            except DocumentPipelineError as error:
+                return StepResult.done(
+                    output={
+                        **_inference_output(base),
+                        "inference_failure": {
+                            "type": type(error).__name__,
+                            "message": str(error),
+                            "stage": str(error.stage or ""),
+                            "code": str(error.code or ""),
+                        },
+                    },
+                    outcome="inference_failed",
+                    artifacts=(ArtifactSpec(base, "Source evidence requiring manual review"),),
+                )
         if isinstance(outcome, SupersededInference):
             with actor_context(actor):
                 current = apps.get_model("workflows_extraction", "Extraction").objects.get(
@@ -508,9 +585,11 @@ class InferEvidenceStepImpl(StepImpl):
                 output={**_inference_output(current), "superseded_by": outcome.current_extraction_id},
                 outcome="superseded", artifacts=(ArtifactSpec(current, "Current extraction evidence"),),
             )
-        return StepResult.done(
-            output=_inference_output(outcome), outcome="inferred",
-            artifacts=(ArtifactSpec(outcome, "Inferred extraction evidence"),),
+        return _retained_inference_result(
+            outcome,
+            actor=actor,
+            success_outcome="inferred",
+            artifact_label="Inferred extraction evidence",
         )
 
 
@@ -520,6 +599,51 @@ def _inference_output(extraction: Any) -> dict[str, Any]:
         "status": extraction.status, "error_code": extraction.error_code,
         "unresolved_reasons": list(extraction.unresolved_reasons),
     }
+
+
+def _retained_inference_result(
+    extraction: Any,
+    *,
+    actor: Any,
+    success_outcome: str,
+    artifact_label: str,
+) -> StepResult:
+    """Route one exact retained result without inventing correspondence choices."""
+
+    if not (
+        extraction.status == "failed"
+        and extraction.error_code
+        == "source_hold:identity_correspondence_required"
+    ):
+        return StepResult.done(
+            output=_inference_output(extraction),
+            outcome=success_outcome,
+            artifacts=(ArtifactSpec(extraction, artifact_label),),
+        )
+    manager = type(extraction).objects
+    if manager.inference_candidate_selectors(extraction):
+        return StepResult.done(
+            output=_inference_output(extraction),
+            outcome="correspondence_required",
+            artifacts=(ArtifactSpec(extraction, artifact_label),),
+        )
+    authority = manager.inference_authority_base(extraction, actor=actor)
+    return StepResult.done(
+        output={
+            **_inference_output(authority),
+            "inference_failure": {
+                "type": "DocumentPipelineError",
+                "message": "The retained correspondence candidate is empty.",
+                "stage": "correspondence",
+                "code": "empty_correspondence_candidate",
+            },
+        },
+        outcome="inference_failed",
+        artifacts=(
+            ArtifactSpec(extraction, "Empty correspondence candidate"),
+            ArtifactSpec(authority, "Source evidence requiring manual review"),
+        ),
+    )
 
 
 class ReviseEvidenceInput(BaseModel):
@@ -564,11 +688,6 @@ class ReviseEvidenceStepImpl(StepImpl):
     config_model = ReviseEvidenceConfig
     outcomes = (StepOutcome("revised", "Revised"),)
 
-    @classmethod
-    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
-        del attempt
-        return RecoveryCapability(RecoveryMode.FRESH)
-
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
         value = self.validate_input(step_run.input)
@@ -578,7 +697,7 @@ class ReviseEvidenceStepImpl(StepImpl):
         correction = GenericEvidenceCorrection.model_validate_json(
             json.dumps(value.review.resolutions[0].resolution, allow_nan=False),
         )
-        actor = step_run.run.created_by
+        actor = step_run.run.admission_actor()
         if actor is None:
             raise PermissionDenied("Evidence correction requires the workflow actor.")
         with actor_context(actor):
@@ -587,8 +706,12 @@ class ReviseEvidenceStepImpl(StepImpl):
             )
             if extraction.revision != value.base_revision:
                 raise ValidationError({"base_revision": "The retained extraction revision differs."})
+            decision = apps.get_model("workflows", "Decision").objects.get(
+                sqid=value.review.resolutions[0].decision_id,
+            )
             corrected = revise(
                 extraction,
+                decision=decision,
                 result=correction.result,
                 operation_step_run=step_run,
                 resolution_path=("review", "resolutions", 0),
@@ -614,7 +737,7 @@ def _restore_prepared(
         raise ValidationError({"pages": "The prepared source manifest is invalid."})
     file_ids = [str(item["file"]) for item in sources if isinstance(item, dict) and "file" in item]
     part_ids = [str(item["message_part"]) for item in sources if isinstance(item, dict) and "message_part" in item]
-    input_refs = OcrExtractInput(
+    input_refs = ExtractionInput(
         files=file_ids, message_parts=part_ids, target_model=manifest.target_model,
         target_id=manifest.target_id,
     )
@@ -642,7 +765,7 @@ def _json_digest(value: Any) -> str:
     ).encode()).hexdigest()
 
 
-def _resolve_sources(value: OcrExtractInput) -> tuple[list[Any], list[Any], Any]:
+def _resolve_sources(value: ExtractionInput) -> tuple[list[Any], list[Any], Any]:
     file_model = apps.get_model("storage", "File")
     part_model = apps.get_model("messaging", "Part")
     requested_files = list(file_model.objects.filter(sqid__in=value.files))

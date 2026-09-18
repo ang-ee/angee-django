@@ -22,6 +22,8 @@ from angee.parties.models import Party as AbstractParty
 from angee.posts.models import MessagePublic, ThreadPublic
 from angee.projects.models import ThreadProjects
 from angee.spaces.models import ThreadSpace
+from angee.workflows_parties.models import DecisionReadableParty
+from angee.workflows_parties.models import Handle as WorkflowHandleContribution
 from tests import spaces_models  # noqa: F401 -- register Thread's group relation target
 from tests.integrate_models import Integration
 
@@ -50,8 +52,10 @@ class Folder(AbstractContactFolder):
         rebac_resource_type = "parties/folder"
 
 
-class Party(AbstractParty):
+class Party(DecisionReadableParty, AbstractParty):
     """Concrete party used by messaging tests."""
+
+    rebac_grantable = DecisionReadableParty.rebac_grantable
 
     class Meta(AbstractParty.Meta):
         """Django model options for the canonical test party."""
@@ -62,8 +66,10 @@ class Party(AbstractParty):
         rebac_resource_type = "parties/party"
 
 
-class Handle(AbstractHandle):
+class Handle(WorkflowHandleContribution, AbstractHandle):
     """Concrete handle (a message sender/recipient) used by messaging tests."""
+
+    rebac_grantable = WorkflowHandleContribution.rebac_grantable
 
     class Meta(AbstractHandle.Meta):
         """Django model options for the canonical test handle."""

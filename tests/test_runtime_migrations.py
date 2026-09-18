@@ -648,7 +648,7 @@ def test_applies_false_writes_nothing(runtime_migration_probe, caplog) -> None:
 def test_adopted_table_drop_requires_consumer_cutover(
     runtime_migration_probe, monkeypatch, settings, caplog, consumer_cutover: bool
 ) -> None:
-    """Source FK changes cannot replace the migration that releases old state."""
+    """Adoption may stage, while physical-owner cleanup waits for consumer cutover."""
 
     _, addon, _, runtime_dir, source_root = runtime_migration_probe
     _write_module(runtime_dir / "integrate_vcs" / "__init__.py")
@@ -751,7 +751,8 @@ class Migration(migrations.Migration):
         assert "table 'resources_legacy', still owned by integrate_vcs.legacy" in str(error.value)
         assert "Never-applicable runtime migration declarations: example.demo:delete_legacy" in str(error.value)
         assert "cutover migration" in str(error.value)
-        assert not (runtime_dir / "integrate_vcs" / "migrations" / "0001_adopt_legacy.py").exists()
+        assert (runtime_dir / "integrate_vcs" / "migrations" / "0001_adopt_legacy.py").exists()
+        assert not (runtime_dir / "resources" / "migrations" / "0003_delete_legacy.py").exists()
 
 
 def test_applicable_declarations_are_planned_sequentially(runtime_migration_probe) -> None:
@@ -1280,6 +1281,84 @@ def test_workflow_identity_migration_is_additive_and_matches_source_fields() -> 
             source_args,
             source_kwargs,
         )
+
+
+def test_workflow_admitted_actor_migration_requires_a_complete_audited_run() -> None:
+    """Admission identity is added only after nullable audit attribution exists."""
+
+    module = importlib.import_module("angee.workflows.runtime_migrations.workflow_admitted_actor")
+    state = ProjectState()
+    state.add_model(ModelState(
+        "workflows",
+        "WorkflowRun",
+        [
+            ("id", models.AutoField(primary_key=True)),
+            ("created_by", models.ForeignKey(
+                "auth.User", null=True, on_delete=models.SET_NULL, related_name="+",
+            )),
+        ],
+    ))
+
+    assert module.applies(state) is True
+    migrated = module.Migration("probe", "workflows").mutate_state(state)
+    assert module.applies(migrated) is False
+    field = migrated.models["workflows", "workflowrun"].fields["admitted_actor_ref"]
+    source = __import__("angee.workflows.models", fromlist=["WorkflowRun"]).WorkflowRun
+    assert field.deconstruct()[1:] == source._meta.get_field("admitted_actor_ref").deconstruct()[1:]
+
+    partial = ProjectState()
+    partial.add_model(ModelState(
+        "workflows", "WorkflowRun", [("id", models.AutoField(primary_key=True))],
+    ))
+    with pytest.raises(ImproperlyConfigured, match="without audit attribution"):
+        module.applies(partial)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflow_admitted_actor_backfill_uses_historical_run_primary_key() -> None:
+    """The data migration clears current-model ordering absent from StateApps."""
+
+    module = importlib.import_module("angee.workflows.runtime_migrations.workflow_admitted_actor")
+    state = ProjectState()
+    state.add_model(ModelState(
+        "iam",
+        "User",
+        [
+            ("id", models.AutoField(primary_key=True)),
+            ("sqid", models.CharField(max_length=255, unique=True)),
+        ],
+        options={"db_table": "test_workflow_admitted_actor_user"},
+    ))
+    state.add_model(ModelState(
+        "workflows",
+        "WorkflowRun",
+        [
+            ("id", models.AutoField(primary_key=True)),
+            ("created_by", models.ForeignKey("iam.User", null=True, on_delete=models.SET_NULL)),
+            ("admitted_actor_ref", models.CharField(blank=True, default="", max_length=255)),
+        ],
+        options={
+            "db_table": "test_workflow_admitted_actor_run",
+            "ordering": ("-created_at", "sqid"),
+        },
+    ))
+    historical_apps = state.apps
+    user = historical_apps.get_model("iam", "User")
+    run = historical_apps.get_model("workflows", "WorkflowRun")
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(user)
+        schema_editor.create_model(run)
+    try:
+        actor = models.QuerySet(model=user).create(sqid="usr_retained")
+        row = models.QuerySet(model=run).create(created_by_id=actor.pk)
+        with connection.schema_editor() as schema_editor:
+            module.backfill_known_admission_actors(historical_apps, schema_editor)
+        row.refresh_from_db()
+        assert row.admitted_actor_ref == str(module._historical_user_subject_ref(actor))
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(run)
+            schema_editor.delete_model(user)
 
 
 def test_agent_session_identity_migration_waits_for_complete_identity_state() -> None:

@@ -5,8 +5,9 @@ import { JsonValueSchema } from "../../widgets/json-value";
 
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 const FieldTypeSchema = v.picklist(["string", "integer", "number", "boolean", "object", "array", "any"]);
+const JsonFieldScalarTypeSchema = v.union([FieldTypeSchema, v.literal("null")]);
 const JsonFieldTypeSchema = v.union([
-  FieldTypeSchema,
+  JsonFieldScalarTypeSchema,
   v.array(v.picklist(["string", "integer", "number", "boolean", "object", "array", "null"])),
 ]);
 const FieldLayoutSchema = v.picklist(["context", "input"]);
@@ -39,13 +40,18 @@ const RelationSchema = v.object({
   create: v.optional(v.object({
     resource: NonEmptyString,
     defaultValues: v.optional(v.record(v.string(), JsonValueSchema)),
+    actionLabel: v.optional(NonEmptyString),
+    title: v.optional(NonEmptyString),
   })),
 });
 const FieldBaseSchema = v.object({
   type: v.optional(JsonFieldTypeSchema),
   required: v.optional(v.array(v.string())),
+  propertyOrder: v.optional(v.array(NonEmptyString)),
   widget: v.optional(NonEmptyString),
   label: v.optional(NonEmptyString),
+  addLabel: v.optional(NonEmptyString),
+  removeLabel: v.optional(NonEmptyString),
   description: v.optional(NonEmptyString),
   placeholder: v.optional(NonEmptyString),
   readOnly: v.optional(v.boolean()),
@@ -66,7 +72,10 @@ const FieldBaseSchema = v.object({
   pattern: v.optional(v.string()),
   enum: v.optional(v.array(v.string("form-spec select values must be strings."))),
   options: v.optional(v.array(v.object({
-    value: NonEmptyString,
+    // JSON Pointer uses the empty string for the root document. It is a valid
+    // authored choice value even though human-facing option labels stay
+    // non-empty.
+    value: v.string(),
     label: NonEmptyString,
     disabled: v.optional(v.boolean()),
     verdict: v.optional(v.picklist(["COMPLETE", "REJECT", "ESCALATE"])),

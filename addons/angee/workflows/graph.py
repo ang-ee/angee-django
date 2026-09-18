@@ -15,7 +15,13 @@ from pydantic import ValidationError as PydanticValidationError
 
 from angee.workflows.attempts import json_values_equal
 from angee.workflows.bindings import binding_error_details, parse_binding
-from angee.workflows.data_contracts import DataContract, DataContractNode, model_data_contract, schema_data_contract
+from angee.workflows.data_contracts import (
+    DataContract,
+    DataContractNode,
+    NumericRange,
+    model_data_contract,
+    schema_data_contract,
+)
 from angee.workflows.steps import StepEffect, StepImpl, StepOutcome, validate_retry_config
 
 GraphLocationKind: TypeAlias = Literal["workflow", "node", "edge"]
@@ -196,11 +202,9 @@ class WorkflowGraph:
 
     @classmethod
     def from_workflow(cls, workflow: Any) -> WorkflowGraph:
-        return cls.from_rows(
-            workflow,
-            workflow.steps.order_by("key", "pk"),
-            workflow.edges.select_related("source", "target").order_by("pk"),
-        )
+        """Load one authorized definition through its canonical owner seam."""
+
+        return type(workflow).objects.definition_graph(workflow)
 
     @classmethod
     def from_rows(
@@ -1089,17 +1093,21 @@ class WorkflowGraph:
             and raw.get("producer") in terminal
             and isinstance(raw.get("when_outcome"), str)
         ]
+        routed_paths = {
+            (node.identity, outcome): tuple(
+                {**choices, node.identity: outcome}
+                for choices in paths[node.identity]
+            )
+            for node, outcome in exits
+        }
         result: list[GraphDiagnostic] = []
         for index, (left, left_outcome) in enumerate(exits):
             for right, right_outcome in exits[index + 1:]:
                 if left.identity == right.identity:
                     continue
-                if any(
-                    all(a.get(key, b.get(key)) == b.get(key, a.get(key)) for key in set(a) | set(b))
-                    for original_left in paths[left.identity]
-                    for original_right in paths[right.identity]
-                    for a in ({**original_left, left.identity: left_outcome},)
-                    for b in ({**original_right, right.identity: right_outcome},)
+                if _choice_sets_coapplicable(
+                    routed_paths[(left.identity, left_outcome)],
+                    routed_paths[(right.identity, right_outcome)],
                 ):
                     result.append(self._workflow(
                         "result_producers_coapplicable",
@@ -1122,6 +1130,39 @@ class WorkflowGraph:
     @staticmethod
     def _edge(edge: GraphEdge, code: str, message: str, field: str) -> GraphDiagnostic:
         return GraphDiagnostic(code, message, GraphLocation("edge", edge.identity, field))
+
+
+def _choice_sets_coapplicable(
+    left_paths: tuple[dict[GraphIdentity, str], ...],
+    right_paths: tuple[dict[GraphIdentity, str], ...],
+) -> bool:
+    """Return whether one left/right route pair has no contradictory choice.
+
+    Index right-side assignments as bit sets so an incompatible pair is proven
+    without enumerating the Cartesian product of both path collections.  The
+    result is equivalent to checking every pair: an omitted choice remains
+    compatible, while two explicit values for the same node must match.
+    """
+
+    if not left_paths or not right_paths:
+        return False
+    all_right = (1 << len(right_paths)) - 1
+    assigned: dict[GraphIdentity, int] = defaultdict(int)
+    values: dict[GraphIdentity, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for index, choices in enumerate(right_paths):
+        bit = 1 << index
+        for identity, outcome in choices.items():
+            assigned[identity] |= bit
+            values[identity][outcome] |= bit
+    for choices in left_paths:
+        incompatible = 0
+        for identity, outcome in choices.items():
+            incompatible |= assigned[identity] & ~values[identity].get(outcome, 0)
+            if incompatible == all_right:
+                break
+        if incompatible != all_right:
+            return True
+    return False
 
 
 def _result_binding_compatible(
@@ -1168,6 +1209,7 @@ def _result_binding_compatible(
             source_node,
             target_schema,
             literal_values=source.literal_values_at_path(binding.path),
+            numeric_ranges=source.numeric_ranges_at_path(binding.path),
         )
     if kind == "object":
         if set(target_schema) - {
@@ -1258,11 +1300,13 @@ def _catalogue_node_compatible(
     target_schema: dict[str, Any],
     *,
     literal_values: tuple[Any, ...] | None = None,
+    numeric_ranges: tuple[NumericRange, ...] | None = None,
 ) -> bool:
     if not target_schema:
         return True
     if set(target_schema) - {
         "type", "title", "description", "$defs", "items", "enum", "const",
+        "minimum", "exclusiveMinimum", "maximum", "exclusiveMaximum",
     }:
         return False
     target_type = target_schema.get("type")
@@ -1274,6 +1318,10 @@ def _catalogue_node_compatible(
         return False
     allowed = set(target_type) if isinstance(target_type, list) else {target_type}
     has_literal_constraint = "enum" in target_schema or "const" in target_schema
+    has_numeric_constraint = any(
+        keyword in target_schema
+        for keyword in ("minimum", "exclusiveMinimum", "maximum", "exclusiveMaximum")
+    )
     if has_literal_constraint and source.kind != "scalar":
         return False
     if source.kind == "scalar":
@@ -1287,6 +1335,11 @@ def _catalogue_node_compatible(
             return literal_values is not None and all(
                 Draft202012Validator(target_schema).is_valid(value)
                 for value in literal_values
+            )
+        if has_numeric_constraint:
+            return numeric_ranges is not None and all(
+                _numeric_range_compatible(numeric_range, target_schema)
+                for numeric_range in numeric_ranges
             )
         return True
     if source.kind == "object":
@@ -1310,6 +1363,47 @@ def _catalogue_node_compatible(
             and _catalogue_node_compatible(source.item.contract, item_schema)
         )
     return False
+
+
+def _numeric_range_compatible(
+    source: NumericRange,
+    target: dict[str, Any],
+) -> bool:
+    """Prove one declared source interval is contained by target bounds."""
+
+    source_minimum, source_minimum_exclusive, source_maximum, source_maximum_exclusive = source
+
+    def number(keyword: str) -> int | float | None:
+        value = target.get(keyword)
+        return value if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+    if "minimum" in target:
+        minimum = number("minimum")
+        if minimum is None or source_minimum is None or source_minimum < minimum:
+            return False
+    if "exclusiveMinimum" in target:
+        minimum = number("exclusiveMinimum")
+        if (
+            minimum is None
+            or source_minimum is None
+            or source_minimum < minimum
+            or (source_minimum == minimum and not source_minimum_exclusive)
+        ):
+            return False
+    if "maximum" in target:
+        maximum = number("maximum")
+        if maximum is None or source_maximum is None or source_maximum > maximum:
+            return False
+    if "exclusiveMaximum" in target:
+        maximum = number("exclusiveMaximum")
+        if (
+            maximum is None
+            or source_maximum is None
+            or source_maximum > maximum
+            or (source_maximum == maximum and not source_maximum_exclusive)
+        ):
+            return False
+    return True
 
 
 def _reachable(entry: GraphIdentity, edges: list[GraphEdge]) -> set[GraphIdentity]:

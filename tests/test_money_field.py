@@ -42,13 +42,15 @@ class DeclaredProjectionField(models.Field):
 
 
 def test_declared_projection_facts_classify_without_concrete_field_type() -> None:
-    """Field classification reads owner declarations before stock type fallback."""
+    """Surface metadata wins before field declarations and stock type fallback."""
 
     field = DeclaredProjectionField()
 
     assert model_field_scalar(field) == "Decimal"
     assert resource_field_widget(field, "scalar") == "money"
     assert money_currency_field(field) == "currency"
+    assert resource_field_widget(field, "scalar", {"angee_widget": "integer"}) == "integer"
+    assert money_currency_field(field, {"angee_currency_field": "ledger_currency"}) == "ledger_currency"
 
 
 def test_sqid_field_declares_id_scalar_for_metadata() -> None:

@@ -40,9 +40,9 @@ export interface DecisionActionFormSpec {
   validateContext(payload: unknown): DecisionFormValidation;
 }
 
-const DECISION_CONTEXT_WIDGETS = new Set(["record", "facts", "differences", "reasons"]);
+const DECISION_CONTEXT_WIDGETS = new Set(["record", "facts", "differences", "reasons", "object"]);
 const FORM_ANNOTATIONS = [
-  "widget", "label", "placeholder", "layout", "defaultValue",
+  "widget", "label", "addLabel", "removeLabel", "placeholder", "layout", "defaultValue", "propertyOrder",
   "omittable", "presenceRequired", "options", "relation",
 ] as const;
 
@@ -177,7 +177,10 @@ function ajvErrorMessages(
   fields: readonly FormSpecFieldDescriptor[],
 ): Record<string, string[]> {
   const messages: Record<string, string[]> = {};
-  const labels = new Map(fields.map((field) => [field.name, field.label ?? field.name]));
+  const labels = new Map<string, string>(fields.map((field) => [
+    field.name,
+    typeof field.label === "string" ? field.label : field.name,
+  ]));
   const relevant = (errors ?? []).filter((error) => {
     if (error.keyword === "oneOf" && error.schemaPath === "#/oneOf") return false;
     const branch = /^#\/oneOf\/(\d+)(?:\/|$)/.exec(error.schemaPath);
@@ -218,9 +221,13 @@ function ajvErrorMessages(
     if (discarded.has(error)) continue;
     const missing = error.keyword === "required" && typeof error.params.missingProperty === "string"
       ? error.params.missingProperty : "";
-    const name = jsonPointerName(error.instancePath) || missing || "root";
-    const label = labels.get(name) ?? name;
-    const message = decisionValidationMessage(error, label);
+    const path = jsonPointerName(error.instancePath);
+    const fullPath = [path, missing].filter(Boolean).join(".");
+    const name = fullPath.split(".")[0] || "root";
+    const leaf = fullPath.split(".").at(-1) || name;
+    const label = labels.get(leaf) ?? leaf;
+    const detail = decisionValidationMessage(error, label);
+    const message = fullPath && fullPath !== name ? `${fullPath}: ${detail}` : detail;
     const key = `${name}\u0000${message}`;
     if (!seen.has(key)) {
       seen.add(key);
@@ -282,13 +289,20 @@ function formatList(values: readonly string[]): string {
   return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
 }
 
-export type FormSpecRelationCreate = Pick<RelationCreateConfig, "resource" | "defaultValues">;
+export type FormSpecRelationCreate = Pick<
+  RelationCreateConfig,
+  "resource" | "defaultValues"
+> & {
+  actionLabel?: string;
+  title?: string;
+};
 
 /**
  * Descriptor produced from a backend-emitted JSON form schema.
  * `type`/`properties`/`required`/`items`/`enum`/`const` are the recursive schema
  * vocabulary. Presentation extensions live on each property: string-only
- * `widget`/`label`/`description`/`placeholder`, `readOnly`, JSON `defaultValue`
+ * `widget`/`label`/`description`/`placeholder`, list `addLabel`/`removeLabel`,
+ * `readOnly`, JSON `defaultValue`
  * (overriding the standard schema `default` when both are supplied),
  * string-labelled `options`, and the pure-data `relation` config. A property's
  * key becomes the descriptor's `name`; no function-valued extension is admitted.
@@ -300,6 +314,8 @@ export interface FormSpecFieldDescriptor extends MutationDialogField {
   rowTemplate?: readonly FormSpecFieldDescriptor[];
   objectTemplate?: readonly FormSpecFieldDescriptor[];
   itemTemplate?: FormSpecFieldDescriptor;
+  addLabel?: string;
+  removeLabel?: string;
   nullable?: boolean;
   omittable?: boolean;
   hasDefault?: boolean;
@@ -337,11 +353,21 @@ export function useFormSpecFields(
 /**
  * Seed each declared form-spec field from its matching payload key, followed by
  * its schema default and then the shared descriptor-kind empty value. The form
- * spec remains the whitelist: payload keys absent from it are ignored.
+ * spec remains the whitelist: payload keys absent from it are ignored. An
+ * authored structured value retains omitted optional children instead of
+ * inventing invalid empty placeholders inside that retained object.
  */
 export function formSpecInitialValues(
   fields: readonly FormSpecFieldDescriptor[],
   payload: unknown,
+): Record<string, unknown> {
+  return formSpecInitialValuesFrom(fields, payload, false);
+}
+
+function formSpecInitialValuesFrom(
+  fields: readonly FormSpecFieldDescriptor[],
+  payload: unknown,
+  preserveOptionalOmission: boolean,
 ): Record<string, unknown> {
   const payloadValues = parseFormSpecPayload(payload);
   const values: Record<string, unknown> = {};
@@ -350,10 +376,10 @@ export function formSpecInitialValues(
       const payloadValue = payloadValues[field.name];
       if (isFormSpecValueCompatible(field, payloadValue)) {
         values[field.name] = field.objectTemplate && payloadValue && typeof payloadValue === "object" && !Array.isArray(payloadValue)
-          ? formSpecInitialValues(field.objectTemplate, payloadValue)
+          ? formSpecInitialValuesFrom(field.objectTemplate, payloadValue, true)
           : field.itemTemplate?.objectTemplate && Array.isArray(payloadValue)
             ? payloadValue.map((item) => item && typeof item === "object" && !Array.isArray(item)
-              ? formSpecInitialValues(field.itemTemplate!.objectTemplate!, item)
+              ? formSpecInitialValuesFrom(field.itemTemplate!.objectTemplate!, item, true)
               : item)
             : payloadValue;
         continue;
@@ -363,7 +389,8 @@ export function formSpecInitialValues(
       values[field.name] = field.defaultValue;
       continue;
     }
-    if (!field.presenceRequired && (field.required || !field.omittable)) {
+    if (!field.presenceRequired
+        && (field.required || (!field.omittable && !preserveOptionalOmission))) {
       values[field.name] = initialFormSpecValue(field);
     }
   }
@@ -422,8 +449,15 @@ function deserializeObjectFields(
   path: string,
 ): readonly FormSpecFieldDescriptor[] {
   const required = new Set(schema.required ?? []);
-  return Object.entries(schema.properties ?? {}).map(([name, field]) =>
-    deserializeField(name, field, required.has(name), widgets, path),
+  const properties = schema.properties ?? {};
+  const names = schema.propertyOrder ?? Object.keys(properties);
+  if (names.length !== Object.keys(properties).length
+      || new Set(names).size !== names.length
+      || names.some((name) => !Object.hasOwn(properties, name))) {
+    throw new Error(`Invalid ${path}.propertyOrder: every property must be named exactly once.`);
+  }
+  return names.map((name) =>
+    deserializeField(name, properties[name]!, required.has(name), widgets, path),
   );
 }
 
@@ -435,20 +469,27 @@ function deserializeField(
   parentPath: string,
 ): FormSpecFieldDescriptor {
   const path = parentPath === "form spec" ? name : `${parentPath}.${name}`;
-  const type = formSpecFieldType(field.type);
-  const nullable = field.nullable || (Array.isArray(field.type) && field.type.includes("null"));
+  const type = formSpecFieldType(field.type, field.anyOf);
+  const nullable = field.nullable
+    || field.type === "null"
+    || (Array.isArray(field.type) && field.type.includes("null"))
+    || field.anyOf?.some((alternative) => alternative.type === "null");
   const variableList = type === "array" && field.widget === "list";
-  const rowTemplate = type === "array" && field.items && formSpecFieldType(field.items.type) === "object"
+  const rowTemplate = type === "array" && field.items
+    && formSpecFieldType(field.items.type, field.items.anyOf) === "object"
     && field.layout !== "context" && !variableList
     ? deserializeObjectFields(field.items, widgets, path)
     : undefined;
-  const objectTemplate = type === "object" && field.widget === "object"
+  const objectTemplate = type === "object" && field.widget === "object" && field.layout !== "context"
     ? deserializeObjectFields(field, widgets, path)
     : undefined;
   const itemTemplate = variableList && field.items
     ? deserializeField("item", field.items, true, widgets, `${path}[]`)
     : undefined;
-  const { relation, widget: authoredWidget, label, description, placeholder, readOnly, layout } = field;
+  const {
+    relation, widget: authoredWidget, label, addLabel, removeLabel,
+    description, placeholder, readOnly, layout,
+  } = field;
   const options = optionsFrom(field);
   if (rowTemplate && authoredWidget && authoredWidget !== "rows") {
     throw new Error(
@@ -468,6 +509,8 @@ function deserializeField(
     kind: type,
     widget,
     ...(label ? { label } : {}),
+    ...(addLabel ? { addLabel } : {}),
+    ...(removeLabel ? { removeLabel } : {}),
     ...(description ? { description } : {}),
     ...(placeholder ? { placeholder } : {}),
     ...(required ? { required: true } : {}),
@@ -492,12 +535,21 @@ function deserializeField(
   };
 }
 
-function formSpecFieldType(type: FormSpecWire["type"]): FormSpecFieldType {
+function formSpecFieldType(
+  type: FormSpecWire["type"],
+  alternatives: FormSpecWire["anyOf"] = [],
+): FormSpecFieldType {
   if (Array.isArray(type)) {
     const nonNull = type.filter((value) => value !== "null");
     return nonNull.length === 1 ? nonNull[0] as FormSpecFieldType : "any";
   }
-  return type ?? "any";
+  if (type) return type === "null" ? "any" : type;
+  const alternativeTypes = [...new Set(alternatives
+    .map((alternative) => alternative.type)
+    .filter((value): value is FormSpecFieldType => (
+      typeof value === "string" && value !== "null"
+    )))];
+  return alternativeTypes.length === 1 ? alternativeTypes[0]! : "any";
 }
 
 function optionsFrom(field: FormSpecWire): readonly WidgetOption[] | undefined {

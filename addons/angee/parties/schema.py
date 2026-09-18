@@ -18,13 +18,14 @@ from django.db import transaction
 from rebac import system_context
 from strawberry import auto
 
+from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     hasura_model_resource,
     public_pk_decoder,
 )
-from angee.graphql.ids import optional_public_id, require_instance_for_id
+from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
@@ -178,6 +179,30 @@ class PartyHandleEvidenceType:
 @strawberry_django.type(PartyHandle)
 class PartyHandleType(AngeeNode):
     """GraphQL projection of a confidence-bearing party↔handle link."""
+
+    @strawberry_django.field(
+        only=["party_id", "handle_id"],
+        annotate={
+            "_readable_party_name": lambda info: PartyHandle.objects.readable_party_name_expression(
+                actor=session_user(info),
+            ),
+            "_readable_handle_value": lambda info: PartyHandle.objects.readable_handle_value_expression(
+                actor=session_user(info),
+            ),
+        },
+    )
+    def display_name(self) -> str:
+        """Return the readable Party and Handle components for this association."""
+
+        label = " — ".join(
+            value
+            for value in (
+                str(getattr(self, "_readable_party_name", "") or "").strip(),
+                str(getattr(self, "_readable_handle_value", "") or "").strip(),
+            )
+            if value
+        )
+        return label or "Contact association"
 
     party: PartyType | None
     handle: HandleType | None
@@ -409,6 +434,36 @@ class PartiesReviewQuery:
 @strawberry.type
 class PartiesIdentityMutation:
     """Human decisions on party identity claims and duplicate records."""
+
+    @strawberry.mutation
+    @action_guard("Could not add this contact.")
+    def propose_manual_contact(
+        self,
+        info: strawberry.Info,
+        party_id: PublicID,
+        platform: str,
+        value: str,
+        label: str,
+    ) -> ActionResult:
+        """Add an unconfirmed email or phone claim to a writable party."""
+
+        actor = session_user(info)
+        party = authorized_action_target(info, Party, party_id, "write")
+        link = PartyHandle.objects.propose_manual_contact(
+            party,
+            platform=platform,
+            value=value,
+            label=label,
+            actor=actor,
+        )
+        if link.is_dismissed:
+            return ActionResult(
+                ok=False,
+                message=(
+                    "This contact remains dismissed. Confirm it in Identity if it should be restored."
+                ),
+            )
+        return ActionResult(ok=True, message="Contact is available in Identity for review.", id=link.sqid)
 
     @strawberry.mutation
     def confirm_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
@@ -717,10 +772,12 @@ _HANDLE_RESOURCE = hasura_model_resource(
     sortable=["platform", "value", "created_at"],
     aggregatable=["id"],
     groupable=["party", "party__display_name"],
-    insertable=["value", "platform", "external_id", "display_name", "label", "is_preferred", "party"],
-    updatable=["value", "platform", "display_name", "label", "is_preferred", "party"],
-    field_id_decode={"party": public_pk_decoder(Party)},
-    write_backend=AngeeHasuraWriteBackend(Handle, public_id_fields=("party",)),
+    # Handle identity and its resolved Party projection are maintained by
+    # ingestion, connection, and PartyHandle owners, never generic CRUD.
+    insert=False,
+    update=False,
+    delete=False,
+    record_representation="value",
 )
 _ADDRESS_RESOURCE = hasura_model_resource(
     AddressType,

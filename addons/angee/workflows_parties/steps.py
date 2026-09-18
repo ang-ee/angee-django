@@ -22,12 +22,19 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, RootModel
 from rebac import SubjectRef, actor_context, system_context
 from rebac.actors import to_subject_ref
 
 from angee.base.identity import canonical_subject_ref
-from angee.workflows.attempts import DecisionRecordAccess, RecoveryCapability, RecoveryMode
+from angee.base.scoping import system_queryset
+from angee.parties.fields import normalize_country_code
+from angee.workflows.attempts import (
+    DecisionGateOutput,
+    DecisionRecordAccess,
+    RecoveryCapability,
+    RecoveryMode,
+)
 from angee.workflows.steps import (
     DecisionSpec,
     StepEffect,
@@ -42,6 +49,23 @@ _EXECUTE_MODES = frozenset({"prepare", "unit"})
 _ACTIONS = ("merge", "skip", "keep_separate")
 _SURVIVORS = ("left", "right")
 _IDENTITY_KEYS = ("left", "right", "left_name", "right_name", "evidence")
+
+
+class IdentityReviewPassThrough(BaseModel):
+    """Frozen identity facts emitted when no human Decision is required."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    party_id: str
+    context: dict[str, Any]
+    current: dict[str, Any]
+    proposed: dict[str, Any]
+    facts_hash: str
+    selection_decision_id: str = ""
+
+
+class IdentityReviewOutput(RootModel[IdentityReviewPassThrough | DecisionGateOutput]):
+    """Typed no-change handoff or retained terminal Decision evidence."""
 
 
 class DedupeScanStepImpl(StepImpl):
@@ -190,6 +214,7 @@ class IdentityReviewStepImpl(StepImpl):
         StepOutcome("expired", "Review expired"),
     )
     effect = StepEffect.READ
+    output_model = IdentityReviewOutput
     effect_description = "Reads Party identity facts and may create a workflow Decision."
     idempotent = True
 
@@ -277,11 +302,6 @@ class IdentityApplyStepImpl(StepImpl):
     effect_description = "Applies approved Party, Address, and PartyHandle facts."
     idempotent = True
 
-    @classmethod
-    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
-        del attempt
-        return RecoveryCapability(RecoveryMode.FRESH)
-
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
         value = _identity_apply_input(step_run.input)
@@ -319,9 +339,32 @@ class IdentityApplyStepImpl(StepImpl):
 
 _ADDRESS_FIELDS = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
 _IDENTITY_ACTIONS = {
-    "name_action": frozenset({"keep", "replace"}),
-    "address_action": frozenset({"keep", "add", "replace"}),
-    "handle_action": frozenset({"keep", "confirm", "dismiss"}),
+    "name_action": {
+        "label": "Supplier name",
+        "description": "Keep the current canonical name or use the proposed name from this invoice.",
+        "choices": {
+            "keep": "Keep current supplier name",
+            "replace": "Use proposed supplier name",
+        },
+    },
+    "address_action": {
+        "label": "Supplier address",
+        "description": "Keep current addresses, add the proposed address, or replace the primary address.",
+        "choices": {
+            "keep": "Keep current supplier addresses",
+            "add": "Add proposed supplier address",
+            "replace": "Replace primary supplier address",
+        },
+    },
+    "handle_action": {
+        "label": "Supplier contact",
+        "description": "Keep the email or phone at its current confirmation status, confirm it for this supplier, or dismiss it.",
+        "choices": {
+            "keep": "Keep current contact status",
+            "confirm": "Confirm proposed supplier contact",
+            "dismiss": "Dismiss proposed supplier contact",
+        },
+    },
 }
 
 
@@ -414,14 +457,25 @@ def _facts_hash(current: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(current, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _address_identity_key(address: Mapping[str, Any]) -> tuple[str, ...]:
+    country = str(address["country"])
+    try:
+        country = normalize_country_code(country)
+    except ValidationError:
+        pass
+    return tuple(
+        (country if field == "country" else str(address[field])).casefold()
+        for field in _ADDRESS_FIELDS
+    )
+
+
 def _identity_differs(current: Mapping[str, Any], proposed: Mapping[str, Any]) -> bool:
     if proposed["name"] and proposed["name"] != current["name"]:
         return True
     address = proposed["address"]
     if any(address[field] for field in _ADDRESS_FIELDS):
-        proposed_key = tuple(address[field].casefold() for field in _ADDRESS_FIELDS)
-        if all(tuple(str(row[field]).casefold() for field in _ADDRESS_FIELDS) != proposed_key
-               for row in current["addresses"]):
+        proposed_key = _address_identity_key(address)
+        if all(_address_identity_key(row) != proposed_key for row in current["addresses"]):
             return True
     link_id = proposed["handle"]["party_handle_id"]
     return bool(link_id and any(row["id"] == link_id and not row["is_confirmed"]
@@ -434,8 +488,18 @@ def _identity_form_schema(payload: Mapping[str, Any]) -> dict[str, Any]:
     del payload
     actions = ["apply_identity", "reject_identity", "escalate_identity"]
     editable = {
-        name: {"type": "string", "enum": sorted(choices), "default": "keep"}
-        for name, choices in _IDENTITY_ACTIONS.items()
+        name: {
+            "type": "string",
+            "enum": list(field["choices"]),
+            "default": "keep",
+            "label": field["label"],
+            "description": field["description"],
+            "options": [
+                {"value": value, "label": label}
+                for value, label in field["choices"].items()
+            ],
+        }
+        for name, field in _IDENTITY_ACTIONS.items()
     }
     return {
         "type": "object", "required": ["action"],
@@ -471,9 +535,11 @@ def _identity_decision(step_run: Any, value: Any) -> dict[str, Any]:
         raise ValidationError({"input": "Identity apply requires the typed gate resolution."})
     if len(value["resolutions"]) != 1 or not isinstance(value["resolutions"][0], Mapping):
         raise ValidationError({"input": "Identity apply requires one exact resolution."})
-    review_rows = list(step_run.previous.select_related("step", "current_attempt").filter(
-        step__step_class="parties_identity_review"
-    ))
+    review_rows = list(
+        system_queryset(type(step_run), using=step_run._state.db, lock=None)
+        .filter(next_step_runs=step_run, step__step_class="parties_identity_review")
+        .select_related("step", "current_attempt")
+    )
     if len(review_rows) != 1 or review_rows[0].current_attempt is None:
         raise ValidationError({"gate": "Identity apply needs the declared review predecessor."})
     review = review_rows[0]
@@ -491,7 +557,7 @@ def _identity_decision(step_run: Any, value: Any) -> dict[str, Any]:
         step_run, resolution_path,
         expected_action=str(review.step.config.get("action") or "review-party-identity"),
         expected_target=("parties.Party", proposal["party_id"]),
-        expected_verdict="completed", actor=value["resolutions"][0].get("resolved_by"),
+        expected_verdict="completed", actor=_resolved_person(value["resolutions"][0]),
     )
     payload, resolution = decision.payload, decision.resolution
     if not isinstance(payload, Mapping) or not isinstance(resolution, Mapping):
@@ -503,9 +569,9 @@ def _identity_decision(step_run: Any, value: Any) -> dict[str, Any]:
         if key in resolution and resolution.get(key) != payload.get(key):
             raise ValidationError({"input": "Identity resolution changed frozen review facts."})
     approved = dict(payload)
-    for key, choices in _IDENTITY_ACTIONS.items():
+    for key, field in _IDENTITY_ACTIONS.items():
         choice = str(resolution.get(key) or "")
-        if choice not in choices:
+        if choice not in field["choices"]:
             raise ValidationError({"input": f"Identity resolution has invalid {key}."})
         approved[key] = choice
     approved["_resolved_by"] = decision.resolved_by
@@ -515,13 +581,19 @@ def _identity_decision(step_run: Any, value: Any) -> dict[str, Any]:
 def _decision_actor(approved: Mapping[str, Any]) -> Any:
     """Resolve the human who completed the Decision as the accountable writer."""
 
+    return _resolved_person({"resolved_by": approved.get("_resolved_by")})
+
+
+def _resolved_person(value: Mapping[str, Any]) -> Any:
+    """Resolve one retained Decision resolver through the active-person owner."""
+
     try:
-        subject = canonical_subject_ref(str(approved.get("_resolved_by") or ""))
+        subject = canonical_subject_ref(str(value.get("resolved_by") or ""))
     except (TypeError, ValueError) as error:
-        raise ValidationError({"decision": "Identity review requires a human resolver."}) from error
+        raise ValidationError({"decision": "Party workflow Decision requires a human resolver."}) from error
     user = get_user_model().objects.active_person_for_subject(subject)
     if user is None:
-        raise ValidationError({"decision": "Identity review requires a human resolver."})
+        raise ValidationError({"decision": "Party workflow Decision requires a human resolver."})
     return user
 
 
@@ -674,9 +746,11 @@ def _prepared_pairs(step_run: Any) -> list[dict[str, str]]:
         raise ValidationError({"input": "Dedupe prepare requires the typed gate resolution."})
     if len(value["resolutions"]) != 1 or not isinstance(value["resolutions"][0], Mapping):
         raise ValidationError({"input": "Dedupe prepare requires one exact resolution."})
-    gate_rows = list(step_run.previous.select_related("step").filter(
-        step__step_class="parties_dedupe_gate"
-    ))
+    gate_rows = list(
+        system_queryset(type(step_run), using=step_run._state.db, lock=None)
+        .filter(next_step_runs=step_run, step__step_class="parties_dedupe_gate")
+        .select_related("step")
+    )
     if len(gate_rows) != 1:
         raise ValidationError({"gate": "Dedupe prepare needs one declared predecessor gate."})
     from angee.workflows import engine
@@ -685,7 +759,7 @@ def _prepared_pairs(step_run: Any) -> list[dict[str, str]]:
         step_run, ("resolutions", 0),
         expected_action=str(gate_rows[0].step.config.get("action") or "dedupe-parties"),
         expected_target=("", ""), expected_verdict="completed",
-        actor=value["resolutions"][0].get("resolved_by"),
+        actor=_resolved_person(value["resolutions"][0]),
     )
 
     approved: list[dict[str, str]] = []
@@ -724,7 +798,7 @@ def _pair_rows(value: Any, *, owner: str) -> list[Mapping[str, Any]]:
 def _apply_unit(value: Any, *, run: Any) -> dict[str, str]:
     """Apply one approved pair verb idempotently and report the outcome.
 
-    Verbs act AS the run creator — the human whose Decision approved the batch —
+    Verbs act AS the run's admitted actor — the human whose Decision approved the batch —
     so durable facts (the MergeVeto, the merge audit trail) carry an accountable
     actor instead of an anonymous system write.
     """
@@ -756,10 +830,9 @@ def _apply_unit(value: Any, *, run: Any) -> dict[str, str]:
 
 
 def _run_owner(run: Any) -> Any:
-    """Return the run creator — the accountable actor for gates and approved verbs."""
+    """Resolve the immutable run admission subject for gates and approved verbs."""
 
-    owner_id = getattr(run, "created_by_id", None)
-    if owner_id is None:
-        raise ValidationError({"run": "Dedupe steps require a run creator."})
-    with system_context(reason="workflows_parties.dedupe.run_owner"):
-        return get_user_model()._base_manager.get(pk=owner_id)
+    owner = run.admission_actor()
+    if owner is None:
+        raise ValidationError({"run": "Party workflow steps require a current admitted actor."})
+    return owner

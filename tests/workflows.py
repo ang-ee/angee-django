@@ -102,6 +102,15 @@ class StepAttempt(workflow_models.StepAttempt):
         rebac_resource_type = "workflows/step_attempt"
 
 
+class StepExternalSubscription(workflow_models.StepExternalSubscription):
+    """Concrete attempt-owned external target for workflow engine tests."""
+
+    class Meta(workflow_models.StepExternalSubscription.Meta):
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_step_external_subscription"
+
+
 class StepArtifact(workflow_models.StepArtifact):
     """Concrete explicit result artifact model for source-addon runtime tests."""
 
@@ -156,6 +165,7 @@ WORKFLOW_RUNTIME_MODELS = (
     WorkflowRun,
     StepRun,
     StepAttempt,
+    StepExternalSubscription,
     StepArtifact,
     WorkflowTestFixture,
     WorkflowRecoveryEvidence,
@@ -260,10 +270,10 @@ def workflow_with_steps(
         return draft.publish()
 
 
-def start_run(workflow: Workflow, *, subject: Any = None) -> WorkflowRun:
+def start_run(workflow: Workflow, *, subject: Any = None, actor: Any = None) -> WorkflowRun:
     """Start a run without relying on a live queue."""
 
-    return engine.start(workflow, subject=subject, actor=None)
+    return engine.start(workflow, subject=subject, actor=actor)
 
 
 def advance_once(run: Any, *, now: Any | None = None) -> list[Any]:

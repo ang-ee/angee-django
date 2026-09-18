@@ -18,7 +18,8 @@
     "@angee/parties": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
-    "@angee/workflows": "workspace:*"
+    "@angee/workflows": "workspace:*",
+    "valibot": "^1.4.0"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

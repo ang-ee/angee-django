@@ -8,9 +8,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import connection, models, transaction
+from django.db.migrations.state import ProjectState
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
@@ -26,13 +28,14 @@ from rebac.errors import PermissionDenied
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows import steps as workflow_steps
-from angee.workflows.attempts import JsonPresence
+from angee.workflows.attempts import AttemptResult, AttemptResultKind, DecisionSpec, JsonPresence
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.steps import HandlerStep, StepResult
 from tests.workflows import (
     Decision,
     Edge,
     Step,
+    StepAttempt,
     StepRun,
     Trigger,
     Workflow,
@@ -48,6 +51,61 @@ from tests.workflows import (
 )
 
 User = get_user_model()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_run_retains_admitted_actor_identity_after_audit_user_deletion(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Deleting audit attribution preserves identity and cannot grant later authority."""
+
+    del workflow_engine_tables, no_workflow_queue
+    actor = User.objects.create_user(username="deleted-workflow-actor")
+    reviewer = User.objects.create_user(username="deleted-workflow-reviewer")
+    actor_ref = str(to_subject_ref(actor))
+    workflow = workflow_with_steps(
+        steps=({"key": "gate", "step_class": "agent_session", "config": {}},),
+        edges=(),
+    )
+    run = engine.start(workflow, subject=None, actor=actor)
+    with system_context(reason="test legacy workflow actor attribution"):
+        models.QuerySet.update(
+            WorkflowRun.objects.filter(pk=run.pk), admitted_actor_ref="",
+        )
+    from angee.workflows.runtime_migrations.workflow_admitted_actor import (
+        backfill_known_admission_actors,
+    )
+
+    historical_apps = ProjectState.from_apps(django_apps).apps
+    backfill_known_admission_actors(historical_apps, SimpleNamespace(connection=connection))
+    with system_context(reason="test delete workflow admission actor"):
+        actor.delete()
+        run.refresh_from_db()
+        step_run = StepRun.objects.get(run=run, step__key="gate")
+
+    assert run.created_by_id is None
+    assert run.admitted_actor_ref == actor_ref
+    assert str(run.admission_actor_subject()) == actor_ref
+    assert run.admission_actor() is None
+
+    claim = StepAttempt.objects.claim(step_run, claimed_at=timezone.now())
+    StepAttempt.objects.admit_invocation(
+        claim.attempt.pk, lease_token=claim.attempt.lease_token, at=timezone.now()
+    )
+    with pytest.raises(ValidationError, match="admitted run actor"):
+        StepAttempt.objects.finalize(
+            claim.attempt.pk,
+            lease_token=claim.attempt.lease_token,
+            result=AttemptResult(
+                AttemptResultKind.SUSPEND,
+                checkpoint_present=True,
+                checkpoint={"gate": True},
+                decisions=(DecisionSpec(assignees=(str(to_subject_ref(reviewer)),), action="approve"),),
+                waiting_kind="approval",
+            ),
+            recorded_at=timezone.now(),
+        )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -121,18 +179,18 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     with system_context(reason="verify initial workflow dispatches"):
         assert WorkflowDispatch.objects.filter(run__in=[absent, present_null, present_value]).count() == 3
     present_value.input = {"changed": True}
-    with pytest.raises(ValidationError, match="input is immutable"):
+    with pytest.raises(ValidationError, match="invocation identity is immutable"):
         present_value.save(update_fields={"input", "updated_at"})
     with system_context(reason="verify immutable workflow input"):
         deferred = WorkflowRun.objects.only("pk").get(pk=present_value.pk)
     deferred.input_present = False
     deferred.input = None
-    with pytest.raises(ValidationError, match="input is immutable"):
+    with pytest.raises(ValidationError, match="invocation identity is immutable"):
         deferred.save()
     absent.input_present = True
     absent.input = None
     with system_context(reason="verify immutable workflow input"):
-        with pytest.raises(TypeError, match="creation facts are immutable"):
+        with pytest.raises(TypeError, match="invocation identity and terminal facts are immutable"):
             WorkflowRun.objects.bulk_update([absent], ["input_present", "input"])
 
 
@@ -754,7 +812,7 @@ def test_deliver_artifact_wakes_all_exact_external_waits_without_approvals(
         ),
         edges=(("entry", "external", "done"), ("entry", "approval", "done")),
     )
-    runs = (start_run(workflow), start_run(workflow))
+    runs = (start_run(workflow, actor=reviewer), start_run(workflow, actor=reviewer))
     for run in runs:
         advance_once(run, now=now)
         execute_started(run, now=now)
@@ -877,6 +935,15 @@ def test_cancellation_propagates_to_journal_and_child_runs(
     engine.cancel(run)
 
     run.refresh_from_db()
+    with system_context(reason="test workflows deliver child cancellation"):
+        cancel_dispatch = WorkflowDispatch.objects.get(
+            run=child,
+            kind=WorkflowDispatchKind.CHILD_CANCEL,
+        )
+    assert child.status == run_status.WAITING
+    assert engine.cancel_child_dispatch(cancel_dispatch.pk, expected_child_id=child.pk) == {
+        "canceled": 1,
+    }
     child.refresh_from_db()
     started.refresh_from_db()
     scheduled.refresh_from_db()
@@ -1198,8 +1265,9 @@ def test_identity_migration_backfills_only_structurally_known_run_origins(
         )
 
     editor = SimpleNamespace(connection=connection)
-    backfill_structural_run_origins(django_apps, editor)
-    backfill_structural_run_origins(django_apps, editor)
+    historical_apps = ProjectState.from_apps(django_apps).apps
+    backfill_structural_run_origins(historical_apps, editor)
+    backfill_structural_run_origins(historical_apps, editor)
 
     trigger_run.refresh_from_db()
     unexplained.refresh_from_db()
@@ -1379,7 +1447,7 @@ def test_ordinary_workflow_run_invocation_is_immutable_across_write_paths(
         run = WorkflowRun.objects.create(workflow=workflow, dedup_key="manual:retained")
         loaded = WorkflowRun.objects.get(pk=run.pk)
         loaded.workflow = other
-        with pytest.raises(ValidationError, match="invocation facts are immutable"):
+        with pytest.raises(ValidationError, match="invocation identity is immutable"):
             loaded.save(update_fields={"workflow", "updated_at"})
         with pytest.raises(TypeError, match="invocation"):
             WorkflowRun.objects.filter(pk=run.pk).update(subject_object_id=42)

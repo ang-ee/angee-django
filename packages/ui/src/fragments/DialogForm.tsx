@@ -43,7 +43,17 @@ export function DialogForm({
         <Dialog.Content placement={placement} size={size}>
           {/* The form sits between the height-capped Content and the scrolling
               Body, so it must carry the flex column for the cap to reach Body. */}
-          <FormRoot layout="plain" className="flex min-h-0 flex-col" onSubmit={onSubmit}>
+          <FormRoot
+            layout="plain"
+            className="flex min-h-0 flex-col"
+            onSubmit={(event) => {
+              // The DOM form is portalled, but React still bubbles its submit
+              // through the component tree. Keep it from submitting a parent
+              // record form; the authored handler owns preventDefault and work.
+              event.stopPropagation();
+              onSubmit?.(event);
+            }}
+          >
             <Dialog.Header>
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">

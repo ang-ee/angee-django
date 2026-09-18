@@ -17,6 +17,7 @@ export {
   type IamLoginPageProps,
 } from "./IamLoginPage";
 export { userDisplayName, type UserDisplayNameInput } from "./identity-labels";
+export { ShareAccessDialog, type ShareAccessDialogProps } from "./ShareAccess";
 export {
   assignmentSubjectOptions,
   useAssignmentSubjects,

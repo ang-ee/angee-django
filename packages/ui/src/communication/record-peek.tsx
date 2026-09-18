@@ -22,9 +22,19 @@ export interface RecordPeekReference {
   search?: Readonly<Record<string, string | null>>;
 }
 
+export interface RecordPeekOpenOptions {
+  /** Initial asynchronous content may select Records only before explicit tab intent. */
+  tabActivation?: "explicit" | "initial";
+}
+
+export type RecordPeekOpen = (
+  reference: RecordPeekReference,
+  options?: RecordPeekOpenOptions,
+) => void;
+
 interface RecordPeekContextValue {
   reference: RecordPeekReference;
-  openRecord: (reference: RecordPeekReference) => void;
+  openRecord: RecordPeekOpen;
 }
 
 const RecordPeekContext = React.createContext<RecordPeekContextValue | null>(null);
@@ -35,9 +45,11 @@ export function useRecordPeekContext(): RecordPeekContextValue | null {
 }
 
 /** Publish a readonly native record form into Chatter or a record's right aside. */
-export function useRecordPeek(): (reference: RecordPeekReference) => void {
+export function useRecordPeek(): RecordPeekOpen {
   const t = useUiT();
-  const { recordSupportKey, setRecordPreview, setActiveTab, setCollapsed } = useChatter();
+  const {
+    recordSupportKey, setRecordPreview, setActiveTab, setCollapsed, setInitialActiveTab,
+  } = useChatter();
   const ownerRef = React.useRef<symbol | null>(null);
   if (ownerRef.current === null) ownerRef.current = Symbol("record-preview");
   const owner = ownerRef.current;
@@ -46,19 +58,28 @@ export function useRecordPeek(): (reference: RecordPeekReference) => void {
     references: readonly RecordPeekReference[];
   }>({ key: recordSupportKey, references: [] });
   const references = state.key === recordSupportKey ? state.references : [];
-  const openRecord = React.useCallback((reference: RecordPeekReference) => {
+  const openRecord = React.useCallback((
+    reference: RecordPeekReference,
+    options?: RecordPeekOpenOptions,
+  ) => {
     setState((current) => {
       const records = current.key === recordSupportKey ? current.references : [];
       const previous = records.at(-1);
       if (previous && sameRecordPeekReference(previous, reference)) return current;
       return { key: recordSupportKey, references: [...records, reference] };
     });
-    if (recordSupportKey === null) setActiveTab("records");
-    setCollapsed(false);
-  }, [recordSupportKey, setActiveTab, setCollapsed]);
-  const openSource = React.useCallback((reference: RecordPeekReference) => {
     if (recordSupportKey === null) {
-      openRecord(reference);
+      if (options?.tabActivation === "initial") setInitialActiveTab("records");
+      else setActiveTab("records");
+    }
+    setCollapsed(false);
+  }, [recordSupportKey, setActiveTab, setCollapsed, setInitialActiveTab]);
+  const openSource = React.useCallback((
+    reference: RecordPeekReference,
+    options?: RecordPeekOpenOptions,
+  ) => {
+    if (recordSupportKey === null) {
+      openRecord(reference, options);
       return;
     }
     setState((current) => current.key === recordSupportKey
@@ -102,7 +123,7 @@ export function useRecordPeek(): (reference: RecordPeekReference) => void {
 
 function RecordPeek({ references, openRecord, goBack, close }: {
   references: readonly RecordPeekReference[];
-  openRecord: (reference: RecordPeekReference) => void;
+  openRecord: RecordPeekOpen;
   goBack: (index: number) => void;
   close?: () => void;
 }): React.ReactElement | null {

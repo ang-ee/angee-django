@@ -52,6 +52,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
+import { ChatterProvider, useChatterContent } from "../../communication";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec } from "./form-spec";
 import { Form } from "./Form";
@@ -73,6 +74,7 @@ import {
 
 const sdkMocks = vi.hoisted(() => ({
   record: null as Row | null,
+  fetching: false,
   listRows: [] as Row[],
   listFilters: undefined as unknown,
   // Whether the most recent relation-options `useList` ran with its query
@@ -170,7 +172,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       return {
         result: options?.queryOptions?.enabled === false ? undefined : projectedRecord(sdkMocks.recordSelection),
         query: {
-          isFetching: false,
+          isFetching: sdkMocks.fetching,
           error: null,
           refetch: vi.fn(),
         },
@@ -247,6 +249,7 @@ describe("FormView", () => {
       createdAt: "2026-05-31T12:00:00Z",
       wordCount: 3,
     };
+    sdkMocks.fetching = false;
     sdkMocks.mutate.mockReset();
     sdkMocks.save.mockReset();
     sdkMocks.listRows = [];
@@ -461,6 +464,7 @@ describe("FormView", () => {
 
   test("keeps an existing-record form locked until its record loads", async () => {
     sdkMocks.record = null;
+    sdkMocks.fetching = true;
 
     function Harness(): ReactElement {
       const [loaded, setLoaded] = useState(false);
@@ -474,12 +478,19 @@ describe("FormView", () => {
                 title: "Loaded",
                 status: "ACTIVE",
               };
+              sdkMocks.fetching = false;
               setLoaded(true);
             }}
           >
             load {String(loaded)}
           </button>
-          <FormView resource="notes.Note" id="note-1" fields={fields} />
+          <FormView
+            resource="notes.Note"
+            id="note-1"
+            fields={fields}
+            title={() => "Draft Invoice"}
+            formExtras={() => <p>No readable documents attached</p>}
+          />
         </>
       );
     }
@@ -488,13 +499,15 @@ describe("FormView", () => {
 
     expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.getAllByText("Loading…").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Draft Invoice")).toBeNull();
+    expect(screen.queryByText("No readable documents attached")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /load/ }));
 
-    const title = await screen.findByRole("textbox", { name: "Title" });
-    await waitFor(() =>
-      expect((title as HTMLInputElement).value).toBe("Loaded"),
-    );
+    expect(await screen.findByText("Draft Invoice")).toBeTruthy();
+    expect(await screen.findByText("No readable documents attached")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Reminder" })).toBeTruthy();
   });
 
   test("renders standalone Form from Field and Group children", async () => {
@@ -2646,6 +2659,49 @@ describe("FormView", () => {
     expect(screen.queryByRole("tab")).toBeNull();
   });
 
+  test("keeps record support in the right pane by default and moves the complete chatter only when requested", async () => {
+    function RecordSupportForm({ placement }: { placement?: "right" | "below" }) {
+      const content = useMemo(() => ({
+        tabs: [{ id: "audit", label: "Audit", children: "Audit trail" }],
+      }), []);
+      useChatterContent(content);
+      return <FormView
+        resource="notes.Note"
+        id="note-1"
+        fields={fields}
+        recordSupportPlacement={placement}
+      />;
+    }
+
+    renderWithProviders(
+      <ChatterProvider><RecordSupportForm /></ChatterProvider>,
+    );
+    expect(screen.queryByLabelText("Chatter")).toBeNull();
+    cleanup();
+
+    renderWithProviders(
+      <ChatterProvider><RecordSupportForm placement="below" /></ChatterProvider>,
+    );
+    expect(await screen.findByLabelText("Chatter")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Audit" })).toBeTruthy();
+    cleanup();
+
+    renderWithProviders(
+      <ChatterProvider>
+        <FormView
+          resource="notes.Note"
+          id="note-1"
+          fields={fields}
+          hideRecordChrome
+          recordSupportPlacement="below"
+        />
+      </ChatterProvider>,
+    );
+    expect(screen.queryByLabelText("Chatter")).toBeNull();
+  });
+
   test("document records honor overview tab placement without changing presentation", async () => {
     renderWithProviders(
       <FormView
@@ -3148,7 +3204,7 @@ describe("FormView", () => {
     renderSaleDoc(null);
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Quotation" } });
     fireEvent.click(screen.getByRole("button", { name: "Add line" }));
-    fireEvent.change(screen.getByLabelText("Text", { exact: true }), { target: { value: "Lamp" } });
+    fireEvent.change(screen.getByLabelText("Label", { exact: true }), { target: { value: "Lamp" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "Quotation", lines: { data: [{ label: "Lamp", position: 0 }] } },
@@ -3231,7 +3287,7 @@ describe("FormView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add line" }));
     // Fill only the label; quantity (Int) and price (Decimal) stay untouched.
     const newLabelCell = screen
-      .getAllByLabelText("Text")
+      .getAllByLabelText("Label")
       .find((cell) => (cell as HTMLInputElement).value === "");
     expect(newLabelCell).toBeTruthy();
     fireEvent.change(newLabelCell as HTMLInputElement, {
@@ -3275,7 +3331,7 @@ describe("FormView", () => {
     }}>Move new line first</button>);
     await screen.findByDisplayValue("Keep");
     fireEvent.click(screen.getByRole("button", { name: "Add line" }));
-    const newCell = screen.getAllByLabelText("Text").find((cell) =>
+    const newCell = screen.getAllByLabelText("Label").find((cell) =>
       (cell as HTMLInputElement).value === "");
     expect(newCell).toBeTruthy();
     fireEvent.change(newCell as HTMLInputElement, { target: { value: "Submitted" } });

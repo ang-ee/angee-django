@@ -27,7 +27,7 @@ import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 import { RelationPicker, type RelationCreateConfig } from "../relation/RelationPicker";
-import { useRelationOptions } from "../relation/relation-options";
+import { useRelationPickerOptions } from "../relation/relation-options";
 import type { FieldDescriptor } from "../page";
 import { directDottedPathMessages } from "./validation-errors";
 import { fieldErrorMessages, isFieldVisible, resolveField } from "./form-view-model";
@@ -44,13 +44,14 @@ export interface MutationDialogRelation {
   labelField?: string;
   /**
    * Server-side filters narrowing which rows are offered — for a target holding
-   * more kinds of row than this field accepts (see `useRelationOptions`).
+   * more kinds of row than this field accepts.
    */
   filters?: readonly CrudFilter[];
   /**
-   * Enables the in-place "Create …" affordance. Unlike a form's auto-wired
-   * relation field, a dialog states this explicitly: the dialog is not a model
-   * form, so there is no metadata to derive creatability from.
+   * Enables native in-place creation, including an optional visible action.
+   * Unlike a form's auto-wired relation field, a dialog states this explicitly:
+   * the dialog is not a model form, so there is no metadata to derive
+   * creatability from.
    */
   create?: RelationCreateConfig;
 }
@@ -471,6 +472,8 @@ export function LabeledDescriptorField({
     rowTemplate?: readonly FormSpecFieldDescriptor[];
     objectTemplate?: readonly FormSpecFieldDescriptor[];
     itemTemplate?: FormSpecFieldDescriptor;
+    addLabel?: string;
+    removeLabel?: string;
     nullable?: boolean;
     omittable?: boolean;
     hasDefault?: boolean;
@@ -573,8 +576,8 @@ export function LabeledDescriptorField({
  * One dialog field rendered as a relation picker: the offered rows come from the
  * related resource's list root (narrowed by the field's `filters`), and "Create …"
  * opens the field's own create form. The option query is deferred until the
- * popover first opens, except that an existing bare-id value eagerly fetches its
- * label. A dialog with an empty untouched relation still performs no work.
+ * popover first opens; an existing bare-id value resolves through its independent
+ * record read. A dialog with an empty untouched relation still performs no work.
  */
 function MutationDialogRelationControl({
   controlId,
@@ -597,7 +600,6 @@ function MutationDialogRelationControl({
   onCommit?: () => void;
   controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): React.ReactElement {
-  const [opened, setOpened] = React.useState(false);
   const metadata = useSchemaFieldMetadata();
   const resource = React.useMemo(
     () =>
@@ -616,6 +618,12 @@ function MutationDialogRelationControl({
     () => relationFieldInfoForResource(resource, model),
     [resource, model],
   );
+  const optionInfo = React.useMemo(
+    () => info && relation.labelField
+      ? { ...info, labelField: relation.labelField }
+      : info,
+    [info, relation.labelField],
+  );
   const create = React.useMemo(
     () => {
       if (!relation.create) return undefined;
@@ -631,12 +639,8 @@ function MutationDialogRelationControl({
     [metadata, relation.create],
   );
   const selectedValue = relationValueId(value);
-  const { list, options } = useRelationOptions(info, {
-    // FormView can thread a selectedOption from its folded detail row. Dialog
-    // descriptors carry bare ids, so a filled value eagerly loads the small
-    // option set to resolve its label before the picker is opened.
-    enabled: opened || Boolean(selectedValue),
-    ...(relation.labelField ? { labelField: relation.labelField } : {}),
+  const picker = useRelationPickerOptions(optionInfo, {
+    value: selectedValue,
     ...(relation.filters ? { filters: relation.filters } : {}),
   });
   if (!info) {
@@ -665,17 +669,17 @@ function MutationDialogRelationControl({
       value={selectedValue}
       onChange={onChange}
       onCommit={onCommit}
-      options={options}
+      options={picker.options}
       readOnly={readOnly}
       placeholder={field.placeholder}
       aria-label={typeof field.label === "string" ? field.label : field.name}
       aria-describedby={describedBy}
       aria-required={field.required || undefined}
       {...(create ? { create } : {})}
-      onCreated={() => list.refetch()}
-      onOpenChange={(open) => {
-        if (open) setOpened(true);
-      }}
+      onCreated={() => picker.list.refetch()}
+      onOpenChange={picker.onOpenChange}
+      onSearchChange={picker.onSearchChange}
+      searchState={picker.searchState}
     />
   );
 }

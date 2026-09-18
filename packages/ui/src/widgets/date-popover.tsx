@@ -47,6 +47,9 @@ export function DatePopover({
   footer,
   triggerRef,
 }: DatePopoverProps): ReactElement {
+  const navigationAnchor = selected ?? new Date();
+  const startMonth = new Date(navigationAnchor.getFullYear() - 100, 0, 1);
+  const endMonth = new Date(navigationAnchor.getFullYear() + 100, 11, 1);
   return (
     <PopoverRoot open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger
@@ -61,10 +64,15 @@ export function DatePopover({
         <PopoverPositioner sideOffset={4} align="start">
           <PopoverContent aria-label={ariaLabel} surface="sheet">
             <Calendar
+              captionLayout="dropdown"
+              defaultMonth={navigationAnchor}
+              endMonth={endMonth}
               fixedWeeks
               mode="single"
+              navLayout="after"
               selected={selected ?? undefined}
               showOutsideDays
+              startMonth={startMonth}
               onSelect={(next) => onSelectDate(next ?? null)}
             />
             {footer}

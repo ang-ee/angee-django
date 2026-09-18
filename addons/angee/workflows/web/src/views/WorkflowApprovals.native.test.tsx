@@ -11,6 +11,17 @@ import { afterEach, expect, test, vi } from "vitest";
 const exactVariables = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 const authoredMode = vi.hoisted(() => ({ current: "success" as "success" | "error" | "empty" }));
 const authoredVerdict = vi.hoisted(() => ({ current: "PENDING" }));
+const decisionSchema = {
+  type: "object", required: ["action"], properties: {
+    action: { type: "string", enum: ["complete"], options: [
+      { value: "complete", label: "Complete", verdict: "COMPLETE" },
+    ] },
+    note: { type: "string", label: "Review note" },
+  },
+  oneOf: [{ type: "object", required: ["action"], properties: {
+    action: { const: "complete" }, note: { type: "string" },
+  }, additionalProperties: false }],
+};
 vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
@@ -22,7 +33,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
       const data = { workflow_decisions: [{
         id: String(variables.id ?? "decision-1"), action: "review", priority: 1, payload: {}, verdict: authoredVerdict.current,
         resolution: {}, resolved_by: "", attempts: 0, max_attempts: 3, expires_at: null, escalate_at: null,
-        decision_schema: null, workflow_name: "Session", step_name: "Approve tool",
+        decision_schema: decisionSchema, workflow_name: "Session", step_name: "Approve tool",
         created_at: "2026-09-09T00:00:00Z", updated_at: "2026-09-09T00:00:00Z",
       }] };
       return {
@@ -39,12 +50,6 @@ vi.mock("@angee/refine", async (importOriginal) => {
       },
     })), { fetching: false, error: null }],
   };
-});
-
-vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
-  const { ApprovalTestJsonEditor } = await import("./approval-test-editor");
-  return { ...actual, JsonEditor: ApprovalTestJsonEditor };
 });
 
 import { RoutedDecisionTask, WorkflowApprovals } from "./WorkflowApprovals";
@@ -238,12 +243,13 @@ test("dirty approval values use the shared leave guard before changing selection
   );
   fireEvent.click(await screen.findByText("review"));
   fireEvent.click(await screen.findByRole("tab", { name: "Your decision" }));
-  const resolution = await screen.findByLabelText("Resolution payload");
-  fireEvent.change(resolution, { target: { value: "{\"kept\":true}" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Complete" }));
+  const resolution = await screen.findByLabelText("Review note");
+  fireEvent.change(resolution, { target: { value: "Keep this review note" } });
   fireEvent.click(screen.getByRole("button", { name: "Next record" }));
   expect(await screen.findByText("Unsaved changes - leave without saving?")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Stay" }));
-  expect((screen.getByLabelText("Resolution payload") as HTMLTextAreaElement).value).toContain("kept");
+  expect((screen.getByLabelText("Review note") as HTMLInputElement).value).toBe("Keep this review note");
   fireEvent.click(screen.getByRole("button", { name: "Next record" }));
   fireEvent.click(await screen.findByRole("button", { name: "Leave" }));
   await waitFor(() => expect(exactVariables.at(-1)).toEqual({ id: "decision-2" }));
@@ -272,6 +278,7 @@ test("resolution awaits the live collection successor instead of the captured pa
   );
 
   fireEvent.click(await screen.findByRole("button", { name: "Complete" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: "Complete" }))[1]!);
   await waitFor(() => expect(resolved).toHaveBeenCalledOnce());
   expect(later).not.toHaveBeenCalled();
   expect(earlier).not.toHaveBeenCalled();
@@ -299,6 +306,7 @@ test("resolution at the end reports remaining earlier work without wrapping", as
   );
 
   fireEvent.click(await screen.findByRole("button", { name: "Complete" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: "Complete" }))[1]!);
   expect(await screen.findByText("End of this review queue")).toBeTruthy();
   expect(resolved).toHaveBeenCalledOnce();
   expect(close).not.toHaveBeenCalled();
@@ -325,6 +333,7 @@ test("resolution shows queue completion only when the refreshed query is empty",
   );
 
   fireEvent.click(await screen.findByRole("button", { name: "Complete" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: "Complete" }))[1]!);
   expect(await screen.findByText("Queue complete")).toBeTruthy();
   expect(screen.getByText("There are no pending approvals in this view.")).toBeTruthy();
   expect(resolved).toHaveBeenCalledOnce();

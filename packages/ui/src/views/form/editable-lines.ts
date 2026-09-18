@@ -164,7 +164,9 @@ export function sameObservedLines(
 
 /**
  * Normalize a record's loaded lines into field-array rows: keep the public id, the
- * editable child columns, and a `position` (from the stored value, else row order).
+ * editable child columns, read-only projections used by supplemental columns, and a
+ * `position` (from the stored value, else row order). The diff serializer still emits
+ * only declared editable fields, so carrying a display projection cannot widen writes.
  * Used to seed the composer and as the diff baseline, so an unedited save is a no-op.
  */
 export function recordLinesToRows(
@@ -253,7 +255,7 @@ export function reconcileAcceptedLineRows(
 }
 
 function rowFromLine(line: Row, index: number, config: LineDiffConfig): Row {
-  const row: Row = {};
+  const row: Row = { ...line };
   const id = rowId(line, config);
   if (id) row[config.idField] = id;
   for (const name of config.fieldNames) row[name] = line[name];

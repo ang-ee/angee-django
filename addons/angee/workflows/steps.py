@@ -298,9 +298,20 @@ class StepImpl(ImplBase):
 
     @classmethod
     def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
-        """Return the explicit safe recovery mode for one retained failure."""
+        """Return the recovery mode proven by the operation's execution boundary.
+
+        A failed database command has no committed domain effect: the fenced
+        attempt manager invokes the command and finalizes its result inside one
+        transaction, and records any failure only after that transaction rolls
+        back. A committed command already owns a successful retained result and
+        cannot be admitted as failed recovery evidence. Fresh execution is
+        therefore native for this mode; narrower operation-specific policies
+        can still override it.
+        """
 
         del attempt
+        if cls.execution_mode is StepExecutionMode.DATABASE_COMMAND:
+            return RecoveryCapability(mode=RecoveryMode.FRESH)
         return RecoveryCapability(mode=None, unavailable_reason="This operation does not support recovery.")
 
     @classmethod
@@ -529,11 +540,6 @@ class CallWorkflow(StepImpl):
     )
 
     @classmethod
-    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
-        del attempt
-        return RecoveryCapability(RecoveryMode.FRESH)
-
-    @classmethod
     def _publication(cls, public_id: str) -> Any:
         workflow_model = apps.get_model("workflows", "Workflow")
         publication = instance_from_public_id(
@@ -542,6 +548,28 @@ class CallWorkflow(StepImpl):
         if publication is None or publication.published_from_id is None or str(publication.status) != "published":
             raise ValidationError({"publication": "CallWorkflow requires an exact published workflow id."})
         return publication
+
+    @classmethod
+    def selected_publication_id(cls, *, config: Any, payload: Any) -> str:
+        """Return the exact publication selected by one retained call input."""
+
+        if not isinstance(config, Mapping):
+            raise ValidationError({"config": "CallWorkflow config must be an object."})
+        if not isinstance(payload, Mapping):
+            raise ValidationError({"input": "CallWorkflow input must be an object."})
+        selected_id = config.get("publication") or payload.get("publication")
+        if not isinstance(selected_id, str):
+            raise ValidationError(
+                {"publication": "CallWorkflow input must select a published workflow."}
+            )
+        if config.get("publication") and payload.get("publication") not in (
+            None,
+            selected_id,
+        ):
+            raise ValidationError(
+                {"publication": "Call input cannot replace its declared static publication."}
+            )
+        return selected_id
 
     @classmethod
     def _input_schema(cls, publication: Any) -> dict[str, Any]:
@@ -604,13 +632,10 @@ class CallWorkflow(StepImpl):
         config = step_run.step.config
         type(self).validate_config(config)
         payload = step_run.input
-        if not isinstance(payload, Mapping):
-            raise ValidationError({"input": "CallWorkflow input must be an object."})
-        selected_id = config.get("publication") or payload.get("publication")
-        if not isinstance(selected_id, str):
-            raise ValidationError({"publication": "CallWorkflow input must select a published workflow."})
-        if config.get("publication") and payload.get("publication") not in (None, selected_id):
-            raise ValidationError({"publication": "Call input cannot replace its declared static publication."})
+        selected_id = type(self).selected_publication_id(
+            config=config,
+            payload=payload,
+        )
         publication = type(self)._publication(selected_id)
         child_input = payload.get("input")
         if not config.get("publication"):
@@ -631,8 +656,8 @@ class CallWorkflow(StepImpl):
             raise ValidationError({"input": "Child input does not satisfy its admitted publication contract."})
         run_model = apps.get_model("workflows", "WorkflowRun")
         root_id = step_run.run.execution_lineage_root_id()
-        root = system_queryset(run_model, lock=None).select_related("created_by").get(pk=root_id)
-        actor = root.created_by
+        root = system_queryset(run_model, lock=None).get(pk=root_id)
+        actor = root.admission_actor()
         if actor is None:
             raise ValidationError({"actor": "CallWorkflow requires the admitted execution actor."})
         subject_spec = payload.get("subject", step_run.run.subject)

@@ -469,3 +469,127 @@ def retarget_historical_resource(
             else:
                 rows.filter(pk=row.pk).update(resource_fk_id=new_row.pk)
         resources.filter(pk=old_row.pk)._raw_delete(using)
+
+
+def retarget_historical_resource_type(
+    apps: Any,
+    *,
+    using: str,
+    old_type: str,
+    new_type: str,
+) -> None:
+    """Move every historical object and subject from one resource type to another.
+
+    Domain/app renames change the persisted REBAC namespace without changing an
+    object's identity.  This owner handles both supported relationship stores,
+    merges only byte-for-byte equivalent grants, and preserves registry backing
+    facts.  Migration callers remain bound to historical models and an explicit
+    database alias.
+    """
+
+    if not isinstance(old_type, str) or not old_type:
+        raise TypeError("Historical resource retargeting requires a non-empty old type.")
+    if not isinstance(new_type, str) or not new_type:
+        raise TypeError("Historical resource retargeting requires a non-empty new type.")
+    if old_type == new_type:
+        return
+
+    storage, relationship, resource = _historical_relationship_store(apps)
+    rows = relationship._base_manager.db_manager(using)
+    with transaction.atomic(using=using):
+        if storage == "denormalized":
+            affected = rows.select_for_update().filter(
+                models.Q(resource_type=old_type) | models.Q(subject_type=old_type)
+            ).order_by("pk")
+            for row in affected:
+                facts = {
+                    "resource_type": new_type if row.resource_type == old_type else row.resource_type,
+                    "resource_id": row.resource_id,
+                    "relation": row.relation,
+                    "subject_type": new_type if row.subject_type == old_type else row.subject_type,
+                    "subject_id": row.subject_id,
+                    "optional_subject_relation": row.optional_subject_relation,
+                    "caveat_name": row.caveat_name,
+                }
+                duplicate = rows.select_for_update().filter(**facts).exclude(pk=row.pk).first()
+                if duplicate is not None:
+                    if (
+                        duplicate.caveat_context != row.caveat_context
+                        or duplicate.expires_at != row.expires_at
+                    ):
+                        raise ImproperlyConfigured(
+                            "Historical resource-type retargeting found conflicting grant facts."
+                        )
+                    rows.filter(pk=row.pk)._raw_delete(using)
+                    continue
+                rows.filter(pk=row.pk).update(
+                    resource_type=facts["resource_type"],
+                    subject_type=facts["subject_type"],
+                )
+            return
+
+        assert resource is not None
+        resources = resource._base_manager.db_manager(using)
+        old_resources = tuple(
+            resources.select_for_update().filter(resource_type=old_type).order_by("pk")
+        )
+        replacements: dict[int, int] = {}
+        for old_row in old_resources:
+            new_row = resources.select_for_update().filter(
+                resource_type=new_type,
+                resource_id=old_row.resource_id,
+            ).first()
+            if new_row is None:
+                resources.filter(pk=old_row.pk).update(resource_type=new_type)
+                replacements[old_row.pk] = old_row.pk
+                continue
+            for field in ("content_type_id", "object_pk"):
+                old_value = getattr(old_row, field)
+                new_value = getattr(new_row, field)
+                if old_value and new_value and old_value != new_value:
+                    raise ImproperlyConfigured(
+                        "Historical resource-type retargeting found conflicting backing facts."
+                    )
+                if old_value and not new_value:
+                    resources.filter(pk=new_row.pk).update(**{field: old_value})
+            replacements[old_row.pk] = new_row.pk
+
+        affected = rows.select_for_update().filter(
+            models.Q(resource_fk_id__in=replacements)
+            | models.Q(subject_fk_id__in=replacements)
+        ).order_by("pk")
+        for row in affected:
+            resource_fk_id = replacements.get(row.resource_fk_id, row.resource_fk_id)
+            subject_fk_id = replacements.get(row.subject_fk_id, row.subject_fk_id)
+            duplicate = rows.select_for_update().filter(
+                resource_fk_id=resource_fk_id,
+                relation=row.relation,
+                subject_fk_id=subject_fk_id,
+                optional_subject_relation=row.optional_subject_relation,
+                caveat_name=row.caveat_name,
+            ).exclude(pk=row.pk).first()
+            if duplicate is not None:
+                if (
+                    duplicate.caveat_context != row.caveat_context
+                    or duplicate.expires_at != row.expires_at
+                ):
+                    raise ImproperlyConfigured(
+                        "Historical resource-type retargeting found conflicting grant facts."
+                    )
+                rows.filter(pk=row.pk)._raw_delete(using)
+                continue
+            rows.filter(pk=row.pk).update(
+                resource_fk_id=resource_fk_id,
+                subject_fk_id=subject_fk_id,
+            )
+
+        merged_ids = [old_id for old_id, new_id in replacements.items() if old_id != new_id]
+        if merged_ids:
+            if rows.filter(
+                models.Q(resource_fk_id__in=merged_ids)
+                | models.Q(subject_fk_id__in=merged_ids)
+            ).exists():
+                raise ImproperlyConfigured(
+                    "Historical resource-type retargeting left relationships on retired resources."
+                )
+            resources.filter(pk__in=merged_ids)._raw_delete(using)

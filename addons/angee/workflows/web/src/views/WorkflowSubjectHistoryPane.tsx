@@ -6,9 +6,15 @@ import {
   recordTargetHref, routeSearchParam, useResourceRecordHrefLookup, useRouteHref, useRouteSearch,
 } from "@angee/ui";
 
-import { DECISION_SEARCH_KEY, WORKFLOW_RUN_SEARCH_KEY, decisionHref, subjectDecisionRunId, subjectPendingDecision } from "../decision-navigation";
+import {
+  DECISION_SEARCH_KEY,
+  WORKFLOW_RUN_SEARCH_KEY,
+  decisionHref,
+  subjectDecision,
+  subjectDecisionRunId,
+  subjectPendingDecision,
+} from "../decision-navigation";
 import { WorkflowSubjectHistoryPaneDocument } from "../documents.console";
-import { WorkflowDecisionDocument } from "../documents.public";
 import { useWorkflowsT } from "../i18n";
 import { WorkflowApprovals } from "./WorkflowApprovals";
 
@@ -33,16 +39,6 @@ export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, acti
     { subjectDeclaration, id: subjectId },
     { models: ["workflows.WorkflowRun", "workflows.Decision", "workflows.StepArtifact"] },
   );
-  const selectedDecision = useAuthoredQuery(
-    WorkflowDecisionDocument,
-    { id: decisionId ?? "" },
-    {
-      dataProviderName: "public",
-      enabled: Boolean(decisionId),
-      models: ["workflows.Decision"],
-      records: decisionId ? [{ model: "workflows.Decision", id: decisionId }] : [],
-    },
-  );
   if (query.isFetching && !query.data) {
     return <div className="space-y-4 p-3">
       {actionContent}
@@ -57,13 +53,36 @@ export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, acti
   }
   const history = query.data?.workflow_subject_history;
   const runs = history?.runs ?? [];
-  const selected = selectedDecision.data?.workflow_decisions[0];
-  const selectedRunId = selected && subjectDecisionRunId(selected.source_run_id, runs);
+  const decisions = history?.decisions ?? [];
+  const selected = subjectDecision(decisionId, decisions);
+  const selectedRunId = selected && subjectDecisionRunId(selected.step_run?.run?.id, runs);
+  const followedReadableRunId = followedRunId && runs.some((run) => run.id === followedRunId)
+    ? followedRunId
+    : null;
   const pending = decisionId ? undefined : subjectPendingDecision(
-    history?.pending_decisions ?? [], followedRunId,
+    decisions.filter((decision) => decision.verdict === "PENDING"),
+    followedReadableRunId,
   );
-  const pendingRunId = pending?.step_run?.run?.id;
-  if (!runs.length) {
+  const pendingRunId = pending && subjectDecisionRunId(pending.step_run?.run?.id, runs);
+  const selectedTarget = !selectedRunId && selected?.target_reference?.model && selected.target_reference.id
+    ? {
+      model: selected.target_reference.model,
+      id: selected.target_reference.id,
+      tab: selected.target_reference.tab ?? undefined,
+    }
+    : undefined;
+  const pendingTarget = !pendingRunId && pending?.target_reference?.model && pending.target_reference.id
+    ? {
+      model: pending.target_reference.model,
+      id: pending.target_reference.id,
+      tab: pending.target_reference.tab ?? undefined,
+    }
+    : undefined;
+  const runIds = new Set(runs.map((run) => run.id));
+  const targetedDecisions = decisions.filter(
+    (decision) => !decision.step_run?.run?.id || !runIds.has(decision.step_run.run.id),
+  );
+  if (!runs.length && !decisions.length) {
     return <div className="space-y-4 p-3">
       {actionContent}
       <EmptyState icon="workflow-run" title={t("subjectHistory.empty")} description={t("subjectHistory.emptyHint")} />
@@ -71,17 +90,52 @@ export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, acti
   }
   return <div className="space-y-4 p-3">
     {actionContent}
-    {decisionId && selectedRunId ? (
-      <WorkflowApprovals runId={selectedRunId} decisionId={decisionId} includeResolved selectedTaskOnly />
-    ) : pending && pendingRunId ? (
-      <WorkflowApprovals runId={pendingRunId} decisionId={pending.id} selectedTaskOnly />
+    {decisionId && selected && (selectedRunId || selectedTarget) ? (
+      <WorkflowApprovals
+        runId={selectedRunId ?? undefined}
+        target={selectedTarget}
+        decisionId={decisionId}
+        includeResolved
+        selectedTaskOnly
+      />
+    ) : pending && (pendingRunId || pendingTarget) ? (
+      <WorkflowApprovals
+        runId={pendingRunId ?? undefined}
+        target={pendingTarget}
+        decisionId={pending.id}
+        selectedTaskOnly
+      />
     ) : null}
-    {history?.truncated ? <Alert tone="info">
+    {history?.runs_truncated ? <Alert tone="info">
       {t("subjectHistory.truncated")} <TextLink href={routeHref("workflows.runs")}>{t("subjectHistory.openAllRuns")}</TextLink>
     </Alert> : null}
+    {history?.decisions_truncated ? <Alert tone="info">
+      {t("subjectHistory.decisionsTruncated")} <TextLink href={routeHref("workflows.inbox")}>{t("subjectHistory.openApprovals")}</TextLink>
+    </Alert> : null}
+    {targetedDecisions.length ? <section className="space-y-2 rounded-8 border border-border-subtle p-3">
+      <h3 className="text-13 font-medium">{t("inbox.title")}</h3>
+      {targetedDecisions.map((decision) => {
+        const target = decision.target_reference;
+        const targetHref = target?.model && target.id ? recordHref(target.model, target.id) : undefined;
+        const href = targetHref ? decisionHref(targetHref, decision.id, target?.tab) : undefined;
+        return <div key={decision.id} className="space-y-1 text-13">
+          {href
+            ? <TextLink href={href}>{t("subjectHistory.decision", { action: decision.action })}</TextLink>
+            : <span>{t("subjectHistory.decision", { action: decision.action })}</span>}
+          <p className="text-fg-muted">{decision.verdict}</p>
+          {decision.assignees.length ? <p className="text-fg-muted">
+            {t("subjectHistory.recipients", {
+              recipients: decision.assignees
+                .map((subject) => recipientLabels.get(subject) ?? subject)
+                .join(", "),
+            })}
+          </p> : null}
+        </div>;
+      })}
+    </section> : null}
     {runs.map((run) => {
       const failure = (history?.failures ?? []).find((item) => item.run.id === run.id);
-      const decisions = (history?.pending_decisions ?? []).filter(
+      const runDecisions = decisions.filter(
         (decision) => decision.step_run?.run?.id === run.id,
       );
       const childRuns = (history?.child_runs ?? [])
@@ -132,7 +186,7 @@ export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, acti
             {t("subjectHistory.child", { workflow: child.workflow.name })}
           </TextLink>)}
         </div>
-        {decisions.map((decision) => {
+        {runDecisions.map((decision) => {
           const target = decision.target_reference;
           const targetHref = target?.model && target.id ? recordHref(target.model, target.id) : undefined;
           const href = targetHref ? decisionHref(targetHref, decision.id, target?.tab) : recordTargetHref(runHref, {
@@ -141,6 +195,7 @@ export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, acti
           });
           return <div key={decision.id} className="space-y-1 text-13">
             <TextLink href={href}>{t("subjectHistory.decision", { action: decision.action })}</TextLink>
+            <p className="text-fg-muted">{decision.verdict}</p>
             {targetHref ? <p>
               <TextLink href={decisionHref(targetHref, decision.id, target?.tab ?? undefined)}>
                 {t("subjectHistory.decisionTarget")}

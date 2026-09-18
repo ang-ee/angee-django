@@ -126,6 +126,7 @@ async function fixture(options: {
   onFieldInteractionCommit?: (path: string) => void;
   recordTabs?: readonly RecordTabDescriptor[];
   formExtras?: React.ComponentProps<typeof FormView>["formExtras"];
+  headerExtras?: React.ComponentProps<typeof FormView>["headerExtras"];
   recordExtras?: React.ComponentProps<typeof FormView>["recordExtras"];
   groups?: readonly GroupDescriptor[];
   title?: React.ComponentProps<typeof FormView>["title"];
@@ -184,6 +185,7 @@ async function fixture(options: {
             onFieldInteractionCommit={options.onFieldInteractionCommit}
             recordTabs={options.recordTabs}
             formExtras={options.formExtras}
+            headerExtras={options.headerExtras}
             recordExtras={options.recordExtras}
             defaultRecordTab={options.recordTabs ? "activity" : undefined}
           />
@@ -237,6 +239,15 @@ test("form extras receive the native create and edit form contexts", async () =>
   expect(extras).toHaveBeenCalled();
 });
 
+test("header extras render from the same live record context as the title", async () => {
+  const extras = vi.fn((context: Parameters<NonNullable<React.ComponentProps<typeof FormView>["headerExtras"]>>[0]) => (
+    <span>contact for {String(context.record?.title ?? "")}</span>
+  ));
+  await fixture({ publicView: true, headerExtras: extras });
+  expect(await screen.findByText("contact for First")).toBeTruthy();
+  expect(extras).toHaveBeenCalled();
+});
+
 test("composed field validation participates in the native submit resolver", async () => {
   const f = await fixture();
   const unregister = f.surface().registerFieldValidation(
@@ -266,7 +277,11 @@ test("an editable metadata relation drops a stale expanded option when its id ch
   const relation = await screen.findByRole("button", { name: /Parent/ });
   expect(relation.textContent).toContain("note-a");
   fireEvent.click(screen.getByRole("button", { name: "Choose B" }));
-  await waitFor(() => expect(relation.textContent).toContain("note-b"));
+  await waitFor(() => {
+    const current = screen.getByRole("button", { name: /Parent/ });
+    expect(current.textContent).toContain("note-b");
+    expect(current.textContent).not.toContain("note-a");
+  });
   fireEvent.click(screen.getByRole("button", { name: "Clear parent" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: /Parent/ })).toBeNull());
 });

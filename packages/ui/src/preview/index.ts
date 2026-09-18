@@ -6,7 +6,11 @@
 
 export { PreviewPane, type PreviewPaneProps } from "./PreviewPane";
 export { PreviewSkeleton, type PreviewSkeletonProps } from "./PreviewSkeleton";
-export { builtinPreviewProviders } from "./builtins";
+export {
+  builtinPreviewProviders,
+  ImagePreviewSurface,
+  type ImagePreviewSurfaceProps,
+} from "./builtins";
 export {
   resolvePreviewProvider,
   type PreviewFile,

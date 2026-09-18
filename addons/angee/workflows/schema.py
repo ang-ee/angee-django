@@ -41,6 +41,7 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import request_from_info, session_user
+from angee.iam.schema import UserType
 from angee.workflows import engine
 from angee.workflows.attempts import JsonPresence, deserialize_decision_specs
 from angee.workflows.data_contracts import DataContract, FlatDataContractEdge, FlatDataContractNode
@@ -397,7 +398,7 @@ class TriggerType(AngeeNode):
     """Admin projection of a workflow trigger definition."""
 
     workflow: WorkflowType
-    execution_actor: auto
+    execution_actor: UserType | None
     kind: auto
     enabled: auto
     config: JSON
@@ -1922,22 +1923,25 @@ class WorkflowSubjectDeclarationQuery:
         )
         failures = failure_candidates[:200]
         artifacts, artifacts_truncated = _artifact_queryset(info).history_page(runs, limit=200)
+        run_history_truncated = (
+            truncated
+            or len(child_candidates) > 200
+            or len(failure_candidates) > 200
+            or artifacts_truncated
+        )
         return WorkflowSubjectHistory(
             runs=cast(list[WorkflowRunType], runs),
-            pending_decisions=cast(list[DecisionType], decisions),
+            decisions=cast(list[DecisionType], decisions),
+            pending_decisions=cast(list[DecisionType], decisions.filter(verdict="pending")),
             failures=cast(list[StepRunType], failures),
             artifacts=cast(list[StepArtifactType], artifacts),
             child_runs=[WorkflowChildRun(
                 parent_run_id=cast(strawberry.ID, to_public_id(WorkflowRun, row.parent_step_run.run_id)),
                 run=cast(WorkflowRunType, row),
             ) for row in child_rows],
-            truncated=(
-                truncated
-                or decisions_truncated
-                or len(child_candidates) > 200
-                or len(failure_candidates) > 200
-                or artifacts_truncated
-            ),
+            runs_truncated=run_history_truncated,
+            decisions_truncated=decisions_truncated,
+            truncated=run_history_truncated or decisions_truncated,
         )
 
 
@@ -1946,10 +1950,13 @@ class WorkflowSubjectHistory:
     """Actor-readable workflow history composed without per-run query fanout."""
 
     runs: list[WorkflowRunType]
+    decisions: list[DecisionType]
     pending_decisions: list[DecisionType]
     failures: list[StepRunType]
     artifacts: list[StepArtifactType]
     child_runs: list["WorkflowChildRun"]
+    runs_truncated: bool
+    decisions_truncated: bool
     truncated: bool
 
 
@@ -1964,7 +1971,7 @@ class WorkflowChildRun:
 def _workflow_subject_history(
     subject: WorkflowObjectRefInput, *, actor: Any,
 ) -> tuple[models.QuerySet[Any], models.QuerySet[Any], bool, bool]:
-    """Resolve shared subject/artifact run scope and its pending target actions."""
+    """Resolve readable runs and Decisions related by exact retained identity."""
 
     empty_runs = WorkflowRun.objects.none()
     empty_decisions = Decision.objects.none()
@@ -1981,27 +1988,50 @@ def _workflow_subject_history(
     content_type = ContentType.objects.get_for_model(target, for_concrete_model=False)
     readable_runs = read_scoped_queryset(cast(type[models.Model], WorkflowRun), actor)
     readable_decisions = read_scoped_queryset(cast(type[models.Model], Decision), actor)
-    if readable_runs is None:
-        return empty_runs, empty_decisions, False, False
     artifact_content_type, artifact_object_id = canonical_record_target(target)
-    artifact_runs = _artifact_queryset_for_actor(actor).filter(
-        target_content_type=artifact_content_type, target_object_id=artifact_object_id,
-    ).values("attempt__step_run__run_id")
-    candidates = readable_runs.filter(
-        models.Q(subject_content_type=content_type, subject_object_id=target.pk)
-        | models.Q(pk__in=models.Subquery(artifact_runs)),
-    ).distinct().order_by("-created_at", "-pk")
-    run_ids = list(candidates.values_list("pk", flat=True)[:101])
-    truncated = len(run_ids) > 100
-    runs = readable_runs.filter(pk__in=run_ids[:100]).select_related("workflow").order_by("-created_at", "-pk")
+    if readable_runs is None:
+        runs, truncated = empty_runs, False
+    else:
+        artifact_runs = _artifact_queryset_for_actor(actor).filter(
+            target_content_type=artifact_content_type, target_object_id=artifact_object_id,
+        ).values("attempt__step_run__run_id")
+        candidates = readable_runs.filter(
+            models.Q(subject_content_type=content_type, subject_object_id=target.pk)
+            | models.Q(pk__in=models.Subquery(artifact_runs)),
+        ).distinct().order_by("-created_at", "-pk")
+        run_ids = list(candidates.values_list("pk", flat=True)[:101])
+        truncated = len(run_ids) > 100
+        runs = readable_runs.filter(pk__in=run_ids[:100]).select_related("workflow").order_by(
+            "-created_at", "-pk",
+        )
     if readable_decisions is None:
         return runs, empty_decisions, truncated, False
-    decision_scope = readable_decisions.filter(
-        step_run__run_id__in=models.Subquery(runs.order_by().values("pk")),
-        verdict="pending",
-    ).select_related(
+    canonical_model = artifact_content_type.model_class()
+    if canonical_model is None:
+        return runs, empty_decisions, truncated, False
+    target_id = str(to_public_id(canonical_model, artifact_object_id))
+    decision_relation = models.Q(
+        target_model=canonical_model._meta.label,
+        target_id=target_id,
+    )
+    if readable_runs is not None:
+        decision_relation |= models.Q(
+            step_run__run_id__in=models.Subquery(runs.order_by().values("pk")),
+        )
+    decision_scope = readable_decisions.filter(decision_relation).distinct().select_related(
         "step_run__run", "suspension_attempt",
-    ).order_by("priority", "created_at", "pk")
+    ).order_by(
+        models.Case(
+            models.When(verdict="pending", then=models.Value(0)),
+            default=models.Value(1),
+        ).asc(),
+        models.Case(
+            models.When(verdict="pending", then=models.F("priority")),
+            default=models.Value(0),
+        ).asc(),
+        models.F("created_at").desc(),
+        models.F("pk").desc(),
+    )
     decision_ids = list(decision_scope.values_list("pk", flat=True)[:201])
     decisions = decision_scope.filter(pk__in=decision_ids[:200])
     return runs, decisions, truncated, len(decision_ids) > 200

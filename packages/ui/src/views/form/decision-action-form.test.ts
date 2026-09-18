@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { defaultWidgets } from "../../widgets";
-import { compileDecisionActionFormSpec } from "./form-spec";
+import { compileDecisionActionFormSpec, formSpecInitialValues } from "./form-spec";
 
 const widgets = { ...defaultWidgets, facts: { read: () => null } };
 
@@ -130,4 +130,63 @@ test("alternative correction fields produce one labelled instruction without dup
   expect(form.validate({
     action: "correct", note: "Reviewed", currency: null, invoice_date: "2026-08-31", vendor_name: null,
   })).toEqual({ valid: true, messages: {} });
+});
+
+test("nested Decision errors remain visible through their owning top-level field", () => {
+  const form = compileDecisionActionFormSpec({
+    type: "object", required: ["action"], properties: {
+      action: { type: "string", enum: ["apply"], options: [
+        { value: "apply", label: "Apply mapping", verdict: "COMPLETE" },
+      ] },
+      documents: { type: "array", items: { type: "object", properties: {
+        lines: { type: "array", items: { type: "object", properties: {
+          account_id: { type: "string", label: "Expense account" },
+        } } },
+      } } },
+    },
+    oneOf: [{ type: "object", required: ["action", "documents"], properties: {
+      action: { const: "apply" },
+      documents: { type: "array", items: { type: "object", properties: {
+        lines: { type: "array", items: { type: "object", properties: {
+          account_id: { type: "string" },
+        } } },
+      } } },
+    }, additionalProperties: false }],
+  }, widgets);
+
+  expect(form.validate({
+    action: "apply", documents: [{ lines: [{ account_id: null }] }],
+  })).toEqual({
+    valid: false,
+    messages: {
+      documents: [
+        "documents.0.lines.0.account_id: account_id has an invalid value.",
+      ],
+    },
+  });
+});
+
+test("retains omitted optional reasons inside a structured Decision object", () => {
+  const form = compileDecisionActionFormSpec({
+    type: "object", required: ["action"], properties: {
+      action: { type: "string", enum: ["apply"], options: [
+        { value: "apply", label: "Apply mapping", verdict: "COMPLETE" },
+      ] },
+      retired_reasons: { type: "object", widget: "object", properties: {
+        source_1: { type: "string", minLength: 1 },
+        source_2: { type: "string", minLength: 1 },
+      }, additionalProperties: false },
+    },
+    oneOf: [{ type: "object", required: ["action", "retired_reasons"], properties: {
+      action: { const: "apply" },
+      retired_reasons: { type: "object", properties: {
+        source_1: { type: "string", minLength: 1 },
+        source_2: { type: "string", minLength: 1 },
+      }, additionalProperties: false },
+    }, additionalProperties: false }],
+  }, widgets);
+
+  const initial = formSpecInitialValues(form.inputFields, { retired_reasons: {} });
+  expect(initial).toEqual({ retired_reasons: {} });
+  expect(form.validate(form.project("apply", initial))).toEqual({ valid: true, messages: {} });
 });

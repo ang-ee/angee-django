@@ -14,13 +14,14 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
-from angee.workflows_extraction.engines import OcrEngine
+from angee.workflows_extraction.engines import ExtractionEngine
 from angee.workflows_extraction.managers import (
     ExtractionManager,
     ExtractionSystemManager,
     ImmutableEvidenceManager,
     evidence_insert_allowed,
 )
+from angee.workflows_extraction.pointers import json_pointer_value
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +74,28 @@ class CorrectionRef:
     original_revision: int
     decision_id: str
     corrected_paths: tuple[str, ...]
+    revision_parent_extraction_id: str | None = None
+    revision_parent_revision: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectionBinding:
+    """Frozen fact authority and exact revision parent for one correction."""
+
+    authority: ExtractionRef
+    revision_parent: ExtractionRef
+
+    @property
+    def bridges_revision_parent(self) -> bool:
+        return self.authority.public_id != self.revision_parent.public_id
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "authority_extraction_id": self.authority.public_id,
+            "authority_extraction_revision": self.authority.revision,
+            "revision_parent_extraction_id": self.revision_parent.public_id,
+            "revision_parent_extraction_revision": self.revision_parent.revision,
+        }
 
 
 class DecisionReadableFile(models.Model):
@@ -123,7 +146,11 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     schema_id = models.CharField(max_length=255, editable=False)
     schema_digest = models.CharField(max_length=64, editable=False)
     schema = models.JSONField(editable=False)
-    engine = ImplClassField(base_class=OcrEngine, registry_setting="ANGEE_OCR_ENGINE_CLASSES", editable=False)
+    engine = ImplClassField(
+        base_class=ExtractionEngine,
+        registry_setting="ANGEE_EXTRACTION_ENGINE_CLASSES",
+        editable=False,
+    )
     model = models.ForeignKey(
         "agents.InferenceModel", null=True, blank=True, on_delete=models.PROTECT, related_name="extraction_evidence"
     )
@@ -220,8 +247,6 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     def selected_document(self, identity: str) -> tuple[Mapping[str, Any], DocumentRef]:
         """Resolve an exact retained document without interpreting a printed label."""
 
-        from angee.workflows_extraction.service import json_pointer_value
-
         reference = self.document_ref(identity)
         result = json_pointer_value(self.result, reference.selector)
         if not isinstance(result, Mapping):
@@ -240,6 +265,16 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
             CorrectionRef(
                 str(item["original_extraction_id"]), int(item["original_extraction_revision"]),
                 str(item["decision_id"]), tuple(item.get("corrected_paths", ())),
+                (
+                    str(item["revision_parent_extraction_id"])
+                    if item.get("revision_parent_extraction_id") is not None
+                    else None
+                ),
+                (
+                    int(item["revision_parent_extraction_revision"])
+                    if item.get("revision_parent_extraction_revision") is not None
+                    else None
+                ),
             )
             for item in self.provenance.get("corrections", ())
         )

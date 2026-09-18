@@ -19,6 +19,8 @@ type DescriptorWidgetField = WidgetField & {
   rowTemplate?: readonly FormSpecFieldDescriptor[];
   objectTemplate?: readonly FormSpecFieldDescriptor[];
   itemTemplate?: FormSpecFieldDescriptor;
+  addLabel?: string;
+  removeLabel?: string;
   minItems?: number;
   maxItems?: number;
 };
@@ -43,6 +45,8 @@ export interface FieldDescriptorControlProps {
     rowTemplate?: readonly FormSpecFieldDescriptor[];
     objectTemplate?: readonly FormSpecFieldDescriptor[];
     itemTemplate?: FormSpecFieldDescriptor;
+    addLabel?: string;
+    removeLabel?: string;
   };
   value: unknown;
   /** Source row for widgets whose display depends on a sibling field (money). */
@@ -93,6 +97,8 @@ export function FieldDescriptorControl({
     ...(field.rowTemplate ? { rowTemplate: field.rowTemplate } : {}),
     ...(field.objectTemplate ? { objectTemplate: field.objectTemplate } : {}),
     ...(field.itemTemplate ? { itemTemplate: field.itemTemplate } : {}),
+    ...(field.addLabel ? { addLabel: field.addLabel } : {}),
+    ...(field.removeLabel ? { removeLabel: field.removeLabel } : {}),
     ...(field.minItems !== undefined ? { minItems: field.minItems } : {}),
     ...(field.maxItems !== undefined ? { maxItems: field.maxItems } : {}),
     ...(field.currencyField ? { currencyField: field.currencyField } : {}),

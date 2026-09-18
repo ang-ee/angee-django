@@ -24,10 +24,17 @@ from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
-from phonenumbers import PhoneNumberMatcher
+from phonenumbers import (
+    NumberParseException,
+    PhoneNumberMatcher,
+    is_possible_number,
+    is_valid_number,
+    parse,
+)
 from rebac import PermissionDenied, actor_context, current_actor, system_context
 
 from angee.base.identity import public_id_for
@@ -330,8 +337,176 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         return handle
 
 
-class PartyHandleManager(AngeeManager):
+class PartyHandleQuerySet(AngeeQuerySet):
+    """Require association mutations to pass through the resolution owner."""
+
+    def readable_party_name_expression(self, *, actor: Any) -> Any:
+        """Return the linked Party label only when ``actor`` can read it."""
+
+        if actor is None:
+            return Value("", output_field=TextField())
+        party_model = apps.get_model("parties", "Party")
+        return (
+            party_model.objects.with_actor(actor)
+            .filter(pk=OuterRef("party_id"))
+            .readable_scalar_subquery(
+                "display_name",
+                actor=actor,
+                default="",
+                output_field=TextField(),
+            )
+        )
+
+    def readable_handle_value_expression(self, *, actor: Any) -> Any:
+        """Return the linked Handle value only when ``actor`` can read it."""
+
+        if actor is None:
+            return Value("", output_field=TextField())
+        handle_model = apps.get_model("parties", "Handle")
+        return (
+            handle_model.objects.with_actor(actor)
+            .filter(pk=OuterRef("handle_id"))
+            .readable_scalar_subquery(
+                "value",
+                actor=actor,
+                default="",
+                output_field=TextField(),
+            )
+        )
+
+    def update(self, **kwargs: Any) -> int:
+        raise TypeError("Party-handle transitions must use link(), confirm(), dismiss(), or delete().")
+
+    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+        raise TypeError("Party-handle links must be created through PartyHandleManager.link().")
+
+    def bulk_update(self, objs: Iterable[Any], fields: Iterable[str], batch_size: int | None = None) -> int:
+        raise TypeError("Party-handle transitions must use link(), confirm(), dismiss(), or delete().")
+
+
+class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # type: ignore[misc]
     """Owns the confidence link between a party and a handle, and the resolution."""
+
+    def propose_manual_contact(
+        self,
+        party: Any,
+        *,
+        platform: str,
+        value: str,
+        label: str = "",
+        actor: Any,
+    ) -> Any:
+        """Add one unconfirmed manual contact claim without asserting sender identity.
+
+        Handles are globally deduplicated on their native ``(platform, value)``
+        identity, while the Party association remains a reviewable ``PartyHandle``.
+        Reusing a global Handle therefore requires read access and never refreshes
+        its display fields. Repeating a dismissed Party association returns that
+        durable anti-link unchanged; confirmation remains the explicit human action.
+        """
+
+        party.with_actor(actor)._require_record_access("write")
+        handle_model = apps.get_model("parties", "Handle")
+        allowed_platforms = {
+            str(handle_model.Platform.EMAIL),
+            str(handle_model.Platform.PHONE),
+        }
+        normalized_platform = str(platform or "").strip().lower()
+        normalized_label = " ".join(str(label or "").split()).strip()
+        contact_value = str(value or "").strip()
+        if normalized_platform not in allowed_platforms:
+            raise ValidationError({"platform": "Choose email or phone."})
+        if not contact_value:
+            raise ValidationError({"value": "Enter an email address or phone number."})
+        if normalized_platform == str(handle_model.Platform.EMAIL):
+            try:
+                validate_email(contact_value)
+            except ValidationError as exc:
+                raise ValidationError({"value": exc.messages}) from exc
+        else:
+            try:
+                number = parse(contact_value, None)
+            except NumberParseException as exc:
+                raise ValidationError(
+                    {"value": "Enter a valid international phone number including country code."}
+                ) from exc
+            if not is_possible_number(number) or not is_valid_number(number):
+                raise ValidationError(
+                    {"value": "Enter a valid international phone number including country code."}
+                )
+
+        candidate = handle_model(
+            platform=normalized_platform,
+            value=contact_value,
+            normalized_value=handle_model.normalize_value(normalized_platform, contact_value),
+            label=normalized_label,
+            created_by_id=getattr(actor, "pk", None),
+        )
+        candidate.full_clean(validate_unique=False, validate_constraints=False)
+        alias = party._state.db or self.db
+        party_model = apps.get_model("parties", "Party")
+
+        with transaction.atomic(using=alias), actor_context(actor):
+            locked_party = (
+                party_model.objects.db_manager(alias)
+                .sudo(reason="parties.party_handle.propose_manual_contact.lock_party")
+                .locked_get(pk=party.pk)
+            )
+            locked_party.with_actor(actor)._require_record_access("write")
+
+            handle_owner = handle_model.objects.db_manager(alias)
+            handle = (
+                handle_owner
+                .sudo(reason="parties.party_handle.propose_manual_contact.handle")
+                .lock_if_supported()
+                .filter(platform=normalized_platform, value=contact_value)
+                .first()
+            )
+            if handle is None:
+                handle_owner.check_create()
+                with system_context(reason="parties.party_handle.propose_manual_contact.handle"):
+                    handle = handle_owner.upsert(
+                        platform=normalized_platform,
+                        value=contact_value,
+                        created_by_id=getattr(actor, "pk", None),
+                    )
+                handle = handle_owner.sudo(
+                    reason="parties.party_handle.propose_manual_contact.lock_handle",
+                ).locked_get(pk=handle.pk)
+            if not handle.with_actor(actor).has_access("read"):
+                raise PermissionDenied("Denied: cannot add this contact point.")
+            if normalized_label and not handle.label and handle.has_access("write"):
+                handle.label = normalized_label
+                handle.save(using=alias, update_fields=("label", "updated_at"))
+
+            existing = (
+                self.db_manager(alias)
+                .sudo(reason="parties.party_handle.propose_manual_contact.lookup")
+                .lock_if_supported()
+                .filter(party_id=locked_party.pk, handle_id=handle.pk)
+                .first()
+            )
+            if existing is not None:
+                if not existing.with_actor(actor).has_access("read"):
+                    raise PermissionDenied("Denied: cannot add this contact point.")
+                return existing
+
+            server_handle = handle_owner.sudo(
+                reason="parties.party_handle.propose_manual_contact.resolve_handle",
+            ).locked_get(pk=handle.pk)
+            verified_link_actor = self.db_manager(alias).check_create()
+            with system_context(reason="parties.party_handle.propose_manual_contact.link"):
+                link = self.db_manager(alias).link(
+                    locked_party,
+                    server_handle,
+                    confidence=0.4,
+                    source=cast(LinkSource, LinkSource.MANUAL),
+                    is_confirmed=False,
+                    created_by_id=getattr(actor, "pk", None),
+                )
+            if not link.with_actor(actor).has_access("read"):
+                raise PermissionDenied("Denied: cannot read the contact association.")
+            return link.with_actor(verified_link_actor)
 
     def has_confirmed_association(self, handle: Any, *, actor: Any) -> bool:
         """Return whether this readable Handle has any confirmed owner, without disclosing it."""
@@ -351,6 +526,26 @@ class PartyHandleManager(AngeeManager):
             raise PermissionDenied("an actor is required to assess a party-handle association")
         party.with_actor(actor)._require_record_access("read")
         handle.with_actor(actor)._require_record_access("read")
+        visible = read_scoped_queryset(self.model, actor)
+        readable = (
+            tuple(visible.filter(handle_id=handle.pk).select_related("party").order_by("pk"))
+            if visible is not None else ()
+        )
+        return self._assess_claimed_handle_authorized(
+            party=party, handle=handle, readable_links=readable
+        )
+
+    def _assess_claimed_handle_authorized(
+        self,
+        *,
+        party: Any,
+        handle: Any,
+        readable_links: tuple[Any, ...],
+    ) -> HandleAssociationAssessment:
+        """Assess one exact Handle after its caller authorized Party and evidence reads."""
+
+        if any(link.handle_id != handle.pk for link in readable_links):
+            raise ValidationError({"handle": "Retained association evidence has the wrong Handle."})
         with system_context(reason="parties.party_handle.assess_claimed_handle"):
             authoritative = tuple(
                 self.filter(handle_id=handle.pk)
@@ -371,12 +566,7 @@ class PartyHandleManager(AngeeManager):
             status = HandleAssociationStatus.WEAK_SAME
         else:
             status = HandleAssociationStatus.UNKNOWN
-        visible = read_scoped_queryset(self.model, actor)
-        readable = (
-            tuple(visible.filter(handle_id=handle.pk).select_related("party").order_by("pk"))
-            if visible is not None else ()
-        )
-        readable_ids = {link.pk for link in readable}
+        readable_ids = {link.pk for link in readable_links}
         conflict_ids = {
             link.pk for link in authoritative
             if (
@@ -390,7 +580,7 @@ class PartyHandleManager(AngeeManager):
         }
         return HandleAssociationAssessment(
             status=status,
-            readable_links=readable,
+            readable_links=readable_links,
             conflict_evidence_readable=conflict_ids.issubset(readable_ids),
         )
 
@@ -414,6 +604,22 @@ class PartyHandleManager(AngeeManager):
         party.with_actor(actor)._require_record_access("write")
         handle.with_actor(actor)._require_record_access("read")
         evidence.with_actor(actor)._require_record_access("read")
+        return self._propose_claimed_handle_authorized(
+            party, handle, evidence=evidence, actor=actor, confidence=confidence
+        )
+
+    def _propose_claimed_handle_authorized(
+        self,
+        party: Any,
+        handle: Any,
+        *,
+        evidence: Any,
+        actor: Any,
+        confidence: float = 0.4,
+    ) -> Any:
+        """Retain a claim after the caller authorized exact Handle and evidence reads."""
+
+        party.with_actor(actor)._require_record_access("write")
         if not 0 < confidence < 0.5:
             raise ValidationError({"confidence": "Claimed-handle proposals require confidence below 0.5."})
         evidence_target = canonical_record_target(evidence)
@@ -424,13 +630,14 @@ class PartyHandleManager(AngeeManager):
             "model": evidence_model._meta.label,
             "id": public_id_for(evidence_model, evidence_target.object_id),
         }
-        with system_context(reason="parties.party_handle.propose_claimed_handle"), transaction.atomic():
-            locked_handle = type(handle)._base_manager.select_for_update().get(pk=handle.pk)
-            existing = self.select_for_update().filter(party=party, handle=locked_handle).first()
+        alias = handle._state.db or self.db
+        with system_context(reason="parties.party_handle.propose_claimed_handle"), transaction.atomic(using=alias):
+            locked_handle = type(handle)._base_manager.using(alias).select_for_update().get(pk=handle.pk)
+            existing = self.using(alias).select_for_update().filter(party=party, handle=locked_handle).first()
             refs = list((existing.metadata or {}).get("evidence", ())) if existing is not None else []
             if evidence_ref not in refs:
                 refs.append(evidence_ref)
-            return self.link(
+            return self.db_manager(alias).link(
                 party,
                 locked_handle,
                 confidence=confidence,
@@ -464,35 +671,37 @@ class PartyHandleManager(AngeeManager):
         a later importer can add provenance without erasing prior evidence.
         """
 
-        link, created = self.get_or_create(
-            party=party,
-            handle=handle,
-            defaults={
-                "confidence": confidence,
-                "source": source,
-                "is_confirmed": is_confirmed,
-                "metadata": metadata or {},
-                "created_by_id": created_by_id,
-            },
-        )
-        upgraded = False
-        dirty: list[str] = []
-        if not created and is_confirmed and not link.is_confirmed:
-            link.confidence = confidence
-            link.source = source
-            link.is_confirmed = True
-            link.is_dismissed = False
-            dirty.extend(("confidence", "source", "is_confirmed", "is_dismissed"))
-            upgraded = True
-        merged_metadata = {**(link.metadata or {}), **(metadata or {})}
-        if merged_metadata != link.metadata:
-            link.metadata = merged_metadata
-            dirty.append("metadata")
-        if dirty:
-            link.save(update_fields=[*dict.fromkeys(dirty), "updated_at"])
-        if created or upgraded or handle.party_id != party.pk:
-            self.resolve(handle)
-        return link
+        alias = handle._state.db or self.db
+        with transaction.atomic(using=alias):
+            link, created = self.using(alias).get_or_create(
+                party=party,
+                handle=handle,
+                defaults={
+                    "confidence": confidence,
+                    "source": source,
+                    "is_confirmed": is_confirmed,
+                    "metadata": metadata or {},
+                    "created_by_id": created_by_id,
+                },
+            )
+            upgraded = False
+            dirty: list[str] = []
+            if not created and is_confirmed and not link.is_confirmed:
+                link.confidence = confidence
+                link.source = source
+                link.is_confirmed = True
+                link.is_dismissed = False
+                dirty.extend(("confidence", "source", "is_confirmed", "is_dismissed"))
+                upgraded = True
+            merged_metadata = {**(link.metadata or {}), **(metadata or {})}
+            if merged_metadata != link.metadata:
+                link.metadata = merged_metadata
+                dirty.append("metadata")
+            if dirty:
+                link.save(using=alias, update_fields=[*dict.fromkeys(dirty), "updated_at"])
+            if created or upgraded or handle.party_id != party.pk:
+                link._resolve_link()
+            return link
 
     def resolve(self, handle: Any) -> None:
         """Materialise ``handle.party`` and its confirmed state from the winning link.
@@ -503,32 +712,35 @@ class PartyHandleManager(AngeeManager):
         the previous owner too, so its ``handle_count`` never goes stale.
         """
 
-        previous_pk = handle.party_id
-        winner = (
-            self.filter(handle=handle, is_dismissed=False)
-            .order_by("-is_confirmed", "-confidence", "sqid")
-            .select_related("party")
-            .first()
-        )
-        resolved = winner.party if winner else None
-        resolved_pk = resolved.pk if resolved else None
-        is_confirmed = bool(winner and winner.is_confirmed)
-        dirty = []
-        if handle.party_id != resolved_pk:
-            handle.party_id = resolved_pk
-            dirty.append("party")
-        if handle.party_link_confirmed != is_confirmed:
-            handle.party_link_confirmed = is_confirmed
-            dirty.append("party_link_confirmed")
-        if dirty:
-            handle.save(update_fields=[*dirty, "updated_at"])
-        if resolved is not None:
-            self.recount(resolved)
-        if previous_pk is not None and previous_pk != resolved_pk:
-            party_model = apps.get_model("parties", "Party")
-            previous = party_model.objects.filter(pk=previous_pk).first()
-            if previous is not None:
-                self.recount(previous)
+        alias = handle._state.db or self.db
+        with transaction.atomic(using=alias):
+            previous_pk = handle.party_id
+            winner = (
+                self.using(alias).filter(handle=handle, is_dismissed=False)
+                .order_by("-is_confirmed", "-confidence", "sqid")
+                .select_related("party")
+                .first()
+            )
+            resolved = winner.party if winner else None
+            resolved_pk = resolved.pk if resolved else None
+            is_confirmed = bool(winner and winner.is_confirmed)
+            dirty = []
+            if handle.party_id != resolved_pk:
+                handle.party_id = resolved_pk
+                dirty.append("party")
+            if handle.party_link_confirmed != is_confirmed:
+                handle.party_link_confirmed = is_confirmed
+                dirty.append("party_link_confirmed")
+            if dirty:
+                handle.save(using=alias, update_fields=[*dirty, "updated_at"])
+            if resolved is not None:
+                self.db_manager(alias).recount(resolved)
+            if previous_pk is not None and previous_pk != resolved_pk:
+                party_model = apps.get_model("parties", "Party")
+                previous = party_model.objects.using(alias).filter(pk=previous_pk).first()
+                if previous is not None:
+                    self.db_manager(alias).recount(previous)
+            handle._party_links_resolved()
 
     def recount(self, party: Any) -> None:
         """Refresh ``party.handle_count`` from the handles resolved onto it (write only on change).

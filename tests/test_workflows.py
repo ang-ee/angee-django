@@ -189,7 +189,7 @@ def test_run_start_validates_only_new_exact_admission(
 
     assert retained.pk == run.pk
     assert validations == ["called"]
-    with pytest.raises(ValidationError, match="different immutable facts"):
+    with pytest.raises(ValidationError, match="different frozen input"):
         WorkflowRun.objects.start(
             published, subject, owner, dedup_key="admission:exact",
             input=JsonPresence(True, {"scope": "changed"}),
@@ -808,10 +808,20 @@ def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_t
             user=outsider,
         )
     )["workflows_for_subject_declaration"]
+    subjectless = result_data(
+        execute_schema(
+            schema,
+            query,
+            {"subjectDeclaration": ""},
+            user=owner,
+        )
+    )["workflows_for_subject_declaration"]
 
     assert [(row["key"], row["name"], row["subject_declaration"]) for row in visible] == [
-        ("any-subject", "Any subject", ""),
         ("matching", "Matching", Workflow._meta.label_lower),
+    ]
+    assert [(row["key"], row["name"], row["subject_declaration"]) for row in subjectless] == [
+        ("any-subject", "Any subject", ""),
     ]
     workflow_selects = [
         query["sql"]
@@ -843,7 +853,7 @@ def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_t
     # REBAC field ownership stays in the annotated domain query, independent of
     # the number of workflows returned; lineage fields add no per-row reads.
     assert len(workflow_selects) == len(expanded_workflow_selects) == 6
-    assert len(expanded) == 5
+    assert len(expanded) == 4
     assert hidden == []
 
 

@@ -17,12 +17,13 @@ from datetime import datetime
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import JsonValue
-from rebac import system_context
-from rebac.actors import to_subject_ref
 
+from angee.base.identity import canonical_subject_ref
 from angee.base.impl import ImplBase, impl_registry, resolve_impl_class
+from angee.base.scoping import system_queryset
 from angee.workflows.steps import DecisionSpec, StepImpl, StepResult, positive_int
 
 ARCHIVE_EXTRACTOR_CLASSES_SETTING = "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES"
@@ -394,15 +395,12 @@ def _mapping_form_schema(target_resource: str) -> dict[str, Any]:
 
 
 def _run_owner_subject(run: Any) -> str:
-    """Return the run creator's REBAC subject ref as the mapping assignee."""
+    """Return the run's retained admission subject as the mapping assignee."""
 
-    owner_id = getattr(run, "created_by_id", None)
-    if owner_id is None:
-        raise ValidationError({"run": "Archive mapping gates require a run creator or explicit assignee."})
-    user_model = run._meta.get_field("created_by").related_model
-    with system_context(reason="workflows_integrate.archive_gate.owner"):
-        owner = user_model._base_manager.get(pk=owner_id)
-    return str(to_subject_ref(owner))
+    subject = run.admission_actor_subject()
+    if subject is None:
+        raise ValidationError({"run": "Archive mapping gates require an admitted actor or explicit assignee."})
+    return str(subject)
 
 
 def _prepared_mappings(step_run: Any) -> list[dict[str, str]]:
@@ -413,9 +411,11 @@ def _prepared_mappings(step_run: Any) -> list[dict[str, str]]:
         raise ValidationError({"input": "Archive prepare requires the typed gate resolution."})
     if len(value["resolutions"]) != 1 or not isinstance(value["resolutions"][0], Mapping):
         raise ValidationError({"input": "Archive prepare requires one exact resolution."})
-    gate_rows = list(step_run.previous.select_related("step").filter(
-        step__step_class="archive_gate"
-    ))
+    gate_rows = list(
+        system_queryset(type(step_run), using=step_run._state.db, lock=None)
+        .filter(next_step_runs=step_run, step__step_class="archive_gate")
+        .select_related("step")
+    )
     if len(gate_rows) != 1:
         raise ValidationError({"gate": "Archive prepare needs one declared predecessor gate."})
     gate = gate_rows[0]
@@ -425,7 +425,7 @@ def _prepared_mappings(step_run: Any) -> list[dict[str, str]]:
         step_run, ("resolutions", 0),
         expected_action=str(gate.step.config.get("action") or "map-archive"),
         expected_target=("", ""), expected_verdict="completed",
-        actor=value["resolutions"][0].get("resolved_by"),
+        actor=_resolution_actor(value["resolutions"][0]),
     )
 
     mappings: list[dict[str, str]] = []
@@ -450,6 +450,19 @@ def _prepared_mappings(step_run: Any) -> list[dict[str, str]]:
         seen.add(extractor_key)
         mappings.append({"extractor": extractor_key, "target": target_pk})
     return mappings
+
+
+def _resolution_actor(value: Mapping[str, Any]) -> Any:
+    """Resolve the retained human Decision resolver for the consumption check."""
+
+    try:
+        subject = canonical_subject_ref(str(value.get("resolved_by") or ""))
+    except (TypeError, ValueError) as error:
+        raise ValidationError({"decision": "Archive mapping requires a human resolver."}) from error
+    actor = get_user_model().objects.active_person_for_subject(subject)
+    if actor is None:
+        raise ValidationError({"decision": "Archive mapping requires a human resolver."})
+    return actor
 
 
 def _mapping_rows(value: Any, *, owner: str) -> list[Mapping[str, Any]]:

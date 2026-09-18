@@ -351,6 +351,7 @@ class DataResourceMetadata:
     canonical_label: str | None = None
     row_model: str = "server"
     record_representation: str | None = None
+    record_search_fields: tuple[str, ...] = ()
     subject_field: str | None = None
     subtitle: DataResourceSubtitleMetadata | None = None
     grantable: tuple[GrantableRelationMetadata, ...] = ()
