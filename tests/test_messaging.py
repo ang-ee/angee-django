@@ -3249,3 +3249,52 @@ def test_handle_upsert_converges_a_value_collision_across_external_ids(messaging
     assert phone.external_id == "4917000123@s.whatsapp.net"
     assert phone.metadata.get("lid") == "99887766@lid"
     assert phone.display_name == "Ada Lovelace"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_upsert_converges_a_value_collision_on_the_external_id_refresh_path(
+    messaging_tables: None,
+) -> None:
+    """A resolved ``@lid`` whose refreshed value hits an existing phone row converges.
+
+    The dual of :func:`test_handle_upsert_converges_a_value_collision_across_external_ids`:
+    here the external-id row already exists (a legacy ``@lid`` handle keyed on the
+    LID), and the drift that would collide surfaces on the *refresh* path, not the
+    create path. The upsert must resolve to the phone row that owns the value —
+    without a failed save escaping into the caller's transaction — and leave the
+    LID row untouched for the offline backfill to merge.
+    """
+
+    del messaging_tables
+    with system_context(reason="test handle external-id refresh collision"):
+        phone = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="+18583421935",
+            external_id="18583421935@s.whatsapp.net",
+            display_name="Bob",
+        )
+        lid = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="113352894324870@lid",
+            external_id="113352894324870@lid",
+            display_name="Bob LID",
+        )
+        resolved = Handle.objects.upsert(
+            platform=Handle.Platform.WHATSAPP,
+            value="+18583421935",
+            external_id="113352894324870@lid",
+            display_name="Bob Business",
+            metadata={"lid": "113352894324870@lid"},
+        )
+
+    # Converged on the phone row; no IntegrityError escaped and both rows survive.
+    assert resolved.pk == phone.pk
+    assert Handle._base_manager.count() == 2
+    phone.refresh_from_db()
+    assert phone.external_id == "18583421935@s.whatsapp.net"
+    assert phone.metadata.get("lid") == "113352894324870@lid"
+    assert phone.display_name == "Bob Business"
+    # The LID row is left for the offline backfill to merge, keeping its old value.
+    lid.refresh_from_db()
+    assert lid.value == "113352894324870@lid"
+    assert lid.external_id == "113352894324870@lid"
