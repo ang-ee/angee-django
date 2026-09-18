@@ -1732,6 +1732,174 @@ class ExtractionServiceTests(TestCase):
             (document.lines[1].identity, document.lines[0].identity),
         )
 
+    def test_preliminary_correspondence_hold_infers_before_reviewed_mapping(self) -> None:
+        schema = {
+            **SCHEMA,
+            "properties": {
+                **SCHEMA["properties"],
+                "routing_review_reasons": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+        }
+
+        def retained_pair(target: Any, *, marker: str) -> tuple[Any, Any]:
+            authority_config = {
+                "result": {"number": marker, "rows": ["retained line"]},
+                "inference_mode": "permitted",
+                "evidence_layout": {"line_collection": "/rows"},
+            }
+            preliminary_config = {
+                "result": {
+                    "number": "",
+                    "rows": [],
+                    "routing_review_reasons": ["missing facts"],
+                },
+                "inference_mode": "permitted",
+                "evidence_layout": {"line_collection": "/rows"},
+                "prompt": f"{marker} unresolved deterministic replay",
+            }
+            with actor_context(self.owner):
+                prepared = prepare_pages(
+                    files=(target,), message_parts=(), authorized_target=target,
+                    config=authority_config,
+                )
+                authority = process(
+                    prepared, (), schema=schema, model=self.model,
+                    authorized_target=target, engine="fake_document",
+                    config=authority_config,
+                )
+                prepared = prepare_pages(
+                    files=(target,), message_parts=(), authorized_target=target,
+                    config=preliminary_config,
+                )
+                preliminary = process(
+                    prepared, (), schema=schema, model=self.model,
+                    authorized_target=target, engine="fake_document",
+                    config=preliminary_config,
+                )
+            self.assertEqual(
+                preliminary.error_code,
+                "source_hold:identity_correspondence_required",
+            )
+            self.assertEqual(preliminary.document_refs, authority.document_refs)
+            self.assertNotIn("inference", preliminary.stage_provenance)
+            return authority, preliminary
+
+        authority, preliminary = retained_pair(self.files[0], marker="MATCHED")
+        admitted = SimpleNamespace(
+            request_key="complete-preliminary-correspondence",
+            input={
+                "base_extraction_id": str(preliminary.sqid),
+                "base_revision": preliminary.revision,
+                "model_id": str(self.model.sqid),
+                "identity_mapping": {},
+                "retired_identities": {},
+            },
+        )
+        with (
+            actor_context(self.owner),
+            patch("angee.workflows.engine.external_operation_request", return_value=admitted),
+            patch(
+                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                return_value=(authority.result, {}, {"route": "test"}),
+            ) as provider,
+        ):
+            inferred = infer(
+                preliminary, model=self.model, authorized_target=self.files[0],
+                operation_step_run=SimpleNamespace(),
+            )
+            exact_retry = infer(
+                preliminary, model=self.model, authorized_target=self.files[0],
+                operation_step_run=SimpleNamespace(),
+            )
+
+        self.assertEqual(inferred.status, "succeeded")
+        self.assertEqual(exact_retry.pk, inferred.pk)
+        self.assertEqual(inferred.document_refs, authority.document_refs)
+        with actor_context(self.owner):
+            self.assertEqual(
+                list(inferred.sources.values_list("file_id", "message_part_id")),
+                list(preliminary.sources.values_list("file_id", "message_part_id")),
+            )
+        self.assertEqual(
+            inferred.stage_provenance["inference"]["authority_extraction_id"],
+            str(authority.sqid),
+        )
+        provider.assert_called_once()
+
+        authority, preliminary = retained_pair(self.files[1], marker="CHANGED")
+        changed_candidate = {
+            "number": "CHANGED",
+            "rows": ["new first", "new second"],
+            "routing_review_reasons": [],
+        }
+        admitted = SimpleNamespace(
+            request_key="populate-preliminary-correspondence",
+            input={
+                "base_extraction_id": str(preliminary.sqid),
+                "base_revision": preliminary.revision,
+                "model_id": str(self.model.sqid),
+                "identity_mapping": {},
+                "retired_identities": {},
+            },
+        )
+        with (
+            actor_context(self.owner),
+            patch("angee.workflows.engine.external_operation_request", return_value=admitted),
+            patch(
+                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                return_value=(changed_candidate, {}, {"route": "test"}),
+            ) as provider,
+        ):
+            populated = infer(
+                preliminary, model=self.model, authorized_target=self.files[1],
+                operation_step_run=SimpleNamespace(),
+            )
+
+        self.assertEqual(populated.status, "failed")
+        self.assertEqual(
+            populated.error_code, "source_hold:identity_correspondence_required",
+        )
+        self.assertEqual(populated.result, changed_candidate)
+        self.assertEqual(populated.document_refs, authority.document_refs)
+        self.assertEqual(
+            populated.provenance["identity_correspondence"]["expected_base_id"],
+            authority.pk,
+        )
+        self.assertEqual(
+            populated.provenance["identity_correspondence"]["last_known_revision"],
+            authority.revision,
+        )
+        provider.assert_called_once()
+        populated_admitted = SimpleNamespace(
+            request_key="populated-correspondence-requires-review",
+            input={
+                "base_extraction_id": str(populated.sqid),
+                "base_revision": populated.revision,
+                "model_id": str(self.model.sqid),
+                "identity_mapping": {},
+                "retired_identities": {},
+            },
+        )
+        with (
+            actor_context(self.owner),
+            patch(
+                "angee.workflows.engine.external_operation_request",
+                return_value=populated_admitted,
+            ),
+            patch(
+                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts"
+            ) as second_provider,
+            self.assertRaisesRegex(ValidationError, "explicit reviewed mapping"),
+        ):
+            infer(
+                populated, model=self.model, authorized_target=self.files[1],
+                operation_step_run=SimpleNamespace(),
+            )
+        second_provider.assert_not_called()
+
     def test_correspondence_hold_inference_uses_exact_last_known_fact_authority(self) -> None:
         original = self._extract(
             config={
@@ -1773,7 +1941,11 @@ class ExtractionServiceTests(TestCase):
         line = document.lines[0]
         with self.assertRaisesRegex(ValidationError, "reviewed correspondence"):
             type(authoritative).objects.automatic_inference_mapping(authoritative)
-        continuing = {document.selector: document.identity, line.selector: line.identity}
+        continuing = {
+            document.selector: document.identity,
+            line.selector: line.identity,
+            "/rows/1": "new",
+        }
         admitted = SimpleNamespace(
             request_key="held-authority-request",
             input={
@@ -1793,12 +1965,7 @@ class ExtractionServiceTests(TestCase):
             patch("angee.workflows.engine.external_operation_request", return_value=admitted),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
-                return_value=(
-                    {"number": "PROVIDER", "rows": ["provider row"]},
-                    provider_claims,
-                    {"route": "test"},
-                ),
-            ),
+            ) as provider,
         ):
             inferred = infer(
                 held,
@@ -1807,7 +1974,13 @@ class ExtractionServiceTests(TestCase):
                 operation_step_run=SimpleNamespace(),
                 identity_mapping=continuing,
             )
-        self.assertEqual(inferred.result, {"number": "HUMAN", "rows": ["source row"]})
+        provider.assert_not_called()
+        self.assertEqual(inferred.status, "succeeded")
+        self.assertEqual(inferred.result, {"number": "HUMAN", "rows": ["source row", "second"]})
+        inferred_document = inferred.document_refs[0]
+        self.assertEqual(inferred_document.identity, document.identity)
+        self.assertEqual(inferred_document.lines[0].identity, line.identity)
+        self.assertNotIn(inferred_document.lines[1].identity, {document.identity, line.identity})
         self.assertEqual(inferred.stage_provenance["inference"]["authority_revision"], 2)
         self.assertEqual(
             inferred.stage_provenance["inference"]["authority_extraction_id"],
@@ -2014,6 +2187,10 @@ class ExtractionServiceTests(TestCase):
                 config={"result": {"number": "OLD", "rows": []}, "source_text": "OLD"},
             )
         decision = self._decision(original, resolver=self.stranger)
+        with system_context(reason="grant admission actor decision read"):
+            write_relationships([
+                RelationshipTuple(to_object_ref(decision), "reader", to_subject_ref(self.owner)),
+            ])
 
         with actor_context(self.owner):
             corrected = self._revise(

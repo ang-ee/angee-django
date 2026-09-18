@@ -709,9 +709,18 @@ def infer(
     config = _json_object(base.engine_config, field="config")
     if config.get("inference_mode") != "permitted":
         raise ValidationError({"inference": "This publication permits deterministic processing only."})
-    if not base.unresolved_reasons:
+    profile = _engine_class(str(base.engine))()
+    inference_required = profile.inference_required(base.result, base.unresolved_reasons)
+    if not correspondence_hold and not inference_required:
         raise ValidationError({"inference": "The retained base has no unresolved source facts."})
     automatic_correspondence = not requested_mapping and not requested_retirement
+    preliminary_correspondence = (
+        correspondence_hold
+        and automatic_correspondence
+        and "mapping" not in base.provenance.get("used_model_roles", ())
+        and not base.stage_provenance.get("inference")
+        and inference_required
+    )
     if automatic_correspondence:
         effective_mapping = {}
     else:
@@ -732,11 +741,20 @@ def infer(
             raise ValidationError(
                 {"inference": "Reviewed correspondence must account for every prior document and line identity."}
             )
-    if correspondence_hold and not (requested_mapping or requested_retirement):
+    if (
+        correspondence_hold
+        and not (requested_mapping or requested_retirement)
+        and not preliminary_correspondence
+    ):
         raise ValidationError({"inference": "The retained correspondence hold requires an explicit reviewed mapping."})
     target = canonical_record_target(authorized_target)
     if target.content_type.pk != base.content_type_id or str(target.object_id) != str(base.object_id):
         raise ValidationError({"inference": "The target differs from the retained base."})
+    preliminary_authority = (
+        extraction_model.objects.inference_authority_base(base, actor=actor)
+        if preliminary_correspondence
+        else None
+    )
     reuse_key = _digest(
         {
             "stage": "bound_inference",
@@ -752,12 +770,20 @@ def infer(
     if existing is not None:
         correspondence = existing.provenance.get("identity_correspondence", {})
         inference_facts = existing.stage_provenance.get("inference", {})
+        expected_identity_base_id = (
+            preliminary_authority.pk
+            if preliminary_correspondence
+            and existing.status == "failed"
+            and existing.error_code
+            == "source_hold:identity_correspondence_required"
+            else base.pk
+        )
         if (
             existing.lineage_key != base.lineage_key
             or existing.model_id != model.pk
             or existing.content_type_id != base.content_type_id
-            or existing.object_id != base.object_id
-            or correspondence.get("expected_base_id") != base.pk
+            or str(existing.object_id) != str(base.object_id)
+            or correspondence.get("expected_base_id") != expected_identity_base_id
             or inference_facts.get("base_extraction_id") != str(base.sqid)
             or inference_facts.get("request_key") != request_key
             or inference_facts.get("mapping_config_digest") != _digest(config.get("mapping_config") or config)
@@ -779,7 +805,9 @@ def infer(
         raise ValidationError({"inference": "The base has no complete retained carriers."})
     if any(row.result.get("status") == "held" for row in base.pages.order_by("position")):
         raise ValidationError({"inference": "Incomplete page carriers cannot be inferred."})
-    authority_base = extraction_model.objects.inference_authority_base(base, actor=actor)
+    authority_base = preliminary_authority or extraction_model.objects.inference_authority_base(
+        base, actor=actor,
+    )
     if authority_base.pk == base.pk:
         authority_sources, authority_parts = sources, parts
     else:
@@ -797,8 +825,7 @@ def infer(
         retired_identities=requested_retirement,
     )
     recognition_used = "recognition" in base.provenance.get("used_model_roles", ())
-    profile = _engine_class(str(base.engine))()
-    if correspondence_hold:
+    if correspondence_hold and not preliminary_correspondence:
         prior_inference = base.stage_provenance.get("inference", {})
         request_metadata = dict(prior_inference.get("provider") or {})
         document_result = DocumentResult(
@@ -839,7 +866,7 @@ def infer(
         automatic_mapping = _implicit_identity_correspondence(
             document_result.value,
             layout=config.get("evidence_layout", {}),
-            original=base,
+            original=(authority_base if preliminary_correspondence else base),
         )
         correspondence_required = automatic_mapping is None
         effective_mapping = automatic_mapping or {}
@@ -919,7 +946,12 @@ def infer(
             base,
             lineage_key=base.lineage_key,
             reuse_key=reuse_key,
-            expected_base_id=base.pk,
+            expected_base_id=(
+                authority_base.pk
+                if preliminary_correspondence and correspondence_required
+                else base.pk
+            ),
+            expected_head_id=base.pk,
             identity_mapping=effective_mapping,
             retired_identities=requested_retirement,
             status="failed" if correspondence_required else "succeeded",
