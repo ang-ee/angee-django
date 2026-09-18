@@ -122,37 +122,40 @@ def _cid_slug(cid: str) -> str:
     return _CID_SLUG_DISALLOWED_RE.sub("", core)[:_CID_SLUG_MAX]
 
 
-def derived_part_name(*, mime: str, cid: str, external_id: str, is_chat: bool, index: int = 0) -> str:
+def derived_part_name(*, mime: str, cid: str, external_id: str, is_email: bool, index: int = 0) -> str:
     """Return the display filename for a message part that arrived without its own name.
 
     One rule, applied at ingest for every backend and frozen into the backfill:
 
-    - a **chat** message part (``is_chat`` — the message's ``CHAT`` kind, whose
-      ``external_id`` a chat backend composes as ``<chat>/<id>``) takes the message
-      id, the segment after the last ``/``, as ``{id}{ext}``; a ``-{index}`` suffix
-      distinguishes the second and later nameless parts of one message;
-    - an **email** part carrying a ``Content-ID`` (an inline image — the
-      near-universal nameless email part) takes ``inline-{cid-slug}{ext}``;
-    - anything else keeps storage's shared ``attachment{ext}`` fallback.
+    - an **email** part (``is_email`` — the message's ``EMAIL`` kind) carrying a
+      ``Content-ID`` (an inline image — the near-universal nameless email part)
+      takes ``inline-{cid-slug}{ext}``;
+    - any **other** message part takes the vendor message id — the segment after
+      the last ``/`` of the ``<chat>/<id>`` ``external_id`` every chat backend
+      composes — as ``{id}{ext}``, with a ``-{index}`` suffix distinguishing the
+      second and later nameless parts of one message. This covers every chat
+      kind, not just ``CHAT``: a Telegram broadcast post lands as a ``COMMENT``
+      yet carries the same id-shaped ``external_id``;
+    - anything left keeps storage's shared ``attachment{ext}`` fallback.
 
-    ``is_chat`` is the discriminator because ``Message.message_type`` is the
-    framework's own chat/email classification — derived at ingest from the thread
-    shape and denormalised onto every row — so the identical fact drives the live
-    rule and the historical backfill, while ``external_id``'s ``/`` shape only
-    *carries* the id the chat branch reads. The extension is storage's
+    ``is_email`` is the discriminator because ``Message.message_type`` is the
+    framework's own classification — derived at ingest from the thread shape and
+    denormalised onto every row — so the identical fact drives the live rule and
+    the historical backfill, while ``external_id``'s ``/`` shape only *carries*
+    the id the non-email branch reads. The extension is storage's
     ``attachment_extension``.
     """
 
     extension = attachment_extension(mime)
-    if is_chat:
-        chat_id = (external_id or "").rsplit("/", 1)[-1]
-        if chat_id:
-            suffix = f"-{index}" if index else ""
-            return f"{chat_id}{suffix}{extension}"
-    else:
+    if is_email:
         slug = _cid_slug(cid)
         if slug:
             return f"inline-{slug}{extension}"
+    else:
+        message_id = (external_id or "").rsplit("/", 1)[-1]
+        if message_id:
+            suffix = f"-{index}" if index else ""
+            return f"{message_id}{suffix}{extension}"
     return fallback_attachment_name(mime)
 
 
@@ -2982,7 +2985,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     mime=parsed.type,
                     cid=parsed.cid,
                     external_id=message.external_id,
-                    is_chat=message.message_type == self.model.MessageKind.CHAT,
+                    is_email=message.message_type == self.model.MessageKind.EMAIL,
                     index=nameless[0],
                 )
                 nameless[0] += 1

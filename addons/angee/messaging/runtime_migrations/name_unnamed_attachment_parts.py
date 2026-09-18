@@ -21,12 +21,13 @@ import mimetypes
 import re
 
 from django.db import migrations
+from django.db.models import Q
 from django.db.migrations.state import ProjectState
 
 _EXTENSION_FIXUPS = {".jpe": ".jpg", ".jpeg": ".jpg"}
 _CID_SLUG_DISALLOWED_RE = re.compile(r"[^A-Za-z0-9._-]")
 _CID_SLUG_MAX = 80
-_CHAT_KIND = "chat"
+_EMAIL_KIND = "email"
 
 
 def _attachment_extension(mime: str) -> str:
@@ -52,19 +53,19 @@ def _cid_slug(cid: str) -> str:
     return _CID_SLUG_DISALLOWED_RE.sub("", core)[:_CID_SLUG_MAX]
 
 
-def _derived_part_name(*, mime: str, cid: str, external_id: str, is_chat: bool, index: int = 0) -> str:
+def _derived_part_name(*, mime: str, cid: str, external_id: str, is_email: bool, index: int = 0) -> str:
     """Frozen copy of ``angee.messaging.managers.derived_part_name`` as it shipped."""
 
     extension = _attachment_extension(mime)
-    if is_chat:
-        chat_id = (external_id or "").rsplit("/", 1)[-1]
-        if chat_id:
-            suffix = f"-{index}" if index else ""
-            return f"{chat_id}{suffix}{extension}"
-    else:
+    if is_email:
         slug = _cid_slug(cid)
         if slug:
             return f"inline-{slug}{extension}"
+    else:
+        message_id = (external_id or "").rsplit("/", 1)[-1]
+        if message_id:
+            suffix = f"-{index}" if index else ""
+            return f"{message_id}{suffix}{extension}"
     return _fallback_attachment_name(mime)
 
 
@@ -111,12 +112,15 @@ def name_unnamed_attachment_parts(apps, schema_editor) -> None:
     file_model = apps.get_model("storage", "File")
     database = schema_editor.connection.alias
 
-    # Pass 1: every byte part that arrived nameless takes its derived name. Ordered by
-    # (message, position, pk) so the per-message running index the ingest owner assigns
-    # to a message's second-and-later nameless parts is reproduced exactly.
+    # Pass 1: every byte part that arrived nameless — or that an earlier pass of this
+    # fix could only give the ``attachment{ext}`` floor — takes its derived name.
+    # Ordered by (message, position, pk) so the per-message running index the ingest
+    # owner assigns to a message's second-and-later nameless parts is reproduced
+    # exactly. A part whose derived name is still the floor rewrites to the same
+    # value, which keeps the pass idempotent.
     nameless = (
         part_model._base_manager.using(database)
-        .filter(name="", file__isnull=False)
+        .filter(Q(name="") | Q(name__startswith="attachment."), file__isnull=False)
         .order_by("message_id", "position", "pk")
         .values("pk", "message_id", "type", "cid", "message__external_id", "message__message_type")
     )
@@ -130,7 +134,7 @@ def name_unnamed_attachment_parts(apps, schema_editor) -> None:
             mime=row["type"] or "",
             cid=row["cid"] or "",
             external_id=row["message__external_id"] or "",
-            is_chat=row["message__message_type"] == _CHAT_KIND,
+            is_email=row["message__message_type"] == _EMAIL_KIND,
             index=index,
         )
         index += 1
@@ -162,7 +166,7 @@ def name_unnamed_attachment_parts(apps, schema_editor) -> None:
             mime=earliest["type"] or "",
             cid=earliest["cid"] or "",
             external_id=earliest["message__external_id"] or "",
-            is_chat=earliest["message__message_type"] == _CHAT_KIND,
+            is_email=earliest["message__message_type"] == _EMAIL_KIND,
             index=0,
         )
         if new_name and new_name != filename:

@@ -526,33 +526,33 @@ def test_derived_part_name_covers_chat_email_and_fallback() -> None:
     # A chat message names the part from the id after the last ``/`` in its
     # external id; the first nameless part has no suffix, later ones get ``-index``.
     assert (
-        derived_part_name(mime="image/jpeg", cid="", external_id="4917000001@s.whatsapp.net/3EB0AF", is_chat=True)
+        derived_part_name(mime="image/jpeg", cid="", external_id="4917000001@s.whatsapp.net/3EB0AF", is_email=False)
         == "3EB0AF.jpg"
     )
     assert (
-        derived_part_name(mime="video/mp4", cid="", external_id="chat/STANZA", is_chat=True, index=0)
+        derived_part_name(mime="video/mp4", cid="", external_id="chat/STANZA", is_email=False, index=0)
         == "STANZA.mp4"
     )
     assert (
-        derived_part_name(mime="video/mp4", cid="", external_id="chat/STANZA", is_chat=True, index=2)
+        derived_part_name(mime="video/mp4", cid="", external_id="chat/STANZA", is_email=False, index=2)
         == "STANZA-2.mp4"
     )
     # An email part with a Content-ID becomes ``inline-{slug}{ext}``; the cid drives
     # the name whether or not the message id has a ``/`` shape.
     assert (
-        derived_part_name(mime="image/png", cid="<hero7>", external_id="msgid@host", is_chat=False)
+        derived_part_name(mime="image/png", cid="<hero7>", external_id="msgid@host", is_email=True)
         == "inline-hero7.png"
     )
     # A ``local@domain`` cid keeps only the safe characters (``@`` is dropped).
     assert (
-        derived_part_name(mime="image/gif", cid="<logo.gif@mail.example>", external_id="x", is_chat=False)
+        derived_part_name(mime="image/gif", cid="<logo.gif@mail.example>", external_id="x", is_email=True)
         == "inline-logo.gifmail.example.gif"
     )
     # Neither a chat message nor a Content-ID: storage's shared ``attachment{ext}``.
-    assert derived_part_name(mime="application/pdf", cid="", external_id="mid@host", is_chat=False) == "attachment.pdf"
-    assert derived_part_name(mime="application/octet-stream", cid="", external_id="", is_chat=False) == "attachment.bin"
+    assert derived_part_name(mime="application/pdf", cid="", external_id="mid@host", is_email=True) == "attachment.pdf"
+    assert derived_part_name(mime="application/octet-stream", cid="", external_id="", is_email=True) == "attachment.bin"
     # A chat message with an unusable (empty) id degrades to the same fallback.
-    assert derived_part_name(mime="image/jpeg", cid="", external_id="", is_chat=True) == "attachment.jpg"
+    assert derived_part_name(mime="image/jpeg", cid="", external_id="", is_email=False) == "attachment.jpg"
 
 
 def test_derived_part_name_slugs_and_caps_the_content_id() -> None:
