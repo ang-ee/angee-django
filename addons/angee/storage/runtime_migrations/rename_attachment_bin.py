@@ -10,10 +10,29 @@ represent a data fix, hence the addon-owned runtime migration.
 
 from __future__ import annotations
 
+import mimetypes
+
 from django.db import migrations
 from django.db.migrations.state import ProjectState
 
-from angee.storage.uploads import fallback_attachment_name
+_EXTENSION_FIXUPS = {".jpe": ".jpg", ".jpeg": ".jpg"}
+
+
+def _fallback_attachment_name(mime: str) -> str:
+    """Return ``attachment{ext}`` for a MIME type, defaulting to ``attachment.bin``.
+
+    A frozen copy of ``angee.storage.uploads.fallback_attachment_name`` as it
+    stood when this fix shipped: the loader copies this module verbatim into a
+    project's migration history, and released history must not import live code
+    that may later move or change its rule. The live helper owns the rule going
+    forward; this copy owns only what the one-time backfill wrote.
+    """
+
+    primary = (mime or "").split(";", 1)[0].strip().lower()
+    extension = mimetypes.guess_extension(primary) if primary else None
+    if extension is None:
+        extension = ".bin"
+    return f"attachment{_EXTENSION_FIXUPS.get(extension, extension)}"
 
 
 def applies(project_state: ProjectState) -> bool:
@@ -56,7 +75,7 @@ def rename_attachment_bin(apps, schema_editor) -> None:
                 mime_model._base_manager.using(database).filter(pk=mime_id).values_list("mime_type", flat=True).first()
                 or ""
             )
-        new_name = fallback_attachment_name(mime)
+        new_name = _fallback_attachment_name(mime)
         if new_name == "attachment.bin":
             continue
         stale.filter(mime_type_id=mime_id).update(filename=new_name)
