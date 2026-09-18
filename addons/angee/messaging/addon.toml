@@ -25,3 +25,8 @@ module = "runtime_migrations.alter_message_status"
 name = "thread_attachment_source_edges"
 app_label = "messaging"
 module = "runtime_migrations.thread_attachment_source_edges"
+
+[[migrations]]
+name = "name_unnamed_attachment_parts"
+app_label = "messaging"
+module = "runtime_migrations.name_unnamed_attachment_parts"
