@@ -13,7 +13,7 @@ import {
   QueryClientProvider,
 } from "@tanstack/react-query";
 import * as React from "react";
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { DialogForm } from "../../fragments/DialogForm";
@@ -21,10 +21,6 @@ import { RecordActionBar } from "./RecordActionBar";
 import { RecordActionTrigger } from "./RecordActionMenu";
 
 describe("RecordActionBar", () => {
-  beforeAll(() => {
-    Element.prototype.getAnimations ??= () => [];
-  });
-
   afterEach(() => {
     cleanup();
   });

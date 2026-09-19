@@ -168,9 +168,12 @@ vi.mock("@refinedev/core", async (importOriginal) => {
     // write (no Refine provider in this harness); a no-op keeps every form render safe.
     useInvalidate: () => vi.fn(async () => undefined),
     useOne: (options?: { meta?: unknown; queryOptions?: { enabled?: boolean } }) => {
-      sdkMocks.recordSelection = fieldsFromMeta(options?.meta);
+      const selection = fieldsFromMeta(options?.meta);
+      if (options?.queryOptions?.enabled !== false) {
+        sdkMocks.recordSelection = selection;
+      }
       return {
-        result: options?.queryOptions?.enabled === false ? undefined : projectedRecord(sdkMocks.recordSelection),
+        result: options?.queryOptions?.enabled === false ? undefined : projectedRecord(selection),
         query: {
           isFetching: sdkMocks.fetching,
           error: null,

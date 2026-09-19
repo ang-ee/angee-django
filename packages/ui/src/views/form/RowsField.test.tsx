@@ -27,11 +27,16 @@ Element.prototype.scrollIntoView = vi.fn();
 
 const refineMocks = vi.hoisted(() => ({
   useList: vi.fn(),
+  useOne: vi.fn(),
 }));
 
 vi.mock("@refinedev/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@refinedev/core")>();
-  return { ...actual, useList: refineMocks.useList };
+  return {
+    ...actual,
+    useList: refineMocks.useList,
+    useOne: refineMocks.useOne,
+  };
 });
 
 const channelRows: Row[] = [
@@ -59,6 +64,20 @@ describe("rows widget", () => {
 
   beforeEach(() => {
     refineMocks.useList.mockReset();
+    refineMocks.useOne.mockReset();
+    refineMocks.useOne.mockImplementation(
+      (options?: { id?: string; queryOptions?: { enabled?: boolean } }) => ({
+        result:
+          options?.queryOptions?.enabled !== false
+            ? channelRows.find((row) => row.id === options?.id)
+            : undefined,
+        query: {
+          isFetching: false,
+          error: null,
+          refetch: vi.fn(),
+        },
+      }),
+    );
     refineMocks.useList.mockImplementation(
       (options?: {
         resource?: string;
@@ -184,15 +203,31 @@ describe("rows widget", () => {
       name: "Target: General",
     });
     expect(screen.queryByPlaceholderText("Search…")).toBeNull();
+    expect(refineMocks.useOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource: "channels",
+        id: "chn-general",
+        queryOptions: expect.objectContaining({ enabled: true }),
+      }),
+    );
     expect(refineMocks.useList).toHaveBeenCalledWith(
       expect.objectContaining({
         resource: "channels",
         filters,
-        queryOptions: expect.objectContaining({ enabled: true }),
+        queryOptions: expect.objectContaining({ enabled: false }),
       }),
     );
 
     fireEvent.click(trigger);
+    await waitFor(() =>
+      expect(refineMocks.useList).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          resource: "channels",
+          filters,
+          queryOptions: expect.objectContaining({ enabled: true }),
+        }),
+      ),
+    );
     const search = await screen.findByPlaceholderText("Search…");
     fireEvent.change(search, { target: { value: "New target" } });
     await waitFor(() =>

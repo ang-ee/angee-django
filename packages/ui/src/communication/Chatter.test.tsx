@@ -11,7 +11,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { baseIcons } from "../chrome/icon-registry";
 import {
@@ -23,10 +23,6 @@ import { Chatter } from "./Chatter";
 import { ChatterProvider, useChatterContent, type ChatterContent } from "./chatter-context";
 import { useRecordPeek } from "./record-peek";
 import { registerForm, type RegisteredFormProps } from "../views/form/registered-form";
-
-beforeAll(() => {
-  Element.prototype.getAnimations ??= () => [];
-});
 
 afterEach(() => cleanup());
 
