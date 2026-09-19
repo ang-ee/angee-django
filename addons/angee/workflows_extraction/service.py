@@ -36,9 +36,9 @@ from angee.workflows_extraction.engines import (
     PageImage,
     PageResult,
 )
-from angee.workflows_extraction.managers import _implicit_identity_correspondence
 from angee.workflows_extraction.pointers import (
     JSON_POINTER_MISSING,
+    implicit_identity_correspondence,
     json_pointer_value_or_missing,
     materialize_missing_json_pointer_path,
     set_json_pointer,
@@ -583,7 +583,7 @@ def process(
             # facts. New requests still correspond against the current head.
             if correspondence_base is not None and not requested_mapping and not requested_retirement:
                 if (
-                    _implicit_identity_correspondence(
+                    implicit_identity_correspondence(
                         result,
                         layout=normalized_config.get("evidence_layout", {}),
                         original=correspondence_base,
@@ -864,7 +864,7 @@ def infer(
         raise ValidationError({"inference": "The profile changed the retained carrier ordering."})
     correspondence_required = False
     if automatic_correspondence:
-        automatic_mapping = _implicit_identity_correspondence(
+        automatic_mapping = implicit_identity_correspondence(
             document_result.value,
             layout=config.get("evidence_layout", {}),
             original=(authority_base if preliminary_correspondence else base),

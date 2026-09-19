@@ -44,13 +44,13 @@ from angee.workflows_extraction.engines import (
     PageImage,
     derive_text_claims,
 )
-from angee.workflows_extraction.managers import (
-    _document_mapping,
-    _implicit_identity_correspondence,
-    _result_selectors,
-)
+from angee.workflows_extraction.managers import _document_mapping
 from angee.workflows_extraction.models import DocumentRef, LineRef
-from angee.workflows_extraction.pointers import json_pointer_value
+from angee.workflows_extraction.pointers import (
+    implicit_identity_correspondence,
+    json_pointer_value,
+    result_selectors,
+)
 from angee.workflows_extraction.routing import (
     _decode_declared_text,
     _html_text,
@@ -570,11 +570,11 @@ class PageAggregationTests(SimpleTestCase):
 
     def test_declared_empty_collection_and_reviewed_split_identity(self) -> None:
         layout = {"document_collection": "/items", "line_collection": "/rows"}
-        self.assertEqual(_result_selectors({"items": []}, layout), ())
+        self.assertEqual(result_selectors({"items": []}, layout), ())
         with self.assertRaisesMessage(ValidationError, "collection is absent"):
-            _result_selectors({"other": []}, layout)
+            result_selectors({"other": []}, layout)
 
-        first_lines = _implicit_identity_correspondence(
+        first_lines = implicit_identity_correspondence(
             {"rows": [{"amount": 10}, {"amount": 20}]},
             layout={"line_collection": "/rows"},
             original=SimpleNamespace(
@@ -587,7 +587,7 @@ class PageAggregationTests(SimpleTestCase):
             {"": "root-id", "/rows/0": "new", "/rows/1": "new"},
         )
         self.assertEqual(
-            _result_selectors({"other": "root"}, {**layout, "root_document_on_missing": True}),
+            result_selectors({"other": "root"}, {**layout, "root_document_on_missing": True}),
             (("", ()),),
         )
         with self.assertRaisesMessage(ValidationError, "explicitly mapped"):

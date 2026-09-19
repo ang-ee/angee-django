@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
+from django.core.exceptions import ValidationError
+
 from angee.workflows.attempts import json_values_equal
 
 JSON_POINTER_MISSING = object()
@@ -88,6 +90,111 @@ def json_pointer_value_or_missing(
         tokens,
         array_element_baseline=array_element_baseline,
     )
+
+
+def result_selectors(
+    result: Any,
+    layout: Any,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Expand domain-declared JSON locators without reading domain field names."""
+
+    if not isinstance(result, dict) or not result:
+        return ()
+    if not isinstance(layout, dict):
+        raise ValidationError({"extraction": "The evidence layout is invalid."})
+    document_collection = layout.get("document_collection", "")
+    line_collection = layout.get("line_collection", "")
+    root_document_on_missing = layout.get("root_document_on_missing", False)
+    if type(root_document_on_missing) is not bool:
+        raise ValidationError({"extraction": "The root document fallback policy must be a boolean."})
+    if not all(
+        isinstance(pointer, str) and (not pointer or pointer.startswith("/"))
+        for pointer in (document_collection, line_collection)
+    ):
+        raise ValidationError({"extraction": "The evidence layout requires JSON pointers."})
+    try:
+        documents = json_pointer_value(result, document_collection) if document_collection else None
+    except KeyError:
+        if not root_document_on_missing:
+            raise ValidationError({"extraction": "The declared document collection is absent."})
+        documents = None
+    if documents is not None and not isinstance(documents, list):
+        raise ValidationError({"extraction": "The declared document collection must be a list."})
+    if isinstance(documents, list):
+        items = tuple((f"{document_collection}/{index}", document) for index, document in enumerate(documents))
+    else:
+        items = (("", result),)
+    selectors = []
+    for selector, document in items:
+        if not isinstance(document, dict):
+            raise ValidationError({"extraction": "A logical document must be an object."})
+        try:
+            lines = json_pointer_value(document, line_collection) if line_collection else None
+        except KeyError:
+            lines = None
+        if lines is not None and not isinstance(lines, list):
+            raise ValidationError({"extraction": "The declared source-line collection must be a list."})
+        selectors.append(
+            (
+                selector,
+                tuple(f"{selector}{line_collection}/{index}" for index in range(len(lines or ()))),
+            )
+        )
+    return tuple(selectors)
+
+
+def implicit_identity_correspondence(
+    result: Any,
+    *,
+    layout: Any,
+    original: Any,
+) -> dict[str, str] | None:
+    """Return the complete correspondence only for the proven safe carry cases."""
+
+    requested = result_selectors(result, layout)
+    previous = tuple(original.document_refs)
+    if not previous:
+        return {}
+    if json_values_equal(original.result, result):
+        return {
+            selector: identity
+            for ref in previous
+            for selector, identity in (
+                (ref.selector, ref.identity),
+                *((line.selector, line.identity) for line in ref.lines),
+            )
+        }
+    if len(previous) != 1 or len(requested) != 1:
+        return None
+    document = previous[0]
+    selector, line_selectors = requested[0]
+    if document.selector != selector:
+        return None
+    mapping = {selector: document.identity}
+    if not document.lines:
+        mapping.update({line_selector: "new" for line_selector in line_selectors})
+        return mapping
+    retained_line_selectors = tuple(line.selector for line in document.lines)
+    if retained_line_selectors != line_selectors:
+        return None
+    if len(line_selectors) == 1:
+        mapping[line_selectors[0]] = document.lines[0].identity
+        return mapping
+    if line_selectors:
+        try:
+            unchanged = all(
+                json_values_equal(
+                    json_pointer_value(original.result, line_selector),
+                    json_pointer_value(result, line_selector),
+                )
+                for line_selector in line_selectors
+            )
+        except KeyError:
+            return None
+        if unchanged:
+            mapping.update({line.selector: line.identity for line in document.lines})
+            return mapping
+    return None
 
 
 def set_json_pointer(value: Any, pointer: str, replacement: Any) -> None:
