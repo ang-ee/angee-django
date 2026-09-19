@@ -26,6 +26,7 @@ from angee.workflows.attempts import (
 from angee.workflows.engine import external_operation_request
 from angee.workflows.steps import StepEffect, StepExecutionMode, StepImpl, StepOutcome, StepResult
 from angee.workflows_extraction.engines import (
+    RETAINED_CARRIER_UNAVAILABLE,
     DocumentPipelineError,
     ExtractionEngine,
     PageImage,
@@ -435,6 +436,7 @@ class InferEvidenceStepImpl(StepImpl):
     outcomes = (
         StepOutcome("inferred", "Inferred"), StepOutcome("unchanged", "Unchanged"),
         StepOutcome("inference_failed", "Inference failed; source review required"),
+        StepOutcome("source_unavailable", "Original evidence needs review"),
         StepOutcome("correspondence_required", "Correspondence required"),
         StepOutcome("superseded", "Superseded"),
     )
@@ -563,15 +565,29 @@ class InferEvidenceStepImpl(StepImpl):
                     retired_identities=value.retired_identities,
                 )
             except DocumentPipelineError as error:
+                if (
+                    error.code == RETAINED_CARRIER_UNAVAILABLE
+                    and error.stage == "correspondence"
+                ):
+                    authority = type(base).objects.inference_authority_base(
+                        base, actor=actor,
+                    )
+                    if authority.pk != base.pk:
+                        return StepResult.done(
+                            output={
+                                **_inference_output(base),
+                                "inference_failure": _inference_failure(error),
+                            },
+                            outcome="source_unavailable",
+                            artifacts=(
+                                ArtifactSpec(base, "Current source evidence"),
+                                ArtifactSpec(authority, "Original retained evidence"),
+                            ),
+                        )
                 return StepResult.done(
                     output={
                         **_inference_output(base),
-                        "inference_failure": {
-                            "type": type(error).__name__,
-                            "message": str(error),
-                            "stage": str(error.stage or ""),
-                            "code": str(error.code or ""),
-                        },
+                        "inference_failure": _inference_failure(error),
                     },
                     outcome="inference_failed",
                     artifacts=(ArtifactSpec(base, "Source evidence requiring manual review"),),
@@ -591,6 +607,17 @@ class InferEvidenceStepImpl(StepImpl):
             success_outcome="inferred",
             artifact_label="Inferred extraction evidence",
         )
+
+
+def _inference_failure(error: DocumentPipelineError) -> dict[str, str]:
+    """Project one bounded provider or retained-carrier failure into the journal."""
+
+    return {
+        "type": type(error).__name__,
+        "message": str(error),
+        "stage": str(error.stage or ""),
+        "code": str(error.code or ""),
+    }
 
 
 def _inference_output(extraction: Any) -> dict[str, Any]:

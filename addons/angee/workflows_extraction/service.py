@@ -26,6 +26,7 @@ from angee.workflows.attempts import DecisionInputSource, json_values_equal
 from angee.workflows.engine import consume_decision_resolution, external_operation_request
 from angee.workflows_extraction.engines import (
     RETAINED_AUTHORITY_COMPLETION_REVIEW,
+    RETAINED_CARRIER_UNAVAILABLE,
     DocumentPart,
     DocumentPipelineError,
     DocumentResult,
@@ -1141,7 +1142,13 @@ def _retained_claim_part_positions(
             (),
         )
         if len(matches) != 1:
-            raise ValidationError({"inference": "A retained source claim has no unambiguous current carrier."})
+            raise DocumentPipelineError(
+                "Previously retained facts cannot be matched to this source set. "
+                "Review the original and current evidence before continuing.",
+                parts=current_parts,
+                stage="correspondence",
+                code=RETAINED_CARRIER_UNAVAILABLE,
+            )
         mapped[position] = matches[0]
     return mapped
 

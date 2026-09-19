@@ -36,9 +36,11 @@ from rebac import (
 from angee.messaging.backends import ParsedMessage, ParsedPart
 from angee.workflows_extraction.engines import (
     RETAINED_AUTHORITY_COMPLETION_REVIEW,
+    RETAINED_CARRIER_UNAVAILABLE,
     DocumentPart,
     DocumentPipelineError,
     DocumentResult,
+    DocumentSource,
     PageImage,
     derive_text_claims,
 )
@@ -59,6 +61,7 @@ from angee.workflows_extraction.service import (
     PreparedPage,
     _document_sources,
     _preserve_retained_authority,
+    _retained_claim_part_positions,
     _reviewed_correction_unresolved_reasons,
     _unchanged_claims,
     collect_carriers,
@@ -166,6 +169,153 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review() -> N
         "stage": "inference",
         "code": "candidate_schema_mismatch",
     }
+
+
+def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relabeling() -> None:
+    actor = object()
+    target = SimpleNamespace(pk=11)
+    old_part = SimpleNamespace(sqid="prt_original")
+    duplicate_part = SimpleNamespace(sqid="prt_duplicate")
+    authority_sources = (
+        DocumentSource(0, "a" * 64, "text/plain", "same body", message_part=old_part),
+    )
+    current_sources = (
+        DocumentSource(0, "a" * 64, "text/plain", "same body", message_part=duplicate_part),
+    )
+    authority_parts = (
+        DocumentPart(0, None, "text/plain", "native_text", "same body", "native", "b" * 64),
+    )
+    current_parts = tuple([*authority_parts])
+    base_manager = SimpleNamespace()
+    extraction_fixture = type("ExtractionFixture", (), {"objects": base_manager})
+    authority = extraction_fixture()
+    for name, value in {
+        "pk": 7,
+        "sqid": "ext_authority",
+        "revision": 2,
+        "status": "succeeded",
+        "error_code": "",
+        "unresolved_reasons": [],
+        "claims": {"/number": [{"part_position": 0, "start": 0, "end": 4}]},
+        "document_refs": (),
+        "result": {"invoice_count": 1},
+        "corrections": (),
+        "provenance": {"used_model_roles": []},
+        "engine": "invoice_document",
+        "content_type_id": 5,
+        "object_id": target.pk,
+    }.items():
+        setattr(authority, name, value)
+    retained_claims = deepcopy(authority.claims)
+    with pytest.raises(DocumentPipelineError) as mismatch:
+        _retained_claim_part_positions(
+            authority,
+            authority_sources=authority_sources,
+            authority_parts=authority_parts,
+            current_sources=current_sources,
+            current_parts=current_parts,
+            retired_identities={},
+        )
+    assert mismatch.value.stage == "correspondence"
+    assert mismatch.value.code == RETAINED_CARRIER_UNAVAILABLE
+
+    hold = extraction_fixture()
+    for name, value in {
+        "pk": 8,
+        "sqid": "ext_hold",
+        "revision": 4,
+        "status": "failed",
+        "error_code": "source_hold:identity_correspondence_required",
+        "unresolved_reasons": ["identity_correspondence_required"],
+        "result": {"invoice_count": 1},
+        "corrections": (),
+        "provenance": {"used_model_roles": []},
+        "engine": "invoice_document",
+        "content_type_id": 5,
+        "object_id": target.pk,
+    }.items():
+        setattr(hold, name, value)
+    selected = [hold]
+    base_manager.get = lambda **_kwargs: selected[0]
+    base_manager.inference_current_head = lambda base, *, actor: base
+    base_manager.inference_authority_base = lambda base, *, actor: (
+        authority if base is hold else base
+    )
+    models = {
+        ("workflows_extraction", "Extraction"): SimpleNamespace(objects=base_manager),
+        ("storage", "File"): SimpleNamespace(objects=SimpleNamespace(get=lambda **_kwargs: target)),
+        ("agents", "InferenceModel"): SimpleNamespace(
+            objects=SimpleNamespace(get=lambda **_kwargs: object())
+        ),
+    }
+    request = SimpleNamespace(input={
+        "base_extraction_id": "ext_hold",
+        "base_revision": 4,
+        "model_id": "imd_mapping",
+        "target_model": "storage.File",
+        "target_id": "fil_source",
+        "identity_mapping": {},
+        "retired_identities": {},
+    })
+
+    class Profile:
+        def inference_required(self, _result, _reasons):
+            return True
+
+    with (
+        patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
+        patch(
+            "angee.workflows_extraction.steps.apps.get_model",
+            side_effect=lambda *key: models[tuple(key[0].split(".", 1)) if len(key) == 1 else key],
+        ),
+        patch("angee.workflows_extraction.steps.actor_context", side_effect=lambda _actor: nullcontext()),
+        patch(
+            "angee.workflows_extraction.steps.canonical_record_target",
+            return_value=SimpleNamespace(content_type=SimpleNamespace(pk=5), object_id=target.pk),
+        ),
+        patch("angee.workflows_extraction.steps.resolve_impl_class", return_value=Profile),
+        patch("angee.workflows_extraction.steps.infer", side_effect=mismatch.value),
+    ):
+        result = InferEvidenceStepImpl().run(
+            SimpleNamespace(run=SimpleNamespace(admission_actor=lambda: actor)),
+            now=None,
+        )
+
+    assert result.outcome == "source_unavailable"
+    assert result.output["extraction_id"] == "ext_hold"
+    assert result.output["inference_failure"]["code"] == RETAINED_CARRIER_UNAVAILABLE
+    assert [(artifact.target, artifact.label) for artifact in result.artifacts] == [
+        (hold, "Current source evidence"),
+        (authority, "Original retained evidence"),
+    ]
+    assert authority.claims == retained_claims
+
+    selected[0] = authority
+    request.input["base_extraction_id"] = "ext_authority"
+    request.input["base_revision"] = 2
+    with (
+        patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
+        patch(
+            "angee.workflows_extraction.steps.apps.get_model",
+            side_effect=lambda *key: models[tuple(key[0].split(".", 1)) if len(key) == 1 else key],
+        ),
+        patch("angee.workflows_extraction.steps.actor_context", side_effect=lambda _actor: nullcontext()),
+        patch(
+            "angee.workflows_extraction.steps.canonical_record_target",
+            return_value=SimpleNamespace(content_type=SimpleNamespace(pk=5), object_id=target.pk),
+        ),
+        patch("angee.workflows_extraction.steps.resolve_impl_class", return_value=Profile),
+        patch("angee.workflows_extraction.steps.infer", side_effect=mismatch.value),
+    ):
+        ordinary = InferEvidenceStepImpl().run(
+            SimpleNamespace(run=SimpleNamespace(admission_actor=lambda: actor)),
+            now=None,
+        )
+
+    assert ordinary.outcome == "inference_failed"
+    assert [(artifact.target, artifact.label) for artifact in ordinary.artifacts] == [
+        (authority, "Source evidence requiring manual review"),
+    ]
 
 
 def test_inference_retains_disabled_base_and_routes_current_correspondence() -> None:

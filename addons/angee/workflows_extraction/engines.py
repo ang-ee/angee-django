@@ -21,6 +21,7 @@ from angee.base.impl import ImplBase
 RETAINED_AUTHORITY_COMPLETION_REVIEW = (
     "retained_authority_completion_requires_review"
 )
+RETAINED_CARRIER_UNAVAILABLE = "retained_carrier_unavailable"
 
 
 class ExtractionPartKind(TextChoices):
