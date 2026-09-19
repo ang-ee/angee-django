@@ -10,6 +10,8 @@ overrides:
   '@assistant-ui/store': 0.2.19
   '@assistant-ui/tap': 0.9.3
 
+packageExtensionsChecksum: sha256-kjhz5CDWkITwMu1ZPr7n8WeGo4fun7D9Kx1TJK9a39I=
+
 importers:
 
   .: {}
@@ -1787,6 +1789,9 @@ importers:
       '@angee/workflows':
         specifier: workspace:*
         version: link:../../workflows/web
+      valibot:
+        specifier: ^1.4.0
+        version: 1.4.2(typescript@6.0.3)
     devDependencies:
       '@tanstack/react-router':
         specifier: ^1.170.16
@@ -9379,6 +9384,7 @@ snapshots:
       '@tanstack/react-query': 5.101.2(react@19.2.7)
       '@types/react': 19.2.17
       '@types/react-dom': 19.2.3(@types/react@19.2.17)
+      graphql: 16.14.2
       lodash: 4.18.1
       lodash-es: 4.18.1
       papaparse: 5.5.4
