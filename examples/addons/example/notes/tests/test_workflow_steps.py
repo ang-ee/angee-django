@@ -50,9 +50,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         for enqueue_name in (
             "enqueue_advance",
             "enqueue_advance_at",
-            "enqueue_execute",
-            "enqueue_decision_escalation_at",
-            "enqueue_decision_expiry_at",
+            "enqueue_dispatch_publisher",
         ):
             patcher = patch.object(engine, enqueue_name)
             patcher.start()

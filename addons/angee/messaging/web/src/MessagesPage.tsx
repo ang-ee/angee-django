@@ -232,7 +232,7 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
     <Field name="title" title readOnly />
     <Field name="status" readOnly />
     <Group label={t("messages.groupEnvelope")} columns={2}>
-      <Field name="sender_name" readOnly />
+      <Field name="sender" readOnly />
       <Field name="sent_at" readOnly />
       <Field name="platform" readOnly />
       <Field name="direction" readOnly />

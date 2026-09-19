@@ -1549,17 +1549,23 @@ class FileAttachmentManager(AngeeManager):
     Mirrors :meth:`angee.tags.models.TagAssignmentManager.attach`: the edge keys on the
     target's canonical record target (:func:`angee.base.refs.canonical_record_target`), so
     a record and each of its REBAC-typed MTI ancestors share one attachment set instead of
-    splitting it. Only the ``get_or_create`` runs elevated — ``storage/file_attachment``
-    declares no ``create`` permission (rows enter through gated call sites that already
-    resolved the file and record), and a pre-insert check has no row id to gate on;
-    ``created_by`` still stamps from the ambient actor, which elevation preserves.
+    splitting it. Only the canonical target/file locks and ``get_or_create`` run
+    elevated — ``storage/file_attachment`` declares no ``create`` permission (rows enter
+    through gated call sites that already resolved the file and record), and a pre-insert
+    check has no row id to gate on; ``created_by`` still stamps from the ambient actor,
+    which elevation preserves.
     """
 
     def attach(self, file: Any, record: models.Model, *, label: str = "") -> Any:
         """Attach ``file`` to ``record``, idempotently per (file, canonical target) edge."""
 
         target = canonical_record_target(record)
-        with system_context(reason="storage.file_attachment.attach"):
+        target_model = target.content_type.model_class()
+        if target_model is None:
+            raise ValueError("File attachment target model is unavailable.")
+        with system_context(reason="storage.file_attachment.attach"), transaction.atomic(using=self.db):
+            target_model._base_manager.using(self.db).select_for_update().get(pk=target.object_id)
+            file = type(file)._base_manager.using(self.db).select_for_update().get(pk=file.pk)
             attachment, _created = self.get_or_create(
                 file=file,
                 content_type=target.content_type,

@@ -37,13 +37,13 @@ describe("resource invalidation targets", () => {
     );
 
     expect(target).toEqual({
-      resource: "notes",
+      resource: "console:notes.Note",
       dataProviderName: "console",
     });
     expect(refineInvalidationParams(target!)).toEqual({
-      resource: "notes",
+      resource: "console:notes.Note",
       dataProviderName: "console",
-      invalidates: ["list", "many", "detail"],
+      invalidates: ["resourceAll"],
     });
   });
 
@@ -54,7 +54,7 @@ describe("resource invalidation targets", () => {
     );
 
     expect(target).toEqual({
-      resource: "notes",
+      resource: "console:notes.Note",
       dataProviderName: "console",
     });
   });

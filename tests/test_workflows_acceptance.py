@@ -49,8 +49,26 @@ def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
                         max_attempts=3,
                         decision_schema={
                             "type": "object",
-                            "required": ["password"],
-                            "properties": {"password": {"type": "string", "const": "correct"}},
+                            "required": ["action", "password"],
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "enum": ["complete"],
+                                    "options": [{
+                                        "value": "complete", "label": "Complete", "verdict": "COMPLETE",
+                                    }],
+                                },
+                                "password": {"type": "string", "const": "correct"},
+                            },
+                            "oneOf": [{
+                                "type": "object",
+                                "required": ["action", "password"],
+                                "properties": {
+                                    "action": {"const": "complete"},
+                                    "password": {"type": "string", "const": "correct"},
+                                },
+                                "additionalProperties": False,
+                            }],
                         },
                     )
                 ],
@@ -65,27 +83,34 @@ def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
     monkeypatch.setattr(HandlerStep, "run", run_handler)
     workflow = _workflow_for_acceptance(assignee_ref)
 
-    run = start_run(workflow)
+    run = start_run(workflow, actor=assignee)
     advance_once(run)
     execute_started(run)
     entry = step_run_for(run, "entry")
     password_decision = _decision_for(entry)
 
-    engine.decide(password_decision, "complete", payload={"password": "wrong"}, actor=assignee)
-    password_decision.refresh_from_db()
-    entry.refresh_from_db()
+    engine.decide(
+        password_decision, "complete",
+        payload={"action": "complete", "password": "wrong"}, actor=assignee,
+    )
     with system_context(reason="test workflow acceptance journal after invalid"):
+        password_decision.refresh_from_db()
+        entry.refresh_from_db()
         assert list(StepRun.objects.filter(run=run).values_list("pk", flat=True)) == [entry.pk]
     assert password_decision.verdict == workflow_models.Verdict.PENDING
     assert password_decision.attempts == 1
     assert entry.status == workflow_models.StepRunStatus.WAITING
 
-    engine.decide(password_decision, "complete", payload={"password": "correct"}, actor=assignee)
-    password_decision.refresh_from_db()
-    entry.refresh_from_db()
+    engine.decide(
+        password_decision, "complete",
+        payload={"action": "complete", "password": "correct"}, actor=assignee,
+    )
+    with system_context(reason="test workflow acceptance journal after completion"):
+        password_decision.refresh_from_db()
+        entry.refresh_from_db()
     assert password_decision.verdict == workflow_models.Verdict.COMPLETED
     assert password_decision.attempts == 1
-    assert password_decision.resolution == {"password": "correct"}
+    assert password_decision.resolution == {"action": "complete", "password": "correct"}
     assert password_decision.resolved_by == assignee_ref
     assert entry.status == workflow_models.StepRunStatus.SUCCEEDED
 
@@ -99,14 +124,18 @@ def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
     execute_started(run)
     review = step_run_for(run, "review")
     review_decision = _decision_for(review)
-    engine.decide(review_decision, "complete", payload={"approved": True}, actor=assignee)
-    review_decision.refresh_from_db()
+    engine.decide(
+        review_decision, "complete",
+        payload={"action": "complete", "approved": True}, actor=assignee,
+    )
+    with system_context(reason="test workflow acceptance review completion"):
+        review_decision.refresh_from_db()
     review.refresh_from_db()
     advance_once(run)
     run.refresh_from_db()
 
     assert review_decision.verdict == workflow_models.Verdict.COMPLETED
-    assert review_decision.resolution == {"approved": True}
+    assert review_decision.resolution == {"action": "complete", "approved": True}
     assert review.status == workflow_models.StepRunStatus.SUCCEEDED
     assert review.outcome == "completed"
     assert run.status == workflow_models.RunStatus.SUCCEEDED
@@ -134,6 +163,29 @@ def _workflow_for_acceptance(assignee_ref: str) -> Workflow:
                 "policy": "one_done",
                 "action": "review-output",
                 "slots": [{"assignee": assignee_ref}],
+                "decision_schema": {
+                    "type": "object",
+                    "required": ["action", "approved"],
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["complete"],
+                            "options": [{
+                                "value": "complete", "label": "Complete", "verdict": "COMPLETE",
+                            }],
+                        },
+                        "approved": {"type": "boolean"},
+                    },
+                    "oneOf": [{
+                        "type": "object",
+                        "required": ["action", "approved"],
+                        "properties": {
+                            "action": {"const": "complete"},
+                            "approved": {"type": "boolean"},
+                        },
+                        "additionalProperties": False,
+                    }],
+                },
             },
             join_rule=workflow_models.JoinRule.ALL_SUCCESS,
         )

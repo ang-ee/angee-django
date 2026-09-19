@@ -541,6 +541,16 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
                 kwargs["update_fields"] = [*update_fields, "normalized_value"]
         super().save(*args, **kwargs)
 
+    def _party_links_resolved(self) -> None:
+        """Run addon contributions after this handle's owner is fully resolved.
+
+        The parties owner invokes this hook inside the same database transaction as
+        its derived ``party`` and counter writes.  Base parties has no additional
+        work; addons may retain a durable consequence of the completed transition.
+        """
+
+        return None
+
     @property
     def resolved_confidence(self) -> float | None:
         """Confidence of the link that resolved this handle's owner.

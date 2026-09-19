@@ -71,8 +71,8 @@ def _resource_addon(path: Path, *, suffix: str, reverse: bool = False) -> AppCon
     resources.mkdir(parents=True)
     (resources / "100_workflows.workflow.yaml").write_text(
         "_meta:\n  model: workflows.Workflow\nrows:\n"
-        "  - xref: left\n    fields: {key: left, name: Left}\n"
-        "  - xref: right\n    fields: {key: right, name: Right}\n"
+        "  - xref: left\n    fields: {key: left, name: Left, description: ''}\n"
+        "  - xref: right\n    fields: {key: right, name: Right, description: ''}\n"
     )
     rows = [("left-step", "left"), ("right-step", "right")]
     if reverse:

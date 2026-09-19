@@ -33,6 +33,7 @@ SETTINGS = {
         "wait": "angee.workflows.steps.WaitStep",
         "gate": "angee.workflows.steps.GateStep",
         "map": "angee.workflows.steps.MapStep",
+        "call_workflow": "angee.workflows.steps.CallWorkflow",
     },
     "ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT": 300,
 }

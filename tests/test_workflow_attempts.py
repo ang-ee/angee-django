@@ -13,7 +13,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.signals import post_save
 from django.utils import timezone
-from rebac import system_context
+from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
 from angee.workflows.attempts import (
@@ -380,8 +380,14 @@ def test_decision_declaration_rejects_unknown_constructor_fields() -> None:
 def scheduled_step_run(workflow_engine_tables: None) -> StepRun:
     del workflow_engine_tables
     workflow = workflow_with_steps(steps=({"key": "start", "step_class": "agent_session"},), edges=())
+    actor = User.objects.create_user(username=f"attempt-run-actor-{uuid.uuid4().hex}")
     with system_context(reason="test retained attempt setup"):
-        run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
+        run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status=RunStatus.RUNNING,
+            admitted_actor_ref=str(to_subject_ref(actor)),
+            created_by=actor,
+        )
         return StepRun.objects.create(run=run, step=workflow.steps.get(key="start"))
 
 
@@ -403,6 +409,61 @@ def test_claim_initializes_stable_effect_identity_and_preserves_presence(schedul
     assert scheduled_step_run.current_attempt_id == attempt.pk
     assert claim.newly_claimed
     assert scheduled_step_run.status == StepRunStatus.STARTED
+
+
+@pytest.mark.django_db(transaction=True)
+def test_database_command_input_requires_the_exact_active_attempt_session(
+    scheduled_step_run: StepRun,
+) -> None:
+    actor = scheduled_step_run.run.admission_actor()
+    admitted = AttemptInput(
+        present=True,
+        value={"document_id": "document-1"},
+        provenance={"source": "map_item"},
+    )
+    attempt = StepAttempt.objects.claim(
+        scheduled_step_run,
+        input=admitted,
+        claimed_at=timezone.now(),
+    ).attempt
+    StepAttempt.objects.admit_invocation(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        at=timezone.now(),
+    )
+
+    with pytest.raises(RuntimeError, match="active attempt write session"):
+        StepAttempt.objects.active_database_command_input(
+            scheduled_step_run.pk,
+            actor=actor,
+        )
+
+    def command(owned_step_run: StepRun, _owned_attempt: StepAttempt) -> AttemptResult:
+        locked, invocation_input = StepAttempt.objects.active_database_command_input(
+            owned_step_run.pk,
+            actor=actor,
+        )
+        assert locked.pk == scheduled_step_run.pk
+        assert invocation_input == admitted
+        return AttemptResult(
+            AttemptResultKind.DONE,
+            output_present=True,
+            output={"accepted": True},
+        )
+
+    finalized = StepAttempt.objects.execute_database_command(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        command=command,
+        recorded_at=timezone.now(),
+    )
+    assert finalized is not None and finalized.recorded and finalized.applied
+
+    with pytest.raises(RuntimeError, match="active attempt write session"):
+        StepAttempt.objects.active_database_command_input(
+            scheduled_step_run.pk,
+            actor=actor,
+        )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -714,7 +775,7 @@ def test_terminal_run_rejects_claim(scheduled_step_run: StepRun) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_legacy_attempt_counter_allocates_next_without_fabricating_history(scheduled_step_run: StepRun) -> None:
+def test_attempt_counter_allocates_next_without_fabricating_history(scheduled_step_run: StepRun) -> None:
     with system_context(reason="test legacy attempt counter"):
         models.QuerySet.update(StepRun.objects.filter(pk=scheduled_step_run.pk), attempt=3)
     with system_context(reason="test attempt refresh"):
@@ -724,11 +785,6 @@ def test_legacy_attempt_counter_allocates_next_without_fabricating_history(sched
     assert attempt.ordinal == 4
     with system_context(reason="test attempt history"):
         assert StepAttempt.objects.filter(step_run=scheduled_step_run).count() == 1
-
-    with system_context(reason="test retained counter guard"):
-        retained = StepRun.objects.get(pk=scheduled_step_run.pk)
-        with pytest.raises(TypeError, match="manager owner"):
-            retained.record_attempt()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -820,13 +876,70 @@ def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents
             priority=3,
             escalate_at=escalate_at,
         ),
-        DecisionSpec(
-            assignees=(second,),
-            action="approve",
-            priority=3,
-            expires_at=expires_at,
-            decision_schema={"type": "object"},
-        ),
+            DecisionSpec(
+                assignees=(second,),
+                action="approve",
+                priority=3,
+                expires_at=expires_at,
+                decision_schema={
+                    "type": "object",
+                    "required": ["action"],
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["complete"],
+                            "options": [{
+                                "value": "complete", "label": "Complete", "verdict": "COMPLETE",
+                            }],
+                        },
+                        "invoice": {
+                            "type": "object",
+                            "widget": "object",
+                            "properties": {
+                                "supplier": {"type": "string"},
+                                "reference": {"type": "string"},
+                                "lines": {
+                                    "type": "array",
+                                    "widget": "list",
+                                    "items": {
+                                        "type": "object",
+                                        "widget": "object",
+                                        "properties": {
+                                            "description": {"type": "string"},
+                                            "quantity": {"type": "number"},
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    "oneOf": [{
+                        "type": "object",
+                        "required": ["action"],
+                        "properties": {
+                            "action": {"const": "complete"},
+                            "invoice": {
+                                "type": "object",
+                                "properties": {
+                                    "supplier": {"type": "string"},
+                                    "reference": {"type": "string"},
+                                    "lines": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "description": {"type": "string"},
+                                                "quantity": {"type": "number"},
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                        "additionalProperties": False,
+                    }],
+                },
+            ),
     )
 
     retained_result = AttemptResult(
@@ -844,13 +957,20 @@ def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents
     )
     with system_context(reason="verify suspension projection"):
         decisions = tuple(Decision.objects.filter(suspension_attempt=attempt).order_by("declaration_index"))
+        attempt.refresh_from_db()
         scheduled_step_run.refresh_from_db()
 
     assert [decision.declaration_index for decision in decisions] == [0, 1]
     assert scheduled_step_run.resume_state["_decision_ids"] == [decision.pk for decision in decisions]
-    assert scheduled_step_run.resume_state["_decision_schemas"] == {
-        str(decisions[1].pk): {"type": "object"}
-    }
+    retained_schema = scheduled_step_run.resume_state["_decision_schemas"][str(decisions[1].pk)]
+    assert retained_schema["propertyOrder"] == ["action", "invoice"]
+    invoice_schema = retained_schema["properties"]["invoice"]
+    assert invoice_schema["propertyOrder"] == ["supplier", "reference", "lines"]
+    assert invoice_schema["properties"]["lines"]["items"]["propertyOrder"] == [
+        "description",
+        "quantity",
+    ]
+    assert deserialize_decision_specs(attempt.result_decisions) == specs
     assert [(intent.kind, intent.decision_id, intent.when) for intent in finalized.timer_intents] == [
         (DecisionTimerKind.ESCALATE, decisions[0].pk, escalate_at),
         (DecisionTimerKind.EXPIRE, decisions[1].pk, expires_at),

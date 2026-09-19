@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import (
     AwareDatetime,
@@ -48,12 +48,40 @@ class RecoveryMode(StrEnum):
     RECONCILE = "reconcile"
 
 
+def workflow_result_terminal_match_error(count: int) -> str:
+    """Return the canonical diagnostic for a non-unique terminal result match."""
+
+    return f"Workflow result contract matched {count} terminal producers; expected one."
+
+
+class ExternalOperationPolicy(StrEnum):
+    """Actual provider guarantees used for an admitted external request."""
+
+    UNSUPPORTED = "unsupported"
+    IDEMPOTENT_REQUEST = "idempotent_request"
+    RECONCILE_HANDLE = "reconcile_handle"
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalOperationRequest:
+    """One retained provider request passed to an external step implementation."""
+
+    request_key: str
+    attempt_id: int
+    input_present: bool
+    input: Any
+    recovery_source_attempt_id: int | None = None
+    uncertainty_acknowledged: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class RecoveryCapability:
     """Operation-owned recovery admission for an exact retained attempt."""
 
     mode: RecoveryMode | None
     unavailable_reason: str = ""
+    requires_uncertainty_ack: bool = False
+    uncertainty_reason: str = ""
 
     @property
     def available(self) -> bool:
@@ -200,6 +228,39 @@ class AttemptClaim:
     newly_claimed: bool
 
 
+DecisionInputSource = Literal["attempt_input", "owned_call_input"]
+
+
+class AdmittedInputPath(BaseModel):
+    """One exact value carried by the current attempt or its owned-call input."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    source: DecisionInputSource
+    path: tuple[StrictStr | StrictInt, ...]
+    proposal_gate_path: tuple[StrictStr | StrictInt, ...] = ()
+
+    @model_validator(mode="after")
+    def complete_path(self) -> Self:
+        """Require a concrete typed path and reject empty object-field names."""
+
+        if not self.path or any(isinstance(part, str) and not part for part in self.path):
+            raise ValueError("Admitted input authority requires a nonempty typed path.")
+        if any(isinstance(part, str) and not part for part in self.proposal_gate_path):
+            raise ValueError("Proposal gate authority path cannot contain empty fields.")
+        return self
+
+
+class DecisionRecordAccess(BaseModel):
+    """One exact record opened only while its owning Decision is pending."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    model: StrictStr
+    id: StrictStr
+    authority_input: AdmittedInputPath | None = None
+
+
 class DecisionSpec(BaseModel):
     """Declaration for one awaited decision slot returned by an invocation."""
 
@@ -218,7 +279,11 @@ class DecisionSpec(BaseModel):
     target_model: StrictStr = ""
     target_id: StrictStr = ""
     target_tab: StrictStr = Field(default="", max_length=100)
-    target_authority_decision_id: StrictStr = ""
+    # Select an ID from this attempt's admitted input. A one-hop proposal must
+    # also declare where its producer consumed the original settled gate.
+    target_authority_path: tuple[StrictStr | StrictInt, ...] = ()
+    target_authority_gate_path: tuple[StrictStr | StrictInt, ...] = ()
+    record_access: tuple[DecisionRecordAccess, ...] = ()
 
     @model_validator(mode="after")
     def complete_target(self) -> Self:
@@ -228,8 +293,10 @@ class DecisionSpec(BaseModel):
             raise ValueError("Decision target_model and target_id must be supplied together.")
         if self.target_tab and not self.target_model:
             raise ValueError("Decision target_tab requires a related-record target.")
-        if self.target_authority_decision_id and not self.target_model:
+        if self.target_authority_path and not self.target_model:
             raise ValueError("Decision target authority requires a related-record target.")
+        if self.target_authority_gate_path and not self.target_authority_path:
+            raise ValueError("Decision proposal gate path requires target authority input.")
         return self
 
     @field_validator("payload", "decision_schema")
@@ -239,6 +306,29 @@ class DecisionSpec(BaseModel):
 
         json.dumps(value, allow_nan=False)
         return value
+
+
+class DecisionResolution(BaseModel):
+    """Immutable typed terminal evidence projected by one awaited Decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    decision_id: StrictStr
+    action: StrictStr
+    verdict: StrictStr
+    resolution: dict[StrictStr, JsonValue]
+    resolved_by: StrictStr
+    resolved_at: AwareDatetime
+    declaration_index: StrictInt = Field(ge=0)
+
+
+class DecisionGateOutput(BaseModel):
+    """Ordered complete terminal resolutions and the native policy outcome."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    resolutions: tuple[DecisionResolution, ...]
+    outcome: StrictStr
 
 
 @dataclass(frozen=True, slots=True)

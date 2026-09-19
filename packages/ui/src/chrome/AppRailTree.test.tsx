@@ -9,16 +9,12 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { AppRailTree } from "./AppRailTree";
 import { MenuTree } from "./menu-tree";
 
 describe("AppRailTree", () => {
-  beforeAll(() => {
-    Element.prototype.getAnimations ??= () => [];
-  });
-
   test("controls its accordion panel and includes badge metadata in its name", async () => {
     const tree = MenuTree.from([
       {

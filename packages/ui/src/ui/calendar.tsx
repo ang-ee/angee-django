@@ -18,6 +18,11 @@ export const calendarVariants = tv({
     caption:
       "flex h-7 items-center justify-center px-1 text-13 font-semibold text-fg",
     captionLabel: "text-13 font-semibold text-fg",
+    dropdowns: "relative inline-flex items-center gap-2",
+    dropdown:
+      "absolute inset-0 z-10 size-full cursor-pointer appearance-none border-0 p-0 opacity-0",
+    dropdownRoot:
+      "relative inline-flex h-7 items-center gap-0.5 rounded-6 px-1 outline-none focus-within:focus-ring",
     nav:
       "pointer-events-none absolute inset-x-2 top-2 flex items-center justify-between",
     navButton:
@@ -75,6 +80,9 @@ export function calendarClassNames(
     month: styles.month(),
     month_caption: styles.caption(),
     caption_label: styles.captionLabel(),
+    dropdowns: styles.dropdowns(),
+    dropdown: styles.dropdown(),
+    dropdown_root: styles.dropdownRoot(),
     nav: styles.nav(),
     button_previous: styles.navButton(),
     button_next: styles.navButton(),

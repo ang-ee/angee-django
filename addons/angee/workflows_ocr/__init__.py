@@ -1,1 +1,1 @@
-"""Schema-validated document extraction evidence for workflows."""
+"""Migration-history compatibility for the retired workflows_ocr app label."""

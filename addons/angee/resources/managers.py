@@ -152,6 +152,49 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         rows_by_entry: dict[EntryKey, list[tuple[ResourceGroup, Any]]] = defaultdict(list)
         for group, resource in loaded_groups:
             rows_by_entry[group.entry.key].append((group, resource))
+        owned_groups: dict[str, tuple[type[models.Model], list[tuple[ResourceGroup, Any]]]] = {}
+        consumed: dict[int, str] = {}
+        for group, resource in loaded_groups:
+            owner_hook = getattr(group.model, "resource_import_owner", None)
+            owner = owner_hook() if callable(owner_hook) else None
+            if owner is None:
+                continue
+            if not isinstance(owner, type) or not issubclass(owner, models.Model):
+                raise ResourceLoadError(f"{group.entry.display}: invalid resource import owner")
+            key = f"{owner._meta.label_lower}:{group.entry.addon.name}"
+            previous = owned_groups.setdefault(key, (owner, []))
+            if previous[0] is not owner:
+                raise ResourceLoadError(f"{group.entry.display}: conflicting resource import owners")
+            previous[1].append((group, resource))
+            if id(group) in consumed:
+                raise ResourceLoadError(f"{group.entry.display}: resource group has conflicting consumers")
+            consumed[id(group)] = key
+        entry_positions = {entry.key: index for index, entry in enumerate(entries)}
+        entries_by_key = {entry.key: entry for entry in entries}
+
+        def depends_on_owner(key: EntryKey, owner_entries: set[EntryKey], seen: set[EntryKey]) -> bool:
+            if key in seen:
+                return False
+            seen.add(key)
+            declaration = entries_by_key.get(key)
+            if declaration is None:
+                return False
+            for source in declaration.depends_on:
+                dependency = (declaration.addon.name, source)
+                if dependency in owner_entries or depends_on_owner(dependency, owner_entries, seen):
+                    return True
+            return False
+
+        for owner_key, (_owner, declaration_groups) in owned_groups.items():
+            last_position = max(entry_positions[group.entry.key] for group, _resource in declaration_groups)
+            owner_entries = {group.entry.key for group, _resource in declaration_groups}
+            for entry in entries[:last_position]:
+                if entry.key in owner_entries:
+                    continue
+                if depends_on_owner(entry.key, owner_entries, set()):
+                    raise ResourceLoadError(
+                        f"{entry.display}: dependent rows precede their resource import owner {owner_key}"
+                    )
         grants_by_entry = {group.entry.key: group for group in grant_groups}
         load_result = LoadResult(created=0, updated=0, skipped=0)
         try:
@@ -161,6 +204,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                     for plan in self._write_preparations(loaded_groups):
                         preparations.enter_context(plan.owner.prepare_resource_writes(plan.targets))
                     imported_groups: list[tuple[ResourceGroup, Any]] = []
+                    installed_owners: set[str] = set()
                     for entry in entries:
                         if entry.kind == GRANT_KIND:
                             created, skipped = materialize_grant_groups(
@@ -175,6 +219,24 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                             )
                             continue
                         for group, resource in rows_by_entry[entry.key]:
+                            owner_key = consumed.get(id(group))
+                            if owner_key is not None:
+                                owner, declaration_groups = owned_groups[owner_key]
+                                if owner_key not in installed_owners and group is declaration_groups[-1][0]:
+                                    install = getattr(owner, "import_resource_groups", None)
+                                    if not callable(install):
+                                        raise ResourceLoadError(f"{entry.display}: resource import owner lacks import_resource_groups")
+                                    installed = install(
+                                        tuple(declaration_groups), ledger_model=self.model, addon_aliases=addon_aliases
+                                    )
+                                    load_result = LoadResult(
+                                        created=load_result.created + installed.created,
+                                        updated=load_result.updated + installed.updated,
+                                        skipped=load_result.skipped + installed.skipped,
+                                    )
+                                    imported_groups.extend(declaration_groups)
+                                    installed_owners.add(owner_key)
+                                continue
                             try:
                                 result = resource.import_data(
                                     group.dataset,

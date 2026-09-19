@@ -44,6 +44,9 @@ const LinesSchema = v.looseObject({
   inputType: OptionalString,
   positionField: OptionalString,
   fields: v.optional(Fields),
+  defaults: v.optional(v.record(v.string(), v.union([
+    v.string(), v.number(), v.boolean(), v.null(),
+  ]))),
 });
 /** Keep extension roots while validating their string/null wire contract. */
 const RootsSchema = v.objectWithRest({
@@ -99,6 +102,7 @@ const ResourceSchema = v.looseObject({
   typeNames: TypeNamesSchema,
   rowModel: v.optional(v.picklist(["client", "server"])),
   recordRepresentation: OptionalString,
+  recordSearchFields: v.optional(Strings),
   subtitle: v.nullish(SubtitleSchema),
   implFields: v.optional(Strings),
   capabilities: Strings,

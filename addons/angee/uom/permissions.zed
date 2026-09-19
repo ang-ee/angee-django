@@ -20,21 +20,23 @@ definition uom/role {
 // them (products, orders, invoices reference units). Platform admins create
 // catalogue rows; stored uom_admin manager bindings govern existing rows.
 definition uom/category {
+    relation shared:  auth/user:*
     relation admin:   angee/role // rebac:const=admin
     relation manager: uom/role:uom_admin
 
     permission create = admin->member + manager->effective_member
-    permission read   = authenticated
+    permission read   = shared + admin->member + manager->effective_member
     permission write  = admin->member + manager->effective_member
     permission delete = admin->member + manager->effective_member
 }
 
 definition uom/uom {
+    relation shared:  auth/user:*
     relation admin:   angee/role // rebac:const=admin
     relation manager: uom/role:uom_admin
 
     permission create = admin->member + manager->effective_member
-    permission read   = authenticated
+    permission read   = shared + admin->member + manager->effective_member
     permission write  = admin->member + manager->effective_member
     permission delete = admin->member + manager->effective_member
 }

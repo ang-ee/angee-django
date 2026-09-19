@@ -17,9 +17,9 @@ import {
  * Every side pane is collapsible, resizable, and size-persistent through the
  * panel group's `autoSave` id.
  *
- * Panes render only when supplied — `<Workbench>{content}</Workbench>` is a
- * bare content frame with no resize machinery, and adding `primary`/`secondary`
- * grows it into the full shell. The prop semantics mirror the older `Explorer`
+ * Side panes render only when supplied. The content panel stays mounted as
+ * panes appear or disappear, preserving the active page's local state.
+ * The prop semantics mirror the older `Explorer`
  * so its consumers migrate mechanically (`navigator`→`primary`, `aside`→
  * `secondary`, `navigatorSize`→`primarySize`, `asideSize`→`secondarySize`).
  *
@@ -109,22 +109,6 @@ export function Workbench({
   usePublishedController(primaryController, onPrimaryController, hasPrimary);
   usePublishedController(secondaryController, onSecondaryController, hasSecondary);
 
-  // No panes → a plain content frame, no resize machinery (Explorer's pattern).
-  if (!hasPrimary && !hasSecondary) {
-    return (
-      <div
-        className={cn(
-          browserScroll
-            ? "h-full min-h-0 min-w-0 overflow-visible"
-            : "h-full min-h-0 min-w-0",
-          className,
-        )}
-      >
-        {children}
-      </div>
-    );
-  }
-
   // The present panel set, so the library restores the layout that matches what
   // is actually rendered — a conditionally-present primary pane otherwise
   // restores sizes saved for a different set (react-resizable-panels `panelIds`).
@@ -164,6 +148,7 @@ export function Workbench({
         </>
       ) : null}
       <SplitPane
+        key="content"
         id="content"
         minSize={contentMinSize}
         className={cn(

@@ -8,6 +8,7 @@ import {
   missingRequiredFieldNames,
   mutationData,
   recordToValues,
+  resolveField,
   titleText,
 } from "./form-view-model";
 
@@ -19,6 +20,18 @@ const fields: readonly FieldDescriptor[] = [
 test("titleText preserves string and numeric scalar titles", () => {
   expect(titleText("Daily briefing", "Untitled")).toBe("Daily briefing");
   expect(titleText(42, "Untitled")).toBe("42");
+});
+
+test("dynamic resolution cannot unlock a field already locked by form mode", () => {
+  const locked: FieldDescriptor = {
+    name: "journal",
+    readOnly: true,
+    resolve: () => ({ name: "journal", readOnly: false }),
+  };
+  expect(resolveField(locked, {})).toMatchObject({ name: "journal", readOnly: true });
+  expect(resolveField({ ...locked, readOnly: false }, {})).toMatchObject({
+    name: "journal", readOnly: false,
+  });
 });
 
 test("keeps long text fields in declaration order when they opt out of body placement", () => {

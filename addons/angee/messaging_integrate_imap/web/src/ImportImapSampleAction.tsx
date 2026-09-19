@@ -1,6 +1,6 @@
 import { useMessagingT } from "@angee/messaging";
 import { useAuthoredMutation } from "@angee/refine";
-import { Alert, Button, ControlBandProvider, DialogForm, FieldRow, Input, RowsListView, errorMessage, useRecordChromeContext, type ListColumn } from "@angee/ui";
+import { Alert, Button, ControlBandProvider, DialogForm, FieldRow, Input, RecordActionTrigger, RowsListView, errorMessage, useRecordChromeContext, type ListColumn } from "@angee/ui";
 import * as React from "react";
 
 import { ImportImapSample, PreviewImapSample } from "./documents";
@@ -78,9 +78,9 @@ export function ImportImapSampleAction(): React.ReactElement | null {
     description={t("channel.imap.sample.description")}
     size="lg"
     trigger={
-      <Button size="sm" variant="secondary" disabled={record.lifecycle !== "PAUSED"}>
+      <RecordActionTrigger disabled={record.lifecycle !== "PAUSED"}>
         {t("channel.imap.sample.button")}
-      </Button>
+      </RecordActionTrigger>
     }
       footer={<Button type="button" variant="primary" disabled={busy} onClick={() => void loadPreview()}>{previewState.fetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.preview")}</Button>}>
       <FieldRow label={t("channel.imap.sample.mailbox")}><Input value={mailbox} onChange={(event) => setMailbox(event.target.value)} /></FieldRow>

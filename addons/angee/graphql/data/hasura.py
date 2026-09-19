@@ -42,6 +42,7 @@ from angee.base.scoping import (
     aggregate_scoped_queryset,
     bind_actor,
     requires_angee_rebac_contract,
+    system_queryset,
 )
 from angee.data.field_classification import (
     is_to_one_relation,
@@ -105,8 +106,10 @@ class HasuraLines:
     for on the wire. ``writable`` overrides the child's editable-column allowlist;
     ``public_id_fields`` names the child relation columns exposed as public ids
     (decoded on write). ``node`` is the child GraphQL node, used only to name the
-    child field metadata the frontend line cells render. ``position_field`` names
-    the integer order column (advertised so the composer maintains it).
+    child field metadata the frontend line cells render. ``defaults`` seeds scalar
+    cells on a newly added row and may name only writable child fields.
+    ``position_field`` names the integer order column (advertised so the composer
+    maintains it).
 
     Completeness contract: ``<res>_save(lines=…)`` takes the **full desired child
     set** — deletion is by omission, so an id absent from the set is deleted. The
@@ -126,6 +129,7 @@ class HasuraLines:
     writable: Sequence[str] | None = None
     public_id_fields: Sequence[str] = ()
     position_field: str = "position"
+    defaults: Mapping[str, str | int | float | bool | None] = dataclasses.field(default_factory=dict)
 
 
 def _child_back_fk(parent_model: type[models.Model], relation: str) -> str:
@@ -675,7 +679,7 @@ def _public_instance(
 
     if value in (None, ""):
         return None
-    active_queryset = queryset if queryset is not None else model._base_manager.all()
+    active_queryset = queryset if queryset is not None else system_queryset(model, lock=None)
     instance = instance_from_public_id(
         model,
         str(value),
@@ -733,6 +737,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     subject_field: str | None = None,
     row_model: str = "server",
     subtitle: DataResourceSubtitleMetadata | None = None,
+    record_representation: str | None = None,
+    record_search_fields: Sequence[str] | None = None,
 ) -> HasuraResource:
     """Build a Hasura resource and attach Angee's model-resource metadata.
 
@@ -756,6 +762,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     closed created/updated/word-count vocabulary as dotted GraphQL selection
     paths. Every path resolves against ``node`` during metadata emission; adding
     another semantic fact extends the declaration and renderer together.
+
+    ``record_representation`` selects the readable String field generic record
+    and relation surfaces use as their human label after final GraphQL naming.
+    ``record_search_fields`` declares the readable filterable String fields relation
+    pickers search together; resources that omit it retain the standard single
+    representation-field search.
     """
 
     active_groupable = relation_group_by_fields(node, model, tuple(groupable))
@@ -851,6 +863,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         subject_field=subject_field,
         row_model=row_model,
         subtitle=subtitle,
+        record_representation=record_representation,
+        record_search_fields=(
+            tuple(record_search_fields) if record_search_fields is not None else None
+        ),
     )
 
 
@@ -1010,6 +1026,8 @@ def attach_hasura_resource_metadata(
     subject_field: str | None = None,
     row_model: str = "server",
     subtitle: DataResourceSubtitleMetadata | None = None,
+    record_representation: str | None = None,
+    record_search_fields: tuple[str, ...] | None = None,
 ) -> HasuraResource:
     """Attach the native bundle and Angee-only policy for final projection."""
 
@@ -1038,6 +1056,8 @@ def attach_hasura_resource_metadata(
             subject_field=subject_field,
             row_model=row_model,
             subtitle=subtitle,
+            record_representation=record_representation,
+            record_search_fields=record_search_fields,
             lines_declaration=lines,
         ),
     )
@@ -1066,12 +1086,20 @@ def _line_metadata(
         input_name,
         accepted=resource_wire_field_names(line_input, exclude=("id",)),
     )
+    unknown_defaults = set(lines.defaults) - set(child_fields)
+    if unknown_defaults:
+        names = ", ".join(sorted(unknown_defaults))
+        raise ImproperlyConfigured(
+            f"editable lines {lines.model._meta.label}.{lines.field} declare defaults for "
+            f"non-writable fields: {names}."
+        )
     return DataLinesMetadata(
         field=lines.field,
         model_label=lines.model._meta.label,
         input_type=input_name,
         fields=_line_child_fields(lines, child_fields, schema, input_name),
         position_field=lines.position_field if _has_model_field(lines.model, lines.position_field) else None,
+        defaults=dict(lines.defaults),
     )
 
 

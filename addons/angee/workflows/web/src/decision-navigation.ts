@@ -40,6 +40,14 @@ export function subjectDecisionRunId(
   return subjectRuns.some((run) => run.id === decisionRunId) ? decisionRunId : null;
 }
 
+/** Admit a route-selected Decision only when the subject history returned it. */
+export function subjectDecision<T extends { id: string }>(
+  decisionId: string | null,
+  decisions: readonly T[],
+): T | undefined {
+  return decisionId ? decisions.find((decision) => decision.id === decisionId) : undefined;
+}
+
 export function subjectPendingDecision<T extends { step_run?: { run?: { id: string } | null } | null }>(
   decisions: readonly T[],
   followedRunId: string | null,

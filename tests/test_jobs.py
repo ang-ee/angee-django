@@ -38,7 +38,7 @@ def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
 
     eta = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
 
-    enqueue_task("workflows.advance", kwargs={"run_id": 1}, eta=eta, queue="default")
+    enqueue_task("test.task", kwargs={"run_id": 1}, eta=eta, queue="default")
     enqueue_task(
         "integrate.run_bridge_session",
         kwargs={"model_label": "messaging.channel", "pk": 1},
@@ -47,7 +47,7 @@ def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
     )
 
     assert calls == [
-        ("workflows.advance", {"run_id": 1}, eta, "default", None),
+        ("test.task", {"run_id": 1}, eta, "default", None),
         (
             "integrate.run_bridge_session",
             {"model_label": "messaging.channel", "pk": 1},

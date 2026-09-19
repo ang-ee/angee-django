@@ -66,7 +66,7 @@ vi.mock("@angee/ui", () => ({
   useResourceViewUtilityContext: () => mocks.list,
 }));
 
-import { ShareListChrome, ShareRecordChrome } from "./ShareAccess";
+import { ShareAccessDialog, ShareListChrome, ShareRecordChrome } from "./ShareAccess";
 
 const resource = {
   modelLabel: "notes.Note",
@@ -130,6 +130,24 @@ describe("shared record access chrome", () => {
       targetIds: ["note-1", "note-2"],
     });
     expect(mocks.dialogProps?.label).toBeUndefined();
+  });
+
+  test("opens the same access adapter from an external record action", () => {
+    const onOpenChange = vi.fn();
+    const { rerender } = render(<ShareAccessDialog
+      resource="notes.Note" targetIds={["note-1"]} label="AP folder"
+      open onOpenChange={onOpenChange} trigger={null}
+    />);
+
+    expect(mocks.queryOptions).toMatchObject({ enabled: true });
+    expect(mocks.queryVariables).toEqual({ targetType: "notes/note", targetIds: ["note-1"] });
+    expect(mocks.dialogProps).toMatchObject({ open: true, label: "AP folder", trigger: null, onOpenChange });
+
+    rerender(<ShareAccessDialog
+      resource="notes.Note" targetIds={["note-1"]}
+      open={false} onOpenChange={onOpenChange} trigger={null}
+    />);
+    expect(mocks.queryOptions).toMatchObject({ enabled: false });
   });
 
   test("nested collections share their selected records", () => {

@@ -171,6 +171,33 @@ class AngeeResource(resources.ModelResource):
             self._instances[xref] = self._instance_from_ledger(ledger)
         return self._instances[xref]
 
+    def declared_instance(self, row: Mapping[str, Any]) -> models.Model | None:
+        """Resolve a declaration through the native ledger and adoption rules."""
+
+        xref = self._row_xref(row.get("_xref"), row_number=0)
+        ledger = self._ledger_for_xref(xref)
+        identity = self._adopt_identity(row)
+        instance = self._instance_from_ledger(ledger)
+        if instance is not None and self._ledger_resolution_is_stale(identity, instance):
+            instance = None
+        if instance is None:
+            instance = self._adopt_existing_target(row, identity)
+        self._instances[xref] = instance
+        return instance
+
+    def record_declared_instance(self, row: Mapping[str, Any], instance: models.Model) -> str:
+        """Write the native resource ledger after a model-owned checked command."""
+
+        xref = self._row_xref(row.get("_xref"), row_number=0)
+        ledger = self._ledger_for_xref(xref)
+        self._check_ledger_target(xref, ledger)
+        row_hash = self._row_content_hash(row)
+        prior = self._instance_from_ledger(ledger)
+        kind = "created" if prior is None else "skipped" if ledger.content_hash == row_hash else "updated"
+        self._upsert_ledger(xref=xref, instance=instance, row_hash=row_hash)
+        self._instances[xref] = instance
+        return kind
+
     def related_instances(self, dataset: tablib.Dataset, field_name: str) -> tuple[models.Model, ...]:
         """Resolve one imported relation column for model-owned write preparation."""
 

@@ -29,14 +29,15 @@ definition money/currency {
     permission delete = admin->member + manager->effective_member
 }
 
-// Exchange rates have the same public-read, admin-create, stored-manager-write
-// posture as the currency catalogue.
+// Only explicitly eligible native/global rates carry the shared reader tuple.
+// Contextual or source-owned rates are scoped by composing product addons.
 definition money/rate {
     relation admin:   angee/role // rebac:const=admin
     relation manager: money/role:money_admin
+    relation shared:  auth/user:*
 
     permission create = admin->member + manager->effective_member
-    permission read   = authenticated
+    permission read   = shared + admin->member + manager->effective_member
     permission write  = admin->member + manager->effective_member
     permission delete = admin->member + manager->effective_member
 }

@@ -10,7 +10,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
-from rebac import system_context
+from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests import test_messaging as messaging_models
@@ -44,6 +44,7 @@ PARTIES_TEST_MODELS = (
     Organization,
     messaging_models.MergeVeto,
     messaging_models.Handle,
+    PartyHandle,
     Address,
     Circle,
 )
@@ -186,10 +187,40 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert display_name_field["requiredOnCreate"] is True
 
 
+def test_contact_resource_metadata_uses_human_relation_labels() -> None:
+    """Handle identity and association rows publish their human label fields."""
+
+    resources = {item.model_label: item for item in _schema("public").angee_resources}
+
+    assert resources["parties.Handle"].record_representation == "value"
+    assert resources["parties.PartyHandle"].record_representation == "display_name"
+
+
 def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     """The related contacts roots are Hasura resources, not handwritten paginated fields."""
 
-    resources = {item.model_label: item for item in _schema("public").angee_resources}
+    schema = _schema("public")
+    resources = {item.model_label: item for item in schema.angee_resources}
+
+    handle = resources["parties.Handle"]
+    assert handle.roots.list_name == "handles"
+    assert handle.roots.detail_name == "handles_by_pk"
+    assert handle.roots.create_name is None
+    assert handle.roots.update_name is None
+    assert handle.roots.delete_name is None
+    assert handle.create_fields == ()
+    assert handle.update_fields == ()
+    assert handle.capabilities == ("list", "detail", "aggregate", "groups")
+
+    mutations = schema._schema.mutation_type.fields
+    assert "insert_handles_one" not in mutations
+    assert "update_handles_by_pk" not in mutations
+    assert "delete_handles_by_pk" not in mutations
+    assert {
+        "propose_manual_contact",
+        "confirm_party_handle",
+        "dismiss_party_handle",
+    } <= set(mutations)
 
     address = resources["parties.Address"]
     assert address.roots.list_name == "addresses"
@@ -385,9 +416,71 @@ def parties_tables(transactional_db: Any) -> Iterator[None]:
                     schema_editor.delete_model(model)
 
 
+def test_party_handle_display_name_projects_only_readable_components(parties_tables: None) -> None:
+    """Association labels stay human-readable without leaking protected Handle values."""
+
+    admin = _platform_admin("party-handle-label-admin")
+    link_reader = User.objects.create_user(username="party-handle-label-link-reader")
+    party_reader = User.objects.create_user(username="party-handle-label-party-reader")
+    handle_reader = User.objects.create_user(username="party-handle-label-handle-reader")
+    full_reader = User.objects.create_user(username="party-handle-label-full-reader")
+    with system_context(reason="test.parties.party_handle_label.seed"):
+        party = messaging_models.Party.objects.create(
+            display_name="Readable supplier",
+            created_by_id=admin.pk,
+        )
+        handle = Handle.objects.create(
+            platform="email",
+            value="billing@example.com",
+            normalized_value="billing@example.com",
+            created_by_id=admin.pk,
+        )
+        link = PartyHandle.objects.link(
+            party,
+            handle,
+            confidence=0.4,
+            source="manual",
+            created_by_id=admin.pk,
+        )
+    for reader in (link_reader, party_reader, handle_reader, full_reader):
+        _grant_reader(link, reader)
+    for reader in (party_reader, full_reader):
+        _grant_reader(party, reader)
+    for reader in (handle_reader, full_reader):
+        _grant_reader(handle, reader)
+
+    schema = _schema("public")
+    query = "query AssociationLabel { party_handles { id display_name } }"
+    link_only = _data(execute_schema(schema, query, user=link_reader))["party_handles"]
+    party_only = _data(execute_schema(schema, query, user=party_reader))["party_handles"]
+    handle_only = _data(execute_schema(schema, query, user=handle_reader))["party_handles"]
+    fully_readable = _data(execute_schema(schema, query, user=full_reader))["party_handles"]
+
+    assert link_only == [{"id": link.sqid, "display_name": "Contact association"}]
+    assert party_only == [{"id": link.sqid, "display_name": "Readable supplier"}]
+    assert handle_only == [{"id": link.sqid, "display_name": "billing@example.com"}]
+    assert fully_readable == [
+        {"id": link.sqid, "display_name": "Readable supplier — billing@example.com"}
+    ]
+
+
 def _schema(name: str) -> Any:
     parts = {key: tuple(parties_schema.schemas[name].get(key, ())) for key in SCHEMA_PART_KEYS}
     return GraphQLSchemas([SchemaAddon({name: parts})]).build(name)
+
+
+def _grant_reader(resource: Any, user: Any) -> None:
+    """Grant one test user direct read access to ``resource``."""
+
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=to_object_ref(resource),
+                relation="reader",
+                subject=to_subject_ref(user),
+            )
+        ]
+    )
 
 
 

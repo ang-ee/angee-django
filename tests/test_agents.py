@@ -780,6 +780,27 @@ def test_openai_backend_can_configure_max_completion_tokens(agents_tables, infer
     assert all(client.is_closed() for client in clients)
 
 
+@pytest.mark.django_db(transaction=True)
+def test_ollama_backend_translates_native_thinking_setting(agents_tables, inference_http):
+    """Ollama's OpenAI endpoint receives its supported reasoning control field."""
+
+    provider = _provider("ollama-chat", backend_class="ollama", name="Ollama")
+
+    response = provider.chat(
+        model="qwen3.6:35b-a3b",
+        messages=[ModelRequest(parts=[UserPromptPart("Map retained evidence")])],
+        model_settings={"max_tokens": 2048, "thinking": False},
+    )
+
+    requests, clients = inference_http
+    payload = json.loads(requests[-1].content)
+    assert payload["reasoning_effort"] == "none"
+    assert payload["max_tokens"] == 2048
+    assert "think" not in payload
+    assert response.text == "pong"
+    assert all(client.is_closed() for client in clients)
+
+
 @pytest.mark.parametrize("options", [{"model": "other"}, {"extra_body": {"messages": []}}])
 def test_workflow_options_cannot_replace_owned_request_fields(options):
     from angee.workflows_agents.steps import _model_settings

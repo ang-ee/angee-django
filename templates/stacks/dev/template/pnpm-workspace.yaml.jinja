@@ -21,6 +21,14 @@ allowBuilds:
   esbuild: true
   "@tailwindcss/oxide": true
 
+# Refine core publishes GraphQL DocumentNode in its public MetaQuery types but
+# omits graphql from its package metadata. Bind that public type to the same
+# GraphQL major as Angee's transport instead of pnpm's unrelated hoisted copy.
+packageExtensions:
+  "@refinedev/core@5.0.12":
+    dependencies:
+      graphql: "^16.14.0"
+
 # assistant-ui pinned EXACT: 0.14.29 / tap 0.9.15 regressed the chat composer
 # (ComposerPrimitive.Input drops all typed input — seen live on demo). The
 # internals (core/store/tap) float independently of the react package, so a

@@ -21,6 +21,7 @@ from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, models, transaction
+from django.db.migrations.state import ProjectState
 from django.db.models.deletion import ProtectedError
 from django.test import RequestFactory
 from django.utils import timezone
@@ -278,7 +279,7 @@ def test_agent_step_debits_token_usage_into_run_budget_spent(
 
 
 @pytest.mark.parametrize(
-    "axis,ceiling", [("tokens", 4), ("prompt_tokens", 1), ("completion_tokens", 2), ("total_tokens", 4)]
+    "axis,ceiling", [("tokens", 4), ("input_tokens", 1), ("output_tokens", 2)]
 )
 def test_budget_ceiling_fails_run_via_engine(
     workflows_agents_tables: None,
@@ -348,9 +349,12 @@ def test_replay_does_not_reinvoke_completed_agent_step(
     )
     run = start_run(workflow)
     row = advance_once(run)[0]
+    with system_context(reason="test workflows capture agent dispatch"):
+        attempt = row.current_attempt
+        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
 
     execute_started(run)
-    engine.execute(row.pk)
+    engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)
     engine.advance(run.pk)
     engine.advance(run.pk)
 
@@ -930,18 +934,22 @@ def test_agent_session_identity_migration_backfills_only_declared_legacy_rows(
     waiting = step_run_for(run, "session")
 
     with system_context(reason="test legacy agent session identity"):
-        Workflow._base_manager.filter(
+        models.QuerySet(model=Workflow).filter(
             models.Q(pk=version.published_from_id) | models.Q(published_from_id=version.published_from_id)
         ).update(key="", purpose=workflow_models.WorkflowPurpose.AUTOMATION)
-        WorkflowRun._base_manager.filter(pk=run.pk).update(origin=workflow_models.RunOrigin.UNKNOWN)
-        StepRun._base_manager.filter(pk=waiting.pk).update(waiting_kind="")
+        models.QuerySet(model=WorkflowRun).filter(pk=run.pk).update(
+            origin=workflow_models.RunOrigin.UNKNOWN,
+        )
+        models.QuerySet(model=StepRun).filter(pk=waiting.pk).update(waiting_kind="")
 
     editor = SimpleNamespace(connection=connection)
+
+    state_apps = ProjectState.from_apps(django_apps).apps
 
     def historical_model(app_label: str, model_name: str) -> Any:
         if (app_label, model_name) == ("resources", "Resource"):
             return WorkflowResourceLedger
-        return django_apps.get_model(app_label, model_name)
+        return state_apps.get_model(app_label, model_name)
 
     historical_apps = SimpleNamespace(get_model=historical_model)
     backfill_agent_session_identity(historical_apps, editor)
@@ -1010,8 +1018,11 @@ def test_one_shot_journals_native_tool_response_and_uses_agent_credential(
     )
     run = start_run(workflow)
     row = advance_once(run)[0]
+    with system_context(reason="test workflows capture native agent dispatch"):
+        attempt = row.current_attempt
+        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
     execute_started(run)
-    engine.execute(row.pk)
+    engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)
     row.refresh_from_db()
     assert row.outcome == "completed"
     assert len(calls) == 1

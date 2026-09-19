@@ -8,7 +8,7 @@ from typing import Annotated, cast
 import strawberry
 import strawberry.experimental.pydantic
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
 
@@ -16,7 +16,7 @@ from angee.graphql.actions import ActionResult, action_target, authorized_action
 from angee.graphql.ids import PublicID
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
 from angee.messaging.schema import ChannelType
-from angee.messaging_integrate_imap.backend import ImapSampleImport, ImapSampleMessage, ImapSamplePreview
+from angee.messaging_integrate_imap.backend import ImapError, ImapSampleImport, ImapSampleMessage, ImapSamplePreview
 from angee.messaging_integrate_imap.connect import (
     ImapConnectError,
     connect_imap_channel,
@@ -44,6 +44,27 @@ class ImapSampleImportType:
 @strawberry.type
 class MessagingImapMutation:
     """Console actions for connecting IMAP-backed message channels."""
+
+    @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
+    def prepare_imap_new_mail(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Set a paused IMAP channel's cursor to the current mailbox boundary."""
+
+        channel = authorized_action_target(info, Channel, id, "write")
+        try:
+            mailbox_count, changed = channel.prepare_imap_new_mail(actor=session_user(info))
+        except ValidationError as error:
+            return ActionResult(ok=False, message=" ".join(error.messages))
+        except ImapError as error:
+            return ActionResult(ok=False, message=error.public_message)
+        if not changed:
+            return ActionResult(
+                ok=True,
+                message=f"New-mail starting point already retained for {mailbox_count} mailbox(es).",
+            )
+        return ActionResult(
+            ok=True,
+            message=f"Set the new-mail starting point for {mailbox_count} mailbox(es). Resume to begin delivery.",
+        )
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
     def preview_imap_sample(

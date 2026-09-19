@@ -70,6 +70,7 @@ export {
 } from "./form/MutationDialog";
 export { RowsField, type RowsValue } from "./form/RowsField";
 export {
+  compileDecisionActionFormSpec,
   deserializeFormSpec,
   formSpecInitialValues,
   normalizeFormSpecValues,
@@ -77,6 +78,9 @@ export {
   type FormSpecFieldDescriptor,
   type FormSpecFieldType,
   type FormSpecRelationCreate,
+  type DecisionActionFormSpec,
+  type DecisionFormActionOption,
+  type DecisionFormValidation,
 } from "./form/form-spec";
 export { structuredFieldErrorPaths } from "./form/field-values";
 export { useUnsavedChangesNavigationGuard } from "./form/use-unsaved-changes-navigation-guard";
@@ -84,6 +88,7 @@ export {
   ActionFormDialog,
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
+export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
   formLevelMessage,
   useActionForm,
@@ -217,7 +222,11 @@ export {
   useRecordChromeContext,
   type RecordChromeContext,
 } from "./resource/record-chrome-context";
-export { EditableLines, type EditableLinesProps } from "./form/EditableLines";
+export {
+  EditableLines,
+  type EditableLineSupplementalColumn,
+  type EditableLinesProps,
+} from "./form/EditableLines";
 export {
   BoundDescriptorField,
   BoundFormValue,

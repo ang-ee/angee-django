@@ -7,97 +7,15 @@ from datetime import datetime
 from typing import Any, cast
 
 from celery import shared_task
-from celery.exceptions import Retry
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
 
 from angee.jobs.enqueue import enqueue_task
-from angee.jobs.locks import record_lock_key, task_lock
 from angee.workflows import dispatch as workflow_dispatch
 from angee.workflows import engine, triggers
 from angee.workflows.dispatch import WorkflowDispatchEnvelope, WorkflowDispatchKind
-from angee.workflows.models import StepRunStatus
-from angee.workflows.steps import StepRetryPolicy, TransientStepError, retry_policy_from_config
-
-
-@shared_task(
-    bind=True,
-    name="workflows.advance",
-    autoretry_for=(Exception,),
-    retry_backoff=15,
-    retry_kwargs={"max_retries": 5},
-)
-def advance_workflow_run(self: Any, run_id: int) -> None:
-    """Translate a legacy wake into a durable ADVANCE pulse."""
-
-    del self
-    run_model = apps.get_model("workflows", "WorkflowRun")
-    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-    with system_context(reason="workflows.legacy_advance"), transaction.atomic():
-        run = run_model.objects.filter(pk=run_id).first()
-        if run is None:
-            return
-        dispatch_model.objects.schedule_advance(run, available_at=timezone.now())
-    workflow_dispatch.publish_due(_send_dispatch, now=timezone.now(), limit=100)
-
-
-@shared_task(bind=True, name="workflows.execute")
-def execute_workflow_step(self: Any, step_run_id: int) -> None:
-    """Execute one claimed step-run outside the advance lock."""
-
-    with task_lock(record_lock_key("workflows.StepRun", step_run_id, "execute")) as acquired:
-        if not acquired:
-            return
-        try:
-            step_run_model = apps.get_model("workflows", "StepRun")
-            with system_context(reason="workflows.legacy_execute"):
-                retained = step_run_model.objects.filter(pk=step_run_id).filter(
-                    models.Q(effect_key__isnull=False)
-                    | models.Q(current_attempt__isnull=False)
-                    | models.Q(attempts__isnull=False)
-                ).exists()
-            if retained:
-                return
-            engine.execute(step_run_id)
-        except TransientStepError as error:
-            _retry_or_journal_exhausted(self, step_run_id, error)
-
-
-@shared_task(
-    bind=True,
-    name="workflows.decision_escalate",
-    autoretry_for=(Exception,),
-    retry_backoff=30,
-    retry_kwargs={"max_retries": 3},
-)
-def escalate_workflow_decision(self: Any, decision_id: int, attempt: int) -> None:
-    """Resolve a decision escalation timer if it still matches the attempt."""
-
-    del self
-    with task_lock(record_lock_key("workflows.Decision", decision_id, "escalate")) as acquired:
-        if not acquired:
-            return
-        engine.escalate_decision(decision_id, attempt)
-
-
-@shared_task(
-    bind=True,
-    name="workflows.decision_expire",
-    autoretry_for=(Exception,),
-    retry_backoff=30,
-    retry_kwargs={"max_retries": 3},
-)
-def expire_workflow_decision(self: Any, decision_id: int, attempt: int) -> None:
-    """Resolve a decision expiry timer if it still matches the attempt."""
-
-    del self
-    with task_lock(record_lock_key("workflows.Decision", decision_id, "expire")) as acquired:
-        if not acquired:
-            return
-        engine.expire_decision(decision_id, attempt)
 
 
 @shared_task(
@@ -156,21 +74,6 @@ def run_workflow_schedule_triggers(self: Any, timestamp: int | None = None) -> N
     triggers.run_due_schedule_triggers(now=_periodic_timestamp(timestamp))
 
 
-def _retry_or_journal_exhausted(task: Any, step_run_id: int, error: TransientStepError) -> None:
-    """Retry a transient step failure or mark the step failed when exhausted."""
-
-    step_run = _step_run_for_id(step_run_id)
-    policy = _retry_policy_for_step_run(step_run)
-    retries = int(getattr(task.request, "retries", 0))
-    if retries + 1 < policy.max_attempts:
-        try:
-            raise task.retry(exc=error, countdown=policy.delay_for(retries + 1))
-        except Retry:
-            raise
-    _journal_retry_exhausted(step_run, exception=error)
-    raise error
-
-
 @shared_task(bind=True, name="workflows.dispatch")
 def consume_workflow_dispatch(
     self: Any,
@@ -199,10 +102,16 @@ def consume_workflow_dispatch(
         engine.escalate_decision_dispatch(
             dispatch_id, expected_decision_id=target_id, expected_generation=generation
         )
-    else:
+    elif parsed == WorkflowDispatchKind.DECISION_EXPIRE:
         engine.expire_decision_dispatch(
             dispatch_id, expected_decision_id=target_id, expected_generation=generation
         )
+    elif parsed == WorkflowDispatchKind.ARTIFACT_DELIVERY:
+        engine.deliver_artifact_dispatch(dispatch_id)
+    elif parsed == WorkflowDispatchKind.CHILD_CANCEL:
+        engine.cancel_child_dispatch(dispatch_id, expected_child_id=target_id)
+    elif parsed == WorkflowDispatchKind.RUN_CANCEL:
+        engine.cancel_run_dispatch(dispatch_id, expected_run_id=target_id)
 
 
 @shared_task(bind=True, name="workflows.publish_dispatches")
@@ -225,39 +134,6 @@ def _send_dispatch(envelope: WorkflowDispatchEnvelope) -> None:
         },
         eta=None,
     )
-
-
-def _step_run_for_id(step_run_id: int) -> Any | None:
-    """Return the StepRun addressed by one task payload."""
-
-    step_run_model = apps.get_model("workflows", "StepRun")
-    with system_context(reason="workflows.retry_policy"):
-        return step_run_model.objects.select_related("step").filter(pk=step_run_id).first()
-
-
-def _retry_policy_for_step_run(step_run: Any | None) -> StepRetryPolicy:
-    """Return the static retry policy declared by ``step_run``."""
-
-    if step_run is None or step_run.step_id is None:
-        return StepRetryPolicy()
-    return retry_policy_from_config(step_run.step.config)
-
-
-def _journal_retry_exhausted(step_run: Any | None, *, exception: BaseException) -> None:
-    """Mark a started StepRun failed when no transient retry remains."""
-
-    if step_run is None:
-        return
-    step_run_model = apps.get_model("workflows", "StepRun")
-    run_id: int | None = None
-    with system_context(reason="workflows.retry_exhausted"), transaction.atomic():
-        locked = step_run_model.objects.lock_if_supported().select_related("run").filter(pk=step_run.pk).first()
-        if locked is None or locked.status != StepRunStatus.STARTED:
-            return
-        locked.mark_failed(error=str(exception), stacktrace="")
-        run_id = locked.run_id
-    if run_id is not None:
-        engine.enqueue_advance(run_id)
 
 
 def _periodic_timestamp(value: int | None) -> datetime:

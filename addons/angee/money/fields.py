@@ -12,6 +12,11 @@ from django.db import models
 
 from angee.graphql.field_types import register_field_type
 
+__all__ = ("MONEY_CURRENCY_FIELD_METADATA_KEY", "MoneyField")
+
+MONEY_CURRENCY_FIELD_METADATA_KEY = "angee_currency_field"
+"""Strawberry field-metadata key naming a money projection's currency path."""
+
 
 class MoneyField(models.DecimalField):
     """A decimal amount paired with the currency its row is denominated in.

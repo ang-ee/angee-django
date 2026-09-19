@@ -41,7 +41,7 @@ from angee.graphql.data.metadata import (
     _finalize_data_resource as _project_final_data_resource,
 )
 from angee.graphql.data.metadata import _relation_label_axes
-from angee.graphql.data.resource_fields import resource_string_field_names
+from angee.graphql.data.resource_fields import final_input_only_resource_fields, resource_string_field_names
 from angee.graphql.ids import require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
@@ -831,6 +831,90 @@ def test_final_alias_keeps_model_source_for_readable_publisher_fields() -> None:
     assert {name for name, field in metadata.query.fields.items() if field.filter} == {"id", "display_name"}
     assert {name for name, field in metadata.query.fields.items() if field.sort} == {"display_name"}
     assert metadata_module.readable_model_field_names(metadata) >= {"name"}
+
+
+def test_final_fields_share_declared_presentation_metadata_across_output_and_input() -> None:
+    """Final output and input-only fields use one declared-metadata mechanism."""
+
+    presentation = {
+        "angee_widget": "money",
+        "angee_currency_field": "currency",
+    }
+
+    @strawberry_django.type(HasuraResourceThing, name="FinalDjangoSourceThingType")
+    class FinalDjangoSourceThingType(AngeeNode):
+        @strawberry_django.field(metadata=presentation)
+        def amount_due(self) -> Decimal:
+            return Decimal("0")
+
+    resource = hasura_model_resource(
+        FinalDjangoSourceThingType,
+        model=HasuraResourceThing,
+        name="final_django_source_things",
+        filterable=["id"],
+        sortable=["id"],
+        aggregatable=[],
+        insert=False,
+        update=False,
+        delete=False,
+        get_queryset=lambda info: HasuraResourceThing.objects.all(),
+    )
+    schema = GraphQLSchemas(
+        [SchemaAddon({"public": {
+            "query": [resource.query],
+            "types": [FinalDjangoSourceThingType, *resource.types],
+        }})]
+    ).build("public")
+    metadata = schema.angee_resources[0]
+    display = {field.name: field for field in metadata.fields}["amount_due"]
+
+    assert display.model_field_name is None
+    assert display.scalar == "Decimal"
+    assert display.widget == "money"
+    assert display.currency_field == "currency"
+    assert display.aggregatable is False
+    assert display.creatable is False
+    assert display.updatable is False
+
+    @strawberry.input(name="FinalPresentationInput")
+    class FinalPresentationInput:
+        amount_due: Decimal = strawberry.field(metadata=presentation)
+
+    @strawberry.type
+    class FinalPresentationQuery:
+        ready: bool = True
+
+    def save(self: Any, data: Any) -> bool:
+        return bool(data)
+
+    save.__annotations__["data"] = FinalPresentationInput
+    save.__annotations__["return"] = bool
+    FinalPresentationMutation = strawberry.type(
+        type("FinalPresentationMutation", (), {"save": strawberry.mutation(resolver=save)})
+    )
+    input_schema = strawberry.Schema(
+        query=FinalPresentationQuery,
+        mutation=FinalPresentationMutation,
+    )._schema
+    [accepted] = final_input_only_resource_fields(
+        input_schema,
+        create_input_name="FinalPresentationInput",
+        update_input_name=None,
+        model=HasuraResourceThing,
+        aggregate_fields=(),
+        create_fields=("amountDue",),
+        update_fields=(),
+        required_create_fields=("amountDue",),
+        readable_fields=(),
+    )
+
+    assert accepted.model_field_name is None
+    assert accepted.readable is False
+    assert accepted.scalar == "Decimal"
+    assert accepted.widget == display.widget == "money"
+    assert accepted.currency_field == display.currency_field == "currency"
+    assert accepted.creatable is True
+    assert accepted.required_on_create is True
 
 
 def test_final_input_projection_maps_aliases_defaults_and_author_allowlist() -> None:

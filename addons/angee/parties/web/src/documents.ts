@@ -31,6 +31,7 @@ export const PARTY_HANDLE_DECISION_INVALIDATES = [
   "parties.Handle",
   "parties.Party",
   "parties.Person",
+  "parties.Organization",
 ] as const;
 
 export const PARTY_MERGE_INVALIDATES = [

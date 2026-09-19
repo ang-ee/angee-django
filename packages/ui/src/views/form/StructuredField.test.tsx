@@ -85,6 +85,53 @@ describe("structured FormSpec widgets", () => {
     )).toEqual(["limit"]);
   });
 
+  test("keeps an optional nullable Decimal union editable through a null transition", () => {
+    const [field] = deserializeFormSpec({ properties: {
+      line_total: {
+        anyOf: [
+          { type: "number" },
+          { type: "string", pattern: "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" },
+          { type: "null" },
+        ],
+        label: "Printed line total",
+        widget: "float",
+        omittable: true,
+        default: null,
+      },
+    } }, defaultWidgets);
+    expect(field).toMatchObject({
+      kind: "any",
+      widget: "float",
+      nullable: true,
+      omittable: true,
+      hasDefault: true,
+      defaultValue: null,
+    });
+    function Harness() {
+      const [value, setValue] = React.useState<unknown>("69.95");
+      return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <LabeledDescriptorField field={field!} value={value} onChange={setValue} />
+      </AppRuntimeProvider>;
+    }
+    render(<Harness />);
+
+    let input = screen.getByRole("textbox", { name: "Printed line total" });
+    expect((input as HTMLInputElement).value).toBe("69.95");
+    fireEvent.click(screen.getByRole("button", { name: "Leave empty" }));
+    input = screen.getByRole("textbox", { name: "Printed line total" });
+    expect(screen.getByText("Left empty")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+    fireEvent.change(input, { target: { value: "70.05" } });
+    expect((input as HTMLInputElement).value).toBe("70.05");
+    fireEvent.click(screen.getByRole("button", { name: "Leave empty" }));
+    fireEvent.click(screen.getByRole("button", { name: "Omit value" }));
+    input = screen.getByRole("textbox", { name: "Printed line total" });
+    expect(screen.getByText("Optional")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+    fireEvent.change(input, { target: { value: "3180" } });
+    expect((input as HTMLInputElement).value).toBe("3180");
+  });
+
   test("rejects malformed persisted structured values instead of replacing them with empties", () => {
     const ObjectEdit = objectWidget.edit!;
     const ListEdit = listWidget.edit!;

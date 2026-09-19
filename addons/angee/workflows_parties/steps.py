@@ -22,18 +22,50 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, RootModel
 from rebac import SubjectRef, actor_context, system_context
 from rebac.actors import to_subject_ref
 
 from angee.base.identity import canonical_subject_ref
-from angee.workflows.attempts import RecoveryCapability, RecoveryMode
-from angee.workflows.steps import DecisionSpec, StepEffect, StepImpl, StepOutcome, StepResult, positive_int
+from angee.base.scoping import system_queryset
+from angee.parties.fields import normalize_country_code
+from angee.workflows.attempts import (
+    DecisionGateOutput,
+    DecisionRecordAccess,
+    RecoveryCapability,
+    RecoveryMode,
+)
+from angee.workflows.steps import (
+    DecisionSpec,
+    StepEffect,
+    StepExecutionMode,
+    StepImpl,
+    StepOutcome,
+    StepResult,
+    positive_int,
+)
 
 _EXECUTE_MODES = frozenset({"prepare", "unit"})
 _ACTIONS = ("merge", "skip", "keep_separate")
 _SURVIVORS = ("left", "right")
 _IDENTITY_KEYS = ("left", "right", "left_name", "right_name", "evidence")
+
+
+class IdentityReviewPassThrough(BaseModel):
+    """Frozen identity facts emitted when no human Decision is required."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    party_id: str
+    context: dict[str, Any]
+    current: dict[str, Any]
+    proposed: dict[str, Any]
+    facts_hash: str
+    selection_decision_id: str = ""
+
+
+class IdentityReviewOutput(RootModel[IdentityReviewPassThrough | DecisionGateOutput]):
+    """Typed no-change handoff or retained terminal Decision evidence."""
 
 
 class DedupeScanStepImpl(StepImpl):
@@ -134,6 +166,7 @@ class DedupeExecuteStepImpl(StepImpl):
     label = "Apply duplicate decisions"
     category = "Activity"
     deterministic = False
+    execution_mode = StepExecutionMode.DATABASE_COMMAND
 
     @classmethod
     def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
@@ -160,7 +193,7 @@ class DedupeExecuteStepImpl(StepImpl):
         del now
         mode = str(step_run.step.config.get("mode") or "")
         if mode == "prepare":
-            return StepResult.done(output=_prepared_pairs(step_run.input), outcome="prepared")
+            return StepResult.done(output=_prepared_pairs(step_run), outcome="prepared")
         return StepResult.done(
             output=_apply_unit(step_run.input, run=step_run.run),
             outcome="completed",
@@ -181,13 +214,23 @@ class IdentityReviewStepImpl(StepImpl):
         StepOutcome("expired", "Review expired"),
     )
     effect = StepEffect.READ
+    output_model = IdentityReviewOutput
     effect_description = "Reads Party identity facts and may create a workflow Decision."
     idempotent = True
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
         proposal = _identity_input(step_run.input)
-        authority = _identity_selection_authority(proposal, run=step_run.run)
+        authority: SubjectRef | None = None
+        if proposal["selection_decision_id"]:
+            from angee.workflows import engine
+
+            authority, selected = engine.target_read_authority(
+                step_run, ("selection_decision_id",),
+                proposal_gate_path=("resolutions", 0, "decision_id"),
+            )
+            if str(selected.resolution.get("party_id") or "") != proposal["party_id"]:
+                raise ValidationError({"selection_decision_id": "Selection Decision chose a different Party."})
         party, current = _identity_snapshot(
             proposal["party_id"], actor=authority or _run_owner(step_run.run),
         )
@@ -195,6 +238,20 @@ class IdentityReviewStepImpl(StepImpl):
             **proposal,
             "current": current,
             "facts_hash": _facts_hash(current),
+            "facts": [
+                {"pointer": "/current", "label": "Current Party identity",
+                 "value": current, "authority": "source",
+                 "subject": {"model": party._meta.label, "id": str(party.sqid),
+                             "label": "Current Party"}},
+                {"pointer": "/proposed", "label": "Proposed Party identity",
+                 "value": proposal["proposed"], "authority": "unverified",
+                 "evidence": [
+                     {"model": item["source_model"], "id": item["source_id"],
+                      "label": item["label"]}
+                     for item in proposal["evidence"]
+                     if item.get("source_model") and item.get("source_id")
+                 ]},
+            ],
         }
         if not _identity_differs(current, proposal["proposed"]):
             return StepResult.done(
@@ -219,7 +276,11 @@ class IdentityReviewStepImpl(StepImpl):
                 target_model=party._meta.label,
                 target_id=str(party.sqid),
                 target_tab="identity",
-                target_authority_decision_id=proposal["selection_decision_id"],
+                record_access=(DecisionRecordAccess(model=party._meta.label, id=str(party.sqid)),),
+                target_authority_path=("selection_decision_id",)
+                if proposal["selection_decision_id"] else (),
+                target_authority_gate_path=("resolutions", 0, "decision_id")
+                if proposal["selection_decision_id"] else (),
             ),),
         )
 
@@ -237,22 +298,17 @@ class IdentityApplyStepImpl(StepImpl):
         StepOutcome("conflict", "Identity changed during review"),
     )
     effect = StepEffect.WRITE
+    execution_mode = StepExecutionMode.DATABASE_COMMAND
     effect_description = "Applies approved Party, Address, and PartyHandle facts."
     idempotent = True
-
-    @classmethod
-    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
-        del attempt
-        return RecoveryCapability(RecoveryMode.FRESH)
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
         value = _identity_apply_input(step_run.input)
         passthrough = _unchanged_identity_input(value)
         if passthrough is not None:
-            authority = _identity_selection_authority(passthrough, run=step_run.run)
             _, current = _identity_snapshot(
-                passthrough["party_id"], actor=authority or _run_owner(step_run.run),
+                passthrough["party_id"], actor=_run_owner(step_run.run),
             )
             if _facts_hash(current) != passthrough["facts_hash"]:
                 return StepResult.done(
@@ -266,19 +322,10 @@ class IdentityApplyStepImpl(StepImpl):
                 },
                 outcome="unchanged",
             )
-        approved = _identity_decision(value, run=step_run.run)
+        approved = _identity_decision(step_run, value)
         actor = _decision_actor(approved)
         party, current = _identity_snapshot(approved["party_id"], actor=actor)
         if _facts_hash(current) != approved["facts_hash"]:
-            if _identity_already_applied(current, approved):
-                return StepResult.done(
-                    output={
-                        "party_id": approved["party_id"], "context": approved["context"],
-                        "name_result": "already_applied", "address_result": "already_applied",
-                        "handle_result": "already_applied",
-                    },
-                    outcome="applied",
-                )
             return StepResult.done(
                 output={"party_id": approved["party_id"], "context": approved["context"]},
                 outcome="conflict",
@@ -292,9 +339,32 @@ class IdentityApplyStepImpl(StepImpl):
 
 _ADDRESS_FIELDS = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
 _IDENTITY_ACTIONS = {
-    "name_action": frozenset({"keep", "replace"}),
-    "address_action": frozenset({"keep", "add", "replace"}),
-    "handle_action": frozenset({"keep", "confirm", "dismiss"}),
+    "name_action": {
+        "label": "Supplier name",
+        "description": "Keep the current canonical name or use the proposed name from this invoice.",
+        "choices": {
+            "keep": "Keep current supplier name",
+            "replace": "Use proposed supplier name",
+        },
+    },
+    "address_action": {
+        "label": "Supplier address",
+        "description": "Keep current addresses, add the proposed address, or replace the primary address.",
+        "choices": {
+            "keep": "Keep current supplier addresses",
+            "add": "Add proposed supplier address",
+            "replace": "Replace primary supplier address",
+        },
+    },
+    "handle_action": {
+        "label": "Supplier contact",
+        "description": "Keep the email or phone at its current confirmation status, confirm it for this supplier, or dismiss it.",
+        "choices": {
+            "keep": "Keep current contact status",
+            "confirm": "Confirm proposed supplier contact",
+            "dismiss": "Dismiss proposed supplier contact",
+        },
+    },
 }
 
 
@@ -303,7 +373,7 @@ def _identity_apply_input(value: Any) -> Any:
 
     if isinstance(value, Mapping) and len(value) == 1:
         nested = next(iter(value.values()))
-        if isinstance(nested, Mapping) and ("decisions" in nested or "party_id" in nested):
+        if isinstance(nested, Mapping) and ("resolutions" in nested or "party_id" in nested):
             return nested
     return value
 
@@ -368,30 +438,6 @@ def _identity_input(value: Any) -> dict[str, Any]:
     }
 
 
-def _identity_selection_authority(proposal: Mapping[str, Any], *, run: Any) -> SubjectRef | None:
-    """Validate the prior same-run human selection that chose this exact Party."""
-
-    decision_id = str(proposal.get("selection_decision_id") or "")
-    if not decision_id:
-        return None
-    decision_model = apps.get_model("workflows", "Decision")
-    with system_context(reason="workflows_parties.identity_review.selection"):
-        decision = decision_model._base_manager.filter(
-            sqid=decision_id, step_run__run=run, verdict="completed",
-        ).first()
-    if decision is None or not isinstance(decision.resolution, Mapping):
-        raise ValidationError({"selection_decision_id": "Selection Decision is not completed in this run."})
-    if str(decision.resolution.get("party_id") or "") != proposal["party_id"]:
-        raise ValidationError({"selection_decision_id": "Selection Decision chose a different Party."})
-    try:
-        actor = canonical_subject_ref(decision.resolved_by)
-    except (TypeError, ValueError) as error:
-        raise ValidationError({"selection_decision_id": "Selection Decision requires a human resolver."}) from error
-    if get_user_model().objects.active_person_for_subject(actor) is None:
-        raise ValidationError({"selection_decision_id": "Selection Decision requires a human resolver."})
-    return actor
-
-
 def _identity_snapshot(party_id: str, *, actor: Any) -> tuple[Any, dict[str, Any]]:
     """Read the review-relevant Party facts through the actor's scoped owners."""
 
@@ -411,168 +457,108 @@ def _facts_hash(current: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(current, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _address_identity_key(address: Mapping[str, Any]) -> tuple[str, ...]:
+    country = str(address["country"])
+    try:
+        country = normalize_country_code(country)
+    except ValidationError:
+        pass
+    return tuple(
+        (country if field == "country" else str(address[field])).casefold()
+        for field in _ADDRESS_FIELDS
+    )
+
+
 def _identity_differs(current: Mapping[str, Any], proposed: Mapping[str, Any]) -> bool:
     if proposed["name"] and proposed["name"] != current["name"]:
         return True
     address = proposed["address"]
     if any(address[field] for field in _ADDRESS_FIELDS):
-        proposed_key = tuple(address[field].casefold() for field in _ADDRESS_FIELDS)
-        if all(tuple(str(row[field]).casefold() for field in _ADDRESS_FIELDS) != proposed_key
-               for row in current["addresses"]):
+        proposed_key = _address_identity_key(address)
+        if all(_address_identity_key(row) != proposed_key for row in current["addresses"]):
             return True
     link_id = proposed["handle"]["party_handle_id"]
     return bool(link_id and any(row["id"] == link_id and not row["is_confirmed"]
                                 for row in current["handles"]))
 
 
-def _identity_already_applied(current: Mapping[str, Any], approved: Mapping[str, Any]) -> bool:
-    """Recognize exactly the approved post-state after a crash following owner writes."""
-
-    frozen, proposed = approved["current"], approved["proposed"]
-    expected_name = proposed["name"] if approved["name_action"] == "replace" else frozen["name"]
-    if current["name"] != expected_name:
-        return False
-
-    frozen_addresses = {row["id"]: row for row in frozen["addresses"]}
-    current_addresses = {row["id"]: row for row in current["addresses"]}
-    address_action = approved["address_action"]
-    if address_action == "keep" and current_addresses != frozen_addresses:
-        return False
-    if address_action == "replace":
-        primary = next((row for row in frozen["addresses"] if row["is_primary"]), None)
-        if primary is None:
-            if any(current_addresses.get(key) != value for key, value in frozen_addresses.items()):
-                return False
-            added = [row for key, row in current_addresses.items() if key not in frozen_addresses]
-            if len(added) != 1 or not added[0]["is_primary"]:
-                return False
-            if any(added[0][field] != proposed["address"][field] for field in ("label", *_ADDRESS_FIELDS)):
-                return False
-        else:
-            if set(current_addresses) != set(frozen_addresses):
-                return False
-            expected = {**primary, **proposed["address"]}
-            if current_addresses[primary["id"]] != expected:
-                return False
-            if any(current_addresses[key] != value for key, value in frozen_addresses.items()
-                   if key != primary["id"]):
-                return False
-    if address_action == "add":
-        if any(current_addresses.get(key) != value for key, value in frozen_addresses.items()):
-            return False
-        added = [row for key, row in current_addresses.items() if key not in frozen_addresses]
-        if len(added) != 1 or any(
-            added[0][field] != proposed["address"][field] for field in ("label", *_ADDRESS_FIELDS)
-        ):
-            return False
-
-    frozen_handles = {row["id"]: row for row in frozen["handles"]}
-    current_handles = {row["id"]: row for row in current["handles"]}
-    if set(current_handles) != set(frozen_handles):
-        return False
-    handle_action = approved["handle_action"]
-    selected_id = proposed["handle"]["party_handle_id"]
-    for key, frozen_row in frozen_handles.items():
-        expected = dict(frozen_row)
-        if key == selected_id and handle_action == "confirm":
-            expected.update(confidence=1.0, is_confirmed=True, is_dismissed=False)
-        elif key == selected_id and handle_action == "dismiss":
-            expected.update(is_confirmed=False, is_dismissed=True)
-        if current_handles[key] != expected:
-            return False
-    return True
-
-
 def _identity_form_schema(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Describe the fixed proposal/evidence and three explicit review choices."""
+    """Describe native verdict choices and typed frozen identity context."""
 
-    return {
-        "type": "object",
-        "required": ["proposed", "current", "evidence", *_IDENTITY_ACTIONS],
-        "properties": {
-            "proposed": _proposed_identity_schema(),
-            "current": _current_identity_schema(),
-            "evidence": {
-                "type": "array", "widget": "rows", "label": "Evidence", "readOnly": True,
-                "items": {"type": "object", "properties": {
-                    "label": {"type": "string", "label": "Fact", "readOnly": True},
-                    "value": {"type": "string", "label": "Value", "readOnly": True},
-                    "source_model": {"type": "string", "label": "Source", "readOnly": True},
-                    "source_id": {"type": "string", "label": "Source id", "readOnly": True},
-                }},
-            },
-            **{name: {"type": "string", "enum": sorted(actions), "default": "keep"}
-               for name, actions in _IDENTITY_ACTIONS.items()},
-        },
-    }
-
-
-def _proposed_identity_schema() -> dict[str, Any]:
-    address_properties = {
-        "label": {"type": "string", "label": "Label", "readOnly": True},
-        **{field: {"type": "string", "label": field.replace("_", " ").title(), "readOnly": True}
-           for field in _ADDRESS_FIELDS},
+    del payload
+    actions = ["apply_identity", "reject_identity", "escalate_identity"]
+    editable = {
+        name: {
+            "type": "string",
+            "enum": list(field["choices"]),
+            "default": "keep",
+            "label": field["label"],
+            "description": field["description"],
+            "options": [
+                {"value": value, "label": label}
+                for value, label in field["choices"].items()
+            ],
+        }
+        for name, field in _IDENTITY_ACTIONS.items()
     }
     return {
-        "type": "object", "widget": "object", "label": "Proposed identity", "readOnly": True,
+        "type": "object", "required": ["action"],
         "properties": {
-            "name": {"type": "string", "label": "Name", "readOnly": True},
-            "address": {"type": "object", "widget": "object", "label": "Address", "readOnly": True,
-                        "properties": address_properties},
-            "handle": {"type": "object", "widget": "object", "label": "Handle", "readOnly": True,
-                       "properties": {
-                           "party_handle_id": {"type": "string", "label": "Link", "readOnly": True},
-                           "evidence": {"type": "string", "label": "Evidence", "readOnly": True},
-                       }},
+            "action": {"type": "string", "enum": actions, "options": [
+                {"value": "apply_identity", "label": "Apply identity choices", "verdict": "COMPLETE"},
+                {"value": "reject_identity", "label": "Reject identity change", "verdict": "REJECT"},
+                {"value": "escalate_identity", "label": "Escalate identity review", "verdict": "ESCALATE"},
+            ]},
+            **editable,
+            "note": {"type": "string", "widget": "textarea"},
+            "facts": {"type": "array", "layout": "context", "widget": "facts",
+                      "items": {"type": "object"}},
         },
+        "oneOf": [
+            {"type": "object", "required": ["action", *editable],
+             "properties": {"action": {"const": "apply_identity"}, **editable},
+             "additionalProperties": False},
+            {"type": "object", "required": ["action", "note"],
+             "properties": {"action": {"const": "reject_identity"},
+                            "note": {"type": "string", "minLength": 1}},
+             "additionalProperties": False},
+            {"type": "object", "required": ["action", "note"],
+             "properties": {"action": {"const": "escalate_identity"},
+                            "note": {"type": "string", "minLength": 1}},
+             "additionalProperties": False},
+        ],
     }
 
 
-def _current_identity_schema() -> dict[str, Any]:
-    return {
-        "type": "object", "widget": "object", "label": "Current identity", "readOnly": True,
-        "properties": {
-            "name": {"type": "string", "label": "Name", "readOnly": True},
-            "addresses": {"type": "array", "widget": "rows", "label": "Addresses", "readOnly": True,
-                          "items": {"type": "object", "properties": {
-                              "id": {"type": "string", "label": "Address", "readOnly": True},
-                              "label": {"type": "string", "readOnly": True},
-                              "po_box": {"type": "string", "label": "PO box", "readOnly": True},
-                              "extended": {"type": "string", "readOnly": True},
-                              "street": {"type": "string", "readOnly": True},
-                              "city": {"type": "string", "readOnly": True},
-                              "region": {"type": "string", "readOnly": True},
-                              "postal_code": {"type": "string", "readOnly": True},
-                              "country": {"type": "string", "readOnly": True},
-                              "is_primary": {"type": "boolean", "label": "Primary", "readOnly": True},
-                          }}},
-            "handles": {"type": "array", "widget": "rows", "label": "Handles", "readOnly": True,
-                        "items": {"type": "object", "properties": {
-                            "id": {"type": "string", "label": "Link", "readOnly": True},
-                            "handle_id": {"type": "string", "label": "Handle", "readOnly": True},
-                            "platform": {"type": "string", "readOnly": True},
-                            "value": {"type": "string", "readOnly": True},
-                            "confidence": {"type": "number", "readOnly": True},
-                            "is_confirmed": {"type": "boolean", "label": "Confirmed", "readOnly": True},
-                            "is_dismissed": {"type": "boolean", "label": "Dismissed", "readOnly": True},
-                        }}},
-        },
-    }
+def _identity_decision(step_run: Any, value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or not isinstance(value.get("resolutions"), list):
+        raise ValidationError({"input": "Identity apply requires the typed gate resolution."})
+    if len(value["resolutions"]) != 1 or not isinstance(value["resolutions"][0], Mapping):
+        raise ValidationError({"input": "Identity apply requires one exact resolution."})
+    review_rows = list(
+        system_queryset(type(step_run), using=step_run._state.db, lock=None)
+        .filter(next_step_runs=step_run, step__step_class="parties_identity_review")
+        .select_related("step", "current_attempt")
+    )
+    if len(review_rows) != 1 or review_rows[0].current_attempt is None:
+        raise ValidationError({"gate": "Identity apply needs the declared review predecessor."})
+    review = review_rows[0]
+    proposal = review.current_attempt.input
+    if not isinstance(proposal, Mapping) or not isinstance(proposal.get("party_id"), str):
+        raise ValidationError({"gate": "Identity review has no retained Party target."})
+    from angee.workflows import engine
 
-
-def _identity_decision(value: Any, *, run: Any) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or not isinstance(value.get("decisions"), list):
-        raise ValidationError({"input": "Identity apply requires a completed decision."})
-    ids = [str(item) for item in value["decisions"]]
-    if len(ids) != 1 or not ids[0]:
-        raise ValidationError({"input": "Identity apply requires exactly one decision."})
-    decision_model = apps.get_model("workflows", "Decision")
-    with system_context(reason="workflows_parties.identity_apply.decision"):
-        decision = decision_model._base_manager.filter(
-            sqid=ids[0], step_run__run=run, step_run__step__step_class="parties_identity_review",
-        ).first()
-    if decision is None or str(getattr(decision.verdict, "value", decision.verdict)) != "completed":
-        raise ValidationError({"input": "Identity review decision is not completed."})
+    resolution_path: tuple[str | int, ...] = ("resolutions", 0)
+    if value is not step_run.input:
+        if not isinstance(step_run.input, Mapping) or len(step_run.input) != 1:
+            raise ValidationError({"input": "Identity resolution envelope is invalid."})
+        resolution_path = (next(iter(step_run.input)), "resolutions", 0)
+    decision, _ = engine.consume_decision_resolution(
+        step_run, resolution_path,
+        expected_action=str(review.step.config.get("action") or "review-party-identity"),
+        expected_target=("parties.Party", proposal["party_id"]),
+        expected_verdict="completed", actor=_resolved_person(value["resolutions"][0]),
+    )
     payload, resolution = decision.payload, decision.resolution
     if not isinstance(payload, Mapping) or not isinstance(resolution, Mapping):
         raise ValidationError({"input": "Identity review data is invalid."})
@@ -583,9 +569,9 @@ def _identity_decision(value: Any, *, run: Any) -> dict[str, Any]:
         if key in resolution and resolution.get(key) != payload.get(key):
             raise ValidationError({"input": "Identity resolution changed frozen review facts."})
     approved = dict(payload)
-    for key, choices in _IDENTITY_ACTIONS.items():
+    for key, field in _IDENTITY_ACTIONS.items():
         choice = str(resolution.get(key) or "")
-        if choice not in choices:
+        if choice not in field["choices"]:
             raise ValidationError({"input": f"Identity resolution has invalid {key}."})
         approved[key] = choice
     approved["_resolved_by"] = decision.resolved_by
@@ -595,13 +581,19 @@ def _identity_decision(value: Any, *, run: Any) -> dict[str, Any]:
 def _decision_actor(approved: Mapping[str, Any]) -> Any:
     """Resolve the human who completed the Decision as the accountable writer."""
 
+    return _resolved_person({"resolved_by": approved.get("_resolved_by")})
+
+
+def _resolved_person(value: Mapping[str, Any]) -> Any:
+    """Resolve one retained Decision resolver through the active-person owner."""
+
     try:
-        subject = canonical_subject_ref(str(approved.get("_resolved_by") or ""))
+        subject = canonical_subject_ref(str(value.get("resolved_by") or ""))
     except (TypeError, ValueError) as error:
-        raise ValidationError({"decision": "Identity review requires a human resolver."}) from error
+        raise ValidationError({"decision": "Party workflow Decision requires a human resolver."}) from error
     user = get_user_model().objects.active_person_for_subject(subject)
     if user is None:
-        raise ValidationError({"decision": "Identity review requires a human resolver."})
+        raise ValidationError({"decision": "Party workflow Decision requires a human resolver."})
     return user
 
 
@@ -699,37 +691,33 @@ def _survivor_score(party: Any) -> tuple[bool, int, int]:
 def _dedupe_form_schema() -> dict[str, Any]:
     """Return the serializable fixed-row pair-review form."""
 
+    pairs = {
+        "type": "array", "widget": "rows", "label": "Duplicate pairs",
+        "items": {
+            "type": "object", "required": list(_IDENTITY_KEYS) + ["survivor", "action"],
+            "properties": {
+                "left": {"type": "string", "label": "Left id", "readOnly": True},
+                "right": {"type": "string", "label": "Right id", "readOnly": True},
+                "left_name": {"type": "string", "label": "Left", "readOnly": True},
+                "right_name": {"type": "string", "label": "Right", "readOnly": True},
+                "evidence": {"type": "string", "label": "Evidence", "readOnly": True},
+                "survivor": {"type": "string", "label": "Keep", "enum": list(_SURVIVORS)},
+                "action": {"type": "string", "label": "Pair action", "enum": list(_ACTIONS)},
+            },
+        },
+    }
     return {
         "type": "object",
-        "required": ["pairs"],
+        "required": ["action"],
         "properties": {
-            "pairs": {
-                "type": "array",
-                "widget": "rows",
-                "label": "Duplicate pairs",
-                "items": {
-                    "type": "object",
-                    "required": list(_IDENTITY_KEYS) + ["survivor", "action"],
-                    "properties": {
-                        "left": {"type": "string", "label": "Left id", "readOnly": True},
-                        "right": {"type": "string", "label": "Right id", "readOnly": True},
-                        "left_name": {"type": "string", "label": "Left", "readOnly": True},
-                        "right_name": {"type": "string", "label": "Right", "readOnly": True},
-                        "evidence": {"type": "string", "label": "Evidence", "readOnly": True},
-                        "survivor": {
-                            "type": "string",
-                            "label": "Keep",
-                            "enum": list(_SURVIVORS),
-                        },
-                        "action": {
-                            "type": "string",
-                            "label": "Action",
-                            "enum": list(_ACTIONS),
-                        },
-                    },
-                },
-            }
+            "action": {"type": "string", "enum": ["apply_pairs"],
+                       "options": [{"value": "apply_pairs", "label": "Apply pair decisions",
+                                    "verdict": "COMPLETE"}]},
+            "pairs": pairs,
         },
+        "oneOf": [{"type": "object", "required": ["action", "pairs"],
+                   "properties": {"action": {"const": "apply_pairs"}, "pairs": pairs},
+                   "additionalProperties": False}],
     }
 
 
@@ -750,53 +738,49 @@ def _input_pairs(value: Any) -> list[dict[str, str]]:
     return [dict(row) for row in pairs]
 
 
-def _prepared_pairs(value: Any) -> list[dict[str, str]]:
+def _prepared_pairs(step_run: Any) -> list[dict[str, str]]:
     """Load the completed decision and return the verified, approved verb list."""
 
-    if not isinstance(value, Mapping) or not isinstance(value.get("decisions"), list):
-        raise ValidationError({"input": "Dedupe prepare input must contain decision ids."})
-    decision_ids = [str(decision_id) for decision_id in value["decisions"]]
-    if not decision_ids or any(not decision_id for decision_id in decision_ids):
-        raise ValidationError({"input": "Dedupe prepare input requires completed decisions."})
+    value = step_run.input
+    if not isinstance(value, Mapping) or not isinstance(value.get("resolutions"), list):
+        raise ValidationError({"input": "Dedupe prepare requires the typed gate resolution."})
+    if len(value["resolutions"]) != 1 or not isinstance(value["resolutions"][0], Mapping):
+        raise ValidationError({"input": "Dedupe prepare requires one exact resolution."})
+    gate_rows = list(
+        system_queryset(type(step_run), using=step_run._state.db, lock=None)
+        .filter(next_step_runs=step_run, step__step_class="parties_dedupe_gate")
+        .select_related("step")
+    )
+    if len(gate_rows) != 1:
+        raise ValidationError({"gate": "Dedupe prepare needs one declared predecessor gate."})
+    from angee.workflows import engine
 
-    decision_model = apps.get_model("workflows", "Decision")
-    with system_context(reason="workflows_parties.dedupe_execute.decisions"):
-        decisions = {
-            str(decision.sqid): decision for decision in decision_model._base_manager.filter(sqid__in=decision_ids)
-        }
-    if set(decisions) != set(decision_ids):
-        raise ValidationError({"input": "Dedupe review decision was not found."})
+    decision, _ = engine.consume_decision_resolution(
+        step_run, ("resolutions", 0),
+        expected_action=str(gate_rows[0].step.config.get("action") or "dedupe-parties"),
+        expected_target=("", ""), expected_verdict="completed",
+        actor=_resolved_person(value["resolutions"][0]),
+    )
 
     approved: list[dict[str, str]] = []
-    for decision_id in decision_ids:
-        decision = decisions[decision_id]
-        verdict = str(getattr(decision.verdict, "value", decision.verdict))
-        if verdict != "completed":
-            raise ValidationError({"input": "Dedupe review decision must be completed."})
-        expected_rows = _pair_rows(decision.payload, owner="payload")
-        resolved_rows = _pair_rows(decision.resolution, owner="resolution")
-        if len(expected_rows) != len(resolved_rows):
-            raise ValidationError({"input": "Dedupe resolution must preserve every proposed pair."})
-        for expected, resolved in zip(expected_rows, resolved_rows, strict=True):
-            for identity_key in _IDENTITY_KEYS:
-                if str(resolved.get(identity_key) or "") != str(expected.get(identity_key) or ""):
-                    raise ValidationError({"input": "Dedupe resolution changed a proposed pair."})
-            action = str(resolved.get("action") or "")
-            survivor = str(resolved.get("survivor") or "")
-            if action not in _ACTIONS:
-                raise ValidationError({"input": f"Dedupe resolution action must be one of {', '.join(_ACTIONS)}."})
-            if survivor not in _SURVIVORS:
-                raise ValidationError({"input": "Dedupe resolution survivor must be left or right."})
-            if action == "skip":
-                continue
-            approved.append(
-                {
-                    "left": str(expected["left"]),
-                    "right": str(expected["right"]),
-                    "survivor": survivor,
-                    "action": action,
-                }
-            )
+    expected_rows = _pair_rows(decision.payload, owner="payload")
+    resolved_rows = _pair_rows(decision.resolution, owner="resolution")
+    if len(expected_rows) != len(resolved_rows):
+        raise ValidationError({"input": "Dedupe resolution must preserve every proposed pair."})
+    for expected, resolved in zip(expected_rows, resolved_rows, strict=True):
+        for identity_key in _IDENTITY_KEYS:
+            if str(resolved.get(identity_key) or "") != str(expected.get(identity_key) or ""):
+                raise ValidationError({"input": "Dedupe resolution changed a proposed pair."})
+        action = str(resolved.get("action") or "")
+        survivor = str(resolved.get("survivor") or "")
+        if action not in _ACTIONS:
+            raise ValidationError({"input": f"Dedupe resolution action must be one of {', '.join(_ACTIONS)}."})
+        if survivor not in _SURVIVORS:
+            raise ValidationError({"input": "Dedupe resolution survivor must be left or right."})
+        if action == "skip":
+            continue
+        approved.append({"left": str(expected["left"]), "right": str(expected["right"]),
+                         "survivor": survivor, "action": action})
     return approved
 
 
@@ -814,7 +798,7 @@ def _pair_rows(value: Any, *, owner: str) -> list[Mapping[str, Any]]:
 def _apply_unit(value: Any, *, run: Any) -> dict[str, str]:
     """Apply one approved pair verb idempotently and report the outcome.
 
-    Verbs act AS the run creator — the human whose Decision approved the batch —
+    Verbs act AS the run's admitted actor — the human whose Decision approved the batch —
     so durable facts (the MergeVeto, the merge audit trail) carry an accountable
     actor instead of an anonymous system write.
     """
@@ -839,17 +823,16 @@ def _apply_unit(value: Any, *, run: Any) -> dict[str, str]:
 
         into, source = (left, right) if survivor_side == "left" else (right, left)
         if source.canonical().pk == into.canonical().pk:
-            # A retried unit after a crash mid-batch: the merge already landed.
+            # Domain identity also handles a fresh recovery after another merge.
             return {"action": action, "result": "already_merged"}
         party_model.objects.merge(into=into, source=source)
         return {"action": action, "result": "merged"}
 
 
 def _run_owner(run: Any) -> Any:
-    """Return the run creator — the accountable actor for gates and approved verbs."""
+    """Resolve the immutable run admission subject for gates and approved verbs."""
 
-    owner_id = getattr(run, "created_by_id", None)
-    if owner_id is None:
-        raise ValidationError({"run": "Dedupe steps require a run creator."})
-    with system_context(reason="workflows_parties.dedupe.run_owner"):
-        return get_user_model()._base_manager.get(pk=owner_id)
+    owner = run.admission_actor()
+    if owner is None:
+        raise ValidationError({"run": "Party workflow steps require a current admitted actor."})
+    return owner

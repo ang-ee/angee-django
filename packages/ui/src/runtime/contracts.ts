@@ -117,6 +117,8 @@ export interface SlotContribution {
   impl?: string;
   id: string;
   sequence?: number;
+  /** Toolbar placement for content in the form-view record-actions slot. */
+  recordActionPlacement?: "primary" | "menu";
   content?: unknown;
 }
 

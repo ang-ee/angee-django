@@ -8,21 +8,25 @@ category = "Integration"
 depends_on = ["angee.integrate"]
 
 [[migrations]]
+fresh_history = "baseline"
 name = "adopt_vcs_models"
 app_label = "integrate_vcs"
 module = "runtime_migrations.adopt_vcs_models"
 
 [[migrations]]
+fresh_history = "baseline"
 name = "migrate_vcs_identities"
 app_label = "integrate_vcs"
 module = "runtime_migrations.migrate_vcs_identities"
 
 [[migrations]]
+fresh_history = "baseline"
 name = "adopt_vcs_permission_schema"
 app_label = "integrate_vcs"
 module = "runtime_migrations.adopt_vcs_permission_schema"
 
 [[migrations]]
+fresh_history = "baseline"
 name = "delete_integrate_vcs_state"
 app_label = "integrate"
 module = "runtime_migrations.delete_integrate_vcs_state"

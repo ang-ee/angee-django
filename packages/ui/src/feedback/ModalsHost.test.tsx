@@ -7,17 +7,13 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { ModalsHost, usePrompt } from "./ModalsHost";
 
 describe("ModalsHost", () => {
-  beforeAll(() => {
-    Element.prototype.getAnimations ??= () => [];
-  });
-
   afterEach(() => {
     cleanup();
   });

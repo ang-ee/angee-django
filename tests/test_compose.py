@@ -924,7 +924,8 @@ def test_build_command_delegates_the_complete_write_lifecycle(
     calls: list[str] = []
 
     class FakeRuntime:
-        def build(self) -> AddonDependencyGroupResult:
+        def build(self, *, fresh_history: bool = False) -> AddonDependencyGroupResult:
+            assert fresh_history is False
             calls.append("build")
             return AddonDependencyGroupResult.UNCHANGED
 
@@ -933,6 +934,29 @@ def test_build_command_delegates_the_complete_write_lifecycle(
     Command()._handle_build({"check": False})
 
     assert calls == ["build"]
+
+
+def test_fresh_history_refuses_a_nonempty_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The explicit baseline mode cannot run against existing schema history."""
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+    connection = SimpleNamespace(
+        cursor=lambda: Cursor(),
+        introspection=SimpleNamespace(table_names=lambda cursor: ["django_migrations"]),
+    )
+    monkeypatch.setattr(
+        "angee.compose.management.commands.angee.connections",
+        {"default": connection},
+    )
+
+    with pytest.raises(CommandError, match="requires an empty database; found django_migrations"):
+        Command._require_fresh_history_database()
 
 
 def test_runtime_build_emits_stale_sources_once_before_materializing(tmp_path: Path, monkeypatch) -> None:
@@ -945,8 +969,9 @@ def test_runtime_build_emits_stale_sources_once_before_materializing(tmp_path: P
         return original_render()
 
     class FakeMigrations:
-        def materialize(self, *, apps) -> tuple[Path, ...]:
+        def materialize(self, *, apps, fresh_history: bool = False) -> tuple[Path, ...]:
             assert apps is runtime_module.apps
+            assert fresh_history is False
             assert "class Resource" in (runtime.runtime_dir / "resources" / "models.py").read_text()
             calls.append("materialize")
             return ()
@@ -966,8 +991,9 @@ def test_runtime_build_materializes_without_rewriting_current_sources(tmp_path: 
     calls: list[str] = []
 
     class FakeMigrations:
-        def materialize(self, *, apps) -> tuple[Path, ...]:
+        def materialize(self, *, apps, fresh_history: bool = False) -> tuple[Path, ...]:
             assert apps is runtime_module.apps
+            assert fresh_history is False
             calls.append("materialize")
             return ()
 
@@ -1029,6 +1055,7 @@ def _provision_options(**overrides: Any) -> dict[str, Any]:
         "force_rebac": False,
         "wait_db": 60,
         "post_build": False,
+        "fresh_history": False,
     }
     options.update(overrides)
     return options
@@ -1102,10 +1129,21 @@ def test_provision_plan_builds_before_it_migrates() -> None:
         _provision_options(demo=True, force_rebac=True, bootstrap_admin=True),
     ):
         plan = Command._provision_plan(options)
-        build = plan.index(["angee", "build"])
         makemigrations = plan.index(["makemigrations", "--skip-checks"])
         migrate = plan.index(["migrate", "--noinput", "--skip-checks"])
-        assert build < makemigrations < migrate
+        assert plan.index(["angee", "build"]) < makemigrations < migrate
+
+
+def test_fresh_history_provision_builds_the_generated_initial_graph_twice() -> None:
+    """The explicit fresh path baselines history only after initial leaves exist."""
+
+    plan = Command._provision_plan(_provision_options(fresh_history=True))
+
+    build = ["angee", "build", "--fresh-history"]
+    builds = [index for index, step in enumerate(plan) if step == build]
+    assert len(builds) == 2
+    assert builds[0] < plan.index(["makemigrations", "--skip-checks"]) < builds[1]
+    assert builds[1] < plan.index(["migrate", "--noinput", "--skip-checks"])
 
 
 def test_provision_defers_checks_only_across_the_schema_identity_transition() -> None:

@@ -37,7 +37,7 @@ vi.mock("@angee/ui", () => ({
     mocks.dialogs.push(props);
     return props.open ? <div role="dialog">args form</div> : null;
   },
-  Button: ({ children, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
+  RecordActionTrigger: ({ children, loading: _loading, glyph: _glyph, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean; glyph?: string }) => (
     <button type="button" {...props}>{children}</button>
   ),
   Glyph: ({ name }: { name: string }) => <span aria-hidden>{name}</span>,

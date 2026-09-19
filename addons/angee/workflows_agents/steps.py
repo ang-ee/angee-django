@@ -133,11 +133,7 @@ class AgentStepImpl(StepImpl):
                 credential=target.agent.inference_credential_for_runtime() if target.agent is not None else None,
             )
             with system_context(reason="workflows_agents.agent_step.budget"), transaction.atomic():
-                step_run.run.debit_budget(
-                    _usage_delta(
-                        response.usage, legacy_keys=set(step_run.run.workflow.budget) | set(step_run.run.budget_spent)
-                    )
-                )
+                step_run.run.debit_budget(_usage_delta(response.usage))
             return StepResult.done(
                 output=_bounded_summary(_success_summary(target=target, request=request, response=response)),
                 outcome="completed",
@@ -308,7 +304,8 @@ def _deferred_results(step_run: Any) -> list[dict[str, Any]]:
     decisions = step_run.decisions.filter(pk__in=decision_ids).order_by("priority", "pk")
     return [
         {
-            **dict(decision.payload or {}),
+            **{key: value for key, value in dict(decision.payload or {}).items()
+               if key != "facts"},
             "approved": decision.verdict == Verdict.COMPLETED,
             "verdict": str(decision.verdict),
             "resolution": dict(decision.resolution or {}),
@@ -397,19 +394,50 @@ def _approval_decisions(session: Any, requests: list[dict[str, Any]]) -> tuple[D
     assignee = str(to_subject_ref(session.owner))
     schema: dict[str, JsonValue] = {
         "type": "object",
+        "required": ["action"],
         "properties": {
+            "action": {
+                "type": "string", "enum": ["approve", "reject"],
+                "options": [
+                    {"value": "approve", "label": "Approve tool request", "verdict": "COMPLETE"},
+                    {"value": "reject", "label": "Reject tool request", "verdict": "REJECT",
+                     "variant": "destructive"},
+                ],
+            },
             "reason": {
                 "type": "string",
                 "label": "Decision note",
                 "widget": "textarea",
-            }
+            },
+            "facts": {
+                "type": "array", "items": {"type": "object"},
+                "layout": "context", "widget": "facts",
+            },
         },
+        "oneOf": [
+            {"type": "object", "required": ["action"],
+             "properties": {"action": {"const": "approve"}, "reason": {"type": "string"}},
+             "additionalProperties": False},
+            {"type": "object", "required": ["action", "reason"],
+             "properties": {"action": {"const": "reject"},
+                            "reason": {"type": "string", "minLength": 1}},
+             "additionalProperties": False},
+        ],
     }
     return tuple(
         DecisionSpec(
             assignees=(assignee,),
             action="approve_tool",
-            payload=dict(request),
+            payload={
+                **request,
+                "facts": [{
+                    "pointer": f"/approval_requests/{index}",
+                    "label": "Requested tool call",
+                    "value": dict(request),
+                    "authority": "unverified",
+                    "evidence": [],
+                }],
+            },
             priority=index,
             max_attempts=3,
             decision_schema=schema,
@@ -607,17 +635,10 @@ def _float(value: Any, *, name: str) -> float:
         raise ValidationError({"config": f"Agent step {name} must be a number."}) from error
 
 
-def _usage_delta(usage: RequestUsage, *, legacy_keys: set[str]) -> dict[str, int]:
-    """Account native usage while honoring already-persisted legacy budget axes."""
+def _usage_delta(usage: RequestUsage) -> dict[str, int]:
+    """Map native request usage to the workflow budget vocabulary."""
 
     delta = {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens, "tokens": usage.total_tokens}
-    for key, value in (
-        ("prompt_tokens", usage.input_tokens),
-        ("completion_tokens", usage.output_tokens),
-        ("total_tokens", usage.total_tokens),
-    ):
-        if key in legacy_keys:
-            delta[key] = value
     return {key: int(value) for key, value in delta.items() if value}
 
 

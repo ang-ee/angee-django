@@ -163,6 +163,8 @@ class Address(AbstractAddress):
 class PartyHandle(WorkflowPartyHandleContribution, AbstractPartyHandle):
     """Concrete identity link used when messaging attributes a user-owned handle."""
 
+    rebac_grantable = WorkflowPartyHandleContribution.rebac_grantable
+
     class Meta(_PartyHandleMeta):
         """Django model options for the canonical test party-handle."""
 

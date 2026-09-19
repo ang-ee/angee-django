@@ -183,7 +183,9 @@ def test_waiting_map_recovery_counts_existing_children_once(
             status=StepRunStatus.SCHEDULED,
             input={"item": "one"},
         ).previous.add(map_row)
-        WorkflowRun.objects.filter(pk=run.pk).update(status=RunStatus.RUNNING, steps_taken=1)
+        models.QuerySet.update(
+            WorkflowRun.objects.filter(pk=run.pk), status=RunStatus.RUNNING, steps_taken=1,
+        )
 
     assert engine.advance(run.pk) == {"claimed": 2}
 

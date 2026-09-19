@@ -2,7 +2,11 @@ import { useEffect, useState, type ReactElement } from "react";
 import { heicTo } from "heic-to";
 
 import {
-  EmptyState, LoadingPanel, type PreviewProviderProps } from "@angee/ui";
+  EmptyState,
+  ImagePreviewSurface,
+  LoadingPanel,
+  type PreviewProviderProps,
+} from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 
@@ -58,13 +62,5 @@ export default function HeicPreview({ file }: PreviewProviderProps): ReactElemen
     );
   }
   if (!state.url) return <LoadingPanel message={t("preview.decoding")} />;
-  return (
-    <div className="grid h-full place-content-center overflow-auto bg-inset p-4">
-      <img
-        src={state.url}
-        alt={file.name}
-        className="max-h-full max-w-full rounded-6 object-contain shadow-sm"
-      />
-    </div>
-  );
+  return <ImagePreviewSurface src={state.url} alt={file.name} />;
 }

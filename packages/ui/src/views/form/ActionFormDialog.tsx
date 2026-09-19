@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Controller, useWatch, type Control } from "react-hook-form";
 import { rowPublicId, useModelMetadata } from "@angee/metadata";
+import type { ActionOutcome } from "@angee/refine";
 
 import { DialogForm } from "../../fragments/DialogForm";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
@@ -28,8 +29,8 @@ export interface ActionFormDialogProps {
   context: ActionFormContext;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Called once after a successful (`ok`) submit — e.g. to reload the record. */
-  onSucceeded?: () => void;
+  /** Called once with the successful (`ok`) outcome — e.g. to reload or follow its record. */
+  onSucceeded?: (outcome: ActionOutcome) => void;
 }
 
 type ArgValues = Record<string, unknown>;
@@ -70,8 +71,8 @@ export function ActionFormDialog({
       // `null` as its form-level failure, so fold the two here.
       return (await action.submit(serializeActionArgValues(args, collected), context)) ?? null;
     },
-    onSuccess: () => {
-      onSucceeded?.();
+    onSuccess: (_values, outcome) => {
+      onSucceeded?.(outcome);
       onOpenChange(false);
     },
     fieldNames: argNames,

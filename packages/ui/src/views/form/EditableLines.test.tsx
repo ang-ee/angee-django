@@ -60,15 +60,17 @@ const LINES = {
 function Host({
   footer,
   inspectContext = false,
+  compact = false,
 }: {
   inspectContext?: boolean;
+  compact?: boolean;
   footer?: (rows: readonly Record<string, unknown>[]) => React.ReactNode;
 }): React.ReactElement {
   const form = useForm<Record<string, unknown>>({
     defaultValues: {
       lines: [
-        { label: "Widget", quantity: 2, position: 0 },
-        { label: "Gadget", quantity: 5, position: 1 },
+        { id: "one", label: "Widget", quantity: 2, amount_subtotal: "20.00", position: 0 },
+        { id: "two", label: "Gadget", quantity: 5, amount_subtotal: "25.00", position: 1 },
       ],
     },
   });
@@ -96,6 +98,14 @@ function Host({
         lines={lines}
         parentRow={{ company: "Acme" }}
         footer={footer}
+        primaryFields={compact ? ["label"] : undefined}
+        supplementalColumns={compact ? [{
+          key: "subtotal",
+          header: "Subtotal",
+          render: (row, _parent, _index, { formIsDirty }) => (
+            <span>{formIsDirty ? "Pending save" : String(row.amount_subtotal)}</span>
+          ),
+        }] : undefined}
       />
     </AppRuntimeProvider>
   );
@@ -185,7 +195,7 @@ describe("EditableLines", () => {
     const f = rowPatchFixture();
     fireEvent.click(screen.getByRole("button", { name: "Preview Gadget" }));
     const pending = f.callbacks.get("Gadget")!;
-    const focusTarget = screen.getAllByRole("textbox", { name: "Decimal number" })[1]!;
+    const focusTarget = screen.getAllByRole("textbox", { name: "Quantity" })[1]!;
     focusTarget.focus();
     expect(document.activeElement).toBe(focusTarget);
     act(() => pending({ label: "Resolved preview" }));
@@ -218,6 +228,30 @@ describe("EditableLines", () => {
     expect(screen.queryByText("Position")).toBeNull();
     expect(screen.getByText("Label")).toBeTruthy();
     expect(screen.getByText("Quantity")).toBeTruthy();
+    expect(screen.getAllByRole("textbox", { name: "Label" })).toHaveLength(2);
+    expect(screen.getAllByRole("textbox", { name: "Quantity" })).toHaveLength(2);
+  });
+
+  test("keeps advanced values available behind details and renders read-only projections", () => {
+    render(<Host compact />);
+
+    expect(screen.queryByText("Quantity")).toBeNull();
+    expect(screen.getByText("Subtotal")).toBeTruthy();
+    expect(screen.getByText("20.00")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show line details" }));
+    expect(screen.getByText("Quantity")).toBeTruthy();
+    expect(screen.getAllByRole("textbox", { name: "Quantity" })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Hide line details" }));
+    expect(screen.queryByText("Quantity")).toBeNull();
+  });
+
+  test("lets a supplemental projection hide stale saved values while the form is dirty", () => {
+    render(<Host compact />);
+    fireEvent.change(screen.getAllByRole("textbox", { name: "Label" })[0]!, {
+      target: { value: "Changed widget" },
+    });
+    expect(screen.getAllByText("Pending save")).toHaveLength(2);
+    expect(screen.queryByText("20.00")).toBeNull();
   });
 
   test("adds a blank row and removes a row", () => {

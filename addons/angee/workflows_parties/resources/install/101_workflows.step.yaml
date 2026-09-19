@@ -29,6 +29,7 @@ rows:
       step_class: parties_dedupe_execute
       config:
         mode: prepare
+      input_binding: {kind: step_output, step_key: gate}
       join_rule: all_success
       is_entry: false
       position: {x: 560, y: 0}

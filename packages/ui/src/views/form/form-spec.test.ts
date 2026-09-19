@@ -8,6 +8,41 @@ import {
 } from "./form-spec";
 
 describe("deserializeFormSpec", () => {
+  test("uses retained property order after persisted nested properties are reordered", () => {
+    const fields = deserializeFormSpec({
+      type: "object",
+      propertyOrder: ["invoice", "note"],
+      properties: {
+        note: { type: "string" },
+        invoice: {
+          type: "object", widget: "object",
+          propertyOrder: ["supplier", "reference", "lines"],
+          properties: {
+            lines: {
+              type: "array", widget: "list",
+              items: {
+                type: "object", widget: "object",
+                propertyOrder: ["description", "quantity"],
+                properties: {
+                  quantity: { type: "number" },
+                  description: { type: "string" },
+                },
+              },
+            },
+            reference: { type: "string" },
+            supplier: { type: "string" },
+          },
+        },
+      },
+    }, defaultWidgets);
+
+    expect(fields.map((field) => field.name)).toEqual(["invoice", "note"]);
+    expect(fields[0]?.objectTemplate?.map((field) => field.name))
+      .toEqual(["supplier", "reference", "lines"]);
+    expect(fields[0]?.objectTemplate?.[2]?.itemTemplate?.objectTemplate?.map((field) => field.name))
+      .toEqual(["description", "quantity"]);
+  });
+
   test("maps the recursive backend schema and its data-only UI extensions", () => {
     const fields = deserializeFormSpec(
       {
@@ -42,6 +77,8 @@ describe("deserializeFormSpec", () => {
               create: {
                 resource: "Channel",
                 defaultValues: { parent_id: "parent_7", revision: 3 },
+                actionLabel: "Create channel",
+                title: "Create channel",
               },
             },
           },
@@ -102,6 +139,8 @@ describe("deserializeFormSpec", () => {
           create: {
             resource: "Channel",
             defaultValues: { parent_id: "parent_7", revision: 3 },
+            actionLabel: "Create channel",
+            title: "Create channel",
           },
         },
       },
@@ -148,6 +187,27 @@ describe("deserializeFormSpec", () => {
         ],
       },
     ]);
+  });
+
+  test("preserves an empty root JSON Pointer as an authored select value", () => {
+    const fields = deserializeFormSpec({
+      type: "object",
+      properties: {
+        selector: {
+          type: "string",
+          options: [{ value: "", label: "Root document" }],
+        },
+      },
+    }, defaultWidgets);
+
+    expect(fields).toEqual([{
+      name: "selector",
+      kind: "string",
+      widget: "select",
+      options: [{ value: "", label: "Root document" }],
+    }]);
+    expect(formSpecInitialValues(fields, { selector: "" })).toEqual({ selector: "" });
+    expect(normalizeFormSpecValues(fields, { selector: "" })).toEqual({ selector: "" });
   });
 
   test("retains the explicit approval layout annotation", () => {
@@ -262,6 +322,22 @@ describe("formSpecInitialValues", () => {
     });
   });
 
+  test("preserves an opaque read-only context object for its owning renderer", () => {
+    const fields = deserializeFormSpec({ properties: {
+      review_context: {
+        type: "object", layout: "context", readOnly: true, widget: "object",
+      },
+    } }, { ...defaultWidgets, object: { read: () => null } });
+    const reviewContext = {
+      kind: "supplier_confirmation",
+      subject: { invoice_id: "inv_1" },
+      candidates: [{ party_id: "pty_1" }],
+    };
+
+    expect(formSpecInitialValues(fields, { review_context: reviewContext }))
+      .toEqual({ review_context: reviewContext });
+  });
+
   test("preserves omitted, defaulted, nullable, and falsey JSON values", () => {
     const fields = deserializeFormSpec({ properties: {
       absent: { type: "string", omittable: true },
@@ -275,6 +351,30 @@ describe("formSpecInitialValues", () => {
     const values = formSpecInitialValues(fields, { empty: "", zero: 0, disabled: false });
     expect(values).toEqual({ defaultNull: null, requiredNull: null, empty: "", zero: 0, disabled: false });
     expect(normalizeFormSpecValues(fields, { ...values, absent: undefined })).toEqual(values);
+  });
+
+  test("accepts a JSON Schema null alternative and preserves its null default", () => {
+    const fields = deserializeFormSpec({ properties: {
+      reference: {
+        anyOf: [{ type: "string" }, { type: "null" }],
+      },
+      line_total: {
+        anyOf: [
+          { type: "number" },
+          { type: "string", pattern: "^[0-9.]+$" },
+          { type: "null" },
+        ],
+        widget: "float",
+        omittable: true,
+        default: null,
+      },
+    } }, defaultWidgets);
+
+    expect(fields[0]).toMatchObject({
+      name: "reference", kind: "string", widget: "text", nullable: true,
+    });
+    expect(fields[1]).toMatchObject({ name: "line_total", nullable: true });
+    expect(formSpecInitialValues(fields, {})).toEqual({ reference: null, line_total: null });
   });
 
   test("falls back to schema defaults when retained payload types are incompatible", () => {

@@ -363,7 +363,7 @@ export function ResourceListBody<TRow extends Row = Row>({
       </ControlBandProvider>
       {open ? (
         <>
-          <div className="h-full min-h-0 overflow-hidden rounded-6 border border-border bg-sheet">
+          <div className="h-full min-h-0 overflow-auto rounded-6 border border-border bg-sheet">
             {recordContent}
           </div>
           {recordDeleteDialog}
