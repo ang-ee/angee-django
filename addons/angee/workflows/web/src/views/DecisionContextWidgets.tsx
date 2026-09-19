@@ -25,22 +25,24 @@ const Reason = v.object({ code: v.string(), parameters: v.optional(v.record(v.st
   v.union([v.string(), v.number(), v.boolean()])), {}) });
 
 function InvalidContext(_props: WidgetRenderProps): React.ReactElement {
+  const t = useWorkflowsT();
   return <div className="rounded-6 border border-warning-soft bg-warning-soft p-3 text-sm text-fg-2">
-    This saved review does not contain a supported presentation. Its frozen processing details remain available below.
+    {t("inbox.contextInvalid")}
   </div>;
 }
 
 function RecordLine({ record }: { record: v.InferOutput<typeof RecordRef> }): React.ReactElement {
+  const t = useWorkflowsT();
   const open = useRecordPeek();
   const authoredLabel = record.label.trim();
   const label = authoredLabel && authoredLabel !== record.model && authoredLabel !== record.id
-    ? authoredLabel : "Open record";
+    ? authoredLabel : t("inbox.contextOpenRecord");
   return <div className="flex flex-wrap items-center gap-x-2 text-sm">
     <Button type="button" variant="link" onClick={() => open({
       model: record.model, id: record.id, label: record.label,
       tab: record.tab, page: record.page, search: record.search,
     })}><Glyph name="workflow-escalate" />{label}</Button>
-    {record.page != null ? <span className="text-fg-muted">Page {record.page}</span> : null}
+    {record.page != null ? <span className="text-fg-muted">{t("inbox.contextPage", { page: record.page })}</span> : null}
   </div>;
 }
 
@@ -53,16 +55,17 @@ function RecordContext({ value }: WidgetRenderProps): React.ReactElement {
 }
 
 function FactsContext({ value }: WidgetRenderProps): React.ReactElement {
+  const t = useWorkflowsT();
   const parsed = v.safeParse(v.array(Fact), value);
   if (!parsed.success) return <InvalidContext value={value} />;
   return <div className="space-y-3">{parsed.output.map((fact, index) => <div key={`${fact.pointer}:${index}`} className="rounded-6 border border-border p-3">
     <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
       <span className="font-medium">{fact.label}</span>
-      <Badge tone={fact.authority === "unverified" ? "warning" : "neutral"}>{authorityLabel(fact.authority)}</Badge>
+      <Badge tone={fact.authority === "unverified" ? "warning" : "neutral"}>{authorityLabel(fact.authority, t)}</Badge>
     </div>
     <div className="mt-2"><ContextValue value={fact.value} /></div>
     {fact.subject || fact.evidence.length ? <div className="mt-3 space-y-1 border-t border-border-subtle pt-2">
-      <p className="text-xs font-medium text-fg-muted">Evidence</p>
+      <p className="text-xs font-medium text-fg-muted">{t("inbox.contextEvidence")}</p>
       {uniqueRecords([...(fact.subject ? [fact.subject] : []), ...fact.evidence])
         .map((ref) => <RecordLine key={`${ref.model}:${ref.id}`} record={ref} />)}
     </div> : null}
@@ -70,14 +73,15 @@ function FactsContext({ value }: WidgetRenderProps): React.ReactElement {
 }
 
 function DifferencesContext({ value }: WidgetRenderProps): React.ReactElement {
+  const t = useWorkflowsT();
   const parsed = v.safeParse(v.array(Difference), value);
   if (!parsed.success) return <InvalidContext value={value} />;
   return <div className="space-y-3">{parsed.output.map((difference, index) => <div key={`${difference.field}:${index}`} className="rounded-6 border border-border p-3">
     <div className="text-sm font-medium">{difference.label}</div>
-    <div className="grid grid-cols-2 gap-3 text-xs text-fg-muted"><span>Before</span><span>After</span></div>
+    <div className="grid grid-cols-2 gap-3 text-xs text-fg-muted"><span>{t("inbox.contextBefore")}</span><span>{t("inbox.contextAfter")}</span></div>
     <div className="grid grid-cols-2 gap-3"><ContextValue value={difference.left} /><ContextValue value={difference.right} /></div>
     {difference.leftRecord || difference.rightRecord ? <div className="mt-2 space-y-1 border-t border-border-subtle pt-2">
-      <p className="text-xs font-medium text-fg-muted">Evidence</p>
+      <p className="text-xs font-medium text-fg-muted">{t("inbox.contextEvidence")}</p>
       {uniqueRecords([...(difference.leftRecord ? [difference.leftRecord] : []),
         ...(difference.rightRecord ? [difference.rightRecord] : [])])
         .map((ref) => <RecordLine key={`${ref.model}:${ref.id}`} record={ref} />)}
@@ -104,15 +108,16 @@ function ObjectContext({ value }: WidgetRenderProps): React.ReactElement {
 }
 
 function ContextValue({ value }: { value: unknown }): React.ReactElement {
+  const t = useWorkflowsT();
   if (value === null || value === undefined || value === "") {
-    return <span className="text-13 text-fg-muted">Not provided</span>;
+    return <span className="text-13 text-fg-muted">{t("inbox.contextNotProvided")}</span>;
   }
-  if (typeof value === "boolean") return <span className="text-13 text-fg-2">{value ? "Yes" : "No"}</span>;
+  if (typeof value === "boolean") return <span className="text-13 text-fg-2">{t(value ? "inbox.contextYes" : "inbox.contextNo")}</span>;
   if (typeof value === "string" || typeof value === "number") {
     return <span className="break-words text-13 text-fg-2">{String(value)}</span>;
   }
   if (Array.isArray(value)) {
-    if (!value.length) return <span className="text-13 text-fg-muted">None</span>;
+    if (!value.length) return <span className="text-13 text-fg-muted">{t("inbox.contextNone")}</span>;
     if (value.some((item) => item !== null && typeof item === "object")) {
       return <StructuredContextValue value={value} />;
     }
@@ -123,7 +128,7 @@ function ContextValue({ value }: { value: unknown }): React.ReactElement {
   if (typeof value === "object") {
     return <StructuredContextValue value={value} />;
   }
-  return <span className="text-13 text-fg-muted">Unavailable</span>;
+  return <span className="text-13 text-fg-muted">{t("inbox.contextUnavailable")}</span>;
 }
 
 /** Keep exact retained structured values available without flooding the review surface. */
@@ -136,22 +141,23 @@ function StructuredContextValue({ value }: { value: unknown }): React.ReactEleme
 }
 
 function ExactStructuredValue({ value }: { value: unknown }): React.ReactElement {
+  const t = useWorkflowsT();
   if (value === null || value === undefined || value === "") {
-    return <span className="text-13 text-fg-muted">Not provided</span>;
+    return <span className="text-13 text-fg-muted">{t("inbox.contextNotProvided")}</span>;
   }
-  if (typeof value === "boolean") return <span className="text-13 text-fg-2">{value ? "Yes" : "No"}</span>;
+  if (typeof value === "boolean") return <span className="text-13 text-fg-2">{t(value ? "inbox.contextYes" : "inbox.contextNo")}</span>;
   if (typeof value === "string" || typeof value === "number") {
     return <span className="break-words text-13 text-fg-2">{String(value)}</span>;
   }
   if (Array.isArray(value)) {
-    if (!value.length) return <span className="text-13 text-fg-muted">None</span>;
+    if (!value.length) return <span className="text-13 text-fg-muted">{t("inbox.contextNone")}</span>;
     return <ol className="space-y-2 pl-5 text-13 marker:text-fg-muted">
       {value.map((item, index) => <li key={index}><ExactStructuredValue value={item} /></li>)}
     </ol>;
   }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>);
-    if (!entries.length) return <span className="text-13 text-fg-muted">None</span>;
+    if (!entries.length) return <span className="text-13 text-fg-muted">{t("inbox.contextNone")}</span>;
     return <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)]">
       {entries.map(([key, item]) => <React.Fragment key={key}>
         <dt className="break-all font-mono text-xs text-fg-muted">{key}</dt>
@@ -159,15 +165,19 @@ function ExactStructuredValue({ value }: { value: unknown }): React.ReactElement
       </React.Fragment>)}
     </dl>;
   }
-  return <span className="text-13 text-fg-muted">Unavailable</span>;
+  return <span className="text-13 text-fg-muted">{t("inbox.contextUnavailable")}</span>;
 }
 
 function uniqueRecords(records: readonly v.InferOutput<typeof RecordRef>[]): v.InferOutput<typeof RecordRef>[] {
   return [...new Map(records.map((record) => [`${record.model}:${record.id}`, record])).values()];
 }
 
-function authorityLabel(authority: v.InferOutput<typeof Fact>["authority"]): string {
-  return { source: "Source evidence", correction: "Reviewer confirmed", unverified: "Needs review" }[authority];
+function authorityLabel(authority: v.InferOutput<typeof Fact>["authority"], t: ReturnType<typeof useWorkflowsT>): string {
+  return t({
+    source: "inbox.authoritySource",
+    correction: "inbox.authorityCorrection",
+    unverified: "inbox.authorityUnverified",
+  }[authority]);
 }
 
 export const decisionContextWidgets: Readonly<Record<string, WidgetDefinition>> = {

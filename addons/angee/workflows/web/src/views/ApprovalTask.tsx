@@ -347,8 +347,8 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
   const confirm = useConfirm();
   const compiled = React.useMemo(() => {
     try { return { form: compileDecisionActionFormSpec(approval.decision_schema, widgets), error: null }; }
-    catch (cause) { return { form: null, error: errorMessage(cause, "Decision form is unavailable.") }; }
-  }, [approval.decision_schema, widgets]);
+    catch (cause) { return { form: null, error: errorMessage(cause, t("inbox.decisionFormUnavailable")) }; }
+  }, [approval.decision_schema, t, widgets]);
   const form = compiled.form;
   const contextFields = form?.contextFields ?? [];
   const inputFields = form?.inputFields ?? [];
@@ -416,7 +416,7 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
   const messagesFor = (name: string): readonly string[] => fieldErrorMessages(errors[name]);
   const actionPicker = form ? <section className="space-y-3">
     <h3 className="text-xs font-semibold text-fg-muted">{t("inbox.yourDecision")}</h3>
-    <div className="flex flex-wrap gap-2" role="group" aria-label="Decision actions">
+    <div className="flex flex-wrap gap-2" role="group" aria-label={t("inbox.decisionActions")}>
       {form.options.map((option) => <Button key={option.value} type="button"
         variant={selectedAction === option.value ? "primary" : "secondary"}
         disabled={!resolutionEditable || resolution.fetching || isSubmitting}
@@ -435,7 +435,7 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
   return (
     <form className="space-y-4" onSubmit={rhf.handleSubmit(submitAction)}>
       {compiled.error ? <ErrorBanner description={compiled.error} /> : null}
-      {form && !contextCheck?.valid ? <ErrorBanner description="Frozen Decision context is unavailable." /> : null}
+      {form && !contextCheck?.valid ? <ErrorBanner description={t("inbox.frozenContextUnavailable")} /> : null}
       {!Content ? <h2 className="text-xl font-semibold text-fg">{approval.step_name || approval.action}</h2> : null}
       {!Content && contextFields.length ? <section className="space-y-3">
         <h3 className="text-xs font-semibold text-fg-muted">{t("inbox.decisionContext")}</h3>
