@@ -32,6 +32,12 @@ module = "runtime_migrations.extraction_state_enums"
 
 [[migrations]]
 fresh_history = "baseline"
+app_label = "workflows_extraction"
+name = "validate_extraction_engines"
+module = "runtime_migrations.validate_extraction_engines"
+
+[[migrations]]
+fresh_history = "baseline"
 app_label = "workflows_ocr"
 name = "retire_workflows_ocr"
 module = "runtime_migrations.retire_workflows_ocr"

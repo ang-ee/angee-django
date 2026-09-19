@@ -269,20 +269,40 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
             pk__in=candidate_step_ids,
             status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
         ).select_related("current_attempt").order_by("run_id", "pk"))
+        eligible_step_runs = [
+            step_run
+            for step_run in step_runs
+            if (run := runs.get(step_run.run_id)) is not None
+            and run.status not in RunStatus.TERMINAL
+            and step_run.current_attempt_id is not None
+        ]
+        attempt_ids = {step_run.current_attempt_id for step_run in eligible_step_runs}
+        attempts = {
+            attempt.pk: attempt
+            for attempt in attempt_model.objects.lock_if_supported().filter(
+                pk__in=attempt_ids
+            ).order_by("pk")
+        }
+        retained_attempt_ids = set(
+            artifact_model.objects.filter(
+                attempt_id__in=attempt_ids,
+                target_content_type_id=target.content_type.pk,
+                target_object_id=target.object_id,
+            ).order_by().values_list("attempt_id", flat=True).distinct()
+        )
         touched: set[int] = set()
-        for step_run in step_runs:
-            run = runs.get(step_run.run_id)
-            if run is None or run.status in RunStatus.TERMINAL or step_run.current_attempt_id is None:
+        for step_run in eligible_step_runs:
+            run = runs[step_run.run_id]
+            attempt = attempts.get(step_run.current_attempt_id)
+            if attempt is None:
                 continue
-            attempt = attempt_model.objects.lock_if_supported().get(pk=step_run.current_attempt_id)
             subscribed = (
                 attempt.pk in subscribed_attempt_ids or attempt.pk in bound_attempt_ids
             ) and attempt.lease_revoked_at is None
-            retained_artifact = step_run.status == StepRunStatus.WAITING and artifact_model.objects.filter(
-                attempt_id=step_run.current_attempt_id,
-                target_content_type_id=target.content_type.pk,
-                target_object_id=target.object_id,
-            ).exists()
+            retained_artifact = (
+                step_run.status == StepRunStatus.WAITING
+                and attempt.pk in retained_attempt_ids
+            )
             if not (subscribed or retained_artifact):
                 continue
             if step_run.status == StepRunStatus.WAITING:

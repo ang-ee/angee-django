@@ -16,6 +16,7 @@ import { decisionHref } from "../decision-navigation";
 import { DecideWorkflowDecisionDocument, type PendingWorkflowDecision } from "../documents.public";
 import { useWorkflowsT } from "../i18n";
 import { WORKFLOW_DECISION_CONTENT_SLOT } from "../slots";
+import { DECISION_OBJECT_WIDGET } from "./DecisionContextWidgets";
 
 const DECISION_MODEL = "workflows.Decision";
 export type ApprovalVerdict = DocumentVariables<typeof DecideWorkflowDecisionDocument>["verdict"];
@@ -30,6 +31,8 @@ export interface WorkflowDecisionContentProps {
   messagesFor: (name: string) => readonly string[];
   /** Framework-owned action choice, placed by rich fragments before their inputs. */
   actionPicker?: React.ReactNode;
+  /** Select a framework-owned action without routing it through input-field writes. */
+  selectAction: (action: string) => void;
   editable: boolean;
   fetching: boolean;
   readOnly: boolean;
@@ -64,8 +67,9 @@ export function DecisionContextFields({ fields, values }: {
   return <>
     {fields.map((field) => {
       const sharedLabel = field.label ?? contextFieldLabel(field.widget, t);
+      const decisionField = field.widget === "object" ? { ...field, widget: DECISION_OBJECT_WIDGET } : field;
       return <LabeledDescriptorField key={field.name}
-        field={sharedLabel ? { ...field, label: sharedLabel } : field} value={values[field.name]}
+        field={sharedLabel ? { ...decisionField, label: sharedLabel } : decisionField} value={values[field.name]}
         readOnly messages={[]} onChange={() => undefined} />
     })}
   </>;
@@ -252,6 +256,7 @@ function HistoricalDecisionPresentation({ approval, onOpenRecord, onOpenEvidence
     inputFields,
     values,
     setValue: () => undefined,
+    selectAction: () => undefined,
     messagesFor: () => [],
     actionPicker: null,
     editable: false,
@@ -414,6 +419,11 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
     }
   }
   const messagesFor = (name: string): readonly string[] => fieldErrorMessages(errors[name]);
+  const selectAction = React.useCallback((action: string) => {
+    if (!form?.options.some((option) => option.value === action)) return;
+    rhf.clearErrors();
+    rhf.setValue("action", action, { shouldDirty: true });
+  }, [form, rhf]);
   const actionPicker = form ? <section className="space-y-3">
     <h3 className="text-xs font-semibold text-fg-muted">{t("inbox.yourDecision")}</h3>
     <div className="flex flex-wrap gap-2" role="group" aria-label={t("inbox.decisionActions")}>
@@ -421,14 +431,14 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
         variant={selectedAction === option.value ? "primary" : "secondary"}
         disabled={!resolutionEditable || resolution.fetching || isSubmitting}
         aria-pressed={selectedAction === option.value}
-        onClick={() => { rhf.clearErrors(); rhf.setValue("action", option.value, { shouldDirty: true }); }}>
+        onClick={() => selectAction(option.value)}>
         {option.label}
       </Button>)}
     </div>
   </section> : null;
   const contentProps: WorkflowDecisionContentProps = {
     approval, contextFields, contextValues, inputFields: branchFields, values, setValue,
-    messagesFor, actionPicker,
+    messagesFor, actionPicker, selectAction,
     editable: resolutionEditable, fetching: resolution.fetching, readOnly: !resolutionEditable,
     openRecord: onOpenRecord, openEvidence: onOpenEvidence,
   };

@@ -83,7 +83,7 @@ function decisionProps(payload: Record<string, unknown>): WorkflowDecisionConten
   return {
     approval: { id: "wdc_identity", payload } as WorkflowDecisionContentProps["approval"],
     contextFields: [], contextValues: {}, inputFields: [], values: {},
-    setValue: vi.fn(), messagesFor: () => [],
+    setValue: vi.fn(), selectAction: vi.fn(), messagesFor: () => [],
     editable: true, fetching: false, readOnly: false,
   };
 }

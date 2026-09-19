@@ -26,6 +26,7 @@ from angee.base.historical_relationships import (
     delete_historical_relationships,
     ensure_historical_relationships,
 )
+from angee.base.impl import ImplClassField
 from angee.compose.model_composition import ModelComposition
 from angee.compose.runtime import Runtime
 from angee.workflows_extraction.managers import _evidence_insertion
@@ -33,6 +34,7 @@ from angee.workflows_extraction.runtime_migrations import adopt_workflows_ocr as
 from angee.workflows_extraction.runtime_migrations import extraction_state_enums as state_enums
 from angee.workflows_extraction.runtime_migrations import retire_workflows_ocr as retire
 from angee.workflows_extraction.runtime_migrations import stage_workflows_extraction as stage
+from angee.workflows_extraction.runtime_migrations import validate_extraction_engines as engine_gate
 from angee.workflows_ocr.apps import WorkflowsOcrHistoryConfig
 from tests.extraction_models import (
     EXTRACTION_MODELS,
@@ -69,6 +71,16 @@ class LegacyCopyTarget(models.Model):
     class Meta:
         app_label = "tests"
         db_table = "test_workflows_ocr_upgrade_target"
+
+
+class EngineGateExtraction(models.Model):
+    """Concrete enum field proving the gate bypasses ImplClassField conversion."""
+
+    engine = ImplClassField(registry_setting="ANGEE_EXTRACTION_ENGINE_CLASSES")
+
+    class Meta:
+        app_label = "tests"
+        db_table = "test_workflows_extraction_engine_gate"
 
 
 class RetainedExtractionReference(models.Model):
@@ -234,6 +246,46 @@ def test_legacy_selectors_preserve_only_explicit_layout_or_one_root() -> None:
     assert adopt._legacy_result_selectors({}, {}) == ()
     with pytest.raises(ImproperlyConfigured, match="document collection"):
         adopt._legacy_result_selectors(result, {"document_collection": "/missing"})
+
+
+@pytest.mark.django_db(transaction=True)
+def test_adoption_refuses_retained_engine_without_current_implementation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy engine tokens must resolve before retained evidence is exposed."""
+
+    apps = SimpleNamespace(get_model=lambda app_label, model_name: EngineGateExtraction)
+    monkeypatch.setattr(
+        engine_gate.settings,
+        "ANGEE_EXTRACTION_ENGINE_CLASSES",
+        {"inference": "example.InferenceEngine", "none": "example.NoEngine"},
+    )
+    with connection.schema_editor() as editor:
+        editor.create_model(EngineGateExtraction)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"INSERT INTO {connection.ops.quote_name(EngineGateExtraction._meta.db_table)} "
+                "(engine) VALUES (%s), (%s)",
+                ["inference", "inference_document"],
+            )
+        with pytest.raises(ImproperlyConfigured, match="inference_document"):
+            engine_gate.validate_engine_keys(
+                apps,
+                SimpleNamespace(connection=connection, quote_name=connection.ops.quote_name),
+            )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"DELETE FROM {connection.ops.quote_name(EngineGateExtraction._meta.db_table)} WHERE engine = %s",
+                ["inference_document"],
+            )
+        engine_gate.validate_engine_keys(
+            apps,
+            SimpleNamespace(connection=connection, quote_name=connection.ops.quote_name),
+        )
+    finally:
+        with connection.schema_editor() as editor:
+            editor.delete_model(EngineGateExtraction)
 
 
 def test_adoption_refuses_occupied_destination_before_copy(monkeypatch: pytest.MonkeyPatch) -> None:

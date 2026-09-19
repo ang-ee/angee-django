@@ -1,10 +1,11 @@
 import * as React from "react";
 import * as v from "valibot";
-import { Badge, Button, Collapsible, Glyph, defaultWidgets, optionalTranslation, useRecordPeek,
+import { Badge, Button, Collapsible, Glyph, optionalTranslation, useRecordPeek,
   type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
 import { useWorkflowsT } from "../i18n";
 
 const Json = v.unknown();
+export const DECISION_OBJECT_WIDGET = "decisionObject";
 const RecordRef = v.object({
   model: v.string(), id: v.string(), label: v.optional(v.string(), ""),
   tab: v.optional(v.nullable(v.string())), page: v.optional(v.nullable(v.number())),
@@ -122,7 +123,7 @@ function ContextValue({ value }: { value: unknown }): React.ReactElement {
       return <StructuredContextValue value={value} />;
     }
     return <ul className="space-y-1 pl-4 text-13 marker:text-fg-muted">
-      {value.map((item, index) => <li key={index}><ContextValue value={item} /></li>)}
+      {keyedContextValues(value).map((item) => <li key={item.key}><ContextValue value={item.value} /></li>)}
     </ul>;
   }
   if (typeof value === "object") {
@@ -152,7 +153,7 @@ function ExactStructuredValue({ value }: { value: unknown }): React.ReactElement
   if (Array.isArray(value)) {
     if (!value.length) return <span className="text-13 text-fg-muted">{t("inbox.contextNone")}</span>;
     return <ol className="space-y-2 pl-5 text-13 marker:text-fg-muted">
-      {value.map((item, index) => <li key={index}><ExactStructuredValue value={item} /></li>)}
+      {keyedContextValues(value).map((item) => <li key={item.key}><ExactStructuredValue value={item.value} /></li>)}
     </ol>;
   }
   if (typeof value === "object") {
@@ -172,6 +173,22 @@ function uniqueRecords(records: readonly v.InferOutput<typeof RecordRef>[]): v.I
   return [...new Map(records.map((record) => [`${record.model}:${record.id}`, record])).values()];
 }
 
+function contextValueKey(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value !== "object") return `${typeof value}:${String(value)}`;
+  return `structured:${JSON.stringify(value)}`;
+}
+
+function keyedContextValues(values: readonly unknown[]): { key: string; value: unknown }[] {
+  const counts = new Map<string, number>();
+  return values.map((value) => {
+    const content = contextValueKey(value);
+    const occurrence = counts.get(content) ?? 0;
+    counts.set(content, occurrence + 1);
+    return { key: `${content}:${occurrence}`, value };
+  });
+}
+
 function authorityLabel(authority: v.InferOutput<typeof Fact>["authority"], t: ReturnType<typeof useWorkflowsT>): string {
   return t({
     source: "inbox.authoritySource",
@@ -185,8 +202,5 @@ export const decisionContextWidgets: Readonly<Record<string, WidgetDefinition>> 
   facts: { read: FactsContext },
   differences: { read: DifferencesContext },
   reasons: { read: ReasonsContext },
-  // Extend the shared structured-object widget instead of replacing its edit
-  // slot. Decision context uses the generic read projection, while typed Step
-  // config still needs the native nested object editor under the same widget id.
-  object: { ...defaultWidgets.object, read: ObjectContext },
+  [DECISION_OBJECT_WIDGET]: { read: ObjectContext },
 };

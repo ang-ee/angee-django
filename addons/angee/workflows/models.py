@@ -315,6 +315,8 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     ) -> Any:
         """Install native Workflow/Step/Edge groups through checked definition commands."""
 
+        # Import after model loading: resource_install imports Workflow while
+        # this method is a safe runtime hook invoked only after app population.
         from angee.workflows.resource_install import import_resource_groups
 
         return import_resource_groups(cls, groups, ledger_model=ledger_model, addon_aliases=addon_aliases)

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -15,6 +14,15 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
+from angee.workflows_extraction.contracts import (
+    CorrectionRef,
+    DocumentRef,
+    ExtractionRef,
+    FactAuthority,
+    LineRef,
+    PageRef,
+    SourceRef,
+)
 from angee.workflows_extraction.engines import ExtractionEngine, ExtractionPartKind, ExtractionStatus
 from angee.workflows_extraction.managers import (
     ExtractionManager,
@@ -23,80 +31,6 @@ from angee.workflows_extraction.managers import (
     evidence_insert_allowed,
 )
 from angee.workflows_extraction.pointers import json_pointer_value
-
-
-@dataclass(frozen=True, slots=True)
-class FactAuthority:
-    """Retained provenance classification for one Extraction result fact."""
-
-    kind: Literal["source", "correction", "unverified"]
-    decision_id: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class SourceRef:
-    kind: Literal["file", "message_part"]
-    public_id: str
-    content_digest: str
-
-
-@dataclass(frozen=True, slots=True)
-class PageRef:
-    source: SourceRef
-    page: int
-    carrier_ids: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class LineRef:
-    identity: str
-    selector: str
-
-
-@dataclass(frozen=True, slots=True)
-class DocumentRef:
-    identity: str
-    selector: str
-    lines: tuple[LineRef, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class ExtractionRef:
-    lineage_key: str
-    public_id: str
-    revision: int
-
-
-@dataclass(frozen=True, slots=True)
-class CorrectionRef:
-    """Decision authority over scalar facts changed or explicitly confirmed."""
-
-    original_extraction_id: str
-    original_revision: int
-    decision_id: str
-    corrected_paths: tuple[str, ...]
-    revision_parent_extraction_id: str | None = None
-    revision_parent_revision: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class CorrectionBinding:
-    """Frozen fact authority and exact revision parent for one correction."""
-
-    authority: ExtractionRef
-    revision_parent: ExtractionRef
-
-    @property
-    def bridges_revision_parent(self) -> bool:
-        return self.authority.public_id != self.revision_parent.public_id
-
-    def payload(self) -> dict[str, Any]:
-        return {
-            "authority_extraction_id": self.authority.public_id,
-            "authority_extraction_revision": self.authority.revision,
-            "revision_parent_extraction_id": self.revision_parent.public_id,
-            "revision_parent_extraction_revision": self.revision_parent.revision,
-        }
 
 
 class DecisionReadableFile(models.Model):
@@ -320,7 +254,9 @@ class ExtractionSource(SqidMixin, AngeeModel):
                 name="extraction_source_one_input",
             ),
             models.UniqueConstraint(
-                fields=("extraction", "file"), condition=models.Q(file__isnull=False), name="uniq_extraction_source_file"
+                fields=("extraction", "file"),
+                condition=models.Q(file__isnull=False),
+                name="uniq_extraction_source_file",
             ),
             models.UniqueConstraint(
                 fields=("extraction", "message_part"),
@@ -416,7 +352,9 @@ class ExtractionPart(SqidMixin, AngeeModel):
         base_manager_name = "objects"
         ordering = ("position",)
         rebac_resource_type = "workflows_extraction/extraction_part"
-        constraints = (models.UniqueConstraint(fields=("extraction", "position"), name="uniq_extraction_part_position"),)
+        constraints = (
+            models.UniqueConstraint(fields=("extraction", "position"), name="uniq_extraction_part_position"),
+        )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         if not evidence_insert_allowed(kwargs.get("using") or self._state.db):

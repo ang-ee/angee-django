@@ -60,13 +60,13 @@ export interface EditableLinesProps {
    * and submit — the host reads `getValues(name)` at save time and diffs them
    * (`diffLines`) into the `<resource>_save` `lines` payload.
    */
-  control: Control<Record<string, unknown>>;
+  control: Control<FieldValues>;
   /**
    * React Hook Form's native leaf-value writer for widget-produced row patches.
    * Standalone callers pass `form.setValue` beside `form.control`; `FormView`
    * supplies both from its owned form automatically.
    */
-  setValue: UseFormSetValue<Record<string, unknown>>;
+  setValue: UseFormSetValue<FieldValues>;
   /** Form field holding the ordered child lines — the `linesResource.field`. */
   name: string;
   /** The resource's editable-lines contract (`modelMetadata.resource.linesResource`). */
@@ -169,15 +169,15 @@ export function EditableLines({
   // The array field lives on the parent form; a per-array keyName keeps rhf's row
   // key off the line's own `id` (which stays the public id used by the save diff).
   const { fields, append, insert, move, remove } = useFieldArray({
-    control: control as unknown as Control<FieldValues>,
+    control,
     name,
     keyName: "rhfKey",
   });
   const { isDirty: formIsDirty } = useFormState({
-    control: control as unknown as Control<FieldValues>,
+    control,
   });
   const rows = (useWatch({
-    control: control as unknown as Control<FieldValues>,
+    control,
     name,
   }) as Row[] | undefined) ?? [];
   // Publish the native field-array identity into unsaved row values. The line
@@ -391,7 +391,7 @@ function LineRow({
       {columns.map((column) => (
         <div key={column.field.name} className={CELL_CLASS}>
           <Controller
-            control={control as unknown as Control<FieldValues>}
+            control={control}
             name={`${name}.${index}.${column.field.name}`}
             render={({ field: controller }) =>
               column.relationMulti ? (

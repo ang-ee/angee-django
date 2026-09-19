@@ -584,7 +584,8 @@ function FormSectionTabs({
   const [active, setActive] = React.useState(sections[0]?.key);
   const trackedFields = sections.flatMap((section) => section.fields.map((field) => field.name));
   if (lineField) trackedFields.push(lineField);
-  const { errors } = useFormState({ control, name: trackedFields });
+  const { errors, submitCount } = useFormState({ control, name: trackedFields });
+  const handledSubmitCount = React.useRef(submitCount);
   React.useEffect(() => {
     const focus = requestedFocusPath;
     if (focus) {
@@ -595,12 +596,14 @@ function FormSectionTabs({
       if (target) setActive(target.key);
       return;
     }
+    if (handledSubmitCount.current === submitCount) return;
+    handledSubmitCount.current = submitCount;
     const errored = sections.find((section) =>
       section.fields.some((field) => get(errors, field.name) !== undefined)
       || (section.key === "editable-lines" && lineField && get(errors, lineField) !== undefined),
     );
     if (errored) setActive(errored.key);
-  }, [errors, lineField, requestedFocusPath, sections]);
+  }, [errors, lineField, requestedFocusPath, sections, submitCount]);
   const value = sections.some((section) => section.key === active)
     ? active
     : sections[0]?.key;

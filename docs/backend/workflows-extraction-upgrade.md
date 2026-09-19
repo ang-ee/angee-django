@@ -20,8 +20,8 @@ Keep every generated `workflows_ocr` migration file already shipped with a
 deployment. The empty source anchor is for a new installation; it is not a
 replacement for released history. Historical extraction migrations also keep
 the legacy `ANGEE_OCR_ENGINE_CLASSES` name bound to the canonical extraction
-registry so their serialized `ImplClassField` can load without restoring a
-second active configuration surface.
+registry so their serialized `ImplClassField` can reconstruct during app
+loading without restoring a second active configuration surface.
 
 Before normal provision, rename deployment overrides from the retired prefix to
 their active extraction names: `ANGEE_OCR_ENGINE_CLASSES` →
@@ -32,7 +32,7 @@ their active extraction names: `ANGEE_OCR_ENGINE_CLASSES` →
 `ANGEE_OCR_TIMEOUT_SECONDS` → `ANGEE_EXTRACTION_TIMEOUT_SECONDS`, and
 `ANGEE_OCR_APPROVED_MODEL_DEPLOYMENTS` →
 `ANGEE_EXTRACTION_APPROVED_MODEL_DEPLOYMENTS`. The historical registry alias is
-only for migration deserialization; active serving code does not read old
+only for migration reconstruction; active serving code does not read old
 settings. Provider-specific optical names such as the GLM engine key and model
 deployment identifiers remain unchanged.
 
@@ -51,8 +51,13 @@ The runtime migration guards recognize these complete states:
 Any partial old/current model graph, partial old table set, missing destination
 column, occupied destination table, primary-key collision, incompatible auth or
 content-type fact, or unsupported persisted-reference format fails the build or
-migration transaction. Adoption preserves primary keys, audit timestamps, JSON
-values, and foreign-key identities, then resets destination sequences. Legacy
+migration transaction. Before upgrading, verify every retained extraction has a
+terminal `succeeded` or `failed` status and an engine key registered in
+`ANGEE_EXTRACTION_ENGINE_CLASSES`. The migration fails closed on any transient
+status or retired engine such as `inference_document`; retained evidence remains
+immutable, so the missing implementation must be restored before retrying.
+Adoption preserves primary keys, audit timestamps, JSON values, and foreign-key
+identities, then resets destination sequences. Legacy
 rows did not retain logical document identities. Adoption allocates stable
 UUID5 identities from each preserved row and selector without asserting
 correspondence across old revisions. A row with an explicitly stored

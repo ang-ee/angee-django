@@ -14,6 +14,7 @@ from angee.base.authority import TransactionBoundAuthority
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.workflows.attempts import json_values_equal
+from angee.workflows_extraction.contracts import CorrectionBinding
 from angee.workflows_extraction.engines import DocumentPart, DocumentSource, PageImage, PageResult
 from angee.workflows_extraction.pointers import (
     implicit_identity_correspondence,
@@ -319,8 +320,6 @@ class ExtractionManager(ImmutableEvidenceManager):
     ) -> tuple[Any, Any]:
         """Freeze the fact authority and exact current parent before human review."""
 
-        from angee.workflows_extraction.models import CorrectionBinding
-
         revision_parent = self.inference_current_head(extraction, actor=actor)
         revision_parent = self._validated_correction_revision_parent(
             extraction,
@@ -402,8 +401,6 @@ class ExtractionManager(ImmutableEvidenceManager):
         extraction: Any,
     ) -> tuple[Any, Any]:
         """Resolve the exact fact authority and frozen revision parent in a Decision."""
-
-        from angee.workflows_extraction.models import CorrectionBinding
 
         if not isinstance(extraction, self.model) or extraction.pk is None:
             raise ValidationError({"extraction": "Correction authority requires a retained extraction."})
