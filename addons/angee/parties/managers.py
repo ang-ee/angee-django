@@ -210,6 +210,10 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         means an address whose human-readable ``value`` drifts (a chat account
         behind a changed number) refreshes the existing row instead of forking a
         duplicate or crashing a concurrent insert on the external-id constraint.
+        When that refreshed ``value`` would instead collide with a different row
+        that already owns ``(platform, value)``, the write converges on that owner
+        rather than rewriting this row — the same rule the create path applies to
+        the mirror collision, so a ``@lid`` and its phone JID settle on one handle.
         The value-keyed path never rewrites ``external_id`` (it is not the key it
         matched on).
 
@@ -227,17 +231,54 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         normalized_value = self.model.normalize_value(platform, value)
         external_id = str(fields.get("external_id") or "")
         if external_id:
-            handle, created = self.get_or_create(
-                platform=platform,
-                external_id=external_id,
-                defaults={
-                    "created_by_id": created_by_id,
-                    "value": value,
-                    "normalized_value": normalized_value,
-                    **fields,
-                },
-            )
+            try:
+                handle, created = self.get_or_create(
+                    platform=platform,
+                    external_id=external_id,
+                    defaults={
+                        "created_by_id": created_by_id,
+                        "value": value,
+                        "normalized_value": normalized_value,
+                        **fields,
+                    },
+                )
+            except IntegrityError:
+                # The external-id create can still collide on ``(platform, value)``
+                # when a second source identity already holds this contact point —
+                # e.g. a WhatsApp contact reached both by phone JID and by a hidden
+                # ``@lid`` that resolves to the same E.164. The value *is* the
+                # contact point, so converge on the row that owns it instead of
+                # forking or crashing; it keeps its own ``external_id`` (the other
+                # source's idempotency key). ``get_or_create`` isolates its insert
+                # in a savepoint, so the surrounding transaction stays usable.
+                existing = self.filter(platform=platform, value=value).first()
+                if existing is None:
+                    raise
+                self._refresh(
+                    existing,
+                    {name: val for name, val in fields.items() if name != "external_id"},
+                )
+                return existing
             if not created:
+                # The external id resolved an existing row, but refreshing its
+                # ``value`` can land on a contact point a *different* row already
+                # owns — a WhatsApp ``@lid`` handle whose sender resolved to an
+                # ``+E164`` that a phone-JID handle already holds. ``_refresh``
+                # saves outside ``get_or_create``'s savepoint, so that collision
+                # would raise ``uq_handle_platform_value`` straight into the
+                # caller's ``atomic()`` and abort its whole message batch. A
+                # pre-check (never a failed save inside the caller's transaction)
+                # converges on the row that owns the value, exactly as the create
+                # path does above; this row keeps its old value for the offline
+                # backfill to merge.
+                if value != handle.value:
+                    owner_of_value = self.filter(platform=platform, value=value).exclude(pk=handle.pk).first()
+                    if owner_of_value is not None:
+                        self._refresh(
+                            owner_of_value,
+                            {name: val for name, val in fields.items() if name != "external_id"},
+                        )
+                        return owner_of_value
                 self._refresh(handle, {"value": value, "normalized_value": normalized_value, **fields})
             return handle
         handle, created = self.get_or_create(

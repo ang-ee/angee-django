@@ -755,7 +755,7 @@ requires-dist = [
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
     { name = "django-zed-rebac", specifier = ">=0.17.2" },
-    { name = "hatch-angee", specifier = ">=0.2.3" },
+    { name = "hatch-angee", specifier = ">=0.2.4" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
@@ -1115,16 +1115,16 @@ wheels = [
 
 [[package]]
 name = "hatch-angee"
-version = "0.2.3"
+version = "0.2.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "hatchling" },
     { name = "packaging" },
     { name = "tomlkit" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/53/f99edfac4aee48562d739780e506f43749cd0a4b155010076c0429d593f2/hatch_angee-0.2.3.tar.gz", hash = "sha256:3fc9f441f0758c836849f0d0e6b3d64f7e4bf75a517c58b4310dedd8c02a00a7", size = 54322, upload-time = "2026-08-29T07:20:02.248Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/31/93/fa464284dc19b9c422741b8bd3d12468333d91308ef49a1928e685e75603/hatch_angee-0.2.4.tar.gz", hash = "sha256:55aa21e2cac8367cdf6073a70082f40733571770c093470fd5e985cb33422e6d", size = 54653, upload-time = "2026-09-18T09:25:39.413Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/84/461552bbe966819dc643ab1b2c536991508d8c429fd01ce28bc8353f372c/hatch_angee-0.2.3-py3-none-any.whl", hash = "sha256:d6b2bc0c4007b202364da3d1000057ba70ceee8ee33a9ad30a9b7d3fa0f3704f", size = 26749, upload-time = "2026-08-29T07:20:01.033Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/1a/07695b75f8e02912c0688758b290e6e1b7d68d81f622e56bb6e8a9bf935f/hatch_angee-0.2.4-py3-none-any.whl", hash = "sha256:a4367361e6ce4878dbe45777a4b70640e450a6096c0f7683483d306a7c0f10df", size = 26934, upload-time = "2026-09-18T09:25:38.408Z" },
 ]
 
 [[package]]

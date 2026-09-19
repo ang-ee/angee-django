@@ -23,6 +23,7 @@ function RecordRowInner<TRow extends Row>({
   onToggleSelected,
   interactive,
   selectable = true,
+  reserveLeadingColumn = false,
   rowHref,
   onRowClick,
   onRecordOpen,
@@ -35,6 +36,14 @@ function RecordRowInner<TRow extends Row>({
   onToggleSelected: (id: string, selected?: boolean) => void;
   interactive: boolean;
   selectable?: boolean;
+  /**
+   * Emit the leading 32px cell even when the row is not `selectable`, as an empty
+   * spacer in place of the checkbox. The flat body has no leading column unless
+   * selectable, so it leaves this unset; the grouped body's `<colgroup>` and header
+   * reserve that column for the group chevron on *every* row, so a grouped record
+   * row must occupy it or its content cells slide left under `table-fixed`.
+   */
+  reserveLeadingColumn?: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   onRecordOpen?: (row: TRow) => void;
@@ -51,6 +60,7 @@ function RecordRowInner<TRow extends Row>({
         selected={selected}
         onToggleSelected={onToggleSelected}
         selectable={selectable}
+        reserveLeadingColumn={reserveLeadingColumn}
         href={href}
         onRecordOpen={onRecordOpen}
         active={active}
@@ -66,6 +76,7 @@ function RecordRowInner<TRow extends Row>({
       onToggleSelected={onToggleSelected}
       interactive={interactive}
       selectable={selectable}
+      reserveLeadingColumn={reserveLeadingColumn}
       onRowClick={onRowClick}
       onRecordOpen={onRecordOpen}
       active={active}
@@ -86,6 +97,7 @@ function LinkedRecordRow<TRow extends Row>({
   selected,
   onToggleSelected,
   selectable,
+  reserveLeadingColumn,
   href,
   onRecordOpen,
   active = false,
@@ -96,6 +108,8 @@ function LinkedRecordRow<TRow extends Row>({
   selected: boolean;
   onToggleSelected: (id: string, selected?: boolean) => void;
   selectable: boolean;
+  /** See {@link RecordRow}: reserve the grouped chevron column with a spacer when not selectable. */
+  reserveLeadingColumn: boolean;
   href: string;
   onRecordOpen?: (row: TRow) => void;
   active?: boolean;
@@ -169,6 +183,8 @@ function LinkedRecordRow<TRow extends Row>({
             onCheckedChange={(checked) => onToggleSelected(id, checked)}
           />
         </TableCell>
+      ) : reserveLeadingColumn ? (
+        <TableCell className="w-8" />
       ) : null}
       {row.getVisibleCells().map((cell, index) => (
         <TableCell
@@ -209,6 +225,7 @@ function PlainRecordRow<TRow extends Row>({
   onToggleSelected,
   interactive,
   selectable,
+  reserveLeadingColumn,
   onRowClick,
   onRecordOpen,
   active = false,
@@ -220,6 +237,8 @@ function PlainRecordRow<TRow extends Row>({
   onToggleSelected: (id: string, selected?: boolean) => void;
   interactive: boolean;
   selectable: boolean;
+  /** See {@link RecordRow}: reserve the grouped chevron column with a spacer when not selectable. */
+  reserveLeadingColumn: boolean;
   onRowClick?: (row: TRow) => void;
   onRecordOpen?: (row: TRow) => void;
   active?: boolean;
@@ -272,6 +291,8 @@ function PlainRecordRow<TRow extends Row>({
             onCheckedChange={(checked) => onToggleSelected(id, checked)}
           />
         </TableCell>
+      ) : reserveLeadingColumn ? (
+        <TableCell className="w-8" />
       ) : null}
       {row.getVisibleCells().map((cell, index) => (
         <TableCell

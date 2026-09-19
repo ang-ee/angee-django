@@ -115,7 +115,11 @@ function partColumns(
         // text — the same follow pattern the activity agenda uses. Degrades to
         // plain text where storage.File has no routed page.
         const file = row.file;
-        const label = file?.title || file?.filename;
+        // Prefer the part's own name: one File is content-addressed and can back
+        // parts from many messages, so the per-part name is the reliable one; the
+        // shared file title/filename is the fallback. (The transcript's attachment
+        // chips resolve the same way through the shared `MessagePartsView` owner.)
+        const label = row.name || file?.title || file?.filename;
         if (!label) return null;
         const href = file?.id ? recordHref(FILE_MODEL, file.id) : undefined;
         return href ? (

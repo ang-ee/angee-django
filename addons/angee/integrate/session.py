@@ -472,6 +472,11 @@ class LiveSession:
         self.pairing = PairingState.PAIRED
         self._report(PairingState.PAIRED)
         self.bridge.report_status(IntegrationRuntimeStatus.OK)
+        # Runtime status is the operator-facing axis; the sync fields are their
+        # own. A live-desired channel never revisits the poll loop that would
+        # drop a prior run's failure, so clear it here where pairing proves it
+        # untrue — leaving the pairing details/QR and scheduler markers intact.
+        self.bridge.clear_sync_error()
         self.outcome_error = None
         return True
 

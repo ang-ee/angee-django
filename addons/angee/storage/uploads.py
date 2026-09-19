@@ -45,6 +45,42 @@ PROXY_CHUNK_SIZE = 1 << 20
 MIME_SNIFF_BYTES = 4096
 """Head bytes captured during finalize hashing for MIME detection."""
 
+ATTACHMENT_FALLBACK_STEM = "attachment"
+"""Display-name stem for a byte payload that arrived without its own name."""
+
+_EXTENSION_FIXUPS: dict[str, str] = {".jpe": ".jpg", ".jpeg": ".jpg"}
+"""Normalise historical ``mimetypes`` oddities to their canonical extension."""
+
+
+def attachment_extension(mime: str) -> str:
+    """Return a dotted filename extension for a MIME type, defaulting to ``.bin``.
+
+    Reads the extension from the stdlib ``mimetypes`` registry — the same owner
+    :func:`detect_mime` consults for its filename fallback — normalising a few
+    historical oddities (``.jpe`` → ``.jpg``) and defaulting to ``.bin`` when the
+    type is empty or unknown, so a byte payload always lands under a plausible
+    extension.
+    """
+
+    primary = (mime or "").split(";", 1)[0].strip().lower()
+    extension = mimetypes.guess_extension(primary) if primary else None
+    if extension is None:
+        return ".bin"
+    return _EXTENSION_FIXUPS.get(extension, extension)
+
+
+def fallback_attachment_name(mime: str) -> str:
+    """Return the display filename for an unnamed byte payload of ``mime``.
+
+    ``attachment{ext}`` — the single naming rule the messaging ingest fallback and
+    the storage ``attachment.bin`` backfill both compose, so an attachment that
+    arrived without a name still reads as its kind (``attachment.jpg``) instead of
+    the opaque ``attachment.bin``. The stored blob is content-addressed by
+    ``storage_path``; this only owns the human-facing name.
+    """
+
+    return f"{ATTACHMENT_FALLBACK_STEM}{attachment_extension(mime)}"
+
 
 def sha256_stream(reader: BinaryIO, *, capture_head: int = 0) -> tuple[str, int, bytes]:
     """Stream-hash a binary reader without materializing it.

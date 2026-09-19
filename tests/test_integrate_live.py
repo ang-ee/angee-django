@@ -1261,6 +1261,53 @@ def test_queued_session_revalidates_terminal_health(live_tables: Any, monkeypatc
 
 
 @pytest.mark.django_db(transaction=True)
+def test_pairing_clears_a_previous_runs_sync_failure(live_tables: Any) -> None:
+    """A live session that reaches PAIRED drops a stale poll failure but keeps pairing."""
+
+    from angee.integrate.sync import BridgeProgressReporter
+
+    channel = _live_channel("fake-live-clears-failure")
+    with system_context(reason="test seed prior sync failure"):
+        channel.record_sync_error(
+            ConnectionError("Connection to Telegram failed 5 time(s)"),
+            now=timezone.now(),
+        )
+    channel.refresh_from_db()
+    assert channel.sync_error == "Integration operation failed."
+    assert channel.last_sync_status == "error"
+    assert "error" in channel.sync_progress
+
+    class PairingSession(FakeLiveSession):
+        """Fake vendor thread that signs in immediately and then disconnects."""
+
+        def _connect(self) -> None:
+            self.events.put(("paired", "account-1"))
+            self.events.put(("disconnected", None))
+            self._stopping.wait(timeout=1)
+
+        def _shutdown(self, connection: threading.Thread) -> bool:
+            connection.join(timeout=0.5)
+            return not connection.is_alive()
+
+    session = PairingSession(
+        channel,
+        reporter=BridgeProgressReporter(channel),
+        stop_event=threading.Event(),
+    )
+    with system_context(reason="test pairing clears failure"), bridge_advisory_lock(channel) as acquired:
+        assert acquired
+        outcome = session.run()
+
+    assert outcome is PairingState.PAIRED
+    with system_context(reason="test pairing clears failure verify"):
+        fresh = type(channel).objects.get(pk=channel.pk)
+    assert fresh.sync_error == ""
+    assert fresh.last_sync_status == "ok"
+    assert "error" not in fresh.sync_progress
+    assert fresh.sync_progress["details"]["pairing"]["state"] == PairingState.PAIRED
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("shutdown_raises", [False, True])
 def test_stalled_native_shutdown_exits_before_releasing_locks(
     live_tables: Any,
