@@ -44,7 +44,11 @@ export function refineInvalidationParams(
   return {
     resource: target.resource,
     dataProviderName: target.dataProviderName,
-    invalidates: ["list", "many", "detail"],
+    // Refine's `detail` invalidation requires an id. Authored verbs name every
+    // model they mutate, but may update a related model whose id is not the
+    // action subject. Invalidate the declared resource prefix so its active
+    // list, many, and real-id detail queries all refresh.
+    invalidates: ["resourceAll"],
   };
 }
 
