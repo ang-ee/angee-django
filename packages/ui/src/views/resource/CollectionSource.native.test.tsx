@@ -46,6 +46,19 @@ import { ToastProvider } from "../../feedback";
 
 type ActivityRow = { id: string; title: string; parent?: string; expandable?: boolean };
 type Variables = { request: CollectionPageRequest | CollectionGroupRequest };
+
+function filterOperatorValue(
+  filter: CollectionPageRequest["filter"],
+  field: string,
+  operator: string,
+): unknown {
+  const condition = filter?.[field];
+  if (!condition || typeof condition !== "object" || Array.isArray(condition)) {
+    return undefined;
+  }
+  return (condition as Readonly<Record<string, unknown>>)[operator];
+}
+
 const PageDocument: TypedDocumentNode<
   { page: CollectionPage<ActivityRow> },
   Variables
@@ -268,6 +281,49 @@ test("an authored server page uses native list paging without a model-resource q
     }),
   );
   expect(f.getList).not.toHaveBeenCalled();
+});
+
+test("an authored source groups through the complete custom catalog without preset or visible-column declarations", async () => {
+  const f = fixture(false);
+  await screen.findByText("Activity all page 1");
+  act(() => f.view.setFilter({ title: { iContains: "invoice" } }));
+  await waitFor(() => expect(f.requests.at(-1)).toMatchObject({
+    filter: { title: { iContains: "invoice" } },
+  }));
+
+  fireEvent.click(screen.getByLabelText("Filter and group"));
+  expect(screen.queryByRole("button", { name: "Account" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+  const field = screen.getByLabelText("Group field");
+  expect(field.textContent).toContain("Account");
+  fireEvent.click(field);
+  expect(await screen.findByRole("option", { name: "Account" })).toBeTruthy();
+  expect(screen.queryByRole("option", { name: "Title" })).toBeNull();
+  fireEvent.click(field);
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+  await waitFor(() => expect(f.requests.some((request) =>
+    "group" in request
+    && request.group.field === "account"
+    && filterOperatorValue(request.filter, "title", "iContains") === "invoice",
+  )).toBe(true));
+  await waitFor(() => expect(f.requests.some((request) =>
+    !("group" in request)
+    && filterOperatorValue(request.filter, "title", "iContains") === "invoice"
+    && Filter.from(request.filter).facetValues("account")[0] === "account-1",
+  )).toBe(true));
+  expect(f.getList).not.toHaveBeenCalled();
+});
+
+test("an authored source keeps its complete filter catalog when shortcut inference is disabled", async () => {
+  fixture(false);
+  await screen.findByText("Activity all page 1");
+  fireEvent.click(screen.getByLabelText("Filter and group"));
+  fireEvent.click(screen.getByRole("button", { name: "Add custom filter" }));
+  const field = screen.getByLabelText("Filter field");
+  fireEvent.click(field);
+  expect(await screen.findByRole("option", { name: "Title" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "Account" })).toBeTruthy();
 });
 
 test("authored groups page headers and expanded members independently through semantic scopes", async () => {

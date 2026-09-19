@@ -41,6 +41,7 @@ export function useResourceToolbarProps({
   group,
   groupStack,
   groupOptions,
+  customGroupOptions,
   groupingEnabled = true,
   filterOptions = [],
   ...props
@@ -59,6 +60,7 @@ export function useResourceToolbarProps({
       group: groupingEnabled ? group : undefined,
       groupStack: groupingEnabled ? groupStack : undefined,
       groupOptions: groupingEnabled ? groupOptions : undefined,
+      customGroupOptions: groupingEnabled ? customGroupOptions : undefined,
       filterOptions,
       onClearGroup: groupingEnabled
         ? () => resourceView.setGroupStack([])
@@ -94,6 +96,7 @@ export function useResourceToolbarProps({
       group,
       groupStack,
       groupOptions,
+      customGroupOptions,
       groupingEnabled,
       props,
       resourceView.applyFavorite,

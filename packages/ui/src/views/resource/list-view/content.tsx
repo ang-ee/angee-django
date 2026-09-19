@@ -134,6 +134,7 @@ export function ListViewContent<TRow extends Row = Row>({
   const toolbarInputs = useResourceViewToolbarInputs({
     query: source?.query,
     inferOptions: !source,
+    serverGrouping: !clientRowModel,
     columns: resolvedColumns,
     rows: surface.rows,
     modelMetadata,
@@ -196,6 +197,7 @@ export function ListViewContent<TRow extends Row = Row>({
     group: effectiveGroupStack[0] ?? null,
     groupStack: effectiveGroupStack,
     groupOptions: toolbarInputs.groupOptions,
+    customGroupOptions: toolbarInputs.customGroupOptions,
     filterOptions: toolbarInputs.filterOptions,
     customFilterFields: toolbarInputs.customFilterFields,
     customFilterChips: toolbarInputs.customFilterChips,
