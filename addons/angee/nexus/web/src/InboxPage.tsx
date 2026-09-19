@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Alert,
   Button,
@@ -9,8 +9,10 @@ import {
   useBreadcrumbLeafLabel,
   useChatter,
   useChatterContent,
+  useLatestRef,
   useResourceView,
   type ChatterContent,
+  type ResourceViewFilter,
 } from "@angee/ui";
 import { InboxConversation } from "./inbox/Conversation";
 import { InboxMessageReader } from "./inbox/MessageReader";
@@ -48,6 +50,13 @@ function InboxExplorer() {
   const view = useResourceView();
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const { setActiveTab, setCollapsed } = useChatter();
+  // Stable across every unrelated `c`-view change so the published navigator node
+  // only republishes when coverage actually changes (shell-publisher pitfall).
+  const viewRef = useLatestRef(view);
+  const onCoverage = useCallback(
+    (next: ResourceViewFilter) => viewRef.current.setFilter(next),
+    [viewRef],
+  );
   const primary = useMemo(
     () => (
       <ResourceViewProvider
@@ -57,12 +66,13 @@ function InboxExplorer() {
       >
         <InboxNavigatorPane
           coverage={view.state.filter}
+          onCoverage={onCoverage}
           timezone={timezone}
           navigation={navigation}
         />
       </ResourceViewProvider>
     ),
-    [view.state.filter, timezone, navigation],
+    [view.state.filter, onCoverage, timezone, navigation],
   );
   const related = useMemo<ChatterContent>(
     () => ({

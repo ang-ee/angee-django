@@ -41,6 +41,13 @@ export const COVERAGE_FIELDS = [
   "timezone",
 ] as const;
 
+/** The conversation-kind vocabulary and its one multi-kind preset, shared by every
+ * editor of the coverage `kind` fact (results toolbar facets + navigator select) so
+ * the inventory and the direct+mail predicate never fork. Mirrors the backend
+ * coverage map in `messaging/inbox.py`. */
+export const COVERAGE_KINDS = ["direct", "mail", "group", "other"] as const;
+export const DIRECT_MAIL_PRESET = { kind: { inList: ["direct", "mail"] } };
+
 /** The row unit and compatible axes are one declaration, shared by controls and transport. */
 export const resultLenses: Record<
   ResultLens,
