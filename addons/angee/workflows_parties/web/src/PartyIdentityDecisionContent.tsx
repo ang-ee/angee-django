@@ -11,6 +11,12 @@ import * as v from "valibot";
 import { useWorkflowsPartiesT } from "./i18n";
 
 type UnknownRecord = Record<string, unknown>;
+type HandleStatus = "confirmed" | "dismissed" | "suggested";
+const STATUS_LABEL_KEYS = {
+  confirmed: "identityReview.status.confirmed",
+  dismissed: "identityReview.status.dismissed",
+  suggested: "identityReview.status.suggested",
+} as const satisfies Record<HandleStatus, string>;
 const Text = v.optional(v.string(), "");
 const Address = v.record(v.string(), v.unknown());
 const Handle = v.looseObject({
@@ -162,12 +168,12 @@ function ContactList({ handles }: { handles: UnknownRecord[] }): React.ReactElem
   </ul>;
 }
 
-function statusBadge(status: string, t: ReturnType<typeof useWorkflowsPartiesT>): React.ReactElement {
+function statusBadge(status: HandleStatus, t: ReturnType<typeof useWorkflowsPartiesT>): React.ReactElement {
   const tone = status === "dismissed" ? "neutral" : status === "confirmed" ? "success" : "warning";
-  return <Badge tone={tone}>{t(`identityReview.status.${status}`)}</Badge>;
+  return <Badge tone={tone}>{t(STATUS_LABEL_KEYS[status])}</Badge>;
 }
 
-function handleStatus(handle: UnknownRecord): "confirmed" | "dismissed" | "suggested" {
+function handleStatus(handle: UnknownRecord): HandleStatus {
   if (handle.is_dismissed === true) return "dismissed";
   if (handle.is_confirmed === true) return "confirmed";
   return "suggested";
