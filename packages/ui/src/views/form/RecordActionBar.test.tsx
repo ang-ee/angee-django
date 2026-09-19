@@ -16,7 +16,9 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
+import { DialogForm } from "../../fragments/DialogForm";
 import { RecordActionBar } from "./RecordActionBar";
+import { RecordActionTrigger } from "./RecordActionMenu";
 
 describe("RecordActionBar", () => {
   beforeAll(() => {
@@ -94,9 +96,71 @@ describe("RecordActionBar", () => {
       expect((trigger as HTMLButtonElement).disabled).toBe(false);
     });
   });
+
+  test("keeps a contributed action mounted when its menu closes for a dialog", async () => {
+    let triggerNode: HTMLElement | null = null;
+    renderActionBar(
+      <RecordActionBar
+        record={record}
+        actions={[]}
+        applyPatch={vi.fn()}
+        reload={vi.fn()}
+        contributedActions={
+          <DialogActionProbe onTriggerRef={(node) => { triggerNode = node; }} />
+        }
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    const menuItem = await screen.findByRole("menuitem", {
+      name: "Update credential",
+    });
+    expect(triggerNode).toBe(menuItem);
+    expect(menuItem.getAttribute("aria-haspopup")).toBe("dialog");
+    fireEvent.click(menuItem);
+
+    expect(await screen.findByRole("dialog", { name: "Credential form" })).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: "Update credential" }),
+    ).toBeNull();
+    const closedItem = screen.getByRole("menuitem", {
+      name: "Update credential",
+      hidden: true,
+    });
+    expect(closedItem.getAttribute("tabindex")).toBe("-1");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Actions" }),
+      );
+    });
+  });
 });
 
 const record: Row = { id: "note-1" };
+
+function DialogActionProbe({
+  onTriggerRef,
+}: {
+  onTriggerRef: (node: HTMLElement | null) => void;
+}): React.ReactElement {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <DialogForm
+      open={open}
+      onOpenChange={setOpen}
+      title="Credential form"
+      trigger={
+        <RecordActionTrigger ref={onTriggerRef} data-testid="credential-trigger">
+          Update credential
+        </RecordActionTrigger>
+      }
+    >
+      <label htmlFor="username">Username</label>
+      <input id="username" />
+    </DialogForm>
+  );
+}
 
 function renderActionBar(children: React.ReactElement): void {
   const queryClient = new QueryClient({

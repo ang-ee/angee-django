@@ -224,6 +224,14 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     applyPatch,
     reload,
   } = surface;
+  const primaryRecordActions = React.useMemo(
+    () => recordActions.filter((entry) => entry.recordActionPlacement !== "menu"),
+    [recordActions],
+  );
+  const menuRecordActions = React.useMemo(
+    () => recordActions.filter((entry) => entry.recordActionPlacement === "menu"),
+    [recordActions],
+  );
   useBreadcrumbLeafLabel(
     titleText(
       recordRepresentationValue(displayRecord, surface.modelMetadata),
@@ -316,19 +324,30 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             </Button>
           </div>
         ) : null}
-        {!readOnly && (declaredActions.length > 0 || visibleDeleteAction !== undefined) ? (
+        {!readOnly && (
+          declaredActions.length > 0 ||
+          visibleDeleteAction !== undefined ||
+          menuRecordActions.length > 0
+        ) ? (
           <RecordActionBar
             record={displayRecord ?? null}
             actions={declaredActions}
             applyPatch={applyPatch}
             reload={reload}
             deleteAction={visibleDeleteAction}
+            contributedActions={
+              recordChromeContext && menuRecordActions.length > 0 ? (
+                <RecordChromeProvider value={recordChromeContext}>
+                  <SlotOutlet entries={menuRecordActions} />
+                </RecordChromeProvider>
+              ) : undefined
+            }
             blocked={formIsDirty || pending}
           />
         ) : null}
         {!readOnly && recordChromeContext ? (
           <RecordChromeProvider value={recordChromeContext}>
-            <SlotOutlet entries={recordActions} />
+            <SlotOutlet entries={primaryRecordActions} />
           </RecordChromeProvider>
         ) : null}
       </div>

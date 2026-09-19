@@ -15,8 +15,23 @@ describe("messaging_integrate_imap addon manifest", () => {
       impl: "imap",
       id: "messaging-integrate-imap.credential",
       sequence: 20,
+      recordActionPlacement: "menu",
     });
     expect(messagingIntegrateImap.i18n?.messaging?.["channel.imap.credential.button"]).toBe("Update credential");
+  });
+
+  test("contributes the paused-channel new-mail boundary action", () => {
+    expect(messagingIntegrateImap.slots?.[2]).toMatchObject({
+      slot: "form-view.record-actions",
+      model: "messaging.Channel",
+      impl: "imap",
+      id: "messaging-integrate-imap.new-mail",
+      sequence: 30,
+      recordActionPlacement: "menu",
+    });
+    expect(messagingIntegrateImap.i18n?.messaging?.["channel.imap.newMail.button"]).toBe(
+      "Set new-mail starting point",
+    );
   });
 
   test("contributes IMAP-specific connect copy", () => {

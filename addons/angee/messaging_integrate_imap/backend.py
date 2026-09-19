@@ -9,14 +9,23 @@ Incremental state lives on ``bridge.cursor`` as per-mailbox UID watermarks::
 
     {"mailboxes": {"INBOX": {"uidvalidity": 123456, "last_uid": 4211}}}
 
+An operator may establish a future-only boundary while the channel is paused::
+
+    {
+        "delivery_mode": "new_only",
+        "mailboxes": {"INBOX": {"uidvalidity": 123456, "last_uid": 4211}},
+    }
+
 Correctness rests on three facts. UIDVALIDITY is checked every run: a changed
-value invalidates that mailbox's UID space, so its cursor resets and the folder
-refetches in full — the ``(platform, external_id)`` ingest idempotency converges
-the refetch instead of duplicating it. UIDNEXT (from STATUS, no SELECT) pre-screens
-each unchanged mailbox so an idle folder costs one round-trip. The backend
-advances its cursor in memory; ``Channel._drain`` persists it only after the
-corresponding batch is ingested locally. A crash can therefore re-fetch an
-unfinished batch without skipping mail or restarting a completed backfill.
+value invalidates that mailbox's UID space. A normal historical cursor resets
+and refetches in full — the ``(platform, external_id)`` ingest idempotency
+converges the refetch instead of duplicating it. A future-only cursor refuses the
+epoch change and requires a fresh explicit boundary, so it can never turn into a
+historical replay. UIDNEXT (from STATUS, no SELECT) pre-screens each unchanged
+mailbox so an idle folder costs one round-trip. The backend advances its cursor
+in memory; ``Channel._drain`` persists it only after the corresponding batch is
+ingested locally. A crash can therefore re-fetch an unfinished batch without
+skipping mail or restarting a completed backfill.
 
 ``fetch_messages`` follows the seam's paging contract (one bounded batch per
 call — ``config["batch_size"]``, default 200, with body pulls additionally split
@@ -42,6 +51,7 @@ from datetime import date
 from email import policy
 from email.parser import BytesHeaderParser
 from functools import partial
+from hashlib import sha256
 from typing import Any, TypeVar
 
 from django.core.exceptions import ValidationError
@@ -68,6 +78,7 @@ _DEFAULT_MAX_BATCH_BYTES = 64_000_000
 _DEFAULT_TIMEOUT_SECONDS = 60
 MAX_SAMPLE_MESSAGES = 50
 MAX_SAMPLE_BYTES = 64_000_000
+NEW_MAIL_DELIVERY_MODE = "new_only"
 # Folders never worth syncing by default; SPECIAL-USE flags are authoritative,
 # these casefolded names are the fallback for servers that do not advertise them.
 _SKIP_SPECIAL_USE = frozenset({"\\junk", "\\trash", "\\drafts"})
@@ -159,6 +170,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         super().__init__(integration)
         self._client: IMAPClient | None = None
         self._selected = ""
+        self._login_name = ""
         self._work: deque[_MailboxWork] | None = None
         self._own_addresses: frozenset[str] = frozenset()
 
@@ -315,6 +327,65 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
     # --- discovery ---
 
+    def prepare_new_mail_cursor(self, current_cursor: object) -> tuple[dict[str, Any], bool]:
+        """Return a durable boundary that excludes every currently selected message.
+
+        The read-only STATUS/SELECT pair pins each mailbox epoch and captures its
+        next allocatable UID. A repeated call against the same selected set and
+        epochs returns the retained boundary unchanged: losing the first action's
+        response can never make a retry skip mail that arrived after it committed.
+
+        Persistence belongs to the Channel action. This transport method only
+        reads the server and closes its session, so a failed snapshot has no local
+        side effect.
+        """
+
+        cursor = dict(current_cursor) if isinstance(current_cursor, dict) else {}
+        retained = cursor.get("mailboxes")
+        retained_mailboxes = retained if isinstance(retained, dict) else {}
+        try:
+            client = self._connect()
+            source_identity = self._source_identity_digest()
+            selected = self._select_mailboxes(client)
+            if not selected:
+                raise ImapError("The IMAP channel has no selectable mailboxes.")
+            snapshot: dict[str, dict[str, int]] = {}
+            for name in selected:
+                status = client.folder_status(name, [b"UIDVALIDITY", b"UIDNEXT"])
+                uidvalidity = int(status[b"UIDVALIDITY"])
+                uidnext = int(status[b"UIDNEXT"])
+                selected_status = client.select_folder(name, readonly=True)
+                self._selected = name
+                selected_uidvalidity = int(selected_status[b"UIDVALIDITY"])
+                if selected_uidvalidity != uidvalidity:
+                    raise ImapError(
+                        f"IMAP mailbox {name!r} changed UIDVALIDITY while setting its new-mail starting point."
+                    )
+                snapshot[name] = {
+                    "uidvalidity": uidvalidity,
+                    "last_uid": max(uidnext - 1, 0),
+                }
+        finally:
+            self.close()
+
+        same_epochs = (
+            cursor.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE
+            and cursor.get("source_identity") == source_identity
+            and set(retained_mailboxes) == set(snapshot)
+            and all(
+                int(retained_mailboxes[name].get("uidvalidity", -1)) == entry["uidvalidity"]
+                for name, entry in snapshot.items()
+                if isinstance(retained_mailboxes.get(name), dict)
+            )
+            and all(isinstance(retained_mailboxes.get(name), dict) for name in snapshot)
+        )
+        if same_epochs:
+            return cursor, False
+        cursor["delivery_mode"] = NEW_MAIL_DELIVERY_MODE
+        cursor["source_identity"] = source_identity
+        cursor["mailboxes"] = snapshot
+        return cursor, True
+
     def _discover(self) -> deque[_MailboxWork]:
         """Build the fetch plan: per selected mailbox, the UIDs beyond its cursor."""
 
@@ -323,6 +394,17 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         mailboxes = self.bridge.cursor.setdefault("mailboxes", {})
         plan: deque[_MailboxWork] = deque()
         selected_mailboxes = self._select_mailboxes(client)
+        new_only = self.bridge.cursor.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE
+        if new_only and self.bridge.cursor.get("source_identity") != self._source_identity_digest():
+            raise ImapError(
+                "The IMAP account changed after the new-mail starting point was set. "
+                "Pause the channel and set the starting point again."
+            )
+        if new_only and set(mailboxes) != set(selected_mailboxes):
+            raise ImapError(
+                "The selected IMAP mailboxes changed after the new-mail starting point was set. "
+                "Pause the channel and set the starting point again."
+            )
         if self.partition is not None:
             # A partition drain plans only its own mailbox; the parent already
             # enumerated the full selection through sync_partitions().
@@ -337,10 +419,16 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             uidvalidity = int(status[b"UIDVALIDITY"])
             uidnext = int(status[b"UIDNEXT"])
             entry = mailboxes.get(name) or {}
-            last_uid = int(entry.get("last_uid", 0)) if int(entry.get("uidvalidity", -1)) == uidvalidity else 0
+            retained_uidvalidity = int(entry.get("uidvalidity", -1))
+            if new_only and retained_uidvalidity != uidvalidity:
+                raise ImapError(
+                    f"IMAP mailbox {name!r} changed UIDVALIDITY after its new-mail starting point was set. "
+                    "Pause the channel and set the starting point again."
+                )
+            last_uid = int(entry.get("last_uid", 0)) if retained_uidvalidity == uidvalidity else 0
             if last_uid and uidnext <= last_uid + 1:
                 continue  # nothing new — screened without a SELECT round-trip
-            self._select(name)
+            self._select(name, expected_uidvalidity=uidvalidity if new_only else None)
             criteria = ["UID", f"{last_uid + 1}:*"] if last_uid else "ALL"
             # A UID range of ``n:*`` returns the highest-UID message even when its
             # UID is below ``n`` (RFC 3501), so re-filter client-side.
@@ -409,7 +497,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
     def _fetch_chunk(self, work: _MailboxWork, uids: list[int]) -> list[ParsedMessage]:
         """Fetch and parse one chunk: pin the mailbox, size-screen, budgeted body pulls."""
 
-        self._select(work.name)
+        self._select(work.name, expected_uidvalidity=work.uidvalidity)
         self._report_progress(
             "syncing",
             "Fetching IMAP message batch",
@@ -422,14 +510,22 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         config = self.bridge.config
         max_bytes = int(config.get("max_message_bytes") or _DEFAULT_MAX_MESSAGE_BYTES)
         batch_bytes = int(config.get("max_batch_bytes") or _DEFAULT_MAX_BATCH_BYTES)
-        sizes = self._with_retry(work.name, lambda: self._client_or_fail().fetch(uids, [b"RFC822.SIZE"]))
+        sizes = self._with_retry(
+            work.name,
+            lambda: self._client_or_fail().fetch(uids, [b"RFC822.SIZE"]),
+            expected_uidvalidity=work.uidvalidity,
+        )
         self._report_unanswered(work.name, uids, sizes, phase="size screen")
         small = [uid for uid in uids if uid in sizes and int(sizes[uid].get(b"RFC822.SIZE", 0)) <= max_bytes]
         small_set = set(small)
         oversized = [uid for uid in uids if uid in sizes and uid not in small_set]
         messages: list[ParsedMessage] = []
         for run in _byte_budget_runs(small, sizes, batch_bytes):
-            data = self._with_retry(work.name, partial(self._fetch_bodies, run))
+            data = self._with_retry(
+                work.name,
+                partial(self._fetch_bodies, run),
+                expected_uidvalidity=work.uidvalidity,
+            )
             self._report_unanswered(work.name, run, data, phase="body fetch")
             messages.extend(self._parse_fetched(work, data, body_key=b"BODY[]"))
         if oversized:
@@ -438,6 +534,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                 lambda: self._client_or_fail().fetch(
                     oversized, [b"BODY.PEEK[HEADER]", b"FLAGS", b"INTERNALDATE", b"RFC822.SIZE"]
                 ),
+                expected_uidvalidity=work.uidvalidity,
             )
             self._report_unanswered(work.name, oversized, data, phase="header fetch")
             messages.extend(self._parse_fetched(work, data, body_key=b"BODY[HEADER]", truncated=True))
@@ -532,7 +629,13 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                 missing[:20],
             )
 
-    def _with_retry(self, mailbox: str, operation: Callable[[], _T]) -> _T:
+    def _with_retry(
+        self,
+        mailbox: str,
+        operation: Callable[[], _T],
+        *,
+        expected_uidvalidity: int | None = None,
+    ) -> _T:
         """Run one server operation, reconnecting and retrying once on transport loss."""
 
         try:
@@ -540,7 +643,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         except _TRANSIENT_ERRORS:
             self.close()
             self._connect()
-            self._select(mailbox)
+            self._select(mailbox, expected_uidvalidity=expected_uidvalidity)
             return operation()
 
     # --- cursor ---
@@ -576,7 +679,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         """Open, secure, and authenticate the IMAP session from config + credential."""
 
         client = self._open()
-        self._login(client)
+        self._login_name = self._login(client)
         self._client = client
         self._selected = ""
         return client
@@ -641,7 +744,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             if is_unsafe_address(address, allow_private=True):
                 raise ImapError(f"IMAP host {host!r} resolves to a forbidden address.")
 
-    def _select(self, name: str) -> None:
+    def _select(self, name: str, *, expected_uidvalidity: int | None = None) -> None:
         """SELECT ``name`` read-only unless it is already the session's folder.
 
         IMAP FETCH is stateful — it reads the *currently selected* folder, and
@@ -651,8 +754,10 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
         if self._selected == name:
             return
-        self._client_or_fail().select_folder(name, readonly=True)
+        status = self._client_or_fail().select_folder(name, readonly=True)
         self._selected = name
+        if expected_uidvalidity is not None and int(status[b"UIDVALIDITY"]) != expected_uidvalidity:
+            raise ImapError(f"IMAP mailbox {name!r} changed UIDVALIDITY before its messages were fetched.")
 
     def _login(self, client: IMAPClient) -> str:
         """Authenticate with the channel credential (LOGIN or XOAUTH2); return the login name.
@@ -698,6 +803,29 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
         return str(self.bridge.config.get("username") or "").strip()
 
+    def _source_identity_digest(self) -> str:
+        """Return a non-secret binding for the mailbox account behind this cursor.
+
+        Password and OAuth material deliberately do not participate: rotating a
+        credential for the same login keeps the boundary. ``_login`` is the one
+        owner of username precedence; this method binds the exact authenticated
+        name without re-deriving or normalizing it. Host/login/transport changes
+        require the operator to establish a fresh boundary before sync.
+        """
+
+        if not self._login_name:
+            raise RuntimeError("The IMAP source identity requires an authenticated session.")
+        config = self.bridge.config
+        identity = "\0".join(
+            (
+                self._host().casefold(),
+                str(config.get("port") or ""),
+                str(config.get("security") or "ssl").casefold(),
+                self._login_name,
+            )
+        )
+        return sha256(identity.encode("utf-8")).hexdigest()
+
     def _account_email(self) -> str:
         """Return the connected external account's email, or ``""``."""
 
@@ -742,6 +870,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             pass
         self._client = None
         self._selected = ""
+        self._login_name = ""
 
 
 def _byte_budget_runs(uids: list[int], sizes: dict[int, dict[bytes, Any]], budget: int) -> list[list[int]]:

@@ -15,6 +15,7 @@ from angee.messaging.models import ThreadAttachment as AbstractThreadAttachment
 from angee.messaging.models import ThreadFollower as AbstractThreadFollower
 from angee.messaging.models import ThreadNotification as AbstractThreadNotification
 from angee.messaging.models import TrackingValue as AbstractTrackingValue
+from angee.messaging_integrate_imap.models import ImapChannelSampling
 from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
@@ -94,7 +95,7 @@ class Fragment(AbstractFragment):
         db_table = "test_messaging_fragment"
 
 
-class Channel(AbstractChannel, Integration):
+class Channel(ImapChannelSampling, AbstractChannel, Integration):
     """Concrete Integration child used to verify channel-owned message access."""
 
     class Meta(AbstractChannel.Meta):
