@@ -1613,6 +1613,31 @@ def _complete_retained_map_step_if_ready(
     expansion_id = expansion_attempt_id or step_run.current_attempt_id
     if expansion_id is None:
         raise ValidationError({"attempt": "Retained Map controller has no current expansion."})
+    expansion = apps.get_model("workflows", "StepAttempt").objects.get(pk=expansion_id)
+    checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
+    map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
+    if isinstance(map_state, dict):
+        target_id = map_state.get("target_step_id")
+        items = map_state.get("items")
+        if target_id is not None and isinstance(items, list):
+            target = apps.get_model("workflows", "Step").objects.get(pk=target_id)
+            # The membership owner validates the exact current expansion before
+            # recovery is allowed to materialize any missing child rows.
+            apps.get_model("workflows", "StepRun").objects.bind_map_membership(
+                run_id=step_run.run_id,
+                target_id=target.pk,
+                expansion_attempt_id=expansion_id,
+                item_count=len(items),
+                at=timestamp,
+            )
+            _ensure_map_children(step_run.run, step_run, target=target, items=items)
+            apps.get_model("workflows", "StepRun").objects.bind_map_membership(
+                run_id=step_run.run_id,
+                target_id=target.pk,
+                expansion_attempt_id=expansion_id,
+                item_count=len(items),
+                at=timestamp,
+            )
     apps.get_model("workflows", "StepAttempt").objects.record_map_aggregate(
         step_run.pk,
         expansion_attempt_id=expansion_id,

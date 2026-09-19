@@ -307,6 +307,7 @@ def test_probe_gate_map_execute_archive_end_to_end(
                             },
                         },
                     },
+                    "propertyOrder": ["extractor", "label", "target"],
                 },
             }
         },
@@ -337,11 +338,14 @@ def test_probe_gate_map_execute_archive_end_to_end(
                                 },
                             },
                         },
+                        "propertyOrder": ["extractor", "label", "target"],
                     },
                 },
             },
             "additionalProperties": False,
+            "propertyOrder": ["action", "mappings"],
         }],
+        "propertyOrder": ["action", "mappings"],
     }
     assert decision.form_schema == expected_schema
     assert decision.payload == {

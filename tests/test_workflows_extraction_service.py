@@ -1001,7 +1001,7 @@ class ExtractionServiceTests(TestCase):
         )
         operation_step_run = SimpleNamespace()
         with patch(
-            "angee.workflows.engine.consume_decision_resolution",
+            "angee.workflows_extraction.service.consume_decision_resolution",
             return_value=(canonical_decision, resolution),
         ) as consume:
             if str(canonical_decision.verdict) != "completed":
@@ -1719,7 +1719,7 @@ class ExtractionServiceTests(TestCase):
         )
         with (
             actor_context(self.owner),
-            patch("angee.workflows.engine.external_operation_request", return_value=admitted),
+            patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
                 return_value=(
@@ -1816,7 +1816,7 @@ class ExtractionServiceTests(TestCase):
         with (
             actor_context(self.owner),
             patch(
-                "angee.workflows.engine.external_operation_request",
+                "angee.workflows_extraction.service.external_operation_request",
                 return_value=admitted,
             ),
             patch(
@@ -1856,7 +1856,7 @@ class ExtractionServiceTests(TestCase):
         with (
             actor_context(self.owner),
             patch(
-                "angee.workflows.engine.external_operation_request",
+                "angee.workflows_extraction.service.external_operation_request",
                 return_value=continuation,
             ),
             patch(
@@ -1950,7 +1950,7 @@ class ExtractionServiceTests(TestCase):
         )
         with (
             actor_context(self.owner),
-            patch("angee.workflows.engine.external_operation_request", return_value=admitted),
+            patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
                 return_value=(authority.result, {}, {"route": "test"}),
@@ -1997,7 +1997,7 @@ class ExtractionServiceTests(TestCase):
         )
         with (
             actor_context(self.owner),
-            patch("angee.workflows.engine.external_operation_request", return_value=admitted),
+            patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
                 return_value=(changed_candidate, {}, {"route": "test"}),
@@ -2036,7 +2036,7 @@ class ExtractionServiceTests(TestCase):
         with (
             actor_context(self.owner),
             patch(
-                "angee.workflows.engine.external_operation_request",
+                "angee.workflows_extraction.service.external_operation_request",
                 return_value=populated_admitted,
             ),
             patch(
@@ -2142,7 +2142,7 @@ class ExtractionServiceTests(TestCase):
         )
         with (
             actor_context(self.owner),
-            patch("angee.workflows.engine.external_operation_request", return_value=admitted),
+            patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
                 return_value=(authority.result, {}, {"route": "test"}),
@@ -2223,7 +2223,7 @@ class ExtractionServiceTests(TestCase):
         }
         with (
             actor_context(self.owner),
-            patch("angee.workflows.engine.external_operation_request", return_value=admitted),
+            patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
             ) as provider,

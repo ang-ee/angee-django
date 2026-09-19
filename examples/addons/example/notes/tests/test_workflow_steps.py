@@ -237,7 +237,13 @@ class NoteWorkflowStepTests(TransactionTestCase):
         execute_retained(approval)
         with system_context(reason="note workflow read approval"):
             decision = approval.decisions.get()
-        engine.decide(decision, "complete", actor=self.owner)
+        attempted = engine.decide(
+            decision,
+            "complete",
+            payload={"action": "approve"},
+            actor=self.owner,
+        )
+        self.assertIsNone(attempted.validation_error)
 
         engine.advance(run.pk)
         with system_context(reason="note workflow execute publication"):
