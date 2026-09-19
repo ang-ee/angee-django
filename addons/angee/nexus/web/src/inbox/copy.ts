@@ -75,6 +75,8 @@ export const inboxMessages = {
   "inbox.platform": "Platforms",
   "inbox.account": "Accounts",
   "inbox.kind": "Conversation kinds",
+  "inbox.anyKind": "All conversations",
+  "inbox.customKinds": "Custom selection",
   "inbox.after": "From",
   "inbox.before": "Before",
   "inbox.attachment": "Attachments",
