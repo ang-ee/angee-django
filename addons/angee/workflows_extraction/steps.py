@@ -547,31 +547,27 @@ class InferEvidenceStepImpl(StepImpl):
                         success_outcome="correspondence_required",
                         artifact_label="Current extraction evidence",
                     )
-                return StepResult.done(
-                    output={**_inference_output(current), "superseded_by": str(current.sqid)},
-                    outcome="superseded",
-                    artifacts=(ArtifactSpec(current, "Current extraction evidence"),),
-                )
-            profile = resolve_impl_class(
-                "ANGEE_EXTRACTION_ENGINE_CLASSES",
-                str(base.engine),
-                base_class=ExtractionEngine,
-            )()
-            unchanged = (
-                base.status == "succeeded"
-                and (
-                    bool(base.corrections)
-                    or not profile.inference_required(
-                        base.result, base.unresolved_reasons
+            else:
+                profile = resolve_impl_class(
+                    "ANGEE_EXTRACTION_ENGINE_CLASSES",
+                    str(base.engine),
+                    base_class=ExtractionEngine,
+                )()
+                unchanged = (
+                    base.status == "succeeded"
+                    and (
+                        bool(base.corrections)
+                        or not profile.inference_required(
+                            base.result, base.unresolved_reasons
+                        )
+                        or "mapping" in base.provenance.get("used_model_roles", ())
                     )
-                    or "mapping" in base.provenance.get("used_model_roles", ())
                 )
-            )
-            if unchanged:
-                return StepResult.done(
-                    output=_inference_output(base), outcome="unchanged",
-                    artifacts=(ArtifactSpec(base, "Retained extraction evidence"),),
-                )
+                if unchanged:
+                    return StepResult.done(
+                        output=_inference_output(base), outcome="unchanged",
+                        artifacts=(ArtifactSpec(base, "Retained extraction evidence"),),
+                    )
             if value.model_id is None:
                 raise ValidationError({"model_id": "An admitted mapping model is required."})
             model = apps.get_model("agents", "InferenceModel").objects.get(sqid=value.model_id)
@@ -659,6 +655,23 @@ def _retained_inference_result(
 ) -> StepResult:
     """Route one exact retained result without inventing correspondence choices."""
 
+    if extraction.status == "failed" and extraction.error_code != (
+        "source_hold:identity_correspondence_required"
+    ):
+        failure = extraction.stage_provenance.get("failure", {})
+        return StepResult.done(
+            output={
+                **_inference_output(extraction),
+                "inference_failure": {
+                    "type": str(failure.get("type") or "DocumentPipelineError"),
+                    "message": str(failure.get("message") or "Inference failed."),
+                    "stage": str(failure.get("stage") or ""),
+                    "code": str(failure.get("code") or ""),
+                },
+            },
+            outcome="inference_failed",
+            artifacts=(ArtifactSpec(extraction, "Failed inferred extraction evidence"),),
+        )
     if not (
         extraction.status == "failed"
         and extraction.error_code

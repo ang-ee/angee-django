@@ -173,6 +173,108 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review() -> N
     }
 
 
+def test_inference_step_retry_reuses_failed_successor_without_second_debit() -> None:
+    actor = object()
+    target = SimpleNamespace(pk=11)
+    base_manager = SimpleNamespace()
+    extraction_fixture = type("ExtractionFixture", (), {"objects": base_manager})
+    base = extraction_fixture()
+    failed = extraction_fixture()
+    for name, value in {
+        "pk": 7,
+        "sqid": "ext_base",
+        "revision": 3,
+        "status": "succeeded",
+        "error_code": "",
+        "unresolved_reasons": ["missing_supplier_identity"],
+        "result": {"invoice_count": 1},
+        "corrections": (),
+        "provenance": {"used_model_roles": []},
+        "engine": "invoice_document",
+        "content_type_id": 5,
+        "object_id": target.pk,
+    }.items():
+        setattr(base, name, value)
+    for name, value in {
+        "pk": 8,
+        "sqid": "ext_failed",
+        "revision": 4,
+        "status": "failed",
+        "error_code": "inference:invalid_document_layout",
+        "unresolved_reasons": ["inference:invalid_document_layout"],
+        "stage_provenance": {
+            "failure": {
+                "type": "DocumentPipelineError",
+                "message": "Malformed candidate.",
+                "stage": "inference",
+                "code": "invalid_document_layout",
+            }
+        },
+    }.items():
+        setattr(failed, name, value)
+    current = base
+    base_manager.get = lambda **_kwargs: base
+    base_manager.inference_current_head = lambda _base, *, actor: current
+    model = object()
+    models = {
+        ("workflows_extraction", "Extraction"): SimpleNamespace(objects=base_manager),
+        ("storage", "File"): SimpleNamespace(objects=SimpleNamespace(get=lambda **_kwargs: target)),
+        ("agents", "InferenceModel"): SimpleNamespace(
+            objects=SimpleNamespace(get=lambda **_kwargs: model)
+        ),
+    }
+    request = SimpleNamespace(input={
+        "base_extraction_id": "ext_base",
+        "base_revision": 3,
+        "model_id": "imd_mapping",
+        "target_model": "storage.File",
+        "target_id": "fil_source",
+        "identity_mapping": {},
+        "retired_identities": {},
+    })
+    debits: list[dict[str, int]] = []
+    step_run = SimpleNamespace(
+        run=SimpleNamespace(
+            admission_actor=lambda: actor,
+            debit_budget=debits.append,
+        )
+    )
+
+    class Profile:
+        def inference_required(self, _result, _reasons):
+            return True
+
+    with (
+        patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
+        patch(
+            "angee.workflows_extraction.steps.apps.get_model",
+            side_effect=lambda *key: models[
+                tuple(key[0].split(".", 1)) if len(key) == 1 else key
+            ],
+        ),
+        patch("angee.workflows_extraction.steps.actor_context", side_effect=lambda _actor: nullcontext()),
+        patch(
+            "angee.workflows_extraction.steps.canonical_record_target",
+            return_value=SimpleNamespace(content_type=SimpleNamespace(pk=5), object_id=target.pk),
+        ),
+        patch("angee.workflows_extraction.steps.resolve_impl_class", return_value=Profile),
+        patch(
+            "angee.workflows_extraction.steps.infer",
+            side_effect=(
+                InferenceResult(failed, {"tokens": 7}),
+                InferenceResult(failed, {}),
+            ),
+        ),
+    ):
+        first = InferEvidenceStepImpl().run(step_run, now=None)
+        current = failed
+        retry = InferEvidenceStepImpl().run(step_run, now=None)
+
+    assert first.outcome == retry.outcome == "inference_failed"
+    assert first.output["extraction_id"] == retry.output["extraction_id"] == "ext_failed"
+    assert debits == [{"tokens": 7}, {}]
+
+
 def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relabeling() -> None:
     actor = object()
     target = SimpleNamespace(pk=11)
@@ -1797,17 +1899,34 @@ class ExtractionServiceTests(TestCase):
                     usage,
                 ),
             ),
-            self.assertRaises(DocumentPipelineError) as raised,
         ):
-            infer(
+            invocation = infer(
+                base,
+                model=self.model,
+                authorized_target=self.drive,
+                operation_step_run=SimpleNamespace(),
+            )
+            retry = infer(
                 base,
                 model=self.model,
                 authorized_target=self.drive,
                 operation_step_run=SimpleNamespace(),
             )
 
-        self.assertEqual(raised.exception.code, "candidate_schema_mismatch")
-        self.assertEqual(raised.exception.usage_delta, usage)
+        self.assertIsInstance(invocation, InferenceResult)
+        self.assertEqual(invocation.usage_delta, usage)
+        self.assertEqual(retry.usage_delta, {})
+        self.assertEqual(retry.extraction.pk, invocation.extraction.pk)
+        failed = invocation.extraction
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(failed.error_code, "inference:candidate_schema_mismatch")
+        self.assertEqual(failed.result, {})
+        self.assertEqual(failed.stage_provenance["inference"]["request_key"], admitted.request_key)
+        self.assertEqual(failed.stage_provenance["inference"]["provider"]["usage"], usage)
+        self.assertEqual(
+            failed.stage_provenance["failure"]["code"],
+            "candidate_schema_mismatch",
+        )
 
     def test_inference_superseded_race_exposes_provider_usage_delta(self) -> None:
         base = self._inference_base()
