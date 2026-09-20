@@ -147,10 +147,9 @@ function ChatterToggleButton({
   pane,
 }: {
   pane?: NonNullable<TopBarProps["chatterPane"]>;
-}): ReactElement | null {
+}): ReactElement {
   const t = useUiT();
-  const { collapsed, toggleCollapsed, recordSupportKey } = useChatter();
-  if (recordSupportKey !== null) return null;
+  const { collapsed, toggleCollapsed } = useChatter();
   const effectivePane = pane ?? { collapsed, toggle: toggleCollapsed };
   const open = !effectivePane.collapsed;
   const label = open ? t("chrome.collapseChatter") : t("chrome.openChatter");

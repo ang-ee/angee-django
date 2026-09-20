@@ -52,7 +52,6 @@ import {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
-import { ChatterProvider, useChatterContent } from "../../communication";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec } from "./form-spec";
 import { Form } from "./Form";
@@ -2660,49 +2659,6 @@ describe("FormView", () => {
     expect(document.querySelector("form")?.className).toContain("min-h-0");
     expect(heading.closest("form")?.querySelector(".overflow-auto")).toBeTruthy();
     expect(screen.queryByRole("tab")).toBeNull();
-  });
-
-  test("keeps record support in the right pane by default and moves the complete chatter only when requested", async () => {
-    function RecordSupportForm({ placement }: { placement?: "right" | "below" }) {
-      const content = useMemo(() => ({
-        tabs: [{ id: "audit", label: "Audit", children: "Audit trail" }],
-      }), []);
-      useChatterContent(content);
-      return <FormView
-        resource="notes.Note"
-        id="note-1"
-        fields={fields}
-        recordSupportPlacement={placement}
-      />;
-    }
-
-    renderWithProviders(
-      <ChatterProvider><RecordSupportForm /></ChatterProvider>,
-    );
-    expect(screen.queryByLabelText("Chatter")).toBeNull();
-    cleanup();
-
-    renderWithProviders(
-      <ChatterProvider><RecordSupportForm placement="below" /></ChatterProvider>,
-    );
-    expect(await screen.findByLabelText("Chatter")).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Audit" })).toBeTruthy();
-    cleanup();
-
-    renderWithProviders(
-      <ChatterProvider>
-        <FormView
-          resource="notes.Note"
-          id="note-1"
-          fields={fields}
-          hideRecordChrome
-          recordSupportPlacement="below"
-        />
-      </ChatterProvider>,
-    );
-    expect(screen.queryByLabelText("Chatter")).toBeNull();
   });
 
   test("document records honor overview tab placement without changing presentation", async () => {

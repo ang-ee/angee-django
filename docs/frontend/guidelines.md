@@ -213,11 +213,9 @@ history uses native Query pages with domain-owned
   lazily when first visited and then remain mounted for that record, so a shared
   `useRecordPeek` Records tab can open evidence without discarding draft input
   in another panel; unmounting the temporary peek must leave other publishers'
-  tabs and composer intact. Chatter stays in the shell's right pane by default.
-  `Form` / `FormView` may opt into `recordSupportPlacement="below"`; the shared
-  form owner moves the same complete chatter surface. Consumers do not mount
-  their own chatter or filter its contributed tabs to change placement. Embedded
-  forms with `hideRecordChrome` leave the parent page's placement alone.
+  tabs and composer intact. Chatter stays in the shell's right pane. Consumers
+  do not mount their own chatter or filter its contributed tabs to change
+  placement.
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
   paging, record selection, and URL state. The workflows Decision inbox keeps
   `ApprovalTask` as the sole form and mutation owner and specializes only its

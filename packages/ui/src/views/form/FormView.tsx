@@ -10,8 +10,6 @@ import { cn } from "../../lib/cn";
 import { SlotOutlet } from "../../lib/slot-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { LoadingPanel } from "../../fragments/LoadingPanel";
-import { RecordSupport } from "../../communication/Chatter";
-import { useRecordSupportPlacement } from "../../communication/chatter-context";
 import {
   RecordChrome,
   RecordChromeProvider,
@@ -80,8 +78,6 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   toolbar?: React.ReactNode;
   /** Saved-record content rendered below, but outside, the form element. */
   recordExtras?: (context: RecordPanelContext) => React.ReactNode;
-  /** Keep record support in the shell's right pane, or opt into the same full chatter below the form. */
-  recordSupportPlacement?: "right" | "below";
   /** Non-form content rendered after the overview fields for both create and edit. */
   formExtras?: (context: RecordToolbarContext) => React.ReactNode;
   /** Compact read-only content rendered with the record heading. */
@@ -117,18 +113,9 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
 export function FormView(props: FormViewProps): React.ReactElement {
   const model = useModelMetadata(props.resource);
   const identity = `${model?.resource?.schemaName ?? "default"}:${model?.resource?.modelLabel ?? props.resource}:${props.id ?? "create"}`;
-  const supportKey = props.id && !props.hideRecordChrome && props.recordSupportPlacement === "below"
-    ? identity
-    : null;
-  useRecordSupportPlacement(supportKey);
-  const recordExtras = React.useCallback((context: RecordPanelContext) => <>
-    {props.recordExtras?.(context)}
-    {supportKey ? <RecordSupport recordKey={supportKey} /> : null}
-  </>, [props.recordExtras, supportKey]);
   return <FormViewInstance
     key={identity}
     {...props}
-    recordExtras={props.recordExtras || supportKey ? recordExtras : undefined}
   />;
 }
 
