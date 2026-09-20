@@ -1,6 +1,6 @@
 import type { DataProvider as RefineDataProvider } from "@refinedev/core";
 import type {
-  RouteComponent,
+  RouteTypes,
 } from "@tanstack/react-router";
 import type {
   ComponentType,
@@ -18,6 +18,8 @@ import type {
 import type { DashboardDefinition } from "@angee/ui/dashboard/headless";
 import type { ThemeContribution } from "@angee/ui/theme";
 
+type RouterComponent = RouteTypes<unknown>["component"];
+
 /** A route that also carries the page component the chrome renders. */
 export interface BaseAddonRoute extends AddonRoute {
   /**
@@ -25,9 +27,9 @@ export interface BaseAddonRoute extends AddonRoute {
    * type, so a `lazyRouteComponent(() => import(...))` (carrying `.preload`) drops
    * straight in next to an eager function component.
    */
-  component?: RouteComponent;
+  component?: RouterComponent;
   /** Native index page rendered only when this route has no matched child. */
-  indexComponent?: RouteComponent;
+  indexComponent?: RouterComponent;
   /**
    * Menu item id whose trail seeds chrome for routes outside the menu, or
    * disambiguates chrome derivation when multiple menu items target this route.
@@ -56,7 +58,7 @@ export interface ResourcePageRoutesOptions {
   /** Menu id that owns the detail route chrome. Defaults to the list route name. */
   detailMenu?: string;
   /** Optional detail component when the child route renders its own page. */
-  detailComponent?: RouteComponent;
+  detailComponent?: RouterComponent;
   /** Model displayed when this route deliberately does not own a resource. */
   recordModel?: string;
 }
@@ -64,7 +66,7 @@ export interface ResourcePageRoutesOptions {
 export function resourcePageRoutes(
   name: string,
   path: string,
-  component: RouteComponent,
+  component: RouterComponent,
   resource?: string,
   options: ResourcePageRoutesOptions = {},
 ): readonly BaseAddonRoute[] {
@@ -95,7 +97,7 @@ export interface DashboardPageRouteOptions {
   name: string;
   path: string;
   dashboard: DashboardDefinition;
-  component: RouteComponent;
+  component: RouterComponent;
   layout?: string;
   menu?: string;
 }

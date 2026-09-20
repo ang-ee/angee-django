@@ -76,7 +76,7 @@ const integrateMenu: readonly BaseMenuItem[] = [
     // child (Integrations), avoiding a duplicate route reference.
     id: INTEGRATE_ID,
     label: "Integrations",
-    icon: "connect",
+    icon: "integration",
     children: [
       {
         // Product connection records and their supporting catalogue.

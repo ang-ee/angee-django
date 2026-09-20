@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useRouterState } from "@tanstack/react-router";
+import { useRouter, useRouterState } from "@tanstack/react-router";
 
 import { AppRail } from "../chrome/AppRail";
 import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
@@ -51,15 +51,27 @@ export function ConsoleLayout({
   const [compactChatterController, setCompactChatterController] =
     React.useState<PaneToggleController | null>(null);
   const [railWidth, setRailWidth] = React.useState<string | null>(null);
-  const [navigationOpen, setNavigationOpen] = React.useState(false);
+  const [navigation, setNavigation] = React.useState<{ target: string | null } | null>(null);
+  const navigationOpen = navigation !== null;
   const mobileViewport = useMediaQuery(MOBILE_VIEWPORT_QUERY);
-  const pathname = useRouterState({
-    select: (state) => state.location.pathname,
-  });
-  React.useEffect(() => setNavigationOpen(false), [pathname]);
+  const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
+  const router = useRouter();
+  React.useEffect(
+    () => router.subscribe("onResolved", () => setNavigation(null)),
+    [router],
+  );
   React.useEffect(() => {
-    if (!mobileViewport) setNavigationOpen(false);
-  }, [mobileViewport]);
+    if (largeViewport) setNavigation(null);
+  }, [largeViewport]);
+  const openNavigation = (target: string | null) => {
+    if (primaryController && !primaryController.collapsed) {
+      primaryController.toggle();
+    }
+    if (compactChatterController && !compactChatterController.collapsed) {
+      compactChatterController.toggle();
+    }
+    setNavigation({ target });
+  };
   const handlePrimaryController = React.useCallback(
     (controller: PaneToggleController | null) => {
       setPrimaryController((current) =>
@@ -95,23 +107,18 @@ export function ConsoleLayout({
                   )}
                 >
                   {mobileViewport ? null : (
-                    <AppRail onWidthChange={setRailWidth} />
+                    <AppRail
+                      onWidthChange={setRailWidth}
+                      onOpenNavigation={largeViewport ? undefined : openNavigation}
+                    />
                   )}
                   <TopBar
                     className="area-topbar"
                     navigation={mobileViewport ? {
                       open: navigationOpen,
                       toggle: () => {
-                        if (primaryController && !primaryController.collapsed) {
-                          primaryController.toggle();
-                        }
-                        if (
-                          compactChatterController
-                          && !compactChatterController.collapsed
-                        ) {
-                          compactChatterController.toggle();
-                        }
-                        setNavigationOpen((open) => !open);
+                        if (navigationOpen) setNavigation(null);
+                        else openNavigation(null);
                       },
                     } : undefined}
                     primaryPane={
@@ -119,7 +126,7 @@ export function ConsoleLayout({
                         ? {
                             collapsed: primaryController.collapsed,
                             toggle: () => {
-                              setNavigationOpen(false);
+                              setNavigation(null);
                               primaryController.toggle();
                             },
                           }
@@ -128,7 +135,7 @@ export function ConsoleLayout({
                     chatterPane={compactChatterController ? {
                       collapsed: compactChatterController.collapsed,
                       toggle: () => {
-                        setNavigationOpen(false);
+                        setNavigation(null);
                         compactChatterController.toggle();
                       },
                     } : undefined}
@@ -159,8 +166,10 @@ export function ConsoleLayout({
                   />
                 </div>
                 <Drawer.Root
-                  open={mobileViewport && navigationOpen}
-                  onOpenChange={setNavigationOpen}
+                  open={!largeViewport && navigationOpen}
+                  onOpenChange={(open) => {
+                    if (!open) setNavigation(null);
+                  }}
                 >
                   <Drawer.Portal>
                     <Drawer.Backdrop />
@@ -169,7 +178,10 @@ export function ConsoleLayout({
                       aria-label="Primary navigation"
                       className="w-[min(20rem,calc(100vw-2rem))] border-0 bg-rail p-0"
                     >
-                      <AppRail presentation="drawer" />
+                      <AppRail
+                        presentation="drawer"
+                        navigationTarget={navigation?.target ?? null}
+                      />
                     </Drawer.Content>
                   </Drawer.Portal>
                 </Drawer.Root>

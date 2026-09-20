@@ -2,27 +2,33 @@ import type { MouseEvent } from "react";
 
 export type RailDropPlacement = "before" | "after";
 
-export interface ActiveLinkToggleProps {
+export interface RailLinkToggleProps {
   "aria-expanded"?: boolean;
+  "aria-haspopup"?: "dialog";
   onClick?: (event: MouseEvent<HTMLElement>) => void;
 }
 
 /**
- * The one owner of the second-click contract: a nav link that already points
- * at the current page toggles the rail on plain left-click instead of
- * re-navigating, and advertises the toggle via `aria-expanded`. Any other
- * link — different target, modified click (new tab), non-primary button, or
- * no toggle available — keeps its browser/router default.
+ * Rail links open temporary navigation when supplied; otherwise only the
+ * current page's link toggles desktop expansion. Modified/non-primary clicks
+ * keep native link behavior in either presentation.
  */
-export function activeLinkToggleProps(
+export function railLinkToggleProps(
   target: string | undefined,
   pathname: string,
   toggle: (() => void) | undefined,
   expanded: boolean,
-): ActiveLinkToggleProps {
-  if (!toggle || !target || target !== pathname) return {};
+  openNavigation?: ((target: string) => void) | undefined,
+): RailLinkToggleProps {
+  if (!target) return {};
+  const activate = openNavigation
+    ? () => openNavigation(target)
+    : target === pathname ? toggle : undefined;
+  if (!activate) return {};
   return {
-    "aria-expanded": expanded,
+    ...(openNavigation
+      ? { "aria-haspopup": "dialog" as const }
+      : { "aria-expanded": expanded }),
     onClick: (event) => {
       if (event.defaultPrevented) return;
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
@@ -30,7 +36,7 @@ export function activeLinkToggleProps(
       }
       if (event.button !== 0) return;
       event.preventDefault();
-      toggle();
+      activate();
     },
   };
 }

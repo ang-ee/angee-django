@@ -16,6 +16,8 @@ describe("platform addon manifest", () => {
       "/platform/models",
       "/platform/models/$id",
       "/platform/fields",
+      "/platform/implementations",
+      "/platform/implementations/$id",
       "/platform/addons",
       "/platform/addons/$id",
     ]);
@@ -40,12 +42,14 @@ describe("platform addon manifest", () => {
       "Graph",
       "Models",
       "Fields",
+      "Implementations",
       "Addons",
     ]);
     expect(groups[0]?.children?.map((child) => child.route)).toEqual([
       "platform.graph",
       "platform.models",
       "platform.fields",
+      "platform.implementations",
       "platform.addons",
     ]);
   });

@@ -1,7 +1,7 @@
 // Hand-authored console query against the platform introspection surface. The
 // platform backend owns the schema (`addons/angee/platform/schema.py`); this
 // document mirrors it and the result types are derived from it, the same
-// no-codegen pattern IAM uses. The resource ledger listing is owned by the
+// generated-document pattern IAM uses. The resource ledger listing is owned by the
 // `resources` addon, not here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
@@ -71,6 +71,37 @@ export type PlatformAddonData = PlatformExplorerData["addons"][number];
 export type PlatformModelData = PlatformExplorerData["models"][number];
 export type PlatformEdgeData = PlatformExplorerData["edges"][number];
 export type PlatformFieldData = PlatformModelData["fields"][number];
+
+/** Full inspection is requested only after opening one registered implementation. */
+export const PlatformImplementation = graphql(`
+  query PlatformImplementation($id: String!) {
+    platform_implementation(id: $id) {
+      id
+      model
+      field
+      key
+      label
+      category
+      icon
+      registry_setting
+      class_path
+      base_class_path
+      addon_id
+      addon_label
+      description
+      defaults
+      config_schema
+      source
+      source_file
+      source_start_line
+      source_unavailable_reason
+    }
+  }
+`);
+
+export type PlatformImplementationData = NonNullable<
+  DocumentType<typeof PlatformImplementation>["platform_implementation"]
+>;
 
 // Marketplace board mutations. The platform backend owns the install source
 // (`settings.yaml` INSTALLED_APPS) through the AddonInstaller; the VCS marketplace

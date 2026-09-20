@@ -57,6 +57,12 @@ export {
   type RelationCreateConfig,
 } from "./relation/RelationPicker";
 export {
+  IMPLEMENTATION_DETAIL_SLOT,
+  ImplementationDetails,
+  useImplementationDetailContext,
+  type ImplementationDetailContext,
+} from "./relation/implementation-details";
+export {
   LabeledDescriptorField,
   MutationDialog,
   type MutationDialogControlProps,

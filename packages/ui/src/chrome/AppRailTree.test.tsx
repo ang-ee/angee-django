@@ -102,4 +102,48 @@ describe("AppRailTree", () => {
     fireEvent.click(inactiveLink);
     expect(onActiveRootToggle).toHaveBeenCalledTimes(1);
   });
+
+  test("opens a requested inactive root without marking it active", async () => {
+    const tree = MenuTree.from([
+      {
+        id: "projects",
+        label: "Projects",
+        to: "/projects",
+        children: [{ id: "projects.all", label: "All projects", to: "/projects" }],
+      },
+      {
+        id: "notes",
+        label: "Notes",
+        to: "/notes",
+        children: [{ id: "notes.all", label: "All notes", to: "/notes" }],
+      },
+    ]);
+    const rootRoute = createRootRoute({ component: () => <Outlet /> });
+    const projectsRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/projects",
+      component: () => (
+        <AppRailTree
+          scope="apps"
+          roots={tree.railMenuItems()}
+          activeRootId="projects"
+          defaultOpenRootId="notes"
+        />
+      ),
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([projectsRoute]),
+      history: createMemoryHistory({ initialEntries: ["/projects"] }),
+    });
+    render(<RouterProvider router={router} />);
+
+    expect((await screen.findByText("Projects")).closest("a")?.getAttribute("data-active"))
+      .toBe("true");
+    expect(screen.getByText("Notes").closest("a")?.getAttribute("data-active"))
+      .toBe("false");
+    expect(screen.getByRole("button", { name: "Collapse Notes" }))
+      .toBeTruthy();
+    expect(screen.getByRole("button", { name: "Expand Projects" }))
+      .toBeTruthy();
+  });
 });

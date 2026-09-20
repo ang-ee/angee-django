@@ -8,7 +8,7 @@ import { barVariants } from "../layouts/bar";
 import { Accordion } from "../ui/accordion";
 import { Badge, CountBadge } from "../ui/badge";
 import { Collapsible } from "../ui/collapsible";
-import { activeLinkToggleProps } from "./app-rail-model";
+import { railLinkToggleProps } from "./app-rail-model";
 import { Glyph } from "./Glyph";
 import type { ChromeMenuNode } from "./menu-tree";
 
@@ -46,6 +46,8 @@ export interface AppRailTreeProps {
   /** The resolved roots of that place, in display order. */
   roots: readonly ChromeMenuNode[];
   activeRootId: string | null;
+  /** Open a requested app without changing which route is marked active. */
+  defaultOpenRootId?: string | null;
   /** The rail collapse toggle, fired by a second activation of the current page's link. */
   onActiveToggle?: (() => void) | undefined;
 }
@@ -56,6 +58,7 @@ export function AppRailTree({
   scope,
   roots,
   activeRootId,
+  defaultOpenRootId = activeRootId,
   onActiveToggle,
 }: AppRailTreeProps): ReactElement {
   const t = useUiT();
@@ -63,8 +66,8 @@ export function AppRailTree({
     select: (state) => state.location.pathname,
   });
   const [openRootId, setOpenRootId] = useDerivedOverride<string | null>(
-    activeRootId,
-    `${scope}\0${activeRootId ?? ""}`,
+    defaultOpenRootId,
+    `${scope}\0${activeRootId ?? ""}\0${defaultOpenRootId ?? ""}`,
   );
   const idPrefix = `app-rail-${useId().replaceAll(":", "")}`;
   const styles = appRailTreeVariants();
@@ -311,7 +314,7 @@ function MenuLink({
       to={item.target}
       aria-current={current ? "page" : undefined}
       data-active={active}
-      {...activeLinkToggleProps(item.target, pathname, onActiveToggle, true)}
+      {...railLinkToggleProps(item.target, pathname, onActiveToggle, true)}
       className={styles.link()}
     >
       <span className={item.tone ? toneGlyph(item.tone) : undefined}>

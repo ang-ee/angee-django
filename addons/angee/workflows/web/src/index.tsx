@@ -1,5 +1,5 @@
 import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
-import { FORM_VIEW_RECORD_CHROME_SLOT, type BaseMenuItem } from "@angee/ui";
+import { FORM_VIEW_RECORD_CHROME_SLOT, IMPLEMENTATION_DETAIL_SLOT, type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
   ArrowUpRight,
@@ -17,6 +17,7 @@ import {
 import { enWorkflowsMessages } from "./i18n";
 import { RunWorkflowMenu } from "./RunWorkflowMenu";
 import { decisionContextWidgets } from "./views/DecisionContextWidgets";
+import { WorkflowImplementationDetails } from "./views/WorkflowImplementationDetails";
 export { WORKFLOW_DECISION_CONTENT_SLOT, WORKFLOW_TRIGGER_FORM_FIELDS_SLOT } from "./slots";
 
 import { CHATTER_TAB_SEARCH_KEY } from "@angee/ui";
@@ -46,6 +47,16 @@ const workflowsRoutes: readonly BaseAddonRoute[] = [
     { detailName: "workflows.run" },
   ),
   ...resourcePageRoutes(
+    "workflows.steps",
+    "/workflows/steps",
+    lazyRouteComponent(() => import("./views/StepsPage"), "StepsPage"),
+    "workflows.Step",
+    {
+      detailName: "workflows.step",
+      detailComponent: lazyRouteComponent(() => import("./views/StepDetail"), "StepDetail"),
+    },
+  ),
+  ...resourcePageRoutes(
     "workflows.inbox",
     "/workflows/inbox",
     lazyRouteComponent(() => import("./views/InboxPage"), "InboxPage"),
@@ -64,6 +75,12 @@ const workflowsMenu: readonly BaseMenuItem[] = [
         label: "Workflows",
         icon: "workflow",
         route: "workflows.workflows",
+      },
+      {
+        id: "workflows.steps",
+        label: "Steps",
+        icon: "workflow-step",
+        route: "workflows.steps",
       },
       {
         id: "workflows.runs",
@@ -94,6 +111,12 @@ const workflows = defineBaseAddon({
       id: "workflows.run-workflow",
       sequence: 50,
       content: <RunWorkflowMenu />,
+    },
+    {
+      slot: IMPLEMENTATION_DETAIL_SLOT,
+      model: "workflows.Step",
+      id: "workflows.step-implementation-details",
+      content: <WorkflowImplementationDetails />,
     },
   ],
   icons: {

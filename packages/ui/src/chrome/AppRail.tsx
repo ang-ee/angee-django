@@ -44,7 +44,7 @@ import {
 } from "./menu-tree";
 import { useChromeMenuTree } from "./refine-menu";
 import {
-  activeLinkToggleProps,
+  railLinkToggleProps,
   moveRailItem,
   orderedRailItems,
   railSortableMove,
@@ -63,6 +63,10 @@ export interface AppRailProps {
   onWidthChange?: (width: string | null) => void;
   /** Render as the full-width contents of the compact navigation drawer. */
   presentation?: "rail" | "drawer";
+  /** Request temporary navigation when the viewport cannot expand the rail. */
+  onOpenNavigation?: ((target: string) => void) | undefined;
+  /** The app or Settings destination to expand in the navigation drawer. */
+  navigationTarget?: string | null;
 }
 
 export const APP_RAIL_COLLAPSED_WIDTH = "var(--spacing-rail-w)";
@@ -76,14 +80,17 @@ const RAIL_BUTTON_ACTIVE =
 /**
  * The global app rail: compact icons or one in-place accordion navigation
  * tree. Clicking the active app (or Settings) a second time toggles the
- * expansion; the expansion toggle itself sits pinned at the rail's foot,
- * outside the scrolling list.
+ * desktop expansion. At intermediate widths, app links request the shell's
+ * temporary navigation drawer. The expansion toggle sits pinned at the rail's
+ * foot, outside the scrolling list.
  */
 export function AppRail({
   className,
   menuItems,
   onWidthChange,
   presentation = "rail",
+  onOpenNavigation,
+  navigationTarget,
 }: AppRailProps): ReactElement {
   const t = useUiT();
   const pathname = useRouterState({
@@ -106,16 +113,22 @@ export function AppRail({
     railPreferences.expanded,
     largeViewport,
   );
-  const place = tree.railPlace(pathname);
+  const activePlace = tree.railPlace(pathname);
+  const place = drawerMode && navigationTarget
+    ? tree.railPlace(navigationTarget)
+    : activePlace;
   const settingsActive = place.scope === "settings";
   const items = useMemo(
     () => orderedRailItems(tree.railMenuItems(), railPreferences.order),
     [railPreferences.order, tree],
   );
   const settings = tree.settingsEntry();
-  const activeRootId = settingsActive
-    ? undefined
-    : place.activeRootId ?? undefined;
+  const activeRootId = activePlace.scope === place.scope
+    ? activePlace.activeRootId
+    : null;
+  const openNavigation = !largeViewport && !drawerMode
+    ? onOpenNavigation
+    : undefined;
   const itemIds = useMemo(() => items.map((item) => item.id), [items]);
   const defaultItemId = itemIds.includes(railPreferences.defaultItemId ?? "")
     ? railPreferences.defaultItemId
@@ -210,18 +223,20 @@ export function AppRail({
             <AppRailTree
               scope={place.scope}
               roots={settingsActive ? place.roots : items}
-              activeRootId={place.activeRootId}
+              activeRootId={activeRootId}
+              defaultOpenRootId={place.activeRootId}
               onActiveToggle={onActiveToggle}
             />
           ) : (
             <SortableRail
               items={items}
-              activeRootId={activeRootId}
+              activeRootId={settingsActive ? undefined : activeRootId ?? undefined}
               defaultItemId={defaultItemId}
               expanded={expanded}
               pathname={pathname}
               onActiveToggle={onActiveToggle}
               onItemLongPress={handleItemLongPress}
+              onOpenNavigation={openNavigation}
               onOrderChange={handleOrderChange}
             />
           )}
@@ -247,11 +262,12 @@ export function AppRail({
       {settings ? (
         <div className="shrink-0 border-t border-border-on-rail pt-2">
           <RailSettingsItem
-            active={settingsActive}
+            active={activePlace.scope === "settings"}
             expanded={expanded}
             icon={settings.icon}
             label={t("chrome.settings")}
             to={settings.target}
+            onOpenNavigation={openNavigation}
             pathname={pathname}
             onActiveToggle={onActiveToggle}
           />
@@ -341,6 +357,7 @@ function RailSettingsItem({
   to,
   pathname,
   onActiveToggle,
+  onOpenNavigation,
 }: {
   active: boolean;
   expanded: boolean;
@@ -349,6 +366,7 @@ function RailSettingsItem({
   to: string;
   pathname: string;
   onActiveToggle?: (() => void) | undefined;
+  onOpenNavigation?: ((target: string) => void) | undefined;
 }): ReactElement {
   const link = (
     <Link
@@ -356,7 +374,7 @@ function RailSettingsItem({
       aria-label={label}
       aria-current={active ? "page" : undefined}
       data-active={active}
-      {...activeLinkToggleProps(to, pathname, onActiveToggle, expanded)}
+      {...railLinkToggleProps(to, pathname, onActiveToggle, expanded, onOpenNavigation)}
       className={cn(
         expanded
           ? appRailTreeVariants().link()
@@ -381,6 +399,7 @@ function SortableRail({
   items,
   pathname,
   onActiveToggle,
+  onOpenNavigation,
   onItemLongPress,
   onOrderChange,
 }: {
@@ -390,6 +409,7 @@ function SortableRail({
   items: readonly ChromeMenuNode[];
   pathname: string;
   onActiveToggle?: (() => void) | undefined;
+  onOpenNavigation?: ((target: string) => void) | undefined;
   onItemLongPress: (item: ChromeMenuNode) => void;
   onOrderChange: (order: readonly string[]) => void;
 }): ReactElement {
@@ -562,11 +582,12 @@ function SortableRail({
       <SortableContext items={railOrder} strategy={verticalListSortingStrategy}>
         <div className="flex flex-col items-center gap-1">
           {railItems.map((item) => {
-            const toggleProps = activeLinkToggleProps(
+            const toggleProps = railLinkToggleProps(
               item.target,
               pathname,
               onActiveToggle,
               expanded,
+              item.targetedChildren.length ? onOpenNavigation : undefined,
             );
             return (
             <RailItem
@@ -574,6 +595,7 @@ function SortableRail({
               item={item}
               active={activeRootId === item.id}
               ariaExpanded={toggleProps["aria-expanded"]}
+              ariaHasPopup={toggleProps["aria-haspopup"]}
               defaultApp={defaultItemId === item.id}
               dragging={activeDragId === item.id}
               onLongPressStart={beginLongPress}
@@ -615,6 +637,7 @@ function SortableRail({
 function RailItem({
   active,
   ariaExpanded,
+  ariaHasPopup,
   defaultApp,
   dragging,
   item,
@@ -626,6 +649,7 @@ function RailItem({
 }: {
   active: boolean;
   ariaExpanded?: boolean | undefined;
+  ariaHasPopup?: "dialog" | undefined;
   defaultApp: boolean;
   dragging: boolean;
   item: ChromeMenuNode;
@@ -681,6 +705,7 @@ function RailItem({
           aria-label={label}
           aria-current={active ? "page" : undefined}
           aria-expanded={ariaExpanded}
+          aria-haspopup={ariaHasPopup}
           draggable={false}
           onPointerDown={(event) => {
             sortable.listeners?.onPointerDown?.(event);
