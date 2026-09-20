@@ -18,7 +18,13 @@ import { enWorkflowsMessages } from "./i18n";
 import { RunWorkflowMenu } from "./RunWorkflowMenu";
 import { decisionContextWidgets } from "./views/DecisionContextWidgets";
 import { WorkflowImplementationDetails } from "./views/WorkflowImplementationDetails";
-export { WORKFLOW_DECISION_CONTENT_SLOT, WORKFLOW_TRIGGER_FORM_FIELDS_SLOT } from "./slots";
+export {
+  WORKFLOW_DECISION_CONTENT_SLOT,
+  WORKFLOW_LAUNCH_CLAIM_SLOT,
+  WORKFLOW_TRIGGER_FORM_FIELDS_SLOT,
+  workflowLaunchClaim,
+} from "./slots";
+export type { WorkflowLaunchClaim } from "./slots";
 
 import { CHATTER_TAB_SEARCH_KEY } from "@angee/ui";
 import { DECISION_SEARCH_KEY, WORKFLOW_RUN_SEARCH_KEY } from "./decision-navigation";
