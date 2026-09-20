@@ -444,6 +444,9 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
                     )
                 ]
             )
+        weak.refresh_from_db()
+        assert weak.confidence == 0.4
+        assert PartyHandle.objects.filter(handle=handle).count() == 2
 
 
 @pytest.mark.django_db(transaction=True)

@@ -498,8 +498,15 @@ def test_attempt_rows_and_owned_step_run_fields_reject_public_mutation(scheduled
 
     attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
     with system_context(reason="test attempt delete guard"):
-        with pytest.raises(TypeError):
-            StepAttempt._base_manager.filter(pk=attempt.pk).delete()
+        queryset = StepAttempt._base_manager.filter(pk=attempt.pk)
+        with pytest.raises(TypeError, match="collection updates"):
+            queryset.update(error="rewritten")
+        with pytest.raises(TypeError, match="bulk_update"):
+            queryset.bulk_update([attempt], ["error"])
+        with pytest.raises(TypeError, match="retained execution evidence"):
+            queryset.delete()
+        with pytest.raises(TypeError, match="retained execution evidence"):
+            queryset._raw_delete(using=queryset.db)
 
 
 @pytest.mark.django_db(transaction=True)

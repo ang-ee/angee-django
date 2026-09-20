@@ -1236,6 +1236,16 @@ def test_output_fixture_is_immutable_nonphysical_retained_evidence(
         assert not WorkflowDispatch.objects.filter(step_attempt=attempt).exists()
         with pytest.raises(TypeError, match="immutable"):
             WorkflowTestFixture.objects.filter(pk=fixture.pk).update(outcome="changed")
+        with pytest.raises(TypeError, match="WorkflowRunManager"):
+            WorkflowTestFixture.objects.bulk_create([fixture])
+        with pytest.raises(TypeError, match="immutable"):
+            WorkflowTestFixture.objects.bulk_update([fixture], ["outcome"])
+        queryset = WorkflowTestFixture.objects.filter(pk=fixture.pk)
+        assert queryset.update(created_by=None, updated_by=None) == 1
+        with pytest.raises(TypeError, match="retained admission facts"):
+            queryset.delete()
+        with pytest.raises(TypeError, match="retained admission facts"):
+            queryset._raw_delete(using=queryset.db)
 
 
 def test_setup_plan_uses_graph_effects_and_fixture_substitution(

@@ -16,7 +16,7 @@ from __future__ import annotations
 import mimetypes
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import combinations
@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
-from django.db import IntegrityError, models, transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
 from phonenumbers import (
@@ -415,30 +415,15 @@ class PartyHandleQuerySet(AngeeQuerySet):
             )
         )
 
-    def _validate_write_fence(
-        self,
-        operation: str,
-        *,
-        objects: tuple[models.Model, ...] = (),
-        changed_fields: tuple[str, ...] = (),
-        values: Mapping[str, Any] | None = None,
-        options: Mapping[str, Any] | None = None,
-    ) -> None:
-        """Keep creation and transitions on the manager while permitting deletion."""
+    def update(self, **kwargs: Any) -> int:
+        """Keep association transitions on the owner that resolves handles."""
 
-        if operation == "bulk_create":
-            raise TypeError("Party-handle links must be created through PartyHandleManager.link().")
-        if operation in {"update", "bulk_update"}:
-            raise TypeError(
-                "Party-handle transitions must use link(), confirm(), dismiss(), or delete()."
-            )
-        super()._validate_write_fence(
-            operation,
-            objects=objects,
-            changed_fields=changed_fields,
-            values=values,
-            options=options,
-        )
+        raise TypeError("Party-handle transitions must use link(), confirm(), dismiss(), or delete().")
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
+        """Require new associations to run the manager's resolution bookkeeping."""
+
+        raise TypeError("Party-handle links must be created through PartyHandleManager.link().")
 
 
 class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # type: ignore[misc]

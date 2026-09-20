@@ -34,7 +34,6 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
-from angee.base.writes import WriteFencedQuerySetMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -72,7 +71,6 @@ class _PublicIdQuerySetMixin(Generic[_ModelT]):
 
 
 class AngeeQuerySet(
-    WriteFencedQuerySetMixin,
     _PublicIdQuerySetMixin[_ModelT],
     RebacQuerySet[_ModelT],
 ):
@@ -206,7 +204,6 @@ class AngeeQuerySet(
 
 
 class AngeeUnscopedQuerySet(
-    WriteFencedQuerySetMixin,
     _PublicIdQuerySetMixin[_ModelT],
     models.QuerySet[_ModelT],
 ):

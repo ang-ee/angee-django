@@ -22,7 +22,6 @@ the converted amount at the point that owns the business policy.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation, localcontext
 from typing import Any
 
@@ -198,28 +197,12 @@ class CurrencyRateQuerySet(
         "source_priority",
     }
 
-    def _validate_write_fence(
-        self,
-        operation: str,
-        *,
-        objects: tuple[models.Model, ...] = (),
-        changed_fields: tuple[str, ...] = (),
-        values: Mapping[str, Any] | None = None,
-        options: Mapping[str, Any] | None = None,
-    ) -> None:
-        """Keep rate identity immutable across every bulk update ingress."""
+    def update(self, **kwargs: Any) -> int:
+        """Keep rate identity changes on the native rate owner."""
 
-        if operation in {"update", "bulk_update"} and self._identity_fields & set(
-            changed_fields
-        ):
+        if self._identity_fields & kwargs.keys():
             raise ValidationError("Currency-rate identity changes through its native owner.")
-        super()._validate_write_fence(
-            operation,
-            objects=objects,
-            changed_fields=changed_fields,
-            values=values,
-            options=options,
-        )
+        return super().update(**kwargs)
 
 
 class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # type: ignore[misc]

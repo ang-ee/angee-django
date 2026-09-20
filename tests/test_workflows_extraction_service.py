@@ -2496,6 +2496,13 @@ class ExtractionServiceTests(TestCase):
             extraction_model.objects.filter(pk=failed.pk).exists()
         with self.assertRaisesRegex(ValueError, "immutable"):
             extraction_model._base_manager.filter(pk=failed.pk).update(status="succeeded")
+        with self.assertRaisesRegex(ValueError, "retention owner"):
+            extraction_model._base_manager.create()
+        with self.assertRaisesRegex(ValueError, "retention owner"):
+            extraction_model._base_manager.bulk_create([failed])
+        with self.assertRaisesRegex(ValueError, "directly deleted"):
+            queryset = extraction_model._base_manager.filter(pk=failed.pk)
+            queryset._raw_delete(using=queryset.db)
         with actor_context(self.owner):
             self.assertEqual(failed.sources.count(), 2)
             self.assertEqual(failed.pages.count(), 2)

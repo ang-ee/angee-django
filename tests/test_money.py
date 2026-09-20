@@ -341,11 +341,24 @@ def test_currency_rate_identity_and_precision_are_native_owned(money_tables: Non
     rate.currency = gbp
     with system_context(reason="money rate identity test"), pytest.raises(ValidationError):
         rate.save(update_fields={"currency"})
-    with system_context(reason="money queryset identity test"), pytest.raises(ValidationError):
+    with (
+        system_context(reason="money queryset identity test"),
+        pytest.raises(ValidationError, match="Currency-rate identity changes through its native owner"),
+    ):
         CurrencyRate.objects.filter(pk=rate.pk).update(currency=gbp)
-    with system_context(reason="money bulk identity test"), pytest.raises(ValidationError):
+    with (
+        system_context(reason="money bulk identity test"),
+        pytest.raises(ValidationError, match="Currency-rate identity changes through its native owner"),
+    ):
         CurrencyRate.objects.bulk_update([rate], ["currency"])
     rate.refresh_from_db()
+    assert rate.currency_id == eur.pk
+    with system_context(reason="money queryset archive test"):
+        assert CurrencyRate.objects.filter(pk=rate.pk).update(is_archived=True) == 1
+        rate.is_archived = False
+        assert CurrencyRate.objects.bulk_update([rate], ["is_archived"]) == 1
+    rate.refresh_from_db()
+    assert rate.is_archived is False
     rate.rate = Decimal("0.123456789012345678901")
     with system_context(reason="money rate precision test"), pytest.raises(ValidationError):
         rate.save(update_fields={"rate"})
