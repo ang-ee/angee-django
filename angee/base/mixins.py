@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
@@ -42,6 +42,13 @@ rows and lists expose an archived facet without per-model wiring.
 """
 
 _EVERY_AUTHENTICATED_USER = SubjectRef.of("auth/user", "*")
+
+
+def audit_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
+    """Schedule audit-FK nullification through the collector's materialized batch path."""
+
+    del using
+    collector.add_field_update(field, None, list(sub_objs))
 
 
 def _shared_reader_policy_field_spellings(model: type[models.Model]) -> frozenset[str]:
@@ -250,7 +257,7 @@ class AuditMixin(models.Model):
         settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
+        on_delete=audit_set_null,
         related_name="+",
     )
     """The user that created the row, when known."""
@@ -259,7 +266,7 @@ class AuditMixin(models.Model):
         settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
+        on_delete=audit_set_null,
         related_name="+",
     )
     """The user that most recently updated the row, when known."""
@@ -268,13 +275,6 @@ class AuditMixin(models.Model):
         """Django model options for audit-only abstract inheritance."""
 
         abstract = True
-
-    @staticmethod
-    def is_audit_nullification(values: Mapping[str, Any]) -> bool:
-        """Return whether a bulk update only clears the actor audit fields."""
-
-        audit_fields = frozenset(field.name for field in AuditMixin._meta.fields)
-        return bool(values) and set(values).issubset(audit_fields) and all(value is None for value in values.values())
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row after stamping user audit fields."""
@@ -310,10 +310,12 @@ class AuditMixin(models.Model):
 
 
 class AppendOnlyQuerySet(models.QuerySet[_ModelT]):
-    """Allow inserts and audited actor deletion, but never edits or deletion.
+    """Allow inserts, but never collection edits or deletion.
 
     Compose before the domain's base queryset to preserve authorization.
-    Instance invariants and collector retention remain model/FK concerns.
+    Instance invariants and collector retention remain model/FK concerns;
+    ``AuditMixin`` clears audit FKs through its collector policy without
+    calling this queryset.
     """
 
     def immutable_error(self, operation: str) -> Exception:
@@ -350,10 +352,8 @@ class AppendOnlyQuerySet(models.QuerySet[_ModelT]):
         )
 
     def update(self, **kwargs: Any) -> int:
-        """Admit the collector's audit nullification only on audited models."""
+        """Reject every collection edit."""
 
-        if issubclass(self.model, AuditMixin) and AuditMixin.is_audit_nullification(kwargs):
-            return super().update(**kwargs)
         raise self.immutable_error("update")
 
     def bulk_update(self, *args: Any, **kwargs: Any) -> int:

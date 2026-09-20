@@ -1,4 +1,4 @@
-"""Behavior of the shared append-only queryset and its audit exception."""
+"""Behavior of the shared append-only queryset and Django collector writes."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import connection, models
+from django.db.migrations.writer import MigrationWriter
 from rebac import system_context
 
-from angee.base.mixins import AppendOnlyQuerySet, AuditMixin
+from angee.base.mixins import AppendOnlyQuerySet, AuditMixin, audit_set_null
 from angee.base.models import AngeeQuerySet
 from tests.conftest import _clear_model_tables, _create_missing_tables, create_user
 
@@ -31,8 +32,22 @@ class RetainedEvidence(AuditMixin, models.Model):
         base_manager_name = "objects"
 
 
-def test_append_only_allows_inserts_and_only_audit_nullification(transactional_db: Any) -> None:
-    """Native inserts work; edits/deletion fail; clearing audit actors stays scoped."""
+def test_audit_foreign_keys_declare_serializable_materialized_nullification() -> None:
+    """Both audit fields retain the stable collector policy in migration state."""
+
+    for name in ("created_by", "updated_by"):
+        on_delete = RetainedEvidence._meta.get_field(name).remote_field.on_delete
+        assert on_delete is audit_set_null
+        serialized, imports = MigrationWriter.serialize(on_delete)
+        assert serialized == "angee.base.mixins.audit_set_null"
+        assert imports == {"import angee.base.mixins"}
+
+
+def test_append_only_rejects_collection_mutation_and_collector_nullifies_audit_fks(
+    transactional_db: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The audit FK policy bypasses a queryset whose update path stays closed."""
 
     del transactional_db
     with pytest.raises(ValidationError, match="contenttypes.ContentType rows cannot be edited"):
@@ -52,6 +67,8 @@ def test_append_only_allows_inserts_and_only_audit_nullification(transactional_d
                 selected.update(name="changed")
             with pytest.raises(ValidationError, match="edited"):
                 selected.update(created_by=actor)
+            with pytest.raises(ValidationError, match="edited"):
+                selected.update(created_by=None)
             with pytest.raises(ValidationError, match="edited"):
                 selected.update(created_by=None, name="changed")
             with pytest.raises(ValidationError, match="edited"):
@@ -75,6 +92,12 @@ def test_append_only_allows_inserts_and_only_audit_nullification(transactional_d
             first.created_by = None
             with pytest.raises(ValidationError, match="edited"):
                 selected.bulk_update([first], ["created_by"])
+
+            def reject_update(*args: Any, **kwargs: Any) -> int:
+                del args, kwargs
+                raise AssertionError("Django's deletion collector must bypass QuerySet.update().")
+
+            monkeypatch.setattr(RetainedEvidenceQuerySet, "update", reject_update)
             actor.delete()
             first.refresh_from_db()
             second.refresh_from_db()

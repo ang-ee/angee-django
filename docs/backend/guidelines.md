@@ -785,13 +785,16 @@ and current contracts before applying a historical example to a new deployment.
   | Retention and deletion | Deliberate FK policies and Django's deletion lifecycle |
   | Exact caller provenance, where required | A small private guard composing `TransactionBoundAuthority` |
 
-  Use `PROTECT`/`RESTRICT` for retained rows. `CASCADE` and `SET_DEFAULT`
-  collector writes bypass every model and queryset hook. Queryset and instance deletion
-  overrides do not protect against every collector path; choose FK policies
-  deliberately, including generic relations that can cascade into retained
-  rows. This is a modelling rule, not a mechanical system check. Shared
-  append-only collections compose [`AppendOnlyQuerySet`](../../angee/base/mixins.py);
-  actor deletion may clear audit FKs through `AuditMixin.is_audit_nullification`.
+  Use `PROTECT`/`RESTRICT` for retained rows. Collector writes bypass model hooks,
+  and Django may apply an unevaluated `SET_NULL` or `SET_DEFAULT` field-update
+  queryset through its public `QuerySet.update()` path. Queryset and
+  instance deletion overrides do not protect against every collector path; choose
+  FK policies deliberately, including generic relations that can cascade into
+  retained rows. This is a modelling rule, not a mechanical system check. Shared
+  append-only collections compose [`AppendOnlyQuerySet`](../../angee/base/mixins.py),
+  whose collection updates remain closed. `AuditMixin` uses its serializable
+  `audit_set_null` FK policy to materialize the collector selection and schedule
+  Django's native `UpdateQuery.update_batch` path for actor deletion.
   Never replace these rules with a database trigger or function.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
