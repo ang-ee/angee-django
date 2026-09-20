@@ -1,33 +1,26 @@
-"""Provider-neutral document acquisition and recognition helpers."""
+"""Provider-neutral document acquisition helpers."""
 
 from __future__ import annotations
 
 import hashlib
 import io
-import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
-from typing import TYPE_CHECKING, Any
 
 import pypdfium2 as pdfium
-from django.conf import settings
 from PIL import Image
 
 from angee.workflows_extraction.contracts import (
     DocumentPart,
     DocumentPipelineError,
-    DocumentResult,
     DocumentSource,
     ExtractionPartKind,
     PageImage,
 )
 from angee.workflows_extraction.structured import extract_structured_sources
-
-if TYPE_CHECKING:
-    from angee.workflows_extraction.engines import ExtractionEngine
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,112 +174,6 @@ def _acquire_native_parts(
                          page_images.get((source_position, page_position)))
             for source_position, page_position in keys
         ),
-    )
-
-
-def recognize_pages(
-    pages: Sequence[PageImage],
-    *,
-    engine: ExtractionEngine,
-    model: Any | None,
-    config: dict[str, Any],
-    timeout: float,
-    acquired_parts: Sequence[DocumentPart] = (),
-) -> tuple[DocumentPart, ...]:
-    """Recognize exactly the supplied scanned pages and retain their plain text."""
-
-    if pages and model is None:
-        raise DocumentPipelineError(
-            "Scanned pages require a recognition model.", parts=acquired_parts,
-            stage="recognition_config", code="model_missing",
-        )
-    started = time.monotonic()
-    parts: list[DocumentPart] = []
-    for page in pages:
-        remaining = timeout - (time.monotonic() - started)
-        if remaining <= 0:
-            raise DocumentPipelineError(
-                "Text recognition timed out.", parts=(*acquired_parts, *parts),
-                stage="recognition_request", code="timeout",
-            )
-        try:
-            result = engine.recognize_page(page, model=model, config=config, timeout=remaining)
-        except DocumentPipelineError as error:
-            raise DocumentPipelineError(
-                str(error),
-                parts=(*acquired_parts, *parts, *error.parts),
-                stage=error.stage,
-                code=error.code,
-                metadata=error.metadata,
-                usage_delta=error.usage_delta,
-            ) from None
-        except (RuntimeError, TimeoutError, ValueError) as error:
-            raise DocumentPipelineError(
-                f"Text recognition failed ({type(error).__name__}).", parts=(*acquired_parts, *parts),
-                stage="recognition_request", code=type(error).__name__,
-            ) from None
-        text = result.text.strip()
-        parts.append(
-            DocumentPart(
-                page.source_position,
-                page.page_position,
-                "text/plain",
-                ExtractionPartKind.RECOGNIZED_TEXT,
-                text,
-                f"{engine.key}:text_recognition",
-                hashlib.sha256(text.encode()).hexdigest(),
-                page.width,
-                page.height,
-                page.dpi,
-                result.duration_ms,
-                result.engine_metadata,
-            )
-        )
-    return tuple(parts)
-
-
-def run_document_pipeline(
-    engine: ExtractionEngine,
-    sources: Sequence[DocumentSource],
-    schema: dict[str, Any],
-    *,
-    model: Any | None,
-    recognition_model: Any | None,
-    config: dict[str, Any],
-    timeout: float,
-) -> DocumentResult:
-    """Acquire, recognize and map a document within one shared deadline."""
-
-    started = time.monotonic()
-    acquired = acquire_native_parts(
-        sources,
-        dpi=int(settings.ANGEE_EXTRACTION_DPI),
-        max_edge=int(settings.ANGEE_EXTRACTION_MAX_EDGE),
-        max_pages=int(settings.ANGEE_EXTRACTION_MAX_PAGES),
-    )
-    recognized = recognize_pages(
-        acquired.recognition_pages,
-        engine=engine,
-        model=recognition_model or model,
-        config=config,
-        timeout=timeout - (time.monotonic() - started),
-        acquired_parts=acquired.parts,
-    )
-    parts = (*acquired.parts, *recognized)
-    mapping = engine.map_text_parts(
-        parts,
-        schema,
-        model=model,
-        config=config,
-        timeout=timeout - (time.monotonic() - started),
-    )
-    return DocumentResult(
-        mapping.value,
-        parts,
-        mapping.claims,
-        used_model_roles=("mapping", "recognition") if recognized and recognition_model is not None else ("mapping",),
-        duration_ms=round((time.monotonic() - started) * 1000),
-        engine_metadata=mapping.engine_metadata,
     )
 
 

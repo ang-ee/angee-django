@@ -175,7 +175,7 @@ def live_tables(settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         **settings.ANGEE_CHANNEL_BACKEND_CLASSES,
         "fake_live": "tests.test_integrate_live.FakeLiveChannelBackend",
     }
-    monkeypatch.setattr("angee.integrate.tasks.bridge_models", lambda _base: (Channel,))
+    monkeypatch.setattr("angee.integrate.tasks.models_with", lambda *, base: (Channel,))
     created_models = _create_missing_tables(LIVE_TEST_MODELS)
     call_command("rebac", "sync", verbosity=0)
     try:
@@ -828,15 +828,15 @@ def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_que
     from angee.integrate import tasks as tasks_module
     from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
     from angee.integrate.models import Bridge
-    from angee.integrate.registry import bridge_models
+    from angee.integrate.registry import models_with
     from tests.conftest import VcsBridge
 
-    discovered = bridge_models(Bridge)
+    discovered = models_with(base=Bridge)
     assert VcsBridge in discovered
     assert Channel in discovered
     assert VcsBridge.live_implementation_field() is None
     assert Channel.live_implementation_field() is Channel._meta.get_field("backend_class")
-    monkeypatch.setattr(tasks_module, "bridge_models", bridge_models)
+    monkeypatch.setattr(tasks_module, "models_with", models_with)
 
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(

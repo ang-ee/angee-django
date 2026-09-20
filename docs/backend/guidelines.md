@@ -289,7 +289,7 @@ Use these owners instead of maintaining another contract in an addon:
     **explicit per-row** choice, **never** derived from a vendor slug (a vendor
     can have several impls/accounts).
   - *Only behaviour differs, closed framework-known set* → a `StateField` + an
-    eager **handler registry** (`integrate.credentials.register_handler`/`handler_for`).
+    **enum-owned handler mapping** (`integrate.credentials.CredentialKind.handler`).
     The row stores the enum value; the kind projects as a GraphQL enum.
 - **Enum-backed fields use `StateField`, never `CharField(choices=…)`.**
   `StateField` wraps django-choices-field's `TextChoicesField`, so strawberry-django
@@ -754,7 +754,7 @@ and current contracts before applying a historical example to a new deployment.
   `super()`. A verb starting from an `Integration` parent row must still resolve
   the concrete child before dispatch because Django does not downcast multi-table
   parent instances automatically (`sync_integration` is the precedent). Walking
-  `bridge_models` fans a query across every installed bridge table, so it is not
+  `models_with(base=Bridge)` fans a query across every installed bridge table, so it is not
   free.
 - **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
   Lifecycle side effects that must survive those paths belong on Django signals; Agent's

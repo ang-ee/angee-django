@@ -188,35 +188,12 @@ class PlatformExplorerData:
         return _Addon.objects.pending_changes()
 
 
-@strawberry.type
+@strawberry.experimental.pydantic.type(model=composed.PlatformImplementationDetail, all_fields=True)
 class PlatformImplementationDetail:
     """Detail-only implementation declaration and registered Python source."""
 
-    id: str
-    model: str
-    field: str
-    key: str
-    label: str
-    category: str
-    icon: str
-    registry_setting: str
-    class_path: str
-    base_class_path: str
-    addon_id: str
-    addon_label: str
     defaults: JSON
     config_schema: JSON | None
-    description: str
-    source: str | None
-    source_file: str | None
-    source_start_line: int | None
-    source_unavailable_reason: str | None
-
-    @classmethod
-    def from_row(cls, row: composed.PlatformImplementationDetail) -> PlatformImplementationDetail:
-        """Project the Pydantic owner row onto its GraphQL detail type."""
-
-        return cls(**row.model_dump())
 
 
 @strawberry.type
@@ -247,8 +224,7 @@ class PlatformQuery:
     def platform_implementation(self, id: str) -> PlatformImplementationDetail | None:
         """Return declaration and Python source for one registered implementation."""
 
-        detail = composed.implementation_detail(id)
-        return None if detail is None else PlatformImplementationDetail.from_row(detail)
+        return cast(PlatformImplementationDetail | None, composed.implementation_detail(id))
 
 
 def platform_can_read() -> bool:

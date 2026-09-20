@@ -20,7 +20,7 @@ from angee.integrate import tasks as integrate_tasks
 from angee.integrate.errors import IntegrationError
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
-from angee.integrate.registry import bridge_models
+from angee.integrate.registry import models_with
 from angee.integrate.scheduler import enqueue_due_bridges
 from angee.integrate.sync import BridgeProgressReporter, current_bridge_progress
 from tests.conftest import (
@@ -130,11 +130,11 @@ def _scan_only_the_fixture_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     modules (posts' Feed, messaging's Channel) whose on-demand tables may not
     exist in this session, so an unscoped scan fails on table/relation state
     these tests don't own. Cross-model discovery itself is covered by
-    ``test_integrate_registry_discovers_bridge_models_in_deterministic_order``,
+    ``test_integrate_registry_discovers_bridges_in_deterministic_order``,
     which reads the registry without querying rows.
     """
 
-    monkeypatch.setattr(integrate_scheduler, "bridge_models", lambda base: (SchedulerBridge,))
+    monkeypatch.setattr(integrate_scheduler, "models_with", lambda *, base: (SchedulerBridge,))
 
 
 @pytest.fixture()
@@ -794,15 +794,15 @@ def test_queue_bridge_sync_inside_outer_transaction_preserves_caller(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_integrate_registry_discovers_bridge_models_in_deterministic_order(scheduler_tables: None) -> None:
+def test_integrate_registry_discovers_bridges_in_deterministic_order(scheduler_tables: None) -> None:
     """Registry helpers include the concrete fixture and sort by model label."""
 
     del scheduler_tables
 
-    discovered_bridge_models = bridge_models(Bridge)
-    bridge_labels = tuple(model._meta.label_lower for model in discovered_bridge_models)
+    discovered_models = models_with(base=Bridge)
+    bridge_labels = tuple(model._meta.label_lower for model in discovered_models)
 
-    assert SchedulerBridge in discovered_bridge_models
+    assert SchedulerBridge in discovered_models
     assert bridge_labels == tuple(sorted(bridge_labels))
 
 

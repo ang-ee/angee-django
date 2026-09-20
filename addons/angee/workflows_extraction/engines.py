@@ -36,7 +36,6 @@ from angee.workflows_extraction.contracts import (
     RecognitionResult,
 )
 from angee.workflows_extraction.contracts import ExtractionPartKind as ExtractionPartKind
-from angee.workflows_extraction.routing import run_document_pipeline
 
 RETAINED_AUTHORITY_COMPLETION_REVIEW = (
     "retained_authority_completion_requires_review"
@@ -180,7 +179,6 @@ class ExtractionEngine(ImplBase):
     category = "Extraction"
     label = "Extraction engine"
     pipeline_version: ClassVar[str] = "page-v1"
-    document_engine: ClassVar[bool] = False
     evidence_layout: ClassVar[dict[str, Any]] = {}
 
     def inference_required(
@@ -212,20 +210,6 @@ class ExtractionEngine(ImplBase):
         if role == "recognition" and str(model.model_use) not in {"multimodal", "image"}:
             raise ValueError("Recognition requires an image-capable model.")
 
-    def extract_document(
-        self,
-        sources: Sequence[DocumentSource],
-        schema: dict[str, Any],
-        *,
-        model: Any | None,
-        recognition_model: Any | None,
-        config: dict[str, Any],
-        timeout: float,
-    ) -> DocumentResult:
-        """Extract a whole document; engines opt in without replacing the registry."""
-
-        raise NotImplementedError
-
     def process_parts(
         self, sources: Sequence[DocumentSource], parts: Sequence[DocumentPart],
         schema: dict[str, Any], *, config: dict[str, Any], recognition_used: bool = False,
@@ -242,17 +226,6 @@ class ExtractionEngine(ImplBase):
     ) -> DocumentResult:
         """Pure domain meaning and grounding of one bound mapping response."""
 
-        raise NotImplementedError
-
-    def extract_page(
-        self,
-        page: PageImage,
-        schema: dict[str, Any],
-        *,
-        model: Any,
-        config: dict[str, Any],
-        timeout: float,
-    ) -> PageResult:
         raise NotImplementedError
 
     def recognize_page(
@@ -282,7 +255,6 @@ class InferenceMappingEngine(ExtractionEngine):
     key = "inference"
     label = "Inference extraction"
     pipeline_version = "document-v1"
-    document_engine = True
 
     def recognize_page(
         self,
@@ -404,28 +376,6 @@ class InferenceMappingEngine(ExtractionEngine):
             dict(usage),
         )
 
-    def extract_document(
-        self,
-        sources: Sequence[DocumentSource],
-        schema: dict[str, Any],
-        *,
-        model: Any | None,
-        recognition_model: Any | None,
-        config: dict[str, Any],
-        timeout: float,
-    ) -> DocumentResult:
-        """Delegate the document pipeline to its routing owner."""
-
-        return run_document_pipeline(
-            self,
-            sources,
-            schema,
-            model=model,
-            recognition_model=recognition_model,
-            config=config,
-            timeout=timeout,
-        )
-
 
 def _inference_settings(config: Mapping[str, Any], *, timeout: float) -> ModelSettings:
     """Return provider-neutral analytical defaults for extraction inference."""
@@ -484,23 +434,3 @@ def _response_metadata(
             output_text_sha256=hashlib.sha256(encoded).hexdigest(),
         )
     return metadata
-
-
-class NoExtractionEngine(ExtractionEngine):
-    """Disabled extraction provider that never fabricates evidence."""
-
-    key = "none"
-    label = "No extraction engine"
-    document_engine = True
-
-    def extract_document(
-        self,
-        sources: Sequence[DocumentSource],
-        schema: dict[str, Any],
-        *,
-        model: Any | None,
-        recognition_model: Any | None,
-        config: dict[str, Any],
-        timeout: float,
-    ) -> DocumentResult:
-        raise DocumentPipelineError("Select a configured extraction engine before extracting documents.")

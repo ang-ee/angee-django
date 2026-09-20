@@ -25,7 +25,7 @@ from strawberry_django_aggregates import AggregateOp, compute_aggregation
 
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import protocol as oidc_protocol
-from angee.iam_integrate_oidc.identity import IDENTITY_RESOLUTION_FAILED
+from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED
 from angee.iam_integrate_oidc.models import OAuthClientOidc
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.connect import complete_account_connect
@@ -1132,10 +1132,50 @@ def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
     )
 
     with pytest.raises(OAuthFlowError) as exc_info:
-        Credential.objects.check_disconnect(credential)
+        Credential.objects.prepare_disconnect(credential)
 
     assert exc_info.value.code == "only_sign_in_method"
     assert exc_info.value.http_status == 409
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("other_sign_in", ["password", "oidc", "oauth_only", "local"])
+def test_credential_disconnect_preserves_other_sign_in_methods(oidc_tables: None, other_sign_in: str) -> None:
+    """The model contribution permits alternatives and non-login credentials."""
+
+    user = get_user_model().objects.create_user(
+        username="disconnect-permitted",
+        password="a-password" if other_sign_in == "password" else None,
+    )
+    if other_sign_in == "local":
+        credential = Credential.objects.create_local_credential(
+            user,
+            kind="static_token",
+            name="API",
+            material={"api_key": "token"},
+        )
+    else:
+        client = _oauth_client(oidc=other_sign_in != "oauth_only")
+        account = ExternalAccount.objects.link(client, "subject", owner=user)
+        credential = Credential.objects.upsert_for_user(
+            user,
+            client,
+            "oauth",
+            {"access_token": "token"},
+            external_account=account,
+        )
+        if other_sign_in == "oidc":
+            other_client = _oauth_client(slug="other")
+            other_account = ExternalAccount.objects.link(other_client, "other-subject", owner=user)
+            Credential.objects.upsert_for_user(
+                user,
+                other_client,
+                "oauth",
+                {"access_token": "other-token"},
+                external_account=other_account,
+            )
+
+    credential.check_disconnect()
 
 
 @pytest.mark.django_db(transaction=True)

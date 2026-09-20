@@ -6,7 +6,10 @@ import importlib
 from types import SimpleNamespace
 from typing import Any, NoReturn
 
+import pytest
+import strawberry
 from django.apps import apps
+from strawberry.schema.config import StrawberryConfig
 
 from angee.platform import composed
 from tests.conftest import addon_schema, execute_schema
@@ -26,6 +29,53 @@ def _schema() -> Any:
     """Build the platform addon's console schema bucket."""
 
     return addon_schema(platform_schema.schemas, "console")
+
+
+@pytest.mark.parametrize("config_schema", [None, {"type": "object", "properties": {"mode": {"type": "string"}}}])
+def test_implementation_detail_projects_owner_fields_and_json(monkeypatch: Any, config_schema: Any) -> None:
+    """Native projection retains inherited fields, JSON values and nullable source metadata."""
+
+    detail = composed.PlatformImplementationDetail(
+        id="tests.Model:backend:sample",
+        model="tests.Model",
+        field="backend",
+        key="sample",
+        label="Sample",
+        category="Tests",
+        icon="test",
+        registry_setting="TEST_IMPLEMENTATIONS",
+        class_path="tests.Sample",
+        base_class_path="tests.Base",
+        addon_id="tests",
+        addon_label="Tests",
+        defaults={"nested": {"enabled": True}, "items": [1, None]},
+        config_schema=config_schema,
+        description="Sample implementation",
+        source=None,
+        source_file=None,
+        source_start_line=None,
+        source_unavailable_reason="No source file",
+    )
+    monkeypatch.setattr(composed, "implementation_detail", lambda _id: detail)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def implementation(self) -> platform_schema.PlatformImplementationDetail | None:
+            return platform_schema.PlatformQuery().platform_implementation(detail.id)
+
+    schema = strawberry.Schema(query=Query, config=StrawberryConfig(auto_camel_case=False))
+    result = schema.execute_sync(
+        """{
+        implementation {
+            id model field key label category icon registry_setting class_path base_class_path addon_id addon_label
+            defaults config_schema description source source_file source_start_line source_unavailable_reason
+        }
+    }"""
+    )
+
+    assert result.errors is None
+    assert result.data == {"implementation": detail.model_dump()}
 
 
 def test_denied_explorer_is_null_while_computed_collections_are_empty(monkeypatch: Any) -> None:

@@ -21,7 +21,6 @@ import secrets
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from functools import cache
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -33,7 +32,6 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connections, models, transaction
 from django.db.models import Prefetch, Q
 from django.utils import timezone
-from django.utils.module_loading import import_string
 from django.utils.text import capfirst
 from rebac import (
     RelationshipTuple,
@@ -55,7 +53,7 @@ from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
 from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
-from angee.integrate.credentials import CredentialKind, handler_for
+from angee.integrate.credentials import CredentialKind, CredentialKindHandler
 from angee.integrate.errors import INTEGRATION_FAILURE_MESSAGE, IntegrationError
 from angee.integrate.events import EventKind
 from angee.integrate.impl import IntegrationImpl
@@ -789,16 +787,10 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
 
     _REASON = "integrate.connections.credential"
 
-    def check_disconnect(self, credential: Any) -> None:
-        """Run installed credential-disconnect guards for an explicit disconnect."""
-
-        for guard in credential_disconnect_guards():
-            guard(credential)
-
     def prepare_disconnect(self, credential: Any) -> None:
         """Validate a disconnect and schedule remote revocation after commit."""
 
-        self.check_disconnect(credential)
+        credential.check_disconnect()
         transaction.on_commit(credential.revoke_remote, robust=True)
 
     def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
@@ -830,7 +822,7 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
     ) -> Any:
         """Create or update one ``(user, oauth_client)`` OAuth credential (connect/login flow)."""
 
-        handler = handler_for(kind)
+        handler = CredentialKind(kind).handler
         operation_values, update_values = self._assemble_values(handler, material, fields)
         if external_account is not None:
             update_values["external_account"] = external_account
@@ -947,7 +939,7 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Validate one local credential and return its owned operation/update values."""
 
-        handler = handler_for(kind)
+        handler = CredentialKind(kind).handler
         if handler.kind == CredentialKind.OAUTH:
             raise ValueError("OAuth credentials are minted by the connect/login flow, not create_local_credential().")
         if not name:
@@ -986,46 +978,13 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         }
 
 
-@cache
-def credential_disconnect_guards() -> tuple[Any, ...]:
-    """Return configured credential-disconnect guard callables."""
-
-    return tuple(import_string(str(path)) for path in getattr(settings, "ANGEE_CREDENTIAL_DISCONNECT_GUARDS", ()))
-
-
-def check_credential_disconnect_guards(
-    app_configs: list[object] | None = None,
-    **kwargs: object,
-) -> list[checks.CheckMessage]:
-    """Validate configured credential-disconnect guard callables."""
-
-    del app_configs, kwargs
-    errors: list[checks.CheckMessage] = []
-    for path in getattr(settings, "ANGEE_CREDENTIAL_DISCONNECT_GUARDS", ()):
-        try:
-            guard = import_string(str(path))
-        except (AttributeError, ImportError, ModuleNotFoundError) as error:
-            errors.append(
-                checks.Error(
-                    f"ANGEE_CREDENTIAL_DISCONNECT_GUARDS entry {path!r} cannot be imported: {error}",
-                    id="angee.integrate.E003",
-                )
-            )
-            continue
-        if not callable(guard):
-            errors.append(
-                checks.Error(
-                    f"ANGEE_CREDENTIAL_DISCONNECT_GUARDS entry {path!r} is not callable.",
-                    id="angee.integrate.E004",
-                )
-            )
-    return errors
-
-
 class Credential(SqidMixin, AuditMixin, AngeeModel):
     """Per-user credential material for acting against a vendor OAuth client."""
 
     runtime = True
+
+    def check_disconnect(self) -> None:
+        """Validate explicit disconnect; installed model contributions extend this invariant."""
 
     def revoke_remote(self) -> None:
         """Revoke this credential's OAuth token when its provider supports it."""
@@ -1111,10 +1070,10 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         )
 
     @property
-    def handler(self) -> Any:
-        """Return the registered handler for this credential kind."""
+    def handler(self) -> CredentialKindHandler:
+        """Return the behavior owned by this credential kind."""
 
-        return handler_for(self.kind)
+        return CredentialKind(self.kind).handler
 
     def reveal(self) -> dict[str, Any]:
         """Return decrypted material through the kind handler."""

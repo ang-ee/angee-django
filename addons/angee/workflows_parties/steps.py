@@ -1,7 +1,7 @@
 """Workflow step implementations for the parties dedupe flow.
 
-Three implementations compose one graph (the ``workflows_integrate`` archive
-canon): ``parties_dedupe_scan`` proposes deterministic duplicate pairs,
+Three implementations compose one graph:
+``parties_dedupe_scan`` proposes deterministic duplicate pairs,
 ``parties_dedupe_gate`` suspends one rows-table Decision the human edits in the
 workflows inbox, and ``parties_dedupe_execute`` (``mode=prepare`` then the
 stock ``map`` fan-out into ``mode=unit``) applies the approved verbs through

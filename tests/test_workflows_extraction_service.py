@@ -58,7 +58,6 @@ from angee.workflows_extraction.pointers import (
 from angee.workflows_extraction.routing import (
     _decode_declared_text,
     _html_text,
-    recognize_pages,
 )
 from angee.workflows_extraction.service import (
     InferenceResult,
@@ -749,16 +748,11 @@ class PageAggregationTests(SimpleTestCase):
             },
         )
 
-    def test_missing_models_retain_acquired_evidence(self) -> None:
+    def test_missing_mapping_model_retains_acquired_evidence(self) -> None:
         part = DocumentPart(0, 0, "text/plain", "native_text", "Invoice 22121", "test", "a" * 64)
         with self.assertRaises(DocumentPipelineError) as mapping_error:
             InferenceMappingEngine().map_text_parts((part,), SCHEMA, model=None, config={}, timeout=1)
         self.assertEqual(mapping_error.exception.parts, (part,))
-
-        page = PageImage(0, 1, "image/jpeg", b"bytes", 10, 10, 200)
-        with self.assertRaises(DocumentPipelineError) as recognition_error:
-            recognize_pages((page,), engine=object(), model=None, config={}, timeout=1, acquired_parts=(part,))
-        self.assertEqual(recognition_error.exception.parts, (part,))
 
     def test_declared_text_decode_is_bounded_to_utf8_and_html_is_inert(self) -> None:
         self.assertEqual(_decode_declared_text(b"\xef\xbb\xbfInvoice 22121"), "Invoice 22121")

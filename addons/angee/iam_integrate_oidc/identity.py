@@ -21,31 +21,17 @@ from django.db import models, transaction
 from rebac import system_context
 
 from angee.iam.auth import can_authenticate_user
+from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.connect import complete_external_account_link
-from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.errors import INVALID_ID_TOKEN, INVALID_STATE, OAuthFlowError
 from angee.integrate.oauth.state import StateFlow, StateRecord
 from angee.parties.mixins import LinkSource
 
-IDENTITY_RESOLUTION_FAILED = "identity_resolution_failed"
 SESSION_AUTH_BACKEND = "angee.iam.auth.ModelBackend"
 logger = logging.getLogger(__name__)
-
-
-class IdentityFlowError(OAuthFlowError):
-    """OIDC identity failure with child-addon-owned public text."""
-
-    @property
-    def public_message(self) -> str:
-        """Return the stable identity message owned by this addon."""
-
-        return {
-            IDENTITY_RESOLUTION_FAILED: "The sign-in identity could not be resolved.",
-            "only_sign_in_method": "This is your only sign-in method.",
-        }.get(self.code, super().public_message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,40 +331,3 @@ def complete_link(oauth_client: Any, *, code: str, state_token: str, redirect_ur
     return OidcLoginCompletion(oauth_client).complete_link(
         code=code, state_token=state_token, redirect_uri=redirect_uri
     )
-
-
-def is_only_oidc_sign_in(user: Any) -> bool:
-    """Return whether ``user`` has no password and only one OIDC sign-in account.
-
-    The guard the disconnect path consults before removing a sign-in credential, so
-    a user who logs in solely through OIDC cannot strip their last way back in.
-    """
-
-    if user.has_usable_password():
-        return False
-    Credential = cast(Any, apps.get_model("integrate", "Credential"))
-    with system_context(reason="iam_integrate_oidc.unlink.guard"):
-        oidc_account_count = (
-            Credential.objects.filter(
-                user=user,
-                kind="oauth",
-                oauth_client__login_enabled=True,
-                external_account__isnull=False,
-            )
-            .values("external_account_id")
-            .distinct()
-            .count()
-        )
-    return oidc_account_count <= 1
-
-
-def guard_last_sign_in_disconnect(credential: Any) -> None:
-    """Veto explicit disconnect of a user's last OIDC sign-in credential."""
-
-    if str(credential.kind) != CredentialKind.OAUTH:
-        return
-    oauth_client = getattr(credential, "oauth_client", None)
-    if oauth_client is None or not getattr(oauth_client, "login_enabled", False):
-        return
-    if is_only_oidc_sign_in(credential.user):
-        raise IdentityFlowError("only_sign_in_method", 409)

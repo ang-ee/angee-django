@@ -16,7 +16,7 @@ from angee.integrate.constants import ENSURE_SESSIONS_TASK, RUN_SESSION_TASK
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.locks import bridge_is_locked, bridge_session_is_hosted
 from angee.integrate.models import Bridge, IntegrationRuntimeStatus
-from angee.integrate.registry import bridge_models
+from angee.integrate.registry import models_with
 from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.sync_runner import run_bridge_sync_job
 from angee.jobs.locks import task_locks_are_cross_process
@@ -81,7 +81,7 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
     starved_by_queue: dict[str, int] = {}
     cross_process = task_locks_are_cross_process()
     with system_context(reason="integrate.ensure_bridge_sessions"):
-        for model in bridge_models(Bridge):
+        for model in models_with(base=Bridge):
             field = model.live_implementation_field()
             if field is None:
                 continue
