@@ -759,12 +759,18 @@ and current contracts before applying a historical example to a new deployment.
 - **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
   Lifecycle side effects that must survive those paths belong on Django signals; Agent's
   service-user deactivation is a `post_delete` receiver for this reason.
-- **Business rules belong to Django owners, not database trigger functions.**
-  Cover instance, queryset, bulk, cascade and relation writes in the owning
-  models/managers/querysets, with explicit Django signals where relation writes
-  bypass those owners. Keep declarative constraints and portable row locks.
-  Raw SQL is not a supported business-write path. Retire existing triggers with
-  append-only migrations rather than rewriting materialized history.
+- **Never a database trigger or function.** Business rules, immutability and
+  ownership guards belong to Django owners: cover instance, queryset, bulk,
+  cascade and relation writes in the owning models/managers/querysets, with
+  explicit Django signals where relation writes bypass those owners. Keep
+  declarative constraints (`UniqueConstraint`, `CheckConstraint`) and portable
+  row locks. Forbidden: `CREATE TRIGGER`, `CREATE FUNCTION`, plpgsql, `RunSQL`
+  that installs them, per-backend mirrors of them, and system or deploy checks
+  that verify a trigger exists instead of the rule holding. A trigger is a
+  second, invisible owner of a rule that the ORM cannot see, test, or migrate
+  from models. Raw SQL is not a supported business-write path. On encountering
+  existing trigger machinery, delete it and move the rule to its Django owner
+  in the same change.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.
