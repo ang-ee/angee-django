@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from typing import Any
 
 from django.apps import apps
 from django.db import models
 from import_export import widgets
+
+from angee.base.serialization import canonical_json
 
 
 class XrefWidgetMixin:
@@ -103,8 +104,7 @@ class _NativeJSONWidget(widgets.JSONWidget):
         self._obj_deprecation_warning(obj)
         if value is None:
             return None
-        # Follow up after F-base S2: compose angee.base's canonical-JSON helper here.
-        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+        return canonical_json(value)
 
 
 def resolve_xref(

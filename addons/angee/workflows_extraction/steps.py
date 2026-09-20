@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -46,14 +46,26 @@ from angee.workflows_extraction.service import (
 EngineConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
 
 
-class ExtractionInput(BaseModel):
-    """Stable public references needed to perform extraction."""
+class ExtractionEngineConfigInput(BaseModel):
+    """Per-invocation extraction-engine configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+    engine_config: EngineConfig = Field(default_factory=dict)
+
+
+class ExtractionPolicyInput(ExtractionEngineConfigInput):
+    """Per-invocation schema and profile policy for evidence processing."""
+
+    schema_: dict[str, Any] = Field(alias="schema", json_schema_extra={"widget": "json"})
+    engine: str = Field(min_length=1)
+
+
+class ExtractionSourceInput(BaseModel):
+    """Stable public source and target references needed to perform extraction."""
 
     model_config = ConfigDict(extra="forbid")
     files: list[str] = Field(default_factory=list)
     message_parts: list[str] = Field(default_factory=list)
-    model: str | None = None
-    recognition_model: str | None = None
     target_model: str
     target_id: str
 
@@ -66,18 +78,11 @@ class ExtractionOutput(BaseModel):
     revision: int
 
 
-class ExtractionConfig(BaseModel):
-    """Schema and engine policy stored on the workflow definition."""
-
-    model_config = ConfigDict(extra="forbid")
-    schema_: dict[str, Any] = Field(alias="schema", json_schema_extra={"widget": "json"})
-    engine: str
-    engine_config: EngineConfig = Field(default_factory=dict)
-    retained_failure_outcome: Literal["failed", "retained_failure"] = "failed"
-
-
-class PreparePagesInput(ExtractionInput):
+class PreparePagesInput(ExtractionEngineConfigInput, ExtractionSourceInput):
     """The original source/target refs; provider work happens later."""
+
+    model: str | None = None
+    recognition_model: str | None = None
 
 
 class PreparePagesOutput(BaseModel):
@@ -101,13 +106,12 @@ class PreparePagesStepImpl(StepImpl):
     effect_description = "Stores bounded native and raster carriers as READY Files."
     input_model = PreparePagesInput
     output_model = PreparePagesOutput
-    config_model = ExtractionConfig
     outcomes = (StepOutcome("prepared", "Prepared"),)
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
         value = self.validate_input(step_run.input)
-        options = ExtractionConfig.model_validate(step_run.step.config).engine_config
+        options = value.engine_config
         actor = step_run.run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page preparation requires the workflow actor.")
@@ -155,6 +159,9 @@ class RecognizePageInput(BaseModel):
     dpi: int = Field(gt=0)
     model_id: str
     config_digest: str
+    engine: str = Field(default="inference", min_length=1)
+    engine_config: EngineConfig = Field(default_factory=dict)
+    timeout: int = Field(default=60, gt=0, description="Provider timeout in whole seconds.")
 
 
 class RecognizePageOutput(BaseModel):
@@ -170,13 +177,6 @@ class RecognizePageOutput(BaseModel):
     duration_ms: int = Field(ge=0)
 
 
-class RecognizePageConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    engine: str = "glm"
-    engine_config: EngineConfig = Field(default_factory=dict)
-    timeout: int = Field(default=60, gt=0, description="Provider timeout in whole seconds.")
-
-
 class RecognizePageStepImpl(StepImpl):
     """One admitted WF external request for exactly one text-poor page."""
 
@@ -190,7 +190,6 @@ class RecognizePageStepImpl(StepImpl):
     effect_description = "Requests one provider recognition and stores a READY text carrier."
     input_model = RecognizePageInput
     output_model = RecognizePageOutput
-    config_model = RecognizePageConfig
     outcomes = (StepOutcome("recognized", "Recognized"),)
 
     @classmethod
@@ -222,9 +221,8 @@ class RecognizePageStepImpl(StepImpl):
     def _recognize(self, step_run: Any) -> StepResult:
         request = external_operation_request(step_run)
         value = self.validate_input(request.input)
-        config = RecognizePageConfig.model_validate(step_run.step.config)
-        if value.config_digest != canonical_json_sha256(config.engine_config):
-            raise ValidationError({"recognition": "The page item names a different published recognizer config."})
+        if value.config_digest != canonical_json_sha256(value.engine_config):
+            raise ValidationError({"recognition": "The page item names a different admitted recognizer config."})
         actor = step_run.run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page recognition requires the workflow actor.")
@@ -245,14 +243,14 @@ class RecognizePageStepImpl(StepImpl):
             if hashlib.sha256(image_bytes).hexdigest() != value.image_digest:
                 raise ValidationError({"recognition": "The stored page image bytes changed."})
             engine_class = resolve_impl_class(
-                "ANGEE_EXTRACTION_ENGINE_CLASSES", config.engine, base_class=ExtractionEngine,
+                "ANGEE_EXTRACTION_ENGINE_CLASSES", value.engine, base_class=ExtractionEngine,
             )
             engine = engine_class()
             engine.validate_model(model, role="recognition")
             response = engine.recognize_page(
                 PageImage(value.source_position, value.page_position, "image/jpeg", image_bytes,
                           value.width, value.height, value.dpi),
-                model=model, config=config.engine_config, timeout=config.timeout,
+                model=model, config=value.engine_config, timeout=value.timeout,
             )
             if not isinstance(response.text, str) or "\x00" in response.text:
                 raise ValidationError({"recognition": "The recognizer did not return valid text."})
@@ -275,11 +273,11 @@ class RecognizePageStepImpl(StepImpl):
             "image_file_id": value.image_file_id, "text_file_id": str(text_file.sqid),
             "model_id": value.model_id, "config_digest": value.config_digest,
             "request_key": request.request_key,
-            "method": f"{config.engine}:text_recognition", "duration_ms": max(response.duration_ms, 0),
+            "method": f"{value.engine}:text_recognition", "duration_ms": max(response.duration_ms, 0),
         }, outcome="recognized", artifacts=(ArtifactSpec(text_file, "Recognized page text"),))
 
 
-class CollectCarriersInput(BaseModel):
+class CollectCarriersInput(ExtractionEngineConfigInput):
     model_config = ConfigDict(extra="forbid")
     prepared: dict[str, Any]
     recognition: dict[str, Any]
@@ -302,13 +300,12 @@ class CollectCarriersStepImpl(StepImpl):
     effect = StepEffect.READ
     input_model = CollectCarriersInput
     output_model = CollectCarriersOutput
-    config_model = ExtractionConfig
     outcomes = (StepOutcome("collected", "Collected"), StepOutcome("source_hold", "Source hold"))
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
         value = self.validate_input(step_run.input)
-        options = ExtractionConfig.model_validate(step_run.step.config).engine_config
+        options = value.engine_config
         actor = step_run.run.admission_actor()
         if actor is None:
             raise PermissionDenied("Carrier collection requires the workflow actor.")
@@ -318,7 +315,7 @@ class CollectCarriersStepImpl(StepImpl):
                 canonical_json_sha256(dict(options.get("recognition_config") or {}))
                 != manifest.recognition_config_digest
             ):
-                raise ValidationError({"recognition": "The published recognizer configuration changed."})
+                raise ValidationError({"recognition": "The admitted recognizer configuration changed."})
             results = value.recognition.get("results")
             if not isinstance(results, list):
                 raise ValidationError({"recognition": "Map did not retain ordered page results."})
@@ -333,7 +330,7 @@ class CollectCarriersStepImpl(StepImpl):
         }, outcome="source_hold" if collected.hold_reasons else "collected")
 
 
-class ProcessEvidenceInput(CollectCarriersOutput):
+class ProcessEvidenceInput(ExtractionPolicyInput, CollectCarriersOutput):
     """Reference-only carrier collection passed from the native Map boundary."""
 
     identity_mapping: dict[str, str] = Field(default_factory=dict)
@@ -359,18 +356,16 @@ class ProcessEvidenceStepImpl(StepImpl):
     execution_mode = StepExecutionMode.DATABASE_COMMAND
     input_model = ProcessEvidenceInput
     output_model = ProcessEvidenceOutput
-    config_model = ExtractionConfig
     outcomes = (StepOutcome("processed", "Processed"), StepOutcome("source_hold", "Source hold"))
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
         value = self.validate_input(step_run.input)
-        config = ExtractionConfig.model_validate(step_run.step.config)
         actor = step_run.run.admission_actor()
         if actor is None:
             raise PermissionDenied("Evidence processing requires the workflow actor.")
         with actor_context(actor):
-            prepared, manifest = _restore_prepared(value.prepared, config.engine_config)
+            prepared, manifest = _restore_prepared(value.prepared, value.engine_config)
             collected = collect_carriers(
                 prepared, value.recognition_results,
                 recognition_model_id=manifest.recognition_model_id,
@@ -389,8 +384,8 @@ class ProcessEvidenceStepImpl(StepImpl):
                 if manifest.recognition_model_id else None
             )
             evidence = process(
-                prepared, value.recognition_results, schema=config.schema_, authorized_target=target,
-                engine=config.engine, config=config.engine_config,
+                prepared, value.recognition_results, schema=value.schema_, authorized_target=target,
+                engine=value.engine, config=value.engine_config,
                 model=mapping_model, recognition_model=recognition_model,
                 identity_mapping=value.identity_mapping,
                 retired_identities=value.retired_identities,
@@ -768,7 +763,7 @@ def _restore_prepared(
         raise ValidationError({"pages": "The prepared source manifest is invalid."})
     file_ids = [str(item["file"]) for item in sources if isinstance(item, dict) and "file" in item]
     part_ids = [str(item["message_part"]) for item in sources if isinstance(item, dict) and "message_part" in item]
-    input_refs = ExtractionInput(
+    input_refs = ExtractionSourceInput(
         files=file_ids, message_parts=part_ids, target_model=manifest.target_model,
         target_id=manifest.target_id,
     )
@@ -790,7 +785,7 @@ def _restore_prepared(
     return prepared, manifest
 
 
-def _resolve_sources(value: ExtractionInput) -> tuple[list[Any], list[Any], Any]:
+def _resolve_sources(value: ExtractionSourceInput) -> tuple[list[Any], list[Any], Any]:
     file_model = apps.get_model("storage", "File")
     part_model = apps.get_model("messaging", "Part")
     requested_files = list(file_model.objects.filter(sqid__in=value.files))

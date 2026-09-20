@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from PIL import Image
+from pydantic import ValidationError as PydanticValidationError
 from pydantic_ai.messages import BinaryContent, ModelResponse, ToolCallPart
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -23,7 +24,12 @@ from angee.workflows_extraction.engines import (
 )
 from angee.workflows_extraction.routing import acquire_native_parts
 from angee.workflows_extraction.service import _validated_schema
-from angee.workflows_extraction.steps import PreparePagesStepImpl, RecognizePageStepImpl
+from angee.workflows_extraction.steps import (
+    CollectCarriersStepImpl,
+    PreparePagesStepImpl,
+    ProcessEvidenceStepImpl,
+    RecognizePageStepImpl,
+)
 from tests.conftest import SchemaAddon
 from tests.extraction_engines import FakePageExtractionEngine
 from tests.extraction_models import Extraction as _Extraction  # noqa: F401 - registers composed test models.
@@ -70,42 +76,103 @@ def _message_part(
     )
 
 
-@pytest.mark.parametrize("step_impl", [PreparePagesStepImpl, RecognizePageStepImpl])
-def test_extraction_step_engine_config_is_authored_as_json(step_impl: type) -> None:
-    """Provider/profile options remain editable without weakening structured config projection."""
+@pytest.mark.parametrize(
+    "step_impl",
+    [
+        PreparePagesStepImpl,
+        RecognizePageStepImpl,
+        CollectCarriersStepImpl,
+        ProcessEvidenceStepImpl,
+    ],
+)
+def test_extraction_execution_policy_is_input_bound(step_impl: type) -> None:
+    """Every reusable extraction activity admits policy through input, not definition config."""
 
-    spec = step_impl.config_form_spec()
+    schema = step_impl.input_contract().raw_schema
 
-    assert spec is not None
-    assert spec["properties"]["engine_config"] == {
-        "type": "object",
-        "widget": "json",
-        "label": "Engine Config",
-        "omittable": True,
+    assert step_impl.config_model is None
+    assert step_impl.config_form_spec() is None
+    assert schema is not None
+    assert schema["properties"]["engine_config"]["widget"] == "json"
+    if step_impl in (PreparePagesStepImpl, CollectCarriersStepImpl):
+        assert "schema" not in schema["properties"]
+        assert "engine" not in schema["properties"]
+    elif step_impl is RecognizePageStepImpl:
+        assert "schema" not in schema["properties"]
+        assert "engine" in schema["properties"]
+    else:
+        assert {"schema", "engine"} <= schema["properties"].keys()
+
+
+@pytest.mark.parametrize(
+    ("step_impl", "step_input"),
+    [
+        (
+            PreparePagesStepImpl,
+            {
+                "files": [],
+                "message_parts": [],
+                "model": None,
+                "recognition_model": None,
+                "target_model": "tests.target",
+                "target_id": "target-1",
+            },
+        ),
+        (CollectCarriersStepImpl, {"prepared": {}, "recognition": {}}),
+        (
+            ProcessEvidenceStepImpl,
+            {
+                "prepared": {},
+                "recognition_results": [],
+                "hold_reasons": [],
+                "completed_page_count": 0,
+            },
+        ),
+    ],
+)
+def test_extraction_steps_admit_per_invocation_policy(
+    step_impl: type,
+    step_input: dict[str, object],
+) -> None:
+    policy: dict[str, object] = {
+        "engine_config": {"recognition_config": {"max_tokens": 512}},
     }
-    assert step_impl.normalize_config({
-        **({"schema": {}, "engine": "profile"} if step_impl is PreparePagesStepImpl else {}),
-        "engine_config": {"nested": {"enabled": False}, "limit": 0, "nullable": None},
-    })["engine_config"] == {
-        "nested": {"enabled": False}, "limit": 0, "nullable": None,
-    }
+    if step_impl is ProcessEvidenceStepImpl:
+        policy.update({
+            "schema": {"$id": "tests.extraction.v1", "type": "object"},
+            "engine": "document_profile",
+        })
+
+    value = step_impl.validate_input({**step_input, **policy})
+
+    assert value.engine_config == policy["engine_config"]
+    if step_impl is ProcessEvidenceStepImpl:
+        assert value.schema_ == policy["schema"]
+        assert value.engine == "document_profile"
 
 
-def test_recognize_page_config_retains_authored_defaults() -> None:
-    spec = RecognizePageStepImpl.config_form_spec()
+def test_recognize_page_input_owns_inference_defaults_and_validates_timeout() -> None:
+    value = RecognizePageStepImpl.validate_input({
+        "source_position": 0,
+        "page_position": 1,
+        "image_file_id": "fil_image",
+        "image_digest": "a" * 64,
+        "width": 100,
+        "height": 200,
+        "dpi": 300,
+        "model_id": "imd_recognition",
+        "config_digest": "b" * 64,
+        "engine_config": {"max_tokens": 512},
+    })
 
-    assert spec is not None
-    assert spec["properties"]["timeout"] == {
-        "type": "integer",
-        "minimum": 1,
-        "label": "Timeout",
-        "description": "Provider timeout in whole seconds.",
-        "defaultValue": 60,
-        "omittable": True,
-    }
-    assert RecognizePageStepImpl.config_defaults() == {"engine": "inference", "timeout": 60}
-    with pytest.raises(ValidationError, match="config.timeout"):
-        RecognizePageStepImpl.normalize_config({"timeout": 0})
+    assert value.engine == "inference"
+    assert value.timeout == 60
+    assert value.engine_config == {"max_tokens": 512}
+    with pytest.raises(PydanticValidationError, match="greater than 0"):
+        RecognizePageStepImpl.validate_input({
+            **value.model_dump(mode="json"),
+            "timeout": 0,
+        })
 
 
 @pytest.mark.parametrize("role", ["body", "title", "quoted", "signature", "header"])
