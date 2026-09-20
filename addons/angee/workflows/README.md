@@ -67,6 +67,9 @@ tagged `oneOf`, action metadata, and read-only context schema. The Decision
 manager remains the sole compiler when it admits the suspension; consumers do
 not compile or hand-author action branches.
 
+[DecisionContextFields](schema.py) exposes workflow and step context on
+authorized Decisions; journal references retain independent read checks.
+
 A consumer pairs the gate with a `DecisionApplyStep` subclass. The subclass
 declares `input_model`, `output_model`, `outcomes`, `effect`, `execution_mode`,
 and `idempotent`, plus its predecessor `gate_step_class` when it is narrower

@@ -2741,6 +2741,26 @@ class Decision(AuditMixin, AngeeDataModel):
         super().save(*args, **kwargs)
 
     @classmethod
+    def context_projection_annotation(cls) -> dict[str, Any]:
+        """Return Decision-readable labels without exposing journal identities.
+
+        The run owns workflow context. Named steps use their name or key;
+        system-injected steps use only their declared system kind.
+        """
+
+        return {
+            "_decision_workflow_key": models.F("step_run__run__workflow__key"),
+            "_decision_workflow_name": models.F("step_run__run__workflow__name"),
+            "_decision_step_key": models.F("step_run__step__key"),
+            "_decision_step_name": models.Case(
+                models.When(step_run__step__isnull=True, then=models.F("step_run__system_kind")),
+                models.When(step_run__step__name="", then=models.F("step_run__step__key")),
+                default=models.F("step_run__step__name"),
+                output_field=models.CharField(),
+            ),
+        }
+
+    @classmethod
     def form_schema_annotation(cls) -> dict[str, Any]:
         """Return the narrow ORM projection consumed by :attr:`form_schema`."""
 

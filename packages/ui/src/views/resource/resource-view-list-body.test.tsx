@@ -2,7 +2,7 @@
 
 import { render, screen } from "@testing-library/react";
 import { schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testQueryField } from "@angee/metadata/testing";
 import { getCoreRowModel, useReactTable, flexRender } from "@tanstack/react-table";
 import { expect, test, vi } from "vitest";
 
@@ -11,6 +11,7 @@ import {
   cellContent,
   groupMeasuresFromColumns,
   hasuraMeasuresFromGroupMeasures,
+  ListCellContent,
   RowActionsHeader,
 } from "./resource-view-list-body";
 
@@ -130,6 +131,53 @@ test("does not probe a date-looking field declared as a string", () => {
 
   expect(container.querySelector("time")).toBeNull();
   expect(screen.getByText("2026-08-22T10:00:00Z")).toBeTruthy();
+});
+
+test("renders metadata enum labels in the normal list-cell path", () => {
+  const resource = testDataResource("tests.Row", {
+    fields: [{
+      name: "status", kind: "enum", values: [{ value: "PENDING", description: "Needs approval" }],
+      readable: true, filterable: false, sortable: false, aggregatable: false,
+      groupable: false, creatable: false, updatable: false, requiredOnCreate: false,
+    }],
+  });
+  const metadata = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+  render(<ListCellContent column={{ field: "status" }} row={{ status: "PENDING" }} metadata={metadata} />);
+  expect(screen.getByText("Needs approval")).toBeTruthy();
+});
+
+test("renders query enum labels from wire values and preserves declared row aliases", () => {
+  const queryField = testQueryField("wire_status", {
+    kind: "enum",
+    values: [{ value: "PENDING", description: "Needs approval" }],
+    filter: { field: "status", scalar: "Enum", values: [], operators: ["exact"], valueMap: [{ from: "PENDING", to: "pending" }] },
+  });
+  expect(cellContent({ field: "status", queryField }, { wire_status: "PENDING" }, (key) => key))
+    .toBe("Needs approval");
+});
+
+test("renders query relation labels with the declared identity fallback", () => {
+  const queryField = testQueryField("channel.public_key", {
+    kind: "relation", scalar: "ID",
+    relation: { model: "messaging.Channel", identityPath: "channel.public_key", labelPath: "channel.display_name" },
+  });
+  expect(cellContent({ field: "channel", queryField }, { channel: { public_key: "chan_1", display_name: "Inbox" } }, (key) => key))
+    .toBe("Inbox");
+  expect(cellContent({ field: "channel", queryField }, { channel: { public_key: "chan_1", id: "private-id", display_name: null } }, (key) => key))
+    .toBe("chan_1");
+  expect(cellContent({ field: "channel", queryField }, { channel: null }, (key) => key)).toBe("");
+});
+
+test("uses query scalar metadata for dates and translated boolean aliases", () => {
+  const dateField = testQueryField("observed", { scalar: "DateTime" });
+  const { container } = render(<>{cellContent(
+    { field: "recorded", queryField: dateField }, { observed: "2026-08-22T10:00:00Z" }, (key) => key,
+  )}</>);
+  expect(container.querySelector("time")?.getAttribute("datetime")).toBe("2026-08-22T10:00:00.000Z");
+  const t = (key: string) => ({ "list.yes": "Sí", "list.no": "No" })[key] ?? key;
+  expect(cellContent({ field: "enabled", queryField: testQueryField("is_enabled", { scalar: "Boolean" }) }, { is_enabled: true }, t)).toBe("Sí");
+  expect(cellContent({ field: "recorded", queryField: testQueryField("observed") }, { observed: "2026-08-22T10:00:00Z" }, t))
+    .toBe("2026-08-22T10:00:00Z");
 });
 
 function modelMetadata(name: string, scalar: string): ModelMetadata {

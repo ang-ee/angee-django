@@ -230,7 +230,7 @@ def _validate_filter(value: Any, resource: Any, path: str, *, depth: int = 0, cl
 
 
 def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
-    """Validate every active widget query against the composed console contract."""
+    """Validate active queries and declared row columns against the console contract."""
 
     from angee.graphql.schema import GraphQLSchemas
 
@@ -242,10 +242,14 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
                 resources[label.casefold()] = resource
 
     for index, widget in enumerate(snapshot["widgets"]):
-        if widget["isArchived"] or widget["data"]["shape"] == "none":
+        if widget["isArchived"]:
             continue
         path = f"widgets[{index}].data"
         data = widget["data"]
+        if data["shape"] != "rows" and "columns" in widget["options"]:
+            _invalid_query(f"widgets[{index}].options.columns", "columns are only valid for row widgets")
+        if data["shape"] == "none":
+            continue
         if set(data) != {"shape", "source"}:
             _invalid_query(path, "query widgets accept only shape and source")
         source = data["source"]
@@ -316,6 +320,28 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
             field = resource.query.fields.get(field_name)
             if field is None or field.row is None:
                 _invalid_query(f"{path}.source.fields", f'field "{field_name}" has no readable row projection')
+
+        if shape == "rows" and "columns" in widget["options"]:
+            columns_path = f"widgets[{index}].options.columns"
+            columns = widget["options"]["columns"]
+            if not isinstance(columns, list) or not columns:
+                _invalid_query(columns_path, "columns must be a non-empty array")
+            seen_columns: set[str] = set()
+            for column_index, column in enumerate(columns):
+                column_path = f"{columns_path}[{column_index}]"
+                if (
+                    not isinstance(column, dict)
+                    or set(column) - {"path", "label"}
+                    or not isinstance(column.get("path"), str)
+                    or not column["path"]
+                    or ("label" in column and (not isinstance(column["label"], str) or not column["label"]))
+                ):
+                    _invalid_query(column_path, "column requires a path and an optional non-empty string label")
+                if column["path"] not in fields:
+                    _invalid_query(f"{column_path}.path", "column must be selected in source.fields")
+                if column["path"] in seen_columns:
+                    _invalid_query(f"{column_path}.path", "column is duplicated")
+                seen_columns.add(column["path"])
 
         limit = source.get("limit")
         if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100):
