@@ -2,12 +2,28 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from angee.workflows.attempts import DecisionRecordAccess
+from angee.workflows.bindings import BindingNode, parse_binding
+
 NonBlankString = Annotated[str, Field(min_length=1)]
+_GATE_BINDING_KINDS = frozenset({"constant", "workflow_input", "step_output", "map_item", "object", "array"})
+
+
+def is_gate_binding_mapping(value: Any) -> bool:
+    """Identify gate bindings while rejecting the reserved discriminator on literals."""
+
+    if not isinstance(value, Mapping) or "kind" not in value:
+        return False
+    kind = value.get("kind")
+    if not isinstance(kind, str) or kind not in _GATE_BINDING_KINDS:
+        raise ValueError("The top-level key 'kind' is reserved for workflow bindings in gate mapping fields.")
+    return True
 
 
 class RetryBackoffConfig(BaseModel):
@@ -52,6 +68,11 @@ class GateSlotConfig(BaseModel):
     priority: int
     requester: str = ""
     escalation: list[str] | None = None
+    action: str = ""
+    payload: dict[str, Any] | None = None
+    decision_schema: dict[str, Any] | None = None
+    target: GateTargetConfig | None = None
+    record_access: list[DecisionRecordAccess] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -70,19 +91,59 @@ class GateSlotConfig(BaseModel):
         return "" if value is None else value
 
 
+class GateTargetConfig(BaseModel):
+    """One related record and any admitted prior-Decision authority paths."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: NonBlankString
+    id: NonBlankString
+    tab: str = ""
+    authority_path: tuple[str | int, ...] = ()
+    authority_gate_path: tuple[str | int, ...] = ()
+
+    @field_validator("authority_path", "authority_gate_path", mode="before")
+    @classmethod
+    def typed_path(cls, value: Any) -> Any:
+        """Reject coercive or empty path segments before they become authority."""
+
+        if not isinstance(value, list | tuple) or any(
+            type(part) not in {str, int} or (isinstance(part, str) and not part) for part in value
+        ):
+            raise ValueError("Gate target authority paths require typed non-empty segments.")
+        return value
+
+    @model_validator(mode="after")
+    def complete_authority(self) -> GateTargetConfig:
+        """Require the original gate path only for a forwarded proposal authority."""
+
+        if self.authority_gate_path and not self.authority_path:
+            raise ValueError("Gate target authority_gate_path requires authority_path.")
+        return self
+
+
+GateSlotConfig.model_rebuild()
+
+
 class GateConfig(WorkflowStepConfig):
     """Approval-gate configuration, including explicitly dynamic decision data."""
 
-    policy: Literal["one_done", "all_success", "majority", "sequential"] = "one_done"
+    policy: Literal["one_done", "all_success", "all_done", "majority", "sequential"] = "one_done"
     action: NonBlankString
-    slots: list[GateSlotConfig] = Field(min_length=1)
-    payload: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
+    slots: BindingNode | list[GateSlotConfig] = Field(json_schema_extra={"widget": "json"})
+    payload: BindingNode | dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
     requester: str = ""
     escalation: list[str] = Field(default_factory=list)
     max_attempts: int | None = Field(default=None, ge=1)
     expires_at: datetime | None = None
     escalate_at: datetime | None = None
-    decision_schema: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
+    decision_schema: BindingNode | dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
+    targets: BindingNode | list[GateTargetConfig] = Field(default_factory=list, json_schema_extra={"widget": "json"})
+    record_access: BindingNode | list[DecisionRecordAccess] = Field(
+        default_factory=list, json_schema_extra={"widget": "json"}
+    )
+    clean: BindingNode | bool = Field(default=False, json_schema_extra={"widget": "json"})
+    resume: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -99,6 +160,32 @@ class GateConfig(WorkflowStepConfig):
                 for index, slot in enumerate(slots)
             ]
         return normalized
+
+    @field_validator(
+        "slots",
+        "payload",
+        "decision_schema",
+        "targets",
+        "record_access",
+        "clean",
+        mode="before",
+    )
+    @classmethod
+    def validate_binding(cls, value: Any) -> Any:
+        """Parse every binding-shaped value through the one workflow grammar."""
+
+        if is_gate_binding_mapping(value):
+            return parse_binding(value)
+        return value
+
+    @field_validator("slots")
+    @classmethod
+    def non_empty_static_slots(cls, value: BindingNode | list[GateSlotConfig]) -> BindingNode | list[GateSlotConfig]:
+        """Require at least one statically declared slot; bound lists check at runtime."""
+
+        if isinstance(value, list) and not value:
+            raise ValueError("Gate slots must contain at least one slot.")
+        return value
 
     @field_validator("policy", mode="before")
     @classmethod

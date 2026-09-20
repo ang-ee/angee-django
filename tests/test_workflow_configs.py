@@ -55,10 +55,11 @@ def test_gate_config_preserves_dynamic_payload_and_defaults_seat_priorities() ->
     }
     normalized = normalized_twice(GateStep, config)
 
-    assert normalized["slots"] == [
-        {"assignees": ["auth/user:1"], "priority": 0, "requester": "", "escalation": None},
-        {"assignees": ["auth/group:2#member"], "priority": 1, "requester": "", "escalation": None},
+    assert [slot["assignees"] for slot in normalized["slots"]] == [
+        ["auth/user:1"],
+        ["auth/group:2#member"],
     ]
+    assert [slot["priority"] for slot in normalized["slots"]] == [0, 1]
     assert normalized["payload"] == config["payload"]
     assert normalized["decision_schema"] == config["decision_schema"]
     assert normalized["max_attempts"] == 2
@@ -81,6 +82,43 @@ def test_gate_slot_escalation_preserves_inherited_and_explicit_empty_meanings() 
     assert decisions[1].escalation == ()
 
 
+def test_gate_config_preserves_binding_nodes_for_runtime_admission() -> None:
+    slots = {"kind": "workflow_input", "path": ["review", "slots"]}
+    payload = {"kind": "workflow_input", "path": ["review", "payload"]}
+    clean = {"kind": "workflow_input", "path": ["review", "clean"]}
+
+    normalized = normalized_twice(
+        GateStep,
+        {
+            "policy": "all_done",
+            "action": "review_invoice",
+            "slots": slots,
+            "payload": payload,
+            "clean": clean,
+            "resume": True,
+        },
+    )
+
+    assert normalized["slots"] == slots
+    assert normalized["payload"] == payload
+    assert normalized["clean"] == clean
+    assert normalized["policy"] == "all_done"
+    assert normalized["resume"] is True
+
+
+def test_gate_config_reserves_kind_only_for_closed_binding_discriminators() -> None:
+    """A domain ``kind`` fails clearly instead of entering the binding parser."""
+
+    with pytest.raises(ValidationError, match="top-level key 'kind' is reserved"):
+        GateStep.normalize_config(
+            {
+                "action": "review_invoice",
+                "slots": [{"assignees": ["auth/user:1"]}],
+                "payload": {"kind": "invoice", "id": "invoice-1"},
+            }
+        )
+
+
 @pytest.mark.django_db(transaction=True)
 def test_step_canonical_config_projects_legacy_gate_without_rewriting_row(workflow_tables: None) -> None:
     """The editor reads canonical slots while an existing definition stays untouched."""
@@ -101,9 +139,8 @@ def test_step_canonical_config_projects_legacy_gate_without_rewriting_row(workfl
         step.refresh_from_db()
 
     projection = step.config_projection()
-    assert projection.value["slots"] == [
-        {"assignees": ["auth/user:1"], "priority": 0, "requester": "", "escalation": None}
-    ]
+    assert projection.value["slots"][0]["assignees"] == ["auth/user:1"]
+    assert projection.value["slots"][0]["priority"] == 0
     assert projection.errors == {}
     assert step.config == legacy
 
@@ -160,8 +197,7 @@ def test_builtin_operations_own_their_typed_models() -> None:
     mapped = MapStep.config_form_spec()
     assert wait is not None and wait["required"] == ["until"]
     assert wait["properties"]["retry"]["nullable"] is True
-    assert gate is not None and gate["properties"]["slots"]["widget"] == "list"
-    assert gate["properties"]["slots"]["minItems"] == 1
+    assert gate is not None and gate["properties"]["slots"]["widget"] == "json"
     assert gate["properties"]["payload"]["widget"] == "json"
     assert gate["properties"]["decision_schema"]["widget"] == "json"
     assert mapped is not None and mapped["properties"]["items"] == {

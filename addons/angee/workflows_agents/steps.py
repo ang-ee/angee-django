@@ -21,20 +21,21 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import transaction
 from django.template import Context, Engine
 from django.utils import timezone
-from pydantic import JsonValue
 from pydantic_ai.messages import ModelRequest, ModelRequestPart, ModelResponse, SystemPromptPart, UserPromptPart
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RequestUsage
 from pydantic_core import to_jsonable_python
-from rebac import actor_context, system_context, to_subject_ref
+from rebac import actor_context, system_context
 
+from angee.agents.backends import is_retryable_provider_error
 from angee.agents.models import SessionStatus, TurnStatus
 from angee.agents.runners import TurnOutcome
-from angee.workflows.models import RunStatus, StepRunStatus, Verdict
+from angee.workflows.decision_actions import ReviewAction, ReviewFact, build_decision_action
+from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import (
-    DecisionSpec,
+    GateStep,
     StepEffect,
     StepImpl,
     StepOutcome,
@@ -141,7 +142,7 @@ class AgentStepImpl(StepImpl):
         except TransientStepError:
             raise
         except Exception as error:  # noqa: BLE001 - backend/config failure is a workflow outcome.
-            if _is_retryable_provider_error(error):
+            if is_retryable_provider_error(error):
                 raise TransientStepError(str(error)) from error
             return StepResult.done(
                 output=_bounded_summary(_failure_summary(request=request, error=error)),
@@ -178,7 +179,13 @@ class AgentSessionStepImpl(StepImpl):
                     if session.status != SessionStatus.IDLE:
                         session.mark_idle()
                     return _park_session()
-                deferred_results = _deferred_results(step_run) if resumed else []
+                if resumed:
+                    resumption = GateStep.resumption(step_run)
+                    if resumption is None or resumption.state.get("turn") != turn.sqid:
+                        raise ValidationError({"gate": "Agent approval state does not match its active turn."})
+                    deferred_results = list(resumption.slots)
+                else:
+                    deferred_results = []
 
         if session.status == SessionStatus.CLOSED:
             close_session(session)
@@ -208,7 +215,7 @@ class AgentSessionStepImpl(StepImpl):
                 replay_state=session.replay_state,
             )
         except Exception as error:  # noqa: BLE001 - provider/runtime failures become turn outcomes.
-            if _is_retryable_provider_error(error) and _attempts_remaining(step_run):
+            if is_retryable_provider_error(error) and _attempts_remaining(step_run):
                 raise TransientStepError(str(error)) from error
             outcome = TurnOutcome(
                 kind="failed",
@@ -295,25 +302,6 @@ def _claim_turn(session: Any) -> tuple[Any | None, bool]:
     return turn, resumed
 
 
-def _deferred_results(step_run: Any) -> list[dict[str, Any]]:
-    """Project this suspension's resolved workflow decisions for the runtime."""
-
-    decision_ids = step_run.resume_state.get("_decision_ids")
-    if not isinstance(decision_ids, list):
-        return []
-    decisions = step_run.decisions.filter(pk__in=decision_ids).order_by("priority", "pk")
-    return [
-        {
-            **{key: value for key, value in dict(decision.payload or {}).items()
-               if key != "facts"},
-            "approved": decision.verdict == Verdict.COMPLETED,
-            "verdict": str(decision.verdict),
-            "resolution": dict(decision.resolution or {}),
-        }
-        for decision in decisions
-    ]
-
-
 def _persist_turn_outcome(step_run: Any, session: Any, turn: Any, outcome: TurnOutcome) -> StepResult:
     """Persist one runtime outcome under system authority and map it to the engine."""
 
@@ -365,14 +353,10 @@ def _persist_turn_outcome(step_run: Any, session: Any, turn: Any, outcome: TurnO
             else:
                 locked_turn.mark_awaiting_approval()
                 locked_session.mark_awaiting_approval()
-                result = StepResult.suspend(
-                    resume_state={
-                        "_resume_after_decisions": True,
-                        "gate": {"policy": "all_done"},
-                        "turn": locked_turn.sqid,
-                        "approval_requests": outcome.approval_requests,
-                    },
-                    decisions=_approval_decisions(locked_session, outcome.approval_requests),
+                result = GateStep.gate_result(
+                    locked_step_run,
+                    config=_approval_gate_config(locked_session, outcome.approval_requests),
+                    retained_state={"turn": locked_turn.sqid},
                 )
         else:
             locked_turn.mark_failed(outcome.error or "Agent runtime failed.")
@@ -388,62 +372,66 @@ def _persist_turn_outcome(step_run: Any, session: Any, turn: Any, outcome: TurnO
     return result
 
 
-def _approval_decisions(session: Any, requests: list[dict[str, Any]]) -> tuple[DecisionSpec, ...]:
-    """Build one owner-assigned workflow decision per deferred tool call."""
+def _approval_gate_config(session: Any, requests: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build one resumable built-in gate with a dynamic slot per deferred tool call."""
 
-    assignee = str(to_subject_ref(session.owner))
-    schema: dict[str, JsonValue] = {
-        "type": "object",
-        "required": ["action"],
-        "properties": {
-            "action": {
-                "type": "string", "enum": ["approve", "reject"],
-                "options": [
-                    {"value": "approve", "label": "Approve tool request", "verdict": "COMPLETE"},
-                    {"value": "reject", "label": "Reject tool request", "verdict": "REJECT",
-                     "variant": "destructive"},
-                ],
+    from angee.workflows import engine  # Runtime edge; safe after the operation registry imports this module.
+
+    assignee = str(engine.resolve_workflow_actor(session.owner).subject)
+    slots = []
+    decision_schema: dict[str, Any] | None = None
+    for index, request in enumerate(requests):
+        review = build_decision_action(
+            actions=(
+                ReviewAction(
+                    value="approve",
+                    label="Approve tool request",
+                    verdict="COMPLETE",
+                    fields=("reason",),
+                ),
+                ReviewAction(
+                    value="reject",
+                    label="Reject tool request",
+                    verdict="REJECT",
+                    fields=("reason",),
+                    required=("reason",),
+                    variant="destructive",
+                ),
+            ),
+            properties={
+                "reason": {
+                    "type": "string",
+                    "label": "Decision note",
+                    "widget": "textarea",
+                    "minLength": 1,
+                }
             },
-            "reason": {
-                "type": "string",
-                "label": "Decision note",
-                "widget": "textarea",
-            },
-            "facts": {
-                "type": "array", "items": {"type": "object"},
-                "layout": "context", "widget": "facts",
-            },
-        },
-        "oneOf": [
-            {"type": "object", "required": ["action"],
-             "properties": {"action": {"const": "approve"}, "reason": {"type": "string"}},
-             "additionalProperties": False},
-            {"type": "object", "required": ["action", "reason"],
-             "properties": {"action": {"const": "reject"},
-                            "reason": {"type": "string", "minLength": 1}},
-             "additionalProperties": False},
-        ],
-    }
-    return tuple(
-        DecisionSpec(
-            assignees=(assignee,),
-            action="approve_tool",
-            payload={
-                **request,
-                "facts": [{
-                    "pointer": f"/approval_requests/{index}",
-                    "label": "Requested tool call",
-                    "value": dict(request),
-                    "authority": "unverified",
-                    "evidence": [],
-                }],
-            },
-            priority=index,
-            max_attempts=3,
-            decision_schema=schema,
+            payload=request,
+            facts=(
+                ReviewFact(
+                    pointer=f"/approval_requests/{index}",
+                    label="Requested tool call",
+                    value=dict(request),
+                    authority="unverified",
+                ),
+            ),
         )
-        for index, request in enumerate(requests)
-    )
+        decision_schema = review.decision_schema
+        slots.append(
+            {
+                "assignees": [assignee],
+                "priority": index,
+                "payload": review.payload,
+            }
+        )
+    return {
+        "policy": "all_done",
+        "action": "approve_tool",
+        "slots": slots,
+        "decision_schema": decision_schema or {},
+        "max_attempts": 3,
+        "resume": True,
+    }
 
 
 def _attempts_remaining(step_run: Any) -> bool:
@@ -678,28 +666,6 @@ def _failure_summary(request: Mapping[str, Any] | None, *, error: Exception) -> 
             "message": str(error),
         },
     }
-
-
-def _is_retryable_provider_error(error: Exception) -> bool:
-    """Return whether an SDK/provider exception represents a transient failure."""
-
-    status = getattr(error, "status_code", None)
-    if status in {408, 409, 425, 429, 500, 502, 503, 504, 529}:
-        return True
-    error_type = type(error).__name__.lower()
-    message = str(error).lower()
-    retryable_terms = (
-        "ratelimit",
-        "rate_limit",
-        "rate limit",
-        "overload",
-        "overloaded",
-        "temporarily unavailable",
-        "timeout",
-        "timed out",
-        "try again",
-    )
-    return any(term in error_type or term in message for term in retryable_terms)
 
 
 def _bounded_summary(summary: Mapping[str, Any]) -> dict[str, Any]:

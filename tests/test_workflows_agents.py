@@ -1,9 +1,4 @@
-"""Tests for the workflows-agents composition addon.
-
-The addon contributes one non-deterministic ``agent`` workflow activity through
-the workflow step registry. Agent gate dispatch is intentionally absent here: it
-depends on the deferred zed subject-union extension decision.
-"""
+"""Tests for one-shot agent work and resumable session approvals."""
 
 from __future__ import annotations
 
@@ -11,6 +6,7 @@ import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -35,7 +31,7 @@ from angee.graphql.events import ChangePayload
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import AttemptResultKind
-from angee.workflows.steps import TransientStepError
+from angee.workflows.steps import GateStep, TransientStepError
 from angee.workflows_agents import sessions
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
@@ -58,6 +54,43 @@ from tests.workflows import (
 )
 
 User = get_user_model()
+
+
+@pytest.mark.django_db
+def test_agent_approval_uses_dynamic_all_done_resumable_gate_slots() -> None:
+    """Session tool calls use the built-in gate instead of authoring Decision specs."""
+
+    from angee.workflows_agents.steps import _approval_gate_config
+
+    owner = User.objects.create_user(username="approval-gate-owner")
+    requests = [
+        {"tool_call_id": "call-1", "name": "read_invoice", "args": {"id": "invoice-1"}},
+        {"tool_call_id": "call-2", "name": "post_invoice", "args": {"id": "invoice-1"}},
+    ]
+    config = _approval_gate_config(SimpleNamespace(owner=owner), requests)
+    result = GateStep.gate_result(
+        SimpleNamespace(resume_state={}),
+        config=config,
+        retained_state={"turn": "turn-1"},
+    )
+
+    assert config["policy"] == "all_done"
+    assert config["resume"] is True
+    assert len(config["slots"]) == 2
+    assert result.resume_state == {
+        "gate": {"policy": "all_done"},
+        "state": {"turn": "turn-1"},
+        "_resume_after_decisions": True,
+    }
+    assert [decision.payload["tool_call_id"] for decision in result.decisions] == [
+        "call-1",
+        "call-2",
+    ]
+    assert all(decision.action == "approve_tool" for decision in result.decisions)
+    assert result.decisions[0].decision_schema["oneOf"][1]["required"] == [
+        "action",
+        "reason",
+    ]
 
 
 def test_journal_serialization_uses_native_values_and_rejects_ambiguous_inputs() -> None:
