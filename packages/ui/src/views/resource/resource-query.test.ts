@@ -33,7 +33,7 @@ test("resource search expands its semantic term across backend-authored fields",
   });
   const resource = testDataResource("accounting.Invoice", {
     recordRepresentation: "title",
-    recordSearchFields: ["supplier_reference", "number"],
+    recordSearchFields: ["supplier_reference", "title", "number"],
     query: testResourceQuery({ fields: {
       kind: searchable("kind"),
       number: searchable("number"),
@@ -51,6 +51,27 @@ test("resource search expands its semantic term across backend-authored fields",
       { supplier_reference: { iContains: "S-1MX0XZ7140-2405" } },
       { number: { iContains: "S-1MX0XZ7140-2405" } },
     ],
+  });
+});
+
+test("resource search falls back only to its searchable record representation", () => {
+  const resource = testDataResource("notes.Note", {
+    recordRepresentation: "title",
+    query: testResourceQuery({ fields: {
+      hidden: testQueryField("hidden", {
+        filter: { field: "hidden", scalar: "String", values: [], operators: ["exact", "iContains"] },
+      }),
+      title: testQueryField("title", {
+        filter: { field: "title", scalar: "String", values: [], operators: ["exact", "iContains"] },
+      }),
+    } }),
+  });
+  const metadata = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+
+  expect(filterForResourceTextSearch(metadata, {
+    title: { iContains: "alpha" },
+  })).toEqual({
+    title: { iContains: "alpha" },
   });
 });
 

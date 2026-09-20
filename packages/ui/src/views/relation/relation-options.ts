@@ -1,5 +1,5 @@
 import * as React from "react";
-import { rowPublicId, type Row } from "@angee/metadata";
+import { ResourceQuery, refineResourceName, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
 import {
   useList,
   useOne,
@@ -12,11 +12,6 @@ import { useDebounce } from "use-debounce";
 import {
   refineFieldsFromPaths,
   } from "@angee/refine";
-import { refineResourceName } from "@angee/metadata";
-import {
-  useModelMetadata,
-} from "@angee/metadata";
-
 import { useValueStable } from "../../lib/use-value-stable";
 import type {
   RelationOption,
@@ -24,7 +19,6 @@ import type {
 } from "../../widgets/RelationField";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { DEFAULT_PAGE_SIZE } from "../resource/page-size";
-import { resolveTextFilterField } from "../resource/resource-view-utils";
 
 export const RELATION_OPTION_LIMIT = 200;
 
@@ -168,12 +162,9 @@ export function useRelationOptions(
   } = config;
   const labelField = optionLabelField ?? relation?.labelField ?? "id";
   const metadata = useModelMetadata(relation?.resource ?? "");
-  const defaultSearchField = resolveTextFilterField(metadata);
-  const authoredSearchFields = metadata?.resource.recordSearchFields;
-  const activeSearchFields =
-    searchFields
-    ?? (authoredSearchFields?.length ? authoredSearchFields : undefined)
-    ?? (defaultSearchField ? [defaultSearchField] : []);
+  const activeSearchFields = metadata
+    ? ResourceQuery.from(metadata).textSearchFields(searchFields)
+    : [];
   // Stabilise filters/sorters by VALUE: a consumer that declares them inline
   // (e.g. a board's `laneSource.filters`) rebuilds the array every render, and
   // forwarding a fresh identity into refine's `useList` drives an update loop.

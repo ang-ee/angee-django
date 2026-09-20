@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { Filter } from "./filter";
 import { ResourceQuery, QueryParseError } from "./query";
 import type { QueryAxis, QueryField, QueryDrill, FilterOperator } from "./query-schema";
-import { testDataResource, testResourceQuery } from "./testing";
+import { testDataResource, testQueryField, testResourceQuery } from "./testing";
 
 const channel: QueryAxis = {
   field: "channel", kind: "relation", identityPath: "channel.id", labelPath: "channel.display_name",
@@ -27,6 +27,87 @@ describe("ResourceQuery", () => {
   test("builds once per immutable resource", () => {
     const metadata = resource();
     expect(ResourceQuery.from(metadata)).toBe(ResourceQuery.from(metadata));
+  });
+  test("resolves resource text-search declarations against executable capabilities", () => {
+    const metadata = testDataResource("money.Currency", {
+      recordRepresentation: "display_name",
+      recordSearchFields: ["code", "unsupported", "missing", "name"],
+      query: testResourceQuery({
+        fields: {
+          display_name: field("display_name", "String", ["exact", "iContains"]),
+          code: field("code", "String", ["exact", "iContains"]),
+          name: field("name", "String", ["exact", "iContains"]),
+          unsupported: field("unsupported", "String", ["exact"]),
+        },
+      }),
+    });
+    const query = ResourceQuery.from(metadata);
+
+    expect(query.textSearchFields()).toEqual(["code", "name"]);
+    expect(query.textSearchFields(["name", "unsupported", "code"])).toEqual([
+      "name",
+      "code",
+    ]);
+    expect(ResourceQuery.from({ resource: metadata, fields: {} })).toBe(query);
+  });
+  test("falls back only to a searchable record representation", () => {
+    const query = ResourceQuery.from(testDataResource("integrate.Vendor", {
+      recordRepresentation: "display_name",
+      recordSearchFields: [],
+      query: testResourceQuery({
+        fields: {
+          display_name: field("display_name", "String", ["exact", "iContains"]),
+          hidden: field("hidden", "String", ["exact", "iContains"]),
+        },
+      }),
+    }));
+    expect(query.textSearchFields()).toEqual(["display_name"]);
+
+    const invalidDeclaration = ResourceQuery.from(testDataResource("integrate.Credential", {
+      recordRepresentation: "display_name",
+      recordSearchFields: ["unsupported"],
+      query: testResourceQuery({
+        fields: {
+          display_name: field("display_name", "String", ["exact", "iContains"]),
+          unsupported: field("unsupported", "String", ["exact"]),
+        },
+      }),
+    }));
+    expect(invalidDeclaration.textSearchFields()).toEqual(["display_name"]);
+
+    const unsupportedRepresentation = ResourceQuery.from(testDataResource("iam.ServiceAccount", {
+      recordRepresentation: "display_name",
+      query: testResourceQuery({
+        fields: {
+          display_name: field("display_name", "String", ["exact"]),
+          hidden: field("hidden", "String", ["exact", "iContains"]),
+        },
+      }),
+    }));
+    expect(unsupportedRepresentation.textSearchFields()).toEqual([]);
+  });
+  test("validates explicit text-search fields for contract and local-row queries", () => {
+    const contract = testResourceQuery({
+      fields: {
+        name: testQueryField("name", {
+          filter: { field: "name", scalar: "String", values: [], operators: ["exact", "iContains"] },
+        }),
+        count: testQueryField("count", {
+          scalar: "Int",
+          filter: { field: "count", scalar: "Int", values: [], operators: ["exact"] },
+        }),
+      },
+    });
+    const authored = ResourceQuery.fromContract(contract);
+    expect(authored.textSearchFields()).toEqual([]);
+    expect(authored.textSearchFields(["count", "name", "missing"])).toEqual(["name"]);
+
+    const rows = ResourceQuery.forRows({ fields: {
+      count: { scalar: "Int" },
+      name: { scalar: "String" },
+    } });
+    expect(rows.textSearchFields()).toEqual([]);
+    expect(rows.textSearchFields(["count", "name"])).toEqual(["name"]);
   });
   test("separates identity, label, selected row paths and server bucket names", () => {
     const query = ResourceQuery.from(resource());

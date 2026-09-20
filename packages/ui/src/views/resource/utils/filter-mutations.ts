@@ -1,5 +1,4 @@
-import { ResourceQuery, type ModelMetadata } from "@angee/metadata";
-import type { ResourceToolbarCustomFilter, ResourceToolbarCustomFilterChip, ResourceToolbarFilterField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../../toolbars";
+import type { ResourceToolbarCustomFilter, ResourceToolbarCustomFilterChip, ResourceToolbarFilterField, ResourceToolbarFilterOption } from "../../../toolbars";
 import { DEFAULT_TEXT_FILTER_FIELD, Filter, isLookupOperator, type ResourceViewFilter, type ResourceViewLookup } from "../resource-view-model";
 import { fieldLabel } from "../model-metadata-defaults";
 import { customFilterChipLabel, customFilterId, isFacetFilter, isLookup, mergeById, parseCustomFilterId } from "./labels";
@@ -25,32 +24,6 @@ export function nextFacetFilter(
   if (!option) return filter;
   if (!facet) return Filter.from(filter).togglePreset(option.filter);
   return Filter.from(filter).toggleFacet(facet);
-}
-
-/** The declared text comparison field used by the search control. */
-export function resolveTextFilterField(
-  metadata: ModelMetadata | null | undefined,
-): string | null {
-  if (!metadata) return DEFAULT_TEXT_FILTER_FIELD;
-  const query = ResourceQuery.from(metadata);
-  const authored = (metadata.resource.recordSearchFields ?? []).find(
-    (name) => query.fields[name]?.filter?.operators.includes("iContains"),
-  );
-  if (authored) return authored;
-  const preferred = metadata.resource.recordRepresentation;
-  if (preferred && query.fields[preferred]?.filter?.operators.includes("iContains")) return preferred;
-  return Object.keys(query.fields).find((name) => query.fields[name]?.filter?.operators.includes("iContains")) ?? null;
-}
-
-/** Validated resource-authored fields expanded by the shared text search. */
-export function resolveTextSearchFields(
-  metadata: ModelMetadata | null | undefined,
-): readonly string[] {
-  if (!metadata) return [];
-  const query = ResourceQuery.from(metadata);
-  return (metadata.resource.recordSearchFields ?? []).filter(
-    (name) => query.fields[name]?.filter?.operators.includes("iContains"),
-  );
 }
 
 export function textFilterValue(
@@ -140,13 +113,6 @@ export function mergeFilterOptions(
   explicit: readonly ResourceToolbarFilterOption[] | undefined,
   inferred: readonly ResourceToolbarFilterOption[],
 ): readonly ResourceToolbarFilterOption[] {
-  return mergeById(explicit, inferred);
-}
-
-export function mergeGroupOptions(
-  explicit: readonly ResourceToolbarGroupOption[] | undefined,
-  inferred: readonly ResourceToolbarGroupOption[],
-): readonly ResourceToolbarGroupOption[] {
   return mergeById(explicit, inferred);
 }
 

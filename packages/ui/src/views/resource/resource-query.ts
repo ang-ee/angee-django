@@ -1,7 +1,6 @@
 import { Filter, ResourceQuery, type LocalQueryField, type ModelMetadata, type QueryFilter } from "@angee/metadata";
 import type { ColumnDescriptor } from "../page";
 import type { ResourceViewGroup } from "./resource-view-model";
-import { resolveTextFilterField, resolveTextSearchFields } from "./utils/filter-mutations";
 
 /** Resource metadata or explicit local declarations supply the same query owner. */
 export function queryForColumns<TRow extends object>(
@@ -30,27 +29,31 @@ export function filterForTextSearch(
 ): QueryFilter {
   const filter = Filter.from(value);
   const text = textSearchField ? filter.textTerm(textSearchField) : "";
-  if (!text || !textSearchField || textSearchFields.length === 0) return query.filterFrom(filter.value);
+  const activeSearchFields = query.textSearchFields(textSearchFields);
+  if (!text || !textSearchField || activeSearchFields.length === 0) return query.filterFrom(filter.value);
+  if (activeSearchFields.length === 1 && activeSearchFields[0] === textSearchField) {
+    return query.filterFrom(filter.value);
+  }
   return query.filterFrom(Filter.combine(
     filter.withTextTerm("", textSearchField),
-    { OR: textSearchFields.filter((field) => query.fields[field]?.filter?.operators.includes("iContains"))
-      .map((field) => ({ [field]: { iContains: text } })) },
+    { OR: activeSearchFields.map((field) => ({ [field]: { iContains: text } })) },
   ));
 }
 
-/** Expand a resource's semantic text term across its backend-authored search fields. */
+/** Expand a resource's semantic text term across its query-owned search fields. */
 export function filterForResourceTextSearch(
   metadata: ModelMetadata | null | undefined,
   value: unknown,
 ): QueryFilter {
   const filter = Filter.from(value);
   if (!metadata) return filter.value;
-  const textSearchFields = resolveTextSearchFields(metadata);
+  const query = ResourceQuery.from(metadata);
+  const textSearchFields = query.textSearchFields();
   if (textSearchFields.length === 0) return filter.value;
   return filterForTextSearch(
-    ResourceQuery.from(metadata),
+    query,
     filter.value,
-    resolveTextFilterField(metadata) ?? undefined,
+    textSearchFields[0],
     textSearchFields,
   );
 }

@@ -59,7 +59,10 @@ export interface LocalQueryField {
  */
 export class ResourceQuery {
   private static readonly cache = new WeakMap<DataResourceMetadata, ResourceQuery>();
-  private constructor(readonly contract: DataResourceQuery) {}
+  private constructor(
+    readonly contract: DataResourceQuery,
+    private readonly defaultTextSearchFields: readonly string[] = [],
+  ) {}
 
   /** Authored server projections declare the same language as generated resources. */
   static fromContract(contract: DataResourceQuery): ResourceQuery {
@@ -70,7 +73,18 @@ export class ResourceQuery {
     const data = "resource" in resource ? resource.resource as DataResourceMetadata : resource;
     const cached = ResourceQuery.cache.get(data);
     if (cached) return cached;
-    const query = new ResourceQuery(parse(DataResourceQuerySchema, data.query, "query"));
+    const contract = parse(DataResourceQuerySchema, data.query, "query");
+    const declaredSearchFields = data.recordSearchFields ?? [];
+    const supportedSearchFields = executableTextSearchFields(contract, declaredSearchFields);
+    const query = new ResourceQuery(
+      contract,
+      supportedSearchFields.length > 0
+        ? supportedSearchFields
+        : executableTextSearchFields(
+            contract,
+            data.recordRepresentation ? [data.recordRepresentation] : [],
+          ),
+    );
     ResourceQuery.cache.set(data, query);
     return query;
   }
@@ -107,6 +121,13 @@ export class ResourceQuery {
 
   get fields(): DataResourceQuery["fields"] { return this.contract.fields; }
   get axes(): DataResourceQuery["axes"] { return this.contract.axes; }
+
+  /** Keep declared order while admitting only executable text comparisons. */
+  textSearchFields(fields?: readonly string[]): readonly string[] {
+    return fields === undefined
+      ? this.defaultTextSearchFields
+      : executableTextSearchFields(this.contract, fields);
+  }
 
   filterFrom(value: unknown = {}): QueryFilter {
     return this.parseFilter(Filter.from(value).value, "filter");
@@ -353,6 +374,13 @@ export class ResourceQuery {
     }
     return mergeConditions(conditions);
   }
+}
+
+function executableTextSearchFields(
+  contract: DataResourceQuery,
+  fields: readonly string[],
+): readonly string[] {
+  return fields.filter((name) => contract.fields[name]?.filter?.operators.includes("iContains"));
 }
 
 /** Resolved group semantics shared by client lanes, server buckets and facets. */
