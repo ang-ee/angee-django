@@ -892,6 +892,51 @@ describe("createApp route menu refs", () => {
     ).toThrow(/Menu item "records\.open" cannot resolve its route.*missing params: id/);
   });
 
+  test("resolves a menu route with its declared params", async () => {
+    const captured = await captureChrome({
+      path: "/dashboards/addon/arp.accounting_intake.accounts_payable",
+      addons: [
+        {
+          id: "dashboard-menu",
+          routes: [
+            {
+              name: "dashboards.addon",
+              path: "/dashboards/addon/$key",
+              layout: "console",
+              component: EmptyPage,
+            },
+          ],
+          menus: [
+            {
+              id: "accounts-payable",
+              route: "dashboards.addon",
+              params: { key: "arp.accounting_intake.accounts_payable" },
+            },
+          ],
+        },
+      ],
+    });
+
+    try {
+      expect(captured.props().menus[0]?.to).toBe(
+        "/dashboards/addon/arp.accounting_intake.accounts_payable",
+      );
+    } finally {
+      captured.cleanup();
+    }
+  });
+
+  test("rejects internal literal menu targets", () => {
+    expect(() =>
+      createApp(testAppInput([
+        {
+          id: "literal-menu",
+          menus: [{ id: "literal", to: "/dashboards/addon/literal" }],
+        },
+      ])),
+    ).toThrow(/declares internal target.*use route and params/);
+  });
+
   test("rejects a route that references an unknown menu item", () => {
     expect(() =>
       createAppWithResources([

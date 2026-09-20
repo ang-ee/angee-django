@@ -1,4 +1,9 @@
 import type { ComposedMenuItem, MenuItem } from "../runtime";
+import {
+  UnknownRouteError,
+  type RouteHref,
+  type RouteHrefParams,
+} from "../runtime/route-href";
 
 import { titleCase } from "../lib/titleCase";
 import type { Tone } from "../lib/tones";
@@ -55,10 +60,70 @@ export function pathMatchesTarget(
   return pathname === target || pathname.startsWith(`${target}/`);
 }
 
+/** Resolve authored route targets once, before the chrome builds its menu tree. */
+export function resolveMenuRouteTargets(
+  items: readonly ComposedMenuItem[],
+  routeHref: RouteHref,
+): readonly ComposedMenuItem[] {
+  return items.map((item) => resolveMenuRouteTarget(item, routeHref));
+}
+
+function resolveMenuRouteTarget(
+  item: ComposedMenuItem,
+  routeHref: RouteHref,
+): ComposedMenuItem {
+  if (item.route && item.to !== undefined) {
+    throw new Error(
+      `Menu item "${item.id}" declares both route and to; use exactly one target owner.`,
+    );
+  }
+  if (!item.route && item.params !== undefined) {
+    throw new Error(
+      `Menu item "${item.id}" declares params without a route.`,
+    );
+  }
+  if (item.to !== undefined && !isExternalTarget(item.to)) {
+    throw new Error(
+      `Menu item "${item.id}" declares internal target "${item.to}" as to; use route and params.`,
+    );
+  }
+
+  let routePath: string | undefined;
+  if (item.route) {
+    try {
+      routePath = routeHref(item.route, item.params);
+    } catch (error) {
+      if (error instanceof UnknownRouteError) {
+        throw new Error(
+          `Menu item "${item.id}" references unknown route "${item.route}".`,
+        );
+      }
+      if (error instanceof Error) {
+        throw new Error(
+          `Menu item "${item.id}" cannot resolve its route: ${error.message}`,
+        );
+      }
+      throw error;
+    }
+  }
+  return {
+    ...item,
+    to: routePath ?? item.to,
+    children: item.children
+      ? resolveMenuRouteTargets(item.children, routeHref)
+      : item.children,
+  };
+}
+
+function isExternalTarget(target: string): boolean {
+  return target.startsWith("//") || /^[A-Za-z][A-Za-z\d+.-]*:/.test(target);
+}
+
 export class ChromeMenuNode implements ChromeMenuItem {
   id: string;
   label?: string;
   route?: string;
+  params?: RouteHrefParams;
   to?: string;
   icon?: string;
   children?: readonly ChromeMenuNode[];

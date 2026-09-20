@@ -55,11 +55,8 @@ import {
   AppRuntimeProvider,
   DEFAULT_LOGIN_PATH,
   HOME_PATH_PREFERENCE_KEY,
-  UnknownRouteError,
   createRouteHref,
   type AppRuntime,
-  type ComposedMenuItem,
-  type RouteHref,
   type SlotContribution,
 } from "@angee/ui/runtime";
 import { composeAddons } from "./define-addon";
@@ -74,6 +71,7 @@ import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { LoadingPanel } from "@angee/ui/fragments/index";
 import {
   MenuTree,
+  resolveMenuRouteTargets,
   type ChromeMenuItem,
 } from "@angee/ui/chrome/menu-tree";
 import { useChromeMenuTree } from "@angee/ui/chrome/refine-menu";
@@ -639,48 +637,6 @@ function Redirect({ to }: { to: string }): ReactNode {
     void navigate({ to });
   }, [to, navigate]);
   return null;
-}
-
-function resolveMenuRouteTargets(
-  items: readonly ComposedMenuItem[],
-  routeHref: RouteHref,
-): readonly ComposedMenuItem[] {
-  return items.map((item) => resolveMenuRouteTarget(item, routeHref));
-}
-
-function resolveMenuRouteTarget(
-  item: ComposedMenuItem,
-  routeHref: RouteHref,
-): ComposedMenuItem {
-  const itemId = item.id;
-  if (item.route && item.to !== undefined) {
-    throw new Error(
-      `Menu item "${itemId}" declares both route and to; use exactly one target owner.`,
-    );
-  }
-  let routePath: string | undefined;
-  if (item.route) {
-    try {
-      routePath = routeHref(item.route);
-    } catch (error) {
-      if (error instanceof UnknownRouteError) {
-        throw new Error(
-          `Menu item "${itemId}" references unknown route "${item.route}".`,
-        );
-      }
-      if (error instanceof Error) {
-        throw new Error(`Menu item "${itemId}" cannot resolve its route: ${error.message}`);
-      }
-      throw error;
-    }
-  }
-  return {
-    ...item,
-    to: routePath ?? item.to,
-    children: item.children
-      ? resolveMenuRouteTargets(item.children, routeHref)
-      : item.children,
-  };
 }
 
 function mergeI18n(base: I18nResources, over: I18nResources): I18nResources {
