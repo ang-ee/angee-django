@@ -18,16 +18,14 @@ from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import transaction
 from pydantic import BaseModel, ConfigDict, RootModel
-from rebac import SubjectRef, actor_context, system_context
+from rebac import system_context
 
+from angee.base.db import get_write_alias
 from angee.base.identity import canonical_subject_ref
 from angee.base.serialization import canonical_json_sha256
-from angee.parties.fields import normalize_country_code
 from angee.workflows.attempts import (
     DecisionGateOutput,
-    DecisionResolution,
     RecoveryCapability,
     RecoveryMode,
 )
@@ -84,11 +82,8 @@ class DedupeUnitInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    left: str
-    right: str
-    survivor: str
-    action: str
-    resolved_by: str
+    decision_id: int
+    pair_index: int
 
 
 class DedupeUnitOutput(BaseModel):
@@ -144,12 +139,16 @@ class DedupeScanStepImpl(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Emit the proposed pair rows, routing ``found`` or ``empty``."""
+        alias = get_write_alias(type(step_run), instance=step_run)
+        step_run.step = (
+            step_run._meta.get_field("step").remote_field.model._base_manager.using(alias).get(pk=step_run.step_id)
+        )
 
         del now
         limit = positive_int(step_run.step.config.get("limit", 50), "Dedupe scan limit")
         party_model = apps.get_model("parties", "Party")
         with system_context(reason="workflows_parties.dedupe_scan"):
-            candidates = party_model.objects.duplicate_candidates(limit=limit)
+            candidates = party_model.objects.db_manager(alias).duplicate_candidates(limit=limit)
             pairs = [_pair_row(candidate) for candidate in candidates]
         if not pairs:
             return StepResult.done(output={"pairs": []}, outcome="empty")
@@ -262,55 +261,37 @@ class DedupeExecuteStepImpl(DecisionApplyStep):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Prepare the confirmed verb list or apply one pair verb."""
+        alias = get_write_alias(type(step_run), instance=step_run)
+        step_run.step = (
+            step_run._meta.get_field("step").remote_field.model._base_manager.using(alias).get(pk=step_run.step_id)
+        )
 
         mode = str(step_run.step.config.get("mode") or "")
         if mode == "prepare":
             return super().run(step_run, now=now)
         return StepResult.done(
-            output=_apply_unit(step_run.input),
+            output=_apply_unit(step_run, using=alias),
             outcome="completed",
         )
 
-    def apply_resolution(
-        self,
-        step_run: Any,
-        decision: Any,
-        admitted: DecisionResolution,
-        *,
-        actor: Any,
-        record_basis: Any,
-        now: datetime,
-    ) -> StepResult:
-        """Verify the frozen pair basis and emit only approved manager verbs."""
+    def invoke_command(self, step_run: Any, *, decision_id: int, actor: Any, now: datetime) -> StepResult:
+        """Prepare plain pair values from a locked, validated workflow resolution."""
+        alias = get_write_alias(type(step_run), instance=step_run)
 
-        del step_run, actor, record_basis, now
-        approved: list[dict[str, str]] = []
-        expected_rows = _pair_rows(decision.payload, owner="payload")
-        resolved_rows = _pair_rows(decision.resolution, owner="resolution")
-        if len(expected_rows) != len(resolved_rows):
-            raise ValidationError({"input": "Dedupe resolution must preserve every proposed pair."})
-        for expected, resolved in zip(expected_rows, resolved_rows, strict=True):
-            for identity_key in _IDENTITY_KEYS:
-                if str(resolved.get(identity_key) or "") != str(expected.get(identity_key) or ""):
-                    raise ValidationError({"input": "Dedupe resolution changed a proposed pair."})
-            action = str(resolved.get("action") or "")
-            survivor = str(resolved.get("survivor") or "")
-            if action not in _ACTIONS:
-                raise ValidationError({"input": f"Dedupe resolution action must be one of {', '.join(_ACTIONS)}."})
-            if survivor not in _SURVIVORS:
-                raise ValidationError({"input": "Dedupe resolution survivor must be left or right."})
-            if action == "skip":
-                continue
-            approved.append(
-                {
-                    "left": str(expected["left"]),
-                    "right": str(expected["right"]),
-                    "survivor": survivor,
-                    "action": action,
-                    "resolved_by": admitted.resolved_by,
-                }
+        del now
+        with apps.get_model("workflows", "Decision").objects.db_manager(alias).locked_resolution(
+            decision_id,
+            actor=actor,
+            consumer_step_run_id=step_run.pk,
+        ) as decision:
+            rows = apps.get_model("parties", "Party").objects.db_manager(alias).prepare_duplicate_pairs(
+                decision.payload.get("pairs"),
+                decision.resolution.get("pairs"),
             )
-        return StepResult.done(output=approved, outcome="prepared")
+            return StepResult.done(
+                output=[{"decision_id": decision.pk, "pair_index": index} for index, _row in enumerate(rows)],
+                outcome="prepared",
+            )
 
 
 class IdentityReviewStepImpl(GateStep):
@@ -333,24 +314,19 @@ class IdentityReviewStepImpl(GateStep):
     config_model = None
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        alias = get_write_alias(type(step_run), instance=step_run)
+        step_run.step = (
+            step_run._meta.get_field("step").remote_field.model._base_manager.using(alias).get(pk=step_run.step_id)
+        )
+        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(alias).get(pk=step_run.run_id)
         del now
         proposal = _identity_input(step_run.input)
-        authority: SubjectRef | None = None
-        if proposal["selection_decision_id"]:
-            from angee.workflows import engine  # Runtime edge; safe after the operation registry imports this module.
+        from angee.workflows import engine  # Runtime edge after operation registry loading.
 
-            authority, selected = engine.target_read_authority(
-                step_run,
-                ("selection_decision_id",),
-                proposal_gate_path=("resolutions", 0, "decision_id"),
-            )
-            if str(selected.resolution.get("party_id") or "") != proposal["party_id"]:
-                raise ValidationError({"selection_decision_id": "Selection Decision chose a different Party."})
-        from angee.workflows import engine  # Runtime edge; safe after the operation registry imports this module.
-
-        party, current = _identity_snapshot(
+        actor = engine.resolve_workflow_actor(run, using=alias).subject
+        party, current = apps.get_model("parties", "Party").objects.db_manager(alias).identity_snapshot(
             proposal["party_id"],
-            actor=authority or engine.resolve_workflow_actor(step_run.run).actor,
+            actor=actor,
         )
         facts = (
             ReviewFact(
@@ -385,7 +361,7 @@ class IdentityReviewStepImpl(GateStep):
             "current": current,
             "facts_hash": canonical_json_sha256(current),
         }
-        if not _identity_differs(current, proposal["proposed"]):
+        if not party.identity_differs(current, proposal["proposed"]):
             return StepResult.done(
                 output={
                     "party_id": proposal["party_id"],
@@ -399,7 +375,9 @@ class IdentityReviewStepImpl(GateStep):
             )
         config = dict(step_run.step.config)
         assignee = str(
-            engine.resolve_workflow_actor(proposal.get("assignee") or config.get("assignee") or step_run.run).subject
+            engine.resolve_workflow_actor(
+                proposal.get("assignee") or config.get("assignee") or run, using=alias
+            ).subject
         )
         review = _identity_review_action(payload=payload, facts=facts)
         return type(self).gate_result(
@@ -416,10 +394,6 @@ class IdentityReviewStepImpl(GateStep):
                         "model": party._meta.label,
                         "id": str(party.sqid),
                         "tab": "identity",
-                        "authority_path": ["selection_decision_id"] if proposal["selection_decision_id"] else [],
-                        "authority_gate_path": ["resolutions", 0, "decision_id"]
-                        if proposal["selection_decision_id"]
-                        else [],
                     }
                 ],
                 "record_access": [{"model": party._meta.label, "id": str(party.sqid)}],
@@ -449,14 +423,16 @@ class IdentityApplyStepImpl(DecisionApplyStep):
     gate_step_class = IdentityReviewStepImpl
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        alias = get_write_alias(type(step_run), instance=step_run)
+        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(alias).get(pk=step_run.run_id)
         value = _identity_apply_input(step_run.input)
         passthrough = _unchanged_identity_input(value)
         if passthrough is not None:
             from angee.workflows import engine  # Runtime edge; safe after the operation registry imports this module.
 
-            _, current = _identity_snapshot(
+            _, current = apps.get_model("parties", "Party").objects.db_manager(alias).identity_snapshot(
                 passthrough["party_id"],
-                actor=engine.resolve_workflow_actor(step_run.run).actor,
+                actor=engine.resolve_workflow_actor(run, using=alias).subject,
             )
             if canonical_json_sha256(current) != passthrough["facts_hash"]:
                 return StepResult.done(
@@ -475,69 +451,30 @@ class IdentityApplyStepImpl(DecisionApplyStep):
             )
         return super().run(step_run, now=now)
 
-    def locked_record_basis(
-        self,
-        step_run: Any,
-        predecessor: Any,
-        *,
-        actor: Any,
-    ) -> Any:
-        """Lock the exact Party protected by the predecessor Decision."""
+    def invoke_command(self, step_run: Any, *, decision_id: int, actor: Any, now: datetime) -> StepResult:
+        """Compose workflow validation with the parties-owned identity operation."""
+        alias = get_write_alias(type(step_run), instance=step_run)
 
-        del step_run, actor
-        party_model = apps.get_model("parties", "Party")
-        with system_context(reason="workflows_parties.identity_apply.lock_basis"):
-            party = party_model.objects.lock_if_supported().from_public_id(predecessor.target_id)
-        if party is None:
-            raise ValidationError({"party_id": "The reviewed Party is unavailable."})
-        return (party,)
-
-    def apply_resolution(
-        self,
-        step_run: Any,
-        decision: Any,
-        admitted: DecisionResolution,
-        *,
-        actor: Any,
-        record_basis: Any,
-        now: datetime,
-    ) -> StepResult:
-        """Validate frozen facts and dispatch the approved identity manager verbs."""
-
-        del step_run, admitted, now
-        payload, resolution = decision.payload, decision.resolution
-        if not isinstance(payload, Mapping) or not isinstance(resolution, Mapping):
-            raise ValidationError({"input": "Identity review data is invalid."})
-        for key in (
-            "party_id",
-            "proposed",
-            "current",
-            "evidence",
-            "context",
-            "assignee",
-            "selection_decision_id",
-            "facts_hash",
-        ):
-            if key in resolution and resolution.get(key) != payload.get(key):
-                raise ValidationError({"input": "Identity resolution changed frozen review facts."})
-        approved = dict(payload)
-        for key, field in _IDENTITY_ACTIONS.items():
-            choice = str(resolution.get(key) or "")
-            if choice not in field["choices"]:
-                raise ValidationError({"input": f"Identity resolution has invalid {key}."})
-            approved[key] = choice
-        party = next(iter(record_basis))
-        party, current = _identity_snapshot(str(party.sqid), actor=actor, lock=True)
-        if canonical_json_sha256(current) != approved["facts_hash"]:
-            return StepResult.done(
-                output={"party_id": approved["party_id"], "context": approved["context"]},
-                outcome="conflict",
+        del now
+        with apps.get_model("workflows", "Decision").objects.db_manager(alias).locked_resolution(
+            decision_id,
+            actor=actor,
+            consumer_step_run_id=step_run.pk,
+        ) as decision:
+            payload = decision.payload
+            if decision.target_model.lower() != "parties.party" or decision.target_id != payload.get("party_id"):
+                raise ValidationError({"party_id": "Identity review does not target its retained Party."})
+            outcome, results = apps.get_model("parties", "Party").objects.db_manager(alias).apply_identity(
+                party_id=decision.target_id,
+                expected_facts_hash=payload["facts_hash"],
+                proposed=payload["proposed"],
+                choices={name: decision.resolution.get(name, "") for name in _IDENTITY_ACTIONS},
+                actor=actor,
             )
-        results = _apply_identity(party, current=current, approved=approved, actor=actor)
-        return StepResult.done(
-            output={"party_id": approved["party_id"], "context": approved["context"], **results},
-            outcome="applied" if any(value not in {"kept", "matched"} for value in results.values()) else "unchanged",
-        )
+            return StepResult.done(
+                output={"party_id": decision.target_id, "context": payload["context"], **results},
+                outcome=outcome,
+            )
 
 
 _ADDRESS_FIELDS = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
@@ -650,48 +587,6 @@ def _identity_input(value: Any) -> dict[str, Any]:
     }
 
 
-def _identity_snapshot(party_id: str, *, actor: Any, lock: bool = False) -> tuple[Any, dict[str, Any]]:
-    """Read the review-relevant Party facts through the actor's scoped owners."""
-
-    party_model = apps.get_model("parties", "Party")
-    address_model = apps.get_model("parties", "Address")
-    link_model = apps.get_model("parties", "PartyHandle")
-    with actor_context(actor):
-        parties = party_model.objects.lock_if_supported() if lock else party_model.objects.all()
-        party = parties.from_public_id(party_id)
-        if party is None or not party.has_access("read"):
-            raise ValidationError({"party_id": "Party was not found."})
-        addresses = address_model.objects.filter(party=party)
-        links = link_model.objects.filter(party=party)
-        if lock:
-            addresses = addresses.lock_if_supported()
-            links = links.lock_if_supported()
-        addresses = list(addresses.order_by("is_primary", "sqid"))
-        links = list(links.select_related("handle").order_by("sqid"))
-    return party, _snapshot_values(party, addresses, links)
-
-
-def _address_identity_key(address: Mapping[str, Any]) -> tuple[str, ...]:
-    country = str(address["country"])
-    try:
-        country = normalize_country_code(country)
-    except ValidationError:
-        pass
-    return tuple((country if field == "country" else str(address[field])).casefold() for field in _ADDRESS_FIELDS)
-
-
-def _identity_differs(current: Mapping[str, Any], proposed: Mapping[str, Any]) -> bool:
-    if proposed["name"] and proposed["name"] != current["name"]:
-        return True
-    address = proposed["address"]
-    if any(address[field] for field in _ADDRESS_FIELDS):
-        proposed_key = _address_identity_key(address)
-        if all(_address_identity_key(row) != proposed_key for row in current["addresses"]):
-            return True
-    link_id = proposed["handle"]["party_handle_id"]
-    return bool(link_id and any(row["id"] == link_id and not row["is_confirmed"] for row in current["handles"]))
-
-
 def _identity_review_action(*, payload: Mapping[str, Any], facts: Any) -> Any:
     """Build the tagged identity actions and typed frozen fact context."""
 
@@ -737,105 +632,6 @@ def _identity_review_action(*, payload: Mapping[str, Any], facts: Any) -> Any:
         payload=payload,
         facts=facts,
     )
-
-
-def _apply_identity(
-    party: Any,
-    *,
-    current: Mapping[str, Any],
-    approved: Mapping[str, Any],
-    actor: Any,
-) -> dict[str, str]:
-    """Apply approved verbs atomically, delegating each fact to its model owner."""
-
-    address_model = apps.get_model("parties", "Address")
-    link_model = apps.get_model("parties", "PartyHandle")
-    proposed = approved["proposed"]
-    results = {"name_result": "kept", "address_result": "kept", "handle_result": "kept"}
-    with transaction.atomic(), actor_context(actor):
-        locked = party.__class__._base_manager.select_for_update().get(pk=party.pk)
-        if not locked.has_access("write"):
-            raise ValidationError({"party_id": "Write access to Party is required."})
-        locked_addresses = list(
-            address_model._base_manager.select_for_update()
-            .filter(
-                party=locked,
-            )
-            .order_by("is_primary", "sqid")
-        )
-        locked_links = list(
-            link_model._base_manager.select_for_update()
-            .filter(
-                party=locked,
-            )
-            .select_related("handle")
-            .order_by("sqid")
-        )
-        locked_current = _snapshot_values(locked, locked_addresses, locked_links)
-        if canonical_json_sha256(locked_current) != approved["facts_hash"]:
-            raise ValidationError({"input": "Party identity facts changed during review."})
-        if approved["name_action"] == "replace":
-            results["name_result"] = party.__class__.objects.replace_name_exact(
-                party=locked,
-                expected=current["name"],
-                proposed=proposed["name"],
-                actor=actor,
-            )
-        address_action = approved["address_action"]
-        if address_action == "add":
-            status, _ = address_model.objects.attach_exact(
-                party=locked,
-                values=proposed["address"],
-                actor=actor,
-                label=proposed["address"]["label"],
-                conflict="append",
-            )
-            results["address_result"] = status
-        elif address_action == "replace":
-            primary = next((row for row in current["addresses"] if row["is_primary"]), None)
-            status, _ = address_model.objects.replace_primary_exact(
-                party=locked,
-                values=proposed["address"],
-                actor=actor,
-                expected_id=(address_model.objects.from_public_id(primary["id"]).pk if primary else None),
-                label=proposed["address"]["label"],
-            )
-            results["address_result"] = status
-        handle_action = approved["handle_action"]
-        if handle_action != "keep":
-            link = link_model.objects.select_for_update().from_public_id(proposed["handle"]["party_handle_id"])
-            if link is None or link.party_id != locked.pk:
-                raise ValidationError({"handle_action": "The proposed PartyHandle changed during review."})
-            getattr(link, handle_action)()
-            results["handle_result"] = f"{handle_action}ed"
-    return results
-
-
-def _snapshot_values(party: Any, addresses: list[Any], links: list[Any]) -> dict[str, Any]:
-    return {
-        "name": party.display_name,
-        "addresses": [
-            {
-                "id": str(row.sqid),
-                "label": row.label,
-                "is_primary": row.is_primary,
-                **{field: getattr(row, field) for field in _ADDRESS_FIELDS},
-            }
-            for row in addresses
-        ],
-        "handles": [
-            {
-                "id": str(link.sqid),
-                "handle_id": str(link.handle.sqid),
-                "platform": str(link.handle.platform),
-                "value": link.handle.value,
-                "confidence": link.confidence,
-                "is_confirmed": link.is_confirmed,
-                "is_dismissed": link.is_dismissed,
-            }
-            for link in links
-        ],
-    }
 
 
 def _pair_row(candidate: Any) -> dict[str, str]:
@@ -894,47 +690,25 @@ def _input_pairs(value: Any) -> list[dict[str, str]]:
     return [dict(row) for row in pairs]
 
 
-def _pair_rows(value: Any, *, owner: str) -> list[Mapping[str, Any]]:
-    """Return the ``pairs`` rows carried by a decision payload or resolution."""
+def _apply_unit(step_run: Any, *, using: str) -> dict[str, str]:
+    """Revalidate the retained pair resolution before calling the domain command."""
 
-    if not isinstance(value, Mapping) or not isinstance(value.get("pairs"), list):
-        raise ValidationError({"input": f"Dedupe decision {owner} must contain pair rows."})
-    rows = [row for row in value["pairs"] if isinstance(row, Mapping)]
-    if len(rows) != len(value["pairs"]):
-        raise ValidationError({"input": f"Dedupe decision {owner} rows must be mappings."})
-    return rows
-
-
-def _apply_unit(value: Any) -> dict[str, str]:
-    """Apply one approved pair verb idempotently and report the outcome.
-
-    Verbs act as the retained human Decision resolver, so durable facts (the
-    MergeVeto and merge audit trail) carry the accountable actor.
-    """
-
-    if not isinstance(value, Mapping):
-        raise ValidationError({"input": "Dedupe unit input must be one approved pair."})
-    action = str(value.get("action") or "")
-    survivor_side = str(value.get("survivor") or "")
-    if action not in _ACTIONS or action == "skip" or survivor_side not in _SURVIVORS:
-        raise ValidationError({"input": "Dedupe unit input carries an unsupported verb."})
-
-    party_model = apps.get_model("parties", "Party")
-    from angee.workflows import engine  # Runtime edge; safe after the operation registry imports this module.
-
-    with actor_context(engine.resolve_workflow_actor(str(value.get("resolved_by") or ""), require_person=True).actor):
-        left = party_model.objects.all().from_public_id(str(value.get("left") or ""))
-        right = party_model.objects.all().from_public_id(str(value.get("right") or ""))
-        if left is None or right is None:
-            raise ValidationError({"input": "Dedupe unit pair references a missing party."})
-
-        if action == "keep_separate":
-            apps.get_model("parties", "MergeVeto").objects.veto(left, right)
-            return {"action": action, "result": "vetoed"}
-
-        into, source = (left, right) if survivor_side == "left" else (right, left)
-        if source.canonical().pk == into.canonical().pk:
-            # Domain identity also handles a fresh recovery after another merge.
-            return {"action": action, "result": "already_merged"}
-        party_model.objects.merge(into=into, source=source)
-        return {"action": action, "result": "merged"}
+    unit = DedupeUnitInput.model_validate(step_run.input)
+    decisions = apps.get_model("workflows", "Decision").objects.db_manager(using)
+    with system_context(reason="workflows_parties.dedupe_resolver"):
+        decision = decisions.get(pk=unit.decision_id)
+    actor = decision.resolution_actor_subject()
+    with decisions.locked_resolution(unit.decision_id, actor=actor, consumer_step_run_id=step_run.pk) as decision:
+        parties = apps.get_model("parties", "Party").objects.db_manager(using)
+        pairs = parties.prepare_duplicate_pairs(decision.payload.get("pairs"), decision.resolution.get("pairs"))
+        if unit.pair_index < 0 or unit.pair_index >= len(pairs):
+            raise ValidationError({"pair_index": "The reviewed pair is unavailable."})
+        pair = pairs[unit.pair_index]
+        result = parties.apply_duplicate_pair(
+            left_id=pair["left"],
+            right_id=pair["right"],
+            survivor=pair["survivor"],
+            action=pair["action"],
+            actor=actor,
+        )
+        return {"action": pair["action"], "result": result}

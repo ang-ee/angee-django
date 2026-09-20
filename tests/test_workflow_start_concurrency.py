@@ -14,7 +14,16 @@ from rebac import system_context
 
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
-from tests.workflows import Step, StepRun, Trigger, Workflow, WorkflowRun, start_run
+from tests.workflows import (
+    Step,
+    StepRun,
+    Trigger,
+    Workflow,
+    WorkflowRun,
+    admit_workflow_actor,
+    start_run,
+    workflow_actor,
+)
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -87,7 +96,9 @@ def test_failure_path_and_direct_start_share_parent_first_lock_order(
             is_entry=True,
         )
         error_workflow.publish()
-        parent_workflow = Workflow.objects.create(name="Parent", error_workflow=error_workflow)
+        parent_workflow = Workflow.objects.create(
+            created_by=workflow_actor(), name="Parent", error_workflow=error_workflow
+        )
         Step.objects.create(
             workflow=parent_workflow,
             key="start",
@@ -109,7 +120,7 @@ def test_failure_path_and_direct_start_share_parent_first_lock_order(
             locked_step = StepRun.objects.lock_if_supported().get(pk=parent_step.pk)
             parent_locked.set()
             assert direct_waiting_for_parent.wait(timeout=5)
-            engine._start_error_workflow(locked_run, failed_step_run=locked_step)
+            engine._start_error_workflow(locked_run, failed_step_run=locked_step, alias="default")
 
     def direct_start() -> int:
         assert parent_locked.wait(timeout=5)
@@ -123,7 +134,7 @@ def test_failure_path_and_direct_start_share_parent_first_lock_order(
             return engine.start(
                 error_workflow,
                 subject=parent_run,
-                actor=None,
+                actor=admit_workflow_actor(error_workflow),
                 parent_step_run=parent_step,
                 parent_relation="continuation",
                 origin=workflow_models.RunOrigin.ERROR_WORKFLOW,

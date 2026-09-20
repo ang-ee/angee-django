@@ -27,6 +27,7 @@ from django.db import models
 from rebac import ObjectRef, to_object_ref
 from rebac.resources import model_resource_type
 
+from angee.base.db import get_write_alias
 from angee.base.identity import public_id_for
 
 
@@ -54,7 +55,7 @@ class CanonicalRecordTarget(NamedTuple):
     object_id: Any
 
 
-def canonical_record_target(obj: models.Model) -> CanonicalRecordTarget:
+def canonical_record_target(obj: models.Model, *, using: str | None = None) -> CanonicalRecordTarget:
     """Return the content type and id a polymorphic edge must store for ``obj``.
 
     The **write rule** for a generic foreign key across multi-table inheritance:
@@ -73,7 +74,9 @@ def canonical_record_target(obj: models.Model) -> CanonicalRecordTarget:
     """
 
     model = canonical_record_model(type(obj))
-    return CanonicalRecordTarget(ContentType.objects.get_for_model(model), obj.pk)
+    alias = get_write_alias(type(obj), using=using, instance=obj)
+    manager = ContentType.objects.db_manager(alias)
+    return CanonicalRecordTarget(manager.get_for_model(model), obj.pk)
 
 
 def ancestor_object_refs(obj: models.Model) -> tuple[ObjectRef, ...]:
@@ -153,7 +156,7 @@ class RecordRefMixin(models.Model):
         object_id = getattr(self, self._record_ref_object_id_field_name(), None)
         if content_type_id in (None, "") or object_id in (None, ""):
             return _empty_record_ref(object_id)
-        model = ContentType.objects.get_for_id(content_type_id).model_class()
+        model = ContentType.objects.db_manager(self._state.db).get_for_id(content_type_id).model_class()
         if model is None:
             return _empty_record_ref(object_id)
         return _record_ref_from_model(model, object_id)

@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
 from django.utils import timezone
 from rebac import system_context, to_subject_ref
@@ -332,18 +333,37 @@ def test_committed_success_replay_does_not_repeat_domain_command(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("parent_relation", ("", "owned_call", "continuation"))
 def test_run_cancel_waits_for_committed_cancellation_before_continuing(
     workflow_engine_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
+    parent_relation: str,
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     actor = User.objects.create_user(username="run-cancel-owner")
     with system_context(reason="run cancellation target setup"):
         target_workflow = Workflow.objects.create(name="Retired target")
+        parent_step_run = None
+        if parent_relation:
+            parent = WorkflowRun.objects.create(
+                workflow=target_workflow,
+                status=RunStatus.RUNNING,
+                created_by=actor,
+            )
+            parent_step = Step.objects.create(
+                workflow=target_workflow,
+                key=f"parent-{parent_relation}",
+                name="Parent",
+                step_class="fixture",
+            )
+            parent_step_run = StepRun.objects.create(run=parent, step=parent_step)
         target = WorkflowRun.objects.create(
             workflow=target_workflow,
             status=RunStatus.RUNNING,
+            created_by=actor,
+            parent_step_run=parent_step_run,
+            parent_relation=parent_relation,
         )
     step_run, attempt, execute = _scheduled_run_cancel_command(
         monkeypatch,
@@ -352,11 +372,12 @@ def test_run_cancel_waits_for_committed_cancellation_before_continuing(
         suffix="ordered",
     )
 
-    with pytest.raises(RuntimeError, match="active attempt write session"):
+    with pytest.raises(ValidationError, match="current invocation lease"):
         WorkflowDispatch.objects.schedule_run_cancel(
             step_run.pk,
             target,
             actor=actor,
+            lease_token=attempt.lease_token,
         )
 
     assert engine.execute_dispatch(
@@ -429,6 +450,7 @@ def test_concurrent_database_commands_share_one_run_cancel_intent(
         target = WorkflowRun.objects.create(
             workflow=target_workflow,
             status=RunStatus.RUNNING,
+            created_by=actor,
         )
     first = _scheduled_run_cancel_command(
         monkeypatch,

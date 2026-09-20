@@ -158,7 +158,7 @@ def test_advance_wake_is_durable_before_transport_publication(
         workflow = Workflow.objects.create(name="Durable wake")
         run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
     monkeypatch.setattr(engine.timezone, "now", lambda: now)
-    monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda: published.append(run.pk))
+    monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda **kwargs: published.append(run.pk))
 
     with transaction.atomic():
         if delay:

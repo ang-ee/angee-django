@@ -9,6 +9,7 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
+from angee.base.db import get_write_alias
 from angee.graphql.actions import authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -91,10 +92,10 @@ class SpacesMembershipMutation:
         party = require_instance_for_id(
             Party,
             party_id,
-            queryset=Party.objects.all().scoped(),
+            queryset=Party.objects.using(group._state.db).scoped(),
             not_found="party not found",
         )
-        membership = Membership.objects.add_confirmed(
+        membership = Membership.objects.db_manager(group._state.db).add_confirmed(
             group=group,
             party=party,
             role=role,
@@ -113,7 +114,7 @@ class SpacesMembershipMutation:
         membership = require_instance_for_id(
             Membership,
             id,
-            queryset=Membership.objects.all(),
+            queryset=Membership.objects.using(get_write_alias(Membership)),
             not_found="membership not found",
         )
         membership.confirm()
@@ -131,7 +132,7 @@ class SpacesMembershipMutation:
         membership = require_instance_for_id(
             Membership,
             id,
-            queryset=Membership.objects.all(),
+            queryset=Membership.objects.using(get_write_alias(Membership)),
             not_found="membership not found",
         )
         membership.dismiss()

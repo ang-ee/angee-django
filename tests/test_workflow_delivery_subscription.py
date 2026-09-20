@@ -61,8 +61,11 @@ def test_continuation_join_uses_exponential_bounded_reconciliation(
         result_rules=[{"outcome": "completed"}],
     )
     child = SimpleNamespace(workflow=publication)
-    monkeypatch.setattr(engine, "join_continuation", lambda *args, **kwargs: (child, None))
+    monkeypatch.setattr(type(StepAttempt.objects), "join_continuation", lambda *args, **kwargs: (child, None))
     step_run = SimpleNamespace(
+        pk=1,
+        current_attempt=SimpleNamespace(lease_token="join-lease"),
+        input={"continuation_id": "child"},
         run=SimpleNamespace(execution_admission_actor=lambda: object()),
         resume_state={},
         step=SimpleNamespace(
@@ -94,8 +97,11 @@ def test_terminal_failed_continuation_routes_child_failed(monkeypatch: pytest.Mo
     )
     child = SimpleNamespace(workflow=publication)
     completion = SimpleNamespace(status=RunStatus.FAILED, result={"status": "failed"})
-    monkeypatch.setattr(engine, "join_continuation", lambda *args, **kwargs: (child, completion))
+    monkeypatch.setattr(type(StepAttempt.objects), "join_continuation", lambda *args, **kwargs: (child, completion))
     step_run = SimpleNamespace(
+        pk=1,
+        current_attempt=SimpleNamespace(lease_token="join-lease"),
+        input={"continuation_id": "child"},
         run=SimpleNamespace(execution_admission_actor=lambda: object()),
         step=SimpleNamespace(
             config={
@@ -219,7 +225,7 @@ def test_continuation_delivery_between_completion_read_and_wait_commit_is_retain
 
     completion_read, release = Event(), Event()
     manager_class = type(StepAttempt.objects)
-    original_completion = manager_class.admitted_continuation_completion
+    original_completion = manager_class.join_continuation
 
     def completion_barrier(manager: Any, *args: Any, **kwargs: Any) -> tuple[Any, Any | None]:
         result = original_completion(manager, *args, **kwargs)
@@ -228,7 +234,7 @@ def test_continuation_delivery_between_completion_read_and_wait_commit_is_retain
             raise RuntimeError("Continuation completion barrier timed out.")
         return result
 
-    monkeypatch.setattr(manager_class, "admitted_continuation_completion", completion_barrier)
+    monkeypatch.setattr(manager_class, "join_continuation", completion_barrier)
 
     def invoke_join() -> dict[str, int]:
         close_old_connections()
@@ -261,6 +267,9 @@ def test_continuation_delivery_between_completion_read_and_wait_commit_is_retain
             join_row.refresh_from_db()
             join_attempt.refresh_from_db()
             subscription = StepExternalSubscription.objects.get(attempt=join_attempt)
+            queryset = StepExternalSubscription.objects.filter(pk=subscription.pk)
+            with pytest.raises(TypeError, match="retained for their attempt lifecycle"):
+                queryset._raw_delete(using=queryset.db)
         assert join_row.status == StepRunStatus.WAITING
         assert join_row.wait_until is not None and join_row.wait_until <= join_attempt.result_recorded_at
         assert subscription.target == child

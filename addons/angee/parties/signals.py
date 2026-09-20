@@ -14,15 +14,18 @@ bookkeeping that must land even when the triggering write ran under a bare actor
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from django.apps import apps
+from django.db import transaction
 from django.db.models.signals import class_prepared, post_delete
 from rebac import system_context
 
 from angee.parties.models import Handle, PartyHandle
 
 _DISPATCH_PREFIX = "parties.counters"
+logger = logging.getLogger(__name__)
 
 
 def connect() -> None:
@@ -54,21 +57,27 @@ def _bind(model: Any) -> None:
         post_delete.connect(_recount_handle_party, sender=model, dispatch_uid=f"{_DISPATCH_PREFIX}.hdel.{label}")
 
 
-def _resolve_from_link(sender: Any, instance: Any, **kwargs: Any) -> None:
+def _resolve_from_link(sender: Any, instance: Any, *, using: str, **kwargs: Any) -> None:
     """Re-resolve a handle's owner after one of its links was saved or deleted."""
 
     del kwargs
-    handle_model = apps.get_model("parties", "Handle")
-    with system_context(reason="parties.counters.resolve"):
-        # Cascades emit child post_delete signals while their parent may also be
-        # disappearing; re-fetch the parent before any derived save.
-        handle = handle_model._base_manager.filter(pk=instance.handle_id).first()
-        if handle is None:
-            return  # the handle itself was deleted; its own receiver recounts the party
-        sender.objects.resolve(handle)
+    handle_model = sender._meta.get_field("handle").remote_field.model
+    handle_id = instance.handle_id
+
+    def repair() -> None:
+        try:
+            with system_context(reason="parties.counters.resolve"):
+                handle = handle_model._base_manager.using(using).filter(pk=handle_id).first()
+                if handle is None:
+                    return
+                sender.objects.db_manager(using).resolve(handle)
+        except Exception:
+            logger.exception("Failed to repair PartyHandle resolution after delete", extra={"handle_id": handle_id})
+
+    transaction.on_commit(repair, using=using)
 
 
-def _recount_handle_party(sender: Any, instance: Any, **kwargs: Any) -> None:
+def _recount_handle_party(sender: Any, instance: Any, *, using: str, **kwargs: Any) -> None:
     """Recount the party a deleted handle was resolved onto, so its count never sticks."""
 
     del sender, kwargs
@@ -76,10 +85,16 @@ def _recount_handle_party(sender: Any, instance: Any, **kwargs: Any) -> None:
         return
     party_handle_model = apps.get_model("parties", "PartyHandle")
     party_model = apps.get_model("parties", "Party")
-    # A Party cascade can delete a resolved Handle while the party itself is
-    # already gone; never save the in-memory doomed parent from signal state.
-    party = party_model._base_manager.filter(pk=instance.party_id).first()
-    if party is None:
-        return
-    with system_context(reason="parties.counters.recount"):
-        party_handle_model.objects.recount(party)
+    party_id = instance.party_id
+
+    def repair() -> None:
+        try:
+            with system_context(reason="parties.counters.recount"):
+                party = party_model._base_manager.using(using).filter(pk=party_id).first()
+                if party is None:
+                    return
+                party_handle_model.objects.db_manager(using).recount(party)
+        except Exception:
+            logger.exception("Failed to recount Party after Handle delete", extra={"party_id": party_id})
+
+    transaction.on_commit(repair, using=using)

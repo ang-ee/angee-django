@@ -11,8 +11,9 @@ enum instead of a per-model copy, so the GraphQL enum name no longer collides.
 from __future__ import annotations
 
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models, router, transaction
+from django.db import models, transaction
 
+from angee.base.db import get_write_alias
 from angee.base.fields import StateField
 
 
@@ -67,14 +68,14 @@ class ScoredLinkMixin(models.Model):
 
         abstract = True
 
-    def confirm(self) -> None:
+    def confirm(self, *, using: str | None = None) -> None:
         """Accept this link at full confidence, then re-resolve any derived owner.
 
         Confirmation is the strongest signal, so the link also takes full confidence
         and the ``manual`` source — a later sync must not out-score a human decision.
         """
 
-        alias = self._state.db or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=using, instance=self)
         with transaction.atomic(using=alias):
             self.confidence = 1.0
             self.source = LinkSource.MANUAL  # type: ignore[assignment]  # TextChoices member unmodeled without django-stubs
@@ -84,23 +85,23 @@ class ScoredLinkMixin(models.Model):
                 using=alias,
                 update_fields=["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"],
             )
-            self._resolve_link()
+            self._resolve_link(using=alias)
 
-    def dismiss(self) -> None:
+    def dismiss(self, *, using: str | None = None) -> None:
         """Reject this link — the durable anti-link — then re-resolve any derived owner.
 
         A dismissed link survives as a row so the same match is never re-proposed
         (suggesters key on the pair and skip an existing link); resolution ignores it.
         """
 
-        alias = self._state.db or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=using, instance=self)
         with transaction.atomic(using=alias):
             self.is_dismissed = True
             self.is_confirmed = False
             self.save(using=alias, update_fields=["is_dismissed", "is_confirmed", "updated_at"])
-            self._resolve_link()
+            self._resolve_link(using=alias)
 
-    def _resolve_link(self) -> None:
+    def _resolve_link(self, *, using: str) -> None:
         """Re-derive any owner pointer this link feeds, after a review decision.
 
         The default is a no-op — a link whose confirm/dismiss materialises a derived

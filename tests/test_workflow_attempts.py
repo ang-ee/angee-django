@@ -5,13 +5,14 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
-from django.db import models
-from django.db.models.signals import post_save
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import IntegrityError, connection, models, transaction
+from django.db.models.signals import post_save, pre_save
 from django.utils import timezone
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
@@ -35,7 +36,15 @@ from angee.workflows.attempts import (
 )
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import GateStep, StepImpl, StepResult
-from tests.workflows import Decision, StepArtifact, StepAttempt, StepRun, WorkflowRun, workflow_with_steps
+from tests.workflows import (
+    Decision,
+    StepArtifact,
+    StepAttempt,
+    StepRun,
+    WorkflowDispatch,
+    WorkflowRun,
+    workflow_with_steps,
+)
 
 User = get_user_model()
 
@@ -206,9 +215,7 @@ def test_artifact_batch_is_retained_once_and_part_of_duplicate_result_identity(
     scheduled_step_run: StepRun,
 ) -> None:
     attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
-    StepAttempt.objects.admit_invocation(
-        attempt.pk, lease_token=attempt.lease_token, at=timezone.now()
-    )
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
     result = AttemptResult(
         AttemptResultKind.DONE,
         artifacts_present=True,
@@ -224,6 +231,9 @@ def test_artifact_batch_is_retained_once_and_part_of_duplicate_result_identity(
     assert first.recorded and not duplicate.recorded
     with system_context(reason="inspect retained artifact"):
         artifact = StepArtifact.objects.get(attempt=attempt)
+        queryset = StepArtifact.objects.filter(pk=artifact.pk)
+        with pytest.raises(TypeError, match="immutable retained result evidence"):
+            queryset._raw_delete(using=queryset.db)
     assert artifact.declaration_index == 0
     assert artifact.label == "Workflow result"
     with pytest.raises(ValidationError, match="different result"):
@@ -280,27 +290,25 @@ def test_artifact_history_groups_before_bound_without_widening_scope(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_artifact_batch_authority_is_spent_before_save_signals(
+def test_artifact_unique_index_rejects_reentrant_batch_insertion(
     scheduled_step_run: StepRun,
 ) -> None:
     attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
-    StepAttempt.objects.admit_invocation(
-        attempt.pk, lease_token=attempt.lease_token, at=timezone.now()
-    )
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
     target = scheduled_step_run.run.workflow
     content_type = ContentType.objects.get_for_model(target, for_concrete_model=False)
 
-    def reenter(sender: object, instance: object, **kwargs: object) -> None:
-        del sender, instance, kwargs
-        StepArtifact.objects._record_for_attempt(
-            attempt,
+    def reenter(sender: object, instance: StepArtifact, **kwargs: object) -> None:
+        del sender, kwargs
+        StepArtifact.objects.retain_artifacts(
+            instance.attempt,
             ((content_type.pk, target.pk, "Forged artifact"),),
             using="default",
         )
 
     post_save.connect(reenter, sender=StepArtifact, weak=False)
     try:
-        with pytest.raises(RuntimeError, match="exact attempt finalization"):
+        with pytest.raises(IntegrityError):
             StepAttempt.objects.finalize(
                 attempt.pk,
                 lease_token=attempt.lease_token,
@@ -412,10 +420,9 @@ def test_claim_initializes_stable_effect_identity_and_preserves_presence(schedul
 
 
 @pytest.mark.django_db(transaction=True)
-def test_database_command_input_requires_the_exact_active_attempt_session(
+def test_database_command_receives_its_locked_attempt_input(
     scheduled_step_run: StepRun,
 ) -> None:
-    actor = scheduled_step_run.run.admission_actor()
     admitted = AttemptInput(
         present=True,
         value={"document_id": "document-1"},
@@ -432,19 +439,11 @@ def test_database_command_input_requires_the_exact_active_attempt_session(
         at=timezone.now(),
     )
 
-    with pytest.raises(RuntimeError, match="active attempt write session"):
-        StepAttempt.objects.active_database_command_input(
-            scheduled_step_run.pk,
-            actor=actor,
-        )
-
     def command(owned_step_run: StepRun, _owned_attempt: StepAttempt) -> AttemptResult:
-        locked, invocation_input = StepAttempt.objects.active_database_command_input(
-            owned_step_run.pk,
-            actor=actor,
-        )
-        assert locked.pk == scheduled_step_run.pk
-        assert invocation_input == admitted
+        assert owned_step_run.pk == scheduled_step_run.pk
+        assert _owned_attempt.input_present == admitted.present
+        assert _owned_attempt.input == admitted.value
+        assert _owned_attempt.input_provenance == admitted.provenance
         return AttemptResult(
             AttemptResultKind.DONE,
             output_present=True,
@@ -458,12 +457,6 @@ def test_database_command_input_requires_the_exact_active_attempt_session(
         recorded_at=timezone.now(),
     )
     assert finalized is not None and finalized.recorded and finalized.applied
-
-    with pytest.raises(RuntimeError, match="active attempt write session"):
-        StepAttempt.objects.active_database_command_input(
-            scheduled_step_run.pk,
-            actor=actor,
-        )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1025,7 +1018,7 @@ def test_cancel_expires_applied_suspension_without_revoking_completed_attempt(
 
     from angee.workflows import engine
 
-    engine.cancel(scheduled_step_run.run)
+    engine.cancel(scheduled_step_run.run, actor=scheduled_step_run.run.admission_actor())
 
     with system_context(reason="verify canceled retained suspension"):
         scheduled_step_run.refresh_from_db()
@@ -1117,13 +1110,13 @@ def test_invalid_later_declaration_is_rejected_before_any_suspension_write(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_retained_decision_owner_rejects_direct_and_bulk_provenance_bypasses(
+def test_retained_decision_creation_requires_current_suspension_and_rejects_bulk_bypasses(
     scheduled_step_run: StepRun,
 ) -> None:
     attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
     declaration = DecisionSpec(assignees=("auth/user:reviewer",), action="approve")
 
-    with pytest.raises(RuntimeError, match="active StepAttemptManager transaction"):
+    with pytest.raises(ValidationError, match="current applicable suspension"):
         Decision.objects.create_for_suspension(
             step_run=scheduled_step_run,
             attempt=attempt,
@@ -1158,7 +1151,7 @@ def test_retained_decision_owner_rejects_direct_and_bulk_provenance_bypasses(
 
 @pytest.mark.parametrize("bypass", ("save", "update", "bulk_create"))
 @pytest.mark.django_db(transaction=True)
-def test_decision_create_capability_cannot_mutate_unrelated_provenance_from_signal(
+def test_decision_generic_save_stays_closed_during_creation_signals(
     scheduled_step_run: StepRun,
     bypass: str,
 ) -> None:
@@ -1462,7 +1455,7 @@ def test_unexpected_retry_allocation_failure_rolls_back_physical_result(
 
 @pytest.mark.parametrize("bypass", ("earlier_save", "unrelated_save", "collection_update"))
 @pytest.mark.django_db(transaction=True)
-def test_attempt_save_capability_cannot_mutate_other_evidence_from_signal(
+def test_attempt_generic_save_stays_closed_during_result_signals(
     scheduled_step_run: StepRun,
     bypass: str,
 ) -> None:
@@ -1558,13 +1551,11 @@ def test_retained_step_run_projection_and_ancestry_reject_public_writes(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_step_run_projection_capability_is_spent_before_save_signals(
+def test_step_run_generic_save_stays_closed_during_projection_signals(
     scheduled_step_run: StepRun,
 ) -> None:
     attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
-    StepAttempt.objects.admit_invocation(
-        attempt.pk, lease_token=attempt.lease_token, at=timezone.now()
-    )
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
 
     def rewrite_projection(sender: object, instance: StepRun, **kwargs: object) -> None:
         del sender, kwargs
@@ -1681,3 +1672,212 @@ def test_terminal_run_retains_transient_result_without_successor(scheduled_step_
     assert finalized.recorded and not finalized.applied and finalized.retry_intent is None
     with system_context(reason="verify no terminal transient successor"):
         assert StepAttempt.objects.filter(retry_of=attempt).count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_invocation_admission_is_a_write_once_conditional_update(scheduled_step_run: StepRun) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    at = timezone.now()
+    with system_context(reason="verify conditional invocation admission"):
+        assert not attempt.admit_invocation(lease_token=uuid.uuid4(), at=at, using="default")
+        assert attempt.admit_invocation(lease_token=attempt.lease_token, at=at, using="default")
+        assert not attempt.admit_invocation(
+            lease_token=attempt.lease_token, at=at + timedelta(seconds=1), using="default"
+        )
+        attempt.refresh_from_db()
+    assert attempt.started_at == at
+    assert attempt.heartbeat_at == at
+
+
+@pytest.mark.django_db(transaction=True)
+def test_settlement_conditional_update_rejects_duplicate_and_non_suspension(scheduled_step_run: StepRun) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    attempt.decision_settlement = {"decision_ids": [1], "outcome": "approved"}
+    with system_context(reason="verify non-suspension cannot settle"):
+        with pytest.raises(ValidationError, match="not available for settlement"):
+            attempt.settle_decisions(using="default")
+    StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.SUSPEND, checkpoint_present=True, checkpoint={}),
+        recorded_at=timezone.now(),
+    )
+    with system_context(reason="verify conditional suspension settlement"):
+        attempt.refresh_from_db()
+        attempt.decision_settlement = {"decision_ids": [1], "outcome": "approved"}
+        attempt.settle_decisions(using="default")
+        with pytest.raises(ValidationError, match="not available for settlement"):
+            attempt.settle_decisions(using="default")
+        attempt.refresh_from_db()
+    assert attempt.decision_settlement == {"decision_ids": [1], "outcome": "approved"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_pre_save_cannot_reenter_finalization_before_result_is_visible(scheduled_step_run: StepRun) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    result = AttemptResult(AttemptResultKind.DONE, output_present=True, output={"ok": True})
+    reentries = []
+
+    def reenter(sender: object, instance: StepAttempt, **kwargs: object) -> None:
+        del sender, kwargs
+        if instance.pk == attempt.pk:
+            reentries.append(
+                StepAttempt.objects.finalize(
+                    attempt.pk, lease_token=attempt.lease_token, result=result, recorded_at=timezone.now()
+                )
+            )
+
+    pre_save.connect(reenter, sender=StepAttempt, weak=False)
+    try:
+        finalization = StepAttempt.objects.finalize(
+            attempt.pk, lease_token=attempt.lease_token, result=result, recorded_at=timezone.now()
+        )
+    finally:
+        pre_save.disconnect(reenter, sender=StepAttempt)
+    assert finalization.recorded and finalization.applied
+    assert len(reentries) == 1 and not reentries[0].recorded
+
+
+@pytest.mark.django_db(transaction=True)
+def test_start_checks_the_pinned_actor_inside_system_context(scheduled_step_run: StepRun) -> None:
+    stranger = User.objects.create_user(username="workflow-start-denied")
+    with system_context(reason="verify start cannot inherit ambient system permission"):
+        before = WorkflowRun.objects.count()
+        with pytest.raises(PermissionDenied, match="cannot start"):
+            WorkflowRun.objects.start(scheduled_step_run.run.workflow, None, stranger)
+        with pytest.raises(PermissionDenied, match="explicit actor"):
+            WorkflowRun.objects.start(scheduled_step_run.run.workflow, None, None)
+        assert WorkflowRun.objects.count() == before
+
+
+@pytest.mark.parametrize("operation", ("heartbeat", "revoke"))
+@pytest.mark.django_db(transaction=True)
+def test_lease_operations_are_visible_to_pre_save_reentry(scheduled_step_run: StepRun, operation: str) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    at = timezone.now() + timedelta(seconds=1)
+    reentries = []
+
+    def invoke() -> object:
+        if operation == "heartbeat":
+            return StepAttempt.objects.heartbeat(attempt.pk, lease_token=attempt.lease_token, at=at)
+        return StepAttempt.objects.revoke(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            reason=LeaseRevocationReason.CANCELED,
+            at=at,
+        )
+
+    def reenter(sender: object, instance: StepAttempt, **kwargs: object) -> None:
+        del sender, kwargs
+        if instance.pk == attempt.pk:
+            reentries.append(invoke())
+
+    pre_save.connect(reenter, sender=StepAttempt, weak=False)
+    try:
+        invoke()
+    finally:
+        pre_save.disconnect(reenter, sender=StepAttempt)
+    assert len(reentries) == 1
+    with system_context(reason="verify committed lease operation"):
+        attempt.refresh_from_db()
+    if operation == "heartbeat":
+        assert attempt.heartbeat_at == at
+    else:
+        assert attempt.lease_revoked_at == at
+
+
+@pytest.mark.parametrize("relationship", ("child", "recovery"))
+@pytest.mark.parametrize("entry_point", ("command", "dispatch"))
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL execution ancestry row locks")
+def test_database_command_locks_execution_ancestors_before_consumer_rows(
+    scheduled_step_run: StepRun,
+    relationship: str,
+    entry_point: str,
+) -> None:
+    source_run = scheduled_step_run.run
+    actor_ref = source_run.admitted_actor_ref
+    if relationship == "recovery":
+        source_attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+        StepAttempt.objects.admit_invocation(
+            source_attempt.pk, lease_token=source_attempt.lease_token, at=timezone.now()
+        )
+        StepAttempt.objects.finalize(
+            source_attempt.pk,
+            lease_token=source_attempt.lease_token,
+            result=AttemptResult(AttemptResultKind.ERROR, error="Retained recovery source"),
+            recorded_at=timezone.now(),
+        )
+        ancestry = {
+            "origin": "recovery",
+            "recovery_source_attempt": source_attempt,
+            "recovery_request_actor_ref": actor_ref,
+            "recovery_mode": RecoveryMode.FRESH,
+        }
+        cause = AttemptCause.MANUAL_RETRY
+    else:
+        ancestry = {
+            "origin": "workflow",
+            "parent_step_run": scheduled_step_run,
+            "parent_relation": "continuation",
+        }
+        cause = AttemptCause.INITIAL
+    with system_context(reason="execution lock-order fixture"):
+        consumer_run = WorkflowRun.objects.create(
+            workflow=source_run.workflow,
+            status=RunStatus.RUNNING,
+            admitted_actor_ref=actor_ref,
+            created_by=source_run.created_by,
+            **ancestry,
+        )
+        consumer = StepRun.objects.create(run=consumer_run, step=scheduled_step_run.step)
+    attempt = StepAttempt.objects.claim(consumer, cause=cause, claimed_at=timezone.now()).attempt
+    dispatch, _ = WorkflowDispatch.objects.schedule_execute(attempt)
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    events: list[tuple[str, tuple[Any, ...]]] = []
+
+    def observe(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        if "FOR UPDATE" in sql:
+            for model in (WorkflowRun, StepRun, StepAttempt):
+                if f'FROM "{model._meta.db_table}"' in sql:
+                    events.append((model.__name__, tuple(params)))
+                    break
+        return execute(sql, params, many, context)
+
+    def command() -> Any:
+        return StepAttempt.objects.execute_database_command(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            command=lambda step_run, owned_attempt: AttemptResult(AttemptResultKind.DONE),
+            recorded_at=timezone.now(),
+        )
+
+    with connection.execute_wrapper(observe):
+        if entry_point == "dispatch":
+            at = timezone.now()
+            with (
+                transaction.atomic(),
+                system_context(reason="execution lock-order dispatch"),
+                WorkflowDispatch.objects._owner_transition(
+                    dispatch_id=dispatch.pk,
+                    lease_token=attempt.lease_token,
+                    at=at,
+                    using="default",
+                ) as preflight,
+            ):
+                finalization = command()
+                WorkflowDispatch.objects._consume_locked(
+                    dispatch.pk, envelope=preflight.envelope, at=at, alias="default"
+                )
+        else:
+            finalization = command()
+    assert finalization is not None and finalization.recorded and finalization.applied
+    assert events[:4] == [
+        ("WorkflowRun", (source_run.pk,)),
+        ("WorkflowRun", (consumer_run.pk,)),
+        ("StepRun", (consumer.pk,)),
+        ("StepAttempt", (attempt.pk,)),
+    ]

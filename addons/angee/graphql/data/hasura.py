@@ -33,6 +33,7 @@ from strawberry_django_hasura import (
     hasura_resource as build_hasura_resource,
 )
 
+from angee.base.db import get_write_alias
 from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
@@ -187,13 +188,14 @@ class AngeeHasuraWriteBackend:
     def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create one row (and any declared nested child lines) atomically."""
 
+        alias = get_write_alias(self.model)
         if self.lines is None:
-            return self._create_row(info, data)
-        with transaction.atomic():
+            return self._create_row(info, data, using=alias)
+        with transaction.atomic(using=alias):
             line_rows = self._pop_line_rows(data)
-            instance = self._create_row(info, data)
+            instance = self._create_row(info, data, using=alias)
             if line_rows is not None:
-                self._apply_line_diff(info, instance, line_rows)
+                self._apply_line_diff(info, instance, line_rows, using=alias)
             return instance
 
     def save(
@@ -221,11 +223,13 @@ class AngeeHasuraWriteBackend:
 
         if self.lines is None:
             raise ImproperlyConfigured(f"{self.model._meta.label} resource declares no editable lines.")
-        with transaction.atomic():
+        targets = self.write_target_queryset()
+        alias = get_write_alias(self.model, bound=targets)
+        with transaction.atomic(using=alias):
             instance = require_instance_for_id(
                 self.model,
                 pk,
-                queryset=self.write_target_queryset(),
+                queryset=targets.using(alias),
             )
             if not instance.has_access("write"):
                 raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
@@ -233,18 +237,18 @@ class AngeeHasuraWriteBackend:
                 instance = mutation_resolvers.update(
                     info,
                     instance,
-                    self._decode_public_id_fields(patch),
+                    self._decode_public_id_fields(patch, using=alias),
                     key_attr=PUBLIC_ID_FIELD_NAME,
                     full_clean=True,
                 )
             if line_rows is not None:
-                self._apply_line_diff(info, instance, line_rows)
+                self._apply_line_diff(info, instance, line_rows, using=alias)
             return instance
 
-    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, using: str | None = None) -> Any:
         """Create one row through strawberry-django's stock mutation resolver."""
 
-        decoded_data, relationships = self._decode_public_id_fields_with_relationships(data)
+        decoded_data, relationships = self._decode_public_id_fields_with_relationships(data, using=using)
         check_create = getattr(self.model._default_manager, "check_create", None)
         if not callable(check_create):
             if requires_angee_rebac_contract(self.model):
@@ -299,6 +303,8 @@ class AngeeHasuraWriteBackend:
         info: strawberry.Info,
         parent: models.Model,
         rows: list[dict[str, Any]],
+        *,
+        using: str | None = None,
     ) -> None:
         """Create/update/delete child lines to match ``rows`` under elevation.
 
@@ -324,12 +330,12 @@ class AngeeHasuraWriteBackend:
         for row in rows:
             payload = dict(row)
             public_id = payload.pop("id", None)
-            decoded = self._decode_public_id_fields(payload, self._line_public_id_fields)
+            decoded = self._decode_public_id_fields(payload, self._line_public_id_fields, using=using)
             prepared.append((str(public_id) if public_id else None, decoded))
         # Phase 2 — child writes elevated, under a parent-row lock.
         with system_context(reason="graphql.hasura.save.lines"):
-            self.model._default_manager.lock_if_supported().filter(pk=parent.pk).first()
-            children = child_model._base_manager.filter(**{self._line_back_fk: parent})
+            self.model._default_manager.db_manager(using).lock_if_supported().filter(pk=parent.pk).first()
+            children = child_model._base_manager.using(using).filter(**{self._line_back_fk: parent})
             existing = children.in_bulk()
             by_public_id = {child.public_id: child for child in existing.values()}
             unknown = sorted({pid for pid, _ in prepared if pid is not None and pid not in by_public_id})
@@ -360,21 +366,23 @@ class AngeeHasuraWriteBackend:
                     )
             removed = set(existing) - kept_pks
             if removed:
-                child_model._base_manager.filter(pk__in=removed).delete()
+                child_model._base_manager.using(using).filter(pk__in=removed).delete()
 
     def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
         """Patch one public-id-addressed row through the write queryset."""
 
+        targets = self.write_target_queryset()
+        alias = get_write_alias(self.model, bound=targets)
         instance = require_instance_for_id(
             self.model,
             pk,
-            queryset=self.write_target_queryset(),
+            queryset=targets.using(alias),
         )
-        with transaction.atomic():
+        with transaction.atomic(using=alias):
             return mutation_resolvers.update(
                 info,
                 instance,
-                self._decode_public_id_fields(data),
+                self._decode_public_id_fields(data, using=alias),
                 key_attr=PUBLIC_ID_FIELD_NAME,
                 full_clean=True,
             )
@@ -406,12 +414,15 @@ class AngeeHasuraWriteBackend:
         self,
         data: dict[str, Any],
         public_id_fields: Mapping[str, type[models.Model]] | None = None,
+        *,
+        using: str | None = None,
     ) -> dict[str, Any]:
         """Translate public-id relation fields to Django-native write values."""
 
         decoded, _relationships = self._decode_public_id_fields_with_relationships(
             data,
             public_id_fields,
+            using=using,
         )
         return decoded
 
@@ -419,6 +430,8 @@ class AngeeHasuraWriteBackend:
         self,
         data: dict[str, Any],
         public_id_fields: Mapping[str, type[models.Model]] | None = None,
+        *,
+        using: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, tuple[Any, ...]]]:
         """Translate public-id relation fields and keep relationship instances.
 
@@ -448,13 +461,15 @@ class AngeeHasuraWriteBackend:
                 field = None
             if getattr(field, "many_to_many", False):
                 instances = (
-                    tuple(_write_public_instance(related_model, item) for item in value) if value is not None else ()
+                    tuple(_write_public_instance(related_model, item, using=using) for item in value)
+                    if value is not None
+                    else ()
                 )
                 out[key] = list(instances) if value is not None else None
                 if instances:
                     relationships[key] = instances
                 continue
-            instance = _write_public_instance(related_model, value)
+            instance = _write_public_instance(related_model, value, using=using)
             out[f"{key}_id"] = None if instance is None else instance.pk
             if instance is not None:
                 relationships[key] = (instance,)
@@ -663,10 +678,10 @@ def _public_pk(model: type[models.Model], value: Any) -> Any:
     return None if instance is None else instance.pk
 
 
-def _write_public_instance(model: type[models.Model], value: Any) -> Any:
+def _write_public_instance(model: type[models.Model], value: Any, *, using: str | None = None) -> Any:
     """Decode one write relation public id through the actor-scoped write owner."""
 
-    return _public_instance(model, value, queryset=write_queryset(model))
+    return _public_instance(model, value, queryset=write_queryset(model, using=using))
 
 
 def _public_instance(

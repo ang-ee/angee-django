@@ -201,10 +201,10 @@ class WorkflowGraph:
             return ()
 
     @classmethod
-    def from_workflow(cls, workflow: Any) -> WorkflowGraph:
+    def from_workflow(cls, workflow: Any, *, using: str | None = None) -> WorkflowGraph:
         """Load one authorized definition through its canonical owner seam."""
 
-        return type(workflow).objects.definition_graph(workflow)
+        return type(workflow).objects.db_manager(using).definition_graph(workflow)
 
     @classmethod
     def from_rows(

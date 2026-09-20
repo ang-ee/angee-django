@@ -32,6 +32,7 @@ from tests.workflows import (
     Trigger,
     Workflow,
     WorkflowRun,
+    admit_workflow_actor,
     start_run,
     step_run_for,
     workflow_with_steps,
@@ -209,7 +210,10 @@ def test_run_start_validates_only_new_exact_admission(
         )
     with pytest.raises(ValidationError, match="different immutable facts"):
         WorkflowRun.objects.start(
-            published, subject, other, dedup_key="admission:exact",
+            published,
+            subject,
+            admit_workflow_actor(published, other),
+            dedup_key="admission:exact",
             input=JsonPresence(True, {"scope": "frozen"}),
         )
     with pytest.raises(ValidationError, match="configuration changed"):

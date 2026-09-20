@@ -7,9 +7,11 @@ from contextlib import contextmanager
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
-from rebac import system_context
+from rebac import RelationshipTuple, system_context, to_subject_ref, write_relationships
+from rebac.resources import to_object_ref
 
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
@@ -30,7 +32,7 @@ from angee.workflows.testing import advance_once as advance_once
 from angee.workflows.testing import execute_started as execute_started
 from angee.workflows.testing import owned_run as owned_run
 from angee.workflows.testing import run_to_terminal as run_to_terminal
-from angee.workflows.testing import start_run as start_run
+from angee.workflows.testing import start_run as start_workflow_run
 from angee.workflows.testing import step_run_for as step_run_for
 from tests.conftest import _clear_model_tables, _create_missing_tables
 
@@ -255,14 +257,37 @@ def no_workflow_queue(monkeypatch: pytest.MonkeyPatch) -> None:
 
     from angee.workflows import dispatch
 
-    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: None)
-    monkeypatch.setattr(engine, "enqueue_advance_at", lambda run_id, when: None)
-    monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda: None)
+    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id, **kwargs: None)
+    monkeypatch.setattr(engine, "enqueue_advance_at", lambda run_id, when, **kwargs: None)
+    monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda **kwargs: None)
     monkeypatch.setattr(dispatch, "enqueue_task", lambda *args, **kwargs: None)
+
+
+def workflow_actor() -> Any:
+    """Return the ordinary author used by source workflow graph fixtures."""
+
+    return get_user_model().objects.get_or_create(username="workflow-fixture-author")[0]
+
+
+def admit_workflow_actor(workflow: Any, actor: Any = None) -> Any:
+    """Give one fixture actor the workflow edit permission needed to start it."""
+
+    actor = actor if actor is not None else workflow_actor()
+    with system_context(reason="test workflow action admission"):
+        head = workflow.published_from if workflow.published_from_id is not None else workflow
+        write_relationships([RelationshipTuple(to_object_ref(head), "editor", to_subject_ref(actor))])
+    return actor
+
+
+def start_run(workflow: Any, *, subject: Any = None, actor: Any = None) -> Any:
+    """Execute source fixtures as an explicitly authorized test actor."""
+
+    return start_workflow_run(workflow, subject=subject, actor=admit_workflow_actor(workflow, actor))
 
 
 def workflow_with_steps(
     *,
+    actor: Any = None,
     name: str = "Engine",
     key: str = "",
     purpose: workflow_models.WorkflowPurpose = workflow_models.WorkflowPurpose.AUTOMATION,
@@ -276,6 +301,7 @@ def workflow_with_steps(
 
     with system_context(reason="test workflows definition"):
         draft = Workflow.objects.create(
+            created_by=actor if actor is not None else workflow_actor(),
             key=key,
             name=name,
             purpose=purpose,

@@ -115,10 +115,10 @@ def test_publication_and_child_mutation_serialize_to_one_revision_snapshot(
     mutation_started = Event()
 
     def publish() -> int:
-        with Workflow.objects._definition_write((draft.pk,)):
+        with Workflow.objects._definition_write((draft.pk,), using="default") as session:
             locked.set()
             assert mutation_started.wait(5)
-            return Workflow.objects.get(pk=draft.pk).publish().pk
+            return Workflow.objects.get(pk=draft.pk).publish(session=session).pk
 
     def mutate() -> None:
         assert locked.wait(5)
@@ -171,12 +171,12 @@ def test_definition_cas_loses_cleanly_to_a_locked_legacy_write(workflow_tables: 
     cas_started = Event()
 
     def legacy_write() -> None:
-        with Workflow.objects._definition_write((draft.pk,)):
+        with Workflow.objects._definition_write((draft.pk,), using="default") as session:
             legacy_locked.set()
             assert cas_started.wait(5)
             current = Step.objects.get(pk=step.pk)
             current.name = "Legacy winner"
-            current.save(update_fields={"name"})
+            current.save(update_fields={"name"}, session=session)
 
     def cas_write() -> None:
         assert legacy_locked.wait(5)
@@ -242,10 +242,10 @@ def test_old_parent_delete_serializes_against_a_concurrent_move(workflow_tables:
     move_started = Event()
 
     def delete() -> None:
-        with Workflow.objects._definition_write((old.pk,)):
+        with Workflow.objects._definition_write((old.pk,), using="default") as session:
             locked.set()
             assert move_started.wait(5)
-            Step.objects.get(pk=step.pk).delete()
+            Step.objects.get(pk=step.pk).delete(session=session)
 
     def move() -> None:
         assert locked.wait(5)
@@ -349,8 +349,8 @@ def test_delete_rechecks_parent_when_a_move_commits_after_its_initial_read(
             pause_first[0] = False
             parent_observed.set()
             assert move_committed.wait(5)
-        with original(manager, workflow_ids, **kwargs) as rows:
-            yield rows
+        with original(manager, workflow_ids, **kwargs) as session:
+            yield session
 
     monkeypatch.setattr(manager_type, "_definition_write", gated_write)
 

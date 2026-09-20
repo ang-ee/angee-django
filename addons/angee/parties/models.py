@@ -29,7 +29,7 @@ from typing import Any, ClassVar, cast
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models, router, transaction
+from django.db import models, transaction
 from phonenumbers import (
     NumberParseException,
     PhoneNumberFormat,
@@ -38,9 +38,10 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import PermissionDenied, actor_context, current_actor
 from rebac.mixins import RebacModelBase
 
+from angee.base.db import get_write_alias
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
@@ -185,11 +186,11 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
             cast(RelationshipKind.PartyKind, RelationshipKind.PartyKind.PERSON),
         ):
             child = kind.model()
-            if child is not None and child._base_manager.filter(pk=self.pk).exists():
+            if child is not None and child._base_manager.using(self._state.db).filter(pk=self.pk).exists():
                 return str(kind)
         return None
 
-    def canonical(self) -> Party:
+    def canonical(self, *, using: str | None = None) -> Party:
         """Return the surviving party this one resolves to, following merge pointers.
 
         :meth:`merge_into` flattens normal writes to the terminal, but this method
@@ -201,10 +202,12 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         party = self
         while party.merged_into_id is not None and party.merged_into_id not in seen:
             seen.add(party.merged_into_id)
-            party = party.merged_into
+            party = type(self)._base_manager.db_manager(using, hints={"instance": party}).get(pk=party.merged_into_id)
         return party
 
-    def apply_merge_field_overrides(self, source: Party, field_overrides: Any) -> None:
+    def apply_merge_field_overrides(
+        self, source: Party, field_overrides: Any, *, using: str | None = None,
+    ) -> None:
         """Apply the allow-listed scalar overrides selected for a merge survivor.
 
         Common human fields live on ``Party``. Person-only name and birthday
@@ -217,6 +220,7 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         if not isinstance(field_overrides, Mapping):
             raise ValidationError({"field_overrides": "Expected an object of field values."})
 
+        alias = get_write_alias(type(self), using=using, instance=self)
         both_people = self.concrete_kind == "person" and source.concrete_kind == "person"
         allowed = set(self._merge_scalar_fields)
         if both_people:
@@ -226,19 +230,21 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
             names = ", ".join(sorted(str(name) for name in unknown))
             raise ValidationError({"field_overrides": f"Unsupported merge field(s): {names}."})
 
-        self._apply_merge_scalar_values(field_overrides, self._merge_scalar_fields)
+        self._apply_merge_scalar_values(field_overrides, self._merge_scalar_fields, using=alias)
         if both_people and any(name in field_overrides for name in self._person_merge_scalar_fields):
             person_model = apps.get_model("parties", "Person")
-            person = person_model.objects.filter(pk=self.pk).first()
+            person = person_model.objects.using(alias).filter(pk=self.pk).first()
             if person is None or not person.has_access("write"):
                 raise PermissionDenied("write access to the surviving person is required")
             person.sudo(reason="parties.merge.person_field_overrides")
-            person._apply_merge_scalar_values(field_overrides, self._person_merge_scalar_fields)
+            person._apply_merge_scalar_values(field_overrides, self._person_merge_scalar_fields, using=alias)
 
     def _apply_merge_scalar_values(
         self,
         field_overrides: Mapping[Any, Any],
         field_names: tuple[str, ...],
+        *,
+        using: str,
     ) -> None:
         """Coerce and save this row's selected merge fields through Django fields."""
 
@@ -252,9 +258,51 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
                 setattr(self, name, value)
                 dirty.append(name)
         if dirty:
-            self.save(update_fields=[*dirty, "updated_at"])
+            self.save(using=using, update_fields=[*dirty, "updated_at"])
 
-    def merge_into(self, target: Party) -> Party:
+    def identity_differs(self, current: Mapping[str, Any], proposed: Mapping[str, Any]) -> bool:
+        """Compare proposed native identity values with a retained read projection."""
+
+        if proposed["name"] and proposed["name"] != current["name"]:
+            return True
+        addresses = apps.get_model("parties", "Address").objects
+        address = proposed["address"]
+        if any(address.get(field) for field in addresses.components):
+            proposed_key = addresses.identity_key(address)
+            if all(addresses.identity_key(row) != proposed_key for row in current["addresses"]):
+                return True
+        link_id = proposed["handle"]["party_handle_id"]
+        return bool(link_id and any(row["id"] == link_id and not row["is_confirmed"] for row in current["handles"]))
+
+    def identity_values(self, addresses: list[Any], links: list[Any]) -> dict[str, Any]:
+        """Project the exact native identity facts used by expected-state checks."""
+
+        return {
+            "name": self.display_name,
+            "addresses": [
+                {
+                    "id": str(row.sqid),
+                    "label": row.label,
+                    "is_primary": row.is_primary,
+                    **{field: getattr(row, field) for field in AddressManager.components},
+                }
+                for row in addresses
+            ],
+            "handles": [
+                {
+                    "id": str(link.sqid),
+                    "handle_id": str(link.handle.sqid),
+                    "platform": str(link.handle.platform),
+                    "value": link.handle.value,
+                    "confidence": link.confidence,
+                    "is_confirmed": link.is_confirmed,
+                    "is_dismissed": link.is_dismissed,
+                }
+                for link in links
+            ],
+        }
+
+    def merge_into(self, target: Party, *, using: str | None = None) -> Party:
         """Atomically merge this party into ``target`` and return the terminal target.
 
         The source chain head is row-locked through ``lock_if_supported`` before
@@ -268,17 +316,18 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         if self.pk is None or target.pk is None:
             raise ValidationError({"merged_into": "Both parties must be saved before merging."})
         party_model = apps.get_model("parties", "Party")
-        with transaction.atomic():
-            source = party_model.objects.lock_if_supported().get(pk=self.pk)
-            target_head = party_model.objects.lock_if_supported().get(pk=target.pk)
-            terminal = target_head.canonical()
+        alias = get_write_alias(type(self), using=using, instance=self)
+        with transaction.atomic(using=alias):
+            source = party_model.objects.db_manager(alias).lock_if_supported().get(pk=self.pk)
+            target_head = party_model.objects.db_manager(alias).lock_if_supported().get(pk=target.pk)
+            terminal = target_head.canonical(using=alias)
             if terminal.pk == source.pk:
                 raise ValidationError(
                     {"merged_into": "Cannot reverse a merge by merging its target back into the source."}
                 )
             source.merged_into = terminal
-            source.save(update_fields=["merged_into", "updated_at"])
-            party_model._base_manager.filter(merged_into_id=source.pk).exclude(pk=source.pk).update(
+            source.save(using=alias, update_fields=["merged_into", "updated_at"])
+            party_model._base_manager.using(alias).filter(merged_into_id=source.pk).exclude(pk=source.pk).update(
                 merged_into_id=terminal.pk
             )
         self.merged_into = terminal
@@ -374,6 +423,7 @@ class MergeVeto(SqidMixin, AuditMixin, AngeeModel):
             update_fields = kwargs.get("update_fields")
             if update_fields is not None:
                 kwargs["update_fields"] = {*update_fields, "party_a", "party_b"}
+        kwargs["using"] = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         super().save(*args, **kwargs)
 
 
@@ -539,9 +589,10 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
             self.normalized_value = self.normalize_value(self.platform, self.value)
             if update_fields is not None and "normalized_value" not in update_fields:
                 kwargs["update_fields"] = [*update_fields, "normalized_value"]
+        kwargs["using"] = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         super().save(*args, **kwargs)
 
-    def _party_links_resolved(self) -> None:
+    def _party_links_resolved(self, *, using: str) -> None:
         """Run addon contributions after this handle's owner is fully resolved.
 
         The parties owner invokes this hook inside the same database transaction as
@@ -658,7 +709,7 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
                 visible.append(PartyHandleEvidence(model=model._meta.label, id=public_id))
         return PartyHandleEvidencePage(tuple(visible[:bounded]), len(refs) > bounded)
 
-    def confirm(self) -> None:
+    def confirm(self, *, using: str | None = None) -> None:
         """Human-confirm this link, then re-resolve the handle's owner.
 
         Overrides the plain :meth:`ScoredLinkMixin.confirm` to add the two facts a
@@ -667,12 +718,11 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
         pointer, both parties' counts) is server-owned bookkeeping that runs elevated.
         """
 
-        if not self.has_access("write"):
-            raise PermissionDenied("write access to the party-handle link is required")
-        with system_context(reason="parties.party_handle.confirm"):
-            super().confirm()
+        actor = self.actor() or current_actor()
+        alias = get_write_alias(type(self), using=using, instance=self)
+        type(self).objects.db_manager(alias)._transition(self, action="confirm", actor=actor, using=alias)
 
-    def dismiss(self) -> None:
+    def dismiss(self, *, using: str | None = None) -> None:
         """Dismiss this link — the durable anti-link — then re-resolve the handle.
 
         Gated and elevated like :meth:`confirm`; the mixin flips the flags and calls
@@ -680,15 +730,16 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
         unowned.
         """
 
-        if not self.has_access("write"):
-            raise PermissionDenied("write access to the party-handle link is required")
-        with system_context(reason="parties.party_handle.dismiss"):
-            super().dismiss()
+        actor = self.actor() or current_actor()
+        alias = get_write_alias(type(self), using=using, instance=self)
+        type(self).objects.db_manager(alias)._transition(self, action="dismiss", actor=actor, using=alias)
 
-    def _resolve_link(self) -> None:
+    def _resolve_link(self, *, using: str) -> None:
         """Re-materialise :attr:`Handle.party` from this handle's surviving links."""
 
-        type(self).objects.resolve(self.handle)
+        handle_model = self._meta.get_field("handle").remote_field.model
+        handle = handle_model._base_manager.using(using).get(pk=self.handle_id)
+        type(self).objects.db_manager(using).resolve(handle)
 
 
 class AddressManager(AngeeManager):
@@ -704,20 +755,26 @@ class AddressManager(AngeeManager):
             for name in self.components
         }
 
-    def lock_party(self, party_id: Any) -> None:
+    def identity_key(self, values: Mapping[str, Any]) -> tuple[str, ...]:
+        """Return the field-normalized, case-insensitive identity of an address."""
+
+        normalized = self._normalize_components(values)
+        return tuple(normalized[field].casefold() for field in self.components)
+
+    def lock_party(self, party_id: Any, *, using: str) -> None:
         """Serialize address writes for one party, including its first address."""
 
         party_model = self.model._meta.get_field("party").remote_field.model
-        party_model.objects.db_manager(self.db).sudo(
+        party_model.objects.db_manager(using).sudo(
             reason="parties.address.lock_party",
         ).locked_get(pk=party_id)
 
-    def demote_primaries(self, address: Address) -> None:
+    def demote_primaries(self, address: Address, *, using: str) -> None:
         """Authorize and demote other primaries inside the selecting save's transaction."""
 
-        self.lock_party(address.party_id)
+        self.lock_party(address.party_id, using=using)
         previous = list(
-            self.sudo(reason="parties.address.primary_integrity")
+            self.db_manager(using).sudo(reason="parties.address.primary_integrity")
             .lock_if_supported()
             .filter(party_id=address.party_id, is_primary=True)
             .exclude(pk=address.pk)
@@ -728,7 +785,7 @@ class AddressManager(AngeeManager):
                 raise PermissionDenied(
                     "Changing the primary address requires write access to the current primary address."
                 )
-        self.sudo(reason="parties.address.demote_primaries").filter(
+        self.db_manager(using).sudo(reason="parties.address.demote_primaries").filter(
             pk__in=[row.pk for row in previous],
         ).update(is_primary=False)
 
@@ -741,18 +798,19 @@ class AddressManager(AngeeManager):
         normalized = self._normalize_components(values)
         if not any(normalized.values()):
             return "missing", None
-        key = tuple(normalized[field].casefold() for field in self.components)
-        with transaction.atomic(using=self.db), actor_context(actor):
-            self.lock_party(party.pk)
+        key = self.identity_key(normalized)
+        alias = get_write_alias(self.model, bound=self, instance=party)
+        manager = self.db_manager(alias)
+        with transaction.atomic(using=alias), actor_context(actor):
+            manager.lock_party(party.pk, using=alias)
             existing = list(
-                self.sudo(reason="parties.address.attach_exact")
+                manager.sudo(reason="parties.address.attach_exact")
                 .lock_if_supported()
                 .filter(party=party)
                 .order_by("pk")
             )
             for row in existing:
-                row_key = tuple(" ".join(str(getattr(row, field) or "").split()).casefold()
-                                for field in self.components)
+                row_key = self.identity_key({field: getattr(row, field) for field in self.components})
                 if row_key == key:
                     if not row.with_actor(actor).has_access("read"):
                         raise PermissionDenied("Denied: cannot read the matching party address.")
@@ -763,13 +821,13 @@ class AddressManager(AngeeManager):
                 if conflict == "raise":
                     raise ValidationError({"address": "A different address already exists for this party."})
                 is_primary = False
-            verified_actor = self.check_create({"party": (party,)})
+            verified_actor = manager.check_create({"party": (party,)})
             row = self.model(
                 party=party, label=" ".join(label.split()).strip()[:64], is_primary=is_primary,
                 created_by_id=getattr(actor, "pk", None), **normalized,
             )
             row.sudo(reason="parties.address.attach_exact")
-            row.save(using=self.db)
+            row.save(using=alias)
             return "created", row.with_actor(verified_actor)
 
     def replace_primary_exact(
@@ -781,15 +839,17 @@ class AddressManager(AngeeManager):
         normalized = self._normalize_components(values)
         if not any(normalized.values()):
             raise ValidationError({"address": "A replacement address must not be empty."})
-        with transaction.atomic(using=self.db), actor_context(actor):
-            self.lock_party(party.pk)
-            current = self.sudo(reason="parties.address.replace_primary_exact").lock_if_supported().filter(
+        alias = get_write_alias(self.model, bound=self, instance=party)
+        manager = self.db_manager(alias)
+        with transaction.atomic(using=alias), actor_context(actor):
+            manager.lock_party(party.pk, using=alias)
+            current = manager.sudo(reason="parties.address.replace_primary_exact").lock_if_supported().filter(
                 party=party, is_primary=True,
             ).first()
             if (current.pk if current else None) != expected_id:
                 raise ValidationError({"address": "The party's primary address changed during review."})
             if current is None:
-                status, created = self.attach_exact(
+                status, created = manager.attach_exact(
                     party=party, values=normalized, actor=actor, label=label, is_primary=True,
                 )
                 if created is None:  # pragma: no cover - non-empty values cannot be missing
@@ -806,7 +866,7 @@ class AddressManager(AngeeManager):
                 if field != "label":
                     setattr(current, field, normalized[field])
             if changed:
-                current.save(using=self.db, update_fields=[*changed, "updated_at"])
+                current.save(using=alias, update_fields=[*changed, "updated_at"])
                 return "replaced", current.with_actor(actor)
             return "matched", current.with_actor(actor)
 
@@ -857,13 +917,14 @@ class Address(SqidMixin, AuditMixin, AngeeModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Make the selected primary address authoritative for this party."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
         update_fields = kwargs.get("update_fields")
         if not self.is_primary or (update_fields is not None and "is_primary" not in update_fields):
             super().save(*args, **kwargs)
             return
-        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         with transaction.atomic(using=using):
-            type(self).objects.db_manager(using).demote_primaries(self)
+            type(self).objects.db_manager(using).demote_primaries(self, using=using)
             super().save(*args, **kwargs)
 
     def __str__(self) -> str:
@@ -1104,7 +1165,9 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
 
         return self.name if outbound or self.is_symmetric else self.inverse_name
 
-    def validate_ends(self, party: Party | None, other_party: Party | None) -> None:
+    def validate_ends(
+        self, party: Party | None, other_party: Party | None, *, using: str | None = None,
+    ) -> None:
         """Raise :class:`ValidationError` if an edge's ends violate this kind's legality.
 
         The knowledge-level guard: an ``organization``-typed end must be a tracked
@@ -1132,9 +1195,9 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
         party_model = apps.get_model("parties", "Party")
         concrete_by_pk = {
             row["pk"]: row
-            for row in party_model._base_manager.filter(pk__in={end.pk for _field, _required, end in checked}).values(
-                "pk", *sorted(relation_names)
-            )
+            for row in party_model._base_manager.db_manager(using)
+            .filter(pk__in={end.pk for _field, _required, end in checked})
+            .values("pk", *sorted(relation_names))
         }
         errors: dict[str, str] = {}
         for field, required, end in checked:
@@ -1264,10 +1327,16 @@ class Relationship(SqidMixin, AuditMixin, AngeeModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the edge, validating ends only when the write can change them."""
 
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         update_fields = kwargs.get("update_fields")
         end_fields = {"party", "party_id", "other_party", "other_party_id", "kind", "kind_id"}
         if self.kind_id is not None and (update_fields is None or end_fields.intersection(update_fields)):
-            self.kind.validate_ends(self.party, self.other_party)
+            kind_model = self._meta.get_field("kind").remote_field.model
+            party_model = self._meta.get_field("party").remote_field.model
+            kind = kind_model._base_manager.using(alias).get(pk=self.kind_id)
+            ends = party_model._base_manager.using(alias).in_bulk([self.party_id, self.other_party_id])
+            kind.validate_ends(ends.get(self.party_id), ends.get(self.other_party_id), using=alias)
         super().save(*args, **kwargs)
 
 
@@ -1309,7 +1378,7 @@ class Directory(Bridge):
         backend_class = cast("type[DirectoryBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
 
-    def sync(self) -> int:
+    def sync(self, *, using: str | None = None) -> int:
         """Discover address books and resolve every contact into parties (the Bridge contract).
 
         Idempotent: each address book mirrors to one :class:`Folder` (keyed by its
@@ -1319,12 +1388,13 @@ class Directory(Bridge):
         ``ctag`` is unchanged is skipped wholesale.
         """
 
+        alias = get_write_alias(type(self), using=using, instance=self)
         folder_model = apps.get_model("parties", "Folder")
         party_model = apps.get_model("parties", "Party")
         backend = self.backend
         resolved = 0
         for book in backend.discover():
-            folder, _created = folder_model.objects.update_or_create(
+            folder, _created = folder_model.objects.db_manager(alias).update_or_create(
                 directory=self,
                 source_href=book.href,
                 defaults={
@@ -1338,15 +1408,15 @@ class Directory(Bridge):
             for parsed in backend.fetch_contacts(book):
                 if not parsed.uid:
                     continue  # no stable per-folder key → cannot upsert idempotently
-                party_model.objects.ingest_contact(
+                party_model.objects.db_manager(alias).ingest_contact(
                     parsed,
                     folder=folder,
                     created_by_id=self.owner_id,
                 )
                 seen.add(parsed.uid)
                 resolved += 1
-            party_model.objects.purge_missing(folder=folder, keep_uids=seen)
+            party_model.objects.db_manager(alias).purge_missing(folder=folder, keep_uids=seen)
             folder.ctag = book.ctag
             folder.sync_token = book.sync_token
-            folder.save(update_fields=["ctag", "sync_token", "updated_at"])
+            folder.save(using=alias, update_fields=["ctag", "sync_token", "updated_at"])
         return resolved

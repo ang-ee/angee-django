@@ -28,7 +28,6 @@ from angee.workflows_extraction.managers import (
     EvidenceManager,
     ExtractionManager,
     ExtractionSystemManager,
-    evidence_insert_allowed,
 )
 from angee.workflows_extraction.pointers import json_pointer_value
 
@@ -58,9 +57,20 @@ class ExtractionLineage(AngeeModel):
         base_manager_name = "objects"
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        if not evidence_insert_allowed(kwargs.get("using") or self._state.db):
-            raise ValueError("The extraction lineage head changes only during retention.")
-        super().save(*args, **kwargs)
+        raise ValueError("The extraction lineage head changes only during retention.")
+
+    def allocate(self, *, using: str) -> None:
+        """Create the lineage lock row before allocating its first revision."""
+
+        super().save(using=using, force_insert=True)
+
+    def advance_head(self, extraction: Any, *, using: str) -> None:
+        """Project the newly retained revision under the manager's lineage lock."""
+
+        if extraction.lineage_key != self.pk:
+            raise ValueError("An extraction head must belong to its lineage.")
+        self.head = extraction
+        super().save(using=using, update_fields=("head",))
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("The extraction lineage is retained and cannot be deleted.")
@@ -117,13 +127,12 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Refuse mutation after the evidence row has been inserted."""
+        raise ValueError("Extraction evidence is immutable; use the retention owner.")
 
-        if not evidence_insert_allowed(kwargs.get("using") or self._state.db):
-            raise ValueError("Extraction evidence can only be inserted by the retention owner.")
-        if self.pk is not None and type(self)._base_manager.filter(pk=self.pk).exists():
-            raise ValueError("Extraction evidence is immutable; create a new revision.")
-        super().save(*args, **kwargs)
+    def retain(self, *, using: str) -> None:
+        """Insert one immutable revision; the manager retains its children and head."""
+
+        super().save(using=using, force_insert=True)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("Extraction evidence is retained and cannot be deleted.")
@@ -228,7 +237,7 @@ class ExtractionSource(SqidMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "exs_"
-    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.CASCADE, related_name="sources")
+    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.PROTECT, related_name="sources")
     file = models.ForeignKey(
         "storage.File", null=True, blank=True, on_delete=models.PROTECT, related_name="extraction_sources"
     )
@@ -266,11 +275,7 @@ class ExtractionSource(SqidMixin, AngeeModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        if not evidence_insert_allowed(kwargs.get("using") or self._state.db):
-            raise ValueError("Extraction source evidence can only be inserted by the retention owner.")
-        if self.pk is not None and type(self)._base_manager.filter(pk=self.pk).exists():
-            raise ValueError("Extraction source evidence is immutable.")
-        super().save(*args, **kwargs)
+        raise ValueError("Extraction source evidence is immutable; use the retention owner.")
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("Extraction source evidence is retained and cannot be deleted.")
@@ -287,8 +292,8 @@ class ExtractionPage(SqidMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "exp_"
-    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.CASCADE, related_name="pages")
-    source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.CASCADE, related_name="pages")
+    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.PROTECT, related_name="pages")
+    source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.PROTECT, related_name="pages")
     position = models.PositiveIntegerField(editable=False)
     source_page = models.PositiveIntegerField(editable=False)
     width = models.PositiveIntegerField(editable=False)
@@ -310,11 +315,7 @@ class ExtractionPage(SqidMixin, AngeeModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        if not evidence_insert_allowed(kwargs.get("using") or self._state.db):
-            raise ValueError("Extraction page evidence can only be inserted by the retention owner.")
-        if self.pk is not None and type(self)._base_manager.filter(pk=self.pk).exists():
-            raise ValueError("Extraction page evidence is immutable.")
-        super().save(*args, **kwargs)
+        raise ValueError("Extraction page evidence is immutable; use the retention owner.")
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("Extraction page evidence is retained and cannot be deleted.")
@@ -330,8 +331,8 @@ class ExtractionPart(SqidMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "exr_"
-    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.CASCADE, related_name="parts")
-    source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.CASCADE, related_name="parts")
+    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.PROTECT, related_name="parts")
+    source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.PROTECT, related_name="parts")
     position = models.PositiveIntegerField(editable=False)
     source_page = models.PositiveIntegerField(null=True, blank=True, editable=False)
     mime_type = models.CharField(max_length=128, editable=False)
@@ -357,11 +358,7 @@ class ExtractionPart(SqidMixin, AngeeModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        if not evidence_insert_allowed(kwargs.get("using") or self._state.db):
-            raise ValueError("Extraction part evidence can only be inserted by the retention owner.")
-        if self.pk is not None and type(self)._base_manager.filter(pk=self.pk).exists():
-            raise ValueError("Extraction part evidence is immutable.")
-        super().save(*args, **kwargs)
+        raise ValueError("Extraction part evidence is immutable; use the retention owner.")
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("Extraction part evidence is retained and cannot be deleted.")

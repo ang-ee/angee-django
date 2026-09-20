@@ -14,6 +14,7 @@ from typing import Any
 
 from django.core.exceptions import ValidationError
 
+from angee.base.db import get_write_alias
 from angee.resources.entries import LoadResult
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import split_xref
@@ -78,9 +79,12 @@ def import_resource_groups(
     *,
     ledger_model: type[Any],
     addon_aliases: Mapping[str, str],
+    using: str | None = None,
 ) -> LoadResult:
     """Compare declarations, retain omitted same-impl config, then publish."""
 
+    alias = get_write_alias(workflow_model, using=using)
+    manager = workflow_model.objects.db_manager(alias)
     step_model = workflow_model._meta.get_field("steps").related_model
     edge_model = workflow_model._meta.get_field("edges").related_model
     by_model: dict[type[Any], list[tuple[Any, Any, dict[str, Any]]]] = defaultdict(list)
@@ -108,14 +112,14 @@ def import_resource_groups(
                 if not isinstance(name, str) or not name:
                     raise ResourceLoadError(f"{group.entry.display}: workflow name is required")
                 instance = workflow_model(name=name, key=declared_key or "")
-                instance.save()
+                instance.save(using=alias)
             elif instance.published_from_id is not None:
                 raise ResourceLoadError(f"{group.entry.display}: a resource declaration must target a draft head")
             if declared_key not in (None, "", instance.key):
                 if instance.key:
                     raise ResourceLoadError(f"{group.entry.display}: stable workflow key cannot change")
                 instance.key = declared_key
-                instance.save(update_fields=["key", "updated_at"])
+                instance.save(using=alias, update_fields=["key", "updated_at"])
             heads[key] = instance
             workflow_resources.setdefault(instance.pk, resource)
             publications[instance.pk] = publications.get(instance.pk, False) or group.entry.publish
@@ -124,7 +128,7 @@ def import_resource_groups(
         workflow_fields: dict[int, dict[str, Any]] = {}
         for group, resource, row in by_model[workflow_model]:
             head = heads[(group.entry.addon.name, str(row["_xref"]))]
-            wanted = _declaration_values(resource, row, workflow_model.objects._WORKFLOW_FIELDS)
+            wanted = _declaration_values(resource, row, manager._WORKFLOW_FIELDS)
             previous = workflow_fields.setdefault(head.pk, wanted)
             if not json_values_equal(previous, wanted):
                 raise ResourceLoadError(f"{group.entry.display}: conflicting workflow declarations")
@@ -139,7 +143,7 @@ def import_resource_groups(
                 raise ResourceLoadError(f"{group.entry.display}: step parent is outside this graph declaration")
             if not isinstance(head, workflow_model) or head.published_from_id is not None:
                 raise ResourceLoadError(f"{group.entry.display}: step parent must be a draft head")
-            wanted = _declaration_values(resource, row, workflow_model.objects._NODE_FIELDS)
+            wanted = _declaration_values(resource, row, manager._NODE_FIELDS)
             declared_nodes[head.pk].append((group, resource, row, wanted))
 
         declared_edges: dict[int, list[tuple[Any, Any, dict[str, Any]]]] = defaultdict(list)
@@ -156,8 +160,8 @@ def import_resource_groups(
 
         all_heads = {head.pk: head for head in heads.values()}
         for head_id in sorted(set(all_heads) | set(declared_nodes) | set(declared_edges)):
-            head = all_heads.get(head_id) or workflow_model.objects.get(pk=head_id)
-            snapshot = workflow_model.objects.definition_snapshot(head)
+            head = all_heads.get(head_id) or manager.get(pk=head_id)
+            snapshot = manager.definition_snapshot(head)
             saved_nodes = {node.key: node for node in snapshot.nodes}
             saved_edges = {(edge.source.key, edge.target.key, edge.condition): edge for edge in snapshot.edges}
             wanted_nodes: dict[tuple[str, str], EndpointRef] = {}
@@ -270,19 +274,19 @@ def import_resource_groups(
             )
             revision = snapshot.revision
             if changed:
-                applied = workflow_model.objects.apply_definition(head, expected_revision=revision, edit=edit)
+                applied = manager.apply_definition(head, expected_revision=revision, edit=edit)
                 revision = applied.revision
-            saved_nodes_after = {node.key: node for node in head.steps.all()}
+            saved_nodes_after = {node.key: node for node in head.steps.using(alias).all()}
             saved_edges_after = {
                 (edge.source.key, edge.target.key, edge.condition): edge
-                for edge in head.edges.select_related("source", "target")
+                for edge in head.edges.using(alias).select_related("source", "target")
             }
             for _group, resource, row, wanted in declared_nodes[head_id]:
                 counts[resource.record_declared_instance(row, saved_nodes_after[wanted["key"]])] += 1
             for _group, resource, row, signature in edge_rows:
                 counts[resource.record_declared_instance(row, saved_edges_after[signature])] += 1
             if publications.get(head_id, False):
-                workflow_model.objects.publish_definition(head, expected_revision=revision)
+                manager.publish_definition(head, expected_revision=revision)
         return LoadResult(**counts)
     except (DefinitionEditError, DefinitionReadinessError, ValidationError, ValueError, KeyError) as error:
         raise ResourceLoadError(f"Workflow declaration installation failed: {error}") from error

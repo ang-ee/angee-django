@@ -2283,6 +2283,8 @@ def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> Non
     assert dismissed is not None
     with system_context(reason="test ingest dismiss sender suggestion"):
         dismissed.dismiss()
+    assert dismissed.is_dismissed
+    assert not dismissed.is_confirmed
 
     _ingest_sender(
         channel=channel,
@@ -2973,7 +2975,7 @@ def _collecting_broadcasts(
 
     sent: list[tuple[Any, dict[str, Any]]] = []
     monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append((model, payload)))
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.connect_change_broadcast_receiver()
     already_wired = {model: publishing.disconnect_publishers(model) for model in models}
     for model in models:

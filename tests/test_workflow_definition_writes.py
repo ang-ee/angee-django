@@ -47,24 +47,24 @@ def test_input_binding_is_versioned_and_copied_with_the_definition(workflow_tabl
 
 @pytest.mark.django_db(transaction=True)
 def test_definition_rows_advance_revision_once_per_locked_batch(workflow_tables: None) -> None:
-    """Nested legacy row saves share one lineage revision owner."""
+    """Nested row saves explicitly share one lineage revision owner."""
 
     del workflow_tables
     with system_context(reason="test definition revision batch"):
         workflow = Workflow.objects.create(name="Batch")
-        with Workflow.objects._definition_write((workflow.pk,)):
-            first = Step.objects.create(
-                workflow=workflow, key="first", name="First", step_class="fixture", is_entry=True
-            )
-            second = Step.objects.create(workflow=workflow, key="second", name="Second", step_class="fixture")
-            Edge.objects.create(workflow=workflow, source=first, target=second, condition="timer")
+        with Workflow.objects._definition_write((workflow.pk,), using="default") as session:
+            first = Step(workflow=workflow, key="first", name="First", step_class="fixture", is_entry=True)
+            first.save(session=session)
+            second = Step(workflow=workflow, key="second", name="Second", step_class="fixture")
+            second.save(session=session)
+            Edge(workflow=workflow, source=first, target=second, condition="timer").save(session=session)
 
         workflow.refresh_from_db()
         assert workflow.draft_revision == 1
 
-        with Workflow.objects._definition_write((workflow.pk,)):
-            first.save(update_fields={"name"})
-            second.save(update_fields={"position"})
+        with Workflow.objects._definition_write((workflow.pk,), using="default") as session:
+            first.save(update_fields={"name"}, session=session)
+            second.save(update_fields={"position"}, session=session)
         workflow.refresh_from_db()
         assert workflow.draft_revision == 1
 
@@ -231,10 +231,12 @@ def test_failed_batch_rolls_back_rows_and_revision(workflow_tables: None) -> Non
         workflow = Workflow.objects.create(name="Rollback")
         other = Workflow.objects.create(name="Other")
         with pytest.raises(ValidationError, match="same workflow"):
-            with Workflow.objects._definition_write((workflow.pk, other.pk)):
-                source = Step.objects.create(workflow=workflow, key="source", name="Source", step_class="fixture")
-                target = Step.objects.create(workflow=other, key="target", name="Target", step_class="fixture")
-                Edge.objects.create(workflow=workflow, source=source, target=target)
+            with Workflow.objects._definition_write((workflow.pk, other.pk), using="default") as session:
+                source = Step(workflow=workflow, key="source", name="Source", step_class="fixture")
+                source.save(session=session)
+                target = Step(workflow=other, key="target", name="Target", step_class="fixture")
+                target.save(session=session)
+                Edge(workflow=workflow, source=source, target=target).save(session=session)
 
         workflow.refresh_from_db()
         assert workflow.draft_revision == 0
@@ -288,12 +290,9 @@ def test_published_parent_rejects_child_mutation_even_under_sudo(workflow_tables
 
     del workflow_tables
     with system_context(reason="test immutable definition"):
-        published = Workflow.objects.create(name="Historical")
-        # Test setup uses the narrow status transition contract, then exercises the public writer.
-        published.status = WorkflowStatus.PUBLISHED
-        published._allow_immutable_status_save = True
-        published.save(update_fields={"status"})
-        del published._allow_immutable_status_save
+        draft = Workflow.objects.create(name="Historical")
+        Step.objects.create(workflow=draft, key="entry", name="Entry", step_class="agent_session", is_entry=True)
+        published = draft.publish()
 
         with pytest.raises(ValidationError, match="immutable"):
             Step.objects.create(workflow=published, key="late", name="Late", step_class="fixture")
@@ -336,7 +335,7 @@ def test_lineage_head_cannot_mark_itself_published(workflow_tables: None) -> Non
     del workflow_tables
     with system_context(reason="test publication-only transition"):
         workflow = Workflow.objects.create(name="Incomplete head")
-        with pytest.raises(ValidationError, match=r"created by publish\(\)"):
+        with pytest.raises(ValidationError, match="Only a copied version"):
             workflow.mark_published()
         workflow.refresh_from_db()
         assert workflow.status == WorkflowStatus.DRAFT
@@ -350,16 +349,16 @@ def test_publication_inside_changed_batch_records_pending_revision(workflow_tabl
     del workflow_tables
     with system_context(reason="test pending publication revision"):
         workflow = Workflow.objects.create(name="Pending publication")
-        with Workflow.objects._definition_write((workflow.pk,)):
-            Step.objects.create(
+        with Workflow.objects._definition_write((workflow.pk,), using="default") as session:
+            Step(
                 workflow=workflow,
                 key="wait",
                 name="Wait",
                 step_class="wait",
                 config={"until": "2030-01-02T03:04:05Z"},
                 is_entry=True,
-            )
-            published = workflow.publish()
+            ).save(session=session)
+            published = workflow.publish(session=session)
 
         workflow.refresh_from_db()
         published.refresh_from_db()
@@ -428,3 +427,42 @@ def test_denied_explicit_actor_cascade_rolls_back_children(workflow_tables: None
     with system_context(reason="verify denied definition cascade"):
         assert Step.objects.filter(pk=source.pk).exists()
         assert Edge.objects.filter(pk=edge.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_explicit_definition_session_cannot_expand_the_locked_lineage(workflow_tables: None) -> None:
+    del workflow_tables
+    with system_context(reason="test explicit definition session scope"):
+        first = Workflow.objects.create(name="Locked")
+        second = Workflow.objects.create(name="Unrelated")
+        with Workflow.objects._definition_write((first.pk,), using="default") as session:
+            with pytest.raises(RuntimeError, match="cannot expand"):
+                Step(workflow=second, key="late", name="Late", step_class="fixture").save(session=session)
+        second.refresh_from_db()
+        assert second.draft_revision == 0
+        assert not second.steps.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_definition_session_does_not_reopen_an_immutable_parent(workflow_tables: None) -> None:
+    del workflow_tables
+    with system_context(reason="test explicit session retains immutable history"):
+        draft = Workflow.objects.create(name="Immutable")
+        Step.objects.create(workflow=draft, key="entry", name="Entry", step_class="agent_session", is_entry=True)
+        published = draft.publish()
+        with Workflow.objects._definition_write(
+            (published.pk,), _allow_status_transition=True, using="default"
+        ) as session:
+            with pytest.raises(ValidationError, match="immutable"):
+                Step(workflow=published, key="late", name="Late", step_class="fixture").save(session=session)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_definition_session_requires_its_lexical_transaction(workflow_tables: None) -> None:
+    del workflow_tables
+    with system_context(reason="test explicit session transaction scope"):
+        draft = Workflow.objects.create(name="Lexical")
+        with Workflow.objects._definition_write((draft.pk,), using="default") as session:
+            pass
+        with pytest.raises(RuntimeError, match="manager's transaction"):
+            Step(workflow=draft, key="late", name="Late", step_class="fixture").save(session=session)

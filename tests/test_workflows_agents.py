@@ -54,6 +54,7 @@ from tests.workflows import (
     StepAttempt,
     WorkflowDispatch,
     WorkflowRun,
+    admit_workflow_actor,
     advance_once,
     execute_started,
     start_run,
@@ -258,6 +259,7 @@ def test_infer_step_unresolved_model_id_is_an_invocation_error(
     step_run = SimpleNamespace(
         input={**_infer_input(), "model": public_id},
         run=SimpleNamespace(debit_budget=lambda delta: debits.append(dict(delta))),
+        _state=SimpleNamespace(adding=False, db="default"),
     )
 
     with pytest.raises(InferenceModel.DoesNotExist):
@@ -293,6 +295,7 @@ def test_infer_step_rejects_unapproved_role_or_deployment_before_provider_call(
     step_run = SimpleNamespace(
         input=_infer_input(model),
         run=SimpleNamespace(debit_budget=lambda delta: debits.append(dict(delta))),
+        _state=SimpleNamespace(adding=False, db="default"),
     )
 
     with pytest.raises(ValueError, match="policy is invalid|is not approved"):
@@ -321,6 +324,7 @@ def test_infer_step_rejects_request_timeout_before_provider_error_routing(
     step_run = SimpleNamespace(
         input=value,
         run=SimpleNamespace(debit_budget=lambda delta: debits.append(dict(delta))),
+        _state=SimpleNamespace(adding=False, db="default"),
     )
 
     with pytest.raises(PydanticValidationError, match="timeout belongs to the infer step input"):
@@ -642,13 +646,15 @@ def test_quiet_turn_heartbeat_cadence_survives_reaper_then_expires_without_pulse
             lease_token=attempt.lease_token,
             at=started_at,
             using=WorkflowDispatch.objects.db,
-        ):
+        ) as preflight:
             StepAttempt.objects.admit_invocation(
                 attempt.pk,
                 lease_token=attempt.lease_token,
                 at=started_at,
             )
-            WorkflowDispatch.objects._consume_locked(dispatch.pk, at=started_at)
+            WorkflowDispatch.objects._consume_locked(
+                dispatch.pk, envelope=preflight.envelope, at=started_at, alias="default"
+            )
     clock = {"now": started_at, "sleeps": 0}
 
     class StopHeartbeat(Exception):
@@ -921,7 +927,7 @@ def _infer_workflow(
 def _start_infer_run(workflow: Any, value: dict[str, Any]) -> Any:
     """Start one workflow with a present inference envelope."""
 
-    return engine.start(workflow, subject=None, actor=None, input=JsonPresence(True, value))
+    return engine.start(workflow, subject=None, actor=admit_workflow_actor(workflow), input=JsonPresence(True, value))
 
 
 def _inference_model(slug: str) -> InferenceModel:

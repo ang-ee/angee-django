@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -11,22 +10,21 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from pydantic import BaseModel, ConfigDict, Field
-from rebac import actor_context, to_subject_ref
+from rebac import actor_context
 
 from angee.base.actors import actor_user_id
+from angee.base.db import get_write_alias
 from angee.base.impl import resolve_impl_class
 from angee.base.refs import canonical_record_target
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import (
     ArtifactSpec,
-    DecisionGateOutput,
     ExternalOperationPolicy,
     RecoveryCapability,
     RecoveryMode,
 )
 from angee.workflows.engine import external_operation_request
 from angee.workflows.steps import (
-    DecisionApplyStep,
     StepEffect,
     StepExecutionMode,
     StepImpl,
@@ -40,16 +38,13 @@ from angee.workflows_extraction.engines import (
     PageImage,
 )
 from angee.workflows_extraction.service import (
-    CorrectionBasis,
     SupersededInference,
     collect_carriers,
-    correction_basis,
     infer,
     prepare_pages,
     process,
     require_approved_model_deployment,
     restore_prepared_pages,
-    retain_correction_revision,
 )
 
 EngineConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
@@ -118,16 +113,19 @@ class PreparePagesStepImpl(StepImpl):
     outcomes = (StepOutcome("prepared", "Prepared"),)
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        alias = get_write_alias(type(step_run), instance=step_run)
+        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(alias).get(pk=step_run.run_id)
         del now
         value = self.validate_input(step_run.input)
         options = value.engine_config
-        actor = step_run.run.admission_actor()
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page preparation requires the workflow actor.")
         with actor_context(actor):
-            files, parts, target = _resolve_sources(value)
+            files, parts, target = _resolve_sources(value, using=alias)
             prepared = prepare_pages(
                 files=files, message_parts=parts, authorized_target=target, config=options,
+                using=alias,
             )
         model_id = value.recognition_model or ""
         recognition_options = dict(options.get("recognition_config") or {})
@@ -216,34 +214,37 @@ class RecognizePageStepImpl(StepImpl):
         )
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        alias = get_write_alias(type(step_run), instance=step_run)
         del now
-        return self._recognize(step_run)
+        return self._recognize(step_run, using=alias)
 
     def run_recovery(
         self, step_run: Any, *, now: datetime, source_attempt: Any, mode: RecoveryMode,
     ) -> StepResult:
+        alias = get_write_alias(type(step_run), instance=step_run)
         del now, source_attempt
         if mode is not RecoveryMode.FRESH:
             raise ValidationError({"recovery": "Page recognition requires fresh acknowledged recovery."})
-        return self._recognize(step_run)
+        return self._recognize(step_run, using=alias)
 
-    def _recognize(self, step_run: Any) -> StepResult:
-        request = external_operation_request(step_run)
+    def _recognize(self, step_run: Any, *, using: str) -> StepResult:
+        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(using).get(pk=step_run.run_id)
+        request = external_operation_request(step_run, using=using)
         value = self.validate_input(request.input)
         if value.config_digest != canonical_json_sha256(value.engine_config):
             raise ValidationError({"recognition": "The page item names a different admitted recognizer config."})
-        actor = step_run.run.admission_actor()
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page recognition requires the workflow actor.")
         with actor_context(actor):
             file_model = apps.get_model("storage", "File")
             model_model = apps.get_model("agents", "InferenceModel")
-            image_file = file_model.objects.get(sqid=value.image_file_id)
+            image_file = file_model.objects.db_manager(using).select_related("drive").get(sqid=value.image_file_id)
             if not image_file.with_actor(actor).has_access("read") or str(image_file.upload_state) != "ready":
                 raise PermissionDenied("Read access to the READY page carrier is required.")
             if str(image_file.content_hash) != value.image_digest:
                 raise ValidationError({"recognition": "The page carrier digest changed."})
-            model = model_model.objects.get(sqid=value.model_id)
+            model = model_model.objects.db_manager(using).get(sqid=value.model_id)
             if not model.with_actor(actor).has_access("read"):
                 raise PermissionDenied("Read access to the recognition model is required.")
             require_approved_model_deployment(model, role="recognition")
@@ -263,9 +264,9 @@ class RecognizePageStepImpl(StepImpl):
                     model=model, config=value.engine_config, timeout=value.timeout,
                 )
             except DocumentPipelineError as error:
-                step_run.run.debit_budget(error.usage_delta)
+                run.debit_budget(error.usage_delta, using=using)
                 raise
-            step_run.run.debit_budget(response.usage_delta)
+            run.debit_budget(response.usage_delta, using=using)
             if not isinstance(response.text, str) or "\x00" in response.text:
                 raise ValidationError({"recognition": "The recognizer did not return valid text."})
             text = response.text.encode("utf-8")
@@ -276,7 +277,7 @@ class RecognizePageStepImpl(StepImpl):
                 "config_digest": value.config_digest,
                 "source_position": value.source_position, "page_position": value.page_position,
             }
-            text_file = file_model.objects.ingest_stream(
+            text_file = file_model.objects.db_manager(using).ingest_stream(
                 ContentFile(text), filename=f"recognized-page-{value.source_position}-{value.page_position}.txt",
                 content_hash=digest, size_bytes=len(text), owner_id=actor_user_id(actor),
                 drive_id=str(image_file.drive.sqid),
@@ -317,14 +318,16 @@ class CollectCarriersStepImpl(StepImpl):
     outcomes = (StepOutcome("collected", "Collected"), StepOutcome("source_hold", "Source hold"))
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        alias = get_write_alias(type(step_run), instance=step_run)
+        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(alias).get(pk=step_run.run_id)
         del now
         value = self.validate_input(step_run.input)
         options = value.engine_config
-        actor = step_run.run.admission_actor()
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Carrier collection requires the workflow actor.")
         with actor_context(actor):
-            prepared, manifest = _restore_prepared(value.prepared, options)
+            prepared, manifest = _restore_prepared(value.prepared, options, using=alias)
             if (
                 canonical_json_sha256(dict(options.get("recognition_config") or {}))
                 != manifest.recognition_config_digest
@@ -336,6 +339,7 @@ class CollectCarriersStepImpl(StepImpl):
             collected = collect_carriers(
                 prepared, results, recognition_model_id=manifest.recognition_model_id,
                 recognition_config_digest=manifest.recognition_config_digest,
+                using=alias,
             )
         return StepResult.done(output={
             "prepared": value.prepared, "recognition_results": results,
@@ -380,28 +384,31 @@ class ProcessEvidenceStepImpl(StepImpl):
         return RecoveryCapability(None, "Processed evidence retention has no recovery reconciliation contract.")
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        alias = get_write_alias(type(step_run), instance=step_run)
+        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(alias).get(pk=step_run.run_id)
         del now
         value = self.validate_input(step_run.input)
-        actor = step_run.run.admission_actor()
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Evidence processing requires the workflow actor.")
         with actor_context(actor):
-            prepared, manifest = _restore_prepared(value.prepared, value.engine_config)
+            prepared, manifest = _restore_prepared(value.prepared, value.engine_config, using=alias)
             collected = collect_carriers(
                 prepared, value.recognition_results,
                 recognition_model_id=manifest.recognition_model_id,
                 recognition_config_digest=manifest.recognition_config_digest,
+                using=alias,
             )
             if list(collected.hold_reasons) != value.hold_reasons:
                 raise ValidationError({"recognition": "The collected source hold changed before retention."})
-            target = apps.get_model(manifest.target_model).objects.get(sqid=manifest.target_id)
+            target = apps.get_model(manifest.target_model).objects.db_manager(alias).get(sqid=manifest.target_id)
             model_model = apps.get_model("agents", "InferenceModel")
             mapping_model = (
-                model_model.objects.get(sqid=manifest.mapping_model_id)
+                model_model.objects.db_manager(alias).get(sqid=manifest.mapping_model_id)
                 if manifest.mapping_model_id else None
             )
             recognition_model = (
-                model_model.objects.get(sqid=manifest.recognition_model_id)
+                model_model.objects.db_manager(alias).get(sqid=manifest.recognition_model_id)
                 if manifest.recognition_model_id else None
             )
             evidence = process(
@@ -410,6 +417,7 @@ class ProcessEvidenceStepImpl(StepImpl):
                 model=mapping_model, recognition_model=recognition_model,
                 identity_mapping=value.identity_mapping,
                 retired_identities=value.retired_identities,
+                using=alias,
             )
         return StepResult.done(output={
             "extraction_id": str(evidence.sqid), "revision": evidence.revision,
@@ -475,29 +483,36 @@ class InferEvidenceStepImpl(StepImpl):
         )
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        alias = get_write_alias(type(step_run), instance=step_run)
         del now
-        return self._infer(step_run)
+        return self._infer(step_run, using=alias)
 
     def run_recovery(
         self, step_run: Any, *, now: datetime, source_attempt: Any, mode: RecoveryMode,
     ) -> StepResult:
+        alias = get_write_alias(type(step_run), instance=step_run)
         del now, source_attempt
         if mode is not RecoveryMode.FRESH:
             raise ValidationError({"recovery": "Inference requires fresh acknowledged recovery."})
-        return self._infer(step_run)
+        return self._infer(step_run, using=alias)
 
-    def _infer(self, step_run: Any) -> StepResult:
-        request = external_operation_request(step_run)
+    def _infer(self, step_run: Any, *, using: str) -> StepResult:
+        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(using).get(pk=step_run.run_id)
+        request = external_operation_request(step_run, using=using)
         value = self.validate_input(request.input)
-        actor = step_run.run.admission_actor()
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Bound inference requires the workflow actor.")
         with actor_context(actor):
-            base = apps.get_model("workflows_extraction", "Extraction").objects.get(sqid=value.base_extraction_id)
+            base = (
+                apps.get_model("workflows_extraction", "Extraction")
+                .objects.db_manager(using)
+                .get(sqid=value.base_extraction_id)
+            )
             if base.revision != value.base_revision:
                 raise ValidationError({"base_revision": "The retained extraction revision differs."})
-            target = apps.get_model(value.target_model).objects.get(sqid=value.target_id)
-            target_ref = canonical_record_target(target)
+            target = apps.get_model(value.target_model).objects.db_manager(using).get(sqid=value.target_id)
+            target_ref = canonical_record_target(target, using=using)
             if (
                 target_ref.content_type.pk != base.content_type_id
                 or str(target_ref.object_id) != str(base.object_id)
@@ -508,13 +523,13 @@ class InferEvidenceStepImpl(StepImpl):
                     raise ValidationError({
                         "base_extraction_id": "Retained-only inference requires successful evidence."
                     })
-                current = type(base).objects.inference_current_head(base, actor=actor)
+                current = type(base).objects.db_manager(using).inference_current_head(base, actor=actor)
                 if current.pk != base.pk:
                     if (
                         current.status == "failed"
                         and current.error_code
                         == "source_hold:identity_correspondence_required"
-                        and type(base).objects.inference_authority_base(
+                        and type(base).objects.db_manager(using).inference_authority_base(
                             current, actor=actor,
                         ).pk
                         == base.pk
@@ -524,6 +539,7 @@ class InferEvidenceStepImpl(StepImpl):
                             actor=actor,
                             success_outcome="correspondence_required",
                             artifact_label="Current extraction evidence",
+                            using=using,
                         )
                     raise ValidationError({
                         "base_extraction_id": (
@@ -534,7 +550,7 @@ class InferEvidenceStepImpl(StepImpl):
                     output=_inference_output(base), outcome="unchanged",
                     artifacts=(ArtifactSpec(base, "Retained extraction evidence"),),
                 )
-            current = type(base).objects.inference_current_head(base, actor=actor)
+            current = type(base).objects.db_manager(using).inference_current_head(base, actor=actor)
             if current.pk != base.pk:
                 if (
                     current.status == "failed"
@@ -546,6 +562,7 @@ class InferEvidenceStepImpl(StepImpl):
                         actor=actor,
                         success_outcome="correspondence_required",
                         artifact_label="Current extraction evidence",
+                        using=using,
                     )
             else:
                 profile = resolve_impl_class(
@@ -570,7 +587,7 @@ class InferEvidenceStepImpl(StepImpl):
                     )
             if value.model_id is None:
                 raise ValidationError({"model_id": "An admitted mapping model is required."})
-            model = apps.get_model("agents", "InferenceModel").objects.get(sqid=value.model_id)
+            model = apps.get_model("agents", "InferenceModel").objects.db_manager(using).get(sqid=value.model_id)
             try:
                 outcome = infer(
                     base,
@@ -579,14 +596,15 @@ class InferEvidenceStepImpl(StepImpl):
                     operation_step_run=step_run,
                     identity_mapping=value.identity_mapping,
                     retired_identities=value.retired_identities,
+                    using=using,
                 )
             except DocumentPipelineError as error:
-                step_run.run.debit_budget(error.usage_delta)
+                run.debit_budget(error.usage_delta, using=using)
                 if (
                     error.code == RETAINED_CARRIER_UNAVAILABLE
                     and error.stage == "correspondence"
                 ):
-                    authority = type(base).objects.inference_authority_base(
+                    authority = type(base).objects.db_manager(using).inference_authority_base(
                         base, actor=actor,
                     )
                     if authority.pk != base.pk:
@@ -609,10 +627,10 @@ class InferEvidenceStepImpl(StepImpl):
                     outcome="inference_failed",
                     artifacts=(ArtifactSpec(base, "Source evidence requiring manual review"),),
                 )
-        step_run.run.debit_budget(outcome.usage_delta)
+        run.debit_budget(outcome.usage_delta, using=using)
         if isinstance(outcome, SupersededInference):
             with actor_context(actor):
-                current = apps.get_model("workflows_extraction", "Extraction").objects.get(
+                current = apps.get_model("workflows_extraction", "Extraction").objects.db_manager(using).get(
                     sqid=outcome.current_extraction_id,
                 )
             return StepResult.done(
@@ -624,6 +642,7 @@ class InferEvidenceStepImpl(StepImpl):
             actor=actor,
             success_outcome="inferred",
             artifact_label="Inferred extraction evidence",
+            using=using,
         )
 
 
@@ -652,6 +671,7 @@ def _retained_inference_result(
     actor: Any,
     success_outcome: str,
     artifact_label: str,
+    using: str,
 ) -> StepResult:
     """Route one exact retained result without inventing correspondence choices."""
 
@@ -682,7 +702,7 @@ def _retained_inference_result(
             outcome=success_outcome,
             artifacts=(ArtifactSpec(extraction, artifact_label),),
         )
-    manager = type(extraction).objects
+    manager = type(extraction).objects.db_manager(using)
     if manager.inference_candidate_selectors(extraction):
         return StepResult.done(
             output=_inference_output(extraction),
@@ -708,115 +728,9 @@ def _retained_inference_result(
     )
 
 
-class ReviseEvidenceInput(BaseModel):
-    """Exact retained base, corrected value, and admitted native gate projection."""
-
-    model_config = ConfigDict(extra="forbid")
-    base_extraction_id: str
-    base_revision: int = Field(ge=1)
-    expected_target_id: str
-    review: DecisionGateOutput
-
-
-class GenericEvidenceCorrection(BaseModel):
-    """Policy-free changed or explicitly confirmed facts from the exact Decision."""
-
-    model_config = ConfigDict(extra="forbid")
-    result: dict[str, Any]
-    identity_mapping: dict[str, str] | None = None
-    retired_identities: dict[str, str] = Field(default_factory=dict)
-    confirmed_paths: list[str] = Field(default_factory=list)
-
-
-class ReviseEvidenceConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    expected_action: str = Field(min_length=1)
-    expected_target_model: str = Field(min_length=1)
-
-
-class ReviseEvidenceStepImpl(DecisionApplyStep):
-    """Retain a generic correction from one exact local native Decision gate."""
-
-    key = "revise_evidence"
-    label = "Retain corrected evidence"
-    category = "Activity"
-    deterministic = False
-    idempotent = True
-    effect = StepEffect.WRITE
-    execution_mode = StepExecutionMode.DATABASE_COMMAND
-    replay_mode = RecoveryMode.FRESH
-    effect_description = "Consumes one exact Decision resolution and clones immutable evidence once."
-    input_model = ReviseEvidenceInput
-    output_model = ProcessEvidenceOutput
-    config_model = ReviseEvidenceConfig
-    outcomes = (StepOutcome("revised", "Revised"),)
-    resolution_path = ("review", "resolutions", 0)
-
-    def locked_record_basis(
-        self,
-        step_run: Any,
-        predecessor: Any,
-        *,
-        actor: Any,
-    ) -> CorrectionBasis:
-        """Lock the exact extraction basis named by the predecessor Decision."""
-
-        del actor
-        value = self.validate_input(step_run.input)
-        config = ReviseEvidenceConfig.model_validate(step_run.step.config)
-        if len(value.review.resolutions) != 1:
-            raise ValidationError({"review": "Generic evidence correction requires one resolution."})
-        if (
-            predecessor.action != config.expected_action
-            or predecessor.target_model != config.expected_target_model
-            or predecessor.target_id != value.expected_target_id
-        ):
-            raise ValidationError({"review": "Correction Decision differs from the declared action or target."})
-        execution_actor = step_run.run.execution_admission_actor()
-        with actor_context(execution_actor):
-            extraction = apps.get_model("workflows_extraction", "Extraction").objects.get(
-                sqid=value.base_extraction_id,
-            )
-        if extraction.revision != value.base_revision:
-            raise ValidationError({"base_revision": "The retained extraction revision differs."})
-        return correction_basis(extraction, decision=predecessor)
-
-    def apply_resolution(
-        self,
-        step_run: Any,
-        decision: Any,
-        admitted: Any,
-        *,
-        actor: Any,
-        record_basis: CorrectionBasis,
-        now: datetime,
-    ) -> StepResult:
-        """Retain the correction from the one factory-admitted resolution."""
-
-        del now
-        execution_actor = step_run.run.execution_admission_actor()
-        correction = GenericEvidenceCorrection.model_validate_json(
-            json.dumps(admitted.resolution, allow_nan=False),
-        )
-        with actor_context(actor):
-            corrected = retain_correction_revision(
-                record_basis,
-                result=correction.result,
-                decision=decision,
-                revision_owner_id=actor_user_id(to_subject_ref(execution_actor)),
-                identity_mapping=correction.identity_mapping,
-                retired_identities=correction.retired_identities,
-                confirmed_paths=correction.confirmed_paths,
-            )
-        return StepResult.done(
-            output=_inference_output(corrected),
-            outcome="revised",
-            artifacts=(ArtifactSpec(corrected, "Corrected extraction evidence"),),
-        )
-
-
 def _restore_prepared(
     value: dict[str, Any], options: dict[str, Any],
+    *, using: str,
 ) -> tuple[Any, PreparePagesOutput]:
     manifest = PreparePagesOutput.model_validate(value)
     sources = manifest.manifest.get("sources")
@@ -828,10 +742,11 @@ def _restore_prepared(
         files=file_ids, message_parts=part_ids, target_model=manifest.target_model,
         target_id=manifest.target_id,
     )
-    files, parts, target = _resolve_sources(input_refs)
+    files, parts, target = _resolve_sources(input_refs, using=using)
     prepared = restore_prepared_pages(
         manifest.manifest, files=files, message_parts=parts,
         authorized_target=target, config=options,
+        using=using,
     )
     if [
         {"source_position": page.source_position, "page_position": page.page_position,
@@ -846,18 +761,20 @@ def _restore_prepared(
     return prepared, manifest
 
 
-def _resolve_sources(value: ExtractionSourceInput) -> tuple[list[Any], list[Any], Any]:
+def _resolve_sources(value: ExtractionSourceInput, *, using: str) -> tuple[list[Any], list[Any], Any]:
     file_model = apps.get_model("storage", "File")
     part_model = apps.get_model("messaging", "Part")
-    requested_files = list(file_model.objects.filter(sqid__in=value.files))
+    requested_files = list(
+        file_model.objects.db_manager(using).select_related("mime_type", "drive").filter(sqid__in=value.files)
+    )
     files_by_id = {str(file.sqid): file for file in requested_files}
     if any(file_id not in files_by_id for file_id in value.files):
         raise ValidationError({"files": "One or more source Files are unavailable."})
     requested_parts = list(
-        part_model.objects.filter(sqid__in=value.message_parts).select_related("message", "fragment")
+        part_model.objects.db_manager(using).filter(sqid__in=value.message_parts).select_related("message", "fragment")
     )
     parts_by_id = {str(part.sqid): part for part in requested_parts}
     if any(part_id not in parts_by_id for part_id in value.message_parts):
         raise ValidationError({"message_parts": "One or more Message Parts are unavailable."})
-    target = apps.get_model(value.target_model).objects.get(sqid=value.target_id)
+    target = apps.get_model(value.target_model).objects.db_manager(using).get(sqid=value.target_id)
     return [files_by_id[item] for item in value.files], [parts_by_id[item] for item in value.message_parts], target

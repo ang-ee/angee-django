@@ -329,7 +329,7 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     sent: list[dict[str, object]] = []
     monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
     # Run the on_commit callback inline so the (non-)broadcast is observable now.
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     stub_payload = ChangePayload(model="tests.Row", id="1", action="update")
     monkeypatch.setattr(
         publishing.ChangePayload,
@@ -350,11 +350,11 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     publishing.publish_change(Row(broadcasts=False), action="update", update_fields=None)
     assert sent == []
 
-    publishing.publish_change(Row(broadcasts=True), action="delete", update_fields=None)
+    publishing.publish_change(Row(broadcasts=True), action="delete", update_fields=None, using="default")
     assert sent == [stub_payload.as_message()]
 
     # A plain model with no hook keeps the default broadcast behavior.
-    publishing.publish_change(object(), action="create", update_fields=None)
+    publishing.publish_change(object(), action="create", update_fields=None, using="default")
     assert sent == [stub_payload.as_message(), stub_payload.as_message()]
 
 

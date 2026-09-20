@@ -66,8 +66,9 @@ terminal. A child's `child_failed` or `child_canceled` call outcome has
 and output bindings on those routes are rejected. A Map body of calls completes
 only after each item's child result is complete and joins results in item order.
 
-`join_continuation` consumes a continuation id only through the provenance-bound
-starter output admitted by `StepAttemptManager`. It subscribes to that original
+`join_continuation` passes the child id and current invocation lease explicitly
+to `StepAttemptManager`. The manager checks the retained parent relationship,
+starter class, execution lineage and actor scope. It subscribes to that original
 run before reading completion, treats terminal artifact delivery as the primary
 wake, and retains `reconcile_after` as a bounded missed-delivery check. An exact
 successful FRESH recovery may satisfy the join only through the manager's
@@ -115,8 +116,8 @@ native contract. `DATABASE_COMMAND` no longer implies replay eligibility.
 `GateStep` is the only workflow review gate. Its static and bound forms share
 the same `GateConfig`: `one_done`, `all_success`, `all_done`, `majority`, and
 `sequential` policies; static or input-bound slots; input-bound `payload`,
-`decision_schema`, `targets`, `record_access`, and `clean`; target authority
-paths; and optional same-step resumption. A true `clean` value returns the
+`decision_schema`, `targets`, `record_access`, and `clean`; and optional
+same-step resumption. A true `clean` value returns the
 canonical empty `DecisionGateOutput` on `completed` without creating Decisions.
 `resume: true` retains caller state, wakes the same `StepRun` after settlement,
 and lets `GateStep.resumption()` return both the canonical gate output and the
@@ -126,8 +127,8 @@ the gate's `input_binding` first; the gate never queries graph sources again.
 
 Decision UI contracts are authored in Python with
 `build_decision_action()`. Consumers provide `ReviewAction` declarations,
-editable property schemas, and typed `ReviewFact`, `ReviewRecordReference`,
-`ReviewDifference`, and `ReviewReason` values. The builder owns the closed
+editable property schemas, and typed `ReviewFact` and `ReviewRecordReference`
+values. The builder owns the closed
 tagged `oneOf`, action metadata, and read-only context schema. The Decision
 manager remains the sole compiler when it admits the suspension; consumers do
 not compile or hand-author action branches.
@@ -156,16 +157,30 @@ config:
 [DecisionContextFields](schema.py) exposes workflow and step context on
 authorized Decisions; journal references retain independent read checks.
 
-A consumer pairs the gate with a `DecisionApplyStep` subclass. The subclass
-declares `input_model`, `output_model`, `outcomes`, `effect`, `execution_mode`,
-and `idempotent`, plus its predecessor `gate_step_class` when it is narrower
-than `GateStep`. Its `locked_record_basis()` locks every row the verb may
-mutate. The base loads the one direct predecessor Decision, resolves its human
-actor, consumes the exact admitted resolution and provenance through
-`engine.consume_decision_resolution()`, and then calls `apply_resolution()`.
-The adapter returns its manager verb's `StepResult` unchanged, including a
-durable wait. Use `DATABASE_COMMAND` only when the complete operation is local
-database work; provider and blob I/O remain a standard or external operation.
+A consumer pairs the gate with a `DecisionApplyStep` subclass. Declare
+`input_model`, `output_model`, `outcomes`, `effect`, `execution_mode`, and
+`idempotent`, plus a narrower `gate_step_class` when needed. The base loads the
+predecessor Decision and calls `invoke_command(step_run, *, decision_id, actor,
+now)`. Actorless expiry and timer resolutions pass `actor=None`; a command must explicitly accept
+its expected terminal verdict. Clean gates have no Decision, and multi-slot
+applications must choose their own domain operation over the retained collection.
+
+`DecisionManager.decide(decision_id, *, actor, resolution=DecisionSubmission(...))`
+owns submission authorization, schema validation, settlement, grant removal and
+durable dispatch as one atomic operation. JSON-authored schemas validate with
+Draft 2020-12 without coercion or inserted defaults; Python-authored contracts
+keep native Pydantic validation.
+
+For application, `DecisionManager.locked_resolution` validates the retained
+Decision, matching resolver, expected action/verdict and current consumer under
+ancestry locks. A bridge calls public domain verbs with plain values and the
+acting user. Those verbs lock domain rows, enforce their own REBAC and expected
+state, and use durable unique/conditional facts for idempotence. Keep dependency
+direction explicit: `parties` never imports workflows; `workflows_parties` only
+orchestrates both owners. An addon already depending on workflows can accept a
+Decision identity in its command, as `ExtractionManager.revise_from_decision`
+does. ARP S7 binds to the same split. `DATABASE_COMMAND` commits the operation,
+result and dispatch together; provider and blob I/O stay outside this mode.
 
 The exact resource shape for a bound gate and apply pair is:
 
@@ -202,7 +217,7 @@ The exact resource shape for a bound gate and apply pair is:
 
 `prepare_review` returns the six bound fields above. It builds `payload` and
 `decision_schema` with `build_decision_action()`; each target is
-`{model, id, tab?, authority_path?, authority_gate_path?}`, and each record
+`{model, id, tab?}`, and each record
 access item is the native `DecisionRecordAccess` JSON shape. The apply class is
 a registered `DecisionApplyStep`; the graph connects `review.completed` to
 `apply_review`. If `clean` can be true on that edge, the apply subclass must
@@ -213,8 +228,6 @@ static mapping-valued gate fields; put domain data with that name below another
 payload key. A clean binding is evaluated before any decision-authoring binding,
 so the clean branch does not require non-clean payloads or slots to exist.
 
-The apply base passes its record-basis loader into Decision consumption. The
-manager locks the run, step run, and current attempt before invoking that loader,
-then validates the consumed Decision against the resulting records. Database
-commands retain those locks through their surrounding invocation transaction;
-adapters must not acquire domain rows before calling the base.
+Application lock order is workflow ancestry, Decision, then domain rows. The
+persisted invocation lease comes from `step_run.current_attempt.lease_token`;
+it is never transported through an ambient session or dynamic step-run attribute.

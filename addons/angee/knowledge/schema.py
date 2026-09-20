@@ -15,6 +15,7 @@ from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
 
+from angee.base.db import get_write_alias
 from angee.base.identity import instance_from_public_id
 from angee.base.scoping import write_scoped_queryset
 from angee.data.metadata import DataResourceSubtitleMetadata
@@ -327,14 +328,15 @@ class PageWriteBackend(AngeeHasuraWriteBackend):
         """Create a page in a vault the requesting user can write."""
 
         del info
-        vault = require_instance_for_id(Vault, data["vault"])
+        alias = get_write_alias(Page)
+        vault = require_instance_for_id(Vault, data["vault"], queryset=Vault._default_manager.using(alias))
         parent = None
         if data.get("parent") is not None:
-            parent = require_instance_for_id(Page, data["parent"])
+            parent = require_instance_for_id(Page, data["parent"], queryset=Page._default_manager.using(alias))
         payload = dict(data)
         payload.pop("vault", None)
         payload.pop("parent", None)
-        return Page._default_manager.create_in(vault, parent=parent, **payload)
+        return Page._default_manager.db_manager(alias).create_in(vault, parent=parent, **payload)
 
 
 _VAULT_RESOURCE = hasura_model_resource(
@@ -372,7 +374,13 @@ MAX_SEARCH_PAGE_SIZE = 100
 """Upper bound on :meth:`KnowledgeQuery.search_pages` ``first`` — every backend inherits it."""
 
 
-def _record_for_binding(model_label: str, record_id: PublicID, *, write: bool = False) -> Any | None:
+def _record_for_binding(
+    model_label: str,
+    record_id: PublicID,
+    *,
+    write: bool = False,
+    using: str | None = None,
+) -> Any | None:
     """Resolve an arbitrary REBAC record through the ambient actor's row scope."""
 
     try:
@@ -381,19 +389,24 @@ def _record_for_binding(model_label: str, record_id: PublicID, *, write: bool = 
         return None
     if model_resource_type(model) is None:
         return None
-    queryset = write_scoped_queryset(model) if write else None
+    queryset = write_scoped_queryset(model, using=using) if write else None
     return instance_from_public_id(model, str(record_id), queryset=queryset)
 
 
-def _knowledge_for_binding(input: RecordBindingInput, *, write: bool = False) -> tuple[Any | None, Any | None]:
+def _knowledge_for_binding(
+    input: RecordBindingInput,
+    *,
+    write: bool = False,
+    using: str | None = None,
+) -> tuple[Any | None, Any | None]:
     """Resolve exactly one Page/Vault owner through the ambient actor's row scope."""
 
     if (input.page is None) == (input.vault is None):
         raise ValueError("Exactly one of page or vault is required.")
     if input.page is not None:
-        queryset = write_scoped_queryset(Page) if write else None
+        queryset = write_scoped_queryset(Page, using=using) if write else None
         return require_instance_for_id(Page, input.page, queryset=queryset), None
-    queryset = write_scoped_queryset(Vault) if write else None
+    queryset = write_scoped_queryset(Vault, using=using) if write else None
     return None, require_instance_for_id(Vault, cast(PublicID, input.vault), queryset=queryset)
 
 
@@ -475,13 +488,14 @@ class KnowledgeMutation:
     def bind_knowledge_record(self, input: RecordBindingInput) -> RecordBindingType:
         """Idempotently bind one writable Page/Vault to one writable record."""
 
-        page, vault = _knowledge_for_binding(input, write=True)
-        target = _record_for_binding(input.model_label, input.record_id, write=True)
+        alias = get_write_alias(Page if input.page is not None else Vault)
+        page, vault = _knowledge_for_binding(input, write=True, using=alias)
+        target = _record_for_binding(input.model_label, input.record_id, write=True, using=alias)
         if target is None:
             raise ValueError("Record not found.")
         return cast(
             RecordBindingType,
-            RecordBinding._default_manager.upsert(
+            RecordBinding._default_manager.db_manager(alias).upsert(
                 page=page,
                 vault=vault,
                 target=target,
@@ -493,11 +507,12 @@ class KnowledgeMutation:
     def unbind_knowledge_record(self, input: RecordBindingInput) -> bool:
         """Remove one Page/Vault-to-record role key if it exists."""
 
-        page, vault = _knowledge_for_binding(input, write=True)
-        target = _record_for_binding(input.model_label, input.record_id, write=True)
+        alias = get_write_alias(Page if input.page is not None else Vault)
+        page, vault = _knowledge_for_binding(input, write=True, using=alias)
+        target = _record_for_binding(input.model_label, input.record_id, write=True, using=alias)
         if target is None:
             raise ValueError("Record not found.")
-        RecordBinding._default_manager.unbind(
+        RecordBinding._default_manager.db_manager(alias).unbind(
             page=page,
             vault=vault,
             target=target,
@@ -539,9 +554,12 @@ class KnowledgeMutation:
     ) -> PageBodyPayload:
         """Write a page's markdown body, last-write-wins with a stale guard."""
 
-        target = require_instance_for_id(Page, page)
+        alias = get_write_alias(Page)
+        target = require_instance_for_id(Page, page, queryset=Page._default_manager.using(alias))
         return _markdown_write_payload(
-            lambda: MarkdownPage._default_manager.write_body(target, body, expected_hash=expected_hash)
+            lambda: MarkdownPage._default_manager.db_manager(alias).write_body(
+                target, body, expected_hash=expected_hash
+            )
         )
 
     @strawberry.mutation(name="patch_page_section")
@@ -563,9 +581,10 @@ class KnowledgeMutation:
         a fail-fast structured edit (``SECTION_NOT_FOUND``/``AMBIGUOUS_MATCH``).
         """
 
-        target = require_instance_for_id(Page, page)
+        alias = get_write_alias(Page)
+        target = require_instance_for_id(Page, page, queryset=Page._default_manager.using(alias))
         return _markdown_write_payload(
-            lambda: MarkdownPage._default_manager.patch_section(
+            lambda: MarkdownPage._default_manager.db_manager(alias).patch_section(
                 target, heading_path, op.value, content, expected_hash=expected_hash
             )
         )
@@ -588,9 +607,12 @@ class KnowledgeMutation:
         ``AMBIGUOUS_MATCH``/``SECTION_NOT_FOUND`` before any write.
         """
 
-        target = require_instance_for_id(Page, page)
+        alias = get_write_alias(Page)
+        target = require_instance_for_id(Page, page, queryset=Page._default_manager.using(alias))
         return _markdown_write_payload(
-            lambda: MarkdownPage._default_manager.replace_unique(target, old, new, expected_hash=expected_hash)
+            lambda: MarkdownPage._default_manager.db_manager(alias).replace_unique(
+                target, old, new, expected_hash=expected_hash
+            )
         )
 
     @strawberry.mutation(name="append_to_page")
@@ -611,9 +633,12 @@ class KnowledgeMutation:
         re-rendered), so the section seam stays consistent.
         """
 
-        target = require_instance_for_id(Page, page)
+        alias = get_write_alias(Page)
+        target = require_instance_for_id(Page, page, queryset=Page._default_manager.using(alias))
         return _markdown_write_payload(
-            lambda: MarkdownPage._default_manager.append(target, content, expected_hash=expected_hash)
+            lambda: MarkdownPage._default_manager.db_manager(alias).append(
+                target, content, expected_hash=expected_hash
+            )
         )
 
 

@@ -11,7 +11,8 @@ from copy import copy, deepcopy
 from types import SimpleNamespace
 from typing import Any
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 from django.apps import apps
@@ -19,8 +20,9 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, models, transaction
+from django.db import IntegrityError, models
 from django.test import SimpleTestCase, override_settings
+from django.utils import timezone
 from rebac import (
     MissingActorError,
     PermissionDenied,
@@ -33,9 +35,9 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.actors import actor_user_id
 from angee.messaging.backends import ParsedMessage, ParsedPart
 from angee.workflows import engine as workflow_engine
+from angee.workflows.states import Verdict
 from angee.workflows_extraction.engines import (
     RETAINED_AUTHORITY_COMPLETION_REVIEW,
     RETAINED_CARRIER_UNAVAILABLE,
@@ -70,12 +72,10 @@ from angee.workflows_extraction.service import (
     _reviewed_correction_unresolved_reasons,
     _unchanged_claims,
     collect_carriers,
-    correction_basis,
     infer,
     prepare_pages,
     process,
     require_approved_model_deployment,
-    retain_correction_revision,
 )
 from angee.workflows_extraction.steps import InferEvidenceStepImpl
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
@@ -83,7 +83,19 @@ from tests.extraction_models import EXTRACTION_MODELS, Extraction, ExtractionPag
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
 from tests.test_integrate_vcs import VCS_TEST_MODELS
 from tests.test_messaging import MESSAGING_TEST_MODELS
-from tests.workflows import Decision, Step, StepRun, Workflow, WorkflowRun
+from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowRun
+
+
+class ExtractionWriteRouter:
+    """Expose accidental read routing during extraction mutation tests."""
+
+    def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
+        del model, hints
+        return "missing-read-replica"
+
+    def db_for_write(self, model: type[models.Model], **hints: Any) -> str:
+        del model, hints
+        return "default"
 
 
 def test_json_pointer_value_resolves_rfc6901_tokens_and_rejects_missing() -> None:
@@ -140,6 +152,16 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review() -> N
     class Profile:
         def inference_required(self, _result, _reasons):
             return True
+
+    step_run._state = SimpleNamespace(adding=False, db="default")
+    step_run.run_id = 1
+    step_run._meta = MagicMock()
+    step_run._meta.get_field.return_value.remote_field.model._base_manager.using.return_value.get.return_value = (
+        step_run.run
+    )
+    for model_fixture in models.values():
+        manager = model_fixture.objects
+        manager.db_manager = lambda alias, manager=manager: manager
 
     with (
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
@@ -236,13 +258,23 @@ def test_inference_step_retry_reuses_failed_successor_without_second_debit() -> 
     step_run = SimpleNamespace(
         run=SimpleNamespace(
             admission_actor=lambda: actor,
-            debit_budget=debits.append,
+            debit_budget=lambda values, *, using: debits.append(values),
         )
     )
 
     class Profile:
         def inference_required(self, _result, _reasons):
             return True
+
+    step_run._state = SimpleNamespace(adding=False, db="default")
+    step_run.run_id = 1
+    step_run._meta = MagicMock()
+    step_run._meta.get_field.return_value.remote_field.model._base_manager.using.return_value.get.return_value = (
+        step_run.run
+    )
+    for model_fixture in models.values():
+        manager = model_fixture.objects
+        manager.db_manager = lambda alias, manager=manager: manager
 
     with (
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
@@ -362,9 +394,21 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         "retired_identities": {},
     })
 
+    step_run = SimpleNamespace(run=SimpleNamespace(admission_actor=lambda: actor))
+
     class Profile:
         def inference_required(self, _result, _reasons):
             return True
+
+    step_run._state = SimpleNamespace(adding=False, db="default")
+    step_run.run_id = 1
+    step_run._meta = MagicMock()
+    step_run._meta.get_field.return_value.remote_field.model._base_manager.using.return_value.get.return_value = (
+        step_run.run
+    )
+    for model_fixture in models.values():
+        manager = model_fixture.objects
+        manager.db_manager = lambda alias, manager=manager: manager
 
     with (
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
@@ -381,7 +425,7 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         patch("angee.workflows_extraction.steps.infer", side_effect=mismatch.value),
     ):
         result = InferEvidenceStepImpl().run(
-            SimpleNamespace(run=SimpleNamespace(admission_actor=lambda: actor)),
+            step_run,
             now=None,
         )
 
@@ -412,7 +456,7 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         patch("angee.workflows_extraction.steps.infer", side_effect=mismatch.value),
     ):
         ordinary = InferEvidenceStepImpl().run(
-            SimpleNamespace(run=SimpleNamespace(admission_actor=lambda: actor)),
+            step_run,
             now=None,
         )
 
@@ -479,6 +523,16 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
             "retired_identities": {},
         }
     )
+
+    step_run._state = SimpleNamespace(adding=False, db="default")
+    step_run.run_id = 1
+    step_run._meta = MagicMock()
+    step_run._meta.get_field.return_value.remote_field.model._base_manager.using.return_value.get.return_value = (
+        step_run.run
+    )
+    for model_fixture in models.values():
+        manager = model_fixture.objects
+        manager.db_manager = lambda alias, manager=manager: manager
 
     with (
         patch(
@@ -1087,14 +1141,34 @@ class ExtractionServiceTests(TestCase):
                 config={},
                 is_entry=True,
             )
-            run = WorkflowRun.objects.create(workflow=workflow, status="succeeded", created_by=self.owner)
+            run = WorkflowRun.objects.create(
+                workflow=workflow,
+                status="succeeded",
+                created_by=self.owner,
+                admitted_actor_ref=str(to_subject_ref(self.owner)),
+            )
             step_run = StepRun.objects.create(
                 run=run,
                 step=step,
                 status="succeeded",
             )
-            decision = Decision.objects.create(
+            attempt = StepAttempt(
                 step_run=step_run,
+                ordinal=1,
+                cause="initial",
+                lease_token=uuid4(),
+                effect_key=uuid4(),
+                result_kind="suspend",
+                result_recorded_at=timezone.now(),
+                applied_at=timezone.now(),
+            )
+            attempt.allocate(using="default")
+            step_run.current_attempt = attempt
+            step_run.project_from_attempt(attempt, fields=("current_attempt",))
+            decision = Decision(
+                step_run=step_run,
+                suspension_attempt=attempt,
+                declaration_index=0,
                 action=action,
                 payload=payload
                 or {
@@ -1103,11 +1177,17 @@ class ExtractionServiceTests(TestCase):
                 },
                 target_model=extraction.target._meta.label,
                 target_id=str(extraction.target.sqid),
-                verdict=verdict,
-                resolution=resolution or {"note": "Reviewed source facts"},
-                resolved_by=str(to_subject_ref(resolver)) if verdict == "completed" else "",
                 created_by=self.owner,
             )
+            decision.create_for_suspension(using="default")
+            if verdict != "pending":
+                decision.resolve(
+                    Verdict(verdict),
+                    resolution={"action": "apply_correction", **(resolution or {"note": "Reviewed source facts"})},
+                    resolved_by=str(to_subject_ref(resolver)),
+                )
+                attempt.decision_settlement = {"decision_ids": [decision.pk], "outcome": "completed"}
+                attempt.settle_decisions(using="default")
             if grant_resolver:
                 write_relationships([RelationshipTuple(to_object_ref(decision), "assignee", to_subject_ref(resolver))])
         return decision
@@ -1122,32 +1202,27 @@ class ExtractionServiceTests(TestCase):
         retired_identities: Mapping[str, str] | None = None,
         confirmed_paths: tuple[str, ...] = (),
     ) -> Any:
-        """Exercise the correction owners after native Decision admission."""
+        """Exercise the public manager command with the retained resolver."""
 
         canonical_decision = type(decision).objects.get(pk=decision.pk)
-        admitted_actor = current_actor()
-        if admitted_actor is None:
-            raise RuntimeError("Correction test requires an admitted actor.")
-        with transaction.atomic():
-            basis = correction_basis(extraction, decision=canonical_decision)
-            if str(canonical_decision.verdict) == "completed":
-                resolver = workflow_engine.resolve_workflow_actor(
-                    canonical_decision.resolved_by,
-                    require_person=True,
-                ).actor
-            else:
-                resolver = admitted_actor
-            with actor_context(resolver):
-                revised = retain_correction_revision(
-                    basis,
-                    result=result,
-                    decision=canonical_decision,
-                    revision_owner_id=actor_user_id(admitted_actor),
-                    identity_mapping=identity_mapping,
-                    retired_identities=retired_identities,
-                    confirmed_paths=confirmed_paths,
-                )
-        return revised
+        actor = current_actor()
+        if actor is None:
+            raise RuntimeError("Correction test requires an actor.")
+        if str(canonical_decision.verdict) == "completed":
+            actor = workflow_engine.resolve_workflow_actor(
+                canonical_decision.resolved_by,
+                require_person=True,
+            ).actor
+        return type(extraction).objects.revise_from_decision(
+            canonical_decision.pk,
+            actor=actor,
+            result=result,
+            expected_action=canonical_decision.action,
+            expected_resolution_action="apply_correction",
+            identity_mapping=identity_mapping,
+            retired_identities=retired_identities,
+            confirmed_paths=confirmed_paths,
+        )
 
     def test_deployment_allowlist_blocks_unapproved_models_and_endpoint_repointing(self) -> None:
         with actor_context(self.owner):
@@ -1513,7 +1588,7 @@ class ExtractionServiceTests(TestCase):
             ValidationError,
             "another retained fact authority",
         ):
-            manager._correction_revision_parent(original, altered_retirement)
+            manager._correction_revision_parent(original, altered_retirement, using="default")
         unbound_decision = self._decision(
             original,
             resolution={"action": "apply_correction", "note": "Stale unbound review"},
@@ -2577,6 +2652,14 @@ class ExtractionServiceTests(TestCase):
             extraction_model._base_manager.filter(pk=failed.pk).update(status="succeeded")
         with self.assertRaisesRegex(ValueError, "retention owner"):
             extraction_model._base_manager.create()
+        valid_values = {
+            field.attname: getattr(failed, field.attname)
+            for field in extraction_model._meta.concrete_fields
+            if not field.primary_key
+        }
+        valid_values["reuse_key"] = hashlib.sha256(f"direct-create:{failed.sqid}".encode()).hexdigest()
+        with self.assertRaisesRegex(ValueError, "retention owner"):
+            extraction_model._base_manager.create(**valid_values)
         with self.assertRaisesRegex(ValueError, "retention owner"):
             extraction_model._base_manager.bulk_create([failed])
         with self.assertRaisesRegex(ValueError, "directly deleted"):
@@ -2619,6 +2702,111 @@ class ExtractionServiceTests(TestCase):
             self.assertEqual(revised.recognition_model_id, self.model.pk)
             self.assertEqual(revised.provenance["configured_model_roles"], ["recognition"])
             self.assertEqual(revised.provenance["used_model_roles"], [])
+
+    def test_revise_from_decision_pins_resolver_even_inside_system_scope(self) -> None:
+        original = self._extract(config={"result": {"number": "OLD", "rows": []}})
+        decision = self._decision(original)
+        with system_context(reason="test ambient scope cannot admit correction"):
+            with self.assertRaises((PermissionDenied, DjangoPermissionDenied)):
+                Extraction.objects.revise_from_decision(
+                    decision.pk,
+                    actor=self.stranger,
+                    result={"number": "FORGED", "rows": []},
+                    expected_action="correct_source_facts",
+                    expected_resolution_action="apply_correction",
+                )
+        self.assertEqual(Extraction._base_manager.count(), 1)
+
+    def test_revise_from_decision_checks_persisted_actions_before_retention(self) -> None:
+        original = self._extract(config={"result": {"number": "OLD", "rows": []}})
+        decision = self._decision(original, resolution={"action": "reject"})
+        with self.assertRaises(ValidationError):
+            Extraction.objects.revise_from_decision(
+                decision.pk,
+                actor=self.owner,
+                result={"number": "NEW", "rows": []},
+                expected_action="correct_source_facts",
+                expected_resolution_action="apply_correction",
+            )
+        with self.assertRaises(ValidationError):
+            Extraction.objects.revise_from_decision(
+                decision.pk,
+                actor=self.owner,
+                result={"number": "NEW", "rows": []},
+                expected_action="another_domain_action",
+                expected_resolution_action="reject",
+            )
+        self.assertEqual(Extraction._base_manager.count(), 1)
+
+    def test_revise_and_revision_retention_route_to_write_database(self) -> None:
+        original = self._extract(config={"result": {"number": "OLD", "rows": []}})
+        decision = self._decision(original)
+
+        with override_settings(DATABASE_ROUTERS=[ExtractionWriteRouter()]):
+            corrected = Extraction.objects.revise_from_decision(
+                decision.pk,
+                actor=self.owner,
+                result={"number": "NEW", "rows": []},
+                expected_action="correct_source_facts",
+                expected_resolution_action="apply_correction",
+            )
+
+        self.assertEqual(corrected._state.db, "default")
+        self.assertEqual(corrected.revision, original.revision + 1)
+
+    def test_revise_from_decision_requires_domain_read_scope_even_inside_system_scope(self) -> None:
+        original = self._extract(config={"result": {"number": "OLD", "rows": []}})
+        decision = self._decision(original, resolver=self.stranger)
+        with system_context(reason="Decision assignment cannot bypass domain read scope"):
+            with self.assertRaisesRegex(DjangoPermissionDenied, "must remain readable"):
+                Extraction.objects.revise_from_decision(
+                    decision.pk,
+                    actor=self.stranger,
+                    result={"number": "NEW", "rows": []},
+                    expected_action="correct_source_facts",
+                    expected_resolution_action="apply_correction",
+                )
+            write_relationships(
+                [
+                    RelationshipTuple(to_object_ref(original), "viewer", to_subject_ref(self.stranger)),
+                ]
+            )
+            with self.assertRaisesRegex(DjangoPermissionDenied, "must remain readable"):
+                Extraction.objects.revise_from_decision(
+                    decision.pk,
+                    actor=self.stranger,
+                    result={"number": "NEW", "rows": []},
+                    expected_action="correct_source_facts",
+                    expected_resolution_action="apply_correction",
+                )
+        self.assertEqual(Extraction._base_manager.count(), 1)
+
+    def test_revise_from_decision_rolls_back_revision_children_and_lineage_together(self) -> None:
+        original = self._extract(config={"result": {"number": "OLD", "rows": []}})
+        decision = self._decision(original)
+        insert = models.QuerySet.bulk_create
+
+        def fail_pages(queryset, rows, *args, **kwargs):
+            if queryset.model is ExtractionPage:
+                raise IntegrityError("correction page retention failed")
+            return insert(queryset, rows, *args, **kwargs)
+
+        with patch.object(models.QuerySet, "bulk_create", fail_pages), self.assertRaises(IntegrityError):
+            Extraction.objects.revise_from_decision(
+                decision.pk,
+                actor=self.owner,
+                result={"number": "NEW", "rows": []},
+                expected_action="correct_source_facts",
+                expected_resolution_action="apply_correction",
+            )
+        with system_context(reason="verify correction aggregate rollback"):
+            lineage = apps.get_model("workflows_extraction", "ExtractionLineage").objects.get(
+                key=original.lineage_key,
+            )
+            self.assertEqual(lineage.head_id, original.pk)
+            self.assertEqual(Extraction._base_manager.count(), 1)
+            self.assertEqual(ExtractionSource._base_manager.count(), original.sources.count())
+            self.assertEqual(ExtractionPage._base_manager.count(), original.pages.count())
 
     def test_human_correction_clones_parts_retains_unchanged_claims_and_reuses_without_engine(self) -> None:
         with actor_context(self.owner):
@@ -2715,10 +2903,14 @@ class ExtractionServiceTests(TestCase):
                 config={"result": {"number": "OLD", "rows": []}, "source_text": "OLD"},
             )
         decision = self._decision(original, resolver=self.stranger)
-        with system_context(reason="grant admission actor decision read"):
-            write_relationships([
-                RelationshipTuple(to_object_ref(decision), "reader", to_subject_ref(self.owner)),
-            ])
+        with system_context(reason="grant independent correction read scopes"):
+            write_relationships(
+                [
+                    RelationshipTuple(to_object_ref(decision), "reader", to_subject_ref(self.owner)),
+                    RelationshipTuple(to_object_ref(original), "viewer", to_subject_ref(self.stranger)),
+                    RelationshipTuple(to_object_ref(self.drive), "viewer", to_subject_ref(self.stranger)),
+                ]
+            )
 
         with actor_context(self.owner):
             corrected = self._retain_correction(
@@ -3081,7 +3273,7 @@ class ExtractionServiceTests(TestCase):
         with actor_context(self.owner):
             with self.assertRaisesRegex(ValidationError, "different extraction revision"):
                 self._retain_correction(original, result={"number": "NEW", "rows": []}, decision=wrong_revision)
-            with self.assertRaisesRegex(ValidationError, "must be completed"):
+            with self.assertRaisesRegex(ValidationError, "retained resolution"):
                 self._retain_correction(original, result={"number": "NEW", "rows": []}, decision=pending)
             with self.assertRaisesRegex(ValidationError, "does not match"):
                 self._retain_correction(original, result={"number": 1, "rows": []}, decision=decision)

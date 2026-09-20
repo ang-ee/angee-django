@@ -7,6 +7,8 @@ from typing import Any, TypeVar, cast
 from django.db import models
 from rebac.resources import model_resource_type
 
+from angee.base.db import get_write_alias
+
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
@@ -58,18 +60,20 @@ def read_scoped_queryset(
     return cast(models.QuerySet[_ModelT], with_action(action) if callable(with_action) else queryset)
 
 
-def write_scoped_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
-    """Return a write-target queryset with REBAC row scope and unredacted fields."""
+def write_scoped_queryset(model: type[_ModelT], *, using: str | None = None) -> models.QuerySet[_ModelT]:
+    """Return a writer-bound target queryset with REBAC row scope and unredacted fields."""
 
     manager = model._default_manager
+    alias = get_write_alias(model, using=using, bound=manager)
     if _is_angee_model(model):
         if requires_angee_rebac_contract(model):
-            return cast(models.QuerySet[_ModelT], cast(Any, manager).for_write())
-        return manager.all()
-    for_write = getattr(manager, "for_write", None)
-    if callable(for_write):
-        return cast(models.QuerySet[_ModelT], for_write())
-    return manager.all()
+            queryset = cast(models.QuerySet[_ModelT], cast(Any, manager).for_write())
+        else:
+            queryset = manager.all()
+    else:
+        for_write = getattr(manager, "for_write", None)
+        queryset = cast(models.QuerySet[_ModelT], for_write()) if callable(for_write) else manager.all()
+    return queryset.using(alias)
 
 
 def system_queryset(

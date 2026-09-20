@@ -208,35 +208,46 @@ def test_direct_dispatch_mutations_and_unowned_consumption_are_rejected(run: Wor
         queryset.delete()
     with pytest.raises(TypeError, match="durable delivery evidence"):
         queryset._raw_delete(using=queryset.db)
-    with pytest.raises(RuntimeError, match="domain-owner authority"):
-        WorkflowDispatch.objects._consume_locked(dispatch.pk, at=timezone.now())
+    with transaction.atomic(), pytest.raises(RuntimeError, match="identity"):
+        WorkflowDispatch.objects._consume_locked(
+            dispatch.pk + 1000, envelope=dispatch.envelope, at=timezone.now(), alias="default"
+        )
 
 
 @pytest.mark.django_db(transaction=True)
 def test_exact_owner_consumption_leaves_early_intent_pending(run: WorkflowRun) -> None:
     available_at = timezone.now() + timedelta(minutes=5)
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=available_at)
-    with transaction.atomic(), WorkflowDispatch.objects._owner_transition(
-        dispatch_id=dispatch.pk,
-        lease_token=None,
-        at=available_at - timedelta(microseconds=1),
-        using="default",
-    ) as preflight:
+    with (
+        transaction.atomic(),
+        WorkflowDispatch.objects._owner_transition(
+            dispatch_id=dispatch.pk,
+            lease_token=None,
+            at=available_at - timedelta(microseconds=1),
+            using="default",
+        ) as preflight,
+    ):
         assert preflight.disposition == DispatchPreflightDisposition.EARLY
     with system_context(reason="verify early dispatch"):
         dispatch.refresh_from_db()
     assert dispatch.consumed_at is None
 
-    with transaction.atomic(), WorkflowDispatch.objects._owner_transition(
-        dispatch_id=dispatch.pk,
-        lease_token=None,
-        at=available_at,
-        using="default",
-    ) as preflight:
+    with (
+        transaction.atomic(),
+        WorkflowDispatch.objects._owner_transition(
+            dispatch_id=dispatch.pk,
+            lease_token=None,
+            at=available_at,
+            using="default",
+        ) as preflight,
+    ):
         assert preflight.disposition == DispatchPreflightDisposition.READY
-        assert WorkflowDispatch.objects._consume_locked(
-            dispatch.pk, at=available_at
-        ) == DispatchConsumption.CONSUMED
+        assert (
+            WorkflowDispatch.objects._consume_locked(
+                dispatch.pk, envelope=preflight.envelope, at=available_at, alias="default"
+            )
+            == DispatchConsumption.CONSUMED
+        )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -274,16 +285,22 @@ def test_publication_records_send_that_is_consumed_before_sender_returns(run: Wo
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
 
     def consume(_envelope: WorkflowDispatchEnvelope) -> None:
-        with transaction.atomic(), WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk,
-            lease_token=None,
-            at=now,
-            using="default",
-        ) as preflight:
+        with (
+            transaction.atomic(),
+            WorkflowDispatch.objects._owner_transition(
+                dispatch_id=dispatch.pk,
+                lease_token=None,
+                at=now,
+                using="default",
+            ) as preflight,
+        ):
             assert preflight.disposition == DispatchPreflightDisposition.READY
-            assert WorkflowDispatch.objects._consume_locked(
-                dispatch.pk, at=now
-            ) == DispatchConsumption.CONSUMED
+            assert (
+                WorkflowDispatch.objects._consume_locked(
+                    dispatch.pk, envelope=preflight.envelope, at=now, alias="default"
+                )
+                == DispatchConsumption.CONSUMED
+            )
 
     publish_due(consume, now=now)
     with system_context(reason="verify consumed publication telemetry"):
@@ -297,15 +314,21 @@ def test_publication_records_send_that_is_consumed_before_sender_returns(run: Wo
 def test_duplicate_is_preflighted_before_owner_mutation(run: WorkflowRun) -> None:
     now = timezone.now()
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
-    with transaction.atomic(), WorkflowDispatch.objects._owner_transition(
-        dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-    ) as preflight:
+    with (
+        transaction.atomic(),
+        WorkflowDispatch.objects._owner_transition(
+            dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
+        ) as preflight,
+    ):
         assert preflight.disposition == DispatchPreflightDisposition.READY
-        WorkflowDispatch.objects._consume_locked(dispatch.pk, at=now)
+        WorkflowDispatch.objects._consume_locked(dispatch.pk, envelope=preflight.envelope, at=now, alias="default")
 
-    with transaction.atomic(), WorkflowDispatch.objects._owner_transition(
-        dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-    ) as preflight:
+    with (
+        transaction.atomic(),
+        WorkflowDispatch.objects._owner_transition(
+            dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
+        ) as preflight,
+    ):
         assert preflight.disposition == DispatchPreflightDisposition.DUPLICATE
 
 
@@ -321,21 +344,26 @@ def test_ready_owner_must_consume_or_roll_back(run: WorkflowRun) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_failed_consume_cannot_spend_authority_or_commit_owner_changes(run: WorkflowRun) -> None:
+def test_failed_consume_cannot_commit_owner_changes(run: WorkflowRun) -> None:
     now = timezone.now()
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
     original_deliveries = run.deliveries
 
     with pytest.raises(RuntimeError, match="without consuming"):
-        with transaction.atomic(), WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-        ) as preflight:
+        with (
+            transaction.atomic(),
+            WorkflowDispatch.objects._owner_transition(
+                dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
+            ) as preflight,
+        ):
             assert preflight.disposition == DispatchPreflightDisposition.READY
             with system_context(reason="simulate dispatch owner mutation"):
                 run.deliveries += 1
                 run.save(update_fields=["deliveries", "updated_at"])
-            with pytest.raises(RuntimeError, match="authority"):
-                WorkflowDispatch.objects._consume_locked(dispatch.pk + 1000, at=now)
+            with pytest.raises(RuntimeError, match="identity"):
+                WorkflowDispatch.objects._consume_locked(
+                    dispatch.pk + 1000, envelope=preflight.envelope, at=now, alias="default"
+                )
 
     with system_context(reason="verify failed consume rollback"):
         run.refresh_from_db()
@@ -345,7 +373,7 @@ def test_failed_consume_cannot_spend_authority_or_commit_owner_changes(run: Work
 
 
 @pytest.mark.django_db(transaction=True)
-def test_dispatch_save_signal_cannot_reuse_consume_or_save_capability(run: WorkflowRun) -> None:
+def test_dispatch_telemetry_signal_cannot_reconsume_or_save(run: WorkflowRun) -> None:
     now = timezone.now()
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
     rejected: list[str] = []
@@ -353,7 +381,7 @@ def test_dispatch_save_signal_cannot_reuse_consume_or_save_capability(run: Workf
     def attack(sender: type[WorkflowDispatch], instance: WorkflowDispatch, **kwargs: object) -> None:
         del sender, kwargs
         try:
-            WorkflowDispatch.objects._consume_locked(instance.pk, at=now)
+            WorkflowDispatch.objects._consume_locked(instance.pk, envelope=instance.envelope, at=now, alias="default")
         except RuntimeError:
             rejected.append("consume")
         try:
@@ -363,11 +391,15 @@ def test_dispatch_save_signal_cannot_reuse_consume_or_save_capability(run: Workf
 
     post_save.connect(attack, sender=WorkflowDispatch, weak=False)
     try:
-        with transaction.atomic(), WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-        ) as preflight:
+        with (
+            transaction.atomic(),
+            WorkflowDispatch.objects._owner_transition(
+                dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
+            ) as preflight,
+        ):
             assert preflight.disposition == DispatchPreflightDisposition.READY
-            WorkflowDispatch.objects._consume_locked(dispatch.pk, at=now)
+            WorkflowDispatch.objects._consume_locked(dispatch.pk, envelope=preflight.envelope, at=now, alias="default")
+        WorkflowDispatch.objects.record_publication(dispatch.pk, attempted_at=now, error="")
     finally:
         post_save.disconnect(attack, sender=WorkflowDispatch)
 
@@ -436,3 +468,23 @@ def test_dispatch_kind_is_closed() -> None:
         "child_cancel",
         "run_cancel",
     }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_dispatch_conditional_consumption_checks_rowcount(run: WorkflowRun) -> None:
+    now = timezone.now()
+    dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
+    with (
+        transaction.atomic(),
+        WorkflowDispatch.objects._owner_transition(
+            dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
+        ) as preflight,
+    ):
+        assert (
+            WorkflowDispatch.objects._consume_locked(dispatch.pk, envelope=preflight.envelope, at=now, alias="default")
+            == DispatchConsumption.CONSUMED
+        )
+        with pytest.raises(RuntimeError, match="already consumed"):
+            WorkflowDispatch.objects._consume_locked(dispatch.pk, envelope=preflight.envelope, at=now, alias="default")
+    dispatch.refresh_from_db()
+    assert dispatch.consumed_at == now

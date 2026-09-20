@@ -82,8 +82,12 @@ class IntakeActionMutation:
 
         target_model = Need.objects.target_model(target.model_label)
         target_record = authorized_action_target(info, target_model, target.record_id, "write")
-        party_record = None if party is None else authorized_action_target(info, Party, party, "read")
-        need = Need.objects.capture(
+        party_record = (
+            None
+            if party is None
+            else authorized_action_target(info, Party, party, "read", using=target_record._state.db)
+        )
+        need = Need.objects.db_manager(target_record._state.db).capture(
             target=target_record,
             body=body,
             party=party_record,
@@ -102,7 +106,7 @@ class IntakeActionMutation:
         """Convert one writable need into a triage task, or return its existing task."""
 
         target = authorized_action_target(info, Need, need, "write")
-        target_queue = authorized_action_target(info, Queue, queue, "write")
+        target_queue = authorized_action_target(info, Queue, queue, "write", using=target._state.db)
         task = target.convert_to_task(target_queue)
         return ActionResult(ok=True, message="Need converted to task.", id=task.sqid)
 

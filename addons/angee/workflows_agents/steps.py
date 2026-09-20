@@ -15,7 +15,7 @@ from typing import Annotated, Any, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import DEFAULT_DB_ALIAS, transaction
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_ai.messages import BinaryContent, ModelMessage, ModelMessagesTypeAdapter, ModelResponse
@@ -30,6 +30,7 @@ from angee.agents.models import (
     TurnStatus,
 )
 from angee.agents.runners import TurnOutcome
+from angee.base.db import get_write_alias
 from angee.workflows.decision_actions import ReviewAction, ReviewFact, build_decision_action
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import (
@@ -124,12 +125,20 @@ class InferStepImpl(StepImpl):
     deterministic = False
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Execute one typed inference request and return its native projection."""
+        """Execute inference on default until provider owners support alias binding."""
 
+        alias = get_write_alias(type(step_run), instance=step_run)
+        if alias != DEFAULT_DB_ALIAS:
+            raise ValidationError(
+                {
+                    "using": "Workflow inference requires the default database until agents provider owners "
+                    "support the operation's database alias."
+                }
+            )
         del now
         value = self.validate_input(step_run.input)
         with system_context(reason="workflows_agents.infer_step.resolve"):
-            model = _resolve_inference_model(value)
+            model = _resolve_inference_model(value, using=alias)
         settings = cast(ModelSettings, {**value.request.settings, "timeout": value.timeout})
         usage: dict[str, int] = {}
         try:
@@ -162,11 +171,11 @@ class InferStepImpl(StepImpl):
             step_run.run.debit_budget(usage)
 
 
-def _resolve_inference_model(value: InferInput) -> Any:
+def _resolve_inference_model(value: InferInput, *, using: str) -> Any:
     """Resolve one public model id and enforce the configured role policy."""
 
     model_class = apps.get_model("agents", "InferenceModel")
-    model = model_class.objects.select_related("provider").get(sqid=value.model)
+    model = model_class.objects.db_manager(using).select_related("provider").get(sqid=value.model)
     validate_approved_deployment(model, role=value.role)
     return model
 
@@ -195,8 +204,16 @@ class AgentSessionStepImpl(StepImpl):
     deterministic = False
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Run the oldest active/pending turn or park an idle session."""
+        """Run on default until session and provider owners support alias binding."""
 
+        alias = get_write_alias(type(step_run), instance=step_run)
+        if alias != DEFAULT_DB_ALIAS:
+            raise ValidationError(
+                {
+                    "using": "Workflow agent sessions require the default database until agents session and "
+                    "provider owners support the operation's database alias."
+                }
+            )
         del now
         with system_context(reason="workflows_agents.session_step.claim"), transaction.atomic():
             session = _session_for_step(step_run)

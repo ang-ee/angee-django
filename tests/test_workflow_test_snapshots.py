@@ -35,7 +35,6 @@ from angee.workflows.attempts import (
 from angee.workflows.attempts import WorkflowScope as WorkflowTestScope
 from angee.workflows.definitions import StaleDefinitionError
 from angee.workflows.dispatch import WorkflowDispatchKind
-from angee.workflows.managers import _admitted_decision_input
 from angee.workflows.models import RunOrigin, WorkflowStatus
 from angee.workflows.steps import StepImpl, StepResult
 from tests.workflows import (
@@ -145,16 +144,26 @@ def test_recovery_reuses_exact_input_and_records_nonduplicated_artifacts(
     ]
 
 
-def test_admitted_continuation_completion_accepts_one_exact_successful_recovery(
+def test_join_continuation_accepts_one_exact_successful_recovery(
     workflow_engine_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     actor = get_user_model().objects.create_user(username="continuation-completion-owner")
     workflow, step = _draft(name="Recovered continuation", owner=actor)
+    parent_workflow, starter_step = _draft(name="Continuation parent", owner=actor)
     actor_ref = str(to_subject_ref(actor))
     frozen_input = {"invoice": "retained"}
     with system_context(reason="continuation completion source fixture"):
+        parent = WorkflowRun.objects.create(
+            workflow=parent_workflow,
+            status="running",
+            admitted_actor_ref=actor_ref,
+            created_by=actor,
+        )
+        starter = StepRun.objects.create(run=parent, step=starter_step, status="succeeded")
+        join = StepRun.objects.create(run=parent, step=starter_step, map_index=1)
         original = WorkflowRun.objects.create(
+            parent_step_run=starter,
+            parent_relation="continuation",
             workflow=workflow,
             origin=RunOrigin.WORKFLOW,
             status="running",
@@ -201,16 +210,17 @@ def test_admitted_continuation_completion_accepts_one_exact_successful_recovery(
         )
         recovery.mark_succeeded(outcome="deferred", output={"status": "deferred"})
 
-    monkeypatch.setattr(
-        type(StepAttempt.objects),
-        "admitted_continuation_child",
-        lambda self, *args, **kwargs: original,
+    join_attempt = StepAttempt.objects.claim(join, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(
+        join_attempt.pk,
+        lease_token=join_attempt.lease_token,
+        at=timezone.now(),
     )
-    retained, completion = StepAttempt.objects.admitted_continuation_completion(
-        failed_step.pk,
-        lease_token=uuid.uuid4(),
-        child_id_path=("child_run_id",),
-        expected_starter_class="starter",
+    retained, completion = StepAttempt.objects.join_continuation(
+        join.pk,
+        lease_token=join_attempt.lease_token,
+        child_id=original.sqid,
+        expected_starter_class=starter_step.step_class,
         actor=actor,
     )
     assert retained.pk == original.pk
@@ -231,11 +241,11 @@ def test_admitted_continuation_completion_accepts_one_exact_successful_recovery(
         )
         conflicting.mark_succeeded(outcome="deferred", output={"status": "deferred"})
     with pytest.raises(ValidationError, match="conflicting retained facts"):
-        StepAttempt.objects.admitted_continuation_completion(
-            failed_step.pk,
-            lease_token=uuid.uuid4(),
-            child_id_path=("child_run_id",),
-            expected_starter_class="starter",
+        StepAttempt.objects.join_continuation(
+            join.pk,
+            lease_token=join_attempt.lease_token,
+            child_id=original.sqid,
+            expected_starter_class=starter_step.step_class,
             actor=actor,
         )
 
@@ -1744,7 +1754,7 @@ def test_test_fixture_retry_requires_exact_json_presence_and_facts(
         )
 
 
-def test_fixture_creation_requires_run_admission_owner(
+def test_fixture_generic_writes_require_the_run_owner(
     workflow_engine_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="fixture-owner-guard")
@@ -1767,11 +1777,11 @@ def test_fixture_creation_requires_run_admission_owner(
     )
     with pytest.raises(TypeError, match="WorkflowRunManager"):
         row.save()
-    with pytest.raises(RuntimeError, match="owning run transaction"):
-        WorkflowTestFixture.objects._create_batch(run, (row,))
+    with pytest.raises(TypeError, match="WorkflowRunManager"):
+        WorkflowTestFixture.objects.bulk_create([row])
 
 
-def test_fixture_batch_authority_rejects_signal_reentry(
+def test_fixture_slot_uniqueness_rejects_signal_reentry(
     workflow_engine_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="fixture-signal-guard")
@@ -1785,11 +1795,11 @@ def test_fixture_batch_authority_rejects_signal_reentry(
             value_present=True,
             value={"forged": True},
         )
-        WorkflowTestFixture.objects._create_batch(instance.run, (forged,))
+        WorkflowTestFixture.objects._create_batch(instance.run, (forged,), alias="default")
 
     post_save.connect(reenter, sender=WorkflowTestFixture, weak=False)
     try:
-        with pytest.raises(RuntimeError, match="exact prepared batch"):
+        with pytest.raises(ValidationError, match="constraint|Constraint"):
             WorkflowRun.objects.start_test(
                 workflow,
                 expected_revision=workflow.draft_revision,
@@ -1882,7 +1892,7 @@ def test_map_item_fixture_is_captured_on_real_body_attempt(
     with system_context(reason="claim node body fixture"):
         with transaction.atomic():
             locked = WorkflowRun.objects.select_for_update().get(pk=run.pk)
-            claimed = engine._claim_due_steps(locked, timestamp=timezone.now())
+            claimed = engine._claim_due_steps(locked, timestamp=timezone.now(), alias="default")
         assert len(claimed) == 1
         attempt = StepAttempt.objects.get(step_run__run=run, cause=AttemptCause.INITIAL)
         assert attempt.test_fixture.role == FixtureRole.MAP_ITEM
@@ -2261,17 +2271,9 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
             attempt = current.current_attempt
             execute = WorkflowDispatch.objects.get(step_attempt=attempt)
             if not child_finishes_before_recovery:
-                admitted, provenance, admitted_run, admitted_path = _admitted_decision_input(
-                    input_source="owned_call_input",
-                    path=("child",),
-                    step_run=current,
-                    attempt=attempt,
-                    using="default",
-                )
-                assert admitted["input"]["child"] == "retained"
-                assert provenance == {"kind": "run_input"}
-                assert admitted_run.pk == source_run.pk
-                assert admitted_path == ("input", "child")
+                assert child.input == {"child": "retained"}
+                assert child.parent_step_run_id == source_step_run.pk
+                assert source_attempt.input_provenance == {"kind": "run_input"}
         assert engine.execute_dispatch(execute.pk, attempt.pk, attempt.lease_token)["executed"] == 1
         future = timezone.now() + timedelta(hours=2)
         assert engine.advance(child.pk, now=future)["claimed"] == 1
@@ -2279,9 +2281,7 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
             current = StepRun.objects.get(run=child)
             attempt = current.current_attempt
             execute = WorkflowDispatch.objects.get(step_attempt=attempt)
-        assert engine.execute_dispatch(
-            execute.pk, attempt.pk, attempt.lease_token, now=future
-        )["executed"] == 1
+        assert engine.execute_dispatch(execute.pk, attempt.pk, attempt.lease_token, now=future)["executed"] == 1
         assert engine.advance(child.pk, now=future)["claimed"] == 0
         with system_context(reason="native call child completion assertion"):
             child.refresh_from_db()

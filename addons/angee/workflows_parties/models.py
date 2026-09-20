@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from django.db import models, router, transaction
+from django.db import models, transaction
 
 
 class DecisionReadableParty(models.Model):
@@ -24,13 +24,13 @@ class Handle(models.Model):
     class Meta:
         abstract = True
 
-    def _party_links_resolved(self) -> None:
+    def _party_links_resolved(self, *, using: str) -> None:
         """Retain delivery only after the parties owner completes resolution."""
 
         from angee.workflows import engine
 
-        super()._party_links_resolved()
-        engine.schedule_artifact_delivery(self)
+        super()._party_links_resolved(using=using)
+        engine.schedule_artifact_delivery(self, using=using)
 
 
 class PartyHandle(models.Model):
@@ -42,12 +42,11 @@ class PartyHandle(models.Model):
     class Meta:
         abstract = True
 
-    def _resolve_link(self) -> None:
+    def _resolve_link(self, *, using: str) -> None:
         """Resolve derived authority, then retain this exact link transition."""
 
         from angee.workflows import engine
 
-        alias = self._state.db or router.db_for_write(type(self), instance=self)
-        with transaction.atomic(using=alias):
-            super()._resolve_link()
-            engine.schedule_artifact_delivery(self)
+        with transaction.atomic(using=using):
+            super()._resolve_link(using=using)
+            engine.schedule_artifact_delivery(self, using=using)

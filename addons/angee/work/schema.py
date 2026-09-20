@@ -158,7 +158,9 @@ class WorkActionMutation:
 
         target = authorized_action_target(info, Task, task, "write")
         target_stage = (
-            None if stage is None else authorized_action_target(info, Stage, stage, "read")
+            None
+            if stage is None
+            else authorized_action_target(info, Stage, stage, "read", using=target._state.db)
         )
         target.accept(target_stage)
         return ActionResult(ok=True, message="Task accepted.", id=target.sqid)
@@ -202,7 +204,7 @@ class WorkActionMutation:
         """Merge one writable task into a writable canonical task."""
 
         target = authorized_action_target(info, Task, task, "write")
-        canonical_target = authorized_action_target(info, Task, canonical, "write")
+        canonical_target = authorized_action_target(info, Task, canonical, "write", using=target._state.db)
         target.mark_duplicate(canonical_target)
         return ActionResult(ok=True, message="Task marked duplicate.", id=target.sqid)
 

@@ -73,7 +73,9 @@ def test_two_consumers_serialize_to_ready_then_duplicate(workflow_engine_tables:
             dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
         ) as preflight:
             if preflight.disposition == DispatchPreflightDisposition.READY:
-                WorkflowDispatch.objects._consume_locked(dispatch.pk, at=now)
+                WorkflowDispatch.objects._consume_locked(
+                    dispatch.pk, envelope=preflight.envelope, at=now, alias="default"
+                )
             return preflight.disposition
 
     with ThreadPoolExecutor(max_workers=2) as pool:

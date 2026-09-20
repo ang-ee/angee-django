@@ -3,32 +3,34 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
+from django.db import close_old_connections, connection
+from django.test import override_settings
 from django.utils import timezone
-from rebac import RelationshipTuple, system_context, to_subject_ref, write_relationships
-from rebac.resources import to_object_ref
+from rebac import PermissionDenied, system_context
 
+from angee.base.serialization import canonical_json_sha256
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import (
-    AdmittedInputPath,
     ArtifactSpec,
     AttemptResult,
     AttemptResultKind,
-    DecisionRecordAccess,
     JsonPresence,
     RecoveryMode,
 )
 from angee.workflows.dispatch import WorkflowDispatchKind
-from angee.workflows.steps import DecisionSpec, StepResult
 from angee.workflows_parties.autoconfig import SETTINGS as WORKFLOWS_PARTIES_SETTINGS
 from angee.workflows_parties.steps import DedupeExecuteStepImpl, IdentityApplyStepImpl, IdentityReviewStepImpl
 from tests.test_messaging import (
@@ -42,11 +44,10 @@ from tests.test_messaging import (
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
     Decision,
-    FixtureStep,
     StepAttempt,
     StepRun,
     WorkflowDispatch,
-    WorkflowRun,
+    admit_workflow_actor,
     advance_once,
     execute_started,
     run_to_terminal,
@@ -55,177 +56,22 @@ from tests.workflows import (
     workflow_with_steps,
 )
 
+POSTGRES_IDENTITY = pytest.mark.skipif(
+    connection.vendor != "postgresql",
+    reason="PostgreSQL Party/Handle serialization contract",
+)
+
+
+class _WriteSplitRouter:
+    def db_for_read(self, model: type[Any], **hints: Any) -> str:
+        del model, hints
+        return "missing-read-replica"
+
+    def db_for_write(self, model: type[Any], **hints: Any) -> str:
+        del model, hints
+        return "default"
+
 User = get_user_model()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_owned_call_gate_delegates_exact_pending_record_access(
-    workflows_parties_tables: None,
-    no_workflow_queue: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A child Decision may delegate only through its exact admitted parent gate."""
-
-    del workflows_parties_tables, no_workflow_queue
-    requester = User.objects.create_user(username="owned-call-requester")
-    resolver = User.objects.create_user(username="owned-call-resolver")
-    reviewer = User.objects.create_user(username="owned-call-reviewer")
-    target_workflow = workflow_with_steps(
-        name="Delegated record fixture",
-        steps=({"key": "hold", "step_class": "wait", "config": {"until": "2099-01-01T00:00:00Z"}},),
-        edges=(),
-    )
-    target_run = engine.start(target_workflow, subject=None, actor=resolver)
-    advance_once(target_run)
-    with system_context(reason="owned-call delegation fixture"):
-        target_step = StepRun.objects.get(run=target_run)
-        target = Decision.objects.create(
-            step_run=target_step,
-            action="retained-evidence",
-            created_by=resolver,
-        )
-        party = Party.objects.create(display_name="Delegated sender party", created_by=requester)
-        handle = Handle.objects.create(
-            platform="email",
-            value="delegated@example.test",
-            owner=requester,
-            created_by=requester,
-        )
-        party_handle = PartyHandle.objects.create(
-            party=party,
-            handle=handle,
-            confidence=0.4,
-            source="email_match",
-            created_by=requester,
-        )
-        write_relationships(
-            (
-                RelationshipTuple(
-                    resource=to_object_ref(target),
-                    relation="requester",
-                    subject=to_subject_ref(resolver),
-                ),
-            )
-        )
-    assert handle.with_actor(requester).has_access("read")
-    assert party_handle.with_actor(requester).has_access("read")
-    assert not handle.with_actor(reviewer).has_access("read")
-    assert not handle.with_actor(reviewer).has_access("write")
-    assert not party_handle.with_actor(reviewer).has_access("read")
-    assert not party_handle.with_actor(reviewer).has_access("write")
-    monkeypatch.setattr(Decision, "rebac_grantable", {"reader": "share", "pending_decision": "share"})
-
-    def suspend(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
-        del self, now
-        if step_run.step.key == "gate":
-            return StepResult.suspend(
-                resume_state={"gate": {"policy": "one_done"}},
-                decisions=(
-                    DecisionSpec(
-                        assignees=(str(to_subject_ref(resolver)),),
-                        action="select-delegation-authority",
-                    ),
-                ),
-            )
-        return StepResult.suspend(
-            resume_state={"gate": {"policy": "one_done"}},
-            decisions=(
-                DecisionSpec(
-                    assignees=(str(to_subject_ref(reviewer)),),
-                    action="review-delegated-record",
-                    record_access=(
-                        DecisionRecordAccess(
-                            model=target._meta.label,
-                            id=str(target.sqid),
-                            authority_input=AdmittedInputPath(
-                                source="owned_call_input",
-                                path=("resolutions", 0, "decision_id"),
-                            ),
-                        ),
-                        DecisionRecordAccess(
-                            model=handle._meta.label,
-                            id=str(handle.sqid),
-                        ),
-                        DecisionRecordAccess(
-                            model=party_handle._meta.label,
-                            id=str(party_handle.sqid),
-                        ),
-                    ),
-                ),
-            ),
-        )
-
-    monkeypatch.setattr(FixtureStep, "run", suspend)
-    child_workflow = workflow_with_steps(
-        name="Owned call delegated review",
-        steps=(
-            {
-                "key": "review",
-                "step_class": "fixture",
-                "config": {},
-                "input_binding": {"kind": "workflow_input", "path": []},
-            },
-        ),
-        edges=(),
-    )
-    parent_workflow = workflow_with_steps(
-        name="Owned call delegation parent",
-        steps=(
-            {"key": "gate", "step_class": "fixture", "config": {}},
-            {
-                "key": "call",
-                "step_class": "call_workflow",
-                "config": {"publication": str(child_workflow.sqid)},
-                "input_binding": {
-                    "kind": "object",
-                    "fields": {"input": {"kind": "step_output", "step_key": "gate", "path": []}},
-                },
-            },
-        ),
-        edges=(("gate", "call", "completed"),),
-    )
-    parent = engine.start(parent_workflow, subject=None, actor=requester)
-    advance_once(parent)
-    execute_started(parent)
-    with system_context(reason="owned-call parent gate fixture"):
-        gate = Decision._base_manager.get(step_run__run=parent, action="select-delegation-authority")
-    assert engine.decide(gate, "complete", actor=resolver).validation_error is None
-    advance_once(parent)
-    execute_started(parent)
-    with system_context(reason="owned-call child fixture"):
-        child = WorkflowRun.objects.get(parent_step_run__run=parent)
-    advance_once(child)
-    execute_started(child)
-
-    with system_context(reason="owned-call delegated review assertion"):
-        review = Decision._base_manager.get(
-            step_run__run=child,
-            action="review-delegated-record",
-        )
-    assert review.record_access == [
-        {
-            "resource_type": "parties/handle",
-            "resource_id": str(handle.pk),
-        },
-        {
-            "resource_type": "parties/party_handle",
-            "resource_id": str(party_handle.pk),
-        },
-        {
-            "resource_type": "workflows/decision",
-            "resource_id": str(target.pk),
-            "authority_decision_id": str(gate.sqid),
-        },
-    ]
-    assert target.with_actor(reviewer).has_access("read")
-    assert handle.with_actor(reviewer).has_access("read")
-    assert not handle.with_actor(reviewer).has_access("write")
-    assert party_handle.with_actor(reviewer).has_access("read")
-    assert not party_handle.with_actor(reviewer).has_access("write")
-    assert engine.decide(review, "complete", actor=reviewer).validation_error is None
-    assert not target.with_actor(reviewer).has_access("read")
-    assert not handle.with_actor(reviewer).has_access("read")
-    assert not party_handle.with_actor(reviewer).has_access("read")
 
 
 @pytest.fixture
@@ -327,7 +173,7 @@ def test_party_handle_review_delivers_exact_nonterminal_artifact_runs(
     )
 
     def retain(target: Any, *, terminal: bool = False) -> Any:
-        run = engine.start(workflow, party, operator)
+        run = engine.start(workflow, party, admit_workflow_actor(workflow, operator))
         advance_once(run)
         with system_context(reason="test retain handle artifact"):
             step_run = StepRun.objects.get(run=run)
@@ -447,7 +293,8 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
         "evidence": [{"label": "Printed supplier", "source_model": "storage.File", "source_id": "fil_example"}],
         "context": {"invoice_id": "inv_example", "draft_revision": 2},
     }
-    run = engine.start(_identity_workflow(), party, operator, input=JsonPresence(True, proposal))
+    workflow = _identity_workflow()
+    run = engine.start(workflow, party, admit_workflow_actor(workflow, operator), input=JsonPresence(True, proposal))
     advance_once(run)
     execute_started(run)
     with system_context(reason="test identity decision"):
@@ -476,12 +323,6 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
         "value": "keep",
         "label": "Keep current contact status",
     }
-    delegated = {**proposal, "selection_decision_id": str(decision.sqid)}
-    with pytest.raises(RuntimeError, match="active fenced invocation lease"):
-        IdentityReviewStepImpl().run(
-            SimpleNamespace(input=delegated, run=run, step=SimpleNamespace(config={})),
-            now=timezone.now(),
-        )
     resolution = {
         "action": "apply_identity",
         "name_action": "replace",
@@ -631,7 +472,7 @@ def test_dedupe_scan_gate_map_apply_end_to_end(
         )
     workflow = _dedupe_workflow()
 
-    run = engine.start(workflow, None, operator)
+    run = engine.start(workflow, None, admit_workflow_actor(workflow, operator))
     advance_once(run)
     execute_started(run)
     advance_once(run)
@@ -670,7 +511,10 @@ def test_dedupe_scan_gate_map_apply_end_to_end(
     assert run.status == workflow_models.RunStatus.SUCCEEDED
 
     prepare = step_run_for(run, "prepare")
-    assert sorted(row["action"] for row in prepare.output) == ["keep_separate", "merge"]
+    assert prepare.output == [
+        {"decision_id": decision.pk, "pair_index": 0},
+        {"decision_id": decision.pk, "pair_index": 1},
+    ]
 
     with system_context(reason="test dedupe assertions"):
         drop_a.refresh_from_db()
@@ -710,7 +554,7 @@ def test_dedupe_scan_without_candidates_routes_empty(
     operator = User.objects.create_user(username="dedupe-empty")
     workflow = _dedupe_workflow()
 
-    run = engine.start(workflow, None, operator)
+    run = engine.start(workflow, None, admit_workflow_actor(workflow, operator))
     run_to_terminal(run)
     run.refresh_from_db()
     assert run.status == workflow_models.RunStatus.SUCCEEDED
@@ -732,7 +576,7 @@ def test_prepare_rejects_a_tampered_pair_identity(
         _duplicate_pair(operator, named="Kent Rothwell", digits="+4915112345678", spaced="+49 151 1234 5678")
     workflow = _dedupe_workflow()
 
-    run = engine.start(workflow, None, operator)
+    run = engine.start(workflow, None, admit_workflow_actor(workflow, operator))
     advance_once(run)
     execute_started(run)
     advance_once(run)
@@ -764,23 +608,21 @@ def test_apply_unit_is_idempotent_on_retry(workflows_parties_tables: None) -> No
     operator = User.objects.create_user(username="dedupe-retry")
     with system_context(reason="test dedupe fixture"):
         keep, drop = _duplicate_pair(operator, named="Brian Bourgerie", digits="+16175550100", spaced="+1 617 555 0100")
-    unit = DedupeExecuteStepImpl()
-    step_run = SimpleNamespace(
-        step=SimpleNamespace(config={"mode": "unit"}),
-        input={
-            "left": str(keep.sqid),
-            "right": str(drop.sqid),
-            "survivor": "left",
-            "action": "merge",
-            "resolved_by": str(to_subject_ref(operator)),
-        },
-        run=SimpleNamespace(admission_actor=lambda: operator),
-    )
 
-    first = unit.run(step_run, now=None)  # type: ignore[arg-type]
-    assert first.output == {"action": "merge", "result": "merged"}
-    second = unit.run(step_run, now=None)  # type: ignore[arg-type]
-    assert second.output == {"action": "merge", "result": "already_merged"}
+    def apply() -> str:
+        return Party.objects.apply_duplicate_pair(
+            left_id=str(keep.sqid),
+            right_id=str(drop.sqid),
+            survivor="left",
+            action="merge",
+            actor=operator,
+        )
+
+    assert apply() == "merged"
+    assert apply() == "already_merged"
+    unit = DedupeExecuteStepImpl()
+    step_run = SimpleNamespace(step=SimpleNamespace(config={"mode": "unit"}))
+
     capability = unit.recovery_capability(attempt=SimpleNamespace(step_run=SimpleNamespace(step=step_run.step)))
     assert capability.mode == RecoveryMode.FRESH
 
@@ -816,34 +658,20 @@ def test_apply_unit_authorizes_and_attributes_merge_and_veto_to_decision_resolve
         assert party.with_actor(resolver).has_access("write")
         assert not party.with_actor(run_owner).has_access("write")
 
-    unit = DedupeExecuteStepImpl()
-
-    def apply(value: dict[str, str]) -> StepResult:
-        return unit.run(
-            SimpleNamespace(
-                step=SimpleNamespace(config={"mode": "unit"}),
-                input={**value, "resolved_by": str(to_subject_ref(resolver))},
-                run=SimpleNamespace(admission_actor=lambda: run_owner),
-            ),
-            now=None,  # type: ignore[arg-type]
+    def apply(left: Any, right: Any, action: str, *, actor: Any = resolver) -> str:
+        return Party.objects.apply_duplicate_pair(
+            left_id=str(left.sqid),
+            right_id=str(right.sqid),
+            survivor="left",
+            action=action,
+            actor=actor,
         )
 
-    assert apply(
-        {
-            "left": str(merge_into.sqid),
-            "right": str(merge_source.sqid),
-            "survivor": "left",
-            "action": "merge",
-        }
-    ).output == {"action": "merge", "result": "merged"}
-    assert apply(
-        {
-            "left": str(veto_left.sqid),
-            "right": str(veto_right.sqid),
-            "survivor": "left",
-            "action": "keep_separate",
-        }
-    ).output == {"action": "keep_separate", "result": "vetoed"}
+    with system_context(reason="test explicit actor cannot inherit engine elevation"):
+        with pytest.raises((PermissionDenied, ValidationError)):
+            apply(merge_into, merge_source, "merge", actor=run_owner)
+        assert apply(merge_into, merge_source, "merge") == "merged"
+        assert apply(veto_left, veto_right, "keep_separate") == "vetoed"
 
     with system_context(reason="test resolver dedupe attribution"):
         merge_source.refresh_from_db()
@@ -865,3 +693,234 @@ def test_autoconfig_registers_the_party_governance_step_keys() -> None:
         "ANGEE_WORKFLOW_STEP_CLASSES.parties_identity_review": ("angee.workflows_parties.steps.IdentityReviewStepImpl"),
         "ANGEE_WORKFLOW_STEP_CLASSES.parties_identity_apply": ("angee.workflows_parties.steps.IdentityApplyStepImpl"),
     }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identity_owner_checks_basis_and_rolls_back_all_changes(
+    workflows_parties_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del workflows_parties_tables
+    actor = User.objects.create_user(username="identity-atomic-owner")
+    with system_context(reason="identity operation fixture"):
+        party = Party.objects.create(display_name="Original", created_by=actor)
+    _, current = Party.objects.identity_snapshot(str(party.sqid), actor=actor)
+    proposed = {"name": "Replacement", "address": {"label": "Billing", "street": "Main 1"}, "handle": {}}
+    choices = {"name_action": "replace", "address_action": "add", "handle_action": "keep"}
+    outcome, _ = Party.objects.apply_identity(
+        party_id=str(party.sqid),
+        expected_facts_hash="stale",
+        proposed=proposed,
+        choices=choices,
+        actor=actor,
+    )
+    assert outcome == "conflict"
+
+    def fail_address(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("address failure")
+
+    monkeypatch.setattr(type(Address.objects), "attach_exact", fail_address)
+    with pytest.raises(RuntimeError, match="address failure"):
+        Party.objects.apply_identity(
+            party_id=str(party.sqid),
+            expected_facts_hash=canonical_json_sha256(current),
+            proposed=proposed,
+            choices=choices,
+            actor=actor,
+        )
+    with system_context(reason="identity rollback assertion"):
+        party.refresh_from_db()
+    assert party.display_name == "Original"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identity_apply_uses_the_write_router_for_its_complete_lock_set(
+    workflows_parties_tables: None,
+) -> None:
+    del workflows_parties_tables
+    actor = User.objects.create_user(username="identity-write-router")
+    with system_context(reason="identity router fixture"):
+        party = Party.objects.create(display_name="Original", created_by=actor)
+    _, current = Party.objects.identity_snapshot(str(party.sqid), actor=actor)
+
+    with override_settings(DATABASE_ROUTERS=[_WriteSplitRouter()]):
+        outcome, results = Party.objects.apply_identity(
+            party_id=str(party.sqid),
+            expected_facts_hash=canonical_json_sha256(current),
+            proposed={"name": "Original", "address": {}, "handle": {}},
+            choices={"name_action": "keep", "address_action": "keep", "handle_action": "keep"},
+            actor=actor,
+        )
+
+    assert outcome == "unchanged"
+    assert set(results.values()) == {"kept"}
+
+
+@POSTGRES_IDENTITY
+@pytest.mark.django_db(transaction=True)
+def test_identity_confirmation_and_competing_admission_share_total_lock_order(
+    workflows_parties_tables: None,
+) -> None:
+    """Concurrent Handle claims serialize without the former Party/Handle deadlock cycle."""
+
+    del workflows_parties_tables
+    actor = User.objects.create_user(username="identity-lock-owner")
+    with system_context(reason="identity lock-order fixture"):
+        first = Party.objects.create(display_name="First", created_by=actor)
+        second = Party.objects.create(display_name="Second", created_by=actor)
+        handle = Handle.objects.create(
+            platform=Handle.Platform.EMAIL,
+            value="identity-lock@example.test",
+            created_by=actor,
+        )
+        link = PartyHandle.objects.link(first, handle, confidence=0.4, created_by_id=actor.pk)
+    start = Barrier(2)
+
+    def confirm() -> None:
+        close_old_connections()
+        start.wait(timeout=5)
+        PartyHandle.objects._transition(link, action="confirm", actor=actor, using="default")
+        close_old_connections()
+
+    def admit_competitor() -> None:
+        close_old_connections()
+        start.wait(timeout=5)
+        PartyHandle.objects.link(second, handle, confidence=0.3, created_by_id=actor.pk)
+        close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_result = pool.submit(confirm)
+        second_result = pool.submit(admit_competitor)
+        first_result.result(timeout=10)
+        second_result.result(timeout=10)
+
+    with system_context(reason="identity lock-order assertion"):
+        handle.refresh_from_db()
+    assert handle.party_id == first.pk
+    assert handle.party_link_confirmed is True
+
+
+@POSTGRES_IDENTITY
+@pytest.mark.django_db(transaction=True)
+def test_identity_suggestion_and_transition_share_total_lock_order(
+    workflows_parties_tables: None,
+) -> None:
+    """Rule insertion and review serialize through the same complete identity lock set."""
+
+    del workflows_parties_tables
+    actor = User.objects.create_user(username="identity-suggest-race")
+    with system_context(reason="identity suggestion race fixture"):
+        first = Party.objects.create(display_name="First", created_by=actor)
+        second = Party.objects.create(display_name="Second", created_by=actor)
+        handle = Handle.objects.create(
+            platform=Handle.Platform.EMAIL,
+            value="suggest-race@example.test",
+            created_by=actor,
+        )
+        link = PartyHandle.objects.link(first, handle, confidence=0.4, created_by_id=actor.pk)
+    start = Barrier(2)
+
+    def confirm() -> None:
+        close_old_connections()
+        start.wait(timeout=5)
+        PartyHandle.objects._transition(link, action="confirm", actor=actor, using="default")
+        close_old_connections()
+
+    def suggest() -> None:
+        close_old_connections()
+        start.wait(timeout=5)
+        PartyHandle.objects._suggest(
+            second,
+            handle,
+            confidence=0.3,
+            metadata={"evidence": {"kind": "race"}},
+            created_by_id=actor.pk,
+            using="default",
+        )
+        close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        confirmed = pool.submit(confirm)
+        suggested = pool.submit(suggest)
+        confirmed.result(timeout=10)
+        suggested.result(timeout=10)
+
+    with system_context(reason="identity suggestion race assertion"):
+        handle.refresh_from_db()
+    assert handle.party_id == first.pk
+    assert handle.party_link_confirmed is True
+    assert PartyHandle.objects.filter(handle=handle, party=second).exists()
+
+
+@POSTGRES_IDENTITY
+@pytest.mark.django_db(transaction=True)
+def test_identity_delete_repair_and_transition_do_not_reverse_lock_order(
+    workflows_parties_tables: None,
+) -> None:
+    """Delete repair waits for commit before competing with an identity transition."""
+
+    del workflows_parties_tables
+    actor = User.objects.create_user(username="identity-delete-race")
+    with system_context(reason="identity delete race fixture"):
+        first = Party.objects.create(display_name="First", created_by=actor)
+        second = Party.objects.create(display_name="Second", created_by=actor)
+        handle = Handle.objects.create(
+            platform=Handle.Platform.EMAIL,
+            value="delete-race@example.test",
+            created_by=actor,
+        )
+        winner = PartyHandle.objects.link(first, handle, confidence=0.9, created_by_id=actor.pk)
+        remaining = PartyHandle.objects.link(second, handle, confidence=0.4, created_by_id=actor.pk)
+    start = Barrier(2)
+
+    def delete_winner() -> None:
+        close_old_connections()
+        start.wait(timeout=5)
+        PartyHandle._base_manager.get(pk=winner.pk).delete()
+        close_old_connections()
+
+    def confirm_remaining() -> None:
+        close_old_connections()
+        start.wait(timeout=5)
+        PartyHandle.objects._transition(remaining, action="confirm", actor=actor, using="default")
+        close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        deleted = pool.submit(delete_winner)
+        confirmed = pool.submit(confirm_remaining)
+        deleted.result(timeout=10)
+        confirmed.result(timeout=10)
+
+    with system_context(reason="identity delete race assertion"):
+        handle.refresh_from_db()
+    assert handle.party_id == second.pk
+    assert handle.party_link_confirmed is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identity_snapshot_hides_private_handles_even_when_the_link_is_readable(
+    workflows_parties_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    del workflows_parties_tables, no_workflow_queue
+    actor = User.objects.create_user(username="identity-visible-link-owner")
+    other = User.objects.create_user(username="identity-private-handle-owner")
+    with system_context(reason="identity snapshot relation-read fixture"):
+        party = Party.objects.create(display_name="Visible Party", created_by=actor)
+        visible_handle = Handle.objects.create(
+            platform=Handle.Platform.EMAIL,
+            value="visible@example.test",
+            created_by=actor,
+        )
+        hidden_handle = Handle.objects.create(
+            platform=Handle.Platform.EMAIL,
+            value="private@example.test",
+            created_by=other,
+        )
+        visible_link = PartyHandle.objects.link(party, visible_handle, created_by_id=actor.pk)
+        hidden_link = PartyHandle.objects.link(party, hidden_handle, created_by_id=actor.pk)
+        assert hidden_link.with_actor(actor).has_access("read")
+        assert not hidden_handle.with_actor(actor).has_access("read")
+        _, snapshot = Party.objects.identity_snapshot(str(party.sqid), actor=actor)
+    assert [row["id"] for row in snapshot["handles"]] == [str(visible_link.sqid)]
+    assert snapshot["handles"][0]["value"] == "visible@example.test"

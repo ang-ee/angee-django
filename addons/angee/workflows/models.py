@@ -16,7 +16,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Self, cast
+from typing import Any, Literal, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -27,14 +27,16 @@ from django.core.exceptions import (
     EmptyResultSet,
     FieldError,
     FullResultSet,
-    ObjectDoesNotExist,
     ValidationError,
 )
-from django.db import DEFAULT_DB_ALIAS, OperationalError, ProgrammingError, connections, models, router, transaction
+from django.db import DEFAULT_DB_ALIAS, OperationalError, ProgrammingError, models, transaction
 from django.db.models.functions import Coalesce
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
 from django.utils import timezone
 from rebac import resolve_subjects, system_context
 
+from angee.base.db import get_write_alias
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref
 from angee.base.impl import ImplClassField, ImplDefaultsMixin, resolve_all_impl_classes
@@ -42,7 +44,13 @@ from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
-from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
+from angee.base.transitions import (
+    StateTransitions,
+    TransitionNotAllowed,
+    get_transition_save_using,
+    save_state,
+    transition,
+)
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.mixins import ResourceLoadMixin, ResourceWritePreparation
@@ -62,22 +70,10 @@ from angee.workflows.dispatch import (
     WorkflowDispatchKind,
 )
 from angee.workflows.graph import GraphIdentity, WorkflowGraph
-from angee.workflows.manager_authority import (
-    _artifact_write_capability,
-    _attempt_save_capability,
-    _attempt_write_active,
-    _decision_resolution_session,
-    _decision_save_capability,
-    _decision_write_active,
-    _definition_write_session,
-    _dispatch_save_capability,
-    _recovery_evidence_write_row,
-    _step_run_save_capability,
-    _test_fixture_write_run,
-)
 from angee.workflows.managers import (
     DecisionManager,
     DefinitionQuerySet,
+    DefinitionWriteSession,
     EdgeManager,
     StepArtifactManager,
     StepAttemptManager,
@@ -124,6 +120,36 @@ logger = logging.getLogger(__name__)
 _CHANGE_FEED_FIX = "declare changes() for the model to join the change feed"
 
 
+def _transition_write_alias(instance: models.Model) -> str:
+    """Use the transition's alias, deriving one only for a direct hook call."""
+
+    alias = get_transition_save_using(instance)
+    if alias is None:
+        alias = get_write_alias(type(instance), instance=instance)
+    return alias
+
+
+def _save_step_run_projection(instance: Any, source: Any, target: Any) -> None:
+    """Persist a model transition through the closed projection operation."""
+
+    fields = {"status", *getattr(instance, "_transition_fields", set())}
+    try:
+        alias = _transition_write_alias(instance)
+        with transaction.atomic(using=alias):
+            current = system_queryset(type(instance), using=alias, lock=("self",)).get(pk=instance.pk)
+            if current.status != source:
+                raise TransitionNotAllowed("StepRun status changed before projection.")
+            attempt_model = instance._meta.get_field("current_attempt").remote_field.model
+            attempt = (
+                system_queryset(attempt_model, using=alias).get(pk=instance.current_attempt_id)
+                if instance.current_attempt_id is not None else None
+            )
+            instance.project_from_attempt(attempt, fields=fields, using=alias)
+    finally:
+        if hasattr(instance, "_transition_fields"):
+            del instance._transition_fields
+
+
 def _empty_workflow_output_schema() -> dict[str, Any]:
     """Return the declared empty output used by workflows without result rules."""
 
@@ -134,7 +160,7 @@ _UNSET_RESULT_OUTPUT = object()
 
 
 @contextmanager
-def _workflow_child_create(instance: Any) -> Iterator[None]:
+def _workflow_child_create(instance: Any, *, using: str) -> Iterator[None]:
     """Authorize one unsaved child through its proposed workflow relation."""
 
     if not instance._state.adding:
@@ -146,8 +172,10 @@ def _workflow_child_create(instance: Any) -> Iterator[None]:
         return
     assert actor is not None
     with DefinitionQuerySet.caller_context(instance):
-        verified_actor = type(instance)._default_manager.check_create(
-            {"workflow": (instance.workflow,)}
+        workflow_model = instance._meta.get_field("workflow").remote_field.model
+        workflow = workflow_model._base_manager.using(using).get(pk=instance.workflow_id)
+        verified_actor = type(instance)._default_manager.db_manager(using).check_create(
+            {"workflow": (workflow,)}
         )
     instance.with_actor(verified_actor).sudo(reason="workflows.child.create")
     try:
@@ -165,27 +193,10 @@ class StepConfigProjection:
 
 
 def _save_workflow_status(instance: models.Model, source: Any, target: Any) -> None:
-    """Persist a workflow status transition through the immutable-row variant."""
+    """Persist a declared workflow status through the narrow model operation."""
 
-    workflow = cast("Workflow", instance)
-    workflow._allow_immutable_status_save = True
-    try:
-        save_state(workflow, source, target)
-    finally:
-        del workflow._allow_immutable_status_save
+    cast("Workflow", instance).persist_status(source=source, using=_transition_write_alias(instance))
 
-
-def _save_run_terminal(instance: models.Model, source: Any, target: Any) -> None:
-    """Commit a terminal run result and its child-completion intent together."""
-
-    run = cast("WorkflowRun", instance)
-    alias = run._state.db or router.db_for_write(type(run), instance=run)
-    with transaction.atomic(using=alias), system_context(reason="workflows.runs.terminal"):
-        save_state(run, source, target)
-        delivery_target = run.delivery_target()
-        if delivery_target.parent_relation in {ParentRelation.OWNED_CALL, ParentRelation.CONTINUATION}:
-            dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-            dispatch_model.objects.db_manager(alias).schedule_artifact_delivery(delivery_target)
 
 
 #: Statuses that participate in version currency: a newer ARCHIVED row
@@ -338,7 +349,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         """Prelock every declared resource lineage in deterministic order."""
 
         ids = sorted(set(workflow_ids))
-        alias = router.db_for_write(cls)
+        alias = get_write_alias(cls)
         with transaction.atomic(using=alias):
             rows = list(
                 system_queryset(cls, using=alias, lock=("self",))
@@ -365,28 +376,22 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         for workflow in sorted(instances, key=lambda instance: instance.pk or 0):
             if workflow.published_from_id is not None:
                 continue
-            workflow._propagate_resource_key_backfill()
+            workflow._propagate_resource_key_backfill(using=get_write_alias(cls, instance=workflow))
         super().after_resource_load(instances, tier=tier, source=source, publish=publish)
 
     @transition(status, source=WorkflowStatus.DRAFT, target=WorkflowStatus.PUBLISHED, on_success=_save_workflow_status)
-    def mark_published(self) -> None:
+    def mark_published(self, *, using: str | None = None) -> None:
         """Mark this copied version as published."""
 
-        session = _definition_write_session.get()
-        if (
-            self.published_from_id is None
-            or session is None
-            or self.pk not in session.copy_target_ids
-        ):
-            raise ValidationError("Only a new snapshot created by publish() can be marked published.")
+        if self.published_from_id is None:
+            raise ValidationError("Only a copied version can be marked published.")
 
     @transition(status, source=WorkflowStatus.DRAFT, target=WorkflowStatus.TEST, on_success=_save_workflow_status)
-    def mark_test(self) -> None:
+    def mark_test(self, *, using: str | None = None) -> None:
         """Mark a copied saved revision as an immutable test snapshot."""
 
-        session = _definition_write_session.get()
-        if self.published_from_id is None or session is None or self.pk not in session.copy_target_ids:
-            raise ValidationError("Only a copied saved revision can be marked as a test snapshot.")
+        if self.published_from_id is None:
+            raise ValidationError("Only a copied version can be marked as a test snapshot.")
 
     @transition(
         status,
@@ -394,7 +399,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         target=WorkflowStatus.ARCHIVED,
         on_success=_save_workflow_status,
     )
-    def archive(self) -> None:
+    def archive(self, *, using: str | None = None) -> None:
         """Archive a published workflow version."""
 
     def clean(self) -> None:
@@ -402,10 +407,21 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
 
         super().clean()
         self.key = (self.key or "").lower()
-        if self.published_from_id is not None and self.key != self.published_from.key:
-            raise ValidationError({"key": "Published workflow versions must share their lineage stable key."})
-        if self.error_workflow_id is not None and self.error_workflow.published_from_id is not None:
-            raise ValidationError({"error_workflow": "Error workflow must point to a workflow lineage head."})
+        routed = self._state.db not in (None, DEFAULT_DB_ALIAS)
+        if self.published_from_id is not None:
+            lineage = (
+                type(self)._base_manager.using(self._state.db).get(pk=self.published_from_id)
+                if routed else self.published_from
+            )
+            if self.key != lineage.key:
+                raise ValidationError({"key": "Published workflow versions must share their lineage stable key."})
+        if self.error_workflow_id is not None:
+            error_workflow = (
+                type(self)._base_manager.using(self._state.db).get(pk=self.error_workflow_id)
+                if routed else self.error_workflow
+            )
+            if error_workflow.published_from_id is not None:
+                raise ValidationError({"error_workflow": "Error workflow must point to a workflow lineage head."})
         # Mirror Trigger.event_model_label: store the canonical label_lower form
         # and reject labels that resolve to no installed model.
         self.subject_declaration = self.subject_declaration.strip().lower()
@@ -440,21 +456,37 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 }
             )
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
+    def insert_publication(self, *, using: str) -> None:
+        """Insert a manager-built draft snapshot through the publication owner."""
+
+        if not self._state.adding or self.published_from_id is None or self.status != WorkflowStatus.DRAFT:
+            raise ValidationError("Publication insertion requires a new draft snapshot.")
+        with DefinitionQuerySet.caller_context(self):
+            self.full_clean_for_write(using=using)
+        super().save(using=using, force_insert=True)
+
+    def persist_status(self, *, source: Any, using: str | None = None) -> None:
+        """Persist only a declared status transition, preserving all definition fields."""
+
+        alias = get_write_alias(type(self), using=using, instance=self)
+        with transaction.atomic(using=alias):
+            current = system_queryset(type(self), using=alias, lock=("self",)).get(pk=self.pk)
+            if current.status != source:
+                raise TransitionNotAllowed("Workflow status changed before persistence.")
+            super().save(using=alias, update_fields=["status", "updated_at"])
+
+    def save(self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any) -> None:
         """Persist the workflow after enforcing immutability and model validation."""
 
-        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         if self._state.adding:
             if self.published_from_id is not None:
-                session = _definition_write_session.get()
-                if session is None or self.published_from_id not in session.workflow_ids:
-                    raise ValidationError("Published workflow versions can only be created by publish().")
-                if self.status != WorkflowStatus.DRAFT:
-                    raise ValidationError({"status": "New publications must begin as draft snapshots."})
+                raise ValidationError("Published workflow versions can only be created by publish().")
             elif self.status != WorkflowStatus.DRAFT or self.version != 0 or self.draft_revision != 0:
                 raise ValidationError("New workflow lineage heads must begin as revision-zero drafts.")
             with DefinitionQuerySet.caller_context(self):
-                self.full_clean()
+                self.full_clean_for_write(using=alias)
             super().save(*args, **kwargs)
             return
 
@@ -462,20 +494,20 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         with manager._definition_write(
             (self.pk,),
             using=alias,
-            _allow_status_transition=getattr(self, "_allow_immutable_status_save", False),
-        ):
+            session=session,
+        ) as session:
             persisted = cast(Self, _definition_rows(type(self), alias).get(pk=self.pk))
             self._raise_if_immutable_save(persisted)
             if self.published_from_id != persisted.published_from_id:
                 raise ValidationError({"published_from": "Workflow lineage ownership is immutable."})
             if self.version != persisted.version:
                 raise ValidationError({"version": "Workflow publication versions are immutable."})
-            if self.status != persisted.status and not getattr(self, "_allow_immutable_status_save", False):
+            if self.status != persisted.status:
                 raise ValidationError({"status": "Workflow status changes require a declared transition."})
             # The database counter is the sole owner; a stale model can never write it backwards.
             self.draft_revision = persisted.draft_revision
             with DefinitionQuerySet.caller_context(self):
-                self.full_clean()
+                self.full_clean_for_write(using=alias)
             self._raise_if_key_changed(persisted)
             update_fields = kwargs.get("update_fields")
             definition_fields = {
@@ -503,35 +535,42 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             )
             super().save(*args, **kwargs)
             if assigns_stable_key:
-                self._propagate_resource_key_backfill()
+                self._propagate_resource_key_backfill(using=alias)
             if changed and self.published_from_id is None:
-                manager.mark_definition_changed(self.pk)
+                session.changed(self.pk)
 
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+    def delete(
+        self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any
+    ) -> tuple[int, dict[str, int]]:
         """Delete only mutable workflow rows."""
 
-        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         manager = type(self).objects.db_manager(alias)
-        with manager._definition_write((self.pk,), using=alias):
+        with manager._definition_write((self.pk,), using=alias, session=session) as session:
             persisted = cast(Self, _definition_rows(type(self), alias).get(pk=self.pk))
             self._raise_if_immutable_save(persisted)
-            if persisted.published_versions.exists():
+            if persisted.published_versions.using(alias).exists():
                 raise ValidationError("A workflow with publication history cannot be deleted.")
             # Collector skips child instance delete methods. Own the full cascade here.
-            edges = persisted.edges.using(alias).all().bound_to(self).all().delete()
-            steps = persisted.steps.using(alias).all().bound_to(self).all().delete()
+            edges = persisted.edges.using(alias).all().bound_to(self).all().delete(session=session)
+            steps = persisted.steps.using(alias).all().bound_to(self).all().delete(session=session)
             with DefinitionQuerySet.caller_context(self):
                 workflow = super().delete(*args, **kwargs)
             return _combined_delete_results(edges, steps, workflow)
 
-    def publish(self) -> Self:
+    def publish(self, *, session: DefinitionWriteSession | None = None, using: str | None = None) -> Self:
         """Copy this draft lineage head into an immutable published version."""
 
         if self.published_from_id is not None:
             raise ValidationError({"published_from": "Only a workflow lineage head can be published."})
-        alias = router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(
+            type(self),
+            using=using if using is not None else session.alias if session is not None else None,
+            instance=self,
+        )
         manager = type(self).objects.db_manager(alias)
-        with manager._definition_write((self.pk,), using=alias):
+        with manager._definition_write((self.pk,), using=alias, session=session) as session:
             draft = cast(
                 Self,
                 DefinitionQuerySet.bind_instance(_definition_rows(type(self), alias).get(pk=self.pk), self),
@@ -539,19 +578,18 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             if draft.status != WorkflowStatus.DRAFT:
                 raise ValidationError({"status": "Only draft workflows can be published."})
             with DefinitionQuerySet.caller_context(draft):
-                draft._validate_publishable()
+                draft._validate_publishable(using=alias)
             with DefinitionQuerySet.caller_context(draft):
-                version = draft._next_published_version()
+                version = draft._next_published_version(using=alias)
             published = draft._new_definition_copy(
                 version=version,
-                draft_revision=manager._definition_revision(draft.pk, draft.draft_revision),
+                draft_revision=session.revision(draft.pk, draft.draft_revision),
             )
             DefinitionQuerySet.bind_instance(published, draft)
-            published.save(using=alias)
-            with manager._copy_to(published.pk):
-                with DefinitionQuerySet.caller_context(draft):
-                    draft._copy_definition_to(published)
-                published.mark_published()
+            published.insert_publication(using=alias)
+            with DefinitionQuerySet.caller_context(draft):
+                draft._copy_definition_to(published, session=session)
+            published.mark_published(using=alias)
             return cast(Self, published)
 
     def _new_definition_copy(self, *, version: int, draft_revision: int) -> Self:
@@ -567,7 +605,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             version=version,
             draft_revision=draft_revision,
             published_from=self,
-            error_workflow=self.error_workflow,
+            error_workflow_id=self.error_workflow_id,
             max_steps=self.max_steps,
             budget=copy.deepcopy(self.budget),
             input_schema=copy.deepcopy(self.input_schema),
@@ -577,63 +615,82 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             updated_by_id=self.updated_by_id,
         )
 
-    def publish_if_changed(self) -> Self | None:
+    def publish_if_changed(
+        self, *, session: DefinitionWriteSession | None = None, using: str | None = None
+    ) -> Self | None:
         """Publish this draft only when no current version has the same definition."""
 
-        alias = router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(
+            type(self),
+            using=using if using is not None else session.alias if session is not None else None,
+            instance=self,
+        )
         manager = type(self).objects.db_manager(alias)
-        with manager._definition_write((self.pk,), using=alias):
+        with manager._definition_write((self.pk,), using=alias, session=session) as session:
             draft = cast(
                 Self,
                 DefinitionQuerySet.bind_instance(_definition_rows(type(self), alias).get(pk=self.pk), self),
             )
             with DefinitionQuerySet.caller_context(draft):
                 current = manager.current_published_for(draft)
-                if current is not None and draft._definition_signature() == current._definition_signature():
+                if current is not None and draft._definition_signature(using=alias) == current._definition_signature(
+                    using=alias
+                ):
                     return None
-            return draft.publish()
+            return draft.publish(session=session, using=alias)
 
-    def _next_published_version(self) -> int:
+    def _next_published_version(self, *, using: str) -> int:
         """Return the next immutable version number for this lineage head."""
 
         current = (
-            type(self).objects.filter(published_from=self).aggregate(max_version=models.Max("version"))["max_version"]
+            type(self).objects.using(using).filter(published_from=self).aggregate(max_version=models.Max("version"))["max_version"]
             or 0
         )
         return int(current) + 1
 
-    def _copy_definition_to(self, published: Workflow) -> None:
-        """Copy this draft's steps and edges to ``published``."""
+    def _copy_definition_to(self, published: Workflow, *, session: DefinitionWriteSession) -> None:
+        """Copy rows under the target draft's native lock and revision accumulator.
 
-        step_model = self.steps.model
-        edge_model = self.edges.model
-        step_map: dict[int, Any] = {}
-        for step in self.steps.order_by("pk"):
-            copied = step_model(
-                workflow=published,
-                key=step.key,
-                name=step.name,
-                step_class=step.step_class,
-                config=copy.deepcopy(step.config),
-                input_binding=copy.deepcopy(step.input_binding),
-                join_rule=step.join_rule,
-                is_entry=step.is_entry,
-                position=copy.deepcopy(step.position),
-            )
-            DefinitionQuerySet.bind_instance(copied, published)
-            copied.save()
-            step_map[step.pk] = copied
-        for edge in self.edges.select_related("source", "target").order_by("pk"):
-            copied_edge = edge_model(
-                workflow=published,
-                source=step_map[edge.source_id],
-                target=step_map[edge.target_id],
-                condition=edge.condition,
-            )
-            DefinitionQuerySet.bind_instance(copied_edge, published)
-            copied_edge.save()
+        A newly inserted publication is still a mutable draft until its status
+        transition. It owns a separate explicit session; restoring into the
+        existing lineage head reuses the caller's already locked session.
+        """
 
-    def _definition_signature(self) -> dict[str, Any]:
+        manager = type(published).objects.db_manager(session.alias)
+        with manager._definition_write(
+            (published.pk,),
+            using=session.alias,
+            session=session if published.published_from_id is None else None,
+        ) as target_session:
+            step_model = self.steps.model
+            edge_model = self.edges.model
+            step_map: dict[int, Any] = {}
+            for step in self.steps.using(session.alias).order_by("pk"):
+                copied = step_model(
+                    workflow=published,
+                    key=step.key,
+                    name=step.name,
+                    step_class=step.step_class,
+                    config=copy.deepcopy(step.config),
+                    input_binding=copy.deepcopy(step.input_binding),
+                    join_rule=step.join_rule,
+                    is_entry=step.is_entry,
+                    position=copy.deepcopy(step.position),
+                )
+                DefinitionQuerySet.bind_instance(copied, published)
+                copied.save(using=session.alias, session=target_session)
+                step_map[step.pk] = copied
+            for edge in self.edges.using(session.alias).select_related("source", "target").order_by("pk"):
+                copied_edge = edge_model(
+                    workflow=published,
+                    source=step_map[edge.source_id],
+                    target=step_map[edge.target_id],
+                    condition=edge.condition,
+                )
+                DefinitionQuerySet.bind_instance(copied_edge, published)
+                copied_edge.save(using=session.alias, session=target_session)
+
+    def _definition_signature(self, *, using: str) -> dict[str, Any]:
         """Return the versioned definition content for publish idempotency."""
 
         return {
@@ -660,7 +717,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                     "is_entry": step.is_entry,
                     "position": copy.deepcopy(step.position),
                 }
-                for step in self.steps.order_by("key", "pk")
+                for step in self.steps.using(using).order_by("key", "pk")
             ],
             "edges": [
                 {
@@ -668,7 +725,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                     "target": edge.target.key,
                     "condition": edge.condition,
                 }
-                for edge in self.edges.select_related("source", "target").order_by(
+                for edge in self.edges.using(using).select_related("source", "target").order_by(
                     "source__key",
                     "target__key",
                     "condition",
@@ -677,35 +734,25 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             ],
         }
 
-    def _validate_publishable(self) -> None:
+    def _validate_publishable(self, *, using: str) -> None:
         """Validate the exact locked graph before creating an executable snapshot."""
 
-        self.validate_readiness()
+        self.validate_readiness(using=using)
 
-    def graph_diagnostics(self) -> tuple[Any, ...]:
+    def graph_diagnostics(self, *, using: str | None = None) -> tuple[Any, ...]:
         """Return readiness diagnostics for the currently persisted definition."""
 
-        return type(self).objects.definition_graph(self).diagnostics()
+        return type(self).objects.db_manager(using).definition_graph(self).diagnostics()
 
-    def validate_readiness(self) -> None:
+    def validate_readiness(self, *, using: str | None = None) -> None:
         """Raise all readiness diagnostics for the currently persisted definition."""
 
-        type(self).objects.definition_graph(self).validate()
-
-    def _persisted_save_snapshot(self) -> Self | None:
-        """Return the persisted status and stable key for save guards."""
-
-        if self._state.adding:
-            return None
-        try:
-            return cast(Self, type(self)._base_manager.only("status", "key").get(pk=self.pk))
-        except ObjectDoesNotExist:
-            return None
+        type(self).objects.db_manager(using).definition_graph(self).validate()
 
     def _raise_if_immutable_save(self, persisted: Self | None) -> None:
         """Reject writes to persisted published or archived workflow definitions."""
 
-        if persisted is None or getattr(self, "_allow_immutable_status_save", False):
+        if persisted is None:
             return
         if persisted.is_immutable:
             raise ValidationError("Published workflow versions are immutable.")
@@ -718,12 +765,12 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         if persisted.key and self.key != persisted.key:
             raise ValidationError({"key": "Workflow stable keys are immutable once assigned."})
 
-    def _propagate_resource_key_backfill(self) -> None:
+    def _propagate_resource_key_backfill(self, *, using: str) -> None:
         """Copy a resource-assigned stable key to legacy published versions."""
 
         if not self.key:
             return
-        versions = type(self)._base_manager.filter(published_from=self)
+        versions = type(self)._base_manager.using(using).filter(published_from=self)
         if versions.exclude(key__in=("", self.key)).exists():
             raise ValidationError({"key": "Published workflow versions disagree with their lineage stable key."})
         models.QuerySet.update(
@@ -839,18 +886,22 @@ class Step(WorkflowDefinitionChildMixin, ImplDefaultsMixin, AuditMixin, AngeeDat
             # Incomplete typed config is a readiness diagnostic, not a storage error.
             self.config = copy.deepcopy(dict(self.config))
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
+    def save(self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any) -> None:
         """Persist the step after enforcing parent immutability and validation."""
 
-        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         old_parent_id = None
         if not self._state.adding:
             old_parent_id = _definition_rows(type(self), alias).filter(pk=self.pk).values_list(
                 "workflow_id", flat=True
             ).first()
         parent_ids = {value for value in (old_parent_id, self.workflow_id) if value is not None}
-        manager = type(self.workflow).objects
-        with manager._definition_write(parent_ids, using=alias):
+        manager = self._meta.get_field("workflow").remote_field.model.objects.db_manager(alias)
+        with manager._definition_write(parent_ids, using=alias, session=session) as session:
+            self.workflow = DefinitionQuerySet.bind_instance(
+                next(row for row in session.rows if row.pk == self.workflow_id), self
+            )
             old = None if self._state.adding else _definition_rows(type(self), alias).filter(pk=self.pk).first()
             if not self._state.adding and (old is None or old.workflow_id != old_parent_id):
                 raise ValidationError("The stored workflow step changed while it was being edited.")
@@ -860,7 +911,7 @@ class Step(WorkflowDefinitionChildMixin, ImplDefaultsMixin, AuditMixin, AngeeDat
                 ).exists():
                     raise ValidationError({"workflow": "A connected step cannot move to another workflow."})
             with DefinitionQuerySet.caller_context(self):
-                self.full_clean()
+                self.full_clean_for_write(using=alias)
             update_fields = kwargs.get("update_fields")
             self.validate_impl_configs(update_fields=update_fields)
             fields = {
@@ -882,36 +933,41 @@ class Step(WorkflowDefinitionChildMixin, ImplDefaultsMixin, AuditMixin, AngeeDat
                 getattr(old, field) != getattr(self, field)
                 for field in considered
             )
-            with _workflow_child_create(self):
+            with _workflow_child_create(self, using=kwargs["using"]):
                 super().save(*args, **kwargs)
-            session = _definition_write_session.get()
-            if changed and session is not None and self.workflow_id not in session.copy_target_ids:
+            if changed:
                 for workflow_id in parent_ids:
-                    manager.mark_definition_changed(workflow_id)
+                    session.changed(workflow_id)
 
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+    def delete(
+        self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any
+    ) -> tuple[int, dict[str, int]]:
         """Delete only steps belonging to mutable workflow rows."""
 
-        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         workflow_id = _definition_rows(type(self), alias).filter(pk=self.pk).values_list(
             "workflow_id", flat=True
         ).first()
         if workflow_id is None:
             return (0, {})
-        manager = type(self.workflow).objects
-        with manager._definition_write((workflow_id,), using=alias):
+        manager = self._meta.get_field("workflow").remote_field.model.objects.db_manager(alias)
+        with manager._definition_write((workflow_id,), using=alias, session=session) as session:
             persisted = _definition_rows(type(self), alias).get(pk=self.pk)
             if persisted.workflow_id != workflow_id:
                 raise ValidationError("The stored workflow step changed while it was being deleted.")
             edge_model = persisted.outgoing_edges.model
-            edges = edge_model.objects.using(alias).all().bound_to(self).filter(
-                models.Q(source_id=self.pk) | models.Q(target_id=self.pk)
-            ).delete()
+            edges = (
+                edge_model.objects.using(alias)
+                .all()
+                .bound_to(self)
+                .filter(models.Q(source_id=self.pk) | models.Q(target_id=self.pk))
+                .delete(session=session)
+            )
             with DefinitionQuerySet.caller_context(self):
                 step = super().delete(*args, **kwargs)
-            session = _definition_write_session.get()
-            if session is not None and workflow_id not in session.copy_target_ids:
-                manager.mark_definition_changed(workflow_id)
+            if session is not None:
+                session.changed(workflow_id)
             return _combined_delete_results(edges, step)
 
 class Edge(WorkflowDefinitionChildMixin, AuditMixin, AngeeDataModel):
@@ -947,40 +1003,41 @@ class Edge(WorkflowDefinitionChildMixin, AuditMixin, AngeeDataModel):
 
         super().clean()
         errors: dict[str, str] = {}
-        if self.workflow_id is not None and self.source_id is not None and self.source.workflow_id != self.workflow_id:
-            errors["source"] = "Edge source must belong to the same workflow."
-        if self.workflow_id is not None and self.target_id is not None and self.target.workflow_id != self.workflow_id:
-            errors["target"] = "Edge target must belong to the same workflow."
+        if self.workflow_id is not None:
+            alias = get_write_alias(type(self), using=self._state.db, instance=self)
+            step_model = self._meta.get_field("source").remote_field.model
+            endpoints = dict(
+                _definition_rows(step_model, alias)
+                .filter(pk__in=(self.source_id, self.target_id)).values_list("pk", "workflow_id")
+            )
+            if self.source_id is not None and endpoints.get(self.source_id) != self.workflow_id:
+                errors["source"] = "Edge source must belong to the same workflow."
+            if self.target_id is not None and endpoints.get(self.target_id) != self.workflow_id:
+                errors["target"] = "Edge target must belong to the same workflow."
         if errors:
             raise ValidationError(errors)
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
+    def save(self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any) -> None:
         """Persist the edge after enforcing parent immutability and validation."""
 
-        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         old_parent_id = None
         if not self._state.adding:
             old_parent_id = _definition_rows(type(self), alias).filter(pk=self.pk).values_list(
                 "workflow_id", flat=True
             ).first()
-        step_model = self._meta.get_field("source").remote_field.model
         parent_ids = {value for value in (old_parent_id, self.workflow_id) if value is not None}
-        manager = type(self.workflow).objects
-        with manager._definition_write(parent_ids, using=alias):
+        manager = self._meta.get_field("workflow").remote_field.model.objects.db_manager(alias)
+        with manager._definition_write(parent_ids, using=alias, session=session) as session:
+            self.workflow = DefinitionQuerySet.bind_instance(
+                next(row for row in session.rows if row.pk == self.workflow_id), self
+            )
             old = None if self._state.adding else _definition_rows(type(self), alias).filter(pk=self.pk).first()
             if not self._state.adding and (old is None or old.workflow_id != old_parent_id):
                 raise ValidationError("The stored workflow edge changed while it was being edited.")
-            endpoints = dict(
-                _definition_rows(step_model, alias)
-                .filter(pk__in=(self.source_id, self.target_id))
-                .values_list("pk", "workflow_id")
-            )
-            if endpoints.get(self.source_id) != self.workflow_id:
-                raise ValidationError({"source": "Edge source must belong to the same workflow."})
-            if endpoints.get(self.target_id) != self.workflow_id:
-                raise ValidationError({"target": "Edge target must belong to the same workflow."})
             with DefinitionQuerySet.caller_context(self):
-                self.full_clean()
+                self.full_clean_for_write(using=alias)
             update_fields = kwargs.get("update_fields")
             fields = {"workflow_id", "source_id", "target_id", "condition"}
             updated = None if update_fields is None else set(update_fields)
@@ -991,32 +1048,33 @@ class Edge(WorkflowDefinitionChildMixin, AuditMixin, AngeeDataModel):
                 getattr(old, field) != getattr(self, field)
                 for field in considered
             )
-            with _workflow_child_create(self):
+            with _workflow_child_create(self, using=kwargs["using"]):
                 super().save(*args, **kwargs)
-            session = _definition_write_session.get()
-            if changed and session is not None and self.workflow_id not in session.copy_target_ids:
+            if changed:
                 for workflow_id in parent_ids:
-                    manager.mark_definition_changed(workflow_id)
+                    session.changed(workflow_id)
 
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+    def delete(
+        self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any
+    ) -> tuple[int, dict[str, int]]:
         """Delete only edges belonging to mutable workflow rows."""
 
-        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         workflow_id = _definition_rows(type(self), alias).filter(pk=self.pk).values_list(
             "workflow_id", flat=True
         ).first()
         if workflow_id is None:
             return (0, {})
-        manager = type(self.workflow).objects
-        with manager._definition_write((workflow_id,), using=alias):
+        manager = self._meta.get_field("workflow").remote_field.model.objects.db_manager(alias)
+        with manager._definition_write((workflow_id,), using=alias, session=session) as session:
             persisted = _definition_rows(type(self), alias).get(pk=self.pk)
             if persisted.workflow_id != workflow_id:
                 raise ValidationError("The stored workflow edge changed while it was being deleted.")
             with DefinitionQuerySet.caller_context(self):
                 result = super().delete(*args, **kwargs)
-            session = _definition_write_session.get()
-            if session is not None and workflow_id not in session.copy_target_ids:
-                manager.mark_definition_changed(workflow_id)
+            if session is not None:
+                session.changed(workflow_id)
             return result
 
 def check_event_trigger_publishers(
@@ -1167,21 +1225,33 @@ class Trigger(AuditMixin, AngeeDataModel):
         """Validate lineage ownership and trigger declaration shape."""
 
         super().clean()
-        if self.workflow_id is not None and self.workflow.published_from_id is not None:
+        workflow = None
+        if self.workflow_id is not None:
+            workflow_model = self._meta.get_field("workflow").remote_field.model
+            workflow = (
+                workflow_model._base_manager.using(self._state.db).get(pk=self.workflow_id)
+                if self._state.db not in (None, DEFAULT_DB_ALIAS) else self.workflow
+            )
+        if workflow is not None and workflow.published_from_id is not None:
             raise ValidationError({"workflow": "Triggers attach only to workflow lineage heads."})
         declaration = self.validated_config(require_publisher=self.enabled)
         self._sync_index_fields(declaration)
-        if self.enabled and type(self.workflow).objects.current_published_for(self.workflow) is None:
+        if (
+            self.enabled
+            and type(workflow).objects.db_manager(workflow._state.db).current_published_for(workflow)
+            is None
+        ):
             raise ValidationError({"enabled": "Publish this workflow before enabling its trigger."})
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
+    def save(self, *args: Any, session: DefinitionWriteSession | None = None, **kwargs: Any) -> None:
         """Persist the trigger after model validation."""
 
         adding = self._state.adding
         if adding:
             self.enabled = False
         update_fields = kwargs.get("update_fields")
-        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         operational_fields = {
             "last_fire_at",
             "hourly_window_started_at",
@@ -1208,12 +1278,17 @@ class Trigger(AuditMixin, AngeeDataModel):
                 discovered["execution_actor_id"],
             )
         workflow_ids = sorted({value for value in (old_workflow_id, self.workflow_id) if value is not None})
-        with DefinitionQuerySet.caller_context(self), transaction.atomic(using=alias):
-            workflow_model = type(self)._meta.get_field("workflow").remote_field.model
-            list(
-                system_queryset(workflow_model, using=alias, lock=("self",))
-                .filter(pk__in=workflow_ids)
-                .order_by("pk")
+        workflow_model = type(self)._meta.get_field("workflow").remote_field.model
+        with (
+            DefinitionQuerySet.caller_context(self),
+            workflow_model.objects.db_manager(alias)._definition_write(
+                workflow_ids,
+                using=alias,
+                session=session,
+            ) as write_session,
+        ):
+            self.workflow = DefinitionQuerySet.bind_instance(
+                next(row for row in write_session.rows if row.pk == self.workflow_id), self
             )
             persisted_rule: tuple[Any, Any] | None = None
             if not adding:
@@ -1238,7 +1313,7 @@ class Trigger(AuditMixin, AngeeDataModel):
                 self.hourly_window_started_at = locked.hourly_window_started_at
                 self.hourly_fire_count = locked.hourly_fire_count
                 self.next_fire_at = locked.next_fire_at
-            self.full_clean()
+            self.full_clean_for_write(using=alias)
             if adding and self.kind == TriggerKind.EVENT and isinstance(self.config, dict):
                 declaration = self.validated_config()
                 if isinstance(declaration, EventTriggerConfig) and "admission_policy" not in self.config:
@@ -1269,20 +1344,28 @@ class Trigger(AuditMixin, AngeeDataModel):
     def _save_validated(self, *args: Any, **kwargs: Any) -> None:
         """Persist after the owning locked path has completed validation."""
 
-        with _workflow_child_create(self):
+        with _workflow_child_create(self, using=kwargs["using"]):
             super().save(*args, **kwargs)
 
-    def enable(self) -> None:
+    def enable(self, *, using: str | None = None) -> None:
         """Enable this trigger through the model owner."""
 
-        enabled = type(self).objects.db_manager(self._state.db).set_enabled(self, enabled=True)
+        enabled = (
+            type(self)
+            .objects.db_manager(get_write_alias(type(self), using=using, instance=self))
+            .set_enabled(self, enabled=True)
+        )
         self.enabled = enabled.enabled
         self.next_fire_at = enabled.next_fire_at
 
-    def disable(self) -> None:
+    def disable(self, *, using: str | None = None) -> None:
         """Disable this trigger through the model owner."""
 
-        disabled = type(self).objects.db_manager(self._state.db).set_enabled(self, enabled=False)
+        disabled = (
+            type(self)
+            .objects.db_manager(get_write_alias(type(self), using=using, instance=self))
+            .set_enabled(self, enabled=False)
+        )
         self.enabled = disabled.enabled
         self.next_fire_at = disabled.next_fire_at
 
@@ -1303,23 +1386,33 @@ class Trigger(AuditMixin, AngeeDataModel):
             return True
         return int(self.hourly_fire_count) < hourly_cap
 
-    def record_fire(self, *, timestamp: datetime) -> None:
+    def record_fire(self, *, timestamp: datetime, using: str | None = None) -> None:
         """Record one trigger fire and persist rate-limit counters."""
 
-        trigger = type(self).objects.db_manager(self._state.db).record_fire(self, timestamp=timestamp)
+        trigger = (
+            type(self)
+            .objects.db_manager(get_write_alias(type(self), using=using, instance=self))
+            .record_fire(self, timestamp=timestamp)
+        )
         self.last_fire_at = trigger.last_fire_at
         self.hourly_window_started_at = trigger.hourly_window_started_at
         self.hourly_fire_count = trigger.hourly_fire_count
         self.next_fire_at = trigger.next_fire_at
 
-    def condition_matches(self, sender: type[models.Model], instance: models.Model) -> bool:
+    def condition_matches(
+        self, sender: type[models.Model], instance: models.Model, *, using: str | None = None
+    ) -> bool:
         """Return whether this event trigger matches a saved model instance."""
 
         condition = self.config_mapping.get("condition", {})
         if not isinstance(condition, Mapping):
             return False
         with system_context(reason="workflows.event_triggers.condition"):
-            return sender._default_manager.using(instance._state.db).filter(pk=instance.pk, **dict(condition)).exists()
+            return (
+                sender._default_manager.using(get_write_alias(type(self), using=using, instance=self))
+                .filter(pk=instance.pk, **dict(condition))
+                .exists()
+            )
 
     def initial_fire_at(self, *, now: datetime) -> datetime | None:
         """Return the first persisted due timestamp for this schedule trigger."""
@@ -1364,7 +1457,10 @@ class Trigger(AuditMixin, AngeeDataModel):
         except ValidationError as error:
             return "; ".join(error.messages)
         if has_current_publication is None:
-            has_current_publication = type(self.workflow).objects.current_published_for(self.workflow) is not None
+            has_current_publication = (
+                type(self.workflow).objects.db_manager(self.workflow._state.db).current_published_for(self.workflow)
+                is not None
+            )
         if not has_current_publication:
             return "Publish this workflow before enabling its trigger."
         return None
@@ -1568,16 +1664,34 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             return canonical_subject_ref(self.admitted_actor_ref)
         return None
 
-    def admission_actor(self) -> Any | None:
-        """Resolve the retained admission subject when that principal still exists."""
+    @staticmethod
+    def _require_admission_database(using: str) -> None:
+        """Reject subject resolution that upstream cannot bind to this database."""
 
+        if using != DEFAULT_DB_ALIAS:
+            raise ValidationError(
+                {
+                    "using": "Workflow admission actor resolution requires the default database: "
+                    f"django-zed-rebac resolve_subjects() cannot bind database alias {using!r}."
+                }
+            )
+
+    def admission_actor(self, *, using: str | None = None) -> Any | None:
+        """Resolve the retained principal, failing closed on unsupported databases."""
+
+        alias = get_write_alias(type(self), using=using, instance=self)
+        self._require_admission_database(alias)
         subject = self.admission_actor_subject()
         return None if subject is None else resolve_subjects((subject,)).get(subject)
 
-    def execution_admission_actor(self) -> Any:
+    def execution_admission_actor(self, *, using: str | None = None) -> Any:
         """Resolve the immutable actor admitted by this recovery lineage root."""
 
-        actor = self.delivery_target().admission_actor()
+        alias = get_write_alias(type(self), using=using, instance=self)
+        self._require_admission_database(alias)
+        target = self.delivery_target(using=alias)
+        target._state.db = alias
+        actor = target.admission_actor()
         if actor is None:
             raise ValidationError({"actor": "Workflow execution requires its admitted actor."})
         return actor
@@ -1588,20 +1702,27 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
 
         return self.status in RunStatus.TERMINAL
 
-    def execution_lineage_root_id(self) -> int:
+    def execution_lineage_root_id(self, *, using: str | None = None) -> int:
         """Return the original run retained by this recovery provenance chain.
 
         This identity does not grant access to either run. Callers must still
         authorize every record and validate their domain payloads independently.
         """
 
+        alias = get_write_alias(type(self), using=using, instance=self)
         current = self
         seen: set[int] = set()
         while current.origin == RunOrigin.RECOVERY:
             if current.pk is None or current.pk in seen:
                 raise ValidationError({"run": "Workflow recovery lineage is cyclic."})
             seen.add(current.pk)
-            source = current.recovery_source_attempt
+            attempt_model = self._meta.get_field("recovery_source_attempt").remote_field.model
+            source = (
+                system_queryset(attempt_model, using=alias)
+                .select_related("step_run__run")
+                .filter(pk=current.recovery_source_attempt_id)
+                .first()
+            )
             if (
                 source is None
                 or source.step_run.current_attempt_id != source.pk
@@ -1614,22 +1735,24 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             raise ValidationError({"run": "Workflow execution lineage requires a saved run."})
         return current.pk
 
-    def delivery_target(self) -> Self:
+    def delivery_target(self, *, using: str | None = None) -> Self:
         """Return the original run identity subscribed by parent operations."""
 
-        root_id = self.execution_lineage_root_id()
+        alias = get_write_alias(type(self), using=using, instance=self)
+        root_id = self.execution_lineage_root_id(using=alias)
         if root_id == self.pk:
             return self
-        return system_queryset(type(self), using=self._state.db, lock=None).get(pk=root_id)
+        return system_queryset(type(self), using=alias, lock=None).get(pk=root_id)
 
-    def same_execution_lineage(self, other: Any) -> bool:
+    def same_execution_lineage(self, other: Any, *, using: str | None = None) -> bool:
         """Return whether two authorized runs share exact recovery provenance."""
 
         if not isinstance(other, type(self)):
             raise TypeError("Workflow execution lineage requires two WorkflowRun records.")
-        return self.execution_lineage_root_id() == other.execution_lineage_root_id()
+        alias = get_write_alias(type(self), using=using, instance=self)
+        return self.execution_lineage_root_id(using=alias) == other.execution_lineage_root_id(using=alias)
 
-    def allows_test_step(self, step: Any) -> bool:
+    def allows_test_step(self, step: Any, *, using: str | None = None) -> bool:
         """Return whether the pinned test scope admits one copied step."""
 
         if step is None or step.workflow_id != self.workflow_id:
@@ -1640,7 +1763,10 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             return False
 
         with system_context(reason="workflows.test_scope.plan"):
-            plan = WorkflowGraph.from_workflow(self.workflow).test_plan(
+            alias = get_write_alias(type(self), using=using, instance=self)
+            workflow_model = self._meta.get_field("workflow").remote_field.model
+            workflow = system_queryset(workflow_model, using=alias).get(pk=self.workflow_id)
+            plan = WorkflowGraph.from_workflow(workflow, using=alias).test_plan(
                 GraphIdentity(existing_id=self.test_step_id)
             )
         return GraphIdentity(existing_id=step.pk) in plan.executable
@@ -1701,17 +1827,18 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             ),
         }
 
-    def awaiting_decision(self) -> bool:
+    def awaiting_decision(self, *, using: str | None = None) -> bool:
         """Return whether this run has an unresolved workflow decision."""
 
-        return self.step_runs.filter(decisions__verdict=Verdict.PENDING).exists()
+        alias = get_write_alias(type(self), using=using, instance=self)
+        return self.step_runs.using(alias).filter(decisions__verdict=Verdict.PENDING).exists()
 
     @transition(status, source=RunStatus.PENDING, target=RunStatus.RUNNING, on_success=save_state)
-    def mark_running(self) -> None:
+    def mark_running(self, *, using: str | None = None) -> None:
         """Mark a pending run as actively orchestrating."""
 
     @transition(status, source=RunStatus.WAITING, target=RunStatus.RUNNING, on_success=save_state)
-    def resume(self) -> None:
+    def resume(self, *, using: str | None = None) -> None:
         """Mark a waiting run as actively orchestrating again."""
 
     @transition(
@@ -1720,7 +1847,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         target=RunStatus.WAITING,
         on_success=save_state,
     )
-    def mark_waiting(self, *, wake_at: Any = None) -> None:
+    def mark_waiting(self, *, wake_at: Any = None, using: str | None = None) -> None:
         """Mark a run as waiting on durable external or timer state."""
 
         self.wake_at = wake_at
@@ -1730,9 +1857,11 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         status,
         source=[RunStatus.RUNNING, RunStatus.WAITING],
         target=RunStatus.SUCCEEDED,
-        on_success=_save_run_terminal,
+        on_success=save_state,
     )
-    def mark_succeeded(self, *, outcome: str = "completed", output: Any = _UNSET_RESULT_OUTPUT) -> None:
+    def mark_succeeded(
+        self, *, outcome: str = "completed", output: Any = _UNSET_RESULT_OUTPUT, using: str | None = None
+    ) -> None:
         """Mark a run as successful."""
 
         self.result = {
@@ -1746,9 +1875,9 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         status,
         source=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
         target=RunStatus.FAILED,
-        on_success=_save_run_terminal,
+        on_success=save_state,
     )
-    def mark_failed(self, error: str = "") -> None:
+    def mark_failed(self, error: str = "", *, using: str | None = None) -> None:
         """Mark a run as failed with an optional durable error message."""
 
         self.error = error
@@ -1760,9 +1889,9 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         status,
         source=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
         target=RunStatus.CANCELED,
-        on_success=_save_run_terminal,
+        on_success=save_state,
     )
-    def mark_canceled(self) -> None:
+    def mark_canceled(self, *, using: str | None = None) -> None:
         """Mark a run as canceled."""
 
         self.result = {"status": "canceled", "outcome": "canceled", "output": None, "error": None}
@@ -1772,10 +1901,11 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the run while keeping start identity and input immutable."""
 
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         if self._state.adding:
             self._save_run_guarded(*args, **kwargs)
             return
-        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
         with transaction.atomic(using=alias):
             retained = (
                 system_queryset(type(self), using=alias, lock=("self",))
@@ -1797,6 +1927,16 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             ):
                 raise ValidationError("A retained terminal workflow run cannot be overwritten.")
             self._save_run_guarded(*args, **kwargs)
+            fields = kwargs.get("update_fields")
+            if (
+                (fields is None or "status" in fields)
+                and retained["status"] not in RunStatus.TERMINAL
+                and self.status in RunStatus.TERMINAL
+            ):
+                with system_context(reason="workflows.runs.terminal"):
+                    delivery_target = self.delivery_target(using=alias)
+                    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
+                    dispatch_model.objects.db_manager(alias).schedule_artifact_delivery(delivery_target)
 
     @classmethod
     def invocation_identity_write_names(cls) -> frozenset[str]:
@@ -1815,10 +1955,10 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                 raise ValidationError({"parent_relation": "Parent relationship is required exactly for a parent step."})
             if self.result is not None:
                 raise ValidationError({"result": "A new workflow run cannot have a terminal result."})
-        self._raise_if_test_identity_changed()
+        self._raise_if_test_identity_changed(using=kwargs["using"])
         super().save(*args, **kwargs)
 
-    def _raise_if_test_identity_changed(self) -> None:
+    def _raise_if_test_identity_changed(self, *, using: str) -> None:
         """Validate the shape of one newly admitted test request."""
 
         if self._state.adding:
@@ -1847,17 +1987,23 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                     self.test_step_id is not None or self.test_source_step_id is not None
                 ):
                     raise ValidationError({"test_step": "Whole workflow tests cannot select one step."})
-                if self.test_step_id is not None and self.test_step.workflow_id != self.workflow_id:
-                    raise ValidationError({"test_step": "The selected test step must belong to the pinned snapshot."})
+                if self.test_step_id is not None:
+                    step_model = self._meta.get_field("test_step").remote_field.model
+                    if not system_queryset(step_model, using=using).filter(
+                        pk=self.test_step_id, workflow_id=self.workflow_id
+                    ).exists():
+                        raise ValidationError(
+                            {"test_step": "The selected test step must belong to the pinned snapshot."}
+                        )
             elif self.test_scope or self.test_step_id is not None or self.test_source_step_id is not None:
                 raise ValidationError({"test_scope": "Only test runs carry test scope facts."})
 
-    def debit_budget(self, delta: Mapping[str, int]) -> None:
+    def debit_budget(self, delta: Mapping[str, int], *, using: str | None = None) -> None:
         """Atomically add usage deltas to this run's budget ledger."""
 
         if not delta:
             return
-        alias = self._state.db or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=using, instance=self)
         with system_context(reason="workflows.runs.debit_budget"), transaction.atomic(using=alias):
             locked = system_queryset(type(self), using=alias, lock=("self",)).get(pk=self.pk)
             spent = dict(locked.budget_spent or {})
@@ -1910,7 +2056,14 @@ class WorkflowTestFixture(AuditMixin, AngeeDataModel):
     def clean(self) -> None:
         super().clean()
         if self.run_id is not None and self.step_id is not None:
-            if self.run.origin != RunOrigin.TEST or self.step.workflow_id != self.run.workflow_id:
+            if self._state.db not in (None, DEFAULT_DB_ALIAS):
+                run_model = self._meta.get_field("run").remote_field.model
+                step_model = self._meta.get_field("step").remote_field.model
+                run = run_model._base_manager.using(self._state.db).get(pk=self.run_id)
+                step = step_model._base_manager.using(self._state.db).get(pk=self.step_id)
+            else:
+                run, step = self.run, self.step
+            if run.origin != RunOrigin.TEST or step.workflow_id != run.workflow_id:
                 raise ValidationError({"step": "Fixture steps must belong to the pinned test snapshot."})
         try:
             validate_json_presence(
@@ -1920,22 +2073,14 @@ class WorkflowTestFixture(AuditMixin, AngeeDataModel):
             raise ValidationError({"value": str(error)}) from error
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        alias = kwargs.get("using") or self._state.db or "default"
-        connection = connections[alias]
-        expected = (
-            (alias, id(connection), id(connection.atomic_blocks[0]), self.run_id)
-            if connection.in_atomic_block
-            else None
-        )
-        if (
-            not self._state.adding
-            or expected is None
-            or _test_fixture_write_run.get() != expected
-            or getattr(self, "_fixture_owner_write", None) != expected
-        ):
-            raise TypeError("Workflow test fixtures can only be written by WorkflowRunManager.")
-        del self._fixture_owner_write
-        super().save(*args, **kwargs)
+        raise TypeError("Workflow test fixtures can only be written by WorkflowRunManager.")
+
+    def insert_retained(self, *, using: str) -> None:
+        """Insert this immutable row through its owning manager operation."""
+
+        if not self._state.adding:
+            raise TypeError("Retained evidence cannot be rewritten.")
+        super().save(using=using, force_insert=True)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise TypeError("Workflow test fixtures are retained admission facts.")
@@ -1963,13 +2108,14 @@ class WorkflowRecoveryEvidence(AuditMixin, AngeeDataModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        expected = (
-            id(self), self.run_id, self.source_attempt_id, self.step_id, self.map_index
-        )
-        if not self._state.adding or _recovery_evidence_write_row.get() != expected:
-            raise TypeError("Recovery evidence can only be saved by WorkflowRunManager.")
-        _recovery_evidence_write_row.set(None)
-        super().save(*args, **kwargs)
+        raise TypeError("Recovery evidence can only be saved by WorkflowRunManager.")
+
+    def insert_retained(self, *, using: str) -> None:
+        """Insert this immutable row through its owning manager operation."""
+
+        if not self._state.adding:
+            raise TypeError("Retained evidence cannot be rewritten.")
+        super().save(using=using, force_insert=True)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise TypeError("Recovery evidence is immutable admission data.")
@@ -1977,6 +2123,35 @@ class WorkflowRecoveryEvidence(AuditMixin, AngeeDataModel):
 
 class StepRun(AuditMixin, AngeeDataModel):
     """Journal row for one workflow step execution or system-injected event."""
+
+    projection_field_names = frozenset(
+        {
+            "run",
+            "run_id",
+            "step",
+            "step_id",
+            "map_index",
+            "status",
+            "input",
+            "output",
+            "output_present",
+            "resume_state",
+            "claimed_deliveries",
+            "outcome",
+            "attempt",
+            "current_attempt",
+            "current_attempt_id",
+            "current_map_expansion",
+            "current_map_expansion_id",
+            "effect_key",
+            "effect_generation",
+            "wait_until",
+            "waiting_kind",
+            "heartbeat_at",
+            "error",
+            "stacktrace",
+        }
+    )
 
     runtime = True
 
@@ -2034,6 +2209,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         status,
         {
             StepRunStatus.SCHEDULED: [
+                StepRunStatus.FAILED,
                 StepRunStatus.STARTED,
                 StepRunStatus.CANCELED,
                 StepRunStatus.SKIPPED,
@@ -2091,7 +2267,7 @@ class StepRun(AuditMixin, AngeeDataModel):
             self.effect_key is not None
             or self.current_attempt_id is not None
             or self.current_map_expansion_id is not None
-            or self.attempts.exists()
+            or self.attempts.using(self._state.db).exists()
         )
 
     @property
@@ -2103,14 +2279,8 @@ class StepRun(AuditMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Keep attempt-owned facts immutable outside the attempt manager."""
 
-        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
-        protected = {
-            "run", "run_id", "step", "step_id", "map_index",
-            "status", "input", "output", "output_present", "resume_state", "claimed_deliveries", "outcome",
-            "attempt", "current_attempt", "current_attempt_id", "current_map_expansion",
-            "current_map_expansion_id", "effect_key", "effect_generation",
-            "wait_until", "waiting_kind", "heartbeat_at", "error", "stacktrace",
-        }
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         if self._state.adding:
             invalid = (
                 self.attempt != 0
@@ -2122,18 +2292,23 @@ class StepRun(AuditMixin, AngeeDataModel):
             if invalid:
                 raise ValidationError({"effect_key": "Attempt identity is initialized by StepAttemptManager."})
         elif not self._state.adding:
-            loaded = system_queryset(type(self), using=alias, lock=None).filter(pk=self.pk).values(
-                "run_id",
-                "step_id",
-                "map_index",
-                "attempt",
-                "current_attempt_id",
-                "current_map_expansion_id",
-                "effect_key",
-                "effect_generation",
-            ).get()
+            loaded = (
+                system_queryset(type(self), using=alias, lock=None)
+                .filter(pk=self.pk)
+                .values(
+                    "run_id",
+                    "step_id",
+                    "map_index",
+                    "attempt",
+                    "current_attempt_id",
+                    "current_map_expansion_id",
+                    "effect_key",
+                    "effect_generation",
+                )
+                .get()
+            )
             update_fields = kwargs.get("update_fields")
-            touches_projection = update_fields is None or bool(protected.intersection(update_fields))
+            touches_projection = update_fields is None or bool(self.projection_field_names.intersection(update_fields))
             attempt_model = self._meta.get_field("current_attempt").remote_field.model
             retained = (
                 loaded["current_attempt_id"] is not None
@@ -2142,26 +2317,12 @@ class StepRun(AuditMixin, AngeeDataModel):
                 or system_queryset(attempt_model, using=alias, lock=None).filter(step_run_id=self.pk).exists()
             )
             changed_ancestry = {
-                name
-                for name in ("run_id", "step_id", "map_index")
-                if loaded[name] != getattr(self, name)
+                name for name in ("run_id", "step_id", "map_index") if loaded[name] != getattr(self, name)
             }
             if retained and changed_ancestry:
-                raise ValidationError(
-                    {name: "Retained StepRun ancestry is immutable." for name in changed_ancestry}
-                )
-            if (retained or _attempt_write_active(alias, self.pk)) and touches_projection:
-                capability = _step_run_save_capability.get()
-                if (
-                    capability is None
-                    or capability.run_id != loaded["run_id"]
-                    or capability.step_run_id != self.pk
-                    or not capability.atomic.consume(alias, self)
-                ):
-                    raise TypeError("Retained StepRun projections can only be saved by their manager owner.")
-            if _attempt_write_active(alias, self.pk):
-                super().save(*args, **kwargs)
-                return
+                raise ValidationError({name: "Retained StepRun ancestry is immutable." for name in changed_ancestry})
+            if retained and touches_projection:
+                raise TypeError("Retained StepRun projections can only be saved by their manager owner.")
             changed = {
                 name
                 for name in ("current_attempt_id", "effect_key", "effect_generation")
@@ -2175,13 +2336,64 @@ class StepRun(AuditMixin, AngeeDataModel):
                 raise ValidationError({name: "This field is owned by StepAttemptManager." for name in changed})
         super().save(*args, **kwargs)
 
+    def project_from_attempt(self, attempt: Any, *, fields: Iterable[str], using: str | None = None) -> None:
+        """Persist an attempt-owned projection while preserving immutable ancestry."""
+
+        fields = set(fields)
+        if fields - self.projection_field_names - {"updated_at"}:
+            raise TypeError("The attempt operation can persist only StepRun projection fields.")
+        alias = get_write_alias(type(self), using=using, instance=self)
+        attnames = {type(self)._meta.get_field(name).attname for name in fields - {"updated_at"}}
+        loaded = (
+            system_queryset(type(self), using=alias, lock=None)
+            .values(
+                "run_id",
+                "step_id",
+                "map_index",
+                "current_attempt_id",
+                "status",
+                *sorted(attnames),
+            )
+            .get(pk=self.pk)
+        )
+        if any(loaded[name] != getattr(self, name) for name in ("run_id", "step_id", "map_index")):
+            raise ValidationError("Retained StepRun ancestry is immutable.")
+        if attempt is not None and (attempt.step_run_id != self.pk or attempt.pk != self.current_attempt_id):
+            raise ValidationError({"attempt": "Projection requires this step run's current attempt."})
+        if attempt is None and loaded["current_attempt_id"] is not None:
+            raise ValidationError({"attempt": "A retained projection requires its attempt."})
+        if all(loaded[name] == getattr(self, name) for name in attnames):
+            return
+        changed = (
+            type(self)
+            .objects.db_manager(alias)
+            .get_queryset()
+            ._project_from_attempt(
+                self,
+                fields=fields - {"updated_at"},
+                previous=loaded,
+            )
+        )
+        if changed != 1:
+            raise TransitionNotAllowed("StepRun projection changed before persistence.")
+        super().save(using=alias, update_fields=fields)
+
+    @transition(
+        status,
+        source=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING],
+        target=StepRunStatus.FAILED,
+        on_success=_save_step_run_projection,
+    )
+    def mark_preparation_failed(self, *, using: str | None = None) -> None:
+        """Project a retained failure before physical invocation."""
+
     @transition(
         status,
         source=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING],
         target=StepRunStatus.STARTED,
-        on_success=save_state,
+        on_success=_save_step_run_projection,
     )
-    def mark_started(self, *, heartbeat_at: Any = None, claimed_deliveries: int = 0) -> None:
+    def mark_started(self, *, heartbeat_at: Any = None, claimed_deliveries: int = 0, using: str | None = None) -> None:
         """Claim this row for execution."""
 
         self.heartbeat_at = heartbeat_at
@@ -2189,13 +2401,16 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.waiting_kind = cast(WaitingKind, "")
         self._transition_fields = {"heartbeat_at", "claimed_deliveries", "waiting_kind"}
 
-    @transition(status, source=StepRunStatus.STARTED, target=StepRunStatus.WAITING, on_success=save_state)
+    @transition(
+        status, source=StepRunStatus.STARTED, target=StepRunStatus.WAITING, on_success=_save_step_run_projection
+    )
     def mark_waiting(
         self,
         *,
         until: Any = None,
         resume_state: dict[str, Any] | None = None,
         waiting_kind: WaitingKind = cast(WaitingKind, WaitingKind.SCHEDULED),
+        using: str | None = None,
     ) -> None:
         """Persist durable wait conditions for this row."""
 
@@ -2214,19 +2429,19 @@ class StepRun(AuditMixin, AngeeDataModel):
         """
 
         if self.status != StepRunStatus.WAITING:
-            raise TransitionNotAllowed(
-                f"StepRun.wake requires status={StepRunStatus.WAITING}; found {self.status}."
-            )
+            raise TransitionNotAllowed(f"StepRun.wake requires status={StepRunStatus.WAITING}; found {self.status}.")
         self.wait_until = at
-        self.save(update_fields=["wait_until", "resume_state", "updated_at"])
+        self.project_from_attempt(self.current_attempt, fields={"wait_until", "resume_state", "updated_at"})
 
     @transition(
         status,
         source=[StepRunStatus.STARTED, StepRunStatus.WAITING],
         target=StepRunStatus.SUCCEEDED,
-        on_success=save_state,
+        on_success=_save_step_run_projection,
     )
-    def mark_succeeded(self, *, output: Any = None, output_present: bool = True, outcome: str = "") -> None:
+    def mark_succeeded(
+        self, *, output: Any = None, output_present: bool = True, outcome: str = "", using: str | None = None
+    ) -> None:
         """Persist a successful step result."""
 
         self.output = output if output_present else None
@@ -2237,16 +2452,24 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.wait_until = None
         self.waiting_kind = cast(WaitingKind, "")
         self._transition_fields = {
-            "output", "output_present", "outcome", "error", "stacktrace", "wait_until", "waiting_kind",
+            "output",
+            "output_present",
+            "outcome",
+            "error",
+            "stacktrace",
+            "wait_until",
+            "waiting_kind",
         }
 
     @transition(
         status,
         source=[StepRunStatus.STARTED, StepRunStatus.WAITING],
         target=StepRunStatus.FAILED,
-        on_success=save_state,
+        on_success=_save_step_run_projection,
     )
-    def mark_failed(self, *, error: str = "", stacktrace: str = "", outcome: str = "failed") -> None:
+    def mark_failed(
+        self, *, error: str = "", stacktrace: str = "", outcome: str = "failed", using: str | None = None
+    ) -> None:
         """Persist a failed step result."""
 
         self.error = error
@@ -2260,9 +2483,9 @@ class StepRun(AuditMixin, AngeeDataModel):
         status,
         source=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING],
         target=StepRunStatus.SKIPPED,
-        on_success=save_state,
+        on_success=_save_step_run_projection,
     )
-    def mark_skipped(self) -> None:
+    def mark_skipped(self, *, using: str | None = None) -> None:
         """Mark this row as skipped by routing or join semantics."""
 
         self.wait_until = None
@@ -2273,9 +2496,9 @@ class StepRun(AuditMixin, AngeeDataModel):
         status,
         source=[StepRunStatus.SCHEDULED, StepRunStatus.STARTED, StepRunStatus.WAITING],
         target=StepRunStatus.CANCELED,
-        on_success=save_state,
+        on_success=_save_step_run_projection,
     )
-    def mark_canceled(self) -> None:
+    def mark_canceled(self, *, using: str | None = None) -> None:
         """Mark this row as canceled."""
 
         self.wait_until = None
@@ -2286,9 +2509,9 @@ class StepRun(AuditMixin, AngeeDataModel):
         status,
         source=[StepRunStatus.SUCCEEDED, StepRunStatus.FAILED, StepRunStatus.CANCELED, StepRunStatus.SKIPPED],
         target=StepRunStatus.SCHEDULED,
-        on_success=save_state,
+        on_success=_save_step_run_projection,
     )
-    def reschedule_for_override(self, *, input: Any = None) -> None:
+    def reschedule_for_override(self, *, input: Any = None, using: str | None = None) -> None:
         """Reset a terminal journal row so a manual override can run it again."""
 
         self.input = input if input is not None else {}
@@ -2537,39 +2760,109 @@ class StepAttempt(AuditMixin, AngeeDataModel):
         return AttemptStatus.ALLOCATED
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
-        capability = _attempt_save_capability.get()
-        if (
-            capability is None
-            or not _attempt_write_active(alias, self.step_run_id)
-            or capability.step_run_id != self.step_run_id
-            or capability.pk != self.pk
-            or capability.adding != self._state.adding
-            or not capability.atomic.consume(alias, self)
-        ):
-            raise TypeError("Step attempts can only be saved by StepAttemptManager.")
+        raise TypeError("Step attempts can only be saved by StepAttemptManager.")
+
+    def allocate(self, *, using: str) -> None:
+        """Insert one manager-validated claim; constraints own its unique identity."""
+
         if not self._state.adding:
-            retained = system_queryset(type(self), using=alias, lock=("self",)).filter(
-                pk=self.pk
-            ).values_list("decision_settlement", flat=True).get()
-            if retained != self.decision_settlement:
-                session = _decision_resolution_session.get()
-                if (
-                    retained
-                    or not isinstance(self.decision_settlement, dict)
-                    or set(self.decision_settlement) != {"decision_ids", "outcome"}
-                    or not isinstance(self.decision_settlement["decision_ids"], list)
-                    or not self.decision_settlement["decision_ids"]
-                    or not isinstance(self.decision_settlement["outcome"], str)
-                    or self.result_kind != str(AttemptResultKind.SUSPEND)
-                    or self.applied_at is None
-                    or session is None
-                    or session.completed
-                    or session.alias != alias
-                    or session.decision_id not in self.decision_settlement["decision_ids"]
-                ):
-                    raise TypeError("Decision settlement is a write-once retained suspension fact.")
-        super().save(*args, **kwargs)
+            raise TypeError("An allocated attempt cannot be inserted again.")
+        super().save(using=using, force_insert=True)
+
+    def admit_invocation(self, *, lease_token: Any, at: datetime, using: str) -> bool:
+        """Claim the first physical invocation before a receiver can re-enter."""
+
+        changed = (
+            type(self)
+            .objects.db_manager(using)
+            .get_queryset()
+            ._admit_invocation(
+                attempt_id=self.pk,
+                lease_token=lease_token,
+                at=at,
+            )
+        )
+        if changed:
+            self.started_at = at
+            self.heartbeat_at = at
+        return changed == 1
+
+    def heartbeat(self, *, using: str) -> bool:
+        """Advance a live heartbeat once before save receivers can re-enter."""
+
+        if type(self).objects.db_manager(using).get_queryset()._heartbeat(self) != 1:
+            return False
+        super().save(using=using, update_fields=["heartbeat_at", "updated_at"])
+        return True
+
+    def revoke_lease(self, *, using: str) -> None:
+        """Retain a lease revocation without rewriting invocation or result facts."""
+
+        if type(self).objects.db_manager(using).get_queryset()._revoke_lease(self) != 1:
+            raise ValidationError({"attempt": "The invocation lease is no longer available for revocation."})
+        super().save(using=using, update_fields=["lease_revoked_at", "lease_revocation_reason", "updated_at"])
+
+    def bind_external(self, *, using: str) -> None:
+        """Retain the manager-validated external operation identity."""
+
+        if type(self).objects.db_manager(using).get_queryset()._bind_external(self) != 1:
+            raise ValidationError({"attempt": "The invocation already has an external binding or is no longer active."})
+        super().save(using=using, update_fields=["external_content_type", "external_object_id", "updated_at"])
+
+    result_field_names = (
+        "result_kind",
+        "result_recorded_at",
+        "output_present",
+        "output",
+        "checkpoint_present",
+        "checkpoint",
+        "error",
+        "stacktrace",
+        "outcome",
+        "waiting_kind",
+        "result_requested_until",
+        "result_decisions",
+        "artifacts_present",
+        "applied_at",
+        "orchestration_error",
+    )
+
+    def retain_result(self, *, using: str) -> None:
+        """Retain one result before save receivers can invoke finalization again."""
+
+        changed = type(self).objects.db_manager(using).get_queryset()._retain_result(self)
+        if changed != 1:
+            raise ValidationError({"attempt": "This attempt already retained its result."})
+        super().save(using=using, update_fields=[*self.result_field_names, "updated_at"])
+
+    def retain_orchestration_error(self, *, using: str) -> None:
+        """Retain failure to schedule an already recorded transient result."""
+
+        super().save(using=using, update_fields=["orchestration_error", "updated_at"])
+
+    def settle_decisions(self, *, using: str) -> None:
+        """Write the full gate settlement once on an applied suspension."""
+
+        value = self.decision_settlement
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"decision_ids", "outcome"}
+            or not isinstance(value["decision_ids"], list)
+            or not value["decision_ids"]
+            or not isinstance(value["outcome"], str)
+        ):
+            raise ValidationError({"decision_settlement": "A settlement needs resolved decisions and an outcome."})
+        changed = (
+            type(self)
+            .objects.db_manager(using)
+            .get_queryset()
+            ._settle_decisions(
+                attempt_id=self.pk,
+                settlement=value,
+            )
+        )
+        if changed != 1:
+            raise ValidationError({"decision_settlement": "This suspension is not available for settlement."})
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise TypeError("Step attempts are retained execution evidence and cannot be deleted.")
@@ -2611,10 +2904,14 @@ class StepExternalSubscription(AuditMixin, AngeeDataModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
-        if not self._state.adding or not _attempt_write_active(alias, self.attempt.step_run_id):
-            raise TypeError("External subscriptions can only be recorded by StepAttemptManager.")
-        super().save(*args, **kwargs)
+        raise TypeError("External subscriptions can only be recorded by StepAttemptManager.")
+
+    def insert_retained(self, *, using: str) -> None:
+        """Insert this immutable row through its owning manager operation."""
+
+        if not self._state.adding:
+            raise TypeError("Retained evidence cannot be rewritten.")
+        super().save(using=using, force_insert=True)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise TypeError("External subscriptions are retained for their attempt lifecycle.")
@@ -2646,17 +2943,14 @@ class StepArtifact(AuditMixin, AngeeDataModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
-        capability = _artifact_write_capability.get()
-        if (
-            capability is None
-            or capability.attempt_id != self.attempt_id
-            or capability.declaration_index != self.declaration_index
-            or not self._state.adding
-            or not capability.atomic.consume(alias, self)
-        ):
-            raise TypeError("Workflow artifacts can only be saved by StepArtifactManager.")
-        super().save(*args, **kwargs)
+        raise TypeError("Workflow artifacts can only be saved by StepArtifactManager.")
+
+    def insert_retained(self, *, using: str) -> None:
+        """Insert this immutable row through its owning manager operation."""
+
+        if not self._state.adding:
+            raise TypeError("Retained evidence cannot be rewritten.")
+        super().save(using=using, force_insert=True)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise TypeError("Workflow artifacts are immutable retained result evidence.")
@@ -2681,10 +2975,6 @@ class Decision(AuditMixin, AngeeDataModel):
     target_model = models.CharField(max_length=255, blank=True, default="", db_index=True)
     target_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
     target_tab = models.CharField(max_length=100, blank=True, default="")
-    target_authority_decision = models.ForeignKey(
-        "workflows.Decision", on_delete=models.PROTECT, null=True, blank=True,
-        related_name="authorized_target_decisions", editable=False,
-    )
     record_access = models.JSONField(default=list, blank=True, editable=False)
     verdict = StateField(choices_enum=Verdict, default=Verdict.PENDING)
     resolution = models.JSONField(default=dict, blank=True)
@@ -2694,18 +2984,6 @@ class Decision(AuditMixin, AngeeDataModel):
     max_attempts = models.PositiveIntegerField(null=True, blank=True)
     expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
     escalate_at = models.DateTimeField(null=True, blank=True, db_index=True)
-
-    verdict_transitions = StateTransitions(
-        verdict,
-        {
-            Verdict.PENDING: [
-                Verdict.COMPLETED,
-                Verdict.REJECTED,
-                Verdict.ESCALATED,
-                Verdict.EXPIRED,
-            ],
-        },
-    )
 
     objects = DecisionManager()
 
@@ -2732,8 +3010,10 @@ class Decision(AuditMixin, AngeeDataModel):
                 name="chk_wdc_declaration_source_pair",
             ),
             models.CheckConstraint(
-                condition=(models.Q(target_model="", target_id="", target_tab="")
-                           | (~models.Q(target_model="") & ~models.Q(target_id=""))),
+                condition=(
+                    models.Q(target_model="", target_id="", target_tab="")
+                    | (~models.Q(target_model="") & ~models.Q(target_id=""))
+                ),
                 name="chk_wdc_target_pair",
             ),
         )
@@ -2747,29 +3027,52 @@ class Decision(AuditMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Keep retained suspension provenance immutable outside its manager."""
 
-        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = alias
         if self._state.adding:
-            if (
-                (self.suspension_attempt_id is not None or self.declaration_index is not None)
-                and not _decision_write_active(alias, self)
-            ):
+            if self.suspension_attempt_id is not None or self.declaration_index is not None:
                 raise TypeError("Decision suspension provenance is owned by DecisionManager.")
         else:
-            retained = system_queryset(type(self), using=alias, lock=None).filter(pk=self.pk).values(
-                "suspension_attempt_id", "declaration_index", "priority", "action", "payload",
-                "target_model", "target_id", "target_tab", "target_authority_decision_id",
-                "record_access", "max_attempts", "expires_at", "escalate_at",
-            ).get()
-            if retained["suspension_attempt_id"] != self.suspension_attempt_id or retained[
-                "declaration_index"
-            ] != self.declaration_index:
+            retained = (
+                system_queryset(type(self), using=alias, lock=None)
+                .filter(pk=self.pk)
+                .values(
+                    "step_run_id",
+                    "suspension_attempt_id",
+                    "declaration_index",
+                    "priority",
+                    "action",
+                    "payload",
+                    "target_model",
+                    "target_id",
+                    "target_tab",
+                    "record_access",
+                    "max_attempts",
+                    "expires_at",
+                    "escalate_at",
+                )
+                .get()
+            )
+            if retained["step_run_id"] != self.step_run_id:
+                raise TypeError("Decision suspension ancestry is immutable.")
+            if (
+                retained["suspension_attempt_id"] != self.suspension_attempt_id
+                or retained["declaration_index"] != self.declaration_index
+            ):
                 raise TypeError("Decision suspension provenance is immutable.")
             immutable = {
                 name
                 for name in (
-                    "priority", "action", "payload", "target_model", "target_id", "target_tab",
-                    "target_authority_decision_id", "record_access",
-                    "max_attempts", "expires_at", "escalate_at"
+                    "priority",
+                    "action",
+                    "payload",
+                    "target_model",
+                    "target_id",
+                    "target_tab",
+                    "record_access",
+                    "max_attempts",
+                    "expires_at",
+                    "escalate_at",
                 )
                 if retained[name] != getattr(self, name)
             }
@@ -2778,14 +3081,8 @@ class Decision(AuditMixin, AngeeDataModel):
             update_fields = kwargs.get("update_fields")
             execution_fields = {"verdict", "resolution", "resolved_by", "resolved_at", "attempts"}
             touches_execution = update_fields is None or bool(execution_fields.intersection(update_fields))
-            if retained["suspension_attempt_id"] is not None and touches_execution:
-                capability = _decision_save_capability.get()
-                if (
-                    capability is None
-                    or capability.decision_id != self.pk
-                    or not capability.atomic.consume(alias, self)
-                ):
-                    raise TypeError("Retained Decisions can only be changed by their transition owner.")
+            if touches_execution:
+                raise TypeError("Decision execution fields are owned by DecisionManager operations.")
         super().save(*args, **kwargs)
 
     @classmethod
@@ -2833,57 +3130,159 @@ class Decision(AuditMixin, AngeeDataModel):
             return dict(schema) if isinstance(schema, dict) and schema else None
         return None
 
-    @transition(verdict, source=Verdict.PENDING, target=Verdict.COMPLETED, on_success=save_state)
-    def mark_completed(self, *, resolution: Any = None, resolved_by: str = "") -> None:
-        """Resolve this slot as completed."""
+    def resolution_actor_subject(self) -> Any | None:
+        """Return the retained human resolver; lifecycle expiry has no human actor."""
 
-        self._set_resolution(resolution=resolution, resolved_by=resolved_by)
+        if self.verdict == Verdict.EXPIRED or not self.resolved_by:
+            return None
+        return canonical_subject_ref(self.resolved_by)
 
-    @transition(verdict, source=Verdict.PENDING, target=Verdict.REJECTED, on_success=save_state)
-    def mark_rejected(self, *, resolution: Any = None, resolved_by: str = "") -> None:
-        """Resolve this slot as rejected."""
+    def create_for_suspension(self, *, using: str) -> None:
+        """Insert one manager-derived declaration through the cooperative save chain."""
 
-        self._set_resolution(resolution=resolution, resolved_by=resolved_by)
+        if (
+            not self._state.adding
+            or self.suspension_attempt_id is None
+            or self.declaration_index is None
+            or self.suspension_attempt.step_run_id != self.step_run_id
+            or self.verdict != Verdict.PENDING
+        ):
+            raise ValidationError({"decision": "Suspension creation requires a new pending declaration."})
+        super().save(using=using, force_insert=True)
 
-    @transition(verdict, source=Verdict.PENDING, target=Verdict.ESCALATED, on_success=save_state)
-    def mark_escalated(self, *, resolution: Any = None, resolved_by: str = "") -> None:
-        """Resolve this slot as escalated."""
+    def record_invalid_resolution(self, *, at: datetime | None = None, using: str | None = None) -> bool:
+        """Advance only this persisted pending validation generation."""
 
-        self._set_resolution(resolution=resolution, resolved_by=resolved_by)
-
-    @transition(verdict, source=Verdict.PENDING, target=Verdict.EXPIRED, on_success=save_state)
-    def mark_expired(self, *, resolution: Any = None, resolved_by: str = "") -> None:
-        """Resolve this slot as expired."""
-
-        self._set_resolution(resolution=resolution, resolved_by=resolved_by)
-
-    def record_invalid_resolution(self) -> None:
-        """Record one failed validation attempt while leaving the slot pending."""
-
+        timestamp = at or timezone.now()
+        alias = get_write_alias(type(self), using=using, instance=self)
+        changed = (
+            type(self)
+            .objects.using(alias)
+            .filter(pk=self.pk)
+            .record_invalid_resolution(generation=self.attempts, at=timestamp)
+        )
+        if changed != 1:
+            return False
         self.attempts += 1
-        self.save(update_fields=["attempts", "updated_at"])
+        self.updated_at = timestamp
+        return True
 
-    def resolve(self, verdict: Verdict, *, resolution: Any = None, resolved_by: str = "") -> None:
-        """Resolve this slot through the transition matching ``verdict``."""
+    def resolve(
+        self,
+        verdict: Verdict,
+        *,
+        resolution: Any = None,
+        resolved_by: str = "",
+        at: datetime | None = None,
+        using: str | None = None,
+    ) -> bool:
+        """Claim a terminal verdict before running cooperative save callbacks."""
 
-        if verdict == Verdict.COMPLETED:
-            self.mark_completed(resolution=resolution, resolved_by=resolved_by)
-        elif verdict == Verdict.REJECTED:
-            self.mark_rejected(resolution=resolution, resolved_by=resolved_by)
-        elif verdict == Verdict.ESCALATED:
-            self.mark_escalated(resolution=resolution, resolved_by=resolved_by)
-        elif verdict == Verdict.EXPIRED:
-            self.mark_expired(resolution=resolution, resolved_by=resolved_by)
-        else:
-            raise ValidationError({"verdict": "Decision verdict must be terminal."})
+        alias = get_write_alias(type(self), using=using, instance=self)
+        return self._resolve_pending(
+            verdict, resolution=resolution, resolved_by=resolved_by, at=at or timezone.now(), using=alias
+        )
 
-    def _set_resolution(self, *, resolution: Any = None, resolved_by: str = "") -> None:
-        """Persist normalized resolution audit fields for a terminal verdict."""
+    def expire(
+        self,
+        *,
+        resolved_by: str = "",
+        at: datetime | None = None,
+        generation: int | None = None,
+        due: bool = False,
+        using: str | None = None,
+    ) -> bool:
+        """Expire a pending slot, optionally requiring its due timer generation."""
 
-        self.resolution = resolution if resolution is not None else {}
-        self.resolved_by = resolved_by
-        self.resolved_at = timezone.now()
-        self._transition_fields = {"resolution", "resolved_by", "resolved_at"}
+        alias = get_write_alias(type(self), using=using, instance=self)
+        return self._resolve_pending(
+            Verdict.EXPIRED,
+            resolution={},
+            resolved_by=resolved_by,
+            at=at or timezone.now(),
+            generation=generation,
+            deadline="expires_at" if due else None,
+            using=alias,
+        )
+
+    def escalate(
+        self,
+        *,
+        resolved_by: str = "",
+        at: datetime | None = None,
+        generation: int | None = None,
+        due: bool = False,
+        using: str | None = None,
+    ) -> bool:
+        """Escalate a pending slot, optionally requiring its due timer generation."""
+
+        alias = get_write_alias(type(self), using=using, instance=self)
+        return self._resolve_pending(
+            Verdict.ESCALATED,
+            resolution={},
+            resolved_by=resolved_by,
+            at=at or timezone.now(),
+            generation=generation,
+            deadline="escalate_at" if due else None,
+            using=alias,
+        )
+
+    def _resolve_pending(
+        self,
+        verdict: Verdict,
+        *,
+        resolution: Any,
+        resolved_by: str,
+        at: datetime,
+        generation: int | None = None,
+        deadline: Literal["expires_at", "escalate_at"] | None = None,
+        using: str,
+    ) -> bool:
+        alias = using
+        payload = resolution if resolution is not None else {}
+        if not isinstance(payload, dict):
+            raise ValidationError({"resolution": "Decision resolution must be a JSON object."})
+        with transaction.atomic(using=alias):
+            changed = (
+                type(self)
+                .objects.using(alias)
+                .filter(pk=self.pk)
+                .resolve_pending(
+                    verdict=verdict,
+                    resolution=payload,
+                    resolved_by=resolved_by,
+                    at=at,
+                    generation=generation,
+                    deadline=deadline,
+                )
+            )
+            if changed != 1:
+                return False
+            self.verdict = verdict
+            self.resolution = payload
+            self.resolved_by = resolved_by
+            self.resolved_at = at
+            super().save(
+                using=alias, update_fields=["verdict", "resolution", "resolved_by", "resolved_at", "updated_at"]
+            )
+            return True
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        if self.suspension_attempt_id is not None or self.declaration_index is not None:
+            raise TypeError("Retained workflow Decisions cannot be deleted.")
+        kwargs["using"] = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        return super().delete(*args, **kwargs)
+
+
+@receiver(pre_delete)
+def _protect_retained_decision_delete(sender: type[models.Model], instance: models.Model, **kwargs: Any) -> None:
+    """Close collector and deliberately bypassed queryset deletion of retained Decisions."""
+
+    del sender, kwargs
+    if isinstance(instance, Decision) and (
+        instance.suspension_attempt_id is not None or instance.declaration_index is not None
+    ):
+        raise TypeError("Retained workflow Decisions cannot be deleted.")
 
 
 class WorkflowDispatch(AuditMixin, AngeeDataModel):
@@ -2998,22 +3397,35 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
         return WorkflowDispatchEnvelope(self.pk, kind, target_id, self.generation, lease_token)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
-        capability = _dispatch_save_capability.get()
-        if (
-            capability is None
-            or capability.pk != self.pk
-            or capability.adding != self._state.adding
-            or capability.kind != str(self.kind)
-            or capability.target != self.target_identity
-            or not capability.atomic.consume(alias, self)
-        ):
-            raise TypeError("Workflow dispatches can only be saved by WorkflowDispatchManager.")
+        raise TypeError("Workflow dispatches can only be saved by WorkflowDispatchManager.")
+
+    def persist_delivery(self, *, using: str, fields: Iterable[str] | None = None) -> None:
+        """Insert an intent or update publication telemetry with fixed identity."""
+
+        alias = using
+        if fields is not None and not set(fields) <= {
+            "last_sent_at",
+            "send_count",
+            "next_send_at",
+            "last_send_error",
+            "updated_at",
+        }:
+            raise TypeError("Only publication telemetry may be updated by this operation.")
         if not self._state.adding:
-            persisted = system_queryset(type(self), using=alias, lock=None).values(
-                "kind", "run_id", "step_attempt_id", "decision_id", "generation",
-                "artifact_content_type_id", "artifact_object_id", "available_at"
-            ).get(pk=self.pk)
+            persisted = (
+                system_queryset(type(self), using=alias, lock=None)
+                .values(
+                    "kind",
+                    "run_id",
+                    "step_attempt_id",
+                    "decision_id",
+                    "generation",
+                    "artifact_content_type_id",
+                    "artifact_object_id",
+                    "available_at",
+                )
+                .get(pk=self.pk)
+            )
             if (
                 persisted["kind"] != self.kind
                 or persisted["run_id"] != self.run_id
@@ -3027,7 +3439,7 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
                 raise TypeError("Workflow dispatch identity and availability are immutable.")
         if self._state.adding and self.next_send_at is None:
             self.next_send_at = self.available_at
-        super().save(*args, **kwargs)
+        super().save(using=using, force_insert=self._state.adding, update_fields=fields)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise TypeError("Workflow dispatches are durable delivery evidence and cannot be deleted.")

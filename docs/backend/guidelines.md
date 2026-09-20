@@ -143,22 +143,42 @@ Use these owners instead of maintaining another contract in an addon:
   reverse related managers, `refresh_from_db`, ContentType lookups, and
   `@transaction.atomic` decorators on instance methods can silently choose the
   default or read alias; bind them explicitly to the operation's write alias.
-  Public override hooks accept optional keyword-only `using`; dispatchers bind
-  their owning instance to the selected alias and retain the legacy hook call
-  shape, while private helpers require the already-selected alias.
+  The invariant is **never silently misroute**: use the native alias-bound form,
+  or fail closed at the operation's entry owner for a non-default alias when
+  Django or the upstream library cannot honour it; do not rebuild that library.
+  Public override hooks accept optional keyword-only `using`, while private
+  helpers require the already-selected alias. To preserve override compatibility,
+  the entry owner pins each persisted instance it hands to a hook to its selected
+  alias through `_state.db` and calls the overridable hook without a `using`
+  keyword; the hook derives the same alias from the instance.
+
+  **Known routing frontiers:**
+
+  - Django M2M `add()`/`set()` choose the write router themselves. Bind the through
+    model's manager to the alias for deletion and bulk insertion, preserving
+    add/set and signal semantics; [`StepRunManager`](../../addons/angee/workflows/managers.py)
+    owns workflow previous-edge mutation.
+  - Django `full_clean()` and FK field validation have no alias argument. Use
+    [`AngeeModel.full_clean_for_write`](../../angee/base/models.py) for native local
+    validation and `BaseConstraint.validate(using=...)`, including native unique
+    constraints. On non-default aliases, FK existence is enforced by the database
+    FK constraint instead of the read-routed field query; local FK validation and
+    model constraints still run. Unsupported validation without an alias-bound
+    native form, including `unique_for_date`/`month`/`year`, fails closed on
+    non-default aliases.
+  - django-zed-rebac `resolve_subjects`, grant/revoke, and `write_relationships`
+    have no alias contract. Workflow actor admission, Decision relationship
+    operations, and resource loading require the default database until the
+    upstream owners support the operation alias. Keep these guards at their
+    entry owners; instance pinning cannot make an unbound upstream query safe.
+  - The agent inference/provider and session owners still lack complete alias
+    propagation. Their [`workflow step entries`](../../addons/angee/workflows_agents/steps.py)
+    reject non-default execution until those owners complete that migration.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
   owner and `system_context` reason. Platform install, agent provisioning, OAuth
   flows, and resources loading all follow this two-phase shape.
-- **Manager-only writes share one transaction-bound lifetime primitive.** Use
-  `angee.base.authority.TransactionBoundAuthority` when a model/queryset guard
-  must recognize an exact manager-owned mutation inside an already-open outer
-  transaction. Keep the manager's domain payload and validation at that owner;
-  the shared primitive owns only alias, connection, outer-atomic, thread,
-  copied-context revocation, and non-nesting lifetime fences. It is not actor authority,
-  does not open a transaction, and does not replace one-use workflow invocation
-  capabilities.
 - Cross-addon and generated-model references go through Django's app registry
   (`apps.get_model`, `apps.get_app_config`, `apps.get_app_configs`) and `_meta`.
   Never import generated `runtime/` modules or rediscover model/app facts by
@@ -806,7 +826,6 @@ and current contracts before applying a historical example to a new deployment.
   | Uniqueness and row consistency | Database constraints on the model |
   | Forbidden bulk operations | Explicit overrides on that domain's queryset |
   | Retention and deletion | Deliberate FK policies and Django's deletion lifecycle |
-  | Exact caller provenance, where required | A small private guard composing `TransactionBoundAuthority` |
 
   Use `PROTECT`/`RESTRICT` for retained rows. Collector writes bypass model hooks,
   and Django may apply an unevaluated `SET_NULL` or `SET_DEFAULT` field-update
@@ -1183,7 +1202,7 @@ and current contracts before applying a historical example to a new deployment.
 
 - **Every human review uses the built-in `GateStep`.** Static declarations and
   dynamic input-bound slots, payloads, action schemas, targets, record access,
-  target-authority paths, `clean` predicates, `all_done`, and same-step
+  `clean` predicates, `all_done`, and same-step
   resumption are variants of one gate contract, not reasons to create an addon
   gate or call `StepResult.suspend()` directly. Bind upstream values into the
   step's admitted input before the gate evaluates them.
@@ -1197,14 +1216,30 @@ and current contracts before applying a historical example to a new deployment.
   Decision admission delegates to `build_decision_action()` and freezes its
   tagged schema. A hand-written static or slot-local `oneOf` is invalid; dynamic
   gates may bind a complete schema built by that same owner upstream.
-- **A reviewed mutation subclasses `DecisionApplyStep`.** Declare its input and
-  output models, outcomes, effect, execution mode, and idempotency on the
-  implementation. Lock its complete record basis in `locked_record_basis()`;
-  the base loads the one direct predecessor gate and consumes its exact admitted
-  resolution before calling `apply_resolution()`. Return the domain manager
-  verb's `StepResult` unchanged, including durable waits. Do not repeat
-  predecessor queries, resolver lookup, provenance comparison, or Decision
-  record-access checks in an addon.
+- **A reviewed mutation subclasses `DecisionApplyStep`.** The dispatcher loads
+  the predecessor Decision identity and resolver. `DecisionManager.locked_resolution`
+  owns retained binding, actor, verdict and current-consumer validation while
+  locking workflow ancestry and the Decision. The bridge then calls a public
+  domain verb with plain values and the actor; that verb owns record locks,
+  permission, expected state and idempotence. Base domain addons never import
+  workflows. An addon that already depends on workflows may expose a domain
+  command accepting the Decision identity, as extraction does. Keep this whole
+  database command in one transaction, with workflow ancestry before Decision
+  before domain rows. Return the domain outcome through the declared `StepResult`.
+- **Workflow persistence uses Django owners.** Manager verbs complete aggregate
+  operations; model methods own narrow transitions and keep generic protected
+  writes closed. Conditional updates on retained leases, generations, deadlines
+  and empty settlement facts check their affected row count. Constraints own
+  uniqueness and consistency; append-only querysets and `PROTECT` own retention.
+  Explicit definition sessions carry locked lineage rows through nested edits
+  and bump the draft revision once. No ambient capability authorizes a save,
+  and a transaction is never evidence of caller provenance.
+- **Action admission and engine persistence have distinct principals.** Start,
+  cancel and decide check the pinned initiating actor inside their owning verb.
+  Engine-owned rows persist under a named `system_context(reason=...)`; their
+  generic saves stay closed even to reentrant signals. `DecisionManager.decide`
+  commits resolution, gate settlement, pending-grant removal and durable dispatch
+  together. Callers never complete a separate resolution handshake.
 - **A gate whose assignee is the run owner must not also set that owner as
   requester.** The decision `act` permission is `(assignee − requester) +
   admin` (separation of duties), so `requester == assignee` locks the owner
@@ -1231,7 +1266,7 @@ and current contracts before applying a historical example to a new deployment.
 - **A fenced database command retires another Workflow run through `RUN_CANCEL`.**
   Retain the cancellation intent and target `WorkflowRun` artifact with an
   external wait in the command transaction. The dispatcher cancels the target
-  outside the attempt-write session, retains artifact delivery, and consumes the
+  outside the originating command, retains artifact delivery, and consumes the
   intent together. Continue only after the target is terminal; keep a bounded
   timer on the wait to reconcile a missed or racing delivery.
 - **External domain waits subscribe before reading their predicate.** A retained
@@ -1256,13 +1291,6 @@ and current contracts before applying a historical example to a new deployment.
   budget enforcement.
 - **Invalid decision resolution re-opens the decision.** It increments the
   attempt audit and leaves journal history immutable.
-- **Terminal Decision delegation is consumed only by the current fenced
-  invocation.** A database-command consumer may pass its complete locked record
-  basis to `consume_decision_resolution()`. The active human resolver must
-  either retain ordinary read access to every record or the Decision's protected
-  record delegation must exactly cover that basis for the same resource types.
-  Consumption does not restore preview access, persist a capability, or create
-  continuing grants after the Decision settles.
 - **Workflow event triggers consume the declared change feed.** A trigger's
   target model must declare `changes()`; otherwise validation tells the addon to
   declare `changes()` for the model to join the change feed.

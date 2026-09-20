@@ -91,7 +91,7 @@ def test_cancel_fences_result_after_physical_invocation(
             lambda: engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token),
         )
         assert invoked.wait(timeout=5)
-        engine.cancel(run)
+        engine.cancel(run, actor=run.admission_actor())
         release.set()
         assert executing.result(timeout=10) == {"executed": 1}
 

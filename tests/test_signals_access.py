@@ -151,7 +151,7 @@ def test_publish_uses_public_id_and_changed_values(
     monkeypatch.setattr(
         publishing.transaction,
         "on_commit",
-        lambda callback: callback(),
+        lambda callback, **kwargs: callback(),
     )
     publishing.connect_change_broadcast_receiver()
     group = Group(id=7, name="editors")
@@ -192,7 +192,7 @@ def test_readable_fields_provider_resolves_only_for_observable_partial_updates(
         resolutions.append("resolved")
         return ("name",)
 
-    monkeypatch.setattr(publishing.transaction, "on_commit", callbacks.append)
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callbacks.append(callback))
     group = Group(id=7, name="editors")
 
     publishing.publish_change(group, action="create", update_fields=None, readable_fields=readable_fields)
@@ -243,8 +243,8 @@ def test_partial_update_payload_is_captured_before_commit(
 
     callbacks: list[Any] = []
     sent: list[ChangePayload] = []
-    monkeypatch.setattr(publishing.transaction, "on_commit", callbacks.append)
-    monkeypatch.setattr(publishing, "_send_change", lambda model, payload: sent.append(payload))
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callbacks.append(callback))
+    monkeypatch.setattr(publishing, "_send_change", lambda model, payload, **kwargs: sent.append(payload))
     group = Group(id=9, name="before")
 
     publishing.publish_change(
@@ -273,7 +273,7 @@ def test_change_signal_receiver_sees_broadcast_payload(
         payloads.append(payload)
 
     monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append((model, event)))
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.connect_change_broadcast_receiver()
     publishing.change_published.connect(
         receiver,
@@ -315,7 +315,7 @@ def test_publish_change_suppresses_non_broadcasting_rows(
         del sender, kwargs
         payloads.append(payload)
 
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.change_published.connect(
         receiver,
         dispatch_uid="tests.publish_change_suppresses_non_broadcasting_rows",
@@ -344,7 +344,7 @@ def test_publish_change_marks_sync_ingestion_and_still_broadcasts(
         payloads.append(payload)
 
     monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append(event))
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.connect_change_broadcast_receiver()
     publishing.change_published.connect(
         receiver,
@@ -378,7 +378,7 @@ def test_publish_change_robust_receivers_log_and_continue(
         del sender, payload, kwargs
         calls.append("later")
 
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.change_published.connect(failing_receiver, dispatch_uid="tests.publish_change.failing")
     publishing.change_published.connect(later_receiver, dispatch_uid="tests.publish_change.later")
     try:
@@ -477,7 +477,7 @@ def test_graphql_ready_connects_publishers_without_building_until_partial_save(
 
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     monkeypatch.setattr(publishing, "_broadcast", lambda model, event: None)
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.disconnect_publishers(ReadyPublished)
     publishing.change_published.connect(
         receiver,

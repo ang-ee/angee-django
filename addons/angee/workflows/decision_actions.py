@@ -4,14 +4,24 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Collection, Mapping
+import re
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from django.apps import apps
 from django.core.exceptions import ValidationError
-from jsonschema import Draft202012Validator, FormatChecker
-from pydantic import BaseModel, ConfigDict, JsonValue, StrictBool, StrictInt, StrictStr, TypeAdapter
+from jsonschema import Draft202012Validator, FormatChecker, validators
+from jsonschema.exceptions import ValidationError as SchemaValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, StrictInt, StrictStr, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
+from rebac.resources import model_resource_type
+from referencing import Registry, Resource
+from referencing.exceptions import Unresolvable
+from referencing.jsonschema import DRAFT202012
+
+from angee.base.identity import instance_from_public_id
+from angee.base.scoping import read_scoped_queryset
 
 
 class ReviewRecordReference(BaseModel):
@@ -34,25 +44,6 @@ class ReviewFact(BaseModel):
     subject: ReviewRecordReference | None = None
     authority: Literal["source", "correction", "unverified"]
     evidence: tuple[ReviewRecordReference, ...] = ()
-
-
-class ReviewDifference(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    field: StrictStr
-    label: StrictStr
-    left: JsonValue
-    right: JsonValue
-    changed: StrictBool
-    leftRecord: ReviewRecordReference | None = None
-    rightRecord: ReviewRecordReference | None = None
-
-
-class ReviewReason(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    code: StrictStr
-    parameters: dict[StrictStr, StrictStr | StrictInt | StrictBool] = {}
 
 
 class ReviewAction(BaseModel):
@@ -95,14 +86,12 @@ def build_decision_action(
     payload: Mapping[str, Any] | None = None,
     facts: Collection[ReviewFact] = (),
     references: ReviewRecordReference | Collection[ReviewRecordReference] | None = None,
-    differences: Collection[ReviewDifference] = (),
-    reasons: Collection[ReviewReason] = (),
 ) -> DecisionActionAuthoring:
     """Build the one tagged Decision schema and typed review context contract.
 
     Consumers declare action metadata and ordinary editable property schemas;
     this owner emits the closed ``oneOf`` branches and serializes the standard
-    review context models. The runtime compiler remains the sole authority that
+    review context models. The runtime validator remains the sole owner that
     admits the resulting schema when a Decision is retained.
     """
 
@@ -134,14 +123,6 @@ def build_decision_action(
             context_values["references"] = _review_json(retained_references)
             reference_adapter = TypeAdapter(tuple[ReviewRecordReference, ...])
         context_schemas["references"] = _context_schema(reference_adapter, "record", definitions)
-    if differences:
-        context_values["differences"] = _review_json(tuple(differences))
-        context_schemas["differences"] = _context_schema(
-            TypeAdapter(tuple[ReviewDifference, ...]), "differences", definitions
-        )
-    if reasons:
-        context_values["reasons"] = _review_json(tuple(reasons))
-        context_schemas["reasons"] = _context_schema(TypeAdapter(tuple[ReviewReason, ...]), "reasons", definitions)
     collisions = set(payload or {}).intersection(context_values)
     if collisions:
         raise ValueError(f"Decision payload cannot replace typed review context: {', '.join(sorted(collisions))}.")
@@ -216,8 +197,6 @@ def _review_json(value: Any) -> Any:
 _CONTEXT_ADAPTERS = {
     "record": (TypeAdapter(ReviewRecordReference), TypeAdapter(tuple[ReviewRecordReference, ...])),
     "facts": (TypeAdapter(tuple[ReviewFact, ...]),),
-    "differences": (TypeAdapter(tuple[ReviewDifference, ...]),),
-    "reasons": (TypeAdapter(tuple[ReviewReason, ...]),),
     "object": (TypeAdapter(dict[StrictStr, JsonValue]),),
 }
 _VERDICTS = {"COMPLETE": "completed", "REJECT": "rejected", "ESCALATE": "escalated"}
@@ -405,3 +384,208 @@ def compile_decision_action_schema(schema: Any) -> DecisionActionContract | None
     if set(checked) != set(values) or set(verdicts) != set(values):
         raise ValidationError({"decision_schema": "Action options and branches must cover enum exactly."})
     return DecisionActionContract(schema, verdicts, checked, context_fields)
+
+
+def validate_decision_resolution(
+    decision: Any, payload: Any, *, actor: Any, verdict: str, using: str
+) -> dict[str, Any]:
+    """Validate values through JSON Schema or the native Python contract.
+
+    JSON-authored Decisions retain self-contained Draft 2020-12 schemas: local
+    references are resolved natively; remote references and nested dialect
+    changes are rejected. Values are neither coerced nor defaulted. Python
+    contracts retain Pydantic's native validation and serialization.
+    """
+
+    resolution = {} if payload is None else payload
+    if not isinstance(resolution, dict):
+        raise ValidationError({"payload": "Decision payload must be a JSON object."})
+    schema = decision.form_schema
+    if schema is None and decision.step_run.step_id is not None:
+        schema = decision.step_run.step.resolve_impl("step_class").decision_schema
+    if schema is None:
+        return dict(resolution)
+    if not isinstance(schema, dict):
+        try:
+            submitted = schema.model_validate(resolution).model_dump(mode="json")
+        except PydanticValidationError as error:
+            raise _resolution_validation_error(error) from error
+        _validate_relation_fields(schema.model_json_schema(by_alias=False), submitted, actor, using=using)
+        return submitted
+
+    schema = _decision_validation_schema(schema)
+    contract = compile_decision_action_schema(schema)
+    properties = schema.get("properties", {})
+    context_fields = {
+        name for name, field in properties.items() if isinstance(field, dict) and field.get("layout") == "context"
+    }
+    submitted_context = context_fields.intersection(resolution)
+    if submitted_context:
+        raise ValidationError(
+            {name: "Decision context cannot be submitted as a resolution." for name in sorted(submitted_context)}
+        )
+    resolution_schema = dict(schema)
+    resolution_schema["properties"] = {name: field for name, field in properties.items() if name not in context_fields}
+    if "required" in schema:
+        resolution_schema["required"] = [name for name in schema["required"] if name not in context_fields]
+    if contract is not None:
+        selected = resolution.get("action")
+        branch = contract.branches.get(selected) if isinstance(selected, str) else None
+        if branch is None:
+            raise ValidationError({"action": "Choose one declared Decision action."})
+        extraneous = set(resolution) - set(branch["properties"])
+        if extraneous:
+            raise ValidationError(
+                {name: "This field is not permitted for the selected action." for name in sorted(extraneous)}
+            )
+        if contract.verdict_for(selected) != str(verdict):
+            raise ValidationError({"verdict": "The selected action maps to a different native verdict."})
+    errors: dict[str, list[str]] = {}
+    try:
+        failures = sorted(
+            Draft202012Validator(
+                resolution_schema,
+                format_checker=FormatChecker(),
+                registry=Registry(),
+            ).iter_errors(resolution),
+            key=lambda item: (tuple(str(part) for part in item.path), item.message),
+        )
+    except Unresolvable as error:
+        raise ValidationError(
+            {"decision_schema": "Decision references must resolve inside the retained schema."}
+        ) from error
+    for error in failures:
+        field = ".".join(str(part) for part in error.path) or "payload"
+        errors.setdefault(field, []).append(error.message)
+    if errors:
+        raise ValidationError(errors)
+    _validate_relation_fields(resolution_schema, resolution, actor, using=using)
+    return copy.deepcopy(resolution)
+
+
+def _decision_validation_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Keep native validator evolution in the retained Draft 2020-12 dialect.
+
+    ``Resource.subresources`` owns discovery of schema nodes, so instance data
+    in defaults/examples and unknown annotations are never interpreted as schemas.
+    Redundant dialect declarations are removed only from this validation copy;
+    jsonschema would otherwise evolve back to its stock, annotation-free class.
+    """
+
+    retained = copy.deepcopy(schema)
+    pending = [Resource(contents=retained, specification=DRAFT202012)]
+    dialect = Draft202012Validator.META_SCHEMA["$id"].rstrip("#")
+    while pending:
+        resource = pending.pop()
+        contents = resource.contents
+        if isinstance(contents, dict) and "$schema" in contents:
+            declared = contents.pop("$schema")
+            if not isinstance(declared, str) or declared.rstrip("#") != dialect:
+                raise ValidationError({"decision_schema": "Decision schemas must use Draft 2020-12 throughout."})
+        pending.extend(resource.subresources())
+    return retained
+
+
+def _validate_relation_fields(schema: dict[str, Any], resolution: dict[str, Any], actor: Any, *, using: str) -> None:
+    """Authorize relation annotations through JSON Schema's native applicators.
+
+    The native validator owns reference resolution, branch selection, nested
+    objects and arrays. The extension adds only the declared record permission;
+    actor scope is explicit and lasts for this validation call.
+    """
+
+    def relation_permission(
+        validator: Any,
+        relation: Any,
+        value: Any,
+        field_schema: Any,
+    ) -> Iterator[SchemaValidationError]:
+        del validator, field_schema
+        message = (
+            _relation_error(relation, value, actor, using=using)
+            if isinstance(relation, dict)
+            else "Relation metadata must be an object."
+        )
+        if message is not None:
+            yield SchemaValidationError(message)
+
+    def relation_errors(error: SchemaValidationError) -> Iterator[SchemaValidationError]:
+        if error.validator == "relation":
+            yield error
+        for nested in error.context:
+            yield from relation_errors(nested)
+
+    relation_validator = validators.extend(Draft202012Validator, {"relation": relation_permission})
+    errors: dict[str, list[str]] = {}
+    try:
+        failures = list(
+            relation_validator(
+                _decision_validation_schema(schema),
+                format_checker=FormatChecker(),
+                registry=Registry(),
+            ).iter_errors(resolution)
+        )
+    except Unresolvable as error:
+        raise ValidationError(
+            {"decision_schema": "Decision references must resolve inside the retained schema."}
+        ) from error
+    for failure in failures:
+        for error in relation_errors(failure):
+            path = ".".join(str(part) for part in error.absolute_path) or "payload"
+            messages = errors.setdefault(path, [])
+            if error.message not in messages:
+                messages.append(error.message)
+    if errors:
+        raise ValidationError(errors)
+
+
+_RELATION_PERMISSION = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _relation_error(relation: dict[str, Any], value: Any, actor: Any, *, using: str) -> str | None:
+    """Return the field error for one submitted relation id, or None when valid.
+
+    Unknown ids, wrong-model ids, and ids outside the declared permission scope
+    share one message so the response does not disclose which records exist.
+    """
+
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        return "Relation value must be a record id."
+    resource = str(relation.get("resource") or "")
+    app_label, separator, model_name = resource.partition(".")
+    if not separator:
+        return "Relation resource must be an app_label.Model string."
+    try:
+        model = apps.get_model(app_label, model_name)
+    except LookupError, ValueError:
+        return f"Relation resource {resource!r} is not installed."
+    permission = relation.get("permission", "write")
+    if not isinstance(permission, str) or _RELATION_PERMISSION.fullmatch(permission) is None:
+        return "Relation value must reference a permitted record."
+    scoped = read_scoped_queryset(model, actor, action=permission)
+    if scoped is not None:
+        scoped = scoped.using(using)
+    if scoped is None and model_resource_type(model):
+        return "Relation value must reference a permitted record."
+    if scoped is None:
+        scoped = model._default_manager.using(using)
+    instance = instance_from_public_id(model, value, queryset=scoped)
+    if instance is None:
+        return (
+            "Relation value must reference a record you can write."
+            if permission == "write"
+            else "Relation value must reference a permitted record."
+        )
+    return None
+
+
+def _resolution_validation_error(error: PydanticValidationError) -> ValidationError:
+    """Translate pydantic failures into field-keyed Django validation errors."""
+
+    field_errors: dict[str, list[str]] = {}
+    for detail in error.errors(include_url=False):
+        field = ".".join(str(component) for component in detail["loc"]) or "payload"
+        field_errors.setdefault(field, []).append(str(detail["msg"]))
+    return ValidationError(field_errors)

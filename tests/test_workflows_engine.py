@@ -10,6 +10,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
@@ -39,6 +40,7 @@ from tests.workflows import (
     Workflow,
     WorkflowDispatch,
     WorkflowRun,
+    admit_workflow_actor,
     advance_once,
     execute_started,
     owned_run,
@@ -46,10 +48,42 @@ from tests.workflows import (
     start_run,
     step_for,
     step_run_for,
+    workflow_actor,
     workflow_with_steps,
 )
 
 User = get_user_model()
+
+
+class _WriteSplitRouter:
+    def db_for_read(self, model: type[Any], **hints: Any) -> str:
+        del model, hints
+        return "missing-read-replica"
+
+    def db_for_write(self, model: type[Any], **hints: Any) -> str:
+        del model, hints
+        return "default"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_start_uses_the_write_router_for_the_complete_operation(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    del workflow_engine_tables, no_workflow_queue
+    actor = User.objects.create_user(username="workflow-start-write-router")
+    workflow = workflow_with_steps(
+        actor=actor,
+        steps=({"key": "start", "step_class": "fixture", "config": {}},),
+        edges=(),
+    )
+
+    with override_settings(DATABASE_ROUTERS=[_WriteSplitRouter()]):
+        run = engine.start(workflow, subject=workflow, actor=actor)
+
+    assert run._state.db == "default"
+    with system_context(reason="write router start assertion"):
+        assert WorkflowRun.objects.using("default").filter(pk=run.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -64,6 +98,7 @@ def test_run_retains_admitted_actor_identity_after_audit_user_deletion(
     reviewer = User.objects.create_user(username="deleted-workflow-reviewer")
     actor_ref = str(to_subject_ref(actor))
     workflow = workflow_with_steps(
+        actor=actor,
         steps=({"key": "gate", "step_class": "agent_session", "config": {}},),
         edges=(),
     )
@@ -80,9 +115,7 @@ def test_run_retains_admitted_actor_identity_after_audit_user_deletion(
     assert run.admission_actor() is None
 
     claim = StepAttempt.objects.claim(step_run, claimed_at=timezone.now())
-    StepAttempt.objects.admit_invocation(
-        claim.attempt.pk, lease_token=claim.attempt.lease_token, at=timezone.now()
-    )
+    StepAttempt.objects.admit_invocation(claim.attempt.pk, lease_token=claim.attempt.lease_token, at=timezone.now())
     with pytest.raises(ValidationError, match="admitted run actor"):
         StepAttempt.objects.finalize(
             claim.attempt.pk,
@@ -157,15 +190,19 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     )
     supplied = {"value": [1]}
 
-    absent = engine.start(workflow, subject=None, actor=None)
-    present_null = engine.start(workflow, subject=None, actor=None, input=JsonPresence(True, None))
-    present_value = engine.start(workflow, subject=None, actor=None, input=JsonPresence(True, supplied))
+    absent = engine.start(workflow, subject=None, actor=admit_workflow_actor(workflow))
+    present_null = engine.start(
+        workflow, subject=None, actor=admit_workflow_actor(workflow), input=JsonPresence(True, None)
+    )
+    present_value = engine.start(
+        workflow, subject=None, actor=admit_workflow_actor(workflow), input=JsonPresence(True, supplied)
+    )
     supplied["value"].append(2)
 
     assert (absent.input_present, absent.input) == (False, None)
     assert (present_null.input_present, present_null.input) == (True, None)
     assert (present_value.input_present, present_value.input) == (True, {"value": [1]})
-    assert publish_requests == [("workflows.publish_dispatches", {})] * 3
+    assert publish_requests == [("workflows.publish_dispatches", {"using": "default"})] * 3
     with system_context(reason="verify initial workflow dispatches"):
         assert WorkflowDispatch.objects.filter(run__in=[absent, present_null, present_value]).count() == 3
     present_value.input = {"changed": True}
@@ -205,7 +242,7 @@ def test_start_rejects_malformed_input_presence_before_writes(
     )
 
     with pytest.raises(ValueError, match="workflow run input"):
-        engine.start(workflow, subject=None, actor=None, input=invalid)
+        engine.start(workflow, subject=None, actor=admit_workflow_actor(workflow), input=invalid)
 
     with system_context(reason="verify rejected workflow start"):
         assert WorkflowRun.objects.count() == 0
@@ -377,25 +414,26 @@ def test_execute_started_selects_one_exact_step_key(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_testing_helpers_reject_non_default_database_objects(
+def test_testing_helpers_forward_non_default_database_objects(
     workflow_engine_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Helpers fail before engine operations that cannot route a database alias."""
+    """The harness forwards the persisted alias to the mutating engine owner."""
 
     del workflow_engine_tables
+    from angee.workflows.testing import start_run as harness_start
+
     workflow = workflow_with_steps(
         steps=({"key": "work", "config": {"outcome": "done"}},),
         edges=(),
     )
     workflow._state.db = "other"
-    with pytest.raises(ValueError, match="workflow uses 'other'"):
-        start_run(workflow)
+    selected = []
+    monkeypatch.setattr(engine, "start", lambda *args, **kwargs: selected.append(kwargs["using"]))
 
-    workflow._state.db = "default"
-    run = start_run(workflow)
-    run._state.db = "other"
-    with pytest.raises(ValueError, match="run uses 'other'"):
-        advance_once(run)
+    harness_start(workflow, actor=object())
+
+    assert selected == ["other"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -500,8 +538,8 @@ def test_start_accepts_matching_and_empty_subject_declarations(
         workflow_subject = Workflow.objects.create(name="Workflow subject")
         step_subject = Step.objects.get(workflow=declared, key="start")
 
-    declared_run = engine.start(declared, subject=workflow_subject, actor=None)
-    unrestricted_run = engine.start(unrestricted, subject=step_subject, actor=None)
+    declared_run = engine.start(declared, subject=workflow_subject, actor=admit_workflow_actor(declared))
+    unrestricted_run = engine.start(unrestricted, subject=step_subject, actor=admit_workflow_actor(unrestricted))
 
     assert declared_run.subject == workflow_subject
     assert unrestricted_run.subject == step_subject
@@ -526,7 +564,7 @@ def test_start_rejects_subject_outside_subject_declaration(
         before = WorkflowRun.objects.count()
 
     with pytest.raises(ValidationError, match="subject declaration"):
-        engine.start(workflow, subject=wrong_subject, actor=None)
+        engine.start(workflow, subject=wrong_subject, actor=admit_workflow_actor(workflow))
 
     with system_context(reason="test workflows rejected subject run count"):
         assert WorkflowRun.objects.count() == before
@@ -1208,7 +1246,12 @@ def test_cancellation_propagates_to_journal_and_child_runs(
     queued = step_for(workflow, "queued")
     waiting = step_for(workflow, "waiting")
     with system_context(reason="test workflows cancel setup"):
-        run = WorkflowRun.objects.create(workflow=workflow, status=workflow_models.RunStatus.RUNNING)
+        actor = User.objects.create_user(username="workflow-cancellation-owner")
+        run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status=workflow_models.RunStatus.RUNNING,
+            created_by=actor,
+        )
         started = StepRun.objects.create(run=run, step=entry, status=step_run_status.STARTED)
         scheduled = StepRun.objects.create(run=run, step=queued, status=step_run_status.SCHEDULED)
         waiting_row = StepRun.objects.create(run=run, step=waiting, status=step_run_status.WAITING)
@@ -1222,7 +1265,7 @@ def test_cancellation_propagates_to_journal_and_child_runs(
 
     from angee.workflows import engine
 
-    engine.cancel(run)
+    engine.cancel(run, actor=actor)
 
     run.refresh_from_db()
     with system_context(reason="test workflows deliver child cancellation"):
@@ -1459,13 +1502,20 @@ def test_reaper_finishes_canceled_started_rows(
         steps=({"key": "start", "config": {"outcome": "done"}},),
         edges=(),
     )
-    run = start_run(workflow)
+    actor = User.objects.create_user(username="canceled-reaper-owner")
+    with system_context(reason="grant workflow start in reaper test"):
+        write_relationships(
+            [
+                RelationshipTuple(to_object_ref(workflow.published_from), "editor", to_subject_ref(actor)),
+            ]
+        )
+    run = start_run(workflow, actor=actor)
     step_run = advance_once(run, now=stale_at)[0]
 
     from angee.workflows import engine
 
-    engine.cancel(run)
-    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: enqueued.append(run_id))
+    engine.cancel(run, actor=actor)
+    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id, **kwargs: enqueued.append(run_id))
     assert engine.reap(now=now) == {"reaped": 0}
 
     run.refresh_from_db()
@@ -1492,7 +1542,9 @@ def test_error_workflow_fires_once_with_failed_run_subject(
         edges=(),
     )
     with system_context(reason="test workflows error workflow definition"):
-        draft = Workflow.objects.create(name="Primary", error_workflow=error_version.published_from)
+        draft = Workflow.objects.create(
+            created_by=workflow_actor(), name="Primary", error_workflow=error_version.published_from
+        )
         Step.objects.create(
             workflow=draft,
             key="explode",
@@ -1537,7 +1589,9 @@ def test_linked_business_workflow_can_start_its_error_workflow(
     )
     parent = run_to_terminal(start_run(parent_workflow))
     with system_context(reason="test linked business child error handling"):
-        draft = Workflow.objects.create(name="Business child", error_workflow=recovery.published_from)
+        draft = Workflow.objects.create(
+            created_by=workflow_actor(), name="Business child", error_workflow=recovery.published_from
+        )
         Step.objects.create(
             workflow=draft,
             key="explode",
@@ -1550,7 +1604,7 @@ def test_linked_business_workflow_can_start_its_error_workflow(
     child = engine.start(
         version,
         subject=None,
-        actor=None,
+        actor=admit_workflow_actor(version),
         parent_step_run=step_run_for(parent, "handoff"),
         parent_relation="continuation",
         origin=workflow_models.RunOrigin.WORKFLOW,
@@ -1580,7 +1634,9 @@ def test_error_workflow_run_does_not_start_another_error_workflow(
         error_draft = error_version.published_from
         error_draft.error_workflow = error_draft
         error_draft.save(update_fields={"error_workflow", "updated_at"})
-        primary = Workflow.objects.create(name="Primary cyclic", error_workflow=error_draft)
+        primary = Workflow.objects.create(
+            created_by=workflow_actor(), name="Primary cyclic", error_workflow=error_draft
+        )
         Step.objects.create(
             workflow=primary,
             key="explode",
@@ -1812,7 +1868,7 @@ def test_publish_retargets_new_starts_without_migrating_trigger(
 
     from angee.workflows import engine
 
-    new_run = engine.start(draft, subject=None, actor=None, trigger=trigger)
+    new_run = engine.start(draft, subject=None, actor=admit_workflow_actor(draft), trigger=trigger)
 
     old_run.refresh_from_db()
     assert old_run.workflow == first

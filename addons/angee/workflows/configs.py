@@ -129,34 +129,13 @@ class GateSlotConfig(BaseModel):
 
 
 class GateTargetConfig(BaseModel):
-    """One related record and any admitted prior-Decision authority paths."""
+    """One related record displayed by the gate."""
 
     model_config = ConfigDict(extra="forbid")
 
     model: NonBlankString
     id: NonBlankString
     tab: str = ""
-    authority_path: tuple[str | int, ...] = ()
-    authority_gate_path: tuple[str | int, ...] = ()
-
-    @field_validator("authority_path", "authority_gate_path", mode="before")
-    @classmethod
-    def typed_path(cls, value: Any) -> Any:
-        """Reject coercive or empty path segments before they become authority."""
-
-        if not isinstance(value, list | tuple) or any(
-            type(part) not in {str, int} or (isinstance(part, str) and not part) for part in value
-        ):
-            raise ValueError("Gate target authority paths require typed non-empty segments.")
-        return value
-
-    @model_validator(mode="after")
-    def complete_authority(self) -> GateTargetConfig:
-        """Require the original gate path only for a forwarded proposal authority."""
-
-        if self.authority_gate_path and not self.authority_path:
-            raise ValueError("Gate target authority_gate_path requires authority_path.")
-        return self
 
 
 GateSlotConfig.model_rebuild()

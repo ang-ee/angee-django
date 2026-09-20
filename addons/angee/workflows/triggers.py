@@ -14,7 +14,9 @@ from django.db.models.signals import post_delete, post_save
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.db import get_write_alias
 from angee.base.identity import instance_from_public_id
+from angee.base.scoping import system_queryset
 from angee.graphql.events import ChangePayload
 from angee.graphql.publishing import change_published
 from angee.workflows.models import TriggerKind
@@ -23,7 +25,7 @@ from angee.workflows.trigger_declarations import EventSource
 _EVENT_TRIGGER_DISPATCH_UID = "angee-workflows-event-triggers"
 _TRIGGER_CACHE_DISPATCH_UID = "angee-workflows-trigger-cache"
 _EVENT_TRIGGER_LABEL_TTL_SECONDS = 5.0
-_event_trigger_label_cache: tuple[float, frozenset[str]] | None = None
+_event_trigger_label_cache: dict[str, tuple[float, frozenset[str]]] = {}
 logger = logging.getLogger(__name__)
 
 
@@ -51,15 +53,16 @@ def connect_event_trigger_receiver() -> None:
     )
 
 
-def run_due_schedule_triggers(*, now: datetime | None = None) -> dict[str, int]:
+def run_due_schedule_triggers(*, now: datetime | None = None, using: str | None = None) -> dict[str, int]:
     """Start enabled schedule triggers due at ``now``."""
 
     timestamp = now or timezone.now()
     trigger_model = _model("Trigger")
-    trigger_model.objects.prime_due_schedules(timestamp=timestamp)
+    alias = get_write_alias(trigger_model, using=using)
+    trigger_model.objects.db_manager(alias).prime_due_schedules(timestamp=timestamp)
     with system_context(reason="workflows.schedule_triggers.scan"):
         trigger_ids = list(
-            trigger_model.objects.filter(
+            trigger_model.objects.using(alias).filter(
                 kind=TriggerKind.SCHEDULE,
                 enabled=True,
                 next_fire_at__isnull=False,
@@ -73,7 +76,7 @@ def run_due_schedule_triggers(*, now: datetime | None = None) -> dict[str, int]:
     skipped = 0
     for trigger_id in trigger_ids:
         try:
-            claimed = trigger_model.objects.start_due_schedule(trigger_id, timestamp=timestamp)
+            claimed = trigger_model.objects.db_manager(alias).start_due_schedule(trigger_id, timestamp=timestamp)
         except (CroniterBadCronError, ValueError, TypeError):
             logger.exception("Skipping workflow schedule trigger %s after next fire calculation failed.", trigger_id)
             claimed = None
@@ -91,6 +94,8 @@ def run_due_schedule_triggers(*, now: datetime | None = None) -> dict[str, int]:
 def _on_change_published(
     sender: type[models.Model],
     payload: ChangePayload,
+    *,
+    using: str,
     **kwargs: Any,
 ) -> None:
     """Start matching event triggers after an observable model change is published."""
@@ -104,17 +109,18 @@ def _on_change_published(
     model_label = payload.model.lower()
     if model_label.startswith("workflows."):
         return
-    if model_label not in _enabled_event_model_labels():
+    alias = using
+    if model_label not in _enabled_event_model_labels(using=alias):
         return
     with system_context(reason="workflows.event_triggers.subject"):
-        instance = instance_from_public_id(sender, payload.id)
+        instance = instance_from_public_id(sender, payload.id, queryset=system_queryset(sender, using=alias))
     if instance is None:
         return
 
     try:
         trigger_model = _model("Trigger")
         triggers = list(
-            trigger_model._base_manager.filter(
+            trigger_model._base_manager.using(alias).filter(
                 kind=TriggerKind.EVENT,
                 enabled=True,
                 event_model_label=model_label,
@@ -133,7 +139,7 @@ def _on_change_published(
         try:
             if trigger.validated_config().source != EventSource.CHANGE_PUBLISHED:
                 continue
-            trigger_model.objects.start_event(
+            trigger_model.objects.db_manager(alias).start_event(
                 trigger.pk,
                 subject=instance,
                 occurrence_id=payload.occurrence_id,
@@ -144,20 +150,21 @@ def _on_change_published(
             logger.exception("Workflow event trigger %s failed admission.", trigger.pk)
 
 
-def _enabled_event_model_labels() -> frozenset[str]:
+def _enabled_event_model_labels(*, using: str) -> frozenset[str]:
     """Return enabled event model labels with a short in-process cache."""
 
-    global _event_trigger_label_cache
+    alias = using
     now = time.monotonic()
-    if _event_trigger_label_cache is not None:
-        expires_at, labels = _event_trigger_label_cache
+    cached = _event_trigger_label_cache.get(alias)
+    if cached is not None:
+        expires_at, labels = cached
         if expires_at > now:
             return labels
     try:
         trigger_model = _model("Trigger")
         labels = frozenset(
             str(label)
-            for label in trigger_model._base_manager.filter(
+            for label in trigger_model._base_manager.using(alias).filter(
                 kind=TriggerKind.EVENT,
                 enabled=True,
             )
@@ -168,7 +175,7 @@ def _enabled_event_model_labels() -> frozenset[str]:
         labels = frozenset()
     except (ProgrammingError, OperationalError):
         labels = frozenset()
-    _event_trigger_label_cache = (now + _EVENT_TRIGGER_LABEL_TTL_SECONDS, labels)
+    _event_trigger_label_cache[alias] = (now + _EVENT_TRIGGER_LABEL_TTL_SECONDS, labels)
     return labels
 
 
@@ -184,8 +191,7 @@ def _invalidate_trigger_cache_on_change(
 def _clear_event_trigger_label_cache() -> None:
     """Clear the process-local enabled event-label cache."""
 
-    global _event_trigger_label_cache
-    _event_trigger_label_cache = None
+    _event_trigger_label_cache.clear()
 
 
 def _model(name: str) -> type[Any]:

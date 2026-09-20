@@ -18,6 +18,7 @@ from django.db import transaction
 from rebac import system_context
 from strawberry import auto
 
+from angee.base.db import get_write_alias
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -447,9 +448,11 @@ class PartiesIdentityMutation:
     ) -> ActionResult:
         """Add an unconfirmed email or phone claim to a writable party."""
 
+        alias = get_write_alias(Party)
+
         actor = session_user(info)
         party = authorized_action_target(info, Party, party_id, "write")
-        link = PartyHandle.objects.propose_manual_contact(
+        link = PartyHandle.objects.db_manager(alias).propose_manual_contact(
             party,
             platform=platform,
             value=value,
@@ -469,26 +472,30 @@ class PartiesIdentityMutation:
     def confirm_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
         """Confirm a party↔handle link (the review queue's accept)."""
 
+        alias = get_write_alias(PartyHandle)
+
         link = require_instance_for_id(
             PartyHandle,
             id,
-            queryset=PartyHandle.objects.all(),
+            queryset=PartyHandle.objects.db_manager(alias).all(),
             not_found="party handle link not found",
         )
-        link.confirm()
+        link.confirm(using=alias)
         return cast(PartyHandleType, link)
 
     @strawberry.mutation
     def dismiss_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
         """Dismiss a party↔handle link — the durable anti-link (the review queue's reject)."""
 
+        alias = get_write_alias(PartyHandle)
+
         link = require_instance_for_id(
             PartyHandle,
             id,
-            queryset=PartyHandle.objects.all(),
+            queryset=PartyHandle.objects.db_manager(alias).all(),
             not_found="party handle link not found",
         )
-        link.dismiss()
+        link.dismiss(using=alias)
         return cast(PartyHandleType, link)
 
     @strawberry.mutation
@@ -500,13 +507,15 @@ class PartiesIdentityMutation:
     ) -> PartyType:
         """Merge one writable party into another through the model-owned transaction."""
 
-        survivor = Party.objects.all().from_public_id(str(into_id))
-        source = Party.objects.all().from_public_id(str(from_id))
+        alias = get_write_alias(Party)
+
+        survivor = Party.objects.db_manager(alias).all().from_public_id(str(into_id))
+        source = Party.objects.db_manager(alias).all().from_public_id(str(from_id))
         if survivor is None or source is None:
             raise ValueError("party not found")
         return cast(
             PartyType,
-            Party.objects.merge(
+            Party.objects.db_manager(alias).merge(
                 into=survivor,
                 source=source,
                 field_overrides=field_overrides,
@@ -517,11 +526,13 @@ class PartiesIdentityMutation:
     def veto_merge(self, a_id: strawberry.ID, b_id: strawberry.ID) -> MergeVetoType:
         """Persist the durable keep-separate decision for two writable parties."""
 
-        party_a = Party.objects.all().from_public_id(str(a_id))
-        party_b = Party.objects.all().from_public_id(str(b_id))
+        alias = get_write_alias(MergeVeto)
+
+        party_a = Party.objects.db_manager(alias).all().from_public_id(str(a_id))
+        party_b = Party.objects.db_manager(alias).all().from_public_id(str(b_id))
         if party_a is None or party_b is None:
             raise ValueError("party not found")
-        return cast(MergeVetoType, MergeVeto.objects.veto(party_a, party_b))
+        return cast(MergeVetoType, MergeVeto.objects.db_manager(alias).veto(party_a, party_b))
 
 
 @strawberry.type
@@ -545,6 +556,8 @@ class PartiesDirectoryMutation:
         contacts into one :class:`~angee.parties.models.Folder` per address book.
         """
 
+        alias = get_write_alias(Directory)
+
         user = session_user(info)
         credential_model = apps.get_model("integrate", "Credential")
         vendor_model = apps.get_model("integrate", "Vendor")
@@ -564,14 +577,18 @@ class PartiesDirectoryMutation:
 
         # Complete validation and network discovery before opening the database
         # transaction. Both rows are intentionally unsaved probe inputs.
-        probe_credential = credential_model.objects.prepare_local_credential(user, **credential_values)
+        probe_credential = credential_model.objects.db_manager(alias).prepare_local_credential(
+            user, **credential_values
+        )
         Directory(credential=probe_credential, **directory_values).backend.probe()
 
         # Persist every owned row in one write-only transaction after the probe.
-        with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic():
-            credential = credential_model.objects.create_local_credential(user, **credential_values)
-            vendor, _created = vendor_model.objects.get_or_create(slug="carddav", defaults={"display_name": "CardDAV"})
-            directory = Directory.objects.create(
+        with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic(using=alias):
+            credential = credential_model.objects.db_manager(alias).create_local_credential(user, **credential_values)
+            vendor, _created = vendor_model.objects.db_manager(alias).get_or_create(
+                slug="carddav", defaults={"display_name": "CardDAV"}
+            )
+            directory = Directory.objects.db_manager(alias).create(
                 vendor=vendor,
                 credential=credential,
                 **directory_values,
@@ -580,7 +597,7 @@ class PartiesDirectoryMutation:
             # claim it (control ownership + confirmed self-identity link). Synced
             # *contacts'* handles get neither fact — only this connected account's.
             if username.strip():
-                Handle.objects.claim_own(
+                Handle.objects.db_manager(alias).claim_own(
                     user,
                     platform=Handle.Platform.for_value(username),
                     value=username.strip(),

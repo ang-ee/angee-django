@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import ValidationError
-from django.db import router
 
+from angee.base.db import get_write_alias
 from angee.base.scoping import system_queryset
 from angee.workflows.attempts import json_values_equal
 from angee.workflows.graph import (
@@ -24,7 +24,7 @@ from angee.workflows.graph import (
 )
 
 if TYPE_CHECKING:
-    from angee.workflows.managers import WorkflowQuerySet
+    from angee.workflows.managers import DefinitionWriteSession, WorkflowQuerySet
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,9 +207,9 @@ class WorkflowDefinitionManagerMixin:
             workflow_ids: Iterable[int],
             *,
             using: str | None = None,
+            session: DefinitionWriteSession | None = None,
             _allow_status_transition: bool = False,
-        ) -> AbstractContextManager[Any]: ...
-        def _definition_revision(self, workflow_id: int, current: int) -> int: ...
+        ) -> AbstractContextManager[DefinitionWriteSession]: ...
 
     _WORKFLOW_FIELDS = frozenset(
         {"name", "description", "purpose", "subject_declaration", "error_workflow", "max_steps", "budget",
@@ -224,7 +224,8 @@ class WorkflowDefinitionManagerMixin:
         """Read one coherent revision and definition under its lineage lock."""
 
         with self._definition_caller(workflow):
-            return self._definition_snapshot(workflow)
+            alias = get_write_alias(self.model, bound=self, instance=workflow)
+            return self._definition_snapshot(workflow, using=alias)
 
     def definition_graph(self, workflow: Any) -> WorkflowGraph:
         """Read one authorized workflow and its exact owned definition rows.
@@ -236,7 +237,7 @@ class WorkflowDefinitionManagerMixin:
         """
 
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
+            alias = get_write_alias(self.model, bound=self, instance=workflow)
             self.using(alias).with_action("read").get(pk=workflow.pk)
             with self._definition_read(workflow.pk, using=alias) as locked:
                 return self._owned_definition_graph(locked, using=alias)
@@ -264,8 +265,8 @@ class WorkflowDefinitionManagerMixin:
         nodes, edges = self._owned_definition_rows(workflow, using=using)
         return WorkflowGraph.from_rows(workflow, nodes, edges)
 
-    def _definition_snapshot(self, workflow: Any) -> DefinitionSnapshot:
-        alias = router.db_for_write(self.model, instance=workflow)
+    def _definition_snapshot(self, workflow: Any, *, using: str) -> DefinitionSnapshot:
+        alias = using
         projected = self.using(alias).with_action("read").with_lineage_projection().get(pk=workflow.pk)
         with self._definition_read(workflow.pk, using=alias) as locked:
             nodes, edges = self._owned_definition_rows(locked, using=alias)
@@ -283,7 +284,8 @@ class WorkflowDefinitionManagerMixin:
 
         self._validate_expected_revision(workflow, expected_revision)
         with self._definition_caller(workflow):
-            return self._apply_definition(workflow, expected_revision=expected_revision, edit=edit)
+            alias = get_write_alias(self.model, bound=self, instance=workflow)
+            return self._apply_definition(workflow, expected_revision=expected_revision, edit=edit, using=alias)
 
     def definition_input_sources(
         self,
@@ -297,7 +299,7 @@ class WorkflowDefinitionManagerMixin:
 
         self._validate_expected_revision(workflow, expected_revision)
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
+            alias = get_write_alias(self.model, bound=self, instance=workflow)
             with self._definition_read(workflow.pk, using=alias) as locked:
                 if locked.draft_revision != expected_revision:
                     raise StaleDefinitionError(expected=expected_revision, current=locked.draft_revision)
@@ -324,7 +326,7 @@ class WorkflowDefinitionManagerMixin:
 
         self._validate_expected_revision(workflow, expected_revision)
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
+            alias = get_write_alias(self.model, bound=self, instance=workflow)
             with self._definition_read(workflow.pk, using=alias) as locked:
                 if locked.draft_revision != expected_revision:
                     raise StaleDefinitionError(expected=expected_revision, current=locked.draft_revision)
@@ -344,19 +346,21 @@ class WorkflowDefinitionManagerMixin:
 
         self._validate_expected_revision(workflow, expected_revision)
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
-            with self._definition_write((workflow.pk,), using=alias):
+            alias = get_write_alias(self.model, bound=self, instance=workflow)
+            with self._definition_write((workflow.pk,), using=alias) as session:
                 draft = self.using(alias).get(pk=workflow.pk)
                 if draft.draft_revision != expected_revision:
                     raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
                 diagnostics = self._owned_definition_graph(draft, using=alias).diagnostics()
                 if diagnostics:
                     raise DefinitionReadinessError(diagnostics)
-                current = self.current_published_for(draft)
-                if current is not None and draft._definition_signature() == current._definition_signature():
+                current = self.db_manager(alias).current_published_for(draft)
+                if current is not None and draft._definition_signature(using=alias) == current._definition_signature(
+                    using=alias
+                ):
                     projected = self.using(alias).with_action("read").with_lineage_projection().get(pk=current.pk)
                     return PublicationResult(draft.draft_revision, projected, False)
-                published = draft.publish()
+                published = draft.publish(session=session, using=alias)
                 projected = self.using(alias).with_action("read").with_lineage_projection().get(pk=published.pk)
                 return PublicationResult(draft.draft_revision, projected, True)
 
@@ -364,18 +368,18 @@ class WorkflowDefinitionManagerMixin:
         """Compare two exact saved lineage definitions under one coherent lock."""
 
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
+            alias = get_write_alias(self.model, bound=self, instance=workflow)
             self.using(alias).with_action("read").get(pk=workflow.pk)
             self.using(alias).with_action("read").get(pk=source.pk)
             with self._definition_write(
                 (workflow.pk, source.pk), using=alias, _allow_status_transition=True
-            ) as rows:
-                by_id = {row.pk: row for row in rows}
+            ) as session:
+                by_id = {row.pk: row for row in session.rows}
                 draft = by_id[workflow.pk]
                 locked_source = by_id[source.pk]
                 _validate_version_source(draft, locked_source)
-                source_definition = locked_source._definition_signature()
-                draft_definition = draft._definition_signature()
+                source_definition = locked_source._definition_signature(using=alias)
+                draft_definition = draft._definition_signature(using=alias)
                 return DefinitionComparison(
                     source=locked_source,
                     draft=draft,
@@ -396,31 +400,31 @@ class WorkflowDefinitionManagerMixin:
 
         self._validate_expected_revision(workflow, expected_revision)
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
+            alias = get_write_alias(self.model, bound=self, instance=workflow)
             self.using(alias).with_action("write").get(pk=workflow.pk)
             self.using(alias).with_action("read").get(pk=source.pk)
             with self._definition_write(
                 (workflow.pk, source.pk), using=alias, _allow_status_transition=True
-            ) as rows:
-                by_id = {row.pk: row for row in rows}
+            ) as session:
+                by_id = {row.pk: row for row in session.rows}
                 draft = by_id[workflow.pk]
                 locked_source = by_id[source.pk]
                 _validate_version_source(draft, locked_source)
                 if draft.draft_revision != expected_revision:
                     raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
-                draft.edges.all().delete()
-                draft.steps.all().delete()
+                draft.edges.using(alias).all().delete(session=session)
+                draft.steps.using(alias).all().delete(session=session)
                 for field_name in self._WORKFLOW_FIELDS:
                     if field_name == "error_workflow":
                         draft.error_workflow_id = locked_source.error_workflow_id
                     else:
                         setattr(draft, field_name, copy.deepcopy(getattr(locked_source, field_name)))
-                draft.save(update_fields=[*sorted(self._WORKFLOW_FIELDS), "updated_at"])
-                locked_source._copy_definition_to(draft)
-                projected_revision = self._definition_revision(draft.pk, draft.draft_revision)
+                draft.save(using=alias, update_fields=[*sorted(self._WORKFLOW_FIELDS), "updated_at"], session=session)
+                locked_source._copy_definition_to(draft, session=session)
+                projected_revision = session.revision(draft.pk, draft.draft_revision)
                 draft.draft_revision = projected_revision
-                nodes = tuple(draft.steps.order_by("key", "pk"))
-                edges = tuple(draft.edges.select_related("source", "target").order_by("pk"))
+                nodes = tuple(draft.steps.using(alias).order_by("key", "pk"))
+                edges = tuple(draft.edges.using(alias).select_related("source", "target").order_by("pk"))
                 snapshot = DefinitionSnapshot(
                     projected_revision,
                     draft,
@@ -445,17 +449,19 @@ class WorkflowDefinitionManagerMixin:
             )
         )
 
-    def _apply_definition(self, workflow: Any, *, expected_revision: int, edit: DefinitionEdit) -> DefinitionResult:
-        alias = router.db_for_write(self.model, instance=workflow)
+    def _apply_definition(
+        self, workflow: Any, *, expected_revision: int, edit: DefinitionEdit, using: str
+    ) -> DefinitionResult:
+        alias = using
         result: DefinitionResult
-        with self._definition_write((workflow.pk,), using=alias):
+        with self._definition_write((workflow.pk,), using=alias) as session:
             locked = self.using(alias).get(pk=workflow.pk)
             if locked.draft_revision != expected_revision:
                 raise StaleDefinitionError(expected=expected_revision, current=locked.draft_revision)
             state = _DefinitionState(self, locked, edit, alias=alias)
             state.preflight()
-            node_correlations, edge_correlations = state.persist()
-            revision = self._definition_revision(locked.pk, locked.draft_revision)
+            node_correlations, edge_correlations = state.persist(session=session)
+            revision = session.revision(locked.pk, locked.draft_revision)
             readiness = self._owned_definition_graph(locked, using=alias).diagnostics()
             result = DefinitionResult(revision, tuple(node_correlations), tuple(edge_correlations), readiness)
         return result
@@ -472,9 +478,10 @@ class _DefinitionState:
         self.step_model = workflow.steps.model
         self.edge_model = workflow.edges.model
         self.workflow_fields = dict(edit.workflow)
-        self.nodes = {row.pk: row for row in workflow.steps.with_action(action).order_by("pk")}
+        self.nodes = {row.pk: row for row in workflow.steps.using(alias).with_action(action).order_by("pk")}
         self.edges = {
-            row.pk: row for row in workflow.edges.with_action(action).select_related("source", "target").order_by("pk")
+            row.pk: row
+            for row in workflow.edges.using(alias).with_action(action).select_related("source", "target").order_by("pk")
         }
         self.original_nodes = dict(self.nodes)
         self.original_edges = dict(self.edges)
@@ -577,12 +584,12 @@ class _DefinitionState:
                     "Atomic swaps of existing edge identities are not supported.",
                 )
 
-    def persist(self) -> tuple[list[Correlation], list[Correlation]]:
+    def persist(self, *, session: DefinitionWriteSession) -> tuple[list[Correlation], list[Correlation]]:
         workflow_fields = set(self.workflow_fields)
         if workflow_fields:
             for name, value in self.workflow_fields.items():
                 setattr(self.workflow, name, copy.deepcopy(value))
-            self.workflow.save(update_fields=workflow_fields)
+            self.workflow.save(using=self.alias, update_fields=workflow_fields, session=session)
 
         deleted_node_ids = {item.identity for item in self.edit.node_deletes}
         incident = [
@@ -592,21 +599,21 @@ class _DefinitionState:
         ]
         for edge in sorted(incident, key=lambda row: row.pk or 0):
             if edge.pk:
-                edge.delete()
+                edge.delete(using=self.alias, session=session)
         for edge_delete in self.edit.edge_deletes:
             edge = self.original_edges.get(edge_delete.identity)
             if edge is not None and edge not in incident:
-                edge.delete()
+                edge.delete(using=self.alias, session=session)
         for node_delete in self.edit.node_deletes:
-            self.original_nodes[node_delete.identity].delete()
+            self.original_nodes[node_delete.identity].delete(using=self.alias, session=session)
 
         node_results: list[Correlation] = []
         for node_patch in self.edit.node_patches:
             row = self.nodes[node_patch.identity]
-            row.save(update_fields=set(node_patch.fields))
+            row.save(using=self.alias, update_fields=set(node_patch.fields), session=session)
         for node_create in self.edit.node_creates:
             row = self.created_nodes[node_create.client_key]
-            row.save()
+            row.save(using=self.alias, session=session)
             node_results.append(Correlation(node_create.client_key, row.pk))
 
         edge_results: list[Correlation] = []
@@ -619,12 +626,12 @@ class _DefinitionState:
             if edge_patch.target is not None:
                 row.target = self._persisted_endpoint(edge_patch.target)
                 fields.add("target")
-            row.save(update_fields=fields)
+            row.save(using=self.alias, update_fields=fields, session=session)
         for edge_create in self.edit.edge_creates:
             row = self.created_edges[edge_create.client_key]
             row.source = self._persisted_endpoint(edge_create.source)
             row.target = self._persisted_endpoint(edge_create.target)
-            row.save()
+            row.save(using=self.alias, session=session)
             edge_results.append(Correlation(edge_create.client_key, row.pk))
         return node_results, edge_results
 
@@ -781,7 +788,7 @@ class _DefinitionState:
 
     def _validate_models(self) -> None:
         try:
-            self.workflow.full_clean(validate_unique=False, validate_constraints=False)
+            self.workflow.full_clean_for_write(using=self.alias, validate_unique=False, validate_constraints=False)
         except ValidationError as error:
             for path, messages in error.message_dict.items():
                 for message in messages:
@@ -798,7 +805,8 @@ class _DefinitionState:
     def _validate_model_rows(self, kind: GraphLocationKind, rows: Iterable[Any]) -> None:
         for row in rows:
             try:
-                row.full_clean(
+                row.full_clean_for_write(
+                    using=self.alias,
                     exclude={"source", "target"} if kind == "edge" else None,
                     validate_unique=False,
                     validate_constraints=False,

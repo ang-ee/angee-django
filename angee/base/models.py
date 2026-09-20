@@ -6,13 +6,14 @@ import hashlib
 import json
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, Self, TypeVar, cast
 
 from django.core import checks, signing
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import connections, models
+from django.core.exceptions import NON_FIELD_ERRORS, FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.db import DEFAULT_DB_ALIAS, connections, models
+from django.db.models.expressions import DatabaseDefault
 from django.db.models.functions import Coalesce
 from rebac import (
     RebacMixin,
@@ -318,6 +319,123 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Django model options for Angee's abstract model base."""
 
         abstract = True
+
+    def full_clean_for_write(
+        self,
+        *,
+        using: str,
+        exclude: Collection[str] | None = None,
+        validate_unique: bool = True,
+        validate_constraints: bool = True,
+    ) -> None:
+        """Validate a write with native database checks bound to its selected alias.
+
+        The default alias delegates unchanged to Django's ``full_clean`` and
+        preserves its validation overrides and instance database state.
+        On other aliases, FK fields retain native conversion, local validation,
+        and validators, but are excluded from ``full_clean``'s field pass because
+        ``ForeignKey.validate`` cannot bind its existence query. The subsequent
+        write's database FK constraint enforces existence; these fields remain
+        included in uniqueness and model constraints. An unconstrained FK,
+        ``limit_choices_to``, or date-scoped uniqueness has no alias-aware native
+        substitute and fails closed. ``validate_unique`` and
+        ``validate_constraints`` overrides also fail closed because their native
+        contracts cannot accept an alias. Model ``clean()`` overrides run with
+        the instance temporarily pinned to the operation alias and must bind
+        any queries they own to that alias; validation restores the caller's
+        database state even when it raises.
+        """
+
+        if using == DEFAULT_DB_ALIAS:
+            self.full_clean(
+                exclude=exclude, validate_unique=validate_unique, validate_constraints=validate_constraints
+            )
+            return
+
+        for name in ("validate_unique", "validate_constraints"):
+            if getattr(type(self), name) is not getattr(models.Model, name):
+                raise ImproperlyConfigured(
+                    f"{self._meta.label}.full_clean_for_write cannot honor overridden {name} "
+                    f"on database {using!r}: Django's validation hook has no alias argument."
+                )
+        excluded = set(exclude or ())
+        unique_checks, date_checks = self._get_unique_checks(exclude=excluded) if validate_unique else ([], [])
+        if date_checks:
+            raise ImproperlyConfigured(
+                f"{self._meta.label}.full_clean_for_write cannot validate unique_for_date/year/month "
+                f"on database {using!r}: Django exposes no alias-aware date uniqueness validation."
+            )
+        foreign_keys = [
+            field for field in self._meta.fields
+            if isinstance(field, models.ForeignKey)
+            and not field.remote_field.parent_link
+            and field.name not in excluded
+        ]
+        for field in foreign_keys:
+            if field.remote_field.limit_choices_to:
+                raise ImproperlyConfigured(
+                    f"{self._meta.label}.{field.name} cannot validate limit_choices_to on database {using!r}: "
+                    "Django's ForeignKey.validate has no alias argument."
+                )
+            if not field.db_constraint:
+                raise ImproperlyConfigured(
+                    f"{self._meta.label}.{field.name} cannot validate a foreign key on database {using!r}: "
+                    "Django's ForeignKey.validate has no alias argument and db_constraint=False "
+                    "leaves no database existence constraint."
+                )
+
+        original_alias = self._state.db
+        self._state.db = using
+        try:
+            errors: dict[str, list[ValidationError]] = {}
+            for field in foreign_keys:
+                value = getattr(self, field.attname)
+                if (
+                    field.generated or (field.blank and value in field.empty_values)
+                    or isinstance(value, DatabaseDefault)
+                ):
+                    continue
+                try:
+                    value = field.to_python(value)
+                    models.Field.validate(field, value, self)
+                    field.run_validators(value)
+                    setattr(self, field.attname, value)
+                except ValidationError as error:
+                    errors[field.name] = error.error_list
+            try:
+                self.full_clean(
+                    exclude=excluded | {field.name for field in foreign_keys},
+                    validate_unique=False,
+                    validate_constraints=False,
+                )
+            except ValidationError as error:
+                errors = error.update_error_dict(errors)
+
+            validation_groups = []
+            if validate_unique:
+                validation_groups.append([
+                    (model, [models.UniqueConstraint(
+                        fields=fields, name=f"{model._meta.label_lower}_{'_'.join(fields)}"
+                    )])
+                    for model, fields in unique_checks
+                ])
+            if validate_constraints:
+                validation_groups.append(self.get_constraints())
+            for constraints in validation_groups:
+                excluded.update(name for name in errors if name != NON_FIELD_ERRORS)
+                for model, model_constraints in constraints:
+                    for constraint in model_constraints:
+                        try:
+                            constraint.validate(model, self, exclude=excluded, using=using)
+                        except ValidationError as error:
+                            if getattr(error, "code", None) == "unique" and len(constraint.fields) == 1:
+                                errors.setdefault(constraint.fields[0], []).append(error)
+                            else:
+                                errors = error.update_error_dict(errors)
+            if errors:
+                raise ValidationError(errors)
+        finally:
+            self._state.db = original_alias
 
     @classmethod
     def system_queryset(

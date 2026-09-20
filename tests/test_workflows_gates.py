@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import json
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
@@ -13,9 +12,9 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.core.exceptions import ValidationError
-from django.db import connection, models
+from django.db import connection
+from django.db.models.deletion import ProtectedError
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -33,14 +32,12 @@ from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.dashboards.models import validate_dashboard_queries
 from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.workflows import engine
+from angee.workflows import decision_actions, engine
 from angee.workflows import models as workflow_models
-from angee.workflows.attempts import AttemptResultKind, DecisionRecordAccess, DecisionResolution, JsonPresence
+from angee.workflows.attempts import AttemptResultKind, DecisionResolution, JsonPresence
 from angee.workflows.decision_actions import (
     ReviewAction,
-    ReviewDifference,
     ReviewFact,
-    ReviewReason,
     ReviewRecordReference,
     build_decision_action,
     compile_decision_action_schema,
@@ -68,6 +65,7 @@ from tests.workflows import (
     Workflow,
     WorkflowDispatch,
     WorkflowRun,
+    admit_workflow_actor,
     advance_once,
     execute_started,
     start_run,
@@ -113,17 +111,6 @@ def test_decision_action_builder_owns_tagged_branches_and_typed_context() -> Non
             ),
         ),
         references=record,
-        differences=(
-            ReviewDifference(
-                field="total",
-                label="Total",
-                left="100.00",
-                right="101.00",
-                changed=True,
-                leftRecord=record,
-            ),
-        ),
-        reasons=(ReviewReason(code="total_changed", parameters={"pages": 1}),),
     )
 
     assert authored.decision_schema["properties"]["action"]["enum"] == ["accept", "reject"]
@@ -137,7 +124,7 @@ def test_decision_action_builder_owns_tagged_branches_and_typed_context() -> Non
     contract.validate_context(authored.payload)
 
 
-def test_gate_resolves_bound_dynamic_slots_context_authority_and_clean_predicate() -> None:
+def test_gate_resolves_bound_dynamic_slots_context_and_clean_predicate() -> None:
     """Every dynamic gate field evaluates through the admitted-input binding grammar."""
 
     authored = build_decision_action(
@@ -155,8 +142,6 @@ def test_gate_resolves_bound_dynamic_slots_context_authority_and_clean_predicate
             {
                 "model": "parties.Party",
                 "id": "party-1",
-                "authority_path": ["party_id"],
-                "authority_gate_path": ["resolutions", 0, "decision_id"],
             }
         ],
         "record_access": [{"model": "parties.Party", "id": "party-1"}],
@@ -191,8 +176,6 @@ def test_gate_resolves_bound_dynamic_slots_context_authority_and_clean_predicate
     assert result.resume_state == {"gate": {"policy": "all_done"}}
     assert [decision.priority for decision in result.decisions] == [0, 1]
     assert result.decisions[0].payload == {"batch": "batch-1"}
-    assert result.decisions[0].target_authority_path == ("party_id",)
-    assert result.decisions[1].target_authority_gate_path == ("resolutions", 0, "decision_id")
     assert result.decisions[0].record_access[0].id == "party-1"
 
     admitted.clear()
@@ -279,30 +262,16 @@ class _ApplyOutput(BaseModel):
     applied: bool
 
 
-def test_decision_apply_base_consumes_provenance_and_passes_durable_wait_through(
+@pytest.mark.parametrize("has_resolver", [True, False])
+def test_decision_apply_dispatches_identity_and_preserves_wait(
     monkeypatch: pytest.MonkeyPatch,
+    has_resolver: bool,
 ) -> None:
-    """The shared apply base owns admission while adapters retain native StepResult waits."""
+    """The dispatcher accepts human and timer outcomes without an authority token."""
 
-    retained = {
-        "decision_id": "decision-1",
-        "action": "approve_batch",
-        "verdict": "completed",
-        "resolution": {"action": "approve"},
-        "resolved_by": "auth/user:1",
-        "resolved_at": timezone.now().isoformat(),
-        "declaration_index": 0,
-    }
-    predecessor = SimpleNamespace(
-        action="approve_batch",
-        target_model="parties.Party",
-        target_id="party-1",
-        resolved_by="auth/user:1",
-    )
-    actor = object()
-    locked = object()
+    actor = object() if has_resolver else None
+    predecessor = SimpleNamespace(pk=42, resolution_actor_subject=lambda: actor)
     calls: list[dict[str, Any]] = []
-    lock_order: list[str] = []
 
     class Apply(DecisionApplyStep):
         input_model = _ApplyInput
@@ -312,51 +281,20 @@ def test_decision_apply_base_consumes_provenance_and_passes_durable_wait_through
         execution_mode = StepExecutionMode.DATABASE_COMMAND
         idempotent = True
 
-        def locked_record_basis(self, *args: Any, **kwargs: Any) -> tuple[Any, ...]:
-            lock_order.append("record")
-            return (locked,)
-
-        def apply_resolution(self, *args: Any, **kwargs: Any) -> StepResult:
-            assert kwargs["record_basis"] == (locked,)
-            lock_order.append("apply")
+        def invoke_command(self, step_run: Any, **kwargs: Any) -> StepResult:
+            calls.append(kwargs)
             return StepResult.wait(
                 until=timezone.now() + timedelta(minutes=1),
                 resume_state={"manager": "retained"},
                 waiting_kind="external",
             )
 
-    monkeypatch.setattr(engine, "load_predecessor_gate_decision", lambda *args: predecessor)
-    monkeypatch.setattr(
-        engine,
-        "resolve_workflow_actor",
-        lambda *args, **kwargs: SimpleNamespace(actor=actor),
-    )
-
-    def consume(*args: Any, **kwargs: Any) -> tuple[Any, DecisionResolution]:
-        lock_order.append("ancestry")
-        basis_loader = kwargs.pop("required_record_access")
-        assert basis_loader() == (locked,)
-        calls.append({**kwargs, "required_record_access": "loaded-after-ancestry"})
-        return predecessor, DecisionResolution.model_validate_json(json.dumps(retained))
-
-    monkeypatch.setattr(engine, "consume_decision_resolution", consume)
-    result = Apply().run(
-        SimpleNamespace(input={"resolutions": [retained]}),
-        now=timezone.now(),
-    )
-
+    monkeypatch.setattr(type(Decision.objects), "predecessor_decision", lambda *args: predecessor)
+    now = timezone.now()
+    result = Apply().run(SimpleNamespace(), now=now)
     assert result.kind == "wait"
     assert result.resume_state == {"manager": "retained"}
-    assert lock_order == ["ancestry", "record", "apply"]
-    assert calls == [
-        {
-            "expected_action": "approve_batch",
-            "expected_target": ("parties.Party", "party-1"),
-            "expected_verdict": "completed",
-            "actor": actor,
-            "required_record_access": "loaded-after-ancestry",
-        }
-    ]
+    assert calls == [{"decision_id": 42, "actor": actor, "now": now}]
 
 
 def test_predecessor_lookup_loads_the_declared_settled_gate_decision(
@@ -389,7 +327,7 @@ def test_predecessor_lookup_loads_the_declared_settled_gate_decision(
     assert engine.decide(decision, "complete", actor=assignee).validation_error is None
     advance_once(run)
 
-    loaded = engine.load_predecessor_gate_decision(_step_run(run, "apply"), GateStep)
+    loaded = Decision.objects.predecessor_decision(_step_run(run, "apply"), GateStep)
 
     assert loaded.pk == decision.pk
 
@@ -617,7 +555,7 @@ def test_decision_target_is_actor_validated_retained_and_immutable(
     )
 
     with pytest.raises(ValidationError, match="not found"):
-        Decision.objects._validated_target(declaration, actor=stranger)
+        Decision.objects._validated_target(declaration, actor=stranger, using="default")
 
     def suspend_from_fixture(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
@@ -629,7 +567,7 @@ def test_decision_target_is_actor_validated_retained_and_immutable(
         steps=({"key": "fixture", "step_class": "fixture", "config": {}},),
         edges=(),
     )
-    run = engine.start(gate, None, actor=admin)
+    run = engine.start(gate, None, actor=admit_workflow_actor(gate, admin))
     advance_once(run)
     execute_started(run)
     decision = _decision_for(run, "fixture")
@@ -778,7 +716,7 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
         ),
         edges=(("gate", "consumer", "completed"),),
     )
-    run = engine.start(workflow, subject=None, actor=requester)
+    run = engine.start(workflow, subject=None, actor=admit_workflow_actor(workflow, requester))
     advance_once(run)
     execute_started(run)
     gate = _step_run(run, "gate")
@@ -808,175 +746,6 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
     assert consumer.current_attempt.input_provenance["settled_decision_ids"] == [
         decision.pk,
     ]
-
-
-def test_owned_call_consumes_exact_terminal_record_delegation_or_current_reads(
-    workflow_gate_record_access_tables: None,
-    no_workflow_queue: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A child consumes its exact gate and no broader terminal record delegation."""
-
-    del workflow_gate_record_access_tables, no_workflow_queue
-    requester = User.objects.create_user(username="owned-call-consume-requester")
-    resolver = User.objects.create_user(username="owned-call-consume-resolver")
-    consumed: list[int] = []
-    with system_context(reason="owned-call target fixture"):
-        target = Workflow.objects.create(name="Owned call unread target", created_by=requester)
-        protected = Party.objects.create(
-            display_name="Protected delegated Party",
-            created_by=requester,
-        )
-        undeclared = Party.objects.create(
-            display_name="Undeclared Party",
-            created_by=requester,
-        )
-        declared_extra = Party.objects.create(
-            display_name="Second protected delegated Party",
-            created_by=requester,
-        )
-        directly_readable = Party.objects.create(
-            display_name="Directly readable Party",
-            created_by=resolver,
-        )
-    assert not target.with_actor(resolver).has_access("read")
-    assert not protected.with_actor(resolver).has_access("read")
-    assert protected.with_actor(requester).has_access("write")
-    assert directly_readable.with_actor(resolver).has_access("read")
-
-    def gate_then_consume(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
-        del self, now
-        if step_run.step.key == "gate":
-            return StepResult.suspend(
-                resume_state={"gate": {"policy": "one_done"}},
-                decisions=(
-                    DecisionSpec(
-                        assignees=(str(to_subject_ref(resolver)),),
-                        action="approve-owned-call-input",
-                        target_model=target._meta.label,
-                        target_id=str(target.sqid),
-                        record_access=(
-                            DecisionRecordAccess(
-                                model=protected._meta.label,
-                                id=str(protected.sqid),
-                            ),
-                            DecisionRecordAccess(
-                                model=declared_extra._meta.label,
-                                id=str(declared_extra.sqid),
-                            ),
-                        ),
-                    ),
-                ),
-            )
-        with pytest.raises(ValidationError, match="retained Decision gate"):
-            engine.consume_decision_resolution(
-                step_run,
-                ("resolutions", 0),
-                expected_action="approve-owned-call-input",
-                expected_target=(target._meta.label, str(target.sqid)),
-                expected_verdict="completed",
-                actor=resolver,
-            )
-        assert not protected.with_actor(resolver).has_access("read")
-        with pytest.raises(DjangoPermissionDenied, match="complete required record basis"):
-            engine.consume_decision_resolution(
-                step_run,
-                ("resolutions", 0),
-                input_source="owned_call_input",
-                expected_action="approve-owned-call-input",
-                expected_target=(target._meta.label, str(target.sqid)),
-                expected_verdict="completed",
-                actor=resolver,
-                required_record_access=(protected,),
-            )
-        with pytest.raises(DjangoPermissionDenied, match="complete required record basis"):
-            engine.consume_decision_resolution(
-                step_run,
-                ("resolutions", 0),
-                input_source="owned_call_input",
-                expected_action="approve-owned-call-input",
-                expected_target=(target._meta.label, str(target.sqid)),
-                expected_verdict="completed",
-                actor=resolver,
-                required_record_access=(protected, declared_extra, undeclared),
-            )
-        direct_decision, _ = engine.consume_decision_resolution(
-            step_run,
-            ("resolutions", 0),
-            input_source="owned_call_input",
-            expected_action="approve-owned-call-input",
-            expected_target=(target._meta.label, str(target.sqid)),
-            expected_verdict="completed",
-            actor=resolver,
-            required_record_access=(directly_readable,),
-        )
-        decision, resolution = engine.consume_decision_resolution(
-            step_run,
-            ("resolutions", 0),
-            input_source="owned_call_input",
-            expected_action="approve-owned-call-input",
-            expected_target=(target._meta.label, str(target.sqid)),
-            expected_verdict="completed",
-            actor=resolver,
-            required_record_access=(protected, declared_extra),
-        )
-        assert direct_decision.pk == decision.pk
-        consumed.append(decision.pk)
-        return StepResult.done(output={"decision_id": resolution.decision_id})
-
-    monkeypatch.setattr(FixtureStep, "run", gate_then_consume)
-    child_workflow = workflow_with_steps(
-        name="Owned call gate consumer",
-        steps=(
-            {
-                "key": "consume",
-                "step_class": "fixture",
-                "config": {},
-                "input_binding": {"kind": "workflow_input", "path": []},
-            },
-        ),
-        edges=(),
-    )
-    parent_workflow = workflow_with_steps(
-        name="Owned call gate producer",
-        steps=(
-            {"key": "gate", "step_class": "fixture", "config": {}},
-            {
-                "key": "call",
-                "step_class": "call_workflow",
-                "config": {"publication": str(child_workflow.sqid)},
-                "input_binding": {
-                    "kind": "object",
-                    "fields": {"input": {"kind": "step_output", "step_key": "gate", "path": []}},
-                },
-            },
-        ),
-        edges=(("gate", "call", "completed"),),
-    )
-    parent = engine.start(parent_workflow, subject=None, actor=requester)
-    advance_once(parent)
-    execute_started(parent)
-    gate = _decision_for(parent, "gate")
-    assert protected.with_actor(resolver).has_access("read")
-    assert declared_extra.with_actor(resolver).has_access("read")
-    assert engine.decide(gate, "complete", actor=resolver).validation_error is None
-    assert not protected.with_actor(resolver).has_access("read")
-    assert not declared_extra.with_actor(resolver).has_access("read")
-    advance_once(parent)
-    execute_started(parent)
-    with system_context(reason="owned-call consume child fixture"):
-        child = WorkflowRun.objects.get(parent_step_run__run=parent)
-    advance_once(child)
-    execute_started(child)
-
-    consume = _step_run(child, "consume")
-    attempt = consume.current_attempt
-    assert attempt is not None
-    retained_failure = f"error={attempt.error!r}\nstacktrace={attempt.stacktrace or ''}"
-    assert consume.status == workflow_models.StepRunStatus.SUCCEEDED, retained_failure
-    assert attempt.result_kind == str(AttemptResultKind.DONE), retained_failure
-    assert consumed == [gate.pk]
-    assert consume.output == {"decision_id": str(gate.sqid)}
 
 
 def test_retained_decision_record_access_rejects_duplicate_refs() -> None:
@@ -1396,14 +1165,14 @@ def test_decision_schema_enforces_resolution_conditional_requirements(
     assert decision.resolution["action"] == "reject"
 
 
-def test_decision_mapping_schema_enforces_authored_constraints_after_normalization(
+def test_decision_json_schema_preserves_types_and_authored_constraints(
     monkeypatch: Any,
 ) -> None:
-    """Full JSON Schema sees coerced submitted fields, before relation authorization."""
+    """JSON Schema rejects coercion and validates all authored constraints before relations."""
 
     relation_checks: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        engine,
+        decision_actions,
         "_validate_relation_fields",
         lambda _schema, resolution, _actor: relation_checks.append(resolution),
     )
@@ -1428,7 +1197,7 @@ def test_decision_mapping_schema_enforces_authored_constraints_after_normalizati
     )
 
     with pytest.raises(ValidationError):
-        engine._validate_mapping_schema(
+        _validate_json_resolution(
             schema,
             {
                 "action": "apply",
@@ -1439,9 +1208,13 @@ def test_decision_mapping_schema_enforces_authored_constraints_after_normalizati
         )
     assert relation_checks == []
 
-    validated = engine._validate_mapping_schema(
+    with pytest.raises(ValidationError):
+        _validate_json_resolution(schema, {"action": "apply", "amount": "7", "payment_term_id": "net-30"})
+    assert relation_checks == []
+
+    validated = _validate_json_resolution(
         schema,
-        {"action": "apply", "amount": "7", "payment_term_id": "net-30"},
+        {"action": "apply", "amount": 7, "payment_term_id": "net-30"},
     )
     assert validated == {
         "action": "apply",
@@ -1488,11 +1261,11 @@ def test_decision_mapping_schema_excludes_layout_context_from_resolution() -> No
             }
         )
 
-    assert engine._validate_mapping_schema(schema, {"action": "accept"}) == {
+    assert _validate_json_resolution(schema, {"action": "accept"}) == {
         "action": "accept",
     }
     with pytest.raises(ValidationError, match="cannot be submitted"):
-        engine._validate_mapping_schema(
+        _validate_json_resolution(
             schema,
             {"source_evidence": "forged", "action": "accept"},
         )
@@ -1503,31 +1276,33 @@ def test_decision_relation_permission_defaults_to_write_and_allows_declared_read
 
     model = object()
     actions: list[str] = []
-    monkeypatch.setattr(engine.apps, "get_model", lambda _app, _model: model)
+    monkeypatch.setattr(decision_actions.apps, "get_model", lambda _app, _model: model)
     monkeypatch.setattr(
-        engine,
+        decision_actions,
         "read_scoped_queryset",
         lambda _model, _actor, *, action: actions.append(action) or object(),
     )
-    monkeypatch.setattr(engine, "instance_from_public_id", lambda _model, _value, *, queryset: object())
+    monkeypatch.setattr(decision_actions, "instance_from_public_id", lambda _model, _value, *, queryset: object())
 
-    assert engine._relation_error({"resource": "demo.Company"}, "company-1", object()) is None
     assert (
-        engine._relation_error(
+        decision_actions._relation_error({"resource": "demo.Company"}, "company-1", object(), using="default") is None
+    )
+    assert (
+        decision_actions._relation_error(
             {"resource": "demo.Company", "permission": "read"},
             "company-1",
             object(),
-        )
+         using="default")
         is None
     )
     assert actions == ["write", "read"]
 
     assert (
-        engine._relation_error(
+        decision_actions._relation_error(
             {"resource": "demo.Company", "permission": "read;delete"},
             "company-1",
             object(),
-        )
+         using="default")
         == "Relation value must reference a permitted record."
     )
     assert actions == ["write", "read"]
@@ -2018,27 +1793,10 @@ def test_retained_decision_transition_requires_complete_owner(
     )
     decision = _decision_for(_open_gate_run(workflow), "gate")
 
-    with pytest.raises(RuntimeError, match="exact transition owner"):
-        type(decision).objects.resolve_retained(
-            decision.pk,
-            verdict=workflow_models.Verdict.COMPLETED,
-            resolution={},
-            resolved_by="test",
-            at=timezone.now(),
-        )
-
-    _refresh_decision(decision)
-    assert decision.verdict == workflow_models.Verdict.PENDING
-
-    with pytest.raises(TypeError, match="transition owner"):
-        decision.resolve(
-            workflow_models.Verdict.COMPLETED,
-            resolution={},
-            resolved_by="bypass",
-        )
-    _refresh_decision(decision)
-    with pytest.raises(TypeError, match="transition owner"):
-        decision.record_invalid_resolution()
+    decision.verdict = workflow_models.Verdict.COMPLETED
+    with system_context(reason="test generic Decision writes stay closed"):
+        with pytest.raises(TypeError):
+            decision.save(update_fields=["verdict"])
     _refresh_decision(decision)
     with pytest.raises(TypeError, match="DecisionManager"):
         type(decision).objects.filter(pk=decision.pk).update(verdict=workflow_models.Verdict.COMPLETED)
@@ -2174,12 +1932,12 @@ def test_workflow_subject_history_batches_context_and_guarded_journals(
     monkeypatch.setattr(FixtureStep, "run", fail)
 
     def add_history_group() -> dict[str, str]:
-        gate_run = engine.start(gate_workflow, subject=subject, actor=viewer)
+        gate_run = engine.start(gate_workflow, subject=subject, actor=admit_workflow_actor(gate_workflow, viewer))
         advance_once(gate_run)
         execute_started(gate_run)
         gate_row = _step_run(gate_run, "gate")
         decision = _decision_for(gate_run, "gate")
-        failed_run = engine.start(failed_workflow, subject=subject, actor=viewer)
+        failed_run = engine.start(failed_workflow, subject=subject, actor=admit_workflow_actor(failed_workflow, viewer))
         advance_once(failed_run)
         execute_started(failed_run)
         failed_row = _step_run(failed_run, "failed")
@@ -2607,19 +2365,51 @@ def test_decide_hides_unreachable_and_missing_decisions_alike(
     """
 
     decision_id = str(decision.sqid)
+    with system_context(reason="create deletable legacy decision for missing oracle"):
+        legacy = Decision.objects.create(step_run=decision.step_run, action="legacy-oracle")
+        missing_id = str(legacy.sqid)
+        legacy.delete()
     existing = _execute(_schema(surface), mutation, {"decision": decision_id}, user=stranger)
     _refresh_decision(decision)
     assert decision.verdict == workflow_models.Verdict.PENDING
     assert decision.attempts == 0
-    with system_context(reason="remove decision for public existence-oracle regression"):
-        models.QuerySet.delete(Decision.objects.filter(pk=decision.pk))
-    missing = _execute(_schema(surface), mutation, {"decision": decision_id}, user=stranger)
+    missing = _execute(_schema(surface), mutation, {"decision": missing_id}, user=stranger)
 
     assert existing.errors is not None
     assert missing.errors is not None
     assert existing.data is None
     assert missing.data is None
     assert [error.formatted for error in existing.errors] == [error.formatted for error in missing.errors]
+
+
+def test_retained_decision_rejects_every_public_and_collector_delete(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Suspension Decisions remain retained through instance, queryset, raw, and parent collectors."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="wdc-delete-retained")
+    workflow = workflow_with_steps(
+        name="Retained decision deletion",
+        steps=(({"key": "gate", "step_class": "gate", "config": _gate_config([assignee], None, [])}),),
+        edges=(),
+    )
+    decision = _decision_for(_open_gate_run(workflow), "gate")
+    with system_context(reason="retained Decision deletion regression"):
+        legacy = Decision.objects.create(step_run=decision.step_run, action="legacy")
+        for delete in (
+            decision.delete,
+            lambda: Decision.objects.filter(pk=decision.pk).delete(),
+            lambda: Decision.objects.filter(pk__in=(legacy.pk, decision.pk)).delete(),
+            lambda: Decision.objects.filter(pk=decision.pk)._raw_delete(using="default"),
+        ):
+            with pytest.raises(TypeError, match="Retained workflow Decisions"):
+                delete()
+        assert Decision.objects.filter(pk=decision.pk).exists()
+        with pytest.raises((TypeError, ProtectedError)):
+            decision.suspension_attempt.delete()
+        legacy.delete()
 
 
 def test_public_decide_accepts_escalate_end_to_end(
@@ -2747,7 +2537,7 @@ def _open_gate_run(workflow: Workflow, *, now: Any = None) -> Any:
     run = engine.start(
         workflow,
         subject=None,
-        actor=actor,
+        actor=admit_workflow_actor(workflow, actor),
         input=JsonPresence(True, {"decision_schema": bound_schema}) if bound_schema_present else JsonPresence(),
     )
     advance_once(run, now=now)
@@ -2818,3 +2608,34 @@ def _execute(schema: Any, query: str, variables: dict[str, Any] | None = None, *
     request = RequestFactory().post("/graphql/public/")
     request.user = user
     return execute_schema(schema, query, variables, request=request)
+
+
+def _validate_json_resolution(schema: dict[str, Any], payload: Any) -> dict[str, Any]:
+    decision = SimpleNamespace(form_schema=schema)
+    return decision_actions.validate_decision_resolution(
+        decision, payload, actor=None, verdict="completed", using="default"
+    )
+
+
+@pytest.mark.parametrize("value", ["7", True, None])
+def test_json_authored_integer_is_not_coerced(value: Any) -> None:
+    schema = {"type": "object", "properties": {"amount": {"type": "integer"}}, "required": ["amount"]}
+    with pytest.raises(ValidationError):
+        _validate_json_resolution(schema, {"amount": value})
+
+
+def test_json_schema_keeps_nested_constraints_and_does_not_insert_defaults() -> None:
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "$defs": {"row": {"type": "integer", "minimum": 2}},
+        "properties": {
+            "rows": {"type": "array", "items": {"$ref": "#/$defs/row"}, "minItems": 1},
+            "optional": {"type": "string", "default": "suggestion"},
+        },
+        "required": ["rows"],
+    }
+    assert _validate_json_resolution(schema, {"rows": [2]}) == {"rows": [2]}
+    for payload in ({"rows": []}, {"rows": [1]}, {"rows": ["2"]}, {"rows": [2], "unknown": True}):
+        with pytest.raises(ValidationError):
+            _validate_json_resolution(schema, payload)

@@ -8,8 +8,9 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Self
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from pydantic import (
     AwareDatetime,
@@ -357,29 +358,6 @@ class AttemptClaim:
     newly_claimed: bool
 
 
-DecisionInputSource = Literal["attempt_input", "owned_call_input"]
-
-
-class AdmittedInputPath(BaseModel):
-    """One exact value carried by the current attempt or its owned-call input."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    source: DecisionInputSource
-    path: tuple[StrictStr | StrictInt, ...]
-    proposal_gate_path: tuple[StrictStr | StrictInt, ...] = ()
-
-    @model_validator(mode="after")
-    def complete_path(self) -> Self:
-        """Require a concrete typed path and reject empty object-field names."""
-
-        if not self.path or any(isinstance(part, str) and not part for part in self.path):
-            raise ValueError("Admitted input authority requires a nonempty typed path.")
-        if any(isinstance(part, str) and not part for part in self.proposal_gate_path):
-            raise ValueError("Proposal gate authority path cannot contain empty fields.")
-        return self
-
-
 class DecisionRecordAccess(BaseModel):
     """One exact record opened only while its owning Decision is pending."""
 
@@ -387,7 +365,6 @@ class DecisionRecordAccess(BaseModel):
 
     model: StrictStr
     id: StrictStr
-    authority_input: AdmittedInputPath | None = None
 
 
 class DecisionSpec(BaseModel):
@@ -408,10 +385,6 @@ class DecisionSpec(BaseModel):
     target_model: StrictStr = ""
     target_id: StrictStr = ""
     target_tab: StrictStr = Field(default="", max_length=100)
-    # Select an ID from this attempt's admitted input. A one-hop proposal must
-    # also declare where its producer consumed the original settled gate.
-    target_authority_path: tuple[StrictStr | StrictInt, ...] = ()
-    target_authority_gate_path: tuple[StrictStr | StrictInt, ...] = ()
     record_access: tuple[DecisionRecordAccess, ...] = ()
 
     @model_validator(mode="after")
@@ -422,10 +395,6 @@ class DecisionSpec(BaseModel):
             raise ValueError("Decision target_model and target_id must be supplied together.")
         if self.target_tab and not self.target_model:
             raise ValueError("Decision target_tab requires a related-record target.")
-        if self.target_authority_path and not self.target_model:
-            raise ValueError("Decision target authority requires a related-record target.")
-        if self.target_authority_gate_path and not self.target_authority_path:
-            raise ValueError("Decision proposal gate path requires target authority input.")
         return self
 
     @field_validator("payload", "decision_schema")
@@ -435,6 +404,22 @@ class DecisionSpec(BaseModel):
 
         json.dumps(value, allow_nan=False)
         return value
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionSubmission:
+    """One explicit human verdict and its action payload."""
+
+    verdict: str
+    payload: Any = None
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionAttemptResult:
+    """Committed Decision state, including a retained invalid-input attempt."""
+
+    decision: Any
+    validation_error: ValidationError | None = None
 
 
 class DecisionResolution(BaseModel):

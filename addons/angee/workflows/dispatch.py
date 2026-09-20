@@ -12,6 +12,7 @@ from django.apps import apps
 from django.db import connections
 from django.utils import timezone
 
+from angee.base.db import get_write_alias
 from angee.jobs.enqueue import enqueue_task
 
 
@@ -67,11 +68,11 @@ class DispatchPreflight:
 DispatchSender = Callable[[WorkflowDispatchEnvelope], None]
 
 
-def enqueue_dispatch_publisher() -> None:
+def enqueue_dispatch_publisher(*, using: str | None = None) -> None:
     """Request one immediate publication pass; periodic recovery remains authoritative."""
 
     try:
-        enqueue_task("workflows.publish_dispatches", kwargs={})
+        enqueue_task("workflows.publish_dispatches", kwargs={"using": using})
     except Exception:  # noqa: BLE001 - the durable intent remains for periodic recovery.
         return
 
@@ -81,6 +82,7 @@ def publish_due(
     *,
     now: datetime | None = None,
     limit: int = 100,
+    using: str | None = None,
 ) -> dict[str, int]:
     """Publish a bounded due batch outside database locks and record telemetry.
 
@@ -92,9 +94,11 @@ def publish_due(
         raise ValueError("Workflow dispatch publication limit must be positive.")
     timestamp = now or timezone.now()
     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-    if connections[dispatch_model.objects.db].in_atomic_block:
+    alias = get_write_alias(dispatch_model, using=using)
+    manager = dispatch_model.objects.db_manager(alias)
+    if connections[alias].in_atomic_block:
         raise RuntimeError("Workflow dispatch publication cannot run inside a database transaction.")
-    envelopes = dispatch_model.objects.due_envelopes(now=timestamp, limit=limit)
+    envelopes = manager.due_envelopes(now=timestamp, limit=limit)
     sent = 0
     failed = 0
     for envelope in envelopes:
@@ -102,14 +106,14 @@ def publish_due(
             sender(envelope)
         except Exception:  # noqa: BLE001 - transport failure is bounded telemetry.
             failed += 1
-            dispatch_model.objects.record_publication(
+            manager.record_publication(
                 envelope.dispatch_id,
                 attempted_at=timestamp,
                 error="Transport send failed.",
             )
         else:
             sent += 1
-            dispatch_model.objects.record_publication(
+            manager.record_publication(
                 envelope.dispatch_id,
                 attempted_at=timestamp,
                 error="",

@@ -13,6 +13,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
+from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.backends import ParsedHandle
@@ -462,6 +463,36 @@ def test_person_for_user_is_the_one_person_per_user_owner(parties_tables: None) 
     assert first.pk == again.pk
     assert first.user_id == user.pk
     assert first.display_name
+
+
+class _MissingReadReplicaRouter:
+    def db_for_read(self, model: type[Any], **hints: Any) -> str:
+        del model, hints
+        return "missing-read-replica"
+
+    def db_for_write(self, model: type[Any], **hints: Any) -> str:
+        del model, hints
+        return "default"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_claim_own_keeps_nested_person_and_handle_writes_on_explicit_alias(parties_tables: None) -> None:
+    """A bound owner keeps every nested read/write off a router-selected replica."""
+
+    del parties_tables
+    user = User.objects.create_user(username="bound-claim", password="x")
+    with override_settings(DATABASE_ROUTERS=[_MissingReadReplicaRouter()]):
+        handle = Handle.objects.db_manager("default").claim_own(
+            user,
+            platform=Handle.Platform.EMAIL,
+            value="bound-claim@example.test",
+            source=LinkSource.OAUTH,
+        )
+
+    person = Person._base_manager.using("default").get(user=user)
+    handle.refresh_from_db(using="default")
+    assert handle.owner_id == user.pk
+    assert handle.party_id == person.pk
 
 
 @pytest.mark.django_db(transaction=True)

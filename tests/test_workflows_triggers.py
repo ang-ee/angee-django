@@ -283,6 +283,7 @@ def test_event_trigger_subject_refetch_uses_system_context(
     workflow_triggers._on_change_published(
         sender=SecuredTriggerSubject,
         payload=ChangePayload.from_instance(no_actor_subject, action="create", update_fields=None),
+        using="default",
     )
     assert len(_runs_for_subject(no_actor_subject)) == 1
 
@@ -294,6 +295,7 @@ def test_event_trigger_subject_refetch_uses_system_context(
         workflow_triggers._on_change_published(
             sender=SecuredTriggerSubject,
             payload=ChangePayload.from_instance(denied_subject, action="create", update_fields=None),
+            using="default",
         )
 
     assert len(_runs_for_subject(denied_subject)) == 1
