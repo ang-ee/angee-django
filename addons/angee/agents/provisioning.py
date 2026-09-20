@@ -19,6 +19,7 @@ from rebac import system_context
 
 from angee.agents.grants import grant_resource_reader_role
 from angee.agents.models import AgentLifecycle
+from angee.base.db import get_write_alias
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.ids import PublicID
@@ -29,7 +30,10 @@ from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorD
 # model->provider->credential fallback, joined up front so provisioning reads the
 # credential in one query instead of lazy FK fetches.
 _PROVISION_CHAIN = (
-    "model__provider__credential",
+    "model__provider__credential__oauth_client",
+    "model__provider__vendor",
+    "workspace_template",
+    "user",
     "inference_credential__oauth_client",
 )
 
@@ -51,17 +55,20 @@ class _RenderPlan:
     service_template: tuple[str, str] | None
 
 
-def provision_agent(id: PublicID) -> ActionResult:
+def provision_agent(id: PublicID, *, using: str | None = None) -> ActionResult:
     """Render an agent into an operator workspace + service and record the instance."""
 
+    agent_model = _agent_model()
+    using = get_write_alias(agent_model, using=using)
     with action_target(
-        _agent_model(),
+        agent_model,
         id,
         reason="agents.graphql.provision_agent",
         select_related=_PROVISION_CHAIN,
+        queryset=agent_model._default_manager.using(using),
     ) as agent:
         if agent.user_id is None:
-            type(agent).objects.sync_service_user(agent)
+            type(agent).objects.db_manager(using).sync_service_user(agent, using=using)
         if agent.runtime_backend.runs_in_process:
             if not agent.inference_credential_ready():
                 return ActionResult(
@@ -71,7 +78,7 @@ def provision_agent(id: PublicID) -> ActionResult:
             try:
                 agent.mark_provisioning()
                 agent.mark_provisioned(workspace="", service="")
-                grant_resource_reader_role(agent)
+                grant_resource_reader_role(agent, using=using)
             except TransitionNotAllowed as error:
                 return ActionResult(ok=False, message=f"Provisioning failed: {error}")
             return ActionResult(ok=True, message="Provisioned in process.")
@@ -101,7 +108,7 @@ def provision_agent(id: PublicID) -> ActionResult:
 
     try:
         with system_context(reason="agents.graphql.provision_agent.plan"):
-            plan = _render_plan(agent)
+            plan = _render_plan(agent, using=using)
         result = _render_agent(
             plan,
             on_workspace_created=record_workspace,
@@ -109,28 +116,31 @@ def provision_agent(id: PublicID) -> ActionResult:
         )
     except Exception as error:  # noqa: BLE001 - a render/plan failure is the result, not a 500
         with system_context(reason="agents.graphql.provision_agent.failed"):
-            _record_provision_failure(agent, str(error), clear_instances=bool(created_workspace))
+            _record_provision_failure(agent, using=using, message=str(error), clear_instances=bool(created_workspace))
         return ActionResult(ok=False, message=f"Provisioning failed: {error}")
     with system_context(reason="agents.graphql.provision_agent.recorded"):
         try:
             agent.mark_provisioned(workspace=result["workspace"], service=result["service"])
         except TransitionNotAllowed as error:
-            _record_provision_failure(agent, str(error))
+            _record_provision_failure(agent, using=using, message=str(error))
             return ActionResult(ok=False, message=f"Provisioning failed: {error}")
     return ActionResult(ok=True, message=f"Provisioned “{result['service'] or result['workspace']}”.")
 
 
-def reprovision_agent(id: PublicID) -> ActionResult:
+def reprovision_agent(id: PublicID, *, using: str | None = None) -> ActionResult:
     """Recreate an agent's service over its existing workspace, re-syncing secrets."""
 
+    agent_model = _agent_model()
+    using = get_write_alias(agent_model, using=using)
     with action_target(
-        _agent_model(),
+        agent_model,
         id,
         reason="agents.graphql.reprovision_agent",
         select_related=_PROVISION_CHAIN,
+        queryset=agent_model._default_manager.using(using),
     ) as agent:
         if agent.user_id is None:
-            type(agent).objects.sync_service_user(agent)
+            type(agent).objects.db_manager(using).sync_service_user(agent, using=using)
         workspace = agent.workspace
         service = agent.service
         if not workspace:
@@ -150,7 +160,7 @@ def reprovision_agent(id: PublicID) -> ActionResult:
     service_destroyed = False
     try:
         with system_context(reason="agents.graphql.reprovision_agent.plan"):
-            plan = _render_plan(agent)
+            plan = _render_plan(agent, using=using)
         _sync_secrets(daemon, plan)
         if service:
             try:
@@ -169,21 +179,29 @@ def reprovision_agent(id: PublicID) -> ActionResult:
         with system_context(reason="agents.graphql.reprovision_agent.failed"):
             # Once the old service is destroyed its name is stale; clear it so a later
             # deprovision doesn't try to tear down a service the daemon already removed.
-            _record_provision_failure(agent, str(error), clear_service=service_destroyed)
+            _record_provision_failure(agent, using=using, message=str(error), clear_service=service_destroyed)
         return ActionResult(ok=False, message=f"Reprovisioning failed: {error}")
     with system_context(reason="agents.graphql.reprovision_agent.recorded"):
         try:
             agent.mark_provisioned(workspace=workspace, service=new_service)
         except TransitionNotAllowed as error:
-            _record_provision_failure(agent, str(error), clear_service=service_destroyed)
+            _record_provision_failure(agent, using=using, message=str(error), clear_service=service_destroyed)
             return ActionResult(ok=False, message=f"Reprovisioning failed: {error}")
     return ActionResult(ok=True, message=f"Recreated service “{new_service}”.")
 
 
-def deprovision_agent(id: PublicID) -> ActionResult:
+def deprovision_agent(id: PublicID, *, using: str | None = None) -> ActionResult:
     """Tear down an agent's operator workspace and services, then clear the record."""
 
-    with action_target(_agent_model(), id, reason="agents.graphql.deprovision_agent") as agent:
+    agent_model = _agent_model()
+    using = get_write_alias(agent_model, using=using)
+    with action_target(
+        agent_model,
+        id,
+        reason="agents.graphql.deprovision_agent",
+        queryset=agent_model._default_manager.using(using),
+        select_related=_PROVISION_CHAIN,
+    ) as agent:
         if agent.runtime_backend.runs_in_process:
             try:
                 agent.mark_deprovisioning()
@@ -226,7 +244,9 @@ def deprovision_agent(id: PublicID) -> ActionResult:
                 pass
     except Exception as error:  # noqa: BLE001 - teardown failure is the result, not a 500
         with system_context(reason="agents.graphql.deprovision_agent.failed"):
-            _record_provision_failure(agent, f"Teardown failed: {error}", clear_service=service_destroyed)
+            _record_provision_failure(
+                agent, using=using, message=f"Teardown failed: {error}", clear_service=service_destroyed
+            )
         return ActionResult(ok=False, message=f"Teardown failed: {error}")
     with system_context(reason="agents.graphql.deprovision_agent.recorded"):
         try:
@@ -242,9 +262,11 @@ def _record_provision_failure(
     *,
     clear_instances: bool = False,
     clear_service: bool = False,
+    using: str,
 ) -> None:
     """Best-effort failure persistence that never hides the action result."""
 
+    agent._state.db = using
     try:
         agent.mark_provision_failed(
             message,
@@ -332,9 +354,10 @@ def _render_service(
     return service
 
 
-def _render_plan(agent: Any) -> _RenderPlan:
+def _render_plan(agent: Any, *, using: str) -> _RenderPlan:
     """Build the operator render plan from an agent's templates, inputs, and secrets."""
 
+    agent._state.db = using
     workspace_template = agent.workspace_template
     runtime = agent.runtime_backend
     return _RenderPlan(

@@ -456,6 +456,10 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
     calls: list[dict[str, Any]] = []
 
     class IngestManager:
+        def db_manager(self, using: str) -> IngestManager:
+            assert using == "default"
+            return self
+
         def ingest(self, batch: list[ParsedMessage], **kwargs: Any) -> list[ParsedMessage]:
             calls.append(kwargs)
             return batch
@@ -469,7 +473,7 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
         monkeypatch.setattr(backend, "fetch_messages", lambda: batches.pop(0))
         monkeypatch.setattr(backend, "close", lambda: None)
         channel = cast(AbstractChannel, SimpleNamespace(cursor={}, save=lambda **_kwargs: None))
-        AbstractChannel._drain(channel, backend)
+        AbstractChannel._drain(channel, backend, using="default")
 
     drain(SlackChannelBackend)
     drain(ImapChannelBackend)

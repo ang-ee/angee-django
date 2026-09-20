@@ -19,7 +19,7 @@ from angee.messaging.delivery import (
     retry_backoff=True,
     retry_kwargs={"max_retries": 3},
 )
-def deliver_message(model_label: str, pk: Any, external_id: str) -> dict[str, Any]:
+def deliver_message(model_label: str, pk: Any, external_id: str, *, using: str | None = None) -> dict[str, Any]:
     """Deliver one message; transient exceptions retry the idempotent owner."""
 
-    return run_message_delivery(model_label, pk, external_id)
+    return run_message_delivery(model_label, pk, external_id, using=using)

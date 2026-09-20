@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hmac
 import socket
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from typing import Any
 
 import httpx
@@ -12,7 +13,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection, transaction
+from django.db import connection, router, transaction
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
@@ -20,7 +21,7 @@ from angee.base.models import AngeeModel
 from angee.integrate.events import EventKind
 from angee.integrate.models import Bridge
 from angee.integrate.net import validate_public_url
-from angee.integrate.webhooks import SIGNATURE_HEADER
+from angee.integrate.webhooks import SIGNATURE_HEADER, WebhookDeliveryError
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -28,6 +29,7 @@ from tests.conftest import (
     _create_missing_tables,
     make_integration,
 )
+from tests.test_transitions import TransitionRouter
 
 
 class DispatchBridge(Bridge, AngeeModel):
@@ -578,3 +580,55 @@ def _owner_tuple_exists(owner: Any, resource: Any) -> bool:
         )
         .exists()
     )
+
+
+@pytest.fixture
+def webhook_alias(webhook_tables: None, database_alias: Callable[[str], AbstractContextManager[str]]) -> Iterator[str]:
+    """Expose the webhook schema through the shared connection factory."""
+
+    with database_alias("integrate_webhook_writer") as alias:
+        yield alias
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("failure", [False, True])
+def test_webhook_commit_fanout_and_delivery_telemetry_keep_the_write_alias(
+    webhook_alias: str,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: bool,
+) -> None:
+    """Fanout waits for its own commit, then records success/failure on that alias."""
+
+    user = get_user_model().objects.create_user(username=f"routed-webhook-{failure}")
+    with system_context(reason="test routed webhook setup"):
+        subscription = WebhookSubscription.objects.using(webhook_alias).create(
+            owner_id=user.pk,
+            target_url="https://hooks.example.test/events",
+            secret="test",
+            event_kinds=[EventKind.BRIDGE_SYNCED.value],
+        )
+    deliveries: list[bytes] = []
+
+    def deliver(_subscription: Any, body: bytes) -> str:
+        deliveries.append(body)
+        if failure:
+            raise WebhookDeliveryError("HTTP failure", status="503")
+        return "204"
+
+    monkeypatch.setattr(WebhookSubscription, "deliver", deliver)
+    routing = TransitionRouter("wrong_writer")
+    with monkeypatch.context() as patch, system_context(reason="test routed webhook fanout"):
+        patch.setattr(router, "routers", [routing])
+        with transaction.atomic(using="default"):
+            with transaction.atomic(using=webhook_alias):
+                WebhookSubscription.objects.db_manager(webhook_alias).enqueue_event(
+                    kind=EventKind.BRIDGE_SYNCED,
+                    payload={"items": 2},
+                )
+                assert deliveries == []
+            assert deliveries == [b'{"items":2}']
+            stored = WebhookSubscription.objects.using(webhook_alias).get(pk=subscription.pk)
+            assert stored.consecutive_failures == int(failure)
+            assert stored.last_delivery_at is not None
+            assert stored.last_delivery_status == ("503" if failure else "204")
+    assert routing.writes == []

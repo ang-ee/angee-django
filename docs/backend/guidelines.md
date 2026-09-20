@@ -143,6 +143,9 @@ Use these owners instead of maintaining another contract in an addon:
   reverse related managers, `refresh_from_db`, ContentType lookups, and
   `@transaction.atomic` decorators on instance methods can silently choose the
   default or read alias; bind them explicitly to the operation's write alias.
+  Public override hooks accept optional keyword-only `using`; dispatchers bind
+  their owning instance to the selected alias and retain the legacy hook call
+  shape, while private helpers require the already-selected alias.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction

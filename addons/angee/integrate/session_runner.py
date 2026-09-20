@@ -9,9 +9,11 @@ from typing import Any, NoReturn
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
+from django.db import connections
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.db import get_write_alias
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.live import PairingState, SessionLoggedOut
 from angee.integrate.locks import bridge_advisory_lock
@@ -28,14 +30,25 @@ def run_bridge_session_job(
     pk: Any,
     *,
     stop_event: threading.Event,
+    using: str | None = None,
     in_child: bool = False,
     on_shutdown: Callable[[], None] | None = None,
     on_stalled_shutdown: Callable[[], NoReturn] | None = None,
 ) -> dict[str, Any]:
     """Run one bridge's live session for the life of its vendor connection."""
 
+    if using is not None:
+        connections[using]
     with system_context(reason="integrate.run_bridge_session"):
-        bridge = _bridge(model_label, pk)
+        try:
+            app_label, model_name = str(model_label).split(".", 1)
+        except ValueError:
+            return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
+        model = apps.get_model(app_label, model_name)
+        if not issubclass(model, Bridge):
+            return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
+        using = get_write_alias(model, using=using)
+        bridge = model._default_manager.db_manager(using).filter(pk=pk).first()
         if bridge is None:
             return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
         if type(bridge).live_implementation_field() is None:
@@ -56,7 +69,7 @@ def run_bridge_session_job(
                 if not acquired:
                     return {"ok": True, "skipped": True, "reason": "session-already-hosted"}
                 try:
-                    return BridgeSessionProcess(model_label, pk, stop_event=stop_event).run()
+                    return BridgeSessionProcess(model_label, pk, stop_event=stop_event, using=using).run()
                 except SessionProcessError as error:
                     logger.error("Live session process for %s %s exited with code %s.", model_label, pk, error.exitcode)
                     with bridge_advisory_lock(bridge) as session_acquired:
@@ -68,7 +81,7 @@ def run_bridge_session_job(
                 return {"ok": True, "skipped": True, "reason": "session-already-running"}
             # A queued start may outlive an operator stop or a terminal outcome.
             # Revalidate under the same lock that guards opening the session store.
-            bridge.refresh_from_db()
+            bridge.refresh_from_db(using=using)
             if stop_event.is_set():
                 return {"ok": True, "skipped": True, "reason": "host-stopping"}
             if bridge.subscription_state.get("desired") != bridge.LiveState.LIVE:
@@ -82,7 +95,7 @@ def run_bridge_session_job(
                 # The implementation changed while the task acquired its lock.
                 # Let reconciliation route the next start through the host.
                 return {"ok": True, "skipped": True, "reason": "implementation-changed"}
-            with bridge_progress_context(bridge) as reporter:
+            with bridge_progress_context(bridge, using=using) as reporter:
                 session = impl.session_class_resolved()(
                     bridge,
                     reporter=reporter,
@@ -93,10 +106,10 @@ def run_bridge_session_job(
                 try:
                     state = session.run()
                 except SessionLoggedOut as error:
-                    _record_logged_out(bridge, error, session=session)
+                    _record_logged_out(bridge, error, session=session, using=using)
                     return {"ok": False, "logged_out": True}
                 if state == PairingState.DUPLICATE_ACCOUNT:
-                    _record_duplicate_account(bridge, session=session)
+                    _record_duplicate_account(bridge, session=session, using=using)
                     return {"ok": False, "duplicate_account": True}
                 if session.outcome_error is not None:
                     bridge.record_sync_error(session.outcome_error, now=timezone.now())
@@ -105,7 +118,7 @@ def run_bridge_session_job(
         return {"ok": True, "state": state, "items": session.landed}
 
 
-def _record_logged_out(bridge: Any, error: Exception, *, session: Any) -> None:
+def _record_logged_out(bridge: Any, error: Exception, *, session: Any, using: str) -> None:
     """Record a logout as runtime failure, then release desire/account and store.
 
     The lifecycle is untouched: the operator declared this bridge connected and
@@ -119,13 +132,14 @@ def _record_logged_out(bridge: Any, error: Exception, *, session: Any) -> None:
     row-locked merge.
     """
 
+    bridge._state.db = using
     impl = _require_live_impl(bridge)
     bridge.record_sync_error(error, now=timezone.now())
     impl.release_account(desired=bridge.LiveState.STOPPED)
     session.discard_store()
 
 
-def _record_duplicate_account(bridge: Any, *, session: Any) -> None:
+def _record_duplicate_account(bridge: Any, *, session: Any, using: str) -> None:
     """Record a rejected duplicate as runtime failure and release the void claim.
 
     Being told another bridge owns this account is a handshake outcome, not the
@@ -134,24 +148,12 @@ def _record_duplicate_account(bridge: Any, *, session: Any) -> None:
     would delete.
     """
 
+    bridge._state.db = using
     impl = _require_live_impl(bridge)
     error = session.duplicate_error or impl.duplicate_account_error()
     bridge.record_sync_error(error, now=timezone.now())
     impl.release_account(desired=bridge.LiveState.STOPPED)
     session.discard_new_store()
-
-
-def _bridge(model_label: str, pk: Any) -> Any | None:
-    """Return one bridge row for a live session task, or ``None``."""
-
-    try:
-        app_label, model_name = str(model_label).split(".", 1)
-    except ValueError:
-        return None
-    model = apps.get_model(app_label, model_name)
-    if not issubclass(model, Bridge):
-        return None
-    return model._default_manager.filter(pk=pk).first()
 
 
 def _require_live_impl(bridge: Any) -> LiveBridgeImpl:

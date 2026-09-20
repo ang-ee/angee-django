@@ -46,7 +46,7 @@ class _Credential:
         self.kind = kind
         self.freshened = 0
 
-    def ensure_fresh(self) -> None:
+    def ensure_fresh(self, *, using: str | None = None) -> None:
         self.freshened += 1
 
     def secret_value(self) -> str:
@@ -78,7 +78,8 @@ def test_anthropic_model_keeps_override_and_oauth_beta_header(monkeypatch: Any) 
             assert isinstance(model, AnthropicModel)
             http_client = captured[0]["http_client"]
             request = http_client.build_request(
-                "POST", "https://anthropic.example/v1/messages",
+                "POST",
+                "https://anthropic.example/v1/messages",
                 json={"system": "Follow the user's instructions.", "messages": []},
             )
             for hook in http_client.event_hooks["request"]:

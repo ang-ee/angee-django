@@ -1127,7 +1127,7 @@ def test_credential_crud_create_delete_are_admin_only(
         "on_commit",
         lambda callback, robust=False: scheduled.append((callback, robust)),
     )
-    monkeypatch.setattr(Credential, "revoke_remote", lambda credential: revoked.append(credential.pk))
+    monkeypatch.setattr(Credential, "revoke_remote", lambda credential, *, using=None: revoked.append(credential.pk))
 
     delete_credential = """
         mutation DeleteCredential($id: ID!) {
@@ -1920,8 +1920,6 @@ def _user_with_password_hash(username: str, password_hash: str) -> Any:
         user.password = password_hash
         user.save(update_fields=["password"])
     return user
-
-
 
 
 def _user_public_id(user: Any) -> str:

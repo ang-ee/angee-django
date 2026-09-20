@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from typing import Any
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, connections, models, router, transaction
+from django.db import connection, models, router, transaction
 from django.test import override_settings
 
 from angee.base import transitions
@@ -203,16 +204,13 @@ def transition_task_table() -> Iterator[None]:
 
 
 @pytest.fixture
-def transition_alias(transition_task_table: None) -> Iterator[str]:
-    """Copy the test connection under a dynamic alias, outside configured aliases."""
+def transition_alias(
+    transition_task_table: None, database_alias: Callable[[str], AbstractContextManager[str]]
+) -> Iterator[str]:
+    """Expose the transition schema through the shared connection factory."""
 
-    alias = "transition_other"
-    connections[alias] = connection.copy(alias=alias)
-    try:
+    with database_alias("transition_other") as alias:
         yield alias
-    finally:
-        connections[alias].close()
-        del connections[alias]
 
 
 class TransitionRouter:

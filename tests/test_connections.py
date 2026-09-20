@@ -747,7 +747,10 @@ def test_ensure_fresh_does_not_call_select_for_update_on_sqlite(monkeypatch: pyt
             locked.expires_at = timezone.now() + timedelta(hours=2)
             locked.last_refresh_at = timezone.now()
             locked.last_refresh_status = "ok"
-            locked.save(update_fields=["material", "expires_at", "last_refresh_at", "last_refresh_status"])
+            locked.save(
+                using=locked._state.db,
+                update_fields=["material", "expires_at", "last_refresh_at", "last_refresh_status"],
+            )
 
         monkeypatch.setattr(type(Credential.objects.all()), "select_for_update", forbidden_select_for_update)
         monkeypatch.setattr(OAuthCredentialHandler, "refresh", fake_handler_refresh)

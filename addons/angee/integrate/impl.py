@@ -9,6 +9,7 @@ from typing import Any, ClassVar, Literal
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
+from angee.base.db import get_write_alias
 from angee.base.impl import ImplBase
 from angee.integrate.connect import enabled_oauth_client_from_hint
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
@@ -30,7 +31,7 @@ class IntegrationImpl(ImplBase):
 
         self.integration = integration
 
-    def connect_oauth_client(self, owner_label: str) -> Any:
+    def connect_oauth_client(self, owner_label: str, *, using: str | None = None) -> Any:
         """Return the enabled OAuth client this integration connects through.
 
         Falls back to the bound integration's vendor slug when the implementation
@@ -38,13 +39,22 @@ class IntegrationImpl(ImplBase):
         ``{vendor}`` template.
         """
 
-        vendor_slug = str(getattr(getattr(self.integration, "vendor", None), "slug", "") or "")
+        using = get_write_alias(type(self.integration), using=using, instance=self.integration)
+        self.integration._state.db = using
+        vendor = (
+            self.integration._meta.get_field("vendor")
+            .remote_field.model._base_manager.db_manager(using)
+            .filter(pk=self.integration.vendor_id)
+            .first()
+        )
+        vendor_slug = str(getattr(vendor, "slug", "") or "")
         hint = str(self.oauth_client or "")
         return enabled_oauth_client_from_hint(
             hint or vendor_slug,
             owner_label=owner_label,
             reason="integrate.graphql.connect_integration.oauth_client",
             vendor_slug=vendor_slug,
+            using=using,
         )
 
 
@@ -89,7 +99,7 @@ class LiveBridgeImpl(BridgeImpl):
             raise TypeError(f"{type(self).__name__}.session_class must resolve to a class.")
         return resolved
 
-    def start_live(self) -> None:
+    def start_live(self, *, using: str | None = None) -> None:
         """Dispatch this bridge's live session to its dedicated queue.
 
         Safe to repeat: the session task's non-blocking advisory-lock acquire
@@ -97,6 +107,8 @@ class LiveBridgeImpl(BridgeImpl):
         undelivered start from outliving the next reconciler tick.
         """
 
+        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
+        self.bridge._state.db = using
         if not self.session_queue:
             raise ImproperlyConfigured(
                 f"{type(self).__name__} must define session_queue; a long-lived session on the "
@@ -104,7 +116,7 @@ class LiveBridgeImpl(BridgeImpl):
             )
         enqueue_task(
             RUN_SESSION_TASK,
-            kwargs={"model_label": self.bridge._meta.label_lower, "pk": self.bridge.pk},
+            kwargs={"model_label": self.bridge._meta.label_lower, "pk": self.bridge.pk, "using": using},
             queue=self.session_queue,
             expires=SESSION_START_EXPIRES,
         )
@@ -121,7 +133,7 @@ class LiveBridgeImpl(BridgeImpl):
         with self.bridge.live_account_lock(self.key, self.normalize_account_id(external_id)) as acquired:
             yield acquired
 
-    def claim_account(self, external_id: str) -> bool:
+    def claim_account(self, external_id: str, *, using: str | None = None) -> bool:
         """Record ``external_id`` as this bridge's durable account identity.
 
         Returns whether the claim landed: ``False`` means another bridge already
@@ -138,13 +150,15 @@ class LiveBridgeImpl(BridgeImpl):
         the process-local lock floor two workers can both pass the ``SELECT``.
         """
 
+        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
+        self.bridge._state.db = using
         return self.bridge.claim_live_account(
             self.key,
             self.normalize_account_id(external_id),
             identity_key=self.state_identity_key,
         )
 
-    def mark_disconnected(self, *, clear_identity: bool) -> None:
+    def mark_disconnected(self, *, clear_identity: bool, using: str | None = None) -> None:
         """Record the operator's disconnect: lifecycle released, identity optional.
 
         The operator declares the lifecycle, so this write moves it through the
@@ -152,9 +166,11 @@ class LiveBridgeImpl(BridgeImpl):
         the claimed account and pairing report when the operator chose a wipe.
         """
 
+        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
+        self.bridge._state.db = using
         self.bridge.disconnect_live_account(identity_key=self.state_identity_key, clear_identity=clear_identity)
 
-    def release_account(self, *, desired: Any) -> None:
+    def release_account(self, *, desired: Any, using: str | None = None) -> None:
         """Record a void claim: drop account identity and live desire, never lifecycle.
 
         The worker's release. A runtime handshake that proved this row's account
@@ -163,6 +179,8 @@ class LiveBridgeImpl(BridgeImpl):
         signal the live task and reconciler both read.
         """
 
+        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
+        self.bridge._state.db = using
         self.bridge.release_live_account(identity_key=self.state_identity_key, desired=desired)
 
     def pairing(self) -> PairingProjection:

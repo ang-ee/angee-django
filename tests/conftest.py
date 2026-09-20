@@ -5,7 +5,8 @@ from __future__ import annotations
 import itertools
 import sys
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
@@ -14,10 +15,11 @@ import pytest
 import reversion
 import tomlkit
 from django.apps import AppConfig
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
-from django.db import connection, models, transaction
+from django.db import connection, connections, models, transaction
 from django.test import RequestFactory
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
@@ -67,6 +69,27 @@ from tests.iam_models import Group as IAMGroup
 from tests.integrate_models import Integration
 
 pytest_plugins = ("tests.workflows",)
+
+
+@pytest.fixture
+def database_alias(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], AbstractContextManager[str]]:
+    """Expose the test database under a configured alias for a bounded context."""
+
+    @contextmanager
+    def copied_connection(alias: str) -> Iterator[str]:
+        if alias in settings.DATABASES:
+            raise ValueError(f"Database alias {alias!r} is already configured.")
+        copied = connection.copy(alias=alias)
+        with monkeypatch.context() as patch:
+            patch.setitem(settings.DATABASES, alias, copied.settings_dict)
+            connections[alias] = copied
+            try:
+                yield alias
+            finally:
+                copied.close()
+                del connections[alias]
+
+    return copied_connection
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):

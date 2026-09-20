@@ -278,7 +278,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         connectionless backends.
         """
 
-    def start_live(self) -> None:
+    def start_live(self, *, using: str | None = None) -> None:
         """Dispatch this source's live ingest (start a session, renew a subscription).
 
         ``Channel.start_live`` owns the persisted desired-state and calls this
@@ -288,7 +288,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         to dispatch.
         """
 
-    def stop_live(self) -> None:
+    def stop_live(self, *, using: str | None = None) -> None:
         """Dispatch this source's live-ingest stop.
 
         The counterpart of :meth:`start_live`; ``Channel.stop_live`` persists the

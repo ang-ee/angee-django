@@ -10,6 +10,7 @@ from typing import Any, ClassVar
 from django.db import models
 from django.utils import timezone
 
+from angee.base.db import get_write_alias
 from angee.integrate.oauth.client import OAuthClientProtocol
 
 
@@ -72,13 +73,13 @@ class CredentialKindHandler:
         material = self.reveal(credential)
         return str(material.get(self.material_field) or "")
 
-    def can_refresh(self, credential: Any) -> bool:
+    def can_refresh(self, credential: Any, *, using: str | None = None) -> bool:
         """Return whether this credential can renew its own secret without the user."""
 
         del credential
         return False
 
-    def refresh(self, credential: Any) -> None:
+    def refresh(self, credential: Any, *, using: str | None = None) -> None:
         """Refresh ``credential`` in place when the kind supports it."""
 
         raise NotImplementedError
@@ -126,15 +127,21 @@ class OAuthCredentialHandler(CredentialKindHandler):
         except KeyError, TypeError, ValueError:
             return None
 
-    def can_refresh(self, credential: Any) -> bool:
+    def can_refresh(self, credential: Any, *, using: str | None = None) -> bool:
         """Return whether a refresh-capable provider and a stored refresh token exist."""
 
-        oauth_client = getattr(credential, "oauth_client", None)
+        using = get_write_alias(type(credential), using=using, instance=credential)
+        oauth_client = (
+            credential._meta.get_field("oauth_client")
+            .remote_field.model._base_manager.db_manager(using)
+            .filter(pk=credential.oauth_client_id)
+            .first()
+        )
         if oauth_client is None or not getattr(oauth_client, "supports_refresh", False):
             return False
         return bool(self.reveal(credential).get("refresh_token"))
 
-    def refresh(self, credential: Any) -> None:
+    def refresh(self, credential: Any, *, using: str | None = None) -> None:
         """Exchange the stored refresh token for fresh material, persisted in place.
 
         Renews this OAuth credential through the provider's refresh grant and writes the
@@ -148,9 +155,16 @@ class OAuthCredentialHandler(CredentialKindHandler):
         rejected or no refresh token is stored.
         """
 
+        using = get_write_alias(type(credential), using=using, instance=credential)
+        credential._state.db = using
         material = self.reveal(credential)
         refresh_value = str(material.get("refresh_token") or "")
-        oauth_client = getattr(credential, "oauth_client", None)
+        oauth_client = (
+            credential._meta.get_field("oauth_client")
+            .remote_field.model._base_manager.db_manager(using)
+            .filter(pk=credential.oauth_client_id)
+            .first()
+        )
         if oauth_client is None or not refresh_value:
             raise ValueError("OAuth credential has no refresh token to renew from.")
         tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
@@ -159,14 +173,23 @@ class OAuthCredentialHandler(CredentialKindHandler):
         # old token's ``expires_in``/``scope``, which describe the token being replaced.
         renewed_material = dict(tokens)
         renewed_material.setdefault("refresh_token", refresh_value)
-        type(credential).objects.upsert_for_user(
-            credential.user,
+        type(credential).objects.db_manager(using).upsert_for_user(
+            credential._meta.get_field("user")
+            .remote_field.model._base_manager.db_manager(using)
+            .get(pk=credential.user_id),
             oauth_client,
             self.kind,
             renewed_material,
-            external_account=credential.external_account,
+            external_account=(
+                credential._meta.get_field("external_account")
+                .remote_field.model._base_manager.db_manager(using)
+                .filter(pk=credential.external_account_id)
+                .first()
+                if credential.external_account_id is not None
+                else None
+            ),
         )
-        credential.refresh_from_db()
+        credential.refresh_from_db(using=using)
 
 
 class StaticTokenCredentialHandler(CredentialKindHandler):
@@ -192,7 +215,7 @@ class StaticTokenCredentialHandler(CredentialKindHandler):
 
         return {"Authorization": f"Bearer {self.secret_value(credential)}"}
 
-    def refresh(self, credential: Any) -> None:
+    def refresh(self, credential: Any, *, using: str | None = None) -> None:
         """Static tokens do not expire through a refresh flow."""
 
 
@@ -215,7 +238,7 @@ class SshKeyCredentialHandler(CredentialKindHandler):
         del credential
         return {}
 
-    def refresh(self, credential: Any) -> None:
+    def refresh(self, credential: Any, *, using: str | None = None) -> None:
         """SSH keys do not expire through a refresh flow."""
 
 
@@ -245,7 +268,7 @@ class BasicAuthCredentialHandler(CredentialKindHandler):
         raw = f"{material.get('username', '')}:{material.get('password', '')}".encode()
         return {"Authorization": f"Basic {base64.b64encode(raw).decode('ascii')}"}
 
-    def refresh(self, credential: Any) -> None:
+    def refresh(self, credential: Any, *, using: str | None = None) -> None:
         """Basic-auth credentials do not expire through a refresh flow."""
 
 
@@ -268,7 +291,7 @@ class AppKeysCredentialHandler(CredentialKindHandler):
         del credential
         return {}
 
-    def refresh(self, credential: Any) -> None:
+    def refresh(self, credential: Any, *, using: str | None = None) -> None:
         """Application registrations do not expire through a refresh flow."""
 
 

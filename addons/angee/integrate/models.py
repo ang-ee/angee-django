@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import secrets
 from collections.abc import Iterable, Mapping
+from copy import copy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -47,6 +48,7 @@ from rebac.mixins import RebacModelBase
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
+from angee.base.db import get_write_alias
 from angee.base.fields import EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
@@ -180,6 +182,8 @@ class OAuthClientManager(AngeeManager.from_queryset(OAuthClientQuerySet)):  # ty
     def sync_from_settings(
         self,
         entries: Iterable[Mapping[str, Any]] | Mapping[str, Mapping[str, Any]] | None = None,
+        *,
+        using: str | None = None,
     ) -> tuple[Any, ...]:
         """Create or update OAuth clients declared in ``settings.ANGEE_INTEGRATE_OAUTH_CLIENTS``.
 
@@ -187,10 +191,12 @@ class OAuthClientManager(AngeeManager.from_queryset(OAuthClientQuerySet)):  # ty
         settings and keeps secrets out of resource files.
         """
 
+        using = get_write_alias(self.model, using=using, bound=self)
+
         synced: list[Any] = []
-        with system_context(reason="integrate.oauth_clients.seed"), transaction.atomic():
+        with system_context(reason="integrate.oauth_clients.seed"), transaction.atomic(using=using):
             for index, entry in enumerate(self._setting_entries(entries), start=1):
-                synced.append(self._sync_setting_entry(index, entry))
+                synced.append(self._sync_setting_entry(index, entry, using=using))
         return tuple(synced)
 
     def _setting_entries(
@@ -213,7 +219,7 @@ class OAuthClientManager(AngeeManager.from_queryset(OAuthClientQuerySet)):  # ty
                 raise ValueError(f"ANGEE_INTEGRATE_OAUTH_CLIENTS entry {index} must be a mapping.")
         return values
 
-    def _sync_setting_entry(self, index: int, entry: Mapping[str, Any]) -> Any:
+    def _sync_setting_entry(self, index: int, entry: Mapping[str, Any], *, using: str) -> Any:
         """Upsert one settings-authored OAuth client."""
 
         self._validate_setting_entry(index, entry)
@@ -222,7 +228,7 @@ class OAuthClientManager(AngeeManager.from_queryset(OAuthClientQuerySet)):  # ty
         defaults = {field: entry[field] for field in sorted(self.seed_fields) if field in entry}
         if "client_secret" in entry:
             defaults["client_secret"] = str(entry.get("client_secret") or "")
-        oauth_client, _created = self.update_or_create(
+        oauth_client, _created = self.db_manager(using).update_or_create(
             slug=slug,
             environment=environment,
             defaults=defaults,
@@ -551,10 +557,12 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
         external_id: str,
         *,
         owner: Any | None = None,
+        using: str | None = None,
         **identity: Any,
     ) -> Any:
         """Create or update one ``(oauth_client, external_id)`` external account."""
 
+        using = get_write_alias(self.model, using=using, bound=self)
         reason = "integrate.connections.link"
         update_values = _validated_manager_values(
             self.model,
@@ -572,14 +580,14 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
             "last_used_at": None,
             **update_values,
         }
-        with system_context(reason=reason), transaction.atomic():
-            instance, created = self.update_or_create(
-                oauth_client=oauth_client,
+        with system_context(reason=reason), transaction.atomic(using=using):
+            instance, created = self.db_manager(using).update_or_create(
+                oauth_client_id=oauth_client.pk,
                 external_id=external_id,
                 defaults=update_values,
                 create_defaults=create_values,
             )
-            if owner is not None and (created or self.owner_for(instance) is None):
+            if owner is not None and (created or self.db_manager(using).owner_for(instance) is None):
                 self.grant_owner(instance, owner)
         return instance
 
@@ -607,14 +615,16 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
             )
         )
 
-    def owner_for(self, account: Any) -> Any | None:
+    def owner_for(self, account: Any, *, using: str | None = None) -> Any | None:
         """Return the user granted owner on ``account``, if one exists."""
 
+        using = get_write_alias(self.model, using=using, bound=self, instance=account)
         resource_ref = to_object_ref(account)
         Relationship = active_relationship_model()
         with system_context(reason="integrate.connections.owner"):
             row = (
-                Relationship.objects.filter(
+                Relationship.objects.db_manager(using)
+                .filter(
                     resource_type=resource_ref.resource_type,
                     resource_id=resource_ref.resource_id,
                     relation="owner",
@@ -629,7 +639,7 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
             UserModel = get_user_model()
             user_id_attr = subject_id_attr(UserModel)
             try:
-                return UserModel.objects.get(**{user_id_attr: row.subject_id})
+                return UserModel.objects.db_manager(using).get(**{user_id_attr: row.subject_id})
             except UserModel.DoesNotExist:
                 return None
 
@@ -787,11 +797,14 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
 
     _REASON = "integrate.connections.credential"
 
-    def prepare_disconnect(self, credential: Any) -> None:
+    def prepare_disconnect(self, credential: Any, *, using: str | None = None) -> None:
         """Validate a disconnect and schedule remote revocation after commit."""
 
+        using = get_write_alias(self.model, using=using, bound=self, instance=credential)
+
+        credential._state.db = using
         credential.check_disconnect()
-        transaction.on_commit(credential.revoke_remote, robust=True)
+        transaction.on_commit(copy(credential).revoke_remote, robust=True, using=using)
 
     def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
         """Return this user's active, non-expired OAuth credential for one client."""
@@ -818,16 +831,18 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         /,
         *,
         external_account: Any | None = None,
+        using: str | None = None,
         **fields: Any,
     ) -> Any:
         """Create or update one ``(user, oauth_client)`` OAuth credential (connect/login flow)."""
 
+        using = get_write_alias(self.model, using=using, bound=self)
         handler = CredentialKind(kind).handler
         operation_values, update_values = self._assemble_values(handler, material, fields)
         if external_account is not None:
-            update_values["external_account"] = external_account
+            update_values["external_account_id"] = external_account.pk
         create_values = {
-            "external_account": external_account,
+            "external_account_id": external_account.pk if external_account is not None else None,
             **self._blank_create_values(),
             **operation_values,
             **update_values,
@@ -836,10 +851,10 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         # own). Create-only so an admin rename, and token refreshes, are preserved.
         if not str(create_values.get("name") or ""):
             create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
-        with system_context(reason=self._REASON), transaction.atomic():
-            instance, _created = self.update_or_create(
-                user=user,
-                oauth_client=oauth_client,
+        with system_context(reason=self._REASON), transaction.atomic(using=using):
+            instance, _created = self.db_manager(using).update_or_create(
+                user_id=user.pk,
+                oauth_client_id=oauth_client.pk,
                 defaults={**operation_values, **update_values},
                 create_defaults=create_values,
             )
@@ -867,6 +882,7 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         kind: str,
         name: str,
         material: dict[str, Any],
+        using: str | None = None,
         **fields: Any,
     ) -> Any:
         """Create or update one provider-less (static/ssh) credential, keyed by ``(user, name)``.
@@ -876,6 +892,7 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         credential's identity. OAuth credentials are minted by the connect/login flow only.
         """
 
+        using = get_write_alias(self.model, using=using, bound=self)
         operation_values, update_values = self._local_credential_values(
             kind=kind,
             name=name,
@@ -889,9 +906,9 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
             **operation_values,
             **update_values,
         }
-        with system_context(reason=self._REASON), transaction.atomic():
-            instance, _created = self.update_or_create(
-                user=user,
+        with system_context(reason=self._REASON), transaction.atomic(using=using):
+            instance, _created = self.db_manager(using).update_or_create(
+                user_id=user.pk,
                 name=name,
                 oauth_client=None,
                 defaults={**operation_values, **update_values},
@@ -986,10 +1003,17 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
     def check_disconnect(self) -> None:
         """Validate explicit disconnect; installed model contributions extend this invariant."""
 
-    def revoke_remote(self) -> None:
+    def revoke_remote(self, *, using: str | None = None) -> None:
         """Revoke this credential's OAuth token when its provider supports it."""
 
-        oauth_client = self.oauth_client
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        oauth_client = (
+            self._meta.get_field("oauth_client")
+            .remote_field.model._base_manager.db_manager(using)
+            .filter(pk=self.oauth_client_id)
+            .first()
+        )
         if oauth_client is None or not getattr(oauth_client, "revoke_endpoint", ""):
             return
         token = str(self.reveal().get("access_token") or "")
@@ -1086,7 +1110,7 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
 
         return canonical_json(dict(material))
 
-    def update_material(self, **changes: Any) -> None:
+    def update_material(self, *, using: str | None = None, **changes: Any) -> None:
         """Merge encrypted material changes under a row lock; ``None`` deletes.
 
         Credential material may be edited concurrently by operator and worker
@@ -1097,9 +1121,12 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         extra keys remain permitted here.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
         with system_context(reason="integrate.credential.material"):
-            with transaction.atomic():
-                row: Credential = type(self).objects.lock_if_supported().get(pk=self.pk)
+            with transaction.atomic(using=using):
+                row: Credential = type(self).objects.db_manager(using).lock_if_supported().get(pk=self.pk)
                 material = dict(row.reveal())
                 for key, value in changes.items():
                     if value is None:
@@ -1107,10 +1134,10 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
                     else:
                         material[key] = value
                 row.material = self.encode_material(material)  # type: ignore[assignment]  # EncryptedField descriptor unmodeled by django-stubs
-                row.save(update_fields=["material", "updated_at"])
-            self.refresh_from_db(fields=["material", "updated_at"])
+                row.save(update_fields=["material", "updated_at"], using=using)
+            self.refresh_from_db(fields=["material", "updated_at"], using=using)
 
-    def replace_material(self, material: Mapping[str, Any]) -> None:
+    def replace_material(self, material: Mapping[str, Any], *, using: str | None = None) -> None:
         """Re-enter this credential's secret(s) under the kind handler's validation.
 
         The operator's "the password changed" path: ``material`` carries the
@@ -1119,6 +1146,9 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         lock — the row, its kind, and its owner stay as they are, so every
         integration attached to it keeps working without re-attachment.
         """
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         replacement = dict(material)
         self.handler.validate(replacement)
@@ -1168,7 +1198,7 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
                 return subject
         return "credential"
 
-    def ensure_fresh(self) -> None:
+    def ensure_fresh(self, *, using: str | None = None) -> None:
         """Renew this credential's token in place when it is near expiry and can refresh.
 
         A best-effort freshening hook for a server-side consumer about to *use* the secret
@@ -1182,21 +1212,24 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         downstream as it would have anyway); unexpected errors propagate.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
         if self.expires_at is None or self.expires_at > timezone.now() + _OAUTH_REFRESH_MARGIN:
             return
         if not self.handler.can_refresh(self):
             return
         try:
-            self._refresh_locked()
+            self._refresh_locked(using=using)
         except (OAuthFlowError, ValueError) as error:
             logger.warning(
                 "Credential %s refresh failed (%s); using the existing token.",
                 self.pk,
                 type(error).__name__,
             )
-            self._record_refresh_failure()
+            self._record_refresh_failure(using=using)
 
-    def refresh_now(self) -> None:
+    def refresh_now(self, *, using: str | None = None) -> None:
         """Force a provider refresh now for an interactive caller, raising on failure.
 
         The explicit counterpart to :meth:`ensure_fresh`: a console refresh action
@@ -1209,15 +1242,18 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         Serialized under the same row lock as :meth:`ensure_fresh`.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
         if not self.handler.can_refresh(self):
             raise ValueError("This credential cannot be refreshed; reconnect the account.")
         try:
-            self._refresh_locked(force=True)
+            self._refresh_locked(force=True, using=using)
         except OAuthFlowError, ValueError:
-            self._record_refresh_failure()
+            self._record_refresh_failure(using=using)
             raise
 
-    def _refresh_locked(self, *, force: bool = False) -> None:
+    def _refresh_locked(self, *, force: bool = False, using: str) -> None:
         """Refresh under a row lock, skipping the network when a concurrent consumer won.
 
         Locks the credential row, re-reads its expiry, and performs the provider refresh
@@ -1230,19 +1266,21 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         tokens won.
         """
 
-        with transaction.atomic():
-            locked = type(self).objects.sudo(reason="integrate.credential.refresh").locked_get(pk=self.pk)
+        with transaction.atomic(using=using):
+            locked = (
+                type(self).objects.db_manager(using).sudo(reason="integrate.credential.refresh").locked_get(pk=self.pk)
+            )
             stale = locked.expires_at is not None and locked.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
             if force or stale:
                 self.handler.refresh(locked)
-        self.refresh_from_db()
+        self.refresh_from_db(using=using)
 
-    def _record_refresh_failure(self) -> None:
+    def _record_refresh_failure(self, *, using: str) -> None:
         """Persist a failed-refresh marker so the console can prompt re-authorization."""
 
         self.last_refresh_status = "failed"
         with system_context(reason="integrate.credential.refresh.failed"):
-            self.save(update_fields=["last_refresh_status", "updated_at"])
+            self.save(update_fields=["last_refresh_status", "updated_at"], using=using)
 
 
 def _validated_manager_values(
@@ -1444,17 +1482,23 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
 class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # type: ignore[misc]
     """Manager factories for invariants that span Integration and its impl row."""
 
-    def sync_kinds(self) -> int:
+    def sync_kinds(self, *, using: str | None = None) -> int:
         """Backfill parent rows with the concrete integration kind they materialize."""
 
-        parent = self.model._base_manager
+        using = get_write_alias(self.model, using=using, bound=self)
+
+        parent = self.model._base_manager.db_manager(using)
         count = parent.filter(kind="").update(kind=self.model.integration_kind_value())
-        connection = connections[self.db]
+        connection = connections[using]
         for child_model in _integration_child_models(cast(type[Integration], self.model)):
             if not child_model._meta.can_migrate(connection):
                 continue
             kind = child_model.integration_kind_value()
-            count += parent.filter(pk__in=child_model._base_manager.values("pk")).exclude(kind=kind).update(kind=kind)
+            count += (
+                parent.filter(pk__in=child_model._base_manager.db_manager(using).values("pk"))
+                .exclude(kind=kind)
+                .update(kind=kind)
+            )
         return count
 
 
@@ -1525,11 +1569,13 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         scope = "authorized" if authorized else "integrity"
         return f"_angee_integration_child_{scope}_{child_model._meta.app_label}_{child_model._meta.model_name}"
 
-    def _concrete_child(self, model: type[Integration], *, actor: Any, authorized: bool) -> Integration | None:
+    def _concrete_child(
+        self, model: type[Integration], *, actor: Any, authorized: bool, using: str | None
+    ) -> Integration | None:
         """Return one child from this row's collection cache or scoped storage."""
 
         cache_name = type(self).concrete_child_cache_attr(model, authorized=authorized)
-        if hasattr(self, cache_name):
+        if (using is None or self._state.db == using) and hasattr(self, cache_name):
             value = getattr(self, cache_name)
             if isinstance(value, list | tuple):
                 return value[0] if value else None
@@ -1539,22 +1585,24 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
             if authorized
             else model.objects.sudo(reason="integrate.integration.child_integrity")
         )
+        if using is not None:
+            queryset = queryset.using(using)
         return cast(Integration | None, queryset.filter(pk=self.pk).first())
 
     def concrete_children(
-        self, *, actor: Any, exposed_model_labels: set[str]
+        self, *, actor: Any, exposed_model_labels: set[str], using: str | None = None
     ) -> tuple[list[Integration], list[Integration]]:
         """Return installed and actor-readable child rows without leaking denied siblings."""
 
         integrity: list[Integration] = []
         authorized: list[Integration] = []
         for child_model in type(self).concrete_child_models():
-            child = self._concrete_child(child_model, actor=actor, authorized=False)
+            child = self._concrete_child(child_model, actor=actor, authorized=False, using=using)
             if child is None:
                 continue
             integrity.append(child)
             if child_model._meta.label in exposed_model_labels:
-                visible = self._concrete_child(child_model, actor=actor, authorized=True)
+                visible = self._concrete_child(child_model, actor=actor, authorized=True, using=using)
                 if visible is not None:
                     authorized.append(visible)
         return integrity, authorized
@@ -1583,7 +1631,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         credential = getattr(self, "credential", None)
         return "" if credential is None else str(getattr(credential, "status", "") or "")
 
-    def concrete_capability(self) -> Integration:
+    def concrete_capability(self, *, using: str | None = None) -> Integration:
         """Return the installed concrete child row for this integration, or itself.
 
         A parent-addressed action (the console targets ``integrate.Integration``
@@ -1594,7 +1642,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
         actor, unscoped = self.effective_actor(strict=True)
         for child_model in type(self).concrete_child_models():
-            child = self._concrete_child(child_model, actor=actor, authorized=not unscoped)
+            child = self._concrete_child(child_model, actor=actor, authorized=not unscoped, using=using)
             if child is not None:
                 return cast(Integration, child)
         return self
@@ -1722,6 +1770,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the parent grouping kind when a concrete child row saves."""
 
+        kwargs["using"] = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         current_kind = self.kind
         if _is_integration_child_model(type(self)) or not self.kind:
             self.kind = type(self).integration_kind_value()
@@ -1750,7 +1799,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         target=IntegrationLifecycle.CONNECTED,
         on_success=save_state,
     )
-    def connect(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> None:
+    def connect(self, *, credential: Any = _UNSET, account: Any = _UNSET, using: str | None = None) -> None:
         """Mark this integration connected, optionally attaching connection rows."""
 
         self._transition_fields = self._set_connection_fields(credential=credential, account=account)
@@ -1759,12 +1808,17 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         """Attach connection rows and reset health, returning the fields changed."""
 
         fields: set[str] = set()
-        if credential is not _UNSET:
-            self.credential = credential
-            fields.add("credential")
-        if account is not _UNSET:
-            self.account = account
-            fields.add("account")
+        for name, value in (("credential", credential), ("account", account)):
+            if value is _UNSET:
+                continue
+            if value is not None and value._state.adding:
+                setattr(self, name, value)
+            else:
+                field = self._meta.get_field(name)
+                setattr(self, field.attname, None if value is None else value.pk)
+                if field.is_cached(self):
+                    field.delete_cached_value(self)
+            fields.add(name)
         self.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
         self.last_error = ""
         self.last_error_at = None
@@ -1777,10 +1831,22 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         *,
         account: Any = _UNSET,
         connect_disconnected: bool = True,
+        using: str | None = None,
     ) -> None:
         """Attach a credential and reset health while preserving paused rows."""
 
-        resolved_account = getattr(credential, "external_account", None) if account is _UNSET else account
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
+        resolved_account = (
+            type(credential)
+            ._meta.get_field("external_account")
+            .remote_field.model._base_manager.db_manager(using)
+            .filter(pk=credential.external_account_id)
+            .first()
+            if account is _UNSET
+            else account
+        )
         if self.pk is None:
             self._set_connection_fields(credential=credential, account=resolved_account)
             if connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
@@ -1788,13 +1854,14 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
                     self,
                     IntegrationLifecycle.CONNECTED,
                     reason="unsaved integration attach resolves initial lifecycle before insert",
+                    using=using,
                 )
             return
         if connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
             self.connect(credential=credential, account=resolved_account)
             return
         fields = self._set_connection_fields(credential=credential, account=resolved_account)
-        self.save(update_fields=[*fields, "updated_at"])
+        self.save(update_fields=[*fields, "updated_at"], using=using)
 
     @transition(
         lifecycle,
@@ -1802,7 +1869,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         target=IntegrationLifecycle.PAUSED,
         on_success=save_state,
     )
-    def pause(self) -> None:
+    def pause(self, *, using: str | None = None) -> None:
         """Pause this connected integration without changing its runtime health."""
 
     @transition(
@@ -1811,11 +1878,14 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         target=IntegrationLifecycle.DISCONNECTED,
         on_success=save_state,
     )
-    def disconnect(self) -> None:
+    def disconnect(self, *, using: str | None = None) -> None:
         """Disconnect this integration without changing its runtime health."""
 
-    def set_lifecycle(self, lifecycle: IntegrationLifecycle | str) -> None:
+    def set_lifecycle(self, lifecycle: IntegrationLifecycle | str, *, using: str | None = None) -> None:
         """Move to one declared lifecycle state using this model's transition methods."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         target = IntegrationLifecycle.from_value(lifecycle)
         if str(self.lifecycle) == target.value:
@@ -1829,16 +1899,21 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         else:
             self.lifecycle_transitions.not_allowed(self.lifecycle, target)
 
-    def attach_credential(self, credential: Any) -> None:
+    def attach_credential(self, credential: Any, *, using: str | None = None) -> None:
         """Attach a live credential and connect this disconnected integration."""
 
-        with system_context(reason="integrate.integration.attach_credential"), transaction.atomic():
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
+        with system_context(reason="integrate.integration.attach_credential"), transaction.atomic(using=using):
             self.attach_connection(credential)
 
     def report_status(
         self,
         status: IntegrationRuntimeStatus | str,
         error: str | IntegrationFailure = "",
+        *,
+        using: str | None = None,
     ) -> None:
         """Record implementation status telemetry and persist this integration.
 
@@ -1849,6 +1924,9 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         is not the operator. ``last_used_status`` keeps what was reported
         verbatim.
         """
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         raw_status = str(getattr(status, "value", status)).strip()
         normalized = IntegrationRuntimeStatus.from_value(status)
@@ -1864,7 +1942,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         if self.pk is None:
             return
 
-        with system_context(reason="integrate.integration.status"), transaction.atomic():
+        with system_context(reason="integrate.integration.status"), transaction.atomic(using=using):
             self.save(
                 update_fields=[
                     "last_error",
@@ -1873,7 +1951,8 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
                     "last_used_status",
                     "runtime_status",
                     "updated_at",
-                ]
+                ],
+                using=using,
             )
 
 
@@ -2029,27 +2108,37 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             identity_key=identity_key,
         )
 
-    def claim_live_account(self, impl_key: str, external_id: str, *, identity_key: str) -> bool:
+    def claim_live_account(
+        self, impl_key: str, external_id: str, *, identity_key: str, using: str | None = None
+    ) -> bool:
         """Persist this row's account claim when no live sibling owns it."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         if not external_id:
             raise ValueError("A live bridge account id is required.")
         model = type(self)
-        with system_context(reason="integrate.live.account.claim"), transaction.atomic():
-            row = model.objects.sudo(reason="integrate.live.account.claim.row").lock_if_supported().get(pk=self.pk)
+        with system_context(reason="integrate.live.account.claim"), transaction.atomic(using=using):
+            row = (
+                model.objects.db_manager(using)
+                .sudo(reason="integrate.live.account.claim.row")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
             owners = row.live_account_owners(
                 impl_key,
                 external_id,
                 identity_key=identity_key,
-                queryset=model.objects.sudo(reason="integrate.live.account.claim.owner"),
+                queryset=model.objects.db_manager(using).sudo(reason="integrate.live.account.claim.owner"),
             )
             if owners.exists():
                 return False
             state = dict(row.subscription_state)
             state[identity_key] = external_id
             row.subscription_state = state
-            row.save(update_fields=["subscription_state", "updated_at"])
-        self.refresh_from_db()
+            row.save(update_fields=["subscription_state", "updated_at"], using=using)
+        self.refresh_from_db(using=using)
         return True
 
     def update_live_state(
@@ -2059,8 +2148,12 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         drop_identity: bool = False,
         drop_pairing_report: bool = False,
         desired: Any | None = None,
+        using: str | None = None,
     ) -> None:
         """Apply durable live-session state changes and save only changed fields."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         fields: list[str] = []
         state = dict(self.subscription_state)
@@ -2079,27 +2172,43 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                 self.sync_progress = progress
                 fields.append("sync_progress")
         if fields:
-            self.save(update_fields=[*fields, "updated_at"])
+            self.save(update_fields=[*fields, "updated_at"], using=using)
 
-    def disconnect_live_account(self, *, identity_key: str, clear_identity: bool) -> None:
+    def disconnect_live_account(self, *, identity_key: str, clear_identity: bool, using: str | None = None) -> None:
         """Disconnect under a row lock and optionally clear claim and pairing state."""
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
         model = type(self)
-        with system_context(reason="integrate.live.account.disconnect"), transaction.atomic():
-            row = model.objects.sudo(reason="integrate.live.account.disconnect.row").lock_if_supported().get(pk=self.pk)
+        with system_context(reason="integrate.live.account.disconnect"), transaction.atomic(using=using):
+            row = (
+                model.objects.db_manager(using)
+                .sudo(reason="integrate.live.account.disconnect.row")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
             row.set_lifecycle(type(row).Lifecycle.DISCONNECTED)
             if clear_identity:
                 row.update_live_state(identity_key=identity_key, drop_identity=True, drop_pairing_report=True)
-        self.refresh_from_db()
+        self.refresh_from_db(using=using)
 
-    def release_live_account(self, *, identity_key: str, desired: Any) -> None:
+    def release_live_account(self, *, identity_key: str, desired: Any, using: str | None = None) -> None:
         """Clear a void account claim without changing operator-owned lifecycle."""
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
         model = type(self)
-        with system_context(reason="integrate.live.account.release"), transaction.atomic():
-            row = model.objects.sudo(reason="integrate.live.account.release.row").lock_if_supported().get(pk=self.pk)
+        with system_context(reason="integrate.live.account.release"), transaction.atomic(using=using):
+            row = (
+                model.objects.db_manager(using)
+                .sudo(reason="integrate.live.account.release.row")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
             row.update_live_state(identity_key=identity_key, drop_identity=True, desired=desired)
-        self.refresh_from_db()
+        self.refresh_from_db(using=using)
 
     def live_pairing(self, impl: Any) -> Any:
         """Project pairing state from durable row facts and backend identity formatting."""
@@ -2186,7 +2295,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         return record_lock_key(self._meta.label_lower, self.pk, "live-host")
 
-    def report_live_session_interrupted(self, *, exitcode: int | None) -> None:
+    def report_live_session_interrupted(self, *, exitcode: int | None, using: str | None = None) -> None:
         """Report a reaped child failure while keeping automatic recovery eligible.
 
         The caller holds the bridge lock after the child exits. Native crashes
@@ -2194,15 +2303,24 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         Terminal session outcomes and a concurrent operator stop remain intact.
         """
 
-        with transaction.atomic():
-            row = type(self).objects.sudo(reason="integrate.live.interrupted").lock_if_supported().get(pk=self.pk)
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
+        with transaction.atomic(using=using):
+            row = (
+                type(self)
+                .objects.db_manager(using)
+                .sudo(reason="integrate.live.interrupted")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
             if (
                 row.lifecycle != row.Lifecycle.CONNECTED
                 or row.runtime_status != IntegrationRuntimeStatus.OK
                 or row.subscription_state.get("desired") != row.LiveState.LIVE
             ):
                 return
-            with bridge_progress_context(row) as reporter:
+            with bridge_progress_context(row, using=using) as reporter:
                 reporter.report(
                     row.SyncStage.FAILED,
                     message="The live session process stopped unexpectedly; automatic recovery will retry.",
@@ -2230,14 +2348,17 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         kept = {key: value for key, value in existing.items() if key not in self._SYNC_OUTCOME_KEYS}
         return {**kept, **values}
 
-    def mark_sync_started(self, *, now: datetime) -> None:
+    def mark_sync_started(self, *, now: datetime, using: str | None = None) -> None:
         """Persist the start timestamp for one scheduler sync attempt."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         self.last_sync_started_at = now
         self.sync_stage = self.SyncStage.SYNCING
         self.sync_error = ""
         self.sync_progress = self._sync_marker(stage=self.SyncStage.SYNCING, started_at=now.isoformat())
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             self.save(
                 update_fields=[
                     "last_sync_started_at",
@@ -2245,10 +2366,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                     "sync_progress",
                     "sync_stage",
                     "updated_at",
-                ]
+                ],
+                using=using,
             )
 
-    def claim_sync(self, *, now: datetime) -> None:
+    def claim_sync(self, *, now: datetime, using: str | None = None) -> None:
         """Push the next poll one interval out as an in-flight claim.
 
         The scheduler claims a due row under a row lock before running it, so an
@@ -2258,27 +2380,36 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         ``record_sync_error`` recompute the real next poll when the run ends.
         """
 
-        self.next_sync_at = self._next_sync_at(now=now)
-        with transaction.atomic():
-            self.save(update_fields=["next_sync_at", "updated_at"])
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
-    def mark_sync_queued(self, *, now: datetime) -> None:
+        self.next_sync_at = self._next_sync_at(now=now)
+        with transaction.atomic(using=using):
+            self.save(update_fields=["next_sync_at", "updated_at"], using=using)
+
+    def mark_sync_queued(self, *, now: datetime, using: str | None = None) -> None:
         """Persist that a worker task has been queued for this bridge."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         self.sync_stage = self.SyncStage.QUEUED
         self.sync_error = ""
         self.sync_progress = self._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
-        with transaction.atomic():
-            self.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"])
+        with transaction.atomic(using=using):
+            self.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"], using=using)
 
-    def reset_sync_queue(self, *, now: datetime) -> None:
+    def reset_sync_queue(self, *, now: datetime, using: str | None = None) -> None:
         """Make a failed queue dispatch due again for the next scheduler pass."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         self.next_sync_at = now
         self.sync_stage = self.SyncStage.IDLE
         self.sync_progress = {}
-        with transaction.atomic():
-            self.save(update_fields=["next_sync_at", "sync_progress", "sync_stage", "updated_at"])
+        with transaction.atomic(using=using):
+            self.save(update_fields=["next_sync_at", "sync_progress", "sync_stage", "updated_at"], using=using)
 
     def sync_queue_token_matches(self, timestamp: datetime) -> bool:
         """Return whether a queued task payload still matches this bridge row."""
@@ -2287,7 +2418,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             return False
         return self.sync_progress.get("queued_at") == timestamp.isoformat()
 
-    def release_sync_queue(self, *, now: datetime) -> bool:
+    def release_sync_queue(self, *, now: datetime, using: str | None = None) -> bool:
         """Release a queue claim this run declined; return whether it was still ours.
 
         A declined run is terminal for its queue token — the work is not happening.
@@ -2303,22 +2434,29 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         holder's stage. Mirrors :meth:`merge_subscription_state`.
         """
 
-        with transaction.atomic():
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
+        with transaction.atomic(using=using):
             row = (
                 type(self)
-                .objects.sudo(reason="integrate.bridge.release_sync_queue")
+                .objects.db_manager(using)
+                .sudo(reason="integrate.bridge.release_sync_queue")
                 .lock_if_supported()
                 .get(pk=self.pk)
             )
             if not row.sync_queue_token_matches(now):
                 return False
             row.sync_stage = row.SyncStage.IDLE
-            row.save(update_fields=["sync_stage", "updated_at"])
+            row.save(update_fields=["sync_stage", "updated_at"], using=using)
         self.sync_stage = self.SyncStage.IDLE
         return True
 
-    def record_sync(self, result: int, *, now: datetime) -> None:
+    def record_sync(self, result: int, *, now: datetime, using: str | None = None) -> None:
         """Persist one successful scheduler sync result and healthy status report."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         self.last_sync_completed_at = now
         self.last_sync_status = "ok"
@@ -2336,7 +2474,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             "completed_at": now.isoformat(),
         }
         self.next_sync_at = self._next_sync_at(now=now)
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             cast(Any, self).report_status(status=IntegrationRuntimeStatus.OK)
             self.save(
                 update_fields=[
@@ -2350,11 +2488,15 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                     "sync_progress",
                     "sync_stage",
                     "updated_at",
-                ]
+                ],
+                using=using,
             )
 
-    def record_sync_error(self, error: Exception, *, now: datetime) -> None:
+    def record_sync_error(self, error: Exception, *, now: datetime, using: str | None = None) -> None:
         """Persist one failed scheduler sync result and error status report."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         failure = _safe_integration_failure(error)
         error_message = failure.message
@@ -2363,7 +2505,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.sync_error = error_message
         self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=error_message)
         self.next_sync_at = self._next_sync_at(now=now)
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
             self.save(
                 update_fields=[
@@ -2373,10 +2515,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                     "sync_progress",
                     "sync_stage",
                     "updated_at",
-                ]
+                ],
+                using=using,
             )
 
-    def clear_sync_error(self) -> None:
+    def clear_sync_error(self, *, using: str | None = None) -> None:
         """Clear a stale failure once a live session proves the account healthy.
 
         The mirror of :meth:`record_sync_error` — that method is the only writer
@@ -2400,9 +2543,16 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         nothing to the change feed.
         """
 
-        with transaction.atomic():
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
+        with transaction.atomic(using=using):
             row = (
-                type(self).objects.sudo(reason="integrate.bridge.clear_sync_error").lock_if_supported().get(pk=self.pk)
+                type(self)
+                .objects.db_manager(using)
+                .sudo(reason="integrate.bridge.clear_sync_error")
+                .lock_if_supported()
+                .get(pk=self.pk)
             )
             progress = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
             if not row.sync_error and row.last_sync_status != "error" and "error" not in progress:
@@ -2416,28 +2566,32 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                     "sync_error",
                     "sync_progress",
                     "updated_at",
-                ]
+                ],
+                using=using,
             )
         self.last_sync_status = row.last_sync_status
         self.sync_error = row.sync_error
         self.sync_progress = row.sync_progress
 
-    def run_sync(self, *, now: datetime) -> int:
+    def run_sync(self, *, now: datetime, using: str | None = None) -> int:
         """Run one sync attempt and persist its lifecycle telemetry."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         self.mark_sync_started(now=now)
         try:
-            with bridge_sync_context(), bridge_progress_context(self):
+            with bridge_sync_context(), bridge_progress_context(self, using=using):
                 result = self.sync()
             # Partitioned syncs report through thread-local Bridge instances.
             # Re-read their last merged payload before this parent writes the
             # terminal marker, or its stale in-memory value drops budget/cursor
             # detail. The scheduler timestamp identifies the attempt; completion
             # is when the external work actually finished.
-            self.refresh_from_db(fields=["sync_progress"])
+            self.refresh_from_db(fields=["sync_progress"], using=using)
             self.record_sync(result, now=timezone.now())
         except Exception as error:  # noqa: BLE001 — sync failure is telemetry, then caller policy.
-            self.refresh_from_db(fields=["sync_progress"])
+            self.refresh_from_db(fields=["sync_progress"], using=using)
             self.record_sync_error(error, now=timezone.now())
             raise
         return result
@@ -2465,17 +2619,17 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.handle_webhook(request_or_payload)
         return True
 
-    def start_live(self) -> None:
+    def start_live(self, *, using: str | None = None) -> None:
         """Start or renew this bridge's live vendor subscription."""
 
         raise NotImplementedError("Bridge subclasses must implement start_live().")
 
-    def stop_live(self) -> None:
+    def stop_live(self, *, using: str | None = None) -> None:
         """Stop this bridge's live vendor subscription."""
 
         raise NotImplementedError("Bridge subclasses must implement stop_live().")
 
-    def merge_subscription_state(self, **values: Any) -> dict[str, Any]:
+    def merge_subscription_state(self, *, using: str | None = None, **values: Any) -> dict[str, Any]:
         """Merge sub-keys into ``subscription_state`` under a row lock; return it.
 
         This method merges only — a key can never be removed; consumed markers
@@ -2488,17 +2642,21 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         saves. Mirrors :meth:`Channel._persist_cursor_slice`.
         """
 
-        with transaction.atomic():
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
+        with transaction.atomic(using=using):
             row = (
                 type(self)
-                .objects.sudo(reason="integrate.bridge.subscription_state")
+                .objects.db_manager(using)
+                .sudo(reason="integrate.bridge.subscription_state")
                 .lock_if_supported()
                 .get(pk=self.pk)
             )
             state = dict(row.subscription_state) if isinstance(row.subscription_state, dict) else {}
             state.update(values)
             row.subscription_state = state
-            row.save(update_fields=["subscription_state", "updated_at"])
+            row.save(update_fields=["subscription_state", "updated_at"], using=using)
         self.subscription_state = state
         return state
 
@@ -2525,19 +2683,20 @@ class WebhookSubscriptionManager(AngeeManager):
         payload: Any,
         impl_app: str = "",
         integration: Any | None = None,
+        using: str | None = None,
     ) -> None:
         """Queue one event fan-out after the current transaction commits."""
+
+        using = get_write_alias(self.model, using=using, bound=self)
 
         kind_value = str(kind)
         body = self._event_body(payload)
         integration_pk = getattr(integration, "pk", None)
         transaction.on_commit(
             lambda: self._deliver_event_body(
-                kind=kind_value,
-                body=body,
-                impl_app=impl_app,
-                integration_pk=integration_pk,
-            )
+                kind=kind_value, body=body, impl_app=impl_app, integration_pk=integration_pk, using=using
+            ),
+            using=using,
         )
 
     def deliver_event(
@@ -2547,6 +2706,7 @@ class WebhookSubscriptionManager(AngeeManager):
         payload: Any,
         impl_app: str = "",
         integration: Any | None = None,
+        using: str | None = None,
     ) -> dict[str, int]:
         """Deliver one integration event to every matching enabled subscription.
 
@@ -2555,11 +2715,14 @@ class WebhookSubscriptionManager(AngeeManager):
         itself; this method only owns the row-set loop and the success/error tally.
         """
 
+        using = get_write_alias(self.model, using=using, bound=self)
+
         return self._deliver_event_body(
             kind=str(kind),
             body=self._event_body(payload),
             impl_app=impl_app,
             integration_pk=getattr(integration, "pk", None),
+            using=using,
         )
 
     @staticmethod
@@ -2575,6 +2738,7 @@ class WebhookSubscriptionManager(AngeeManager):
         body: bytes,
         impl_app: str,
         integration_pk: Any | None,
+        using: str,
     ) -> dict[str, int]:
         """Deliver a pre-serialized event body to matching enabled subscriptions."""
 
@@ -2582,9 +2746,7 @@ class WebhookSubscriptionManager(AngeeManager):
         errors = 0
         with system_context(reason="integrate.webhooks.deliver"):
             for subscription in self._matching_queryset(
-                kind=kind,
-                impl_app=impl_app,
-                integration_pk=integration_pk,
+                kind=kind, impl_app=impl_app, integration_pk=integration_pk, using=using
             ).iterator():
                 if not subscription.matches(kind=kind, impl_app=impl_app, integration_pk=integration_pk):
                     continue
@@ -2595,15 +2757,15 @@ class WebhookSubscriptionManager(AngeeManager):
                     errors += 1
         return {"delivered": delivered, "errors": errors}
 
-    def _matching_queryset(self, *, kind: str, impl_app: str, integration_pk: Any | None) -> Any:
+    def _matching_queryset(self, *, kind: str, impl_app: str, integration_pk: Any | None, using: str) -> Any:
         """Return the narrowest portable candidate queryset for one webhook event."""
 
-        queryset = self.filter(enabled=True)
+        queryset = self.db_manager(using).filter(enabled=True)
         if integration_pk is None:
             queryset = queryset.filter(integration_filter__isnull=True)
         else:
             queryset = queryset.filter(Q(integration_filter__isnull=True) | Q(integration_filter_id=integration_pk))
-        if connections[queryset.db].features.supports_json_field_contains:
+        if connections[using].features.supports_json_field_contains:
             queryset = queryset.filter(event_kinds__contains=[kind])
             queryset = queryset.filter(Q(impl_app_filter=[]) | Q(impl_app_filter__contains=[impl_app]))
         return queryset.order_by("pk")
@@ -2677,8 +2839,11 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
 
         return PinnedWebhookClient(str(self.target_url)).post(secret=str(self.secret), body=body)
 
-    def deliver_recorded(self, body: bytes) -> tuple[bool, str]:
+    def deliver_recorded(self, body: bytes, *, using: str | None = None) -> tuple[bool, str]:
         """Deliver one body, persist telemetry, and return ``(ok, status_or_error)``."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         try:
             status = self.deliver(body)
@@ -2694,12 +2859,13 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
         self.record_delivery(status)
         return True, status
 
-    def deliver_test(self) -> tuple[bool, str]:
+    def deliver_test(self, *, using: str | None = None) -> tuple[bool, str]:
         """Send a test event, persist telemetry, and return an action result tuple."""
 
-        body = canonical_json(
-            {"type": "test", "subscription": self.public_id}
-        ).encode("utf-8")
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
+        body = canonical_json({"type": "test", "subscription": self.public_id}).encode("utf-8")
         ok, result = self.deliver_recorded(body)
         return (True, f"Delivered (status {result}).") if ok else (False, f"Delivery failed: {result}")
 
@@ -2721,7 +2887,7 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
             return "Webhook target is invalid."
         return _WEBHOOK_FAILURE_MESSAGE
 
-    def rotate_secret(self) -> str:
+    def rotate_secret(self, *, using: str | None = None) -> str:
         """Generate a new signing secret, persist it, and return the plaintext once.
 
         The subscription owns its signing material: a console action calls this to
@@ -2729,26 +2895,35 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
         reads never expose it.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+
         new_secret = secrets.token_urlsafe(32)
         self.secret = new_secret  # type: ignore[assignment]  # EncryptedField descriptor unmodeled by django-stubs
-        self.save(update_fields=["secret", "updated_at"])
+        self.save(update_fields=["secret", "updated_at"], using=using)
         return new_secret
 
-    def record_delivery(self, status: str) -> None:
+    def record_delivery(self, status: str, *, using: str | None = None) -> None:
         """Persist success telemetry for one delivery attempt (mirrors ``Bridge.record_sync``)."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         self.last_delivery_at = timezone.now()
         self.last_delivery_status = status
         self.last_error = ""
         self.consecutive_failures = 0
-        self.save(update_fields=self._delivery_update_fields)
+        self.save(update_fields=self._delivery_update_fields, using=using)
 
-    def record_delivery_failure(self, *, status: str, error: str) -> None:
+    def record_delivery_failure(self, *, status: str, error: str, using: str | None = None) -> None:
         """Persist failure telemetry for one delivery attempt (mirrors ``Bridge.record_sync_error``).
 
         Takes the already-classified ``status``/``error``: the delivery layer
         owns turning a delivery exception into those strings.
         """
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
 
         self.last_delivery_at = timezone.now()
         self.last_delivery_status = status
@@ -2756,5 +2931,5 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
         # Atomic add so concurrent fan-outs to the same subscription don't lose an
         # increment — this counter is the thing failure policy gates on.
         self.consecutive_failures = models.F("consecutive_failures") + 1
-        self.save(update_fields=self._delivery_update_fields)
-        self.refresh_from_db(fields=("consecutive_failures",))
+        self.save(update_fields=self._delivery_update_fields, using=using)
+        self.refresh_from_db(fields=("consecutive_failures",), using=using)

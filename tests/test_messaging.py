@@ -532,8 +532,7 @@ def test_derived_part_name_covers_chat_email_and_fallback() -> None:
         == "3EB0AF.jpg"
     )
     assert (
-        derived_part_name(mime="video/mp4", cid="", external_id="chat/STANZA", is_email=False, index=0)
-        == "STANZA.mp4"
+        derived_part_name(mime="video/mp4", cid="", external_id="chat/STANZA", is_email=False, index=0) == "STANZA.mp4"
     )
     assert (
         derived_part_name(mime="video/mp4", cid="", external_id="chat/STANZA", is_email=False, index=2)
@@ -609,20 +608,24 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
             events.clear()
             parent = _parsed("source-parent", sent_at=_AT)
             reply = _parsed("source-reply", sent_at=_AT + timedelta(days=1), in_reply_to="source-parent")
-            first = Message.objects.ingest([reply], channel=channel, explicit_thread=thread,
-                                           historical=True, quote_edges=False)[0]
+            first = Message.objects.ingest(
+                [reply], channel=channel, explicit_thread=thread, historical=True, quote_edges=False
+            )[0]
             assert first.parent_id is None
             # An unrelated record with the same source ID cannot become its parent.
             other_channel = make_integration("other-source")
-            Message.objects.ingest([parent], channel=other_channel, explicit_thread=other,
-                                   historical=True, quote_edges=False)
-            Message.objects.ingest([reply], channel=channel, explicit_thread=thread,
-                                   historical=True, quote_edges=False)
+            Message.objects.ingest(
+                [parent], channel=other_channel, explicit_thread=other, historical=True, quote_edges=False
+            )
+            Message.objects.ingest([reply], channel=channel, explicit_thread=thread, historical=True, quote_edges=False)
             first.refresh_from_db()
             assert first.parent_id is None
             landed = Message.objects.ingest(
-                [parent, reply], channel=channel, explicit_thread=thread,
-                historical=True, quote_edges=False,
+                [parent, reply],
+                channel=channel,
+                explicit_thread=thread,
+                historical=True,
+                quote_edges=False,
             )
             assert landed[1].pk == first.pk
             assert landed[1].parent_id == landed[0].pk
@@ -644,15 +647,21 @@ def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any,
         thread = ThreadedTicket.objects.create(title="Original record").message_thread()
         other = ThreadedTicket.objects.create(title="Different record").message_thread()
         original = Message.objects.ingest(
-            [_parsed("shared-source-id")], channel=channel, explicit_thread=thread,
-            historical=True, quote_edges=False,
+            [_parsed("shared-source-id")],
+            channel=channel,
+            explicit_thread=thread,
+            historical=True,
+            quote_edges=False,
         )[0]
         part_ids = list(original.parts.values_list("pk", flat=True))
         replay = _parsed("shared-source-id", text="Edited source body") if changed_body else _parsed("shared-source-id")
         with pytest.raises(ValueError, match="different explicit thread"):
             Message.objects.ingest(
-                [replay], channel=channel, explicit_thread=other,
-                historical=True, quote_edges=False,
+                [replay],
+                channel=channel,
+                explicit_thread=other,
+                historical=True,
+                quote_edges=False,
             )
         original.refresh_from_db()
         thread.refresh_from_db()
@@ -873,7 +882,8 @@ def test_threaded_model_unlinks_chatter_message(messaging_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_threaded_record_delete_tears_down_chatter_graph(messaging_tables: None) -> None:
+@pytest.mark.parametrize("delete_args", [(), ("default",)])
+def test_threaded_record_delete_tears_down_chatter_graph(messaging_tables: None, delete_args: tuple[str, ...]) -> None:
     """Hard-deleting a chattered record collects its whole private thread subtree (M1).
 
     The record's chatter thread is private to it, so deleting the record must remove its
@@ -903,7 +913,7 @@ def test_threaded_record_delete_tears_down_chatter_graph(messaging_tables: None)
     assert ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
 
     with system_context(reason="test threaded model delete cascade"):
-        ticket.delete()
+        ticket.delete(*delete_args)
 
     assert not Thread._base_manager.filter(pk=thread_pk).exists()
     assert not ThreadAttachment._base_manager.filter(pk=attachment_pk).exists()
@@ -1872,9 +1882,7 @@ def test_nameless_email_inline_part_names_from_the_content_id(messaging_tables: 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(
-    messaging_tables: None, tmp_path: Path
-) -> None:
+def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(messaging_tables: None, tmp_path: Path) -> None:
     """One content-addressed File keeps its first name; each nameless Part gets its own."""
 
     del messaging_tables
@@ -2108,21 +2116,33 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
         owner = channel.owner
         party = Party._base_manager.create(display_name="Invoice sender", created_by=owner)
         handle = Handle._base_manager.create(
-            platform=Handle.Platform.EMAIL, value="billing@example.test", created_by=owner,
+            platform=Handle.Platform.EMAIL,
+            value="billing@example.test",
+            created_by=owner,
         )
         messages = [
             Message._base_manager.create(
-                channel=channel, external_id=f"sender-evidence-{index}", direction="inbound",
-                status="synced", message_type="email", sender=handle, created_by=owner,
+                channel=channel,
+                external_id=f"sender-evidence-{index}",
+                direction="inbound",
+                status="synced",
+                message_type="email",
+                sender=handle,
+                created_by=owner,
             )
             for index in range(1, 22)
         ]
         link = PartyHandle.objects.link(
-            party, handle, confidence=1.0, source=LinkSource.MANUAL,
-            is_confirmed=True, created_by_id=owner.pk,
+            party,
+            handle,
+            confidence=1.0,
+            source=LinkSource.MANUAL,
+            is_confirmed=True,
+            created_by_id=owner.pk,
         )
         foreign_owner = get_user_model().objects.create_user(
-            username="foreign-sender-evidence", email="foreign-sender-evidence@example.test",
+            username="foreign-sender-evidence",
+            email="foreign-sender-evidence@example.test",
         )
         foreign_party = Party._base_manager.create(display_name="Private evidence", created_by=foreign_owner)
         link.metadata = {"evidence": [{"model": "messaging.Party", "id": str(foreign_party.sqid)}]}
@@ -2130,7 +2150,10 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
 
     for message in messages:
         PartyHandle.objects.propose_claimed_handle(
-            party, handle, evidence=message, actor=owner,
+            party,
+            handle,
+            evidence=message,
+            actor=owner,
         )
 
     link.refresh_from_db()
@@ -2158,20 +2181,30 @@ def test_claimed_sender_assessment_reports_hidden_confirmed_other_without_disclo
 
     actor = channel.owner
     foreign = get_user_model().objects.create_user(
-        username="foreign-handle-owner", email="foreign-handle-owner@example.test",
+        username="foreign-handle-owner",
+        email="foreign-handle-owner@example.test",
     )
     with system_context(reason="test hidden sender association fixtures"):
         candidate = Party._base_manager.create(display_name="Candidate supplier", created_by=actor)
         other = Party._base_manager.create(display_name="Private supplier", created_by=foreign)
         handle = Handle._base_manager.create(
-            platform=Handle.Platform.EMAIL, value="private-owner@example.test", created_by=actor,
+            platform=Handle.Platform.EMAIL,
+            value="private-owner@example.test",
+            created_by=actor,
         )
         PartyHandle._base_manager.create(
-            party=other, handle=handle, confidence=1.0, source=LinkSource.MANUAL,
-            is_confirmed=True, created_by=foreign,
+            party=other,
+            handle=handle,
+            confidence=1.0,
+            source=LinkSource.MANUAL,
+            is_confirmed=True,
+            created_by=foreign,
         )
         visible = PartyHandle._base_manager.create(
-            party=candidate, handle=handle, confidence=0.4, source=LinkSource.EMAIL_MATCH,
+            party=candidate,
+            handle=handle,
+            confidence=0.4,
+            source=LinkSource.EMAIL_MATCH,
             created_by=actor,
         )
 

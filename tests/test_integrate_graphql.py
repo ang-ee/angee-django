@@ -903,7 +903,7 @@ def test_sync_integration_queues_bridge_for_an_admin(
     bridge = make_integration("sync-queue", backend_class="stub", model=VcsBridge)
     queued: list[tuple[int, Any]] = []
 
-    def fake_queue_bridge_sync(queued_bridge: VcsBridge, *, now: Any = None) -> None:
+    def fake_queue_bridge_sync(queued_bridge: VcsBridge, *, now: Any = None, using: str | None = None) -> None:
         queued.append((queued_bridge.pk, now))
         queued_bridge.sync_stage = queued_bridge.SyncStage.QUEUED
         queued_bridge.sync_error = ""
@@ -1443,8 +1443,6 @@ def _request(user: Any) -> Any:
     request = RequestFactory().post("/graphql/console/")
     request.user = user
     return request
-
-
 
 
 def _public_id(value: Any) -> str:

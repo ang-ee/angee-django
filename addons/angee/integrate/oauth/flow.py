@@ -20,6 +20,7 @@ from django.apps import apps
 from django.http import HttpRequest
 from django.utils.http import url_has_allowed_host_and_scheme
 
+from angee.base.db import get_write_alias
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
@@ -52,6 +53,7 @@ def issue_flow(
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.CONNECT,
     integration_id: str = "",
+    using: str | None = None,
 ) -> tuple[str, state.StateRecord, str, str]:
     """Issue and session-bind state for one redirect flow.
 
@@ -60,6 +62,7 @@ def issue_flow(
     the effective redirect is what we issue, sign, and exchange.
     """
 
+    using = get_write_alias(type(oauth_client), using=using, instance=oauth_client)
     effective_redirect_uri, mode = oauth_client.resolve_connect_redirect(redirect_uri)
     state_token, record = state.issue(
         oauth_client,
@@ -70,7 +73,7 @@ def issue_flow(
         integration_id=integration_id,
     )
     session = cast(Any, request).session
-    session[f"{_SESSION_OAUTH_CLIENT_PREFIX}{state_token}"] = str(oauth_client.sqid)
+    session[f"{_SESSION_OAUTH_CLIENT_PREFIX}{state_token}"] = {"sqid": str(oauth_client.sqid), "using": using}
     session.modified = True
     return state_token, record, effective_redirect_uri, mode
 
@@ -84,6 +87,7 @@ def start(
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.CONNECT,
     integration_id: str = "",
+    using: str | None = None,
     authorize_url_builder: Callable[[Any, str, state.StateRecord, str], str] | None = None,
 ) -> OAuthStart:
     """Issue state and return the browser redirect facts for one OAuth/OIDC flow."""
@@ -96,6 +100,7 @@ def start(
         next_path=next_path,
         flow=flow,
         integration_id=integration_id,
+        using=using,
     )
     builder = authorize_url_builder or _default_authorize_url
     return OAuthStart(
@@ -115,6 +120,8 @@ def remembered_oauth_client(request: HttpRequest, state_token: str) -> Any:
     session.modified = True
     if not oauth_client_sqid:
         raise OAuthFlowError(INVALID_STATE, 400)
+    if isinstance(oauth_client_sqid, dict):
+        return enabled_oauth_client(oauth_client_sqid["sqid"], using=oauth_client_sqid["using"])
     return enabled_oauth_client(str(oauth_client_sqid))
 
 
@@ -134,10 +141,12 @@ def consume_validated_state(
     return record
 
 
-def enabled_oauth_client(oauth_client_sqid: str) -> Any:
+def enabled_oauth_client(oauth_client_sqid: str, *, using: str | None = None) -> Any:
     """Return one enabled OAuth client addressed by sqid, or raise."""
 
-    queryset = _oauth_client_model().objects.system_context(reason="integrate.oauth.flow.oauth_client")
+    model = _oauth_client_model()
+    using = get_write_alias(model, using=using)
+    queryset = model.objects.db_manager(using).system_context(reason="integrate.oauth.flow.oauth_client")
     oauth_client = queryset.from_public_id(oauth_client_sqid)
     if oauth_client is None or not oauth_client.is_enabled:
         raise ValueError("OAuth client is not enabled.")

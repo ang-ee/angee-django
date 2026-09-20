@@ -15,6 +15,7 @@ import queue
 import threading
 from collections.abc import Callable
 from contextlib import ExitStack
+from functools import cached_property
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal, NoReturn, overload
@@ -22,6 +23,7 @@ from typing import Any, Literal, NoReturn, overload
 import qrcode
 from django.utils import timezone
 
+from angee.base.db import get_write_alias
 from angee.integrate.live import (
     AWAITING_PASSWORD_WAKE_SECONDS,
     STOP_JOIN_SECONDS,
@@ -97,6 +99,14 @@ class LiveSession:
         self._password_optional = False
         self.outcome_error: Exception | None = None
         self._stopping = threading.Event()
+
+    @cached_property
+    def using(self) -> str:
+        """Select the bridge database once when this session needs persistence."""
+
+        using = get_write_alias(type(self.bridge), using=None, instance=self.bridge)
+        self.bridge._state.db = using
+        return using
 
     def run(self) -> PairingState:
         """Connect and drain events until stopped, logged out, disconnected, or unlocked."""
@@ -221,7 +231,7 @@ class LiveSession:
         if self.stop_event.is_set():
             self.pairing = PairingState.STOPPED if self.pairing != PairingState.PAIRED else self.pairing
             return False
-        self.bridge.refresh_from_db(fields=["lifecycle", "subscription_state"])
+        self.bridge.refresh_from_db(using=self.using, fields=["lifecycle", "subscription_state"])
         if self.bridge.subscription_state.get("desired") != self.bridge.LiveState.LIVE:
             self.pairing = PairingState.STOPPED
             return False
@@ -410,8 +420,14 @@ class LiveSession:
     def _fresh_credential(self) -> Any | None:
         """Reload and return the bridge credential, replacing Django's FK cache."""
 
-        self.bridge.refresh_from_db(fields=["credential"])
-        return self.bridge.credential
+        self.bridge.refresh_from_db(using=self.using, fields=["credential"])
+        return (
+            type(self.bridge)
+            ._meta.get_field("credential")
+            .remote_field.model._base_manager.db_manager(self.using)
+            .filter(pk=self.bridge.credential_id)
+            .first()
+        )
 
     def _terminal_password_failure(self, error: Exception) -> bool:
         """Report a safe runtime failure and end this session without raising."""

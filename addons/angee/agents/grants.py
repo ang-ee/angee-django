@@ -14,6 +14,7 @@ from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationships, write_relationships
 from rebac.types import RelationshipFilter
 
+from angee.base.db import get_write_alias
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 from angee.mcp.server import mcp_server
 
@@ -43,50 +44,48 @@ def tool_grant_ref(server_sqid: str, tool_name: str) -> ObjectRef:
     try:
         grant_id = grant_ids[tool_name]
     except KeyError as error:
-        raise tool_model.DoesNotExist(
-            f"No MCP tool {tool_name!r} exists for server {server_sqid!r}."
-        ) from error
+        raise tool_model.DoesNotExist(f"No MCP tool {tool_name!r} exists for server {server_sqid!r}.") from error
     return ObjectRef(TOOL_GRANT_RESOURCE_TYPE, grant_id)
 
 
-def tool_grant_ids(server_sqid: str, tool_names: Iterable[str]) -> dict[str, str]:
+def tool_grant_ids(server_sqid: str, tool_names: Iterable[str], *, using: str | None = None) -> dict[str, str]:
     """Resolve public catalogue keys to primary-key authorization identities."""
 
     tool_model = apps.get_model("agents", "MCPTool")
+    using = get_write_alias(tool_model, using=using)
     server_model = apps.get_model("agents", "MCPServer")
-    server_lookup = {
-        f"server__{field}": value
-        for field, value in server_model.public_id_lookup(server_sqid).items()
-    }
+    server_lookup = {f"server__{field}": value for field, value in server_model.public_id_lookup(server_sqid).items()}
     return {
         str(name): str(pk)
-        for name, pk in tool_model._base_manager.filter(
+        for name, pk in tool_model._base_manager.using(using)
+        .filter(
             **server_lookup,
             name__in=tool_names,
-        ).values_list("name", "pk")
+        )
+        .values_list("name", "pk")
     }
 
 
-def builtin_mcp_server() -> Any:
+def builtin_mcp_server(*, using: str | None = None) -> Any:
     """Return the single catalogue row for the process-native Angee MCP server."""
 
     from angee.agents.models import BUILTIN_MCP_ANGEE
 
     server_model = apps.get_model("agents", "MCPServer")
+    using = get_write_alias(server_model, using=using)
     servers = [
         server
-        for server in server_model._base_manager.order_by("pk")
+        for server in server_model._base_manager.using(using).order_by("pk")
         if server.builtin == BUILTIN_MCP_ANGEE
     ]
     if len(servers) != 1:
         raise ImproperlyConfigured(
-            "Exactly one agents.MCPServer row must declare config.builtin='angee' "
-            f"(found {len(servers)})."
+            f"Exactly one agents.MCPServer row must declare config.builtin='angee' (found {len(servers)})."
         )
     return servers[0]
 
 
-def sync_builtin_tool_catalogue() -> int:
+def sync_builtin_tool_catalogue(*, using: str | None = None) -> int:
     """Mirror the live built-in registry into its deterministic pinning catalogue.
 
     The FastMCP registry remains execution truth. ``MCPTool`` rows are deliberately
@@ -98,31 +97,34 @@ def sync_builtin_tool_catalogue() -> int:
     registered = sorted(async_to_sync(mcp_server().list_tools)(), key=lambda tool: tool.name)
     names = [tool.name for tool in registered]
     tool_model = apps.get_model("agents", "MCPTool")
-    with system_context(reason="agents.builtin_tools.sync"), transaction.atomic():
-        server = builtin_mcp_server()
+    using = get_write_alias(tool_model, using=using)
+    with system_context(reason="agents.builtin_tools.sync"), transaction.atomic(using=using):
+        server = builtin_mcp_server(using=using)
         for tool in registered:
-            tool_model._base_manager.update_or_create(
-                server=server,
+            tool_model._base_manager.db_manager(using).update_or_create(
+                server_id=server.pk,
                 name=tool.name,
                 defaults={
                     "description": str(tool.description or ""),
                     "input_schema": dict(tool.parameters or {}),
                 },
             )
-        tool_model._base_manager.filter(server=server).exclude(name__in=names).delete()
-        _sync_resource_reader_grants(server, registered)
+        tool_model._base_manager.using(using).filter(server=server).exclude(name__in=names).delete()
+        _sync_resource_reader_grants(server, registered, using=using)
     return len(registered)
 
 
-def grant_resource_reader_role(agent: Any) -> None:
+def grant_resource_reader_role(agent: Any, *, using: str | None = None) -> None:
     """Idempotently grant one provisioned in-process agent the reader bundle."""
 
     from rebac.roles import grant
 
+    using = get_write_alias(type(agent), using=using, instance=agent)
+    agent._state.db = using
     grant(actor=agent.principal_subject(), role=RESOURCE_READER_ROLE)
 
 
-def _sync_resource_reader_grants(server: Any, registered: list[Any]) -> None:
+def _sync_resource_reader_grants(server: Any, registered: list[Any], *, using: str) -> None:
     """Replace the sync-owned generated-reader grants for ``resource_reader``."""
 
     subject = SubjectRef(RESOURCE_READER_ROLE)
@@ -135,10 +137,8 @@ def _sync_resource_reader_grants(server: Any, registered: list[Any]) -> None:
             optional_subject_relation=subject.optional_relation,
         )
     )
-    reader_names = tuple(
-        tool.name for tool in registered if RESOURCE_READER_TOOL_TAG in tool.tags
-    )
-    grant_ids = tool_grant_ids(str(server.sqid), reader_names)
+    reader_names = tuple(tool.name for tool in registered if RESOURCE_READER_TOOL_TAG in tool.tags)
+    grant_ids = tool_grant_ids(str(server.sqid), reader_names, using=using)
     writes = [
         RelationshipTuple(
             resource=ObjectRef(TOOL_GRANT_RESOURCE_TYPE, grant_ids[name]),
@@ -151,7 +151,7 @@ def _sync_resource_reader_grants(server: Any, registered: list[Any]) -> None:
         write_relationships(writes)
 
 
-def resync_tool_grants() -> int:
+def resync_tool_grants(*, using: str | None = None) -> int:
     """Migrate legacy agent subjects and synchronize the built-in catalogue.
 
     Agent tool selections are now live-backed and require no tuple rewrite.
@@ -161,16 +161,14 @@ def resync_tool_grants() -> int:
     """
 
     agent_model = apps.get_model("agents", "Agent")
-    with system_context(reason="agents.tool_grants.resync"), transaction.atomic():
-        agents = list(
-            agent_model._base_manager.select_related("user")
-            .order_by("pk")
-        )
+    using = get_write_alias(agent_model, using=using)
+    with system_context(reason="agents.tool_grants.resync"), transaction.atomic(using=using):
+        agents = list(agent_model._base_manager.using(using).select_related("user").order_by("pk"))
         for agent in agents:
             if agent.user_id is None:
-                agent.user = agent_model.objects.sync_service_user(agent)
-        migrated = _migrate_agent_principal_memberships(agents)
-        sync_builtin_tool_catalogue()
+                agent.user = agent_model.objects.db_manager(using).sync_service_user(agent, using=using)
+        migrated = _migrate_agent_principal_memberships(agents, using=using)
+        sync_builtin_tool_catalogue(using=using)
         delete_relationships(
             RelationshipFilter(
                 resource_type=TOOL_GRANT_RESOURCE_TYPE,
@@ -181,37 +179,35 @@ def resync_tool_grants() -> int:
     return migrated
 
 
-def _migrate_agent_principal_memberships(agents: list[Any]) -> int:
+def _migrate_agent_principal_memberships(agents: list[Any], *, using: str) -> int:
     """Rewrite persisted memberships from agent resources to service users."""
 
     relationship_model = active_relationship_model()
     legacy = list(
-        relationship_model.objects.filter(
+        relationship_model.objects.using(using)
+        .filter(
             subject_type="agents/agent",
-        ).filter(
+        )
+        .filter(
             resource_type="agents/toolrole",
             relation="member",
         )
     )
     legacy_groups = list(
-        relationship_model.objects.filter(
+        relationship_model.objects.using(using).filter(
             resource_type="auth/group",
             relation="agent_member",
             subject_type="agents/agent",
         )
     )
     legacy_group_refs = list(
-        relationship_model.objects.filter(
+        relationship_model.objects.using(using).filter(
             subject_type="auth/group",
             optional_subject_relation="agent_member",
         )
     )
     legacy_subject_ids = {str(row.subject_id) for row in legacy + legacy_groups}
-    agents_by_sqid = {
-        str(agent.sqid): agent
-        for agent in agents
-        if str(agent.sqid) in legacy_subject_ids
-    }
+    agents_by_sqid = {str(agent.sqid): agent for agent in agents if str(agent.sqid) in legacy_subject_ids}
     migrated: list[RelationshipTuple] = []
     for row in legacy + legacy_groups:
         agent = agents_by_sqid.get(str(row.subject_id))

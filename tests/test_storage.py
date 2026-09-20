@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import importlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.management import call_command
-from django.db import close_old_connections, connection, connections, models, transaction
+from django.db import close_old_connections, connection, connections, models, router, transaction
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
 from rebac import actor_context, system_context
@@ -25,8 +26,10 @@ from rebac.errors import PermissionDenied
 from rebac.roles import grant
 
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
+from angee.base.refs import canonical_record_target
 from angee.data.field_classification import is_archive_field
 from angee.storage import exceptions
+from angee.storage import models as storage_models
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
@@ -46,6 +49,7 @@ from tests.conftest import (
     result_data,
 )
 from tests.mtidemo.models import MtiChild, MtiParent
+from tests.test_transitions import TransitionRouter
 
 # A real 1x1 PNG — libmagic classifies it as image/png; a fake signature would not.
 PNG_BYTES = bytes.fromhex(
@@ -132,9 +136,7 @@ def test_archive_column_is_marked_archivable_in_resource_metadata() -> None:
     """
 
     schema = addon_schema(storage_schema.schemas, "public")
-    resource = next(
-        item for item in schema.angee_resources if item.model_label == Drive._meta.label
-    )
+    resource = next(item for item in schema.angee_resources if item.model_label == Drive._meta.label)
     fields = {field.name: field for field in resource.fields}
     assert fields["is_archived"].archivable is True
     assert fields["slug"].archivable is False
@@ -672,9 +674,7 @@ def test_storage_admin_role_reaches_manager_gated_rows_tuple_free(drive: Any) ->
 
     from rebac.models import active_relationship_model
 
-    manager_user = get_user_model().objects.create_user(
-        username="storage-manager", email="storage-manager@example.com"
-    )
+    manager_user = get_user_model().objects.create_user(username="storage-manager", email="storage-manager@example.com")
 
     with actor_context(manager_user):
         assert not drive.backend.has_access("read")
@@ -690,9 +690,7 @@ def test_storage_admin_role_reaches_manager_gated_rows_tuple_free(drive: Any) ->
     # Tuple-free: the grant wrote a role membership, never a backend/drive tuple.
     with system_context(reason="probe manager reach is tuple-free"):
         assert not (
-            active_relationship_model()
-            .objects.filter(resource_type__in=["storage/backend", "storage/drive"])
-            .exists()
+            active_relationship_model().objects.filter(resource_type__in=["storage/backend", "storage/drive"]).exists()
         )
 
 
@@ -1295,3 +1293,156 @@ def test_local_folder_backend_rejects_traversal_keys(tmp_path: Path) -> None:
 
     with pytest.raises(SuspiciousFileOperation):
         backend.open("../outside.txt", "rb")
+
+
+@pytest.fixture
+def storage_alias(drive: Any, database_alias: Callable[[str], AbstractContextManager[str]]) -> Iterator[str]:
+    """Expose the storage schema through the shared connection factory."""
+
+    with database_alias("storage_writer") as alias:
+        yield alias
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("selection", ["explicit", "persisted", "router"])
+def test_finalize_keeps_alias_through_publish_refresh_and_callback(
+    drive: Any, storage_alias: str, monkeypatch: pytest.MonkeyPatch, selection: str
+) -> None:
+    """Post-admission MIME lookup, update, stale refresh and commit all use the write database."""
+
+    with actor_context(drive.alice):
+        draft = File.objects.draft(filename="routed.png", drive_id=str(drive.sqid))
+        token = draft.issue_upload_token()
+        File.objects.for_upload_token(token).receive_bytes(BytesIO(PNG_BYTES))
+    row = File._base_manager.using(storage_alias).get(pk=draft.pk)
+    stale = File._base_manager.using(storage_alias).get(pk=draft.pk)
+    using = storage_alias if selection == "explicit" else None
+    if selection == "explicit":
+        row._state.db = "other_instance_database"
+    elif selection == "router":
+        row._state.db = None
+    routing = TransitionRouter(storage_alias if selection == "router" else "other_writer")
+    committed: list[tuple[str, str]] = []
+
+    def capture(sender: Any, instance: Any, using: str, **kwargs: Any) -> None:
+        del kwargs
+        stored = sender._base_manager.using(using).get(pk=instance.pk)
+        committed.append((using, stored.upload_state))
+
+    file_finalized.connect(capture, sender=File)
+    try:
+        with monkeypatch.context() as patch, system_context(reason="storage routing publish"):
+            patch.setattr(router, "routers", [routing])
+            with transaction.atomic(using=storage_alias):
+                row.finalize(expected_hash=PNG_SHA256, using=using)
+                stale.finalize(expected_hash=PNG_SHA256)
+                assert committed == []
+            assert committed == [(storage_alias, UploadState.READY)]
+    finally:
+        file_finalized.disconnect(capture, sender=File)
+    assert stale.upload_state == UploadState.READY
+    assert routing.writes == ([row] if selection == "router" else [])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_dedup_restores_and_merges_metadata_on_bound_alias(
+    drive: Any, storage_alias: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A READY dedup hit still carries the manager binding through restore and metadata save."""
+
+    row = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="storage routed dedup setup"):
+        row.delete()
+    routing = TransitionRouter("other_writer")
+    with monkeypatch.context() as patch, system_context(reason="storage routed dedup"):
+        patch.setattr(router, "routers", [routing])
+        result = File.objects.db_manager(storage_alias).ingest_stream(
+            BytesIO(PNG_BYTES),
+            filename="same.png",
+            content_hash=PNG_SHA256,
+            size_bytes=len(PNG_BYTES),
+            drive_id=str(drive.sqid),
+            owner_id=drive.alice.pk,
+            metadata={"source": {"indexed": True}},
+        )
+    stored = File._base_manager.using(storage_alias).get(pk=row.pk)
+    assert result.pk == row.pk
+    assert stored.is_trashed is False
+    assert stored.metadata == {"source": {"indexed": True}}
+    assert routing.writes == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_upload_consumes_nonce_and_persists_failure_on_explicit_alias(
+    drive: Any, storage_alias: str, monkeypatch: pytest.MonkeyPatch, settings: Any
+) -> None:
+    """The lock and failure save after token admission cannot escape to a read/default alias."""
+
+    with actor_context(drive.alice):
+        row = File.objects.draft(filename="too-large.png", drive_id=str(drive.sqid))
+    settings.ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES = 1
+    routing = TransitionRouter("other_writer")
+    with monkeypatch.context() as patch, actor_context(drive.alice):
+        patch.setattr(router, "routers", [routing])
+        token = row.issue_upload_token(using=storage_alias)
+        admitted = File.objects.db_manager(storage_alias).for_upload_token(token)
+        admitted._state.db = "other_instance_database"
+        with pytest.raises(exceptions.UploadTooLarge):
+            admitted.receive_bytes(BytesIO(PNG_BYTES), using=storage_alias)
+    stored = File._base_manager.using(storage_alias).get(pk=row.pk)
+    assert stored.upload_envelope["used"] is True
+    assert stored.upload_envelope["failure_reason"] == "too_large"
+    assert stored.upload_state == UploadState.FAILED
+    assert routing.writes == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_folder_tree_validation_and_save_keep_explicit_alias(
+    drive: Any, storage_alias: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ancestor query inside save remains on the transaction's explicit alias."""
+
+    with system_context(reason="storage routed tree setup"):
+        parent = Folder._base_manager.create(drive=drive, name="Parent")
+        child = Folder._base_manager.create(drive=drive, name="Child")
+    child.parent_id = parent.pk
+    child._state.db = "other_instance_database"
+    routing = TransitionRouter("other_writer")
+    with monkeypatch.context() as patch, system_context(reason="storage routed tree"):
+        patch.setattr(router, "routers", [routing])
+        child.save(using=storage_alias)
+    assert Folder._base_manager.using(storage_alias).get(pk=child.pk).parent_id == parent.pk
+    assert routing.writes == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_attachment_lock_and_create_keep_alias_after_canonical_admission(
+    drive: Any, storage_alias: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the shared canonical-target owner admits an edge, both locks and its insert stay bound."""
+
+    row = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="storage routed attachment setup"):
+        target = MtiChild.objects.create(title="Routed", detail="target")
+    canonical = canonical_record_target(target)
+    routing = TransitionRouter("other_writer")
+    locks: list[tuple[type[models.Model], str | None]] = []
+    select_for_update = models.QuerySet.select_for_update
+
+    def capture_lock(queryset: Any, **kwargs: Any) -> Any:
+        locks.append((queryset.model, queryset._db))
+        return select_for_update(queryset, **kwargs)
+
+    with monkeypatch.context() as patch, system_context(reason="storage routed attachment"):
+        patch.setattr(router, "routers", [routing])
+        # canonical_record_target has no using contract yet; isolate that known
+        # shared-owner debt while exercising every storage operation after it.
+        patch.setattr(storage_models, "canonical_record_target", lambda record: canonical)
+        patch.setattr(models.QuerySet, "select_for_update", capture_lock)
+        attachment = FileAttachment.objects.db_manager(storage_alias).attach(row, target)
+    assert locks == [(MtiParent, storage_alias), (File, storage_alias)]
+    stored = FileAttachment._base_manager.using(storage_alias).get(pk=attachment.pk)
+    assert stored.file_id == row.pk
+    assert stored.object_id == target.pk
+    assert stored.content_type_id == canonical.content_type.pk
+    assert routing.writes == []

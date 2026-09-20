@@ -144,10 +144,7 @@ def test_overlong_message_id_is_preserved() -> None:
     long_message_id = f"outlook-{'x' * 700}@example.com"
     raw = _eml(
         message_id=f"<{long_message_id}>",
-        extra_headers=(
-            f"In-Reply-To: <{long_message_id}>\r\n"
-            f"References: <root@example.com> <{long_message_id}>"
-        ),
+        extra_headers=(f"In-Reply-To: <{long_message_id}>\r\nReferences: <root@example.com> <{long_message_id}>"),
     )
 
     parsed = _parse(raw)
@@ -448,11 +445,12 @@ def test_embedded_rfc822_expansion_limit_retains_raw_parent(monkeypatch: pytest.
     raw = (
         b"From: ada@example.com\r\nTo: bob@example.com\r\nSubject: Fwd\r\n"
         b"Message-ID: <fwd-limit@example.com>\r\nMIME-Version: 1.0\r\n"
-        b'Content-Type: message/rfc822\r\n\r\n' + inner
+        b"Content-Type: message/rfc822\r\n\r\n" + inner
     )
     budget_type = imap_parser._EmbeddedMessageBudget
     monkeypatch.setattr(
-        imap_parser, "_EmbeddedMessageBudget",
+        imap_parser,
+        "_EmbeddedMessageBudget",
         lambda: budget_type(remaining_parts=256, remaining_bytes=1),
     )
     embedded = _parse(raw).body
@@ -477,8 +475,7 @@ def test_delivery_report_keeps_status_blocks_and_expands_attached_message() -> N
         b"--REPORT\r\nContent-Type: message/delivery-status\r\n\r\n"
         b"Reporting-MTA: dns; example.com\r\n\r\nFinal-Recipient: rfc822; billing@example.com\r\n"
         b"Action: delayed\r\nStatus: 4.0.0\r\n\r\n"
-        b"--REPORT\r\nContent-Type: message/rfc822\r\n\r\n" + attached +
-        b"\r\n--REPORT--\r\n"
+        b"--REPORT\r\nContent-Type: message/rfc822\r\n\r\n" + attached + b"\r\n--REPORT--\r\n"
     )
     body = _parse(raw).body
     assert body.type == "multipart/report"
@@ -502,8 +499,7 @@ def test_outer_html_and_embedded_plain_are_normalized_per_message() -> None:
         b"Message-ID: <outer-html@example.com>\r\nMIME-Version: 1.0\r\n"
         b'Content-Type: multipart/mixed; boundary="OUTERHTML"\r\n\r\n'
         b"--OUTERHTML\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Outer context.</p>\r\n"
-        b"--OUTERHTML\r\nContent-Type: message/rfc822\r\n\r\n" + inner +
-        b"\r\n--OUTERHTML--\r\n"
+        b"--OUTERHTML\r\nContent-Type: message/rfc822\r\n\r\n" + inner + b"\r\n--OUTERHTML--\r\n"
     )
     body = _parse(raw).body
     assert body.children[0].type == "multipart/alternative"
@@ -615,8 +611,7 @@ class FakeIMAPClient:
 
     def list_folders(self) -> list[tuple[tuple[bytes, ...], bytes, str]]:
         return [
-            (folder.get("flags", (b"\\HasNoChildren",)), b"/", name)
-            for name, folder in self.account.folders.items()
+            (folder.get("flags", (b"\\HasNoChildren",)), b"/", name) for name, folder in self.account.folders.items()
         ]
 
     def folder_status(self, name: str, what: Any = None) -> dict[bytes, int]:
@@ -1041,9 +1036,7 @@ def test_uid_star_range_quirk_is_filtered_client_side(monkeypatch: pytest.Monkey
 def test_uidvalidity_change_resets_the_folder_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
     """A regenerated mailbox refetches from scratch under its new UID space."""
 
-    account = FakeImapAccount(
-        {"INBOX": _folder(_eml(message_id="<a@x>", subject="A"), uidvalidity=777)}
-    )
+    account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<a@x>", subject="A"), uidvalidity=777)})
     backend = _backend(monkeypatch, account)
     backend.bridge.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 50}}}
 
@@ -1314,7 +1307,7 @@ def test_channel_sync_partitions_mailboxes(
     with system_context(reason="test imap partition drain"):
         # One partition drained in isolation touches only its own mailbox and
         # persists only its own cursor slice.
-        landed_archive = channel._drain_partition("Archive")
+        landed_archive = channel._drain_partition("Archive", using=channel._state.db)
         channel.refresh_from_db()
         assert landed_archive == 1
         assert set(channel.cursor["mailboxes"]) == {"Archive"}
@@ -1341,11 +1334,7 @@ def test_channel_sync_preserves_overlong_message_id(
     del imap_tables
     long_message_id = f"outlook-{'x' * 700}@example.com"
     account = FakeImapAccount(
-        {
-            "INBOX": _folder(
-                _eml(message_id=f"<{long_message_id}>", subject="", body="No subject.\n")
-            )
-        }
+        {"INBOX": _folder(_eml(message_id=f"<{long_message_id}>", subject="", body="No subject.\n"))}
     )
     _wire_fake(monkeypatch, account)
     channel = _imap_channel(batch_size=1)
@@ -1527,13 +1516,7 @@ def test_attributed_quote_reuses_the_original_body_fragment(
 
     del imap_tables
     reply_body = (
-        "Yes, confirmed!\n"
-        "\n"
-        "On Thu, Jul 2, 2026 Ada wrote:\n"
-        "> Are we still on for Thursday?\n"
-        "\n"
-        "Best regards,\n"
-        "Bob\n"
+        "Yes, confirmed!\n\nOn Thu, Jul 2, 2026 Ada wrote:\n> Are we still on for Thursday?\n\nBest regards,\nBob\n"
     )
     account = FakeImapAccount(
         {
@@ -1605,9 +1588,7 @@ def test_channel_sync_dedups_retained_header_fragments(
         assert channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC)) == 2
 
     headers = list(
-        Part._base_manager.select_related("fragment")
-        .filter(role=Part.PartRole.HEADER)
-        .order_by("message_id")
+        Part._base_manager.select_related("fragment").filter(role=Part.PartRole.HEADER).order_by("message_id")
     )
     assert [part.name for part in headers] == ["list-id", "list-id"]
     assert headers[0].fragment.text == list_id

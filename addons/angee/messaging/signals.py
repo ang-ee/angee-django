@@ -18,6 +18,7 @@ from typing import Any
 from django.apps import apps
 from django.db.models.signals import class_prepared, pre_delete
 
+from angee.base.db import get_write_alias
 from angee.messaging.models import ThreadedModelMixin
 
 
@@ -50,8 +51,9 @@ def _bind_teardown(model: Any) -> None:
     )
 
 
-def teardown_record_thread(sender: Any, instance: Any, **kwargs: Any) -> None:
+def teardown_record_thread(sender: Any, instance: Any, *, using: str | None = None, **kwargs: Any) -> None:
     """Delete a record's private chatter thread graph before the row itself is deleted."""
 
     del sender, kwargs
-    apps.get_model("messaging", "ThreadAttachment").objects.teardown_for_record(instance)
+    using = get_write_alias(type(instance), using=using, instance=instance)
+    apps.get_model("messaging", "ThreadAttachment").objects.db_manager(using).teardown_for_record(instance, using=using)

@@ -33,11 +33,10 @@ LIVE_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel)
 def test_run_bridge_session_skips_actual_periodic_vcs_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     """A stale live-session delivery for a periodic VCS bridge exits cleanly."""
 
-    from angee.integrate import session_runner
     from angee.integrate import tasks as tasks_module
     from tests.conftest import VcsBridge
 
-    monkeypatch.setattr(session_runner, "_bridge", lambda *_: VcsBridge())
+    monkeypatch.setattr(type(VcsBridge._default_manager.all()), "first", lambda _queryset: VcsBridge())
 
     assert tasks_module.run_bridge_session("integrate_vcs.vcsbridge", 1) == {
         "ok": True,
@@ -861,7 +860,7 @@ def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_que
     assert sent == [
         {
             "name": RUN_SESSION_TASK,
-            "kwargs": {"model_label": channel._meta.label_lower, "pk": channel.pk},
+            "kwargs": {"model_label": channel._meta.label_lower, "pk": channel.pk, "using": "default"},
             "queue": "fake-live",
             "expires": SESSION_START_EXPIRES,
         }

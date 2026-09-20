@@ -86,13 +86,24 @@ class SDKInferenceBackend(InferenceBackend):
     def _credential_auth(self, *, credential: Any | None = None) -> dict[str, str]:
         """Return credential auth, or the SDK placeholder key for a no-auth backend."""
 
-        credential = credential or getattr(self.provider, "credential", None)
+        if credential is None:
+            if self.using is None:
+                credential = getattr(self.provider, "credential", None)
+            elif self.provider.credential_id is not None:
+                credential_model = self.provider._meta.get_field("credential").remote_field.model
+                credential = (
+                    credential_model._base_manager.using(self.using)
+                    .select_related("oauth_client")
+                    .get(pk=self.provider.credential_id)
+                )
         if credential is None:
             if not self.requires_credential:
                 return {"api_key": "not-required"}
             raise ValueError(f"{self.label} inference requires an attached credential.")
         ensure_fresh = getattr(credential, "ensure_fresh", None)
         if callable(ensure_fresh):
+            if self.using is not None:
+                credential._state.db = self.using
             ensure_fresh()
         secret = str(credential.secret_value() or "")
         if not secret:

@@ -366,7 +366,7 @@ def test_ollama_backend_keeps_an_explicit_gateway_credential() -> None:
     freshened: list[bool] = []
     credential = SimpleNamespace(
         kind=CredentialKind.STATIC_TOKEN,
-        ensure_fresh=lambda: freshened.append(True),
+        ensure_fresh=lambda **kwargs: freshened.append(True),
         secret_value=lambda: "gateway-key",
     )
     backend = OllamaInferenceBackend(SimpleNamespace(credential=None))

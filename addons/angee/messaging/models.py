@@ -39,7 +39,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import close_old_connections, connection, connections, models, transaction
+from django.db import close_old_connections, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.utils.text import capfirst
@@ -52,6 +52,7 @@ from rebac import (
 )
 
 from angee.base.actors import actor_user_id
+from angee.base.db import get_write_alias
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
@@ -95,7 +96,7 @@ def _owner_user_id(instance: models.Model) -> Any | None:
     return actor_user_id(actor)
 
 
-def _user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
+def _user_subject_ref(*, user: Any = None, user_id: Any = None, using: str) -> SubjectRef:
     """Return the REBAC subject ref for a user instance or a bare user id.
 
     The user model owns its subject identity, so a bare ``user_id`` is loaded and
@@ -107,7 +108,7 @@ def _user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
         return to_subject_ref(user)
     if user_id is None:
         raise ValueError("A user or user_id is required to build a subject reference.")
-    return to_subject_ref(get_user_model()._base_manager.get(pk=user_id))
+    return to_subject_ref(get_user_model()._base_manager.db_manager(using).get(pk=user_id))
 
 
 class ThreadedModelMixin(models.Model):
@@ -196,18 +197,21 @@ class ThreadedModelMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist this row and log configured field changes in its chatter."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+
         creating = self._state.adding or self.pk is None
         tracker = self._field_tracker()
-        tracking_before = tracker.snapshot(kwargs.get("update_fields"))
+        tracking_before = tracker.snapshot(kwargs.get("update_fields"), using=using)
         super().save(*args, **kwargs)
         if creating:
-            self._message_after_create()
+            self._message_after_create(using=using)
             return
-        changes = tracker.changes(tracking_before)
+        changes = tracker.changes(tracking_before, using=using)
         if changes:
-            self.message_track(changes, subtype_key=self.thread_tracking_subtype_key)
+            self.message_track(changes, subtype_key=self.thread_tracking_subtype_key, using=using)
 
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+    def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
         """Delete this row after authorizing the record, then elevate its cascade.
 
         Composing this mixin means an instance delete checks this record's own
@@ -220,28 +224,36 @@ class ThreadedModelMixin(models.Model):
         maintenance path only.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+
         if not self.has_access("delete"):
             raise PermissionDenied(f"Denied: cannot delete {self._meta.label}")
         with system_context(reason="messaging.threaded_record.delete"):
-            return super().delete(*args, **kwargs)
+            return super().delete(using=using, keep_parents=keep_parents)
 
-    def message_thread(self, *, create: bool = True) -> models.Model | None:
+    def message_thread(self, *, create: bool = True, using: str | None = None) -> models.Model | None:
         """Return this row's chatter thread, optionally creating it."""
 
-        attachment = self.message_thread_attachment(create=create)
+        using = get_write_alias(type(self), using=using, instance=self)
+
+        attachment = self.message_thread_attachment(create=create, using=using)
         return attachment.thread if attachment is not None else None
 
-    def message_thread_attachment(self, *, create: bool = True) -> models.Model | None:
+    def message_thread_attachment(self, *, create: bool = True, using: str | None = None) -> models.Model | None:
         """Return this row's chatter thread attachment, optionally creating it."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         if create:
-            return attachment_model.objects.ensure_for_record(
+            return attachment_model.objects.db_manager(using).ensure_for_record(
                 self,
                 role=self.thread_attachment_role,
                 title=self.message_thread_title(),
             )
-        return attachment_model.objects.for_record(self, role=self.thread_attachment_role)
+        return attachment_model.objects.db_manager(using).for_record(
+            self, role=self.thread_attachment_role, using=using
+        )
 
     def message_post(
         self,
@@ -253,6 +265,7 @@ class ThreadedModelMixin(models.Model):
         message_type: Message.MessageKind | None = None,
         subtype_key: str = "comment",
         parent: models.Model | None = None,
+        using: str | None = None,
     ) -> models.Model:
         """Post an internal comment on this row's chatter thread.
 
@@ -260,6 +273,8 @@ class ThreadedModelMixin(models.Model):
         the message write path), keeping the enum the single source of truth. A chatter
         comment carries no title of its own — the thread's title fragment is the label.
         """
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         return self._message_post(
             body,
@@ -271,6 +286,7 @@ class ThreadedModelMixin(models.Model):
             parent=parent,
             tracking_values=(),
             autofollow_author=self.thread_autofollow_author,
+            using=using,
         )
 
     def message_log(
@@ -282,12 +298,15 @@ class ThreadedModelMixin(models.Model):
         tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
         attachments: tuple[models.Model, ...] = (),
         parent: models.Model | None = None,
+        using: str | None = None,
     ) -> models.Model:
         """Log a structured system note on this row's chatter thread.
 
         Defaults to the :attr:`Message.MessageKind.NOTIFICATION` kind; callers logging
         a tracked change (``message_track``) pass ``AUTO_COMMENT``.
         """
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         message_model = apps.get_model("messaging", "Message")
         return self._message_post(
@@ -300,6 +319,7 @@ class ThreadedModelMixin(models.Model):
             recipient_user_ids=(),
             autofollow_recipients=False,
             autofollow_author=False,
+            using=using,
         )
 
     def message_track(
@@ -308,6 +328,7 @@ class ThreadedModelMixin(models.Model):
         *,
         body: str = "",
         subtype_key: str = "record_updated",
+        using: str | None = None,
     ) -> models.Model:
         """Log Odoo-style field tracking values in this row's chatter thread.
 
@@ -319,40 +340,47 @@ class ThreadedModelMixin(models.Model):
         save rolled back by a post-access denial.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+
         message_model = apps.get_model("messaging", "Message")
         return self._message_system_post(
             body=body,
             subtype_key=subtype_key,
             message_type=message_model.MessageKind.AUTO_COMMENT,
             tracking_values=changes,
+            using=using,
         )
 
-    def message_update_content(self, message: models.Model, *, body: str) -> models.Model:
+    def message_update_content(self, message: models.Model, *, body: str, using: str | None = None) -> models.Model:
         """Update a comment in this row's chatter thread."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         if not self.can_post():
             raise PermissionDenied(
                 f"Updating messages on {self._meta.label} requires {self.thread_post_access!r} access."
             )
-        attachment = self.message_thread_attachment(create=False)
+        attachment = self.message_thread_attachment(create=False, using=using)
         if attachment is None or message.thread_id != attachment.thread_id:
             raise ValueError("Message does not belong to this record thread.")
         message_model = apps.get_model("messaging", "Message")
         owner_id = _owner_user_id(self)
-        return message_model.objects.update_content(message, body=body, owner_id=owner_id)
+        return message_model.objects.db_manager(using).update_content(message, body=body, owner_id=owner_id)
 
-    def message_unlink(self, message: models.Model) -> models.Model:
+    def message_unlink(self, message: models.Model, *, using: str | None = None) -> models.Model:
         """Delete a message from this row's chatter thread."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         if not self.can_post():
             raise PermissionDenied(
                 f"Deleting messages on {self._meta.label} requires {self.thread_post_access!r} access."
             )
-        attachment = self.message_thread_attachment(create=False)
+        attachment = self.message_thread_attachment(create=False, using=using)
         if attachment is None or message.thread_id != attachment.thread_id:
             raise ValueError("Message does not belong to this record thread.")
         message_model = apps.get_model("messaging", "Message")
-        return message_model.objects.unlink_from_thread(message, thread=attachment.thread)
+        return message_model.objects.db_manager(using).unlink_from_thread(message, thread=attachment.thread)
 
     def message_reaction(
         self,
@@ -361,18 +389,23 @@ class ThreadedModelMixin(models.Model):
         reaction: str,
         action: str = "toggle",
         user: Any,
+        using: str | None = None,
     ) -> models.Model:
         """Add, remove, or toggle ``user``'s reaction on a chatter message."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         if not self.can_post():
             raise PermissionDenied(
                 f"Reacting to messages on {self._meta.label} requires {self.thread_post_access!r} access."
             )
-        attachment = self.message_thread_attachment(create=False)
+        attachment = self.message_thread_attachment(create=False, using=using)
         if attachment is None or message.thread_id != attachment.thread_id:
             raise ValueError("Message does not belong to this record thread.")
         message_model = apps.get_model("messaging", "Message")
-        return message_model.objects.set_reaction(message, reaction=reaction, action=action, user=user)
+        return message_model.objects.db_manager(using).set_reaction(
+            message, reaction=reaction, action=action, user=user
+        )
 
     def message_starred(self, message: models.Model, *, user: Any) -> bool:
         """Return whether ``user`` has starred ``message`` in this row's chatter."""
@@ -383,30 +416,36 @@ class ThreadedModelMixin(models.Model):
         star_model = apps.get_model("messaging", "MessageStar")
         return bool(star_model.objects.is_starred(message, user=user))
 
-    def message_set_starred(self, message: models.Model, *, user: Any, starred: bool | None = None) -> bool:
+    def message_set_starred(
+        self, message: models.Model, *, user: Any, starred: bool | None = None, using: str | None = None
+    ) -> bool:
         """Set or toggle ``user``'s star on a message in this row's chatter."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         if not self._message_read_allowed():
             raise PermissionDenied(
                 f"Starring messages on {self._meta.label} requires {self.thread_read_access!r} access."
             )
-        attachment = self.message_thread_attachment(create=False)
+        attachment = self.message_thread_attachment(create=False, using=using)
         if attachment is None or message.thread_id != attachment.thread_id:
             raise ValueError("Message does not belong to this record thread.")
         star_model = apps.get_model("messaging", "MessageStar")
-        return bool(star_model.objects.set_starred(message, user=user, starred=starred))
+        return bool(star_model.objects.db_manager(using).set_starred(message, user=user, starred=starred))
 
-    def message_unstar_all(self, *, user: Any) -> int:
+    def message_unstar_all(self, *, user: Any, using: str | None = None) -> int:
         """Remove all Odoo-style stars owned by ``user``."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         if not self._message_read_allowed():
             raise PermissionDenied(
                 f"Unstarring messages on {self._meta.label} requires {self.thread_read_access!r} access."
             )
         star_model = apps.get_model("messaging", "MessageStar")
-        return int(star_model.objects.unstar_all(user=user))
+        return int(star_model.objects.db_manager(using).unstar_all(user=user))
 
-    def message_set_done(self, message: models.Model, *, user: Any) -> int:
+    def message_set_done(self, message: models.Model, *, user: Any, using: str | None = None) -> int:
         """Advance ``user``'s read receipt to ``message`` (mark read up to it).
 
         Read state is positional (a follower's ``last_read_message`` receipt), so
@@ -414,15 +453,19 @@ class ThreadedModelMixin(models.Model):
         the IM semantics that replaced the per-message notification flags.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+
         if not self._message_read_allowed():
             raise PermissionDenied(
                 f"Marking messages done on {self._meta.label} requires {self.thread_read_access!r} access."
             )
-        attachment = self.message_thread_attachment(create=False)
+        attachment = self.message_thread_attachment(create=False, using=using)
         if attachment is None or message.thread_id != attachment.thread_id:
             raise ValueError("Message does not belong to this record thread.")
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        return int(follower_model.objects.mark_read_up_to(attachment.thread, user=user, message=message))
+        return int(
+            follower_model.objects.db_manager(using).mark_read_up_to(attachment.thread, user=user, message=message)
+        )
 
     def _message_post(
         self,
@@ -436,6 +479,7 @@ class ThreadedModelMixin(models.Model):
         recipient_user_ids: tuple[Any, ...],
         autofollow_recipients: bool,
         autofollow_author: bool,
+        using: str,
     ) -> models.Model:
         """Post one user-authored chatter message after enforcing this row's post policy.
 
@@ -455,6 +499,7 @@ class ThreadedModelMixin(models.Model):
             parent=parent,
             tracking_values=tracking_values,
             recipient_user_ids=recipient_user_ids,
+            using=using,
         )
         owner_id = _owner_user_id(self)
         follower_model = apps.get_model("messaging", "ThreadFollower")
@@ -466,7 +511,7 @@ class ThreadedModelMixin(models.Model):
         # follow verb (message_subscribe, incl. grant_read) stays actor-gated.
         if autofollow_author and owner_id is not None:
             with system_context(reason="messaging.autofollow"):
-                follower_model.objects.subscribe(
+                follower_model.objects.db_manager(using).subscribe(
                     self,
                     user_id=owner_id,
                     role=self.thread_attachment_role,
@@ -475,11 +520,13 @@ class ThreadedModelMixin(models.Model):
                 # advance ran before this autofollow existed, so seed the fresh
                 # follower's receipt at the just-posted message — an author never
                 # sees their own post as unread.
-                follower_model.objects.mark_read_up_to(message.thread, user_id=owner_id, message=message)
+                follower_model.objects.db_manager(using).mark_read_up_to(
+                    message.thread, user_id=owner_id, message=message
+                )
         if autofollow_recipients:
             with system_context(reason="messaging.autofollow"):
                 for user_id in recipient_user_ids:
-                    follower_model.objects.subscribe(
+                    follower_model.objects.db_manager(using).subscribe(
                         self,
                         user_id=user_id,
                         role=self.thread_attachment_role,
@@ -496,6 +543,7 @@ class ThreadedModelMixin(models.Model):
         parent: models.Model | None = None,
         tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
         recipient_user_ids: tuple[Any, ...] = (),
+        using: str,
     ) -> models.Model:
         """Write one automatic system message on this row's chatter thread.
 
@@ -508,7 +556,7 @@ class ThreadedModelMixin(models.Model):
         through :meth:`_message_post`, which adds the post gate and the follower fan-out.
         """
 
-        attachment = self.message_thread_attachment(create=True)
+        attachment = self.message_thread_attachment(create=True, using=using)
         if attachment is None:
             raise ValueError("Cannot post a message without a thread.")
         message_model = apps.get_model("messaging", "Message")
@@ -528,6 +576,7 @@ class ThreadedModelMixin(models.Model):
                 parent=parent,
                 tracking_values=tracking_values,
                 recipient_user_ids=recipient_user_ids,
+                using=using,
             )
 
     def _system_post_pipeline(
@@ -542,10 +591,11 @@ class ThreadedModelMixin(models.Model):
         parent: models.Model | None,
         tracking_values: tuple[TrackingChange | dict[str, Any], ...],
         recipient_user_ids: tuple[Any, ...],
+        using: str,
     ) -> models.Model:
         """Run the elevated system-post write; split out for readability only."""
 
-        return message_model.objects.post_to_thread(
+        return message_model.objects.db_manager(using).post_to_thread(
             attachment.thread,
             body=body,
             owner_id=_owner_user_id(self),
@@ -566,6 +616,7 @@ class ThreadedModelMixin(models.Model):
         notification_policy: str | None = None,
         subtype_keys: tuple[str, ...] | None = None,
         grant_read: bool = False,
+        using: str | None = None,
     ) -> models.Model:
         """Subscribe a user to this row's chatter thread.
 
@@ -578,8 +629,10 @@ class ThreadedModelMixin(models.Model):
         denial rolls back the whole subscribe transaction.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        return follower_model.objects.subscribe(
+        return follower_model.objects.db_manager(using).subscribe(
             self,
             user=user,
             role=self.thread_attachment_role,
@@ -588,7 +641,9 @@ class ThreadedModelMixin(models.Model):
             grant_read=grant_read,
         )
 
-    def message_unsubscribe(self, *, user: models.Model | None = None, revoke_read: bool = False) -> bool:
+    def message_unsubscribe(
+        self, *, user: models.Model | None = None, revoke_read: bool = False, using: str | None = None
+    ) -> bool:
         """Unsubscribe a user from this row's chatter thread.
 
         ``revoke_read`` also revokes the user's thread ``reader`` grant (the mirror of
@@ -596,9 +651,11 @@ class ThreadedModelMixin(models.Model):
         the follow and the read that kept the member's ``threadChanged`` socket live.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+
         follower_model = apps.get_model("messaging", "ThreadFollower")
         return bool(
-            follower_model.objects.unsubscribe(
+            follower_model.objects.db_manager(using).unsubscribe(
                 self, user=user, role=self.thread_attachment_role, revoke_read=revoke_read
             )
         )
@@ -609,11 +666,12 @@ class ThreadedModelMixin(models.Model):
         follower_model = apps.get_model("messaging", "ThreadFollower")
         return bool(follower_model.objects.is_following(self, user=user, role=self.thread_attachment_role))
 
-    def message_followers(self) -> models.QuerySet:
+    def message_followers(self, *, using: str | None = None) -> models.QuerySet:
         """Return this row's chatter followers."""
 
+        using = get_write_alias(type(self), using=using, instance=self)
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        return follower_model.objects.for_record(self, role=self.thread_attachment_role)
+        return follower_model.objects.db_manager(using).for_record(self, role=self.thread_attachment_role)
 
     def message_suggested_recipients(
         self,
@@ -621,6 +679,7 @@ class ThreadedModelMixin(models.Model):
         role: str = "chatter",
         reply_discussion: bool = True,
         user: models.Model | None = None,
+        using: str | None = None,
     ) -> tuple[dict[str, Any], ...]:
         """Return Odoo-style suggested recipients for this record's chatter.
 
@@ -630,16 +689,17 @@ class ThreadedModelMixin(models.Model):
         omitted so the composer suggests only additional recipients.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
         if not self._message_read_allowed():
             raise PermissionDenied(
                 f"Reading message recipients on {self._meta.label} requires {self.thread_read_access!r} access."
             )
         user_model = apps.get_model(settings.AUTH_USER_MODEL)
-        attachment = self.message_thread_attachment(create=False)
+        attachment = self.message_thread_attachment(create=False, using=using)
         thread = attachment.thread if attachment is not None else None
         follower_ids = {
             str(user_id)
-            for user_id in self.message_followers()
+            for user_id in self.message_followers(using=using)
             .sudo(reason="messaging suggested recipients follower suppression")
             .values_list("user_id", flat=True)
         }
@@ -648,7 +708,7 @@ class ThreadedModelMixin(models.Model):
         seen: set[str] = set()
 
         def add(candidate: Any, *, reason: str, source: str) -> None:
-            resolved = _message_suggestion_user(user_model, candidate)
+            resolved = _message_suggestion_user(user_model, candidate, using=using)
             if resolved is None:
                 return
             key = str(resolved.pk)
@@ -661,7 +721,7 @@ class ThreadedModelMixin(models.Model):
 
         for field in self._message_suggested_recipient_model_fields():
             add(
-                getattr(self, field.name, None),
+                field.value_from_object(self),
                 reason=capfirst(str(field.verbose_name or field.name)),
                 source=field.name,
             )
@@ -670,7 +730,8 @@ class ThreadedModelMixin(models.Model):
             message_model = apps.get_model("messaging", "Message")
             notification_model = apps.get_model("messaging", "ThreadNotification")
             latest = (
-                message_model._base_manager.filter(
+                message_model._base_manager.db_manager(using)
+                .filter(
                     thread=thread,
                     message_type__in=(
                         message_model.MessageKind.COMMENT,
@@ -683,7 +744,10 @@ class ThreadedModelMixin(models.Model):
             if latest is not None:
                 add(latest.created_by_id, reason="Recent message author", source="recent_message_author")
                 for notification in (
-                    notification_model._base_manager.filter(message=latest).select_related("user").order_by("pk")
+                    notification_model._base_manager.db_manager(using)
+                    .filter(message=latest)
+                    .select_related("user")
+                    .order_by("pk")
                 ):
                     add(notification.user, reason="Recent message recipient", source="recent_message_recipient")
 
@@ -698,15 +762,18 @@ class ThreadedModelMixin(models.Model):
         due_date: object | None = None,
         activity_type: str = "todo",
         metadata: dict[str, object] | None = None,
+        using: str | None = None,
     ) -> models.Model:
         """Schedule an activity on this row's chatter thread."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         if not self._message_activity_allowed():
             raise PermissionDenied(
                 f"Scheduling activities on {self._meta.label} requires {self.thread_activity_access!r} access."
             )
         activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.schedule(
+        return activity_model.objects.db_manager(using).schedule(
             self,
             user=user,
             role=self.thread_attachment_role,
@@ -717,35 +784,42 @@ class ThreadedModelMixin(models.Model):
             metadata=metadata,
         )
 
-    def activity_ids(self, *, include_done: bool = True) -> models.QuerySet:
+    def activity_ids(self, *, include_done: bool = True, using: str | None = None) -> models.QuerySet:
         """Return this row's scheduled chatter activities."""
 
+        using = get_write_alias(type(self), using=using, instance=self)
         activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.for_record(
+        return activity_model.objects.db_manager(using).for_record(
             self,
             role=self.thread_attachment_role,
             include_done=include_done,
         )
 
-    def activity_feedback(self, activity: models.Model, *, feedback: str = "") -> models.Model:
+    def activity_feedback(
+        self, activity: models.Model, *, feedback: str = "", using: str | None = None
+    ) -> models.Model:
         """Mark an activity done and log the feedback in the chatter thread."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         if not self._message_activity_allowed():
             raise PermissionDenied(
                 f"Completing activities on {self._meta.label} requires {self.thread_activity_access!r} access."
             )
         activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.complete(activity, feedback=feedback)
+        return activity_model.objects.db_manager(using).complete(activity, feedback=feedback)
 
-    def activity_unlink(self, activity: models.Model) -> models.Model:
+    def activity_unlink(self, activity: models.Model, *, using: str | None = None) -> models.Model:
         """Cancel a scheduled activity without logging a completion message."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         if not self._message_activity_allowed():
             raise PermissionDenied(
                 f"Canceling activities on {self._meta.label} requires {self.thread_activity_access!r} access."
             )
         activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.cancel(activity)
+        return activity_model.objects.db_manager(using).cancel(activity)
 
     def message_thread_title(self) -> str:
         """Return the default title text for this row's chatter thread.
@@ -761,7 +835,7 @@ class ThreadedModelMixin(models.Model):
 
         return f"{capfirst(str(self._meta.verbose_name))} created"
 
-    def _message_after_create(self) -> None:
+    def _message_after_create(self, *, using: str) -> None:
         """Run Odoo-style chatter side effects after this row is first saved."""
 
         owner_id = _owner_user_id(self)
@@ -772,18 +846,19 @@ class ThreadedModelMixin(models.Model):
             # System bookkeeping on an already-authorized create; see the
             # autofollow elevation note in _message_post.
             with system_context(reason="messaging.autofollow"):
-                follower_model.objects.subscribe(
+                follower_model.objects.db_manager(using).subscribe(
                     self,
                     user_id=owner_id,
                     role=self.thread_attachment_role,
                 )
-        create_changes = self._field_tracker().create_changes()
+        create_changes = self._field_tracker().create_changes(using=using)
         message_model = apps.get_model("messaging", "Message")
         if self.thread_create_log:
             self._message_system_post(
                 body=self.message_creation_message(),
                 message_type=message_model.MessageKind.NOTIFICATION,
                 subtype_key=self.thread_creation_subtype_key,
+                using=using,
             )
         if create_changes:
             self._message_system_post(
@@ -791,6 +866,7 @@ class ThreadedModelMixin(models.Model):
                 message_type=message_model.MessageKind.AUTO_COMMENT,
                 subtype_key=self.thread_tracking_subtype_key,
                 tracking_values=tuple(create_changes),
+                using=using,
             )
 
     def can_post(self, user: Any = None) -> bool:
@@ -912,7 +988,7 @@ class Channel(Bridge):
 
         return self.backend.test_connection()
 
-    def start_live(self) -> None:
+    def start_live(self, *, using: str | None = None) -> None:
         """Mark this channel live-desired, then dispatch the backend's live ingest.
 
         The Bridge live contract for channels: the base persists the desired
@@ -923,10 +999,13 @@ class Channel(Bridge):
         clobber it.
         """
 
-        self.merge_subscription_state(desired=self.LiveState.LIVE)
+        using = get_write_alias(type(self), using=using, instance=self)
+
+        self.merge_subscription_state(desired=self.LiveState.LIVE, using=using)
+        self._state.db = using
         self.backend.start_live()
 
-    def stop_live(self) -> None:
+    def stop_live(self, *, using: str | None = None) -> None:
         """Mark this channel stop-desired, then dispatch the backend's live stop.
 
         A running live session notices the persisted desire on its next wake and
@@ -935,7 +1014,10 @@ class Channel(Bridge):
         running session cannot clobber it with a stale write.
         """
 
-        self.merge_subscription_state(desired=self.LiveState.STOPPED)
+        using = get_write_alias(type(self), using=using, instance=self)
+
+        self.merge_subscription_state(desired=self.LiveState.STOPPED, using=using)
+        self._state.db = using
         self.backend.stop_live()
 
     def _next_sync_at(self, *, now: Any) -> Any:
@@ -950,7 +1032,7 @@ class Channel(Bridge):
             return None
         return super()._next_sync_at(now=now)
 
-    def sync(self) -> int:
+    def sync(self, *, using: str | None = None) -> int:
         """Sync the channel's source (the Bridge child-sync contract); report the landed count.
 
         A backend that partitions its source (:meth:`ChannelBackend.sync_partitions`
@@ -962,9 +1044,12 @@ class Channel(Bridge):
         worker fleet, parallelism within a channel rides these threads.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+
+        self._state.db = using
         backend = self.backend
         deadline = self._sync_deadline()
-        cap = self._sync_parallelism()
+        cap = self._sync_parallelism(using=using)
         # Enumerating partitions costs a transport round-trip; skip it entirely
         # when the drain is pinned serial (SQLite, or an operator cap of 1).
         partitions = tuple(backend.sync_partitions()) if cap > 1 else ()
@@ -973,8 +1058,8 @@ class Channel(Bridge):
             # Partition drains own their own transports; release the discovery
             # connection this instance opened enumerating them.
             backend.close()
-            return self._sync_parallel(partitions, parallelism, deadline=deadline)
-        return self._drain(backend, deadline=deadline)
+            return self._sync_parallel(partitions, parallelism, deadline=deadline, using=using)
+        return self._drain(backend, deadline=deadline, using=using)
 
     def _sync_deadline(self) -> float:
         """Return the monotonic instant this run must stop draining by.
@@ -1003,7 +1088,7 @@ class Channel(Bridge):
         budget = float(cast("float | int | str", config.get("sync_time_budget", max(60.0, soft_limit - 60.0))))
         return monotonic() + max(0.0, budget)
 
-    def _sync_parallelism(self) -> int:
+    def _sync_parallelism(self, *, using: str) -> int:
         """Return the configured per-channel partition thread cap (min 1).
 
         Parallel partitions need a database that takes concurrent writers with
@@ -1011,13 +1096,13 @@ class Channel(Bridge):
         vendor pins the drain serial — same vendor gate as fragment full-text.
         """
 
-        if connection.vendor != "postgresql":
+        if connections[using].vendor != "postgresql":
             return 1
         config = self.config if isinstance(self.config, dict) else {}
         value = int(config.get("sync_parallelism", _DEFAULT_SYNC_PARALLELISM))
         return max(1, value)
 
-    def _sync_parallel(self, partitions: tuple[str, ...], parallelism: int, *, deadline: float) -> int:
+    def _sync_parallel(self, partitions: tuple[str, ...], parallelism: int, *, deadline: float, using: str) -> int:
         """Drain every partition concurrently; fail the run if any partition failed.
 
         Each worker gets a ``copy_context()`` so the scheduler's ``system_context``
@@ -1031,7 +1116,8 @@ class Channel(Bridge):
         failures: list[tuple[str, Exception]] = []
         with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix=f"channel-{self.pk}-sync") as pool:
             futures = {
-                pool.submit(copy_context().run, self._drain_partition, name, deadline): name for name in partitions
+                pool.submit(copy_context().run, self._drain_partition, name, deadline, using=using): name
+                for name in partitions
             }
             for future in as_completed(futures):
                 name = futures[future]
@@ -1042,13 +1128,13 @@ class Channel(Bridge):
         # Partition threads persisted their cursor slices onto the row; reload the
         # merged cursor so the caller's post-run save cannot clobber it with this
         # instance's stale in-memory copy.
-        self.refresh_from_db(fields=["cursor"])
+        self.refresh_from_db(using=using, fields=["cursor"])
         if failures:
             names = ", ".join(sorted(name for name, _ in failures))
             raise RuntimeError(f"Channel sync failed for partition(s): {names}") from failures[0][1]
         return landed
 
-    def _drain_partition(self, partition: str, deadline: float | None = None) -> int:
+    def _drain_partition(self, partition: str, deadline: float | None = None, *, using: str) -> int:
         """Drain one partition on this thread — own channel row, own backend, own connection."""
 
         close_old_connections()
@@ -1056,20 +1142,22 @@ class Channel(Bridge):
             # A per-thread channel instance keeps the in-memory cursor private to
             # this partition: a shared instance would let one thread's slice save
             # persist a sibling's pre-ingest advance (a crash could then skip mail).
-            channel = type(self)._base_manager.get(pk=self.pk)
+            channel = type(self)._base_manager.db_manager(using).get(pk=self.pk)
             backend = channel.backend
             backend.partition = partition
             # Rebind the progress reporter to this thread's own row: the copied
             # context would otherwise share the parent's reporter — one model
             # instance mutated and saved from every pool thread concurrently.
-            with bridge_progress_context(channel):
-                return channel._drain(backend, partition=partition, deadline=deadline)
+            with bridge_progress_context(channel, using=using):
+                return channel._drain(backend, partition=partition, deadline=deadline, using=using)
         finally:
             # close_all, not close_old: a healthy young connection on a dying
             # pool thread would otherwise leak to GC under persistent CONN_MAX_AGE.
             connections.close_all()
 
-    def _drain(self, backend: ChannelBackend, *, partition: str | None = None, deadline: float | None = None) -> int:
+    def _drain(
+        self, backend: ChannelBackend, *, partition: str | None = None, deadline: float | None = None, using: str
+    ) -> int:
         """Drain one backend batch by batch and ingest each.
 
         The batch/drain contract lives on :meth:`ChannelBackend.fetch_messages`;
@@ -1104,16 +1192,16 @@ class Channel(Bridge):
                     )
                 previous = current
                 landed += len(
-                    message_model.objects.ingest(
+                    message_model.objects.db_manager(using).ingest(
                         batch,
                         channel=self,
                         quote_edges=backend.quote_edges,
                     )
                 )
                 if partition is None:
-                    self.save(update_fields=["cursor", "updated_at"])
+                    self.save(using=using, update_fields=["cursor", "updated_at"])
                 else:
-                    self._persist_cursor_slice(backend, partition)
+                    self._persist_cursor_slice(backend, partition, using=using)
                 if reporter is not None:
                     reporter.report(
                         str(self.SyncStage.SYNCING),
@@ -1144,7 +1232,7 @@ class Channel(Bridge):
             details["partition"] = partition
         return details
 
-    def _persist_cursor_slice(self, backend: ChannelBackend, partition: str) -> None:
+    def _persist_cursor_slice(self, backend: ChannelBackend, partition: str, *, using: str) -> None:
         """Merge one partition's cursor fragment into the persisted cursor, row-locked.
 
         Parallel partitions each write only the nested slice they own, so a save
@@ -1155,8 +1243,14 @@ class Channel(Bridge):
         path, value = backend.partition_cursor_slice(partition)
         if not path or value is None:
             return
-        with transaction.atomic():
-            row = type(self).objects.sudo(reason="messaging.channel.cursor_slice").lock_if_supported().get(pk=self.pk)
+        with transaction.atomic(using=using):
+            row = (
+                type(self)
+                .objects.db_manager(using)
+                .sudo(reason="messaging.channel.cursor_slice")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
             cursor = row.cursor if isinstance(row.cursor, dict) else {}
             node = cursor
             for key in path[:-1]:
@@ -1167,7 +1261,7 @@ class Channel(Bridge):
                 node = child
             node[path[-1]] = value
             row.cursor = cursor
-            row.save(update_fields=["cursor", "updated_at"])
+            row.save(using=using, update_fields=["cursor", "updated_at"])
 
 
 class ChannelWebform(models.Model):
@@ -1401,7 +1495,7 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
         title = self.title.text if self.title_id else ""
         return title or f"thread:{self.public_id}"
 
-    def is_record_attached(self) -> bool:
+    def is_record_attached(self, *, using: str | None = None) -> bool:
         """Whether this thread is bound to a model row through a ``ThreadAttachment``.
 
         The one owner of the chatter-attachment fact, used by both the thread's and the
@@ -1411,11 +1505,17 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
         Source evidence edges deliberately do not change conversation broadcasting.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        return attachment_model._base_manager.filter(
-            thread_id=self.pk,
-            role=attachment_model.AttachmentRole.CHATTER,
-        ).exists()
+        return (
+            attachment_model._base_manager.db_manager(using)
+            .filter(
+                thread_id=self.pk,
+                role=attachment_model.AttachmentRole.CHATTER,
+            )
+            .exists()
+        )
 
     def broadcasts_changes(self) -> bool:
         """Whether this thread's changes reach the generic ``changes`` subscription.
@@ -1430,22 +1530,26 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
 
         return self.host_broadcasts_changes or not self.is_record_attached()
 
-    def grant_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
+    def grant_reader(self, *, user: models.Model | None = None, user_id: Any = None, using: str | None = None) -> None:
         """Grant a user direct ``reader`` access through the declared share surface."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         self._grant_declared_record_access(
             Thread,
             "reader",
-            _user_subject_ref(user=user, user_id=user_id),
+            _user_subject_ref(user=user, user_id=user_id, using=using),
         )
 
-    def revoke_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
+    def revoke_reader(self, *, user: models.Model | None = None, user_id: Any = None, using: str | None = None) -> None:
         """Revoke a user's direct ``reader`` access to this thread (mirror of :meth:`grant_reader`)."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
 
         self._revoke_declared_record_access(
             Thread,
             "reader",
-            _user_subject_ref(user=user, user_id=user_id),
+            _user_subject_ref(user=user, user_id=user_id, using=using),
         )
 
 
@@ -1955,7 +2059,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
             ),
         )
 
-    def content_edit_error(self) -> str | None:
+    def content_edit_error(self, *, using: str | None = None) -> str | None:
         """Return why this message's body cannot be edited, or ``None`` if it can.
 
         The Odoo mail edit rule: only an internally authored plain comment carrying
@@ -1967,21 +2071,23 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         ``can_edit`` projection, so the two never drift.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+
         if self.message_type != self.MessageKind.COMMENT:
             return "Only comment messages can be edited."
         if self.direction != self.Direction.INTERNAL:
             return "Only internally authored comments can be edited."
-        if self._has_tracking_values():
+        if self._has_tracking_values(using=using):
             return "Messages with tracking values cannot be edited."
         return None
 
-    def _has_tracking_values(self) -> bool:
+    def _has_tracking_values(self, *, using: str) -> bool:
         """Return whether this message carries tracking values, reusing any prefetch."""
 
         cache = getattr(self, "_prefetched_objects_cache", None)
         if cache is not None and "tracking_values" in cache:
             return bool(self.tracking_values.all())
-        return self.tracking_values.exists()
+        return self.tracking_values.using(using).exists()
 
     def can_edit(self, *, post_access: bool) -> bool:
         """Return whether a post-authorised actor may edit this message's body.
@@ -2026,7 +2132,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
             raise ValueError("Message feed positions require an aware timestamp and signed-64-bit PK.")
         return f"1:{at.astimezone(UTC).isoformat(timespec='microseconds')}:{pk + 2**63:020d}"
 
-    def reaction_groups(self, user: Any = None) -> list[MessageReactionGroup]:
+    def reaction_groups(self, user: Any = None, *, using: str | None = None) -> list[MessageReactionGroup]:
         """Return this message's reactions grouped by content, with ``user``'s state.
 
         The chatter feed shows reactions grouped by content — each with a count, the
@@ -2035,13 +2141,20 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         is the single owner of the grouping fact; the GraphQL resolver only projects it.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
         cache = getattr(self, "_prefetched_objects_cache", None)
-        if cache is not None and "reactions" in cache:
+        if (
+            cache is not None
+            and "reactions" in cache
+            and self._state.db == using
+            and all(reaction._state.db == using for reaction in cache["reactions"])
+        ):
             reactions = list(self.reactions.all())
         else:
             reactions = list(
                 apps.get_model("messaging", "Reaction")
-                ._base_manager.filter(message=self)
+                ._base_manager.db_manager(using)
+                .filter(message=self)
                 .select_related("handle")
                 .order_by("pk")
             )
@@ -2071,9 +2184,14 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
 
         if self.thread_id is None:
             return None
-        attachment = apps.get_model("messaging", "ThreadAttachment")._base_manager.filter(
-            thread_id=self.thread_id, role="chatter",
-        ).first()
+        attachment = (
+            apps.get_model("messaging", "ThreadAttachment")
+            ._base_manager.filter(
+                thread_id=self.thread_id,
+                role="chatter",
+            )
+            .first()
+        )
         if attachment is None:
             return None
         target = attachment.target
@@ -2166,7 +2284,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
             return ""
         return part.fragment.text
 
-    def deliver(self) -> bool:
+    def deliver(self, *, using: str | None = None) -> bool:
         """Queue this outbound message for idempotent channel delivery.
 
         This is the consumer seam: callers compose and persist the message,
@@ -2174,9 +2292,11 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         transport always runs through ``angee.jobs``, never in the request.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+
         from angee.messaging.delivery import queue_message_delivery
 
-        return queue_message_delivery(self)
+        return queue_message_delivery(self, using=using)
 
     def __str__(self) -> str:
         """Return a readable message label for Django displays."""
@@ -2197,7 +2317,11 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
 
         if self.thread_id is None:
             return True
-        return not self.thread.is_record_attached()
+        field = self._meta.get_field("thread")
+        thread = field.get_cached_value(self, default=None)
+        if thread is None:
+            thread = field.related_model._base_manager.db_manager(self._state.db).get(pk=self.thread_id)
+        return not thread.is_record_attached(using=self._state.db)
 
 
 class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):
@@ -2762,7 +2886,9 @@ class MessageStar(SqidMixin, AuditMixin, AngeeModel):
         return f"{self.user_id} starred {self.message_id}"
 
 
-def _message_suggestion_user(user_model: type[models.Model], candidate: Any) -> models.Model | None:
+def _message_suggestion_user(
+    user_model: type[models.Model], candidate: Any, *, using: str | None = None
+) -> models.Model | None:
     """Return a user row from a candidate object/id for recipient suggestions."""
 
     if candidate is None:
@@ -2773,4 +2899,4 @@ def _message_suggestion_user(user_model: type[models.Model], candidate: Any) -> 
         candidate = candidate.pk
     if candidate in (None, ""):
         return None
-    return user_model._default_manager.filter(pk=candidate).first()
+    return user_model._default_manager.db_manager(using).filter(pk=candidate).first()

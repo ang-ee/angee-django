@@ -14,6 +14,7 @@ from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 
+from angee.base.db import get_write_alias
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
@@ -342,8 +343,10 @@ class StorageMutation:
     def file_upload_begin(self, input: FileUploadBeginInput) -> FileUploadBeginPayload:
         """Reserve a draft file and tell the client where to send bytes."""
 
+        using = get_write_alias(File)
         try:
             row = File.objects.draft(
+                using=using,
                 filename=input.filename,
                 mime_type=input.mime_type,
                 size_bytes=input.size_bytes,
@@ -356,7 +359,7 @@ class StorageMutation:
             return FileUploadBeginPayload(error=str(error), error_code=error.code)
         if row.upload_state == UploadState.READY:
             return FileUploadBeginPayload(method="deduped", file=row)
-        token = row.issue_upload_token()
+        token = row.issue_upload_token(using=using)
         upload_url = f"{reverse('storage_upload')}?{urlencode({'token': token})}"
         return FileUploadBeginPayload(method="proxy", file=row, upload_url=upload_url, upload_token=token)
 
@@ -364,11 +367,12 @@ class StorageMutation:
     def file_upload_finalize(self, input: FileUploadFinalizeInput) -> FileUploadFinalizePayload:
         """Verify uploaded bytes and return the READY row."""
 
-        row = instance_for_id(File, input.file, queryset=File.objects.all())
+        using = get_write_alias(File)
+        row = instance_for_id(File, input.file, queryset=File.objects.db_manager(using).all())
         if row is None:
             return FileUploadFinalizePayload(error="file not found", error_code="not_found")
         try:
-            row.finalize(expected_hash=input.content_hash, expected_size=input.size_bytes)
+            row.finalize(expected_hash=input.content_hash, expected_size=input.size_bytes, using=using)
         except exceptions.UploadError as error:
             return FileUploadFinalizePayload(error=str(error), error_code=error.code)
         return FileUploadFinalizePayload(file=row)
@@ -377,30 +381,35 @@ class StorageMutation:
     def restore_file(self, id: PublicID) -> FileType | None:
         """Pull one file out of the Trash smart folder."""
 
-        row = require_instance_for_id(File, id, queryset=File.objects.all(), not_found="file not found")
-        row.restore()
+        using = get_write_alias(File)
+        row = require_instance_for_id(
+            File, id, queryset=File.objects.db_manager(using).all(), not_found="file not found"
+        )
+        row.restore(using=using)
         return cast(FileType, row)
 
     @strawberry.mutation(name="delete_file")
     def delete_file(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Preview or confirm moving one file to Trash."""
 
+        using = get_write_alias(File)
         return delete_by_public_id(
             File,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(File),
+            queryset=write_queryset(File).using(using),
         )
 
     @strawberry.mutation(name="delete_folder")
     def delete_folder(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Preview or confirm deleting one folder."""
 
+        using = get_write_alias(Folder)
         return delete_by_public_id(
             Folder,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(Folder),
+            queryset=write_queryset(Folder).using(using),
         )
 
 
@@ -429,14 +438,15 @@ class StorageConsoleMutation:
     def purge_file(self, id: PublicID) -> bool:
         """Permanently delete one file row and its backend object."""
 
+        using = get_write_alias(File)
         with system_context(reason="storage.graphql.purge_file"):
             row = require_instance_for_id(
                 File,
                 id,
-                queryset=File._default_manager.all(),
+                queryset=File._default_manager.db_manager(using).all(),
                 not_found="file not found",
             )
-            row.purge()
+            row.purge(using=using)
         return True
 
 

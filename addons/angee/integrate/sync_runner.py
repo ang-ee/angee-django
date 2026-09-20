@@ -6,10 +6,12 @@ from datetime import datetime
 from typing import Any
 
 from django.apps import apps
+from django.db import connections
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rebac import system_context
 
+from angee.base.db import get_write_alias
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge
 
@@ -20,13 +22,17 @@ def run_bridge_sync_job(
     timestamp: str | datetime | None = None,
     *,
     require_queue_token: bool = False,
+    using: str | None = None,
 ) -> dict[str, Any]:
     """Run one concrete bridge sync job through the shared lock/lifecycle path."""
 
+    if using is not None:
+        connections[using]
     now = _parse_timestamp(timestamp)
     model = _bridge_model(model_label)
+    using = get_write_alias(model, using=using)
     with system_context(reason="integrate.bridge_sync_job"):
-        bridge = model._default_manager.get(pk=pk)
+        bridge = model._default_manager.db_manager(using).get(pk=pk)
         if require_queue_token and not bridge.sync_queue_token_matches(now):
             return {"ok": True, "items": 0, "skipped": True, "stale": True}
         with bridge_advisory_lock(bridge) as acquired:
