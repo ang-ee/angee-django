@@ -4,8 +4,10 @@ import {
   ChromeMenuNode,
   MenuTree,
   pathMatchesTarget,
+  resolveMenuRouteTargets,
   type ChromeMenuItem,
 } from "./menu-tree";
+import { createRouteHref } from "../runtime/route-href";
 
 // Two apps with sections plus a single-page app.
 const MENU: readonly ChromeMenuItem[] = [
@@ -29,6 +31,59 @@ const MENU: readonly ChromeMenuItem[] = [
   },
   { id: "single", label: "Single", to: "/single" },
 ];
+
+describe("resolveMenuRouteTargets", () => {
+  const routeHref = createRouteHref([
+    { name: "dashboards.addon", path: "/dashboards/addon/$key" },
+  ]);
+
+  test("resolves parameterized route targets through the route href owner", () => {
+    expect(
+      resolveMenuRouteTargets(
+        [
+          {
+            id: "accounts-payable",
+            route: "dashboards.addon",
+            params: { key: "arp.accounting_intake/accounts payable" },
+          },
+        ],
+        routeHref,
+      ),
+    ).toEqual([
+      {
+        id: "accounts-payable",
+        route: "dashboards.addon",
+        params: { key: "arp.accounting_intake/accounts payable" },
+        to: "/dashboards/addon/arp.accounting_intake%2Faccounts%20payable",
+        children: undefined,
+      },
+    ]);
+  });
+
+  test("keeps to for external links only", () => {
+    expect(
+      resolveMenuRouteTargets(
+        [{ id: "docs", to: "https://docs.example.test/start" }],
+        routeHref,
+      )[0]?.to,
+    ).toBe("https://docs.example.test/start");
+    expect(() =>
+      resolveMenuRouteTargets(
+        [{ id: "literal", to: "/dashboards/addon/literal" }],
+        routeHref,
+      ),
+    ).toThrow(/declares internal target.*use route and params/);
+  });
+
+  test("rejects params without their route owner", () => {
+    expect(() =>
+      resolveMenuRouteTargets(
+        [{ id: "orphan", params: { key: "value" } }],
+        routeHref,
+      ),
+    ).toThrow(/declares params without a route/);
+  });
+});
 
 describe("navigableItems", () => {
   test("returns navigable leaves paired with their root app, in build order", () => {

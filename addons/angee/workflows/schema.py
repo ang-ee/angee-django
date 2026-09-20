@@ -117,6 +117,13 @@ def _artifact_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
     return _artifact_queryset_for_actor(session_user(info))
 
 
+def _actionable_decision_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+    """Project console decisions through the viewer's REBAC ``act`` seats."""
+
+    scoped = read_scoped_queryset(Decision, session_user(info), action="act")
+    return Decision.objects.none() if scoped is None else scoped
+
+
 def _decision_schema(root: Any) -> JSON | None:
     """Return the model-owned JSON form schema without exposing its journal."""
 
@@ -1645,6 +1652,7 @@ _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
     filterable=[
         "id",
         "workflow",
+        "workflow__key",
         "workflow__purpose",
         "workflow__published_from",
         "trigger",
@@ -1657,7 +1665,7 @@ _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
     ],
     sortable=["workflow", "status", "wake_at", "steps_taken", "created_at", "updated_at"],
     aggregatable=["id", "steps_taken"],
-    groupable=["workflow", "workflow__name", "origin", "status", "updated_at"],
+    groupable=["workflow", "workflow__key", "workflow__name", "origin", "status", "updated_at"],
     insert=False,
     update=False,
     delete=False,
@@ -1759,6 +1767,7 @@ _DECISION_RESOURCE = hasura_model_resource(
         "step_run__step__name",
         "step_run__run",
         "step_run__run__workflow",
+        "step_run__run__workflow__key",
         "step_run__run__workflow__name",
         "suspension_attempt",
         "priority",
@@ -1794,7 +1803,7 @@ _DECISION_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=read_resource_queryset(Decision),
+    get_queryset=_actionable_decision_queryset,
     field_id_decode={
         "step_run": public_pk_decoder(StepRun),
         "step_run__step": public_pk_decoder(Step),

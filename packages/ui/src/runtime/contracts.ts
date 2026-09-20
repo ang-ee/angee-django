@@ -6,6 +6,8 @@
 
 import type { ReactElement, ReactNode } from "react";
 
+import type { RouteHrefParams } from "./route-href";
+
 export const FORM_VIEW_RECORD_ACTIONS_SLOT = "form-view.record-actions";
 export const FORM_VIEW_SECTIONS_SLOT = "form-view.sections";
 
@@ -26,18 +28,24 @@ export interface MenuItem {
   label?: string;
   children?: readonly MenuItem[];
   /**
-   * Route name this item targets. The rendered binding resolves `to` from the
-   * route path and may derive route chrome from the item's root ancestor:
-   * root title/icon, linked ancestor crumbs, and a plain leaf crumb.
+   * Route name this item targets. The rendered binding resolves its href from
+   * the route and params and may derive route chrome from the item's root
+   * ancestor: root title/icon, linked ancestor crumbs, and a plain leaf crumb.
    */
   route?: string;
+  /** Route parameters for a parameterized `route`. */
+  params?: RouteHrefParams;
+  /** External URL. Internal app destinations use `route` and optional `params`. */
   to?: string;
   icon?: string;
 }
 
-/** A composed navigation entry with defaults applied. */
-export interface ComposedMenuItem extends Omit<MenuItem, "children" | "id"> {
+/** A composed navigation entry with defaults and its runtime target applied. */
+export interface ComposedMenuItem
+  extends Omit<MenuItem, "children" | "id" | "to"> {
   id: string;
+  /** Resolved internal href or the authored external URL. */
+  to?: string;
   children?: readonly ComposedMenuItem[];
 }
 

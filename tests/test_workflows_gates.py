@@ -1314,6 +1314,26 @@ def test_public_schema_exposes_decision_resource_decide_mutation_and_subscriptio
     assert decision["query"]["fields"]["step_run.run"]["filter"]["field"] == "step_run__run"
 
 
+def test_console_dashboard_resources_expose_lineage_and_pending_filters(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Dashboard queries compose stable lineage fields with the native verdict filter."""
+
+    del workflow_gate_tables, no_workflow_queue
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    parts = {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}
+    metadata = GraphQLSchemas([SchemaAddon({"console": parts})]).render_metadata()["console"]["angee"]
+    resources = {item["modelLabel"]: item for item in metadata["resources"]}
+    workflow_run = resources["workflows.WorkflowRun"]
+    decision = resources["workflows.Decision"]
+
+    assert workflow_run["query"]["fields"]["workflow.key"]["filter"]["field"] == "workflow__key"
+    assert "workflow.key" in workflow_run["query"]["axes"]
+    assert decision["query"]["fields"]["step_run.run.workflow.key"]["filter"]["field"] == "step_run__run__workflow__key"
+    assert {"from": "PENDING", "to": "pending"} in decision["query"]["fields"]["verdict"]["filter"]["valueMap"]
+
+
 def test_public_schema_decision_projection_excludes_step_run_journal(
     workflow_gate_tables: None,
     no_workflow_queue: None,
@@ -1538,13 +1558,14 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
     workflow_gate_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    """Decision reads stay assignee-scoped while journal links require their own read access."""
+    """Console decisions use act seats while public reads retain their broader scope."""
 
     del workflow_gate_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-resource-assignee")
+    requester = User.objects.create_user(username="wdc-resource-requester")
     stranger = User.objects.create_user(username="wdc-resource-stranger")
     admin = _platform_admin("wdc-resource-admin")
-    decision = _opened_decision([assignee], None)
+    decision = _opened_decision([assignee], requester)
     query = """
         query DecisionReads($id: String!, $run: String!) {
           workflow_decisions(where: {step_run__run: {_eq: $run}}, limit: 10) {
@@ -1566,20 +1587,27 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
     variables = {"id": str(decision.sqid), "run": str(decision.step_run.run.sqid)}
 
     assigned = result_data(_execute(public, query, variables, user=assignee))
+    requester_read = result_data(_execute(public, query, variables, user=requester))
     denied = result_data(_execute(public, query, variables, user=stranger))
     privileged = result_data(_execute(public, query, variables, user=admin))
     console_query = """
-        query ConsoleDecision($id: String!) {
+        query ConsoleDecision($id: String!, $workflowKey: String!) {
+          workflow_decisions(
+            where: {step_run__run__workflow__key: {_eq: $workflowKey}}
+            limit: 10
+          ) { id step_run { id } }
           workflow_decisions_by_pk(id: $id) { id step_run { id } }
+          workflow_decisions_aggregate { aggregate { count } }
         }
     """
     console = _schema("console")
-    assigned_console = result_data(
-        _execute(console, console_query, {"id": str(decision.sqid)}, user=assignee)
-    )
-    privileged_console = result_data(
-        _execute(console, console_query, {"id": str(decision.sqid)}, user=admin)
-    )
+    console_variables = {
+        "id": str(decision.sqid),
+        "workflowKey": decision.step_run.run.workflow.key,
+    }
+    assigned_console = result_data(_execute(console, console_query, console_variables, user=assignee))
+    requester_console = result_data(_execute(console, console_query, console_variables, user=requester))
+    privileged_console = result_data(_execute(console, console_query, console_variables, user=admin))
 
     assert assigned["workflow_decisions"] == [
         {
@@ -1591,26 +1619,30 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
     ]
     assert assigned["workflow_decisions_by_pk"] == assigned["workflow_decisions"][0]
     assert assigned["workflow_decisions_aggregate"]["aggregate"]["count"] == 1
+    assert requester_read["workflow_decisions_by_pk"] == assigned["workflow_decisions_by_pk"]
     assert denied["workflow_decisions"] == []
     assert denied["workflow_decisions_by_pk"] is None
     assert denied["workflow_decisions_aggregate"]["aggregate"]["count"] == 0
-    assert privileged["workflow_decisions_by_pk"]["source_run_id"] == str(
-        decision.step_run.run.sqid
-    )
-    assert privileged["workflow_decisions_by_pk"]["source_execution_id"] == str(
-        decision.step_run.sqid
-    )
-    assert privileged["workflow_decisions_by_pk"]["source_attempt_id"] == str(
-        decision.suspension_attempt.sqid
-    )
-    assert assigned_console["workflow_decisions_by_pk"] == {
+    assert privileged["workflow_decisions_by_pk"]["source_run_id"] == str(decision.step_run.run.sqid)
+    assert privileged["workflow_decisions_by_pk"]["source_execution_id"] == str(decision.step_run.sqid)
+    assert privileged["workflow_decisions_by_pk"]["source_attempt_id"] == str(decision.suspension_attempt.sqid)
+    expected_assigned_console = {
         "id": str(decision.sqid),
         "step_run": None,
     }
-    assert privileged_console["workflow_decisions_by_pk"] == {
+    assert assigned_console["workflow_decisions"] == [expected_assigned_console]
+    assert assigned_console["workflow_decisions_by_pk"] == expected_assigned_console
+    assert assigned_console["workflow_decisions_aggregate"]["aggregate"]["count"] == 1
+    assert requester_console["workflow_decisions"] == []
+    assert requester_console["workflow_decisions_by_pk"] is None
+    assert requester_console["workflow_decisions_aggregate"]["aggregate"]["count"] == 0
+    expected_privileged_console = {
         "id": str(decision.sqid),
         "step_run": {"id": str(decision.step_run.sqid)},
     }
+    assert privileged_console["workflow_decisions"] == [expected_privileged_console]
+    assert privileged_console["workflow_decisions_by_pk"] == expected_privileged_console
+    assert privileged_console["workflow_decisions_aggregate"]["aggregate"]["count"] == 1
 
 
 def test_public_decide_mutation_uses_actor_scoped_act_permission(

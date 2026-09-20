@@ -86,6 +86,31 @@ describe("composeAddons", () => {
     ).toThrow(/menu item id "shared.route"/);
   });
 
+  test("preserves route params while composing cross-addon menu targets", () => {
+    const composed = composeAddons(
+      [
+        defineAddon({
+          id: "accounting-intake",
+          menus: [
+            {
+              route: "dashboards.addon",
+              params: { key: "arp.accounting_intake.accounts_payable" },
+            },
+          ],
+        }),
+      ],
+      IDENTITY_CANONICALIZER,
+    );
+
+    expect(composed.menus).toEqual([
+      {
+        id: "dashboards.addon",
+        route: "dashboards.addon",
+        params: { key: "arp.accounting_intake.accounts_payable" },
+      },
+    ]);
+  });
+
   test("requires a menu id when no route can own the default", () => {
     expect(() =>
       composeAddons(
