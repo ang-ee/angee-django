@@ -46,8 +46,6 @@ def addon_manifest(app_config: AppConfig, *, refresh: bool = False) -> AddonMani
             raise ImproperlyConfigured(
                 f"{marker}: addon.name {manifest.name!r} disagrees with AppConfig.name {app_config.name!r}"
             )
-        if len(set(manifest.depends_on)) != len(manifest.depends_on):
-            raise ImproperlyConfigured(f"{manifest.name} declares duplicate dependency in addon.depends_on")
     app_config.__dict__[_MANIFEST_CACHE] = manifest
     return manifest
 
@@ -132,33 +130,57 @@ def resolve_manifest_roots(
     this owner never guesses dotted AppConfig paths or imports disabled addons.
     """
 
-    root_aliases = aliases or {}
     manifests_by_name: dict[str, AddonManifest] = {}
     for manifest in manifests:
         manifests_by_name.setdefault(manifest.name, manifest)
+    ordered = order_app_dependencies(
+        roots,
+        {name: manifest.depends_on for name, manifest in manifests_by_name.items()},
+        aliases=aliases,
+    )
+    return tuple(manifests_by_name[name] for name in ordered)
+
+
+def order_app_dependencies(
+    roots: Iterable[str],
+    dependencies: Mapping[str, tuple[str, ...]],
+    *,
+    aliases: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Order a discovered app graph, rejecting duplicate edges and cycles.
+
+    Visit roots in declaration order and each app's dependencies lexically,
+    completing a dependency's closure before the next sibling or root. This
+    precedence determines composed addon contributions. Only nodes supplied by
+    the discovery owner participate: manifest projections omit plain Django apps,
+    while AppGraph imports and validates every dependency before ordering.
+    """
+
+    app_aliases = aliases or {}
     root_names = tuple(roots)
     if len(set(root_names)) != len(root_names):
         duplicate = next(name for name in root_names if root_names.count(name) > 1)
         raise RuntimeError(f"Duplicate root app {duplicate!r}")
-    ordered: list[AddonManifest] = []
-    visiting: set[str] = set()
+    ordered: list[str] = []
+    visiting: list[str] = []
     visited: set[str] = set()
 
     def visit(declaration: str) -> None:
-        name = root_aliases.get(declaration, declaration)
-        manifest = manifests_by_name.get(name)
-        if manifest is None or name in visited:
+        name = app_aliases.get(declaration, declaration)
+        if name not in dependencies or name in visited:
             return
         if name in visiting:
-            raise RuntimeError(f"Cycle in app dependencies at {name}")
-        if len(set(manifest.depends_on)) != len(manifest.depends_on):
+            cycle = " -> ".join((*visiting[visiting.index(name) :], name))
+            raise RuntimeError(f"Cycle in app dependencies: {cycle}")
+        declared_dependencies = dependencies[name]
+        if len(set(declared_dependencies)) != len(declared_dependencies):
             raise RuntimeError(f"{name} declares duplicate dependency")
-        visiting.add(name)
-        for dependency in sorted(manifest.depends_on):
+        visiting.append(name)
+        for dependency in sorted(declared_dependencies):
             visit(dependency)
-        visiting.remove(name)
+        visiting.pop()
         visited.add(name)
-        ordered.append(manifest)
+        ordered.append(name)
 
     for root in root_names:
         visit(root)

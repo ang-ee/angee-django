@@ -1,17 +1,19 @@
 """Transport-neutral data-surface description values and operations.
 
-This module owns the frozen description objects and their JSON-safe envelope
-serialization. Projection layers supply the final facts; the contract only stores
-and describes them.
+This module owns frozen description objects and declares their JSON-safe envelope
+for Pydantic serialization. Projection layers supply the final facts; the contract
+only stores and describes them.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 from django.db import models
+from pydantic import Field, TypeAdapter, with_config
+from pydantic.alias_generators import to_camel
 
 __all__ = [
     "DataAggregateMeasureMetadata",
@@ -75,7 +77,7 @@ class DataResourceFieldMetadata:
     this flag so a nested relation reads ``{ id <label> }`` and an id projection
     stays a leaf.
     """
-    model_field_name: str | None = dataclasses.field(default=None, metadata={"wire": False})
+    model_field_name: Annotated[str | None, Field(exclude=True)] = None
     """Owning Django field name when the final GraphQL field is aliased."""
 
 
@@ -83,8 +85,8 @@ class DataResourceFieldMetadata:
 class DataQueryValueMap:
     """One backend-owned enum bucket rewrite into an accepted filter value."""
 
-    from_value: Any = dataclasses.field(metadata={"wire": "from"})
-    to_value: Any = dataclasses.field(metadata={"wire": "to"})
+    from_value: Annotated[Any, Field(serialization_alias="from")]
+    to_value: Annotated[Any, Field(serialization_alias="to")]
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,18 +266,18 @@ class DataLinesMetadata:
 class DataResourceRoots:
     """GraphQL wire root names emitted for one model data resource."""
 
-    list_name: str | None = dataclasses.field(default=None, metadata={"wire": "list"})
-    detail_name: str | None = dataclasses.field(default=None, metadata={"wire": "detail"})
-    aggregate_name: str | None = dataclasses.field(default=None, metadata={"wire": "aggregate"})
-    group_name: str | None = dataclasses.field(default=None, metadata={"wire": "groups"})
-    group_count_name: str | None = dataclasses.field(default=None, metadata={"wire": "groupsCount"})
-    create_name: str | None = dataclasses.field(default=None, metadata={"wire": "create"})
-    update_name: str | None = dataclasses.field(default=None, metadata={"wire": "update"})
-    save_name: str | None = dataclasses.field(default=None, metadata={"wire": "save"})
-    delete_name: str | None = dataclasses.field(default=None, metadata={"wire": "delete"})
-    delete_preview_name: str | None = dataclasses.field(default=None, metadata={"wire": "deletePreview"})
-    revisions_name: str | None = dataclasses.field(default=None, metadata={"wire": "revisions"})
-    changes_name: str | None = dataclasses.field(default=None, metadata={"wire": "changes"})
+    list_name: Annotated[str | None, Field(serialization_alias="list")] = None
+    detail_name: Annotated[str | None, Field(serialization_alias="detail")] = None
+    aggregate_name: Annotated[str | None, Field(serialization_alias="aggregate")] = None
+    group_name: Annotated[str | None, Field(serialization_alias="groups")] = None
+    group_count_name: Annotated[str | None, Field(serialization_alias="groupsCount")] = None
+    create_name: Annotated[str | None, Field(serialization_alias="create")] = None
+    update_name: Annotated[str | None, Field(serialization_alias="update")] = None
+    save_name: Annotated[str | None, Field(serialization_alias="save")] = None
+    delete_name: Annotated[str | None, Field(serialization_alias="delete")] = None
+    delete_preview_name: Annotated[str | None, Field(serialization_alias="deletePreview")] = None
+    revisions_name: Annotated[str | None, Field(serialization_alias="revisions")] = None
+    changes_name: Annotated[str | None, Field(serialization_alias="changes")] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,11 +332,12 @@ class GrantableRelationMetadata:
     subjects: tuple[RecordAccessSubjectMetadata, ...]
 
 
+@with_config(alias_generator=to_camel)
 @dataclass(frozen=True, slots=True)
 class DataResourceMetadata:
-    """Internal metadata for one Angee model data resource."""
+    """Final resource facts with camelCase envelope keys, including nested descriptions."""
 
-    model: type[models.Model] | None = dataclasses.field(metadata={"wire": False})
+    model: Annotated[type[models.Model] | None, Field(exclude=True)]
     model_label: str
     resource_type: str | None
     app_label: str
@@ -342,11 +345,10 @@ class DataResourceMetadata:
     query: DataResourceQuery
     roots: DataResourceRoots
     type_names: DataResourceTypeNames
-    contributors: tuple[str, ...] = dataclasses.field(
+    contributors: Annotated[tuple[str, ...], Field(exclude=True)] = dataclasses.field(
         default=(),
         compare=False,
         repr=False,
-        metadata={"wire": False},
     )
     canonical_label: str | None = None
     row_model: str = "server"
@@ -365,12 +367,16 @@ class DataResourceMetadata:
     update_fields: tuple[str, ...] = ()
     required_create_fields: tuple[str, ...] = ()
     revision_fields: tuple[str, ...] = ()
-    lines: DataLinesMetadata | None = dataclasses.field(default=None, metadata={"wire": "linesResource"})
+    lines: Annotated[DataLinesMetadata | None, Field(serialization_alias="linesResource")] = None
 
     def as_wire(self, *, schema_name: str) -> dict[str, object]:
         """Return this resource metadata in JSON-safe frontend wire shape."""
 
-        return {"schemaName": schema_name, **_wire_dataclass(self)}
+        return {"schemaName": schema_name, **_RESOURCE_ADAPTER.dump_python(self, mode="json", by_alias=True)}
+
+
+_RESOURCE_ADAPTER = TypeAdapter(DataResourceMetadata)
+"""Serialize nested descriptions through the root adapter to inherit its envelope aliases."""
 
 
 def serialize_data_resources(
@@ -381,47 +387,3 @@ def serialize_data_resources(
     """Return a JSON-safe schema-extension payload for resource metadata."""
 
     return [item.as_wire(schema_name=schema_name) for item in metadata]
-
-
-def _wire_dataclass(instance: Any) -> dict[str, object]:
-    """Serialize one metadata dataclass through its own declared wire shape.
-
-    Each dataclass owns its wire mapping: a field serializes under its
-    ``_metadata_key`` (camelCase) name unless it declares a ``wire`` key in field
-    metadata, and fields marked ``{"wire": False}`` (the Python type handles) are
-    omitted.
-    """
-
-    payload: dict[str, object] = {}
-    for field_def in dataclasses.fields(instance):
-        wire = field_def.metadata.get("wire", True)
-        if wire is False:
-            continue
-        key = wire if isinstance(wire, str) else _metadata_key(field_def.name)
-        payload[key] = _wire_value(getattr(instance, field_def.name))
-    return payload
-
-
-def _wire_value(value: object) -> object:
-    """Return a JSON-safe wire value for one metadata field."""
-
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return _wire_dataclass(value)
-    if isinstance(value, dict):
-        return {key: _wire_value(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_wire_value(item) for item in value]
-    return value
-
-
-def _metadata_key(name: str) -> str:
-    """Return the contract's camelCase JSON key for one metadata field.
-
-    Envelope keys are camelCase independently of the GraphQL wire field names,
-    which remain snake_case. This intentionally matches Strawberry's
-    ``to_camel_case`` algorithm without importing Strawberry, keeping historical
-    envelopes byte-stable while the contract remains outside that dependency.
-    """
-
-    first, *rest = name.split("_")
-    return first + "".join(part.capitalize() if part else "_" for part in rest)

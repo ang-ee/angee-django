@@ -5,13 +5,13 @@ from __future__ import annotations
 import importlib.util
 from datetime import date, datetime
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
 import pytest
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.test import override_settings
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer
 
 from angee.base.impl import (
     ImplBase,
@@ -235,6 +235,96 @@ def test_typed_config_projects_supported_scalars_and_validates_paths() -> None:
 
     with pytest.raises(ValidationError, match="config.retries"):
         _TypedConfigImpl.normalize_config({"endpoint": "https://example.test"})
+
+
+def test_typed_config_defaults_do_not_depend_on_form_projection() -> None:
+    """Backend defaults remain available for declarations the bounded UI cannot render."""
+
+    class BackendConfig(BaseModel):
+        required: str
+        headers: dict[str, str] = {"Accept": "application/json"}
+        blank: str = ""
+        optional: str | None = None
+        enabled: bool = False
+        retries: int = 0
+
+    class BackendImpl(ImplBase):
+        config_model = BackendConfig
+
+    assert BackendImpl.config_defaults() == {
+        "headers": {"Accept": "application/json"},
+        "enabled": False,
+        "retries": 0,
+    }
+    assert BackendImpl.effective_defaults()["config"] == BackendImpl.config_defaults()
+    with pytest.raises(ImproperlyConfigured, match=r"config\.headers.*additionalProperties"):
+        BackendImpl.config_form_spec()
+
+
+def test_typed_config_defaults_preserve_json_aliases_and_mutable_isolation() -> None:
+    """Static defaults retain aliases, native JSON encoding and mutable isolation."""
+
+    class Mode(str, Enum):
+        SAFE = "safe"
+
+    class NestedConfig(BaseModel):
+        tags: list[str] = Field(default=["declared"], alias="wireTags")
+
+    class BackendConfig(BaseModel):
+        model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
+
+        nested: NestedConfig = Field(default=NestedConfig(), alias="wireNested")
+        scheduled: date = date(2026, 9, 20)
+        mode: Mode = Mode.SAFE
+        encoded: bytes = b"declared"
+
+    class BackendImpl(ImplBase):
+        config_model = BackendConfig
+
+    expected = {
+        "wireNested": {"wireTags": ["declared"]},
+        "scheduled": "2026-09-20",
+        "mode": "safe",
+        "encoded": "ZGVjbGFyZWQ=",
+    }
+    first = BackendImpl.config_defaults()
+    second = BackendImpl.config_defaults()
+    assert first == second == BackendImpl.normalize_config(first) == expected
+    first["wireNested"]["wireTags"].append("changed")
+    assert second == BackendImpl.config_defaults() == expected
+
+
+def test_typed_config_defaults_are_inputs_before_output_serializers_and_exclusions() -> None:
+    """Suggestions preserve input defaults; normalization owns the model's output rules."""
+
+    class BackendConfig(BaseModel):
+        value: Annotated[int, PlainSerializer(lambda value: f"{value:02d}", return_type=str)] = 7
+        internal_token: str = Field(default="seed", exclude=True)
+
+    class BackendImpl(ImplBase):
+        config_model = BackendConfig
+
+    suggestions = BackendImpl.config_defaults()
+    assert suggestions == {"value": 7, "internal_token": "seed"}
+    assert BackendImpl.normalize_config(suggestions) == {"value": "07"}
+    spec = BackendImpl.config_form_spec()
+    assert spec is not None
+    assert spec["properties"]["value"]["defaultValue"] == 7
+
+
+def test_typed_config_defaults_compose_native_json_schema_declarations() -> None:
+    """Native schema customization supplies the same suggestion to backend and form."""
+
+    class BackendConfig(BaseModel):
+        value: int = Field(default=7, json_schema_extra={"default": 9})
+
+    class BackendImpl(ImplBase):
+        config_model = BackendConfig
+
+    assert BackendImpl.config_defaults() == {"value": 9}
+    spec = BackendImpl.config_form_spec()
+    assert spec is not None
+    assert spec["properties"]["value"]["defaultValue"] == 9
 
 
 def test_typed_config_projects_native_input_constraints() -> None:
@@ -513,7 +603,10 @@ def test_typed_config_omits_default_factory_without_invoking_it() -> None:
     assert "defaultValue" not in spec["properties"]["generated"]
     assert spec["properties"]["static"]["defaultValue"] == ["declared"]
     assert FactoryImpl.config_defaults() == {"static": ["declared"]}
+    assert FactoryImpl.choice().defaults == {"config": {"static": ["declared"]}}
     assert calls == 0
+    assert FactoryImpl.normalize_config({}) == {"generated": ["runtime"], "static": ["declared"]}
+    assert calls == 1
 
 
 @pytest.mark.parametrize(
@@ -576,6 +669,8 @@ def test_typed_config_rejects_recursive_models_and_preserves_string_aliases() ->
 
     with pytest.raises(ImproperlyConfigured, match=r"AmbiguousImpl.*config\.value.*one string alias"):
         AmbiguousImpl.config_form_spec()
+    with pytest.raises(ImproperlyConfigured, match=r"AmbiguousImpl.*config\.value.*one string alias"):
+        AmbiguousImpl.config_defaults()
 
     class CollidingConfig(BaseModel):
         value: str = Field(alias="wireValue")
@@ -586,6 +681,8 @@ def test_typed_config_rejects_recursive_models_and_preserves_string_aliases() ->
 
     with pytest.raises(ImproperlyConfigured, match=r"CollidingImpl.*colliding wire names.*wireValue"):
         CollidingImpl.config_form_spec()
+    with pytest.raises(ImproperlyConfigured, match=r"CollidingImpl.*colliding wire names.*wireValue"):
+        CollidingImpl.config_defaults()
 
 
 def test_materialize_seeds_only_unprovided_fields() -> None:

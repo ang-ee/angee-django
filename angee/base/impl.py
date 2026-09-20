@@ -108,7 +108,7 @@ class _ConfigFormSpecProjector:
 
     def __init__(self, model: type[BaseModel], *, owner: str) -> None:
         self.owner = owner
-        self._validate_aliases(model, path="config", seen=frozenset())
+        _validate_config_aliases(model, owner=owner)
         self.schema = model.model_json_schema(by_alias=True)
         definitions = self.schema.pop("$defs", {})
         if not isinstance(definitions, dict):
@@ -292,38 +292,6 @@ class _ConfigFormSpecProjector:
         if unsupported:
             self._unsupported(path, f"keywords {', '.join(unsupported)}")
 
-    def _validate_aliases(
-        self, model: type[BaseModel], *, path: str, seen: frozenset[type[BaseModel]]
-    ) -> None:
-        if model in seen:
-            return
-        wire_names = [field.alias or name for name, field in model.model_fields.items()]
-        duplicates = sorted({name for name in wire_names if wire_names.count(name) > 1})
-        if duplicates:
-            raise ImproperlyConfigured(
-                f"{self.owner}.config_model field {path!r} has colliding wire names: {', '.join(duplicates)}."
-            )
-        for name, field in model.model_fields.items():
-            field_path = f"{path}.{name}"
-            alias = field.alias
-            if (
-                alias is None
-                and (field.validation_alias is not None or field.serialization_alias is not None)
-            ) or (
-                alias is not None
-                and (
-                    not isinstance(alias, str)
-                    or field.validation_alias != alias
-                    or field.serialization_alias != alias
-                )
-            ):
-                raise ImproperlyConfigured(
-                    f"{self.owner}.config_model field {field_path!r} must use one string alias "
-                    "for validation and serialization."
-                )
-            for nested in _pydantic_models_in(field.annotation):
-                self._validate_aliases(nested, path=field_path, seen=seen | {model})
-
     def _unsupported(self, path: str, detail: str) -> NoReturn:
         raise ImproperlyConfigured(f"{self.owner}.config_model field {path!r} uses unsupported schema: {detail}.")
 
@@ -332,6 +300,33 @@ def _pydantic_models_in(annotation: Any) -> tuple[type[BaseModel], ...]:
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return (annotation,)
     return tuple(model for argument in get_args(annotation) for model in _pydantic_models_in(argument))
+
+
+def _validate_config_aliases(
+    model: type[BaseModel], *, owner: str, path: str = "config", seen: frozenset[type[BaseModel]] = frozenset()
+) -> None:
+    """Keep one unambiguous input/output identity for every declared config field."""
+
+    if model in seen:
+        return
+    wire_names = [field.alias or name for name, field in model.model_fields.items()]
+    duplicates = sorted({name for name in wire_names if wire_names.count(name) > 1})
+    if duplicates:
+        raise ImproperlyConfigured(
+            f"{owner}.config_model field {path!r} has colliding wire names: {', '.join(duplicates)}."
+        )
+    for name, field in model.model_fields.items():
+        field_path = f"{path}.{name}"
+        alias = field.alias
+        if (alias is None and (field.validation_alias is not None or field.serialization_alias is not None)) or (
+            alias is not None
+            and (not isinstance(alias, str) or field.validation_alias != alias or field.serialization_alias != alias)
+        ):
+            raise ImproperlyConfigured(
+                f"{owner}.config_model field {field_path!r} must use one string alias for validation and serialization."
+            )
+        for nested in _pydantic_models_in(field.annotation):
+            _validate_config_aliases(nested, owner=owner, path=field_path, seen=seen | {model})
 
 
 def model_config_form_spec(model: type[BaseModel], *, owner: str) -> dict[str, Any]:
@@ -390,16 +385,21 @@ class ImplBase:
 
     @classmethod
     def config_defaults(cls) -> dict[str, Any]:
-        """Return non-empty config suggestions from the authoritative typed declaration."""
+        """Return non-empty static input suggestions from Pydantic's JSON Schema.
+
+        Pydantic's validation schema owns default encoding and omits factories;
+        ``normalize_config`` resolves those when validating runtime input.
+        FormSpec support does not determine which backend defaults are available.
+        """
 
         if cls.config_model is None:
             return {}
-        spec = cls.config_form_spec()
-        assert spec is not None
+        _validate_config_aliases(cls.config_model, owner=cls.__name__)
+        schema = cls.config_model.model_json_schema(by_alias=True)
         return {
-            name: copy.deepcopy(field["defaultValue"])
-            for name, field in spec["properties"].items()
-            if field.get("defaultValue") not in (None, "")
+            name: copy.deepcopy(field["default"])
+            for name, field in schema["properties"].items()
+            if field.get("default") not in (None, "")
         }
 
     @classmethod
