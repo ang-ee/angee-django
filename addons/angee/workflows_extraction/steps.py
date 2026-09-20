@@ -247,11 +247,16 @@ class RecognizePageStepImpl(StepImpl):
             )
             engine = engine_class()
             engine.validate_model(model, role="recognition")
-            response = engine.recognize_page(
-                PageImage(value.source_position, value.page_position, "image/jpeg", image_bytes,
-                          value.width, value.height, value.dpi),
-                model=model, config=value.engine_config, timeout=value.timeout,
-            )
+            try:
+                response = engine.recognize_page(
+                    PageImage(value.source_position, value.page_position, "image/jpeg", image_bytes,
+                              value.width, value.height, value.dpi),
+                    model=model, config=value.engine_config, timeout=value.timeout,
+                )
+            except DocumentPipelineError as error:
+                step_run.run.debit_budget(error.usage_delta)
+                raise
+            step_run.run.debit_budget(response.usage_delta)
             if not isinstance(response.text, str) or "\x00" in response.text:
                 raise ValidationError({"recognition": "The recognizer did not return valid text."})
             text = response.text.encode("utf-8")
@@ -564,6 +569,7 @@ class InferEvidenceStepImpl(StepImpl):
                     retired_identities=value.retired_identities,
                 )
             except DocumentPipelineError as error:
+                step_run.run.debit_budget(error.usage_delta)
                 if (
                     error.code == RETAINED_CARRIER_UNAVAILABLE
                     and error.stage == "correspondence"
@@ -591,6 +597,7 @@ class InferEvidenceStepImpl(StepImpl):
                     outcome="inference_failed",
                     artifacts=(ArtifactSpec(base, "Source evidence requiring manual review"),),
                 )
+        step_run.run.debit_budget(outcome.usage_delta)
         if isinstance(outcome, SupersededInference):
             with actor_context(actor):
                 current = apps.get_model("workflows_extraction", "Extraction").objects.get(
@@ -601,7 +608,7 @@ class InferEvidenceStepImpl(StepImpl):
                 outcome="superseded", artifacts=(ArtifactSpec(current, "Current extraction evidence"),),
             )
         return _retained_inference_result(
-            outcome,
+            outcome.extraction,
             actor=actor,
             success_outcome="inferred",
             artifact_label="Inferred extraction evidence",
