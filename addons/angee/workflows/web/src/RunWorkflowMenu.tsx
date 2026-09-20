@@ -13,9 +13,11 @@ import {
   MutationDialog,
   mutationDialogValueCodecs,
   useActionResultRun,
+  useModelSlot,
   useRecordChromeContext,
   type MutationDialogField,
   type MutationDialogValues,
+  type SlotContribution,
 } from "@angee/ui";
 import * as React from "react";
 
@@ -25,6 +27,10 @@ import {
   WorkflowsForSubjectDeclarationDocument,
 } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
+import {
+  WORKFLOW_LAUNCH_CLAIM_SLOT,
+  type WorkflowLaunchClaimContent,
+} from "./slots";
 
 const WORKFLOW_MODEL = "workflows.Workflow";
 const WORKFLOW_RUN_MODEL = "workflows.WorkflowRun";
@@ -44,6 +50,11 @@ const WORKFLOW_TECHNICAL_MODELS: ReadonlySet<string> = new Set([
 export function RunWorkflowMenu(): React.ReactElement | null {
   const t = useWorkflowsT();
   const { resource, dataProviderName, recordId } = useRecordChromeContext();
+  const claimTarget = React.useMemo(
+    () => ({ slot: WORKFLOW_LAUNCH_CLAIM_SLOT, model: resource }),
+    [resource],
+  );
+  const claimEntries = useModelSlot(claimTarget);
   const isWorkflowDefinition = resource === WORKFLOW_MODEL;
   const acceptsRecordAutomations = !WORKFLOW_TECHNICAL_MODELS.has(resource);
   const query = useAuthoredQuery(
@@ -66,6 +77,13 @@ export function RunWorkflowMenu(): React.ReactElement | null {
     noResultTitle: t("runWorkflow.failed"),
   });
   const workflows = query.data?.workflows_for_subject_declaration ?? [];
+  const claims = resolveWorkflowLaunchClaims(claimEntries, resource);
+  const availableKeys = new Set(workflows.map((workflow) => workflow.key));
+  const claimedKeys = new Set(claims.flatMap((claim) => claim.workflowKeys));
+  const activeClaims = claims
+    .filter((claim) => claim.workflowKeys.some((key) => availableKeys.has(key)))
+    .sort((left, right) => (left.sequence ?? 0) - (right.sequence ?? 0));
+  const genericWorkflows = workflows.filter((workflow) => !claimedKeys.has(workflow.key));
 
   if (isWorkflowDefinition) {
     return (
@@ -82,47 +100,103 @@ export function RunWorkflowMenu(): React.ReactElement | null {
   if (workflows.length === 0) return null;
 
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger
-        render={
-          <Button type="button" variant="ghost" size="md" loading={startState.fetching}>
-            <Glyph name="workflow-run" />
-            {t("runWorkflow.label")}
-            <Glyph decorative name="chevron-down" className="size-3" />
-          </Button>
-        }
-      />
-      <DropdownMenu.Portal>
-        <DropdownMenu.Positioner sideOffset={6} align="start">
-          <DropdownMenu.Content className="w-56">
-            <DropdownMenu.Group>
-              <DropdownMenu.Label>{t("runWorkflow.menuPurpose")}</DropdownMenu.Label>
-              {workflows.map((workflow) => (
-                <DropdownMenu.Item
-                  key={workflow.id}
-                  disabled={startState.fetching}
-                  onClick={() =>
-                    void settle(async () =>
-                      extractActionOutcome(
-                        await startWorkflow({
-                          workflow: workflow.id,
-                          subject: { subject_declaration: resource, id: recordId },
-                        }),
-                        "start_workflow_run",
-                      ),
-                    )
-                  }
-                >
-                  <Glyph name="workflow-run" />
-                  {workflow.name}
-                </DropdownMenu.Item>
-              ))}
-            </DropdownMenu.Group>
-          </DropdownMenu.Content>
-        </DropdownMenu.Positioner>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+    <div className="flex items-center gap-2">
+      {activeClaims.map((claim) => (
+        <React.Fragment key={claim.id}>{claim.content}</React.Fragment>
+      ))}
+      {genericWorkflows.length > 0 ? (
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            render={
+              <Button type="button" variant="ghost" size="md" loading={startState.fetching}>
+                <Glyph name="workflow-run" />
+                {t("runWorkflow.label")}
+                <Glyph decorative name="chevron-down" className="size-3" />
+              </Button>
+            }
+          />
+          <DropdownMenu.Portal>
+            <DropdownMenu.Positioner sideOffset={6} align="start">
+              <DropdownMenu.Content className="w-56">
+                <DropdownMenu.Group>
+                  <DropdownMenu.Label>{t("runWorkflow.menuPurpose")}</DropdownMenu.Label>
+                  {genericWorkflows.map((workflow) => (
+                    <DropdownMenu.Item
+                      key={workflow.id}
+                      disabled={startState.fetching}
+                      onClick={() =>
+                        void settle(async () =>
+                          extractActionOutcome(
+                            await startWorkflow({
+                              workflow: workflow.id,
+                              subject: { subject_declaration: resource, id: recordId },
+                            }),
+                            "start_workflow_run",
+                          ),
+                        )
+                      }
+                    >
+                      <Glyph name="workflow-run" />
+                      {workflow.name}
+                    </DropdownMenu.Item>
+                  ))}
+                </DropdownMenu.Group>
+              </DropdownMenu.Content>
+            </DropdownMenu.Positioner>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      ) : null}
+    </div>
   );
+}
+
+interface ResolvedWorkflowLaunchClaim extends WorkflowLaunchClaimContent {
+  id: string;
+  sequence?: number;
+}
+
+function resolveWorkflowLaunchClaims(
+  entries: readonly SlotContribution[],
+  subjectModel: string,
+): readonly ResolvedWorkflowLaunchClaim[] {
+  const owners = new Map<string, string>();
+  return entries.map((entry) => {
+    const claim = workflowLaunchClaimContent(entry);
+    for (const key of claim.workflowKeys) {
+      if (owners.has(key)) {
+        const owner = owners.get(key);
+        throw new Error(
+          `Workflow lineage "${key}" for subject model "${subjectModel}" is claimed by both "${owner}" and "${entry.id}".`,
+        );
+      }
+      owners.set(key, entry.id);
+    }
+    return { id: entry.id, sequence: entry.sequence, ...claim };
+  });
+}
+
+function workflowLaunchClaimContent(entry: SlotContribution): WorkflowLaunchClaimContent {
+  const value = entry.content;
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`Workflow launch claim "${entry.id}" has invalid content.`);
+  }
+  const candidate = value as { workflowKeys?: unknown; content?: unknown };
+  if (
+    !isWorkflowKeyList(candidate.workflowKeys)
+    || !React.isValidElement(candidate.content)
+  ) {
+    throw new Error(`Workflow launch claim "${entry.id}" has invalid content.`);
+  }
+  return {
+    workflowKeys: candidate.workflowKeys,
+    content: candidate.content,
+  };
+}
+
+function isWorkflowKeyList(value: unknown): value is readonly string[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((key) => typeof key === "string" && key.trim().length > 0);
 }
 
 type WorkflowLaunchProjection = NonNullable<

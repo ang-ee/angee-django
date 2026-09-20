@@ -423,6 +423,7 @@ export const WorkflowsForSubjectDeclarationDocument = graphql(`
       subject_declaration: $subjectDeclaration
     ) {
       id
+      key
       name
       subject_declaration
     }
