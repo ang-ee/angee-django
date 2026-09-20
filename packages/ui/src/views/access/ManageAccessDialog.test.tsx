@@ -76,6 +76,17 @@ test("explains an empty grantable intersection while retaining existing access e
   expect(screen.getByText("Existing recipient")).toBeTruthy();
 });
 
+test("omits the Share trigger when an existing action opens the dialog", () => {
+  render(<ManageAccessDialog
+    open onOpenChange={vi.fn()} trigger={null} label="AP folder"
+    targetIds={["1"]} grantable={[]} entries={[]} fetching={false} error={null}
+    onRetry={vi.fn()} onGrant={vi.fn()} onRevoke={vi.fn()}
+  />);
+
+  expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "Share AP folder" })).toBeTruthy();
+});
+
 test("explains a relation without selectable subject types while keeping relation selection available", () => {
   render(<ManageAccessDialog
     open

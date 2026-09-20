@@ -40,7 +40,8 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import request_from_info, session_user
+from angee.iam.permissions import read_resource_queryset, request_from_info, session_user
+from angee.iam.schema import UserType
 from angee.workflows import engine
 from angee.workflows.attempts import JsonPresence, deserialize_decision_specs
 from angee.workflows.data_contracts import DataContract, FlatDataContractEdge, FlatDataContractNode
@@ -99,16 +100,6 @@ _PROJECTED_STEP_NAME = "_workflows_step_name"
 _PROJECTED_STEP_KEY = "_workflows_step_key"
 _PROJECTED_SYSTEM_KIND = "_workflows_system_kind"
 _PROJECTED_STEP_RUN_ID = "_workflows_step_run_id"
-
-
-def _read_resource_queryset(model: type[models.Model]) -> Any:
-    """Bind one read-only resource to the model's native REBAC read scope."""
-
-    def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        scoped = read_scoped_queryset(model, session_user(info), action="read")
-        return model.objects.none() if scoped is None else scoped
-
-    return get_queryset
 
 
 def _artifact_queryset_for_actor(actor: Any) -> models.QuerySet[Any]:
@@ -302,6 +293,9 @@ class WorkflowType(AngeeNode):
     error_workflow: "WorkflowType | None"
     max_steps: auto
     budget: JSON
+    input_schema: JSON
+    output_schema: JSON
+    result_rules: JSON
     created_at: auto
     updated_at: auto
 
@@ -394,7 +388,7 @@ class TriggerType(AngeeNode):
     """Admin projection of a workflow trigger definition."""
 
     workflow: WorkflowType
-    execution_actor: auto
+    execution_actor: UserType | None
     kind: auto
     enabled: auto
     config: JSON
@@ -584,6 +578,8 @@ class WorkflowRecoveryPlan:
     available: bool
     mode: str | None
     unavailable_reason: str
+    requires_uncertainty_ack: bool
+    uncertainty_reason: str
 
 
 @strawberry.type
@@ -832,6 +828,8 @@ class WorkflowTestSetupQuery:
             available=plan.capability.available,
             mode=None if plan.capability.mode is None else str(plan.capability.mode),
             unavailable_reason=plan.capability.unavailable_reason,
+            requires_uncertainty_ack=plan.capability.requires_uncertainty_ack,
+            uncertainty_reason=plan.capability.uncertainty_reason,
         )
 
     @strawberry.field
@@ -890,6 +888,7 @@ class WorkflowRunType(AngeeNode):
     occurrence_id: auto
     trigger: TriggerType | None
     parent_step_run: "StepRunType | None"
+    parent_relation: auto
     recovery_source_attempt: "StepAttemptType | None"
     reprocessed_from: "WorkflowRunType | None"
     recovery_mode: auto
@@ -900,6 +899,7 @@ class WorkflowRunType(AngeeNode):
     steps_taken: auto
     budget_spent: JSON
     error: auto
+    result: JSON | None
     created_at: auto
     updated_at: auto
 
@@ -933,6 +933,7 @@ class StepRunType(AngeeNode):
     status: auto
     input: JSON
     output: JSON
+    output_present: auto
     resume_state: JSON
     outcome: auto
     attempt: auto
@@ -1291,6 +1292,9 @@ class WorkflowDefinitionPatchInput:
     error_workflow: PublicID | None = strawberry.UNSET
     max_steps: int | None = strawberry.UNSET
     budget: JSON | None = strawberry.UNSET
+    input_schema: JSON | None = strawberry.UNSET
+    output_schema: JSON | None = strawberry.UNSET
+    result_rules: JSON | None = strawberry.UNSET
 
 
 @strawberry.input
@@ -1657,7 +1661,7 @@ _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_resource_queryset(WorkflowRun),
+    get_queryset=read_resource_queryset(WorkflowRun),
     field_id_decode={
         "workflow": public_pk_decoder(Workflow),
         "workflow__published_from": public_pk_decoder(Workflow),
@@ -1688,7 +1692,7 @@ _STEP_RUN_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_resource_queryset(StepRun),
+    get_queryset=read_resource_queryset(StepRun),
     field_id_decode={
         "run": public_pk_decoder(WorkflowRun),
         "step": public_pk_decoder(Step),
@@ -1723,7 +1727,7 @@ _STEP_ATTEMPT_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_resource_queryset(StepAttempt),
+    get_queryset=read_resource_queryset(StepAttempt),
     field_id_decode={
         "step_run": public_pk_decoder(StepRun),
         "retry_of": public_pk_decoder(StepAttempt),
@@ -1790,7 +1794,7 @@ _DECISION_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_resource_queryset(Decision),
+    get_queryset=read_resource_queryset(Decision),
     field_id_decode={
         "step_run": public_pk_decoder(StepRun),
         "step_run__step": public_pk_decoder(Step),
@@ -1844,7 +1848,7 @@ _PUBLIC_DECISION_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=_read_resource_queryset(Decision),
+    get_queryset=read_resource_queryset(Decision),
     field_id_decode={
         "step_run": public_pk_decoder(StepRun),
         "step_run__step": public_pk_decoder(Step),
@@ -1909,22 +1913,25 @@ class WorkflowSubjectDeclarationQuery:
         )
         failures = failure_candidates[:200]
         artifacts, artifacts_truncated = _artifact_queryset(info).history_page(runs, limit=200)
+        run_history_truncated = (
+            truncated
+            or len(child_candidates) > 200
+            or len(failure_candidates) > 200
+            or artifacts_truncated
+        )
         return WorkflowSubjectHistory(
             runs=cast(list[WorkflowRunType], runs),
-            pending_decisions=cast(list[DecisionType], decisions),
+            decisions=cast(list[DecisionType], decisions),
+            pending_decisions=cast(list[DecisionType], decisions.filter(verdict="pending")),
             failures=cast(list[StepRunType], failures),
             artifacts=cast(list[StepArtifactType], artifacts),
             child_runs=[WorkflowChildRun(
                 parent_run_id=cast(strawberry.ID, to_public_id(WorkflowRun, row.parent_step_run.run_id)),
                 run=cast(WorkflowRunType, row),
             ) for row in child_rows],
-            truncated=(
-                truncated
-                or decisions_truncated
-                or len(child_candidates) > 200
-                or len(failure_candidates) > 200
-                or artifacts_truncated
-            ),
+            runs_truncated=run_history_truncated,
+            decisions_truncated=decisions_truncated,
+            truncated=run_history_truncated or decisions_truncated,
         )
 
 
@@ -1933,10 +1940,13 @@ class WorkflowSubjectHistory:
     """Actor-readable workflow history composed without per-run query fanout."""
 
     runs: list[WorkflowRunType]
+    decisions: list[DecisionType]
     pending_decisions: list[DecisionType]
     failures: list[StepRunType]
     artifacts: list[StepArtifactType]
     child_runs: list["WorkflowChildRun"]
+    runs_truncated: bool
+    decisions_truncated: bool
     truncated: bool
 
 
@@ -1951,7 +1961,7 @@ class WorkflowChildRun:
 def _workflow_subject_history(
     subject: WorkflowObjectRefInput, *, actor: Any,
 ) -> tuple[models.QuerySet[Any], models.QuerySet[Any], bool, bool]:
-    """Resolve shared subject/artifact run scope and its pending target actions."""
+    """Resolve readable runs and Decisions related by exact retained identity."""
 
     empty_runs = WorkflowRun.objects.none()
     empty_decisions = Decision.objects.none()
@@ -1968,27 +1978,50 @@ def _workflow_subject_history(
     content_type = ContentType.objects.get_for_model(target, for_concrete_model=False)
     readable_runs = read_scoped_queryset(cast(type[models.Model], WorkflowRun), actor)
     readable_decisions = read_scoped_queryset(cast(type[models.Model], Decision), actor)
-    if readable_runs is None:
-        return empty_runs, empty_decisions, False, False
     artifact_content_type, artifact_object_id = canonical_record_target(target)
-    artifact_runs = _artifact_queryset_for_actor(actor).filter(
-        target_content_type=artifact_content_type, target_object_id=artifact_object_id,
-    ).values("attempt__step_run__run_id")
-    candidates = readable_runs.filter(
-        models.Q(subject_content_type=content_type, subject_object_id=target.pk)
-        | models.Q(pk__in=models.Subquery(artifact_runs)),
-    ).distinct().order_by("-created_at", "-pk")
-    run_ids = list(candidates.values_list("pk", flat=True)[:101])
-    truncated = len(run_ids) > 100
-    runs = readable_runs.filter(pk__in=run_ids[:100]).select_related("workflow").order_by("-created_at", "-pk")
+    if readable_runs is None:
+        runs, truncated = empty_runs, False
+    else:
+        artifact_runs = _artifact_queryset_for_actor(actor).filter(
+            target_content_type=artifact_content_type, target_object_id=artifact_object_id,
+        ).values("attempt__step_run__run_id")
+        candidates = readable_runs.filter(
+            models.Q(subject_content_type=content_type, subject_object_id=target.pk)
+            | models.Q(pk__in=models.Subquery(artifact_runs)),
+        ).distinct().order_by("-created_at", "-pk")
+        run_ids = list(candidates.values_list("pk", flat=True)[:101])
+        truncated = len(run_ids) > 100
+        runs = readable_runs.filter(pk__in=run_ids[:100]).select_related("workflow").order_by(
+            "-created_at", "-pk",
+        )
     if readable_decisions is None:
         return runs, empty_decisions, truncated, False
-    decision_scope = readable_decisions.filter(
-        step_run__run_id__in=models.Subquery(runs.order_by().values("pk")),
-        verdict="pending",
-    ).select_related(
+    canonical_model = artifact_content_type.model_class()
+    if canonical_model is None:
+        return runs, empty_decisions, truncated, False
+    target_id = str(to_public_id(canonical_model, artifact_object_id))
+    decision_relation = models.Q(
+        target_model=canonical_model._meta.label,
+        target_id=target_id,
+    )
+    if readable_runs is not None:
+        decision_relation |= models.Q(
+            step_run__run_id__in=models.Subquery(runs.order_by().values("pk")),
+        )
+    decision_scope = readable_decisions.filter(decision_relation).distinct().select_related(
         "step_run__run", "suspension_attempt",
-    ).order_by("priority", "created_at", "pk")
+    ).order_by(
+        models.Case(
+            models.When(verdict="pending", then=models.Value(0)),
+            default=models.Value(1),
+        ).asc(),
+        models.Case(
+            models.When(verdict="pending", then=models.F("priority")),
+            default=models.Value(0),
+        ).asc(),
+        models.F("created_at").desc(),
+        models.F("pk").desc(),
+    )
     decision_ids = list(decision_scope.values_list("pk", flat=True)[:201])
     decisions = decision_scope.filter(pk__in=decision_ids[:200])
     return runs, decisions, truncated, len(decision_ids) > 200
@@ -2694,16 +2727,23 @@ class WorkflowRunActionMutation:
         info: strawberry.Info,
         source_attempt: PublicID,
         request_key: str,
+        acknowledge_uncertain_external: bool = False,
+        prior_recovery: PublicID | None = None,
     ) -> ActionResult:
         """Start or recover one idempotent run from exact retained failure evidence."""
 
         attempt = instance_for_id(StepAttempt, source_attempt)
         if attempt is None:
             raise ValidationError({"source_attempt": "Recovery source evidence is unavailable."})
+        prior = instance_for_id(WorkflowRun, prior_recovery) if prior_recovery is not None else None
+        if prior_recovery is not None and prior is None:
+            raise ValidationError({"prior_recovery": "Prior recovery is unavailable."})
         run = WorkflowRun.objects.start_recovery(
             attempt,
             request_key=request_key,
             actor=session_user(info),
+            acknowledge_uncertain_external=acknowledge_uncertain_external,
+            prior_recovery=prior,
         )
         return ActionResult(ok=True, message=f"Started workflow recovery {run.sqid}.", id=run.sqid)
 

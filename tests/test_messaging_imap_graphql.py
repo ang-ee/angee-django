@@ -11,7 +11,7 @@ from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
-from angee.messaging_integrate_imap.backend import ImapChannelBackend
+from angee.messaging_integrate_imap.backend import ImapChannelBackend, ImapError
 from tests.conftest import SchemaAddon, Vendor, execute_schema
 from tests.conftest import result_data as _data
 from tests.test_messaging_graphql import (
@@ -23,7 +23,7 @@ from tests.test_messaging_graphql import (
     messaging_schema,
     parties_schema,
 )
-from tests.test_messaging_imap import FakeImapAccount, FakeIMAPClient
+from tests.test_messaging_imap import FakeImapAccount, FakeIMAPClient, _eml
 
 pytest_plugins = ("tests.test_messaging_graphql",)
 
@@ -213,6 +213,62 @@ def test_update_imap_channel_credential_refuses_blank_material(messaging_graphql
     with system_context(reason="test.messaging.imap.rotate.blank.verify"):
         saved = Channel.objects.get(sqid=channel["id"])
         assert saved.credential.reveal()["password"] == "mail-password"
+
+
+def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
+    messaging_graphql_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The paused action skips the current UID set once and never backfills after an epoch change."""
+
+    admin = _platform_admin("msg-imap-new-mail-admin")
+    _seed_imap_vendor()
+    channel = _connect(admin, {**_CONNECT_VARIABLES, "host": "10.0.0.4", "mailboxes": ["INBOX"]})
+    account = FakeImapAccount(
+        {
+            "INBOX": {
+                "flags": (b"\\HasNoChildren",),
+                "uidvalidity": 100,
+                "messages": {
+                    1: {"raw": _eml(subject="old one", message_id="<old-1@example.com>")},
+                    2: {"raw": _eml(subject="old two", message_id="<old-2@example.com>")},
+                },
+            }
+        }
+    )
+    monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
+    monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
+    with system_context(reason="test.messaging.imap.new_mail.pause"):
+        saved = Channel.objects.get(sqid=channel["id"])
+        saved.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
+        saved.save(update_fields=["cursor", "updated_at"])
+        saved.pause()
+
+    with system_context(reason="test.messaging.imap.new_mail.first"):
+        saved = Channel.objects.get(sqid=channel["id"])
+    assert saved.prepare_imap_new_mail(actor=admin) == (1, True)
+
+    account.folders["INBOX"]["messages"][3] = {
+        "raw": _eml(subject="new", message_id="<new@example.com>")
+    }
+    with system_context(reason="test.messaging.imap.new_mail.repeat"):
+        saved = Channel.objects.get(sqid=channel["id"])
+    assert saved.prepare_imap_new_mail(actor=admin) == (1, False)
+
+    with system_context(reason="test.messaging.imap.new_mail.verify"):
+        saved = Channel.objects.get(sqid=channel["id"])
+        assert saved.cursor["delivery_mode"] == "new_only"
+        assert len(saved.cursor["source_identity"]) == 64
+        assert saved.cursor["mailboxes"] == {"INBOX": {"uidvalidity": 100, "last_uid": 2}}
+        backend = saved.backend
+        messages = []
+        while batch := backend.fetch_messages():
+            messages.extend(batch)
+        assert [message.subject for message in messages] == ["new"]
+
+        account.folders["INBOX"]["uidvalidity"] = 200
+        with pytest.raises(ImapError, match="changed UIDVALIDITY after its new-mail starting point"):
+            saved.backend.fetch_messages()
 
 
 def test_test_connection_logs_in_through_the_imap_backend(

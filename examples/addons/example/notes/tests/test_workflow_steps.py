@@ -50,9 +50,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         for enqueue_name in (
             "enqueue_advance",
             "enqueue_advance_at",
-            "enqueue_execute",
-            "enqueue_decision_escalation_at",
-            "enqueue_decision_expiry_at",
+            "enqueue_dispatch_publisher",
         ):
             patcher = patch.object(engine, enqueue_name)
             patcher.start()
@@ -239,7 +237,13 @@ class NoteWorkflowStepTests(TransactionTestCase):
         execute_retained(approval)
         with system_context(reason="note workflow read approval"):
             decision = approval.decisions.get()
-        engine.decide(decision, "complete", actor=self.owner)
+        attempted = engine.decide(
+            decision,
+            "complete",
+            payload={"action": "approve"},
+            actor=self.owner,
+        )
+        self.assertIsNone(attempted.validation_error)
 
         engine.advance(run.pk)
         with system_context(reason="note workflow execute publication"):

@@ -11,7 +11,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { baseIcons } from "../chrome/icon-registry";
 import {
@@ -23,10 +23,6 @@ import { Chatter } from "./Chatter";
 import { ChatterProvider, useChatterContent, type ChatterContent } from "./chatter-context";
 import { useRecordPeek } from "./record-peek";
 import { registerForm, type RegisteredFormProps } from "../views/form/registered-form";
-
-beforeAll(() => {
-  Element.prototype.getAnimations ??= () => [];
-});
 
 afterEach(() => cleanup());
 
@@ -222,6 +218,29 @@ describe("Chatter", () => {
     expect((screen.getByRole("textbox", { name: "Review note" }) as HTMLInputElement).value)
       .toBe("Retain this review");
   });
+
+  test("initial record evidence selects Records before explicit tab intent", async () => {
+    renderRecordPeekIntent();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load initial evidence" }));
+    const records = await screen.findByRole("tab", { name: "Records" });
+    expect(records.getAttribute("aria-selected")).toBe("true");
+    expect(await screen.findByText("Evidence pty_1")).toBeTruthy();
+  });
+
+  test("late initial record evidence preserves explicit tab intent", async () => {
+    renderRecordPeekIntent();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Workflow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Load initial evidence" }));
+    await screen.findByRole("tab", { name: "Records" });
+    expect(screen.getByRole("tab", { name: "Workflow" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Workflow history")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open evidence" }));
+    expect(screen.getByRole("tab", { name: "Records" }).getAttribute("aria-selected")).toBe("true");
+    expect(await screen.findByText("Evidence pty_2")).toBeTruthy();
+  });
 });
 
 function RecordPeekHarness(): React.ReactElement {
@@ -232,6 +251,33 @@ function RecordPeekHarness(): React.ReactElement {
       Inspect supplier
     </button>
   </>;
+}
+
+function RecordPeekIntentHarness(): React.ReactElement {
+  const open = useRecordPeek();
+  return <>
+    <button type="button" onClick={() => open(
+      { model: "parties.Party", id: "pty_1" },
+      { tabActivation: "initial" },
+    )}>
+      Load initial evidence
+    </button>
+    <button type="button" onClick={() => open({ model: "parties.Party", id: "pty_2" })}>
+      Open evidence
+    </button>
+  </>;
+}
+
+function renderRecordPeekIntent(): void {
+  const CanonicalForm = ({ id }: RegisteredFormProps) => <p>Evidence {id}</p>;
+  render(chatterContentView(<>
+    <PublishedContent content={{ tabs: [
+      { id: "workflow", label: "Workflow", children: <p>Workflow history</p> },
+    ] }} />
+    <RecordPeekIntentHarness />
+  </>, "comments", {
+    forms: { "parties.Party": registerForm("parties.Party", CanonicalForm) },
+  }));
 }
 
 function PublishedContent({ content }: { content: ChatterContent }): null {

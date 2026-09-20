@@ -1019,21 +1019,25 @@ def test_trigger_list_projects_summary_and_blocker_without_per_row_queries(
             )
         ]
     ).build("console")
+    admin = _platform_admin("workflow-trigger-list-admin")
     with system_context(reason="test trigger list projection"):
         draft = Workflow.objects.create(name="Trigger list")
         Step.objects.create(workflow=draft, key="start", name="Start", is_entry=True)
         draft.publish()
         Trigger.objects.create(
             workflow=draft,
+            execution_actor=admin,
             kind=workflow_models.TriggerKind.EVENT,
             config={"model": TriggerSubject._meta.label_lower, "condition": {}, "admission_policy": "each_change"},
         )
         Trigger.objects.create(workflow=draft, kind=workflow_models.TriggerKind.MANUAL, config={})
         Trigger.objects.create(workflow=draft, kind=workflow_models.TriggerKind.MANUAL, config={})
-    admin = _platform_admin("workflow-trigger-list-admin")
     query = """
       query TriggerList {
-        workflow_triggers { id summary activation_blocker last_fire_at }
+        workflow_triggers {
+          id summary activation_blocker last_fire_at
+          execution_actor { id display_name }
+        }
       }
     """
 
@@ -1045,6 +1049,10 @@ def test_trigger_list_projects_summary_and_blocker_without_per_row_queries(
         "Manual start",
         "Manual start",
     ]
+    assert rows[0]["execution_actor"] == {
+        "id": str(admin.sqid),
+        "display_name": "workflow-trigger-list-admin",
+    }
     trigger_selects = [
         item["sql"] for item in queries.captured_queries
         if Trigger._meta.db_table in item["sql"] and item["sql"].lstrip().upper().startswith("SELECT")

@@ -143,7 +143,11 @@ export function defineChannelPollBridgeAddon({
 /** Scope each vendor record verb to the vendor's own channel rows. */
 function channelRecordActionSlots(key: string, recordActions: readonly ChannelRecordAction[]) {
   const target = formViewRecordActionsSlot(CHANNEL_MODEL, key);
-  return recordActions.map((action) => ({ ...target, ...action }));
+  return recordActions.map((action) => ({
+    ...target,
+    ...action,
+    recordActionPlacement: "menu" as const,
+  }));
 }
 
 /** Emit one vendor entry under Messaging. */

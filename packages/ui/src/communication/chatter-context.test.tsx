@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { useEffect, useRef } from "react";
 
@@ -65,6 +65,37 @@ describe("ChatterProvider", () => {
 
     expect(expand).toHaveBeenCalledOnce();
   });
+
+  test("expands a replacement pane when its native handle becomes ready", () => {
+    let bridge: ReturnType<typeof useChatter> | null = null;
+    const expand = vi.fn();
+    render(<ChatterProvider defaultCollapsed>
+      <CaptureBridge onRender={(value) => { bridge = value; }} />
+    </ChatterProvider>);
+
+    act(() => bridge!.registerSecondaryController({
+      collapsed: true, ready: true, collapse: vi.fn(), expand: vi.fn(), toggle: vi.fn(),
+    }));
+    act(() => {
+      bridge!.registerSecondaryController(null);
+      bridge!.setCollapsed(false);
+      bridge!.registerSecondaryController({
+        collapsed: true, ready: false, collapse: vi.fn(), expand, toggle: vi.fn(),
+      });
+    });
+    expect(expand).not.toHaveBeenCalled();
+
+    act(() => bridge!.registerSecondaryController({
+      collapsed: true, ready: true, collapse: vi.fn(), expand, toggle: vi.fn(),
+    }));
+    expect(expand).toHaveBeenCalledOnce();
+
+    // A later user collapse is a new state, not the pending open request.
+    act(() => bridge!.registerSecondaryController({
+      collapsed: true, ready: true, collapse: vi.fn(), expand, toggle: vi.fn(),
+    }));
+    expect(expand).toHaveBeenCalledOnce();
+  });
 });
 
 function Publisher({
@@ -85,6 +116,13 @@ function PendingOpen({ controller }: {
     registerSecondaryController(controller);
     return () => registerSecondaryController(null);
   }, [controller, registerSecondaryController, setCollapsed]);
+  return null;
+}
+
+function CaptureBridge({ onRender }: {
+  onRender: (value: ReturnType<typeof useChatter>) => void;
+}): null {
+  onRender(useChatter());
   return null;
 }
 

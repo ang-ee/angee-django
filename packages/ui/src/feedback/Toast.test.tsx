@@ -8,7 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { AppRuntimeProvider } from "../runtime";
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ReactElement } from "react";
 
 import { baseIcons } from "../chrome/icon-registry";
@@ -16,10 +16,6 @@ import { ToastProvider, useToast } from "./Toast";
 import { useRefineNotificationProvider } from "./refine-notification";
 
 describe("ToastProvider", () => {
-  beforeAll(() => {
-    Element.prototype.getAnimations ??= () => [];
-  });
-
   afterEach(() => {
     cleanup();
   });

@@ -39,6 +39,7 @@ import {
 import { IdentityTab } from "./IdentityTab";
 import { PartyAddresses } from "./PartyAddresses";
 import { usePartiesT } from "./i18n";
+import { usePartyContactActions } from "./party-contact-actions";
 
 import { PERSON_FORM_FIELDS_SLOT } from "./slots";
 import { personFields } from "./PersonForm";
@@ -195,10 +196,12 @@ function peopleForm(
   t: ReturnType<typeof usePartiesT>,
   mergeSubmit: NonNullable<ActionDescriptor["submit"]>,
   extraFields: React.ReactNode,
+  contactActions: React.ReactNode,
 ): React.ReactElement {
   return (
     <Form resource={MODEL}>
       {personFields(t, extraFields)}
+      {contactActions}
       <Action
         id="merge-into"
         label={t("person.action.merge")}
@@ -229,6 +232,7 @@ function peopleForm(
 export function PeoplePage(): React.ReactElement {
   const extraFields = slotContents(useSlot(PERSON_FORM_FIELDS_SLOT));
   const t = usePartiesT();
+  const contactActions = usePartyContactActions();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const search = useRouteSearch();
@@ -409,7 +413,7 @@ export function PeoplePage(): React.ReactElement {
           <Column field="family_name" />
           <Column field="created_at" />
         </List>
-        {peopleForm(t, mergeSubmit, extraFields)}
+        {peopleForm(t, mergeSubmit, extraFields, contactActions)}
       </ResourceList>
     </>
   );

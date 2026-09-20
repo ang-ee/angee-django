@@ -1,8 +1,21 @@
 import * as React from "react";
-import { Column, ResourceList, Field, Form, Group, List, registerForm, slotContents, useSlot, type RecordTabDescriptor, type RegisteredFormProps } from "@angee/ui";
+import {
+  Column,
+  ResourceList,
+  Field,
+  Form,
+  Group,
+  List,
+  registerForm,
+  slotContents,
+  useSlot,
+  type RecordTabDescriptor,
+  type RegisteredFormProps,
+} from "@angee/ui";
 import { usePartiesT } from "./i18n";
 import { PartyAddresses } from "./PartyAddresses";
 import { IdentityTab } from "./IdentityTab";
+import { usePartyContactActions } from "./party-contact-actions";
 
 import { ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 
@@ -44,6 +57,7 @@ export function OrganizationsPage(): React.ReactElement {
 export function OrganizationForm({ resource: _resource, recordTabs, ...props }: RegisteredFormProps): React.ReactElement {
   const t = usePartiesT();
   const extraFields = useSlot(ORGANIZATION_FORM_FIELDS_SLOT);
+  const contactActions = usePartyContactActions();
   return (
     <Form {...props} resource={MODEL} recordTabs={recordTabs ?? organizationTabs(t)}>
       <Field name="display_name" title />
@@ -53,6 +67,7 @@ export function OrganizationForm({ resource: _resource, recordTabs, ...props }: 
       </Group>
       {slotContents(extraFields)}
       <Field name="notes" />
+      {contactActions}
     </Form>
   );
 }

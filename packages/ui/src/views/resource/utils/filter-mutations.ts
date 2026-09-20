@@ -33,9 +33,24 @@ export function resolveTextFilterField(
 ): string | null {
   if (!metadata) return DEFAULT_TEXT_FILTER_FIELD;
   const query = ResourceQuery.from(metadata);
+  const authored = (metadata.resource.recordSearchFields ?? []).find(
+    (name) => query.fields[name]?.filter?.operators.includes("iContains"),
+  );
+  if (authored) return authored;
   const preferred = metadata.resource.recordRepresentation;
   if (preferred && query.fields[preferred]?.filter?.operators.includes("iContains")) return preferred;
   return Object.keys(query.fields).find((name) => query.fields[name]?.filter?.operators.includes("iContains")) ?? null;
+}
+
+/** Validated resource-authored fields expanded by the shared text search. */
+export function resolveTextSearchFields(
+  metadata: ModelMetadata | null | undefined,
+): readonly string[] {
+  if (!metadata) return [];
+  const query = ResourceQuery.from(metadata);
+  return (metadata.resource.recordSearchFields ?? []).filter(
+    (name) => query.fields[name]?.filter?.operators.includes("iContains"),
+  );
 }
 
 export function textFilterValue(

@@ -137,9 +137,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   filterOptions?: readonly ResourceToolbarFilterOption[];
   /** Explicit relation facets exposed as quick filters and group-by axes. */
   facets?: readonly FacetDescriptor[];
-  /** Fields available to the toolbar's custom filter editor. */
+  /** Presentation overrides for custom filters; the query supplies all supported fields. */
   customFilterFields?: readonly ResourceToolbarFilterField[];
-  /** Fields available to the toolbar's group-by editor. */
+  /** Curated group shortcuts; the custom editor always uses the query's supported axes. */
   groupOptions?: readonly ResourceToolbarGroupOption[];
   /** Default resource order when the URL-owned data view has no sort. */
   order?: ResourceOrder<ResourceTypeName>;

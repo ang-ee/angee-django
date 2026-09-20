@@ -116,8 +116,9 @@ describe("MessagesPage", () => {
     render(<messageForm.Component resource="messaging.Message" id="msg-1" readOnly />);
 
     expect(pageMocks.fields).toEqual(expect.arrayContaining([
-      "title", "status", "sender_name", "sent_at", "platform", "direction", "external_id",
+      "title", "status", "sender", "sent_at", "platform", "direction", "external_id",
     ]));
+    expect(pageMocks.fields).not.toContain("sender_name");
     expect(pageMocks.actions).toBe(0);
     expect(pageMocks.formProps?.recordTabs).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "content", label: "messages.tabContent" }),

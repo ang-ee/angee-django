@@ -41,6 +41,7 @@ def test_denied_explorer_is_null_while_computed_collections_are_empty(monkeypatc
               platform_explorer { models { label } }
               platform_models(limit: 10) { id }
               platform_fields(limit: 10) { id }
+              platform_implementations(limit: 10) { id }
             }
             """,
         )
@@ -50,6 +51,7 @@ def test_denied_explorer_is_null_while_computed_collections_are_empty(monkeypatc
         "platform_explorer": None,
         "platform_models": [],
         "platform_fields": [],
+        "platform_implementations": [],
     }
 
 

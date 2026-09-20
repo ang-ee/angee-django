@@ -8,6 +8,7 @@ category = "Data"
 depends_on = ["angee.parties", "angee.messaging"]
 
 [[migrations]]
+fresh_history = "baseline"
 name = "tie_pair_reshape"
 app_label = "nexus"
 module = "runtime_migrations.tie_pair_reshape"

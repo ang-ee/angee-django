@@ -5,6 +5,11 @@ import { JsonValueSchema } from "../../widgets/json-value";
 
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 const FieldTypeSchema = v.picklist(["string", "integer", "number", "boolean", "object", "array", "any"]);
+const JsonFieldScalarTypeSchema = v.union([FieldTypeSchema, v.literal("null")]);
+const JsonFieldTypeSchema = v.union([
+  JsonFieldScalarTypeSchema,
+  v.array(v.picklist(["string", "integer", "number", "boolean", "object", "array", "null"])),
+]);
 const FieldLayoutSchema = v.picklist(["context", "input"]);
 export type FormSpecFieldType = v.InferOutput<typeof FieldTypeSchema>;
 
@@ -35,13 +40,18 @@ const RelationSchema = v.object({
   create: v.optional(v.object({
     resource: NonEmptyString,
     defaultValues: v.optional(v.record(v.string(), JsonValueSchema)),
+    actionLabel: v.optional(NonEmptyString),
+    title: v.optional(NonEmptyString),
   })),
 });
 const FieldBaseSchema = v.object({
-  type: v.optional(FieldTypeSchema),
+  type: v.optional(JsonFieldTypeSchema),
   required: v.optional(v.array(v.string())),
+  propertyOrder: v.optional(v.array(NonEmptyString)),
   widget: v.optional(NonEmptyString),
   label: v.optional(NonEmptyString),
+  addLabel: v.optional(NonEmptyString),
+  removeLabel: v.optional(NonEmptyString),
   description: v.optional(NonEmptyString),
   placeholder: v.optional(NonEmptyString),
   readOnly: v.optional(v.boolean()),
@@ -58,11 +68,19 @@ const FieldBaseSchema = v.object({
   defaultValue: v.optional(JsonValueSchema),
   default: v.optional(JsonValueSchema),
   const: v.optional(JsonValueSchema),
+  format: v.optional(NonEmptyString),
+  pattern: v.optional(v.string()),
   enum: v.optional(v.array(v.string("form-spec select values must be strings."))),
   options: v.optional(v.array(v.object({
-    value: NonEmptyString,
+    // JSON Pointer uses the empty string for the root document. It is a valid
+    // authored choice value even though human-facing option labels stay
+    // non-empty.
+    value: v.string(),
     label: NonEmptyString,
     disabled: v.optional(v.boolean()),
+    verdict: v.optional(v.picklist(["COMPLETE", "REJECT", "ESCALATE"])),
+    variant: v.optional(v.picklist(["primary", "secondary", "destructive", "ghost"])),
+    confirm: v.optional(v.string()),
   }))),
   relation: v.optional(RelationSchema),
 });
@@ -70,11 +88,31 @@ const FieldBaseSchema = v.object({
 export type FormSpecWire = v.InferOutput<typeof FieldBaseSchema> & {
   properties?: Record<string, FormSpecWire>;
   items?: FormSpecWire;
+  oneOf?: FormSpecWire[];
+  anyOf?: FormSpecWire[];
+  allOf?: FormSpecWire[];
+  if?: FormSpecWire;
+  then?: FormSpecWire;
+  else?: FormSpecWire;
+  not?: FormSpecWire;
+  $defs?: Record<string, FormSpecWire>;
+  $ref?: string;
+  additionalProperties?: boolean | FormSpecWire;
 };
 const FieldSchema: v.GenericSchema<unknown, FormSpecWire> = v.lazy(() => v.object({
   ...FieldBaseSchema.entries,
   properties: v.optional(v.record(v.string(), FieldSchema)),
   items: v.optional(FieldSchema),
+  oneOf: v.optional(v.array(FieldSchema)),
+  anyOf: v.optional(v.array(FieldSchema)),
+  allOf: v.optional(v.array(FieldSchema)),
+  if: v.optional(FieldSchema),
+  then: v.optional(FieldSchema),
+  else: v.optional(FieldSchema),
+  not: v.optional(FieldSchema),
+  $defs: v.optional(v.record(v.string(), FieldSchema)),
+  $ref: v.optional(v.string()),
+  additionalProperties: v.optional(v.union([v.boolean(), FieldSchema])),
 }));
 const FormSchema = v.pipe(FieldSchema, v.check(
   (schema) => schema.type === undefined || schema.type === "object",

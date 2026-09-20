@@ -11,7 +11,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.db import close_old_connections, connection, connections, transaction
 from django.utils import timezone
-from rebac import system_context
+from rebac import system_context, to_subject_ref
 
 from angee.workflows import engine
 from angee.workflows.attempts import (
@@ -22,7 +22,7 @@ from angee.workflows.attempts import (
 )
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus, Verdict
-from angee.workflows.steps import StepResult
+from angee.workflows.steps import StepImpl, StepResult
 from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 pytestmark = [
@@ -42,6 +42,7 @@ def _thread(call: Callable[[], Any]) -> Any:
 
 
 def _claimed_execution(monkeypatch: pytest.MonkeyPatch, impl: type[Any]) -> tuple[Any, Any, Any, Any]:
+    actor = get_user_model().objects.create_user(username="runtime-race-owner")
     with system_context(reason="runtime race setup"):
         workflow = Workflow.objects.create(name="Runtime race", max_steps=10)
         step = Step.objects.create(
@@ -51,7 +52,12 @@ def _claimed_execution(monkeypatch: pytest.MonkeyPatch, impl: type[Any]) -> tupl
             step_class="agent_session",
             is_entry=True,
         )
-        run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
+        run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status=RunStatus.RUNNING,
+            created_by=actor,
+            admitted_actor_ref=str(to_subject_ref(actor)),
+        )
         step_run = StepRun.objects.create(run=run, step=step, status=StepRunStatus.SCHEDULED)
     monkeypatch.setattr(type(step), "resolve_impl", lambda self, field: impl)
     advance = WorkflowDispatch.objects.schedule_advance(run, available_at=timezone.now())
@@ -69,7 +75,7 @@ def test_cancel_fences_result_after_physical_invocation(
     invoked = Event()
     release = Event()
 
-    class BlockingDone:
+    class BlockingDone(StepImpl):
         input_model = None
 
         def run(self, step_run: Any, *, now: Any) -> StepResult:
@@ -115,7 +121,7 @@ def test_override_fences_old_result_and_advances_generation(
     invoked = Event()
     release = Event()
 
-    class BlockingDone:
+    class BlockingDone(StepImpl):
         input_model = None
 
         def run(self, step_run: Any, *, now: Any) -> StepResult:
@@ -193,19 +199,27 @@ def test_decision_timer_waits_on_run_before_locking_decision(
     workflow_engine_tables: None,
 ) -> None:
     now = timezone.now()
+    actor = get_user_model().objects.create_user(username="decision-lock-order-owner")
     with system_context(reason="decision lock order setup"):
         workflow = Workflow.objects.create(name="Decision lock order")
         step = Step.objects.create(workflow=workflow, key="gate", name="Gate", is_entry=True)
-        run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
+        run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status=RunStatus.RUNNING,
+            created_by=actor,
+            admitted_actor_ref=str(to_subject_ref(actor)),
+        )
         step_run = StepRun.objects.create(run=run, step=step, status=StepRunStatus.SCHEDULED)
     attempt = StepAttempt.objects.claim(step_run, claimed_at=now).attempt
     StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=now)
     StepAttempt.objects.finalize(
         attempt.pk,
         lease_token=attempt.lease_token,
-        result=AttemptResult(
-            AttemptResultKind.SUSPEND,
-            decisions=(DecisionSpec(assignees=(), action="approve", expires_at=now),),
+            result=AttemptResult(
+                AttemptResultKind.SUSPEND,
+                checkpoint_present=True,
+                checkpoint={},
+                decisions=(DecisionSpec(assignees=(), action="approve", expires_at=now),),
             waiting_kind="approval",
         ),
         recorded_at=now,
@@ -242,15 +256,23 @@ def test_due_decision_timers_serialize_to_one_policy_projection(
     workflow_engine_tables: None,
 ) -> None:
     now = timezone.now()
+    actor = get_user_model().objects.create_user(username="decision-timer-race-owner")
     with system_context(reason="decision timer race setup"):
         workflow = Workflow.objects.create(name="Decision timer race")
         step = Step.objects.create(workflow=workflow, key="gate", name="Gate", is_entry=True)
-        run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
+        run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status=RunStatus.RUNNING,
+            created_by=actor,
+            admitted_actor_ref=str(to_subject_ref(actor)),
+        )
         step_run = StepRun.objects.create(run=run, step=step, status=StepRunStatus.SCHEDULED)
     attempt = StepAttempt.objects.claim(step_run, claimed_at=now).attempt
     StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=now)
     result = AttemptResult(
         AttemptResultKind.SUSPEND,
+        checkpoint_present=True,
+        checkpoint={},
         decisions=(DecisionSpec(assignees=(), action="approve", escalate_at=now, expires_at=now),),
         waiting_kind="approval",
     )

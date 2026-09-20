@@ -14,6 +14,8 @@ type StructuredWidgetField = WidgetField & {
   itemTemplate?: FormSpecFieldDescriptor;
   minItems?: number;
   maxItems?: number;
+  addLabel?: string;
+  removeLabel?: string;
 };
 
 function ObjectField({ value, field, messages = [], readOnly = false, onChange, onCommit, controlRef }: WidgetRenderProps): React.ReactElement {
@@ -45,6 +47,8 @@ function ListField({ value, field, messages = [], readOnly = false, onChange, on
   if (value != null && !Array.isArray(value)) throw new Error('The "list" widget value must be an array.');
   const values = Array.isArray(value) ? value : [];
   const name = requiredName(field, "list");
+  const addLabel = descriptorField.addLabel ?? t("form.list.add");
+  const removeLabel = descriptorField.removeLabel ?? t("form.list.remove");
   const [identities, nextIdentity] = useListIdentities(values.length);
   return (
     <div id={field?.controlProps?.id} className="space-y-3" aria-labelledby={field?.controlProps?.["aria-labelledby"]} aria-describedby={field?.controlProps?.["aria-describedby"]}>
@@ -62,14 +66,16 @@ function ListField({ value, field, messages = [], readOnly = false, onChange, on
                 onClick={() => { identities.current = moved(identities.current, index, index - 1); onChange?.(moved(values, index, index - 1)); onCommit?.(); }}>{t("form.list.moveUp")}</Button>
               <Button type="button" size="sm" variant="ghost" disabled={index === values.length - 1} aria-label={t("form.list.moveDownNamed", { number: index + 1 })}
                 onClick={() => { identities.current = moved(identities.current, index, index + 1); onChange?.(moved(values, index, index + 1)); onCommit?.(); }}>{t("form.list.moveDown")}</Button>
-              <Button type="button" size="sm" variant="ghost" disabled={descriptorField.minItems !== undefined && values.length <= descriptorField.minItems} aria-label={t("form.list.removeNamed", { number: index + 1 })}
-                onClick={() => { identities.current.splice(index, 1); onChange?.(values.filter((_, currentIndex) => currentIndex !== index)); onCommit?.(); }}>{t("form.list.remove")}</Button>
+              <Button type="button" size="sm" variant="ghost" disabled={descriptorField.minItems !== undefined && values.length <= descriptorField.minItems} aria-label={descriptorField.removeLabel
+                ? t("form.list.actionNamed", { action: removeLabel, number: index + 1 })
+                : t("form.list.removeNamed", { number: index + 1 })}
+                onClick={() => { identities.current.splice(index, 1); onChange?.(values.filter((_, currentIndex) => currentIndex !== index)); onCommit?.(); }}>{removeLabel}</Button>
             </div> : null}
           </div>
         );
       })}
       {!readOnly ? <Button ref={values.length === 0 ? controlRef : undefined} type="button" size="sm" variant="secondary" disabled={descriptorField.maxItems !== undefined && values.length >= descriptorField.maxItems}
-        onClick={() => { identities.current.push(nextIdentity()); onChange?.([...values, initialFormSpecValue(item)]); onCommit?.(); }}>{t("form.list.add")}</Button> : null}
+        onClick={() => { identities.current.push(nextIdentity()); onChange?.([...values, initialFormSpecValue(item)]); onCommit?.(); }}>{addLabel}</Button> : null}
     </div>
   );
 }

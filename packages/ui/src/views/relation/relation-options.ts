@@ -8,6 +8,7 @@ import {
   type CrudSort,
   type HttpError,
   } from "@refinedev/core";
+import { useDebounce } from "use-debounce";
 import {
   refineFieldsFromPaths,
   } from "@angee/refine";
@@ -17,9 +18,13 @@ import {
 } from "@angee/metadata";
 
 import { useValueStable } from "../../lib/use-value-stable";
-import type { RelationOption } from "../../widgets/RelationField";
+import type {
+  RelationOption,
+  RelationSearchState,
+} from "../../widgets/RelationField";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { DEFAULT_PAGE_SIZE } from "../resource/page-size";
+import { resolveTextFilterField } from "../resource/resource-view-utils";
 
 export const RELATION_OPTION_LIMIT = 200;
 
@@ -55,25 +60,95 @@ export interface RelationOptionsResult {
   rows: readonly Row[];
 }
 
+export interface RelationPickerOptionsConfig
+  extends Omit<RelationOptionsConfig, "enabled" | "searchText"> {
+  value?: string | null;
+  /** Folded selected row supplied by a parent record read, when available. */
+  selectedOption?: RelationOption;
+}
+
+export interface RelationPickerOptionsResult extends RelationOptionsResult {
+  activate: () => void;
+  onOpenChange: (open: boolean) => void;
+  onSearchChange: (query: string) => void;
+  searchState: RelationSearchState;
+}
+
 /** Resolve a selected identity independently of the option page or search. */
 export function useRelationSelectedOption(
-  relation: RelationFieldInfo,
+  relation: RelationFieldInfo | null,
   value: string | null | undefined,
 ): RelationOption | undefined {
-  const metadata = useModelMetadata(relation.resource);
+  const metadata = useModelMetadata(relation?.resource ?? "");
   const resource = metadata?.resource;
+  const labelField = relation?.labelField ?? "id";
   const fields = React.useMemo(
-    () => refineFieldsFromPaths(["id", relation.labelField]),
-    [relation.labelField],
+    () => refineFieldsFromPaths(["id", labelField]),
+    [labelField],
   );
   const read = useOne<RowRecord, HttpError>({
     resource: resource ? refineResourceName(resource) : "__angee_disabled__",
     dataProviderName: resource?.schemaName,
     id: value ?? "",
     meta: { fields },
-    queryOptions: { enabled: Boolean(resource && value) },
+    queryOptions: { enabled: Boolean(relation && resource && value) },
   });
-  return relationSelectedOption(read.result, relation.labelField);
+  return relationSelectedOption(read.result, labelField);
+}
+
+/** Own lazy remote search plus selected-record retention for a relation picker. */
+export function useRelationPickerOptions(
+  relation: RelationFieldInfo | null,
+  config: RelationPickerOptionsConfig = {},
+): RelationPickerOptionsResult {
+  const { selectedOption: supplied, value, ...optionsConfig } = config;
+  const [opened, setOpened] = React.useState(false);
+  const [search, setSearch] = React.useState("");
+  const [searchText] = useDebounce(search, 250);
+  const suppliedSelected = supplied?.value === value ? supplied : undefined;
+  const resolved = useRelationSelectedOption(
+    relation,
+    suppliedSelected ? undefined : value,
+  );
+  const selected = suppliedSelected ?? (resolved?.value === value ? resolved : undefined)
+    ?? (value ? { value, label: value } : undefined);
+  const result = useRelationOptions(relation, {
+    ...optionsConfig,
+    enabled: opened,
+    searchText,
+  });
+  const options = React.useMemo(
+    () =>
+      selected &&
+      !result.options.some((option) => option.value === selected.value)
+        ? [selected, ...result.options]
+        : result.options,
+    [result.options, selected],
+  );
+  const activate = React.useCallback(() => setOpened(true), []);
+  const onOpenChange = React.useCallback((open: boolean) => {
+    setSearch("");
+    if (open) setOpened(true);
+  }, []);
+  const searchState = React.useMemo<RelationSearchState>(
+    () => ({
+      pending: result.list.fetching || search !== searchText,
+      error: result.list.error,
+      retry: result.list.refetch,
+    }),
+    [result.list, search, searchText],
+  );
+  return React.useMemo(
+    () => ({
+      ...result,
+      options,
+      activate,
+      onOpenChange,
+      onSearchChange: setSearch,
+      searchState,
+    }),
+    [activate, onOpenChange, options, result, searchState],
+  );
 }
 
 export function useRelationOptions(
@@ -92,26 +167,33 @@ export function useRelationOptions(
     searchFields,
   } = config;
   const labelField = optionLabelField ?? relation?.labelField ?? "id";
+  const metadata = useModelMetadata(relation?.resource ?? "");
+  const defaultSearchField = resolveTextFilterField(metadata);
+  const authoredSearchFields = metadata?.resource.recordSearchFields;
+  const activeSearchFields =
+    searchFields
+    ?? (authoredSearchFields?.length ? authoredSearchFields : undefined)
+    ?? (defaultSearchField ? [defaultSearchField] : []);
   // Stabilise filters/sorters by VALUE: a consumer that declares them inline
   // (e.g. a board's `laneSource.filters`) rebuilds the array every render, and
   // forwarding a fresh identity into refine's `useList` drives an update loop.
   // A value-equal array keeps a stable identity, so plausible inline props are
   // safe without every caller memoising.
-  const searchFilters: CrudFilter[] = searchText?.trim()
-    ? [
-        {
-          operator: "or",
-          value: (searchFields ?? [labelField]).map((field) => ({
-            field,
-            operator: "contains",
-            value: searchText.trim(),
-          })),
-        },
-      ]
-    : [];
+  const searchFilters: CrudFilter[] =
+    searchText?.trim() && activeSearchFields.length > 0
+      ? [
+          {
+            operator: "or",
+            value: activeSearchFields.map((field) => ({
+              field,
+              operator: "contains",
+              value: searchText.trim(),
+            })),
+          },
+        ]
+      : [];
   const stableFilters = useValueStable([...(filters ?? []), ...searchFilters]);
   const stableSorters = useValueStable(sorters);
-  const metadata = useModelMetadata(relation?.resource ?? "");
   const resource = metadata?.resource ?? null;
   const fields = React.useMemo(
     () => refineFieldsFromPaths(["id", labelField, ...(extraFields ?? [])]),

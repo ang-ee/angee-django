@@ -1,0 +1,19 @@
+// A native Party owner can temporarily open one Party to one Decision's assignees.
+// @rebac_package: workflows_parties
+// @rebac_schema_revision: 3
+
+definition parties/party {
+    relation pending_decision: workflows/decision
+    permission read = pending_decision->assignee
+}
+
+definition parties/party_handle {
+    relation pending_decision: workflows/decision
+    permission read = pending_decision->assignee
+}
+
+
+definition parties/handle {
+    relation pending_decision: workflows/decision
+    permission read = pending_decision->assignee
+}

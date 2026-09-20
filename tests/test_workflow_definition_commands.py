@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import connection, models
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
 from angee.workflows.definitions import (
@@ -186,6 +188,42 @@ def test_noop_and_snapshot_share_one_revision_owner(workflow_tables: None) -> No
     assert [row.pk for row in snapshot.nodes] == [entry.pk, tail.pk]
     assert [row.pk for row in snapshot.edges] == [edge.pk]
     assert snapshot.readiness == ()
+
+
+def test_graph_diagnostics_authorizes_owner_once_and_retains_foreign_endpoint_diagnostics(
+    workflow_tables: None,
+) -> None:
+    """Owned definition rows avoid per-row REBAC while malformed endpoints remain visible."""
+
+    del workflow_tables
+    workflow, _entry, tail, _edge = _draft()
+    with system_context(reason="test graph snapshot setup"):
+        for index in range(20):
+            Step.objects.create(
+                workflow=workflow,
+                key=f"extra-{index:02d}",
+                name=f"Extra {index}",
+                step_class="agent_session",
+            )
+        other = Workflow.objects.create(name="Other")
+        foreign = Step.objects.create(
+            workflow=other,
+            key="foreign",
+            name="Foreign",
+            step_class="agent_session",
+            is_entry=True,
+        )
+        malformed = Edge(workflow=workflow, source=foreign, target=tail, condition="foreign")
+        models.QuerySet(model=Edge).bulk_create((malformed,))
+
+    admin = create_platform_admin("workflow-graph-owner")
+    with actor_context(admin):
+        visible = Workflow.objects.with_actor(admin).get(pk=workflow.pk)
+        with CaptureQueriesContext(connection) as queries:
+            diagnostics = visible.graph_diagnostics()
+
+    assert len(queries) < 50
+    assert any(item.code == "edge_source_missing" for item in diagnostics)
 
 
 def test_source_preview_rejects_an_ambiguous_target_reference(workflow_tables: None) -> None:

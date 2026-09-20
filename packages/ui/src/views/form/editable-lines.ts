@@ -3,6 +3,9 @@ import type { LineInput } from "@angee/refine";
 
 import { relationValueId } from "../../widgets/types";
 
+/** RHF's stable field-array key, retained on unsaved form rows for save correlation. */
+export const CLIENT_LINE_KEY = "__angeeClientLineKey";
+
 /**
  * The facts the line diff needs from the child-lines contract: which field owns a
  * row's public id, which integer column carries the drag-maintained order, the
@@ -22,6 +25,7 @@ export interface LineDiffConfig {
   multiRelationFields: ReadonlySet<string>;
   enumFields: ReadonlySet<string>;
   stringFields: ReadonlySet<string>;
+  defaultValues: Readonly<Record<string, string | number | boolean | null>>;
 }
 
 /** Derive the diff config from a resource's editable-lines metadata. */
@@ -51,6 +55,7 @@ export function lineDiffConfig(lines: DataResourceLinesMetadata): LineDiffConfig
         .filter((field) => field.kind === "scalar" && (field.scalar ?? "String") === "String")
         .map((field) => field.name),
     ),
+    defaultValues: lines.defaults ?? {},
   };
 }
 
@@ -159,7 +164,9 @@ export function sameObservedLines(
 
 /**
  * Normalize a record's loaded lines into field-array rows: keep the public id, the
- * editable child columns, and a `position` (from the stored value, else row order).
+ * editable child columns, read-only projections used by supplemental columns, and a
+ * `position` (from the stored value, else row order). The diff serializer still emits
+ * only declared editable fields, so carrying a display projection cannot widen writes.
  * Used to seed the composer and as the diff baseline, so an unedited save is a no-op.
  */
 export function recordLinesToRows(
@@ -181,6 +188,7 @@ export function emptyLineRow(index: number, config: LineDiffConfig): Row {
 }
 
 function emptyCellValue(name: string, config: LineDiffConfig): unknown {
+  if (Object.hasOwn(config.defaultValues, name)) return config.defaultValues[name];
   if (config.multiRelationFields.has(name)) return [];
   if (config.relationFields.has(name)) return null;
   return "";
@@ -188,12 +196,66 @@ function emptyCellValue(name: string, config: LineDiffConfig): unknown {
 
 /** Duplicate a row for the composer's "duplicate" action, dropping its identity. */
 export function duplicateLineRow(row: Row, config: LineDiffConfig): Row {
-  const { [config.idField]: _id, ...rest } = row;
+  const { [config.idField]: _id, [CLIENT_LINE_KEY]: _clientKey, ...rest } = row;
   return { ...rest };
 }
 
+/** Adopt server IDs for submitted new lines without losing later edits or order. */
+export function reconcileAcceptedLineRows(
+  accepted: readonly Row[],
+  submitted: readonly Row[],
+  current: readonly Row[],
+  config: LineDiffConfig,
+): Row[] | null {
+  const submittedIds = new Set(submitted.map((row) => rowId(row, config)).filter(Boolean));
+  const savedById = new Map(accepted.map((row) => [rowId(row, config), row] as const));
+  const createdByPosition = new Map<unknown, Row>();
+  for (const [index, row] of accepted.entries()) {
+    const id = rowId(row, config);
+    if (!id || submittedIds.has(id)) continue;
+    const position = config.positionField ? row[config.positionField] : index;
+    if (createdByPosition.has(position)) return null;
+    createdByPosition.set(position, row);
+  }
+  const submittedById = new Map<string, Row>();
+  const submittedByClientKey = new Map<string, Row>();
+  const acceptedByClientKey = new Map<string, Row>();
+  for (const [index, row] of submitted.entries()) {
+    const id = rowId(row, config);
+    if (id) {
+      submittedById.set(id, row);
+      continue;
+    }
+    const key = row[CLIENT_LINE_KEY];
+    if (typeof key !== "string" || !key || submittedByClientKey.has(key)) return null;
+    const saved = createdByPosition.get(index);
+    if (!saved || !rowId(saved, config)) return null;
+    submittedByClientKey.set(key, row);
+    acceptedByClientKey.set(key, saved);
+  }
+  return current.map((row, index) => {
+    const id = rowId(row, config);
+    const key = row[CLIENT_LINE_KEY];
+    const saved = id ? savedById.get(id)
+      : typeof key === "string" ? acceptedByClientKey.get(key) : undefined;
+    const before = id ? submittedById.get(id)
+      : typeof key === "string" ? submittedByClientKey.get(key) : undefined;
+    if (!saved || !before) return row;
+    const next = { ...saved };
+    for (const name of config.fieldNames) {
+      if (name === config.positionField) continue;
+      if (compareKey(lineFieldValue(before, name, config))
+        !== compareKey(lineFieldValue(row, name, config))) next[name] = row[name];
+    }
+    if (config.positionField && index !== submitted.indexOf(before)) {
+      next[config.positionField] = index;
+    }
+    return next;
+  });
+}
+
 function rowFromLine(line: Row, index: number, config: LineDiffConfig): Row {
-  const row: Row = {};
+  const row: Row = { ...line };
   const id = rowId(line, config);
   if (id) row[config.idField] = id;
   for (const name of config.fieldNames) row[name] = line[name];

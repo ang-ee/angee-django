@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -15,8 +16,9 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.management import call_command
-from django.db import connection, models
+from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
+from django.db.utils import OperationalError
 from rebac import actor_context, system_context
 from rebac.actors import to_subject_ref
 from rebac.errors import PermissionDenied
@@ -264,6 +266,44 @@ def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, driv
         assert via_child.content_type == ContentType.objects.get_for_model(MtiParent)
         assert via_child.object_id == child.pk
         assert FileAttachment._base_manager.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(
+    connection.vendor != "postgresql",
+    reason="PostgreSQL canonical attachment-target serialization contract",
+)
+def test_file_attachment_attach_serializes_on_canonical_target(tmp_path: Path, drive: Any) -> None:
+    """A reviewed target lock fences concurrent changes to its complete File set."""
+
+    del tmp_path
+    file = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="file attachment serialization setup"):
+        child = MtiChild.objects.create(title="Acme", detail="org")
+
+    def attach_while_locked() -> str:
+        close_old_connections()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout TO '250ms'")
+            try:
+                FileAttachment.objects.attach(file, child)
+            except OperationalError as error:
+                return str(error)
+            raise AssertionError("The attachment write bypassed the canonical target lock.")
+        finally:
+            connections.close_all()
+
+    with transaction.atomic(), system_context(reason="file attachment serialization review"):
+        MtiParent._base_manager.select_for_update().get(pk=child.pk)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            blocked = pool.submit(attach_while_locked).result(timeout=5)
+        assert "lock timeout" in blocked.lower()
+        assert not FileAttachment._base_manager.filter(object_id=child.pk).exists()
+
+    with system_context(reason="file attachment serialization retry"):
+        attachment = FileAttachment.objects.attach(file, child)
+    assert attachment.object_id == child.pk
 
 
 @pytest.mark.django_db(transaction=True)

@@ -8,6 +8,7 @@ import type {
 } from "@angee/metadata";
 import {
   RelationRepresentationError,
+  ResourceQuery,
   rowValueAtPath,
   schemaFieldMetadataFromDataResources,
 } from "@angee/metadata";
@@ -18,6 +19,7 @@ import {
   buildFilterFields,
   buildFilterOptions,
   buildGroupOptions,
+  mergeFilterFields,
   resolveResourceViewGroup,
   validResourceViewGroupStack,
 } from "./resource-view-utils";
@@ -31,6 +33,7 @@ import {
 const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
 import { requestedFieldPaths } from "./resource-view-codecs";
 import type { ColumnDescriptor, FieldDescriptor } from "../page";
+import { relationFilterFields } from "../relation/relation-filter";
 
 const STATUS_VALUES = [{ value: "DRAFT", description: "Draft" }, { value: "IN_REVIEW" }, { value: "ACTIVE" }];
 const dateAxis = (field: string) => testQueryAxis(field, {
@@ -264,6 +267,114 @@ describe("resource metadata defaults", () => {
       options: [],
     }]);
     expect(buildFilterOptions([{ field: "status" }], rows, filterFields)).toEqual([]);
+  });
+
+  test("keeps relation query capabilities and augments them with the lazy picker seam", () => {
+    const vendor = canonicalModel({}, {
+      ...relationResource("parties.Vendor", "vendors"),
+      recordRepresentation: "displayName",
+    });
+    const metadata = canonicalModel({
+      vendor: {
+        name: "vendor",
+        kind: "relation",
+        relationModelLabel: "parties.Vendor",
+        relationObject: false,
+        scalar: "ID",
+      },
+    }, testDataResource("orders.Order", { query: testResourceQuery({ fields: {
+      vendor: testQueryField("vendor", {
+        kind: "relation",
+        scalar: "ID",
+        relation: {
+          model: "parties.Vendor",
+          identityPath: "vendor.id",
+          labelPath: "vendor.displayName",
+        },
+        filter: {
+          field: "vendor",
+          scalar: "ID",
+          values: [],
+          operators: ["exact", "inList", "isNull"],
+        },
+      }),
+    } }) }));
+    const query = ResourceQuery.from(metadata);
+    const base = buildFilterFields([], [{ id: "ignored", vendor: "page-only" }], metadata, query);
+
+    expect(base).toMatchObject([{
+      id: "vendor",
+      field: "vendor",
+      type: "text",
+      operators: ["exact", "inList", "isNull", "isNotNull"],
+    }]);
+    expect(base[0]?.options).toBeUndefined();
+
+    const augmented = relationFilterFields(
+      query,
+      metadata,
+      schemaFieldMetadataFromDataResources([vendor.resource]),
+    );
+    expect(augmented).toMatchObject([{
+      id: "vendor",
+      field: "vendor",
+    }]);
+    expect(augmented[0]?.renderValue).toEqual(expect.any(Function));
+    expect(mergeFilterFields(augmented, base)).toMatchObject([{
+      id: "vendor",
+      field: "vendor",
+      operators: ["exact", "inList", "isNull", "isNotNull"],
+      renderValue: expect.any(Function),
+    }]);
+
+    // Authored collection sources carry their relation target on ResourceQuery
+    // even though ListView deliberately has no parent model metadata for them.
+    expect(relationFilterFields(
+      query,
+      null,
+      schemaFieldMetadataFromDataResources([vendor.resource]),
+    )[0]?.renderValue).toEqual(expect.any(Function));
+    expect(relationFilterFields(
+      query,
+      null,
+      schemaFieldMetadataFromDataResources([]),
+    )).toEqual([]);
+  });
+
+  test("keeps a filterable plain record ID without deriving page choices", () => {
+    const metadata = canonicalModel({
+      id: { name: "id", kind: "scalar", scalar: "ID" },
+    }, testDataResource("orders.Order", { query: testResourceQuery({ fields: {
+      id: testQueryField("id", { scalar: "ID", filter: {
+        field: "id", scalar: "ID", values: [], operators: ["exact", "inList"],
+      } }),
+    } }) }));
+
+    expect(buildFilterFields([], [{ id: "page-row" }], metadata)).toMatchObject([{
+      id: "id",
+      field: "id",
+      type: "text",
+      operators: ["exact", "inList"],
+    }]);
+  });
+
+  test("keeps executable structured filter capabilities in the catalogue", () => {
+    const metadata = canonicalModel({
+      metadata: { name: "metadata", kind: "scalar", scalar: "JSON" },
+      tags: { name: "tags", kind: "list", scalar: "String" },
+    }, testDataResource("orders.Order", { query: testResourceQuery({ fields: {
+      metadata: testQueryField("metadata", { kind: "json", scalar: "JSON", filter: {
+        field: "metadata", scalar: "JSON", values: [], operators: ["jsonContains", "isNull"],
+      } }),
+      tags: testQueryField("tags", { kind: "list", scalar: "String", filter: {
+        field: "tags", scalar: "String", values: [], operators: ["exact", "inList"],
+      } }),
+    } }) }));
+
+    expect(buildFilterFields([], [], metadata)).toMatchObject([
+      { id: "metadata", type: "text", operators: ["jsonContains", "isNull", "isNotNull"] },
+      { id: "tags", type: "text", operators: ["exact", "inList"] },
+    ]);
   });
 
   test("keeps local row selection filters row-derived", () => {

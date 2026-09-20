@@ -2,6 +2,7 @@ import * as React from "react";
 import { Field, Form, Group, registerForm, slotContents, useSlot, type RegisteredFormProps } from "@angee/ui";
 
 import { usePartiesT } from "./i18n";
+import { usePartyContactActions } from "./party-contact-actions";
 import { PERSON_FORM_FIELDS_SLOT } from "./slots";
 
 const MODEL = "parties.Person";
@@ -31,7 +32,11 @@ export function personFields(t: ReturnType<typeof usePartiesT>, extraFields: Rea
 export function PersonForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = usePartiesT();
   const extraFields = slotContents(useSlot(PERSON_FORM_FIELDS_SLOT));
-  return <Form {...props} resource={MODEL}>{personFields(t, extraFields)}</Form>;
+  const contactActions = usePartyContactActions();
+  return <Form {...props} resource={MODEL}>
+    {personFields(t, extraFields)}
+    {contactActions}
+  </Form>;
 }
 
 export const personForm = registerForm(MODEL, PersonForm);

@@ -218,7 +218,7 @@ class _DispatchSaveCapability:
     pk: Any
     adding: bool
     kind: str
-    target: tuple[int | None, int | None, int | None, int | None]
+    target: tuple[int | None, ...]
 
 
 _dispatch_save_capability: ContextVar[_DispatchSaveCapability | None] = ContextVar(

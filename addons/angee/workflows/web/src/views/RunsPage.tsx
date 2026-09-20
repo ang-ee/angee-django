@@ -18,6 +18,7 @@ import {
   GraphView,
   Group,
   List,
+  RelationFieldWidget,
   ResourceList,
   routeSearchParam,
   Skeleton,
@@ -45,7 +46,6 @@ import {
   WorkflowRecoveryPlanDocument,
   WorkflowTestRepairContextDocument,
   StartWorkflowRecoveryDocument,
-  WorkflowLegacyExecutionPayloadDocument,
   WorkflowRunInspectionDocument,
   WorkflowStepRunCandidateDocument,
 } from "../documents.console";
@@ -268,8 +268,6 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
   const showingAttemptHistory = search.history === "attempts";
   const showingExecutionHistory = search.history === "executions";
   const selectedStepId = typeof search.step === "string" ? search.step : null;
-  const legacyPane: LegacyPane = search.payload === "output" || search.payload === "failure"
-    ? search.payload : "input";
   const [containerRef, wide] = useContainerQuery(960);
   const [reprocessing, setReprocessing] = React.useState(false);
   const [reprocessError, setReprocessError] = React.useState<string | null>(null);
@@ -354,9 +352,6 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
     || selectionQuery.data?.workflow_step_attempts[0]?.id === attemptId;
   const currentAttemptId = selectionQuery.data?.workflow_step_runs[0]?.current_attempt?.id ?? null;
   const attemptCount = selectionQuery.data?.workflow_step_attempts_aggregate.aggregate.count ?? 0;
-  const legacyExecution = validExecution
-    && attemptCount === 0
-    && TERMINAL_RUN_STATUSES.has(String(selectedExecution?.status));
   const executionSummary = selectedExecution ? [
     selectedExecution.step?.name || selectedExecution.step?.key || selectedExecution.system_kind || t("runs.systemExecution"),
     selectedExecution.map_index >= 0 ? t("runs.mapItem", { index: selectedExecution.map_index }) : null,
@@ -407,7 +402,7 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
     || t("runs.failedSummaryFallback");
   const activeAdvanceError = TERMINAL_RUN_STATUSES.has(String(run.status)) ? null : run.error;
   const setExecution = (id: string | null) => {
-    void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { execution: id, attempt: null, history: id ? null : selectedStepId ? "executions" : null, payload: null }) });
+    void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { execution: id, attempt: null, history: id ? null : selectedStepId ? "executions" : null }) });
   };
   const setAttempt = (id: string | null) => {
     void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { attempt: id, history: id ? null : "attempts" }) });
@@ -422,12 +417,9 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
     : selectionQuery.isFetching && !selectionQuery.data ? <RunListSkeleton label={t("runs.loading")} />
     : executionId && !validExecution ? <EmptyState fill icon="workflow-run" title={t("runs.unavailable")} />
     : attemptId && !validAttempt ? <EmptyState fill icon="workflow-run" title={t("runs.unavailable")} />
-    : legacyExecution ? (
-      <LegacyExecutionData runId={runId} executionId={executionId} pane={legacyPane} onPane={(payload) => {
-        void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { payload }) });
-      }} />
-    ) : validExecution && attemptCount === 0 ? (
-      <EmptyState fill icon="workflow-run" title={t("runs.awaitingFirstAttempt")} />
+    : validExecution && attemptCount === 0 ? (
+      <EmptyState fill icon="workflow-run" title={t(TERMINAL_RUN_STATUSES.has(String(selectedExecution?.status))
+        ? "runs.noAttemptHistory" : "runs.awaitingFirstAttempt")} />
     ) : (
     <AttemptHistory executionId={validExecution ? executionId : ""} attemptId={validExecution && validAttempt ? attemptId : null}
       defaultRecordTab={String(selectedExecution?.status) === "FAILED" ? "failure" : "input"} onSelect={setAttempt} />
@@ -437,7 +429,7 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
   ) : <GraphView className="h-full" ariaLabel={t("runs.graph")} fitViewOptions={{ padding: 0.18, maxZoom: 1 }} nodes={graphNodes} edges={graphEdges} nodeStyles={workflowNodeStyles} onNodeSelect={(node) => {
     const nodeId = node?.id ?? null;
     if (nodeId === selectedStepId) return;
-    void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { step: nodeId, execution: null, attempt: null, history: null, payload: null }) });
+    void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { step: nodeId, execution: null, attempt: null, history: null }) });
   }} />;
   const narrowStack = (label: React.ReactNode, backLabel: React.ReactNode, onBack: () => void, content: React.ReactNode) => (
     <section aria-label={String(label)} className="flex h-full min-h-0 flex-col">
@@ -485,7 +477,6 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
               execution: failedExecution.id,
               attempt: failedAttemptId,
               history: null,
-              payload: failedAttemptId ? null : "failure",
             }) });
           }}>{t("runs.inspectFailure")}</Button>
           {onReprocess ? <Button type="button" size="sm" disabled={reprocessing} onClick={() => {
@@ -514,65 +505,6 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
           {graph}
         </Workbench>
       )}
-    </div>
-  );
-}
-
-type LegacyPane = "input" | "output" | "failure";
-
-function LegacyExecutionData({ runId, executionId, pane, onPane }: {
-  runId: string; executionId: string; pane: LegacyPane; onPane: (pane: LegacyPane) => void;
-}): React.ReactElement {
-  const t = useWorkflowsT();
-  const query = useAuthoredQuery(WorkflowLegacyExecutionPayloadDocument, {
-    run: runId,
-    execution: executionId,
-    includeInput: pane === "input",
-    includeOutput: pane === "output",
-    includeFailure: pane === "failure",
-  }, { models: [STEP_RUN_MODEL] });
-  const labels: Record<LegacyPane, string> = {
-    input: t("runs.input"), output: t("runs.output"), failure: t("runs.failure"),
-  };
-  return (
-    <section aria-label={t("runs.executionData")} className="flex h-full min-h-0 flex-col bg-sheet-1">
-      <div className="flex flex-none flex-wrap gap-2 border-b border-border-subtle p-2">
-        {(["input", "output", "failure"] as const).map((id) => (
-          <Button key={id} type="button" size="sm" variant={pane === id ? "secondary" : "ghost"} onClick={() => onPane(id)}>
-            {labels[id]}
-          </Button>
-        ))}
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto p-4">
-        <h3 className="text-sm font-semibold text-fg">{t("runs.executionData")}</h3>
-        <p className="mt-1 text-13 text-fg-muted">{t("runs.executionDataDescription")}</p>
-        <div className="mt-4">
-          {query.isFetching && !query.data ? <RunPayloadSkeleton label={t("runs.loading")} />
-            : query.error ? <ErrorBanner description={errorMessage(query.error, t("runs.unavailable"))} />
-              : <LegacyExecutionPane row={query.data?.workflow_step_runs[0]} pane={pane} labels={labels} />}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function LegacyExecutionPane({ row, pane, labels }: {
-  row: { input?: unknown; output?: unknown; error?: string; stacktrace?: string } | undefined;
-  pane: LegacyPane; labels: Record<LegacyPane, string>;
-}): React.ReactElement {
-  const t = useWorkflowsT();
-  if (!row) return <EmptyState icon="workflow-run" title={t("runs.unavailable")} />;
-  if (pane === "failure") return (
-    <div className="space-y-3">
-      {row.error ? <ErrorBanner description={row.error} /> : <EmptyState icon="workflow-run" title={t("runs.noExecutionFailure")} />}
-      {row.stacktrace ? <FieldDescriptorControl field={{ name: "stacktrace", label: labels.failure, widget: "textarea" }} value={row.stacktrace} readOnly /> : null}
-    </div>
-  );
-  const value = pane === "input" ? row.input : row.output;
-  return (
-    <div className="space-y-3">
-      <FieldDescriptorControl field={{ name: pane, label: labels[pane], widget: "json" }} value={value} readOnly />
-      <p className="text-xs text-fg-muted">{t("runs.executionPresenceUnknown")}</p>
     </div>
   );
 }
@@ -662,6 +594,8 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
   const requestKey = React.useRef<string | null>(null);
   const currentAttempt = React.useRef(attemptId);
   const [pending, setPending] = React.useState(false);
+  const [uncertaintyAck, setUncertaintyAck] = React.useState(false);
+  const [priorRecovery, setPriorRecovery] = React.useState("");
   const [message, setMessage] = React.useState<string | null>(null);
   const [started, setStarted] = React.useState<{ id: string; href?: string } | null>(null);
   const recovery = plan.data?.workflow_recovery_plan;
@@ -672,13 +606,20 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
     setMessage(null);
     setStarted(null);
     setPending(false);
+    setUncertaintyAck(false);
+    setPriorRecovery("");
   }, [attemptId]);
   const startRecovery = async () => {
     requestKey.current ??= crypto.randomUUID();
     setPending(true);
     setMessage(null);
     try {
-      const data = await start({ sourceAttempt: attemptId, requestKey: requestKey.current });
+      const data = await start({
+        sourceAttempt: attemptId,
+        requestKey: requestKey.current,
+        acknowledgeUncertainExternal: Boolean(recovery?.requires_uncertainty_ack && uncertaintyAck),
+        priorRecovery: priorRecovery.trim() || null,
+      });
       if (currentAttempt.current !== attemptId) return;
       const result = data?.start_workflow_recovery;
       if (result?.ok && result.id) {
@@ -700,12 +641,38 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
       <p className="mt-1 text-13 text-fg-muted">{recovery?.available
         ? t("runs.recoveryAvailable", { mode: recovery.mode ?? "" })
         : recovery?.unavailable_reason || t("runs.recoveryUnavailable")}</p>
+      {recovery?.requires_uncertainty_ack ? <div className="mt-3 space-y-2">
+        <p className="text-13 text-fg-muted">{recovery.uncertainty_reason}</p>
+        <label className="flex items-start gap-2 text-13 text-fg">
+          <input type="checkbox" checked={uncertaintyAck} onChange={(event) => setUncertaintyAck(event.target.checked)} />
+          <span>{t("runs.uncertainExternalAck")}</span>
+        </label>
+      </div> : null}
+      {recovery?.map_index != null ? <div className="mt-3 text-13 text-fg">
+        <p>{t("runs.priorMapRecovery")}</p>
+        <div className="mt-1">
+          <RelationFieldWidget
+            aria-label={t("runs.priorMapRecovery")}
+            relation={{ resource: RUN_MODEL, labelField: "display_name", canCreate: false }}
+            filters={[
+              { field: "origin", operator: "eq", value: "RECOVERY" },
+              { field: "status", operator: "in", value: ["SUCCEEDED", "FAILED", "CANCELED"] },
+            ]}
+            searchFields={["display_name"]}
+            value={priorRecovery || null}
+            onChange={setPriorRecovery}
+            readOnly={pending || Boolean(started)}
+            placeholder={t("runs.priorMapRecoveryPlaceholder")}
+          />
+        </div>
+        <span className="mt-1 block text-fg-muted">{t("runs.priorMapRecoveryHelp")}</span>
+      </div> : null}
       {message ? <ErrorBanner description={message} /> : null}
       {started ? <p className="mt-2 text-13 text-fg-muted">
         {t("runs.recoveryStarted", { id: started.id })}
         {started.href ? <> · <TextLink href={started.href} onNavigate={(href) => { void navigate({ to: href }); }}>{t("runs.openRecovery")}</TextLink></> : null}
       </p> : null}
-      <Button type="button" className="mt-3" disabled={!recovery?.available || pending || Boolean(started)} onClick={() => { void startRecovery(); }}>
+      <Button type="button" className="mt-3" disabled={!recovery?.available || pending || Boolean(started) || Boolean(recovery?.requires_uncertainty_ack && !uncertaintyAck)} onClick={() => { void startRecovery(); }}>
         {pending ? t("runs.recoveryStarting") : t("runs.startRecovery")}
       </Button>
     </div>
@@ -763,7 +730,7 @@ function AttemptResultBadge({ kind, t }: { kind: unknown; t: ReturnType<typeof u
 
 export function inspectionSelectionSearch(
   search: Readonly<Record<string, unknown>>,
-  update: { step?: string | null; execution?: string | null; attempt?: string | null; history?: string | null; payload?: LegacyPane | null },
+  update: { step?: string | null; execution?: string | null; attempt?: string | null; history?: string | null },
 ): Record<string, unknown> {
   const next = { ...search };
   for (const [key, value] of Object.entries(update)) {

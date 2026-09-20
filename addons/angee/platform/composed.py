@@ -7,6 +7,7 @@ are projected here directly from Django's native objects.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +16,7 @@ from django.db.models import Model
 from pydantic import BaseModel, PrivateAttr
 
 from angee.addons import addon_manifest, is_angee_addon
+from angee.base.impl import ImplChoice, ImplClassField
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +153,62 @@ class ContributedFieldRow(BaseModel):
     model_label: str
     field_name: str
     verbose_name: str
+
+
+class PlatformImplementationRow(BaseModel):
+    """List projection for one registered ``ImplClassField`` implementation."""
+
+    id: str
+    model: str
+    field: str
+    key: str
+    label: str
+    category: str
+    icon: str
+    registry_setting: str
+    class_path: str
+    base_class_path: str
+    addon_id: str
+    addon_label: str
+
+    _implementation: type = PrivateAttr()
+    _choice: ImplChoice = PrivateAttr()
+
+    def detail(self) -> PlatformImplementationDetail:
+        """Inspect source only when this canonical registered row is selected."""
+
+        try:
+            source_lines, source_start_line = inspect.getsourcelines(self._implementation)
+            source = "".join(source_lines)
+            source_file = inspect.getsourcefile(self._implementation)
+            unavailable = None
+        except (OSError, TypeError) as error:
+            source = None
+            source_file = None
+            source_start_line = None
+            unavailable = str(error) or type(error).__name__
+        return PlatformImplementationDetail(
+            **self.model_dump(),
+            defaults=self._choice.defaults,
+            config_schema=self._choice.config_schema,
+            description=inspect.getdoc(self._implementation) or "",
+            source=source,
+            source_file=source_file,
+            source_start_line=source_start_line,
+            source_unavailable_reason=unavailable,
+        )
+
+
+class PlatformImplementationDetail(PlatformImplementationRow):
+    """Admin-only implementation detail, including declaration and source facts."""
+
+    defaults: dict[str, Any]
+    config_schema: dict[str, Any] | None
+    description: str
+    source: str | None
+    source_file: str | None
+    source_start_line: int | None
+    source_unavailable_reason: str | None
 
 
 def addons() -> list[AppConfig]:
@@ -293,3 +351,73 @@ def field_rows() -> list[PlatformFieldRow]:
         for model in data_models(config)
         for field in own_fields(model)
     ]
+
+
+def _class_path(value: type | None) -> str:
+    """Return the canonical import path for a declared class."""
+
+    return "" if value is None else f"{value.__module__}.{value.__qualname__}"
+
+
+def _implementation_addon(
+    implementation: type, configs: list[AppConfig]
+) -> AppConfig | None:
+    """Return the installed addon whose native Python module owns ``implementation``."""
+
+    module_name = implementation.__module__
+    candidates = [
+        config
+        for config in configs
+        if module_name == config.module.__name__
+        or module_name.startswith(f"{config.module.__name__}.")
+    ]
+    return max(candidates, key=lambda config: len(config.module.__name__), default=None)
+
+
+def _implementation_row(
+    model: type[Model], field: ImplClassField, key: str, choice: ImplChoice, configs: list[AppConfig]
+) -> PlatformImplementationRow:
+    """Project one field-owned registered key without inspecting Python source."""
+
+    implementation = field.resolve_class(key)
+    owner = _implementation_addon(implementation, configs)
+    row = PlatformImplementationRow(
+        id=f"{model._meta.label}.{field.name}:{key}",
+        model=model._meta.label,
+        field=field.name,
+        key=key,
+        label=choice.label,
+        category=choice.category,
+        icon=choice.icon,
+        registry_setting=field.registry_setting,
+        class_path=_class_path(implementation),
+        base_class_path=_class_path(field.base_class),
+        addon_id=owner.name if owner is not None else "",
+        addon_label=owner.label if owner is not None else "",
+    )
+    row._implementation = implementation
+    row._choice = choice
+    return row
+
+
+def implementation_rows() -> list[PlatformImplementationRow]:
+    """Enumerate registered implementations from composed model field owners."""
+
+    configs = addons()
+    rows: list[PlatformImplementationRow] = []
+    for config in configs:
+        for model in data_models(config):
+            for field in own_fields(model):
+                if not isinstance(field, ImplClassField):
+                    continue
+                keys = field.registered_keys()
+                choices = {choice.key: choice for choice in field.impl_choices()}
+                rows.extend(_implementation_row(model, field, key, choices[key], configs) for key in keys)
+    return sorted(rows, key=lambda row: row.id)
+
+
+def implementation_detail(row_id: str) -> PlatformImplementationDetail | None:
+    """Resolve detail only for a canonical registered implementation identity."""
+
+    row = next((row for row in implementation_rows() if row.id == row_id), None)
+    return None if row is None else row.detail()

@@ -2,7 +2,7 @@ import * as React from "react";
 import { type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { stableKey } from "@angee/refine";
 import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Table, type VisibilityState } from "@tanstack/react-table";
-import { queryForColumns } from "../resource-query";
+import { filterForResourceTextSearch, queryForColumns } from "../resource-query";
 import { errorFromUnknown } from "../../../data/errors";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import { Filter, type ResourceListOrder, type ResourceViewFilter, type ResourceViewGroup } from "../resource-view-model";
@@ -151,8 +151,11 @@ export function useResourceViewQueryFacts<TRow extends Row>({
     [columns, fields, laneSource, modelMetadata, groupStack],
   );
   const mergedFilter = React.useMemo(
-    () => Filter.combineOptional(filter, resourceView.state.filter),
-    [resourceView.state.filter, filter],
+    () => filterForResourceTextSearch(
+      modelMetadata,
+      Filter.combineOptional(filter, resourceView.state.filter),
+    ),
+    [resourceView.state.filter, filter, modelMetadata],
   );
   const sortOrder = React.useMemo(
     () => {

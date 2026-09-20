@@ -21,7 +21,7 @@ away from zero. That mode is **this addon's stated policy** for quantity
 rounding, deliberately fixed here rather than caller-supplied (unlike the
 money/tax owners, whose amount rounding takes an explicit mode from company
 policy). ``rounding`` is a decimal step and, because unit steps are powers of ten,
-is read as a number of fractional digits by :func:`angee.base.numeric.quantize`.
+is read as a signed decimal-place position by :func:`angee.base.numeric.quantize`.
 """
 
 from __future__ import annotations
@@ -30,14 +30,70 @@ import decimal
 from decimal import Decimal
 from typing import Any
 
-from django.db import models
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
 
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
+from angee.base.mixins import (
+    ArchiveMixin,
+    ArchiveQuerySet,
+    ConditionalSharedReaderMixin,
+    ConditionalSharedReaderQuerySet,
+)
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
 
 
-class UomCategory(AngeeDataModel):
+class UomCategoryQuerySet(
+    ConditionalSharedReaderQuerySet[Any],
+    AngeeQuerySet[Any],
+):
+    """Guard the conditional reader contract for unit categories."""
+
+
+class UomCategoryManager(AngeeManager.from_queryset(UomCategoryQuerySet)):  # type: ignore[misc]
+    """Own exact source-neutral category projection and correction."""
+
+    def apply_reference_projection(
+        self,
+        expected: models.Model | None,
+        prepared: models.Model,
+    ) -> models.Model:
+        """Create or compare-and-swap one unit category's canonical facts."""
+
+        if not isinstance(prepared, self.model):
+            raise ValidationError("Prepare a unit category from the composed uom model.")
+        if expected is None and prepared.pk is not None:
+            raise ValidationError("A new unit-category projection cannot reuse a saved identity.")
+        with transaction.atomic(using=self.db):
+            current = None
+            if expected is not None:
+                if not isinstance(expected, self.model) or expected.pk is None:
+                    raise ValidationError(
+                        "A unit-category correction requires its exact saved target."
+                    )
+                current = self.model.system_queryset(
+                    using=self.db, lock=("self",)
+                ).get(pk=expected.pk)
+                if _category_projection_facts(current) != _category_projection_facts(expected):
+                    raise ValidationError(
+                        "The unit category changed before its projection was applied."
+                    )
+                prepared.pk = current.pk
+                prepared._state.adding = False
+                prepared._state.db = self.db
+            prepared.validate_reference_projection_policy()
+            if current is not None and _category_projection_facts(
+                current
+            ) == _category_projection_facts(prepared):
+                return current
+            prepared.save(
+                using=self.db,
+                update_fields=None if current is None else {"name", "updated_at"},
+            )
+            return prepared
+
+
+class UomCategory(ConditionalSharedReaderMixin, AngeeDataModel):
     """A family of units that measure the same quantity (weight, volume, time)."""
 
     runtime = True
@@ -46,6 +102,8 @@ class UomCategory(AngeeDataModel):
     sqid_prefix = "uoc_"
 
     name = models.CharField(max_length=128)
+
+    objects = UomCategoryManager()
 
     class Meta:
         """Django model options for a unit-of-measure category."""
@@ -59,15 +117,105 @@ class UomCategory(AngeeDataModel):
 
         return self.name
 
+    @property
+    def shared_reader_eligible(self) -> bool:
+        """Native catalogue categories are shared; source donors may narrow them."""
 
-class UomQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+        return True
+
+    def validate_reference_projection_policy(self) -> None:
+        """Cooperate with a composed source owner before a projection write."""
+
+
+def _category_projection_facts(row: models.Model) -> tuple[Any, ...]:
+    """Return the exact native category facts guarded by projection CAS."""
+
+    return (row.name,)
+
+
+class UomQuerySet(
+    ConditionalSharedReaderQuerySet[Any],
+    ArchiveQuerySet[Any],
+    AngeeQuerySet[Any],
+):
     """Archive read scopes layered over the REBAC-scoped unit queryset."""
 
 
-UomManager = AngeeManager.from_queryset(UomQuerySet)
+class UomManager(AngeeManager.from_queryset(UomQuerySet)):  # type: ignore[misc]
+    """Own exact source-neutral unit projection and correction."""
+
+    def apply_reference_projection(
+        self,
+        expected: models.Model | None,
+        prepared: models.Model,
+    ) -> models.Model:
+        """Create or compare-and-swap one unit after locking its category."""
+
+        if not isinstance(prepared, self.model):
+            raise ValidationError("Prepare a unit from the composed uom model.")
+        if expected is None and prepared.pk is not None:
+            raise ValidationError("A new unit projection cannot reuse a saved identity.")
+        if prepared.ratio <= 0 or prepared.rounding <= 0:
+            raise ValidationError("Unit ratio and rounding must be positive.")
+        normalized_rounding = prepared.rounding.normalize()
+        if normalized_rounding.as_tuple().digits != (1,):
+            raise ValidationError("Unit rounding must be a decimal power-of-ten step.")
+        if prepared.is_reference and (
+            prepared.ratio != Decimal(1) or prepared.offset != Decimal(0)
+        ):
+            raise ValidationError("A reference unit must be the category identity map.")
+        with transaction.atomic(using=self.db):
+            category = (
+                self.model._meta.get_field("category")
+                .related_model.system_queryset(using=self.db, lock=("self",))
+                .filter(pk=prepared.category_id)
+                .first()
+            )
+            if category is None:
+                raise ValidationError("The unit category is unavailable.")
+            current = None
+            if expected is not None:
+                if not isinstance(expected, self.model) or expected.pk is None:
+                    raise ValidationError("A unit correction requires its exact saved target.")
+                current = self.model.system_queryset(
+                    using=self.db, lock=("self",)
+                ).get(pk=expected.pk)
+                if _uom_projection_facts(current) != _uom_projection_facts(expected):
+                    raise ValidationError("The unit changed before its projection was applied.")
+                if prepared.category_id != current.category_id:
+                    raise ValidationError(
+                        "A unit projection cannot move an existing unit between categories."
+                    )
+                prepared.pk = current.pk
+                prepared._state.adding = False
+                prepared._state.db = self.db
+            prepared.category = category
+            prepared.validate_reference_projection_policy(category=category)
+            if current is not None and _uom_projection_facts(
+                current
+            ) == _uom_projection_facts(prepared):
+                return current
+            prepared.save(
+                using=self.db,
+                update_fields=(
+                    None
+                    if current is None
+                    else {
+                        "name",
+                        "category",
+                        "ratio",
+                        "offset",
+                        "rounding",
+                        "is_reference",
+                        "is_archived",
+                        "updated_at",
+                    }
+                ),
+            )
+            return prepared
 
 
-class Uom(ArchiveMixin, AngeeDataModel):
+class Uom(ConditionalSharedReaderMixin, ArchiveMixin, AngeeDataModel):
     """One unit within a category, mapped affinely onto the reference unit.
 
     ``value_in_reference = qty * ratio + offset``: ``ratio`` is the number of
@@ -124,18 +272,29 @@ class Uom(ArchiveMixin, AngeeDataModel):
         return self.name
 
     @property
+    def shared_reader_eligible(self) -> bool:
+        """Native catalogue units are shared; source donors may narrow them."""
+
+        return True
+
+    def validate_reference_projection_policy(self, *, category: models.Model) -> None:
+        """Cooperate with a composed source owner after the canonical category lock."""
+
+        del category
+
+    @property
     def rounding_places(self) -> int:
-        """Return the fractional-digit count of this unit's ``rounding`` step.
+        """Return the signed decimal-place position of this unit's ``rounding`` step.
 
         ``rounding`` is a decimal step (``0.001`` rounds to a milligram, ``1`` to a
-        whole unit). :func:`angee.base.numeric.quantize` rounds to a number of
-        places, so the step is read as its normalized scale — exact because unit
-        steps are powers of ten (a non-power-of-ten step such as ``0.5`` is not
-        representable this way; see the module docstring).
+        whole unit, and ``10`` rounds to tens). :func:`angee.base.numeric.quantize`
+        accepts signed places, so the step is the inverse of its normalized
+        exponent — exact because unit steps are powers of ten. A non-power-of-ten
+        step such as ``0.5`` is not representable this way; see the module docstring.
         """
 
         exponent = self.rounding.normalize().as_tuple().exponent
-        return -exponent if isinstance(exponent, int) and exponent < 0 else 0
+        return -exponent if isinstance(exponent, int) else 0
 
     def quantize(self, qty: Decimal) -> Decimal:
         """Return ``qty`` quantized to this unit's ``rounding`` step (``ROUND_HALF_UP``).
@@ -168,6 +327,20 @@ class Uom(ArchiveMixin, AngeeDataModel):
                 "units belong to different categories"
             )
         return to_uom.quantize((qty * self.ratio + self.offset - to_uom.offset) / to_uom.ratio)
+
+
+def _uom_projection_facts(row: models.Model) -> tuple[Any, ...]:
+    """Return the exact native unit facts guarded by projection CAS."""
+
+    return (
+        row.name,
+        row.category_id,
+        row.ratio,
+        row.offset,
+        row.rounding,
+        row.is_reference,
+        row.is_archived,
+    )
 
 
 UomRole = role_anchor("uom/role")

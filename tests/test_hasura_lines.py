@@ -74,6 +74,7 @@ _LINES = HasuraLines(
     model=SaleLine,
     node=SaleLineType,
     writable=("label", "quantity", "position"),
+    defaults={"quantity": "1"},
 )
 
 _RESOURCE = hasura_model_resource(
@@ -643,6 +644,7 @@ def test_lines_resource_metadata_is_emitted():
     assert resource.lines.field == "lines"
     assert resource.lines.model_label == "linesdemo.SaleLine"
     assert resource.lines.position_field == "position"
+    assert resource.lines.defaults == {"quantity": "1"}
     line_field_names = {field.name for field in resource.lines.fields}
     assert {"label", "quantity", "position"} <= line_field_names
     # The parent create fields must not leak the nested lines envelope.

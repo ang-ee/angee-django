@@ -88,7 +88,7 @@ INSTALLED_APPS:
   # Document OCR + structured extraction evidence for review workflows (depends
   # on workflows + agents + storage + messaging, all composed above); ships
   # built-in inference engines, so no separate OCR engine addon is required.
-  - angee.workflows_ocr
+  - angee.workflows_extraction
   # In-process agent runtime (pydantic-ai): registers the "pydantic" key in
   # ANGEE_AGENT_RUNTIME_CLASSES so agents can run as Celery turns with no
   # workspace/service; model-less (sessions/turns live in angee.agents).

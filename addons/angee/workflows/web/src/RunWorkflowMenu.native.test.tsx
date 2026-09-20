@@ -25,10 +25,13 @@ vi.mock("./documents.console", () => ({
 }));
 
 vi.mock("../../../../../packages/ui/src/views/relation/relation-options", () => ({
-  useRelationOptions: () => ({
+  useRelationPickerOptions: () => ({
     list: { fetching: false, refetch: vi.fn() },
     options: [{ value: "drive_7", label: "Backup drive" }],
     rows: [{ id: "drive_7", name: "Backup drive" }],
+    onOpenChange: vi.fn(),
+    onSearchChange: vi.fn(),
+    searchState: { pending: false },
   }),
 }));
 

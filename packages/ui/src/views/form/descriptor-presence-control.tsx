@@ -17,6 +17,16 @@ export function DescriptorPresenceControl({ field, value, readOnly, onChange, on
   children: ReactNode;
 }): ReactElement {
   const t = useUiT();
+  const compactScalar = isCompactOptionalScalar(field);
+  if (compactScalar && (value === undefined || value === null)) {
+    return <>{children}{!readOnly ? <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-fg-3">
+      <span>{value === null ? t("form.value.leftEmpty") : t("form.value.optional")}</span>
+      {field.nullable && value !== null ? <Button type="button" size="sm" variant="ghost"
+        onClick={() => { onChange(null); onCommit?.(); }}>{t("form.value.leaveEmpty")}</Button> : null}
+      {field.omittable && value !== undefined ? <Button type="button" size="sm" variant="ghost"
+        onClick={() => { onChange(undefined); onCommit?.(); }}>{t("form.value.omit")}</Button> : null}
+    </div> : null}</>;
+  }
   if ((field.omittable || field.nullable) && value === undefined) {
     return <div className="flex items-center gap-2">
       <span className="text-13 text-fg-3">{t("form.value.notSet")}</span>
@@ -49,8 +59,24 @@ export function DescriptorPresenceControl({ field, value, readOnly, onChange, on
   </div> : null}</>;
 }
 
+/** Plain optional inputs stay usable while retaining distinct omitted/null values. */
+function isCompactOptionalScalar(field: FieldDescriptor): boolean {
+  const numericInput = isNumericInput(field);
+  return Boolean(
+    field.omittable
+    && (
+      !field.hasDefault
+      || (field.defaultValue === null && numericInput)
+    )
+    && !field.presenceRequired
+    && !field.objectTemplate
+    && !field.itemTemplate
+    && (field.kind === "string" || numericInput),
+  );
+}
+
 function presentValue(field: FieldDescriptor, useDefault: boolean): unknown {
-  if (!useDefault && (field.kind === "integer" || field.kind === "number")) {
+  if (!useDefault && isNumericInput(field)) {
     return "";
   }
   return initialFormSpecValue({
@@ -58,4 +84,10 @@ function presentValue(field: FieldDescriptor, useDefault: boolean): unknown {
     nullable: useDefault ? field.nullable : false,
     hasDefault: useDefault,
   } as FormSpecFieldDescriptor);
+}
+
+/** Numeric widgets also render exact Decimal strings from JSON Schema unions. */
+function isNumericInput(field: FieldDescriptor): boolean {
+  return field.kind === "integer" || field.kind === "number"
+    || field.widget === "integer" || field.widget === "float";
 }

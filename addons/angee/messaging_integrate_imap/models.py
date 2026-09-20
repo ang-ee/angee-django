@@ -27,14 +27,44 @@ class ImapChannelSampling(models.Model):
     class Meta:
         abstract = True
 
-    def _require_imap_sampling(self, actor: Any) -> None:
-        """Sampling needs explicit channel write access and a paused IMAP bridge."""
+    def _require_paused_imap(self, actor: Any) -> None:
+        """Require explicit write access to one paused IMAP channel."""
 
         self.with_actor(actor)._require_record_access("write")
         if self.lifecycle != self.Lifecycle.PAUSED:
-            raise ValidationError("Pause this channel before selecting historical messages.")
+            raise ValidationError("Pause this IMAP channel before changing its mailbox position.")
         if not isinstance(self.backend, ImapChannelBackend):
-            raise ValidationError("Historical mailbox selection is available for IMAP channels.")
+            raise ValidationError("Mailbox positioning is available for IMAP channels.")
+
+    def prepare_imap_new_mail(self, *, actor: Any) -> tuple[int, bool]:
+        """Atomically exclude the selected mailboxes' current contents from live sync.
+
+        The transport snapshot happens under the bridge's normal sync lock but
+        outside a database transaction. The locked row then revalidates every
+        fact used by that snapshot before it commits the complete cursor at once.
+        """
+
+        channel_model = type(self)
+        with actor_context(actor):
+            current = channel_model._base_manager.get(pk=self.pk)
+            current._require_paused_imap(actor)
+            original_cursor = current.cursor if isinstance(current.cursor, dict) else {}
+            with bridge_advisory_lock(current) as acquired:
+                if not acquired:
+                    raise ValidationError("The channel is busy. Retry when its current operation finishes.")
+                cursor, changed = current.backend.prepare_new_mail_cursor(original_cursor)
+                with transaction.atomic():
+                    locked = channel_model._base_manager.select_for_update().get(pk=self.pk)
+                    locked._require_paused_imap(actor)
+                    if locked.config != current.config or locked.credential_id != current.credential_id:
+                        raise ValidationError("The channel configuration changed. Set the starting point again.")
+                    locked_cursor = locked.cursor if isinstance(locked.cursor, dict) else {}
+                    if locked_cursor != original_cursor:
+                        raise ValidationError("The channel cursor changed. Set the starting point again.")
+                    if changed:
+                        locked.cursor = cursor
+                        locked.save(update_fields=["cursor", "updated_at"])
+            return len(cursor.get("mailboxes", {})), changed
 
     def preview_imap_sample(
         self, *, actor: Any, mailbox: str, since: date, before: date, limit: int = 20,
@@ -42,7 +72,7 @@ class ImapChannelSampling(models.Model):
         """Read a bounded header preview; leave the mailbox and normal cursor unchanged."""
 
         current = type(self)._base_manager.get(pk=self.pk)
-        current._require_imap_sampling(actor)
+        current._require_paused_imap(actor)
         return current.backend.preview_sample(mailbox=mailbox, since=since, before=before, limit=limit)
 
     def import_imap_sample(
@@ -57,7 +87,7 @@ class ImapChannelSampling(models.Model):
         """
 
         current = type(self)._base_manager.get(pk=self.pk)
-        current._require_imap_sampling(actor)
+        current._require_paused_imap(actor)
         with bridge_advisory_lock(current) as acquired:
             if not acquired:
                 raise ValidationError("The channel is busy. Retry when its current operation finishes.")
@@ -66,7 +96,7 @@ class ImapChannelSampling(models.Model):
             )
             with transaction.atomic():
                 locked = type(self)._base_manager.select_for_update().get(pk=self.pk)
-                locked._require_imap_sampling(actor)
+                locked._require_paused_imap(actor)
                 if locked.config != current.config or locked.credential_id != current.credential_id:
                     raise ValidationError("The channel configuration changed. Preview the sample again.")
                 with system_context(reason="messaging_integrate_imap.historical_sample"):

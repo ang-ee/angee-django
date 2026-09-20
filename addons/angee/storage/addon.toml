@@ -11,6 +11,7 @@ dependencies = [
 ]
 
 [[migrations]]
+fresh_history = "baseline"
 name = "file_attachment_unique_edge"
 app_label = "storage"
 module = "runtime_migrations.file_attachment_unique_edge"

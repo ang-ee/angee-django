@@ -126,6 +126,7 @@ async function fixture(options: {
   onFieldInteractionCommit?: (path: string) => void;
   recordTabs?: readonly RecordTabDescriptor[];
   formExtras?: React.ComponentProps<typeof FormView>["formExtras"];
+  headerExtras?: React.ComponentProps<typeof FormView>["headerExtras"];
   recordExtras?: React.ComponentProps<typeof FormView>["recordExtras"];
   groups?: readonly GroupDescriptor[];
   title?: React.ComponentProps<typeof FormView>["title"];
@@ -151,13 +152,14 @@ async function fixture(options: {
   clients.push(client);
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   let surface!: FormViewSaveSurface;
+  let acknowledgedSource = options.acknowledgedSource;
   const id = options.id === undefined ? "note-1" : options.id;
   function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
       dataResource: resource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
       submit: options.submit, readOnlyWhen: options.readOnlyWhen, onSaved, t: (key) => key,
-      acknowledgedSource: options.acknowledgedSource,
+      acknowledgedSource,
       onFieldInteractionStart: options.onFieldInteractionStart,
       onFieldInteractionCommit: options.onFieldInteractionCommit,
     });
@@ -177,12 +179,13 @@ async function fixture(options: {
             fields={viewFields}
             groups={options.groups}
             title={options.title}
-            acknowledgedSource={options.acknowledgedSource}
+            acknowledgedSource={acknowledgedSource}
             submit={options.submit}
             onFieldInteractionStart={options.onFieldInteractionStart}
             onFieldInteractionCommit={options.onFieldInteractionCommit}
             recordTabs={options.recordTabs}
             formExtras={options.formExtras}
+            headerExtras={options.headerExtras}
             recordExtras={options.recordExtras}
             defaultRecordTab={options.recordTabs ? "activity" : undefined}
           />
@@ -196,8 +199,33 @@ async function fixture(options: {
   if (!options.publicView && id !== null && options.acknowledgedSource?.values !== null) {
     await waitFor(() => expect(surface?.form.getValues("title")).toBe("First"));
   }
-  return { surface: () => surface, onSaved, getOne, update, client, setRecord: (next: Row) => { record = next; }, rerender: (props: Parameters<typeof Tree>[0]) => view.rerender(<Tree {...props} />) };
+  return { surface: () => surface, onSaved, getOne, update, client,
+    setRecord: (next: Row) => { record = next; },
+    setAcknowledgedSource: (next: FormViewAcknowledgedSource) => { acknowledgedSource = next; },
+    rerender: (props: Parameters<typeof Tree>[0]) => view.rerender(<Tree {...props} />) };
 }
+
+test("dirty scalar edits keep their original saved revision across a refreshed record", async () => {
+  const source: FormViewAcknowledgedSource = {
+    record: { id: "note-1", title: "First", draft_revision: "rev-1" },
+    values: { title: "First", body: "Original body" },
+  };
+  const submit = vi.fn(async () => null);
+  const f = await fixture({ acknowledgedSource: source, submit });
+  edit("title", "My edit");
+  f.setAcknowledgedSource({
+    record: { id: "note-1", title: "Remote edit", draft_revision: "rev-2" },
+    values: { title: "Remote edit", body: "Original body" },
+  });
+  f.rerender({});
+  await waitFor(() => expect(f.surface().displayRecord?.draft_revision).toBe("rev-2"));
+  expect(f.surface().form.getValues("title")).toBe("My edit");
+  await act(async () => f.surface().submitForm());
+  expect(submit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+    record: expect.objectContaining({ draft_revision: "rev-2" }),
+    baselineRecord: expect.objectContaining({ draft_revision: "rev-1" }),
+  }));
+});
 
 test("form extras receive the native create and edit form contexts", async () => {
   const extras = vi.fn((context: Parameters<NonNullable<React.ComponentProps<typeof FormView>["formExtras"]>>[0]) => (
@@ -208,6 +236,15 @@ test("form extras receive the native create and edit form contexts", async () =>
 
   f.rerender({ recordId: "note-1" });
   expect((await screen.findAllByText("note-1")).length).toBeGreaterThan(0);
+  expect(extras).toHaveBeenCalled();
+});
+
+test("header extras render from the same live record context as the title", async () => {
+  const extras = vi.fn((context: Parameters<NonNullable<React.ComponentProps<typeof FormView>["headerExtras"]>>[0]) => (
+    <span>contact for {String(context.record?.title ?? "")}</span>
+  ));
+  await fixture({ publicView: true, headerExtras: extras });
+  expect(await screen.findByText("contact for First")).toBeTruthy();
   expect(extras).toHaveBeenCalled();
 });
 
@@ -240,7 +277,11 @@ test("an editable metadata relation drops a stale expanded option when its id ch
   const relation = await screen.findByRole("button", { name: /Parent/ });
   expect(relation.textContent).toContain("note-a");
   fireEvent.click(screen.getByRole("button", { name: "Choose B" }));
-  await waitFor(() => expect(relation.textContent).toContain("note-b"));
+  await waitFor(() => {
+    const current = screen.getByRole("button", { name: /Parent/ });
+    expect(current.textContent).toContain("note-b");
+    expect(current.textContent).not.toContain("note-a");
+  });
   fireEvent.click(screen.getByRole("button", { name: "Clear parent" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: /Parent/ })).toBeNull());
 });

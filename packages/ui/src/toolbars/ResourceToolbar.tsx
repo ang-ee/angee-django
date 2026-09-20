@@ -49,7 +49,11 @@ export interface ResourceToolbarProps {
   view?: ResourceViewKind;
   group?: ResourceViewGroup | null;
   groupStack?: readonly ResourceViewGroup[];
+  /** Curated grouping shortcuts shown directly in the Group by menu. */
   groupOptions?: readonly ResourceToolbarGroupOption[];
+  /** Complete supported grouping catalog for the custom group editor. Falls
+   * back to `groupOptions` for standalone callers that omit it. */
+  customGroupOptions?: readonly ResourceToolbarGroupOption[];
   filterOptions?: readonly ResourceToolbarFilterOption[];
   customFilterFields?: readonly ResourceToolbarFilterField[];
   customFilterChips?: readonly ResourceToolbarCustomFilterChip[];
@@ -208,6 +212,7 @@ export function ResourceToolbar({
   group,
   groupStack,
   groupOptions,
+  customGroupOptions,
   filterOptions = [],
   customFilterFields = [],
   customFilterChips = [],
@@ -261,11 +266,13 @@ export function ResourceToolbar({
   const groupControls =
     capabilities.grouping &&
     (groupOptions !== undefined ||
+      customGroupOptions !== undefined ||
       groupStack !== undefined ||
       group !== undefined ||
       onGroupStackChange !== undefined ||
       onClearGroup !== undefined);
   const toolbarGroupOptions = groupOptions ?? [];
+  const toolbarCustomGroupOptions = customGroupOptions ?? toolbarGroupOptions;
   const groups = groupControls ? groupStack ?? (group ? [group] : []) : [];
   const activeFilters = filterOptions.filter(
     (option) => activeFilterIds.includes(option.id) && !option.preset,
@@ -295,6 +302,7 @@ export function ResourceToolbar({
             groups={groups}
             groupControls={groupControls}
             groupOptions={toolbarGroupOptions}
+            customGroupOptions={toolbarCustomGroupOptions}
             activeFilters={activeFilters}
             activeFilterIds={activeFilterIds}
             filterOptions={filterOptions}
@@ -405,6 +413,7 @@ function FilterPicker({
   groups,
   groupControls,
   groupOptions,
+  customGroupOptions,
   filterOptions,
   customFilterFields,
   customFilterChips,
@@ -424,6 +433,7 @@ function FilterPicker({
   groups: readonly ResourceViewGroup[];
   groupControls: boolean;
   groupOptions: readonly ResourceToolbarGroupOption[];
+  customGroupOptions: readonly ResourceToolbarGroupOption[];
   filterOptions: readonly ResourceToolbarFilterOption[];
   customFilterFields: readonly ResourceToolbarFilterField[];
   customFilterChips: readonly ResourceToolbarCustomFilterChip[];
@@ -473,8 +483,16 @@ function FilterPicker({
   const [customGroupGranularity, setCustomGroupGranularity] =
     React.useState<ResourceViewGroupGranularity>("day");
   const selectedCustomGroup =
-    groupOptions.find((option) => option.id === customGroupId) ??
-    groupOptions[0];
+    customGroupOptions.find((option) => option.id === customGroupId) ??
+    customGroupOptions[0];
+  const effectiveCustomGroupGranularity = groupGranularity(
+    selectedCustomGroup,
+    customGroupGranularity,
+  );
+  const groupLabelOptions = React.useMemo(
+    () => [...groupOptions, ...customGroupOptions],
+    [customGroupOptions, groupOptions],
+  );
   const [favoriteOpen, setFavoriteOpen] = React.useState(false);
   const [favoriteLabel, setFavoriteLabel] =
     React.useState(defaultFavoriteLabel);
@@ -525,8 +543,12 @@ function FilterPicker({
     if (!selectedCustomGroup || !onGroupStackChange) return;
     const group =
       selectedCustomGroup.type === "date"
-        ? { ...selectedCustomGroup.group, granularity: customGroupGranularity }
+        ? { ...selectedCustomGroup.group, granularity: effectiveCustomGroupGranularity }
         : selectedCustomGroup.group;
+    if (groups.some((item) => resourceViewGroupsEqual(item, group))) {
+      setCustomGroupOpen(false);
+      return;
+    }
     onGroupStackChange([...groups, group]);
     setCustomGroupOpen(false);
   }
@@ -556,8 +578,8 @@ function FilterPicker({
                 ? t("resourceToolbar.groupBy")
                 : t("resourceToolbar.then")
             }
-            value={resourceViewGroupLabel(nextGroup, groupOptions)}
-            removeLabel={resourceViewGroupLabel(nextGroup, groupOptions)}
+            value={resourceViewGroupLabel(nextGroup, groupLabelOptions)}
+            removeLabel={resourceViewGroupLabel(nextGroup, groupLabelOptions)}
             onRemove={() => {
               const next = groups.filter(
                 (_, groupIndex) => groupIndex !== index,
@@ -774,17 +796,17 @@ function FilterPicker({
                 </PickerButton>
                 {customGroupOpen ? (
                   <CustomGroupEditor
-                    options={groupOptions}
+                    options={customGroupOptions}
                     option={selectedCustomGroup}
                     optionId={selectedCustomGroup?.id ?? ""}
-                    granularity={customGroupGranularity}
+                    granularity={effectiveCustomGroupGranularity}
                     onOption={(id) => {
-                      const option = groupOptions.find(
+                      const option = customGroupOptions.find(
                         (item) => item.id === id,
                       );
                       setCustomGroupId(id);
                       setCustomGroupGranularity(
-                        option?.group.granularity ?? "day",
+                        groupGranularity(option, "day"),
                       );
                     }}
                     onGranularity={setCustomGroupGranularity}
@@ -1277,6 +1299,18 @@ function resourceViewGroupLabel(
   return group.granularity
     ? `${field} · ${titleCase(group.granularity)}`
     : field;
+}
+
+function groupGranularity(
+  option: ResourceToolbarGroupOption | undefined,
+  selected: ResourceViewGroupGranularity,
+): ResourceViewGroupGranularity {
+  const supported = option?.granularities ?? [];
+  if (supported.includes(selected)) return selected;
+  const declared = option?.group.granularity;
+  return declared && supported.includes(declared)
+    ? declared
+    : supported[0] ?? "day";
 }
 
 function operatorsForField(

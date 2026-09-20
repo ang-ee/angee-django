@@ -4,6 +4,7 @@ import { expectValidBaseAddon } from "@angee/app/testing";
 import { PARTIES_REVIEW_TOOLBAR_SLOT } from "@angee/parties";
 import { RecordChromeProvider, formViewSectionsSlot } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
+import { WORKFLOW_DECISION_CONTENT_SLOT } from "@angee/workflows";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
@@ -49,6 +50,7 @@ describe("workflows-parties addon manifest", () => {
     expect(workflowsParties.routes ?? []).toEqual([]);
     expect((workflowsParties.slots ?? []).map((entry) => [entry.slot, entry.id])).toEqual([
       [PARTIES_REVIEW_TOOLBAR_SLOT, "workflows-parties.dedupe"],
+      [WORKFLOW_DECISION_CONTENT_SLOT, "workflows-parties.review-party-identity"],
       ["form-view.record-chrome", "workflows-parties.selected-decision"],
       [formViewSectionsSlot("parties.Person").slot, "workflows-parties.activity"],
       [formViewSectionsSlot("parties.Organization").slot, "workflows-parties.activity"],

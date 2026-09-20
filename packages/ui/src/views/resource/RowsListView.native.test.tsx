@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { ResourceQuery } from "@angee/metadata";
+import { testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { ToastProvider } from "../../feedback";
 import { RowsListView } from "./RowsListView";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
@@ -49,6 +50,57 @@ test("typed local rows search only text-capable columns while preserving Boolean
   expect(screen.getByText("Alpha")).toBeTruthy();
   expect(screen.queryByText("Alpha active")).toBeNull();
   expect(screen.queryByText("Beta")).toBeNull();
+});
+
+test("local rows keep curated group shortcuts separate from complete query capabilities", async () => {
+  const query = ResourceQuery.forRows({ fields: {
+    name: { scalar: "String" },
+    owner: { scalar: "String" },
+  } });
+  render(<ToastProvider><ResourceViewProvider scope="local">
+    <RowsListView
+      query={query}
+      rows={[{ id: "1", name: "Alpha", owner: "Ada" }]}
+      columns={[{ field: "name", header: "Name" }]}
+      groupOptions={[]}
+    />
+  </ResourceViewProvider></ToastProvider>);
+
+  fireEvent.click(screen.getByLabelText("Filter and group"));
+  expect(screen.queryByRole("button", { name: "Owner" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+  const field = screen.getByLabelText("Group field");
+  fireEvent.click(field);
+  expect(await screen.findByRole("option", { name: "Owner" })).toBeTruthy();
+});
+
+test("drops a curated date shortcut when its granularity is no longer supported", async () => {
+  const query = ResourceQuery.fromContract(testResourceQuery({
+    fields: { invoice_date: testQueryField("invoice_date", { scalar: "Date" }) },
+    axes: {
+      invoice_date: testQueryAxis("invoice_date", {
+        kind: "date",
+        extractions: [{ name: "month", input: "MONTH", key: "invoice_date_month" }],
+      }),
+    },
+  }));
+  render(<ToastProvider><ResourceViewProvider scope="local">
+    <RowsListView
+      query={query}
+      rows={[{ id: "1", invoice_date: "2026-09-19" }]}
+      columns={[{ field: "invoice_date", header: "Invoice date" }]}
+      groupOptions={[{
+        id: "invoice-date-day",
+        label: "Invoice date by day",
+        group: { field: "invoice_date", granularity: "day" },
+      }]}
+    />
+  </ResourceViewProvider></ToastProvider>);
+
+  fireEvent.click(screen.getByLabelText("Filter and group"));
+  expect(screen.queryByRole("button", { name: "Invoice date by day" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+  expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
 });
 
 test("the native row model sorts declared Decimal strings numerically without losing precision", () => {

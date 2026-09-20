@@ -22,6 +22,7 @@ const platformMenu: readonly BaseMenuItem[] = [
           { id: "platform.graph", label: "Graph", route: "platform.graph", icon: "share" },
           { id: "platform.models", label: "Models", route: "platform.models", icon: "grid" },
           { id: "platform.fields", label: "Fields", route: "platform.fields", icon: "columns" },
+          { id: "platform.implementations", label: "Implementations", route: "platform.implementations", icon: "terminal" },
           { id: "platform.addons", label: "Addons", route: "platform.addons", icon: "grid" },
         ],
       },
@@ -37,6 +38,10 @@ const platformRoutes: readonly BaseAddonRoute[] = [
     detailComponent: lazyRouteComponent(() => import("./views/ModelDetail"), "ModelDetail"),
   }),
   { name: "platform.fields", path: "/platform/fields", resource: "platform.Field", component: lazyRouteComponent(() => import("./views/FieldsPage"), "FieldsPage") },
+  ...resourcePageRoutes("platform.implementations", "/platform/implementations", lazyRouteComponent(() => import("./views/ImplementationsPage"), "ImplementationsPage"), "platform.Implementation", {
+    detailMenu: "platform.implementations",
+    detailComponent: lazyRouteComponent(() => import("./views/ImplementationDetail"), "ImplementationDetail"),
+  }),
   ...resourcePageRoutes("platform.addons", "/platform/addons", lazyRouteComponent(() => import("./views/AddonsPage"), "AddonsPage"), "platform.Addon", {
     detailName: "platform.addons.record",
     detailMenu: "platform.addons",

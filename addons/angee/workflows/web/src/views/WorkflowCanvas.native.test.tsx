@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WorkflowInputPreviewProvider } from "./workflow-input-preview";
+import { decisionContextWidgets } from "./DecisionContextWidgets";
 
 const mocks = vi.hoisted(() => ({
   workflowStatus: "DRAFT",
@@ -131,6 +132,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
                   properties: {
                     retry: {
                       type: "object",
+                      widget: "object",
                       label: "Retry",
                       nullable: true,
                       properties: { max_attempts: { type: "integer", label: "Max attempts" } },
@@ -276,7 +278,7 @@ function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>
         <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(dataResources)}>
           <ModalsHost>
             <ToastProvider>
-              <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+              <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...decisionContextWidgets } }}>
                 <Form
                   resource="workflows.Workflow"
                   id="workflow_1"
@@ -863,6 +865,8 @@ describe("WorkflowCanvas native narrow inspector", () => {
     expect(screen.getByText("Retry")).toBeTruthy();
     expect(screen.getByText("Slots")).toBeTruthy();
     expect(screen.queryByText("Advanced configuration")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Set value" }));
+    expect(await screen.findByLabelText("Max attempts")).toBeTruthy();
 
   });
 

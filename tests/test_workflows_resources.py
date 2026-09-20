@@ -16,6 +16,7 @@ from angee.addons import addon_manifest
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.models import Resource
 from angee.workflows import models as workflow_models
+from angee.workflows.definitions import DefinitionEdit, NodePatch
 from tests.conftest import write_addon_manifest
 from tests.workflows import WORKFLOW_DEFINITION_MODELS, Trigger, Workflow, workflow_table_setup
 
@@ -77,6 +78,7 @@ def test_demo_workflow_resources_publish_lineage_and_leave_trigger_disabled(
     assert [row.version for row in published] == [1]
     assert current == published[0]
     assert trigger.enabled is False
+    assert draft.error_workflow_id is None
     assert draft_binding == {"kind": "workflow_input", "path": []}
     assert published_binding == {"kind": "workflow_input", "path": []}
 
@@ -147,6 +149,98 @@ def test_workflows_parties_resource_backfills_key_across_existing_lineage(
     assert published.key == draft.key
     with system_context(reason="test workflow resource backfill idempotency"):
         assert Workflow.objects.filter(published_from=draft).count() == 1
+
+
+def test_resource_republication_preserves_omitted_same_impl_config_until_explicit_clear(
+    workflow_resource_tables: None,
+    tmp_path: Path,
+) -> None:
+    """A declaration update preserves operator policy unless config is explicit."""
+
+    del workflow_resource_tables
+    owner = _notes_workflow_addon(tmp_path)
+    steps_path = Path(owner.path) / "resources" / "demo" / "101_workflows.step.yaml"
+    steps_path.write_text(steps_path.read_text().replace(
+        "      config: {}\n      input_binding: {kind: workflow_input, path: []}\n",
+        "      input_binding: {kind: workflow_input, path: []}\n",
+        1,
+    ))
+    WorkflowResourceLedger.objects.load_addons(
+        (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True,
+    )
+
+    with system_context(reason="test operator config before resource republication"):
+        draft = Workflow.objects.get(name="Note publish approval", status=workflow_models.WorkflowStatus.DRAFT)
+        snapshot = Workflow.objects.definition_snapshot(draft)
+        entry = next(node for node in snapshot.nodes if node.key == "entry")
+        configured = Workflow.objects.apply_definition(
+            draft,
+            expected_revision=snapshot.revision,
+            edit=DefinitionEdit(node_patches=(NodePatch(
+                entry.pk, {"config": {"operator_policy": {"mode": "strict"}}},
+            ),)),
+        )
+        Workflow.objects.publish_definition(draft, expected_revision=configured.revision)
+
+    steps_path.write_text(steps_path.read_text().replace("name: Validate note", "name: Validate source note"))
+    WorkflowResourceLedger.objects.load_addons(
+        (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True,
+    )
+    with system_context(reason="test omitted resource config retention"):
+        draft.refresh_from_db()
+        assert draft.steps.get(key="entry").config == {"operator_policy": {"mode": "strict"}}
+        current = Workflow.objects.current_published_for(draft)
+        assert current.steps.get(key="entry").config == {"operator_policy": {"mode": "strict"}}
+        publication_count = Workflow.objects.filter(published_from=draft).count()
+
+    WorkflowResourceLedger.objects.load_addons(
+        (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True,
+    )
+    with system_context(reason="test omitted resource config idempotency"):
+        assert Workflow.objects.filter(published_from=draft).count() == publication_count
+
+    steps_path.write_text(steps_path.read_text().replace(
+        "      step_class: agent_session\n      input_binding: {kind: workflow_input, path: []}\n",
+        "      step_class: agent_session\n      config: {}\n      input_binding: {kind: workflow_input, path: []}\n",
+        1,
+    ))
+    WorkflowResourceLedger.objects.load_addons(
+        (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True,
+    )
+    with system_context(reason="test explicit resource config clear"):
+        draft.refresh_from_db()
+        assert draft.steps.get(key="entry").config == {}
+        current = Workflow.objects.current_published_for(draft)
+        assert current.steps.get(key="entry").config == {}
+
+        snapshot = Workflow.objects.definition_snapshot(draft)
+        entry = draft.steps.get(key="entry")
+        configured = Workflow.objects.apply_definition(
+            draft,
+            expected_revision=snapshot.revision,
+            edit=DefinitionEdit(node_patches=(NodePatch(
+                entry.pk, {"config": {"operator_policy": {"mode": "replacement"}}},
+            ),)),
+        )
+        Workflow.objects.publish_definition(draft, expected_revision=configured.revision)
+
+    steps_path.write_text(steps_path.read_text().replace(
+        "      step_class: agent_session\n      config: {}\n",
+        "      step_class: archive_probe\n",
+        1,
+    ))
+    edges_path = Path(owner.path) / "resources" / "demo" / "102_workflows.edge.yaml"
+    edges_path.write_text(edges_path.read_text().replace(
+        "      condition: needs_review\n", "      condition: recognized\n", 1,
+    ))
+    WorkflowResourceLedger.objects.load_addons(
+        (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True,
+    )
+    with system_context(reason="test changed implementation config reset"):
+        draft.refresh_from_db()
+        entry = draft.steps.get(key="entry")
+        assert entry.step_class == "archive_probe"
+        assert entry.config == {}
 
 
 def _notes_workflow_addon(tmp_path: Path) -> AppConfig:

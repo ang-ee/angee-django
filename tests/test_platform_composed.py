@@ -73,3 +73,36 @@ def test_nested_inherited_fields_keep_the_selected_child_identity() -> None:
     assert projected.id == f"{child._meta.label_lower}.{inherited.name}"
     assert projected.model == child._meta.label_lower
     assert projected.addon == child._meta.app_label
+
+
+def test_implementation_rows_use_registered_field_owners_without_reading_source(
+    monkeypatch: Any,
+) -> None:
+    """List rows resolve canonical registry metadata but never inspect Python source."""
+
+    monkeypatch.setattr(composed.inspect, "getsourcelines", _unexpected)
+    monkeypatch.setattr(composed.inspect, "getsourcefile", _unexpected)
+
+    rows = composed.implementation_rows()
+
+    assert rows
+    assert rows == sorted(rows, key=lambda row: row.id)
+    assert all(row.id == f"{row.model}.{row.field}:{row.key}" for row in rows)
+    assert all(row.registry_setting and row.class_path and row.base_class_path for row in rows)
+
+
+def test_implementation_detail_only_resolves_registered_ids() -> None:
+    """Detail source lookup accepts canonical registered identities and rejects arbitrary paths."""
+
+    row = composed.implementation_rows()[0]
+
+    assert composed.implementation_detail("/tmp/caller-controlled.py") is None
+    detail = composed.implementation_detail(row.id)
+
+    assert detail is not None
+    assert detail.id == row.id
+    assert detail.defaults is not None
+    assert (detail.source is not None) != (detail.source_unavailable_reason is not None)
+    if detail.source is not None:
+        assert detail.source_file
+        assert detail.source_start_line is not None

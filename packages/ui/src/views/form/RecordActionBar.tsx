@@ -7,6 +7,7 @@ import { DropdownMenu } from "../../ui/dropdown-menu";
 import { Glyph } from "../../chrome/Glyph";
 import { errorMessage, useConfirm, usePrompt, useToast } from "../../feedback";
 import { ActionFormDialog } from "./ActionFormDialog";
+import { RecordActionMenuItems } from "./RecordActionMenu";
 import type { ActionDescriptor, ActionResult } from "../page";
 
 export interface RecordDeleteAction {
@@ -36,16 +37,23 @@ export function RecordActionBar({
   applyPatch,
   reload,
   deleteAction,
+  contributedActions,
+  blocked = false,
 }: {
   record: Row | null;
   actions: readonly ActionDescriptor[];
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
   reload: () => void;
   deleteAction?: RecordDeleteAction;
+  /** Addon-contributed verbs rendered inside this same Actions menu. */
+  contributedActions?: React.ReactNode;
+  /** A dirty or pending form must be saved before acting on its persisted record. */
+  blocked?: boolean;
 }): React.ReactElement | null {
   const confirm = useConfirm();
   const prompt = usePrompt();
   const toast = useToast();
+  const actionsTriggerRef = React.useRef<HTMLElement>(null);
   // The open typed-args action form (F-a), or null. Set after any confirm passes;
   // the dialog owns collecting the args and firing the action's `submit`.
   const [formAction, setFormAction] = React.useState<ActionDescriptor | null>(
@@ -89,6 +97,7 @@ export function RecordActionBar({
 
   const runAction = React.useCallback(
     async (action: ActionDescriptor): Promise<void> => {
+      if (blocked) return;
       if (action.confirm) {
         const confirmation =
           typeof action.confirm === "function" && record !== null
@@ -126,7 +135,7 @@ export function RecordActionBar({
         .mutateAsync({ action, values })
         .catch(() => undefined);
     },
-    [actionMutation, confirm, prompt, record],
+    [actionMutation, blocked, confirm, prompt, record],
   );
 
   // An action with a `visibleWhen` predicate shows only when the open record
@@ -135,7 +144,11 @@ export function RecordActionBar({
     (action) =>
       !action.visibleWhen || (record != null && action.visibleWhen(record)),
   );
-  if (visibleActions.length === 0 && deleteAction === undefined) return null;
+  if (
+    visibleActions.length === 0 &&
+    deleteAction === undefined &&
+    contributedActions == null
+  ) return null;
 
   return (
     <>
@@ -148,6 +161,7 @@ export function RecordActionBar({
             // disabled, so a slow non-navigating action gives feedback and can't be
             // re-fired from a reopened menu.
             <Button
+              ref={actionsTriggerRef}
               type="button"
               variant="ghost"
               size="md"
@@ -158,13 +172,13 @@ export function RecordActionBar({
             </Button>
           }
         />
-        <DropdownMenu.Portal>
+        <DropdownMenu.Portal keepMounted>
           <DropdownMenu.Positioner sideOffset={6} align="start">
             <DropdownMenu.Content className="w-52">
               {deleteAction !== undefined ? (
                 <DropdownMenu.Item
                   variant="danger"
-                  disabled={!deleteAction.canDelete || deleteAction.isPending}
+                  disabled={blocked || !deleteAction.canDelete || deleteAction.isPending}
                   onClick={deleteAction.onDelete}
                 >
                   <Glyph name="trash" />
@@ -179,7 +193,7 @@ export function RecordActionBar({
                   key={action.id}
                   variant={action.danger ? "danger" : "default"}
                   disabled={
-                    Boolean(action.disabled) ||
+                    blocked || Boolean(action.disabled) ||
                     pendingId === action.id ||
                     (recordId === null && !action.run && !action.submit)
                   }
@@ -189,6 +203,14 @@ export function RecordActionBar({
                   {action.label}
                 </DropdownMenu.Item>
               ))}
+              {contributedActions != null ? (
+                <RecordActionMenuItems
+                  blocked={blocked}
+                  finalFocusRef={actionsTriggerRef}
+                >
+                  {contributedActions}
+                </RecordActionMenuItems>
+              ) : null}
             </DropdownMenu.Content>
           </DropdownMenu.Positioner>
         </DropdownMenu.Portal>

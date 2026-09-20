@@ -213,7 +213,11 @@ history uses native Query pages with domain-owned
   lazily when first visited and then remain mounted for that record, so a shared
   `useRecordPeek` Records tab can open evidence without discarding draft input
   in another panel; unmounting the temporary peek must leave other publishers'
-  tabs and composer intact.
+  tabs and composer intact. Chatter stays in the shell's right pane by default.
+  `Form` / `FormView` may opt into `recordSupportPlacement="below"`; the shared
+  form owner moves the same complete chatter surface. Consumers do not mount
+  their own chatter or filter its contributed tabs to change placement. Embedded
+  forms with `hideRecordChrome` leave the parent page's placement alone.
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
   paging, record selection, and URL state. The workflows Decision inbox keeps
   `ApprovalTask` as the sole form and mutation owner and specializes only its
@@ -254,6 +258,13 @@ history uses native Query pages with domain-owned
   Contributing a vendor's verb to a *model-scoped* key the vendor does not own
   displaces it for every row of that model and caps the model at one vendor.
 - Tokens beat color props and one-off variants. Theme by overriding tokens.
+- Implementation inspection reuses field-owned choice metadata. Platform owns
+  the registered-type catalogue and source viewer; configured records and domain
+  contracts stay with their addon. Contribute those panels through the shared
+  [`ImplementationDetails`](../../packages/ui/src/views/relation/implementation-details.tsx)
+  model slot, so an addon need not depend on the optional Settings explorer.
+  Render declared configuration with the existing FormSpec descriptors, and keep
+  absent defaults distinct from explicit `false`, zero, or empty values.
 - Color is two orthogonal axes (`lib/tones.ts` is the owner): `tone` (the palette
   — `neutral`/`brand`/`info`/`success`/`warning`/`danger`) × `variant`/fill
   (`solid`/`soft`/`surface`/`outline`/`ghost`). Drive recipe color through
@@ -638,13 +649,15 @@ Hard-won traps — the wise learn from others' mistakes
   descendant accordion tree. A root with `group:"platform"` contributes to the
   shared **Settings place** instead: the rail and chooser expose one synthetic
   Settings entry, and the expanded rail swaps to the platform tree with a back
-  header. The rail's one scrolling list is domain roots, a separator, then
-  Settings; the expansion toggle sits in the rail's own footer, outside that
-  scroll, and the rail is viewport-sticky so neither ever scrolls away. A
+  header. Settings and the expansion toggle sit below the scrolling list, and
+  the rail is viewport-sticky so both remain reachable. At desktop widths, a
   plain second activation of a nav link that already points at the current
-  page toggles the expansion instead of re-navigating
-  (`activeLinkToggleProps` in `chrome/app-rail-model.ts` is the one owner of
-  that contract; modified clicks keep the browser default). Workbench primary
+  page toggles expansion. When the viewport fits only the icon rail, activating
+  an app with children or Settings opens its menu temporarily in the shell's
+  shared navigation drawer. Mobile uses the same drawer through the top-bar
+  navigation button. Temporary navigation never changes the desktop expansion
+  preference (`railLinkToggleProps` in `chrome/app-rail-model.ts` owns link
+  activation; modified clicks keep the browser default). Workbench primary
   panes are reserved for page-published explorers; `TopMenuTabs` is reserved
   for explicit collection-view state, not derived menu children.
   A route referenced by more than one menu item must set `route.menu` (the owning

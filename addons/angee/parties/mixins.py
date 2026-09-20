@@ -11,7 +11,7 @@ enum instead of a per-model copy, so the GraphQL enum name no longer collides.
 from __future__ import annotations
 
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, router, transaction
 
 from angee.base.fields import StateField
 
@@ -74,12 +74,17 @@ class ScoredLinkMixin(models.Model):
         and the ``manual`` source — a later sync must not out-score a human decision.
         """
 
-        self.confidence = 1.0
-        self.source = LinkSource.MANUAL  # type: ignore[assignment]  # TextChoices member unmodeled without django-stubs
-        self.is_confirmed = True
-        self.is_dismissed = False
-        self.save(update_fields=["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"])
-        self._resolve_link()
+        alias = self._state.db or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=alias):
+            self.confidence = 1.0
+            self.source = LinkSource.MANUAL  # type: ignore[assignment]  # TextChoices member unmodeled without django-stubs
+            self.is_confirmed = True
+            self.is_dismissed = False
+            self.save(
+                using=alias,
+                update_fields=["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"],
+            )
+            self._resolve_link()
 
     def dismiss(self) -> None:
         """Reject this link — the durable anti-link — then re-resolve any derived owner.
@@ -88,10 +93,12 @@ class ScoredLinkMixin(models.Model):
         (suggesters key on the pair and skip an existing link); resolution ignores it.
         """
 
-        self.is_dismissed = True
-        self.is_confirmed = False
-        self.save(update_fields=["is_dismissed", "is_confirmed", "updated_at"])
-        self._resolve_link()
+        alias = self._state.db or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=alias):
+            self.is_dismissed = True
+            self.is_confirmed = False
+            self.save(using=alias, update_fields=["is_dismissed", "is_confirmed", "updated_at"])
+            self._resolve_link()
 
     def _resolve_link(self) -> None:
         """Re-derive any owner pointer this link feeds, after a review decision.

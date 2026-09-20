@@ -44,6 +44,14 @@ dependent reads. Bounded local collections use `ResourceQuery.forRows` with
 explicit field declarations and pass that query to `RowsListView` when the
 visible columns do not describe all queryable fields.
 
+Toolbar shortcuts and custom choices have separate jobs. `groupOptions` curates
+the quick groups (an empty array means no shortcuts); declared facets supply
+shortcuts when no explicit list is given. Custom filter and group editors always
+use the complete `ResourceQuery` capabilities, including fields absent from
+visible columns. Authored server collections use their declared query without
+sampling a record page for choices. Keep new capabilities in the backend resource
+declaration, and customize their presentation through the shared toolbar owners.
+
 ## Grouped boards
 
 For a server resource, selecting a group in the card view discovers groups across

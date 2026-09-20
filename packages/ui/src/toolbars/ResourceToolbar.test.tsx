@@ -85,6 +85,125 @@ describe("ResourceToolbar under the calendar kind", () => {
 });
 
 describe("ResourceToolbar list-kind regression", () => {
+  test("keeps presets curated while a custom-only catalog exposes supported groups", () => {
+    const onGroupStackChange = vi.fn();
+    renderToolbar({
+      view: "list",
+      groupOptions: [],
+      customGroupOptions: [
+        { id: "partner", label: "Supplier", group: { field: "partner" } },
+        { id: "currency", label: "Currency", group: { field: "currency" } },
+      ],
+      onGroupStackChange,
+    });
+
+    fireEvent.click(screen.getByLabelText("Filter and group"));
+    expect(screen.queryByRole("button", { name: "Supplier" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+    expect(screen.getByLabelText("Group field").textContent).toContain("Supplier");
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(onGroupStackChange).toHaveBeenCalledWith([{ field: "partner" }]);
+  });
+
+  test("falls back to preset options for standalone custom-group callers", () => {
+    renderToolbar({
+      view: "list",
+      groupOptions: [
+        { id: "platform", label: "Platform", group: { field: "platform" } },
+      ],
+      onGroupStackChange: vi.fn(),
+    });
+
+    fireEvent.click(screen.getByLabelText("Filter and group"));
+    fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+    expect(screen.getByLabelText("Group field").textContent).toContain("Platform");
+  });
+
+  test("uses supported custom date granularities and labels their active chip", () => {
+    const onGroupStackChange = vi.fn();
+    renderToolbar({
+      view: "list",
+      groupOptions: [],
+      customGroupOptions: [{
+        id: "invoice-date",
+        label: "Invoice date",
+        group: { field: "invoice_date" },
+        type: "date",
+        granularities: ["month", "year"],
+      }],
+      groupStack: [{ field: "invoice_date", granularity: "month" }],
+      onGroupStackChange,
+    });
+
+    expect(screen.getByText("Invoice date · Month")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Filter and group"));
+    fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+    expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
+  });
+
+  test("resolves stale custom field and granularity state after a catalog change", () => {
+    const onGroupStackChange = vi.fn();
+    const { rerender } = render(<ResourceToolbar
+      pager={PAGER}
+      view="list"
+      groupOptions={[]}
+      customGroupOptions={[{
+        id: "created", label: "Created", group: { field: "created" },
+        type: "date", granularities: ["day"],
+      }]}
+      onGroupStackChange={onGroupStackChange}
+      onFilterTextChange={vi.fn()}
+    />);
+    fireEvent.click(screen.getByLabelText("Filter and group"));
+    fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+
+    rerender(<ResourceToolbar
+      pager={PAGER}
+      view="list"
+      groupOptions={[]}
+      customGroupOptions={[{
+        id: "invoice-date", label: "Invoice date", group: { field: "invoice_date" },
+        type: "date", granularities: ["month"],
+      }]}
+      onGroupStackChange={onGroupStackChange}
+      onFilterTextChange={vi.fn()}
+    />);
+
+    expect(screen.getByLabelText("Group field").textContent).toContain("Invoice date");
+    expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(onGroupStackChange).toHaveBeenCalledWith([
+      { field: "invoice_date", granularity: "month" },
+    ]);
+  });
+
+  test("preserves group depth and ignores an exact custom duplicate", () => {
+    const onGroupStackChange = vi.fn();
+    const props: Partial<ResourceToolbarProps> = {
+      view: "list",
+      maxGroupDepth: 1,
+      groupOptions: [],
+      customGroupOptions: [
+        { id: "partner", label: "Supplier", group: { field: "partner" } },
+      ],
+      groupStack: [{ field: "status" }],
+      onGroupStackChange,
+    };
+    const { rerender } = render(<ResourceToolbar pager={PAGER}
+      onFilterTextChange={vi.fn()} {...props} />);
+    fireEvent.click(screen.getByLabelText("Filter and group"));
+    fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(onGroupStackChange).toHaveBeenCalledWith([{ field: "partner" }]);
+
+    onGroupStackChange.mockClear();
+    rerender(<ResourceToolbar pager={PAGER} onFilterTextChange={vi.fn()}
+      {...props} groupStack={[{ field: "partner" }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(onGroupStackChange).not.toHaveBeenCalled();
+  });
+
   test("places shared utilities between the query controls and pager", () => {
     renderToolbar({
       view: "list",

@@ -248,7 +248,8 @@ class DataLinesMetadata:
     the child model, ``input_type`` the shared GraphQL line input (an optional
     public ``id`` plus the editable child columns), and ``fields`` the per-column
     metadata (scalar/widget) the line cells render. ``position_field`` names the
-    integer order column when the child carries one.
+    integer order column when the child carries one. ``defaults`` contains
+    backend-authored scalar values for a newly added row.
     """
 
     field: str
@@ -256,6 +257,7 @@ class DataLinesMetadata:
     input_type: str | None = None
     fields: tuple[DataResourceFieldMetadata, ...] = ()
     position_field: str | None = None
+    defaults: dict[str, str | int | float | bool | None] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +351,7 @@ class DataResourceMetadata:
     canonical_label: str | None = None
     row_model: str = "server"
     record_representation: str | None = None
+    record_search_fields: tuple[str, ...] = ()
     subject_field: str | None = None
     subtitle: DataResourceSubtitleMetadata | None = None
     grantable: tuple[GrantableRelationMetadata, ...] = ()

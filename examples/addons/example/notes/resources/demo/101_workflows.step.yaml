@@ -23,6 +23,30 @@ rows:
         action: approve-note-publish
         slots:
           - assignee: angee/role:admin#member
+        decision_schema:
+          type: object
+          required: [action]
+          properties:
+            action:
+              type: string
+              enum: [approve, reject, escalate]
+              options:
+                - {value: approve, label: Publish note, verdict: COMPLETE}
+                - {value: reject, label: Reject publication, verdict: REJECT}
+                - {value: escalate, label: Escalate review, verdict: ESCALATE}
+          oneOf:
+            - type: object
+              required: [action]
+              properties: {action: {const: approve}}
+              additionalProperties: false
+            - type: object
+              required: [action]
+              properties: {action: {const: reject}}
+              additionalProperties: false
+            - type: object
+              required: [action]
+              properties: {action: {const: escalate}}
+              additionalProperties: false
       join_rule: all_success
       is_entry: false
       position:

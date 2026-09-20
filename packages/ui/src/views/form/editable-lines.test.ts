@@ -216,15 +216,16 @@ describe("recordLinesToRows", () => {
   test("normalizes a record's lines into seed rows, defaulting position to order", () => {
     const rows = recordLinesToRows(
       [
-        { id: "ln_a", product: { id: "p1" }, label: "A", quantity: 1, position: 0 },
+        { id: "ln_a", product: { id: "p1" }, label: "A", quantity: 1, amount_subtotal: "10.00", position: 0 },
         { id: "ln_b", product: { id: "p2" }, label: "B", quantity: 2 },
       ],
       config,
     );
     expect(rows).toEqual([
-      { id: "ln_a", product: { id: "p1" }, label: "A", quantity: 1, position: 0 },
+      { id: "ln_a", product: { id: "p1" }, label: "A", quantity: 1, amount_subtotal: "10.00", position: 0 },
       { id: "ln_b", product: { id: "p2" }, label: "B", quantity: 2, position: 1 },
     ]);
+    expect(lineToInput(rows[0]!, 0, config)).not.toHaveProperty("amount_subtotal");
   });
 
   test("returns an empty list for a missing lines collection", () => {
@@ -241,6 +242,13 @@ describe("emptyLineRow / duplicateLineRow", () => {
       quantity: "",
       position: 2,
     });
+  });
+
+  test("an authored line default seeds a new row and is submitted", () => {
+    const defaulted = lineDiffConfig({ ...LINES, defaults: { quantity: "1" } });
+    const row = emptyLineRow(2, defaulted);
+    expect(row).toEqual({ product: null, label: "", quantity: "1", position: 2 });
+    expect(lineToInput(row, 2, defaulted)).toEqual({ label: "", quantity: "1", position: 2 });
   });
 
   test("a duplicate drops the identity so it saves as a create", () => {

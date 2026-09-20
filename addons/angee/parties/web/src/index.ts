@@ -122,6 +122,12 @@ const parties = defineBaseAddon({
 export { PARTIES_OVERVIEW_SLOT, PARTIES_REVIEW_TOOLBAR_SLOT, PERSON_FORM_FIELDS_SLOT, ORGANIZATION_FORM_FIELDS_SLOT } from "./slots";
 export { senderDisplayName, type SenderIdentity } from "./identity";
 export { addressFields, PartyAddresses } from "./PartyAddresses";
+export {
+  PartyContactSummary,
+  partyAddressLines,
+  partyContactValues,
+  type PartyContactSummaryProps,
+} from "./PartyContactSummary";
 export { PartyPicker, partyPickerWidget, type PartyPickerProps } from "./PartyPicker";
 
 export default parties;

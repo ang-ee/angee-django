@@ -8,6 +8,7 @@ import {
 } from "../ui/dialog";
 import { FormRoot } from "../ui/form";
 import { FormActions, FormGrid } from "../ui/form-layout";
+import { useRecordActionFinalFocus } from "../ui/record-action-context";
 
 export interface DialogFormProps {
   open: boolean;
@@ -35,15 +36,30 @@ export function DialogForm({
   placement = "prompt",
   trigger,
 }: DialogFormProps): React.ReactElement {
+  const finalFocus = useRecordActionFinalFocus();
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       {trigger ? <Dialog.Trigger render={trigger} /> : null}
       <Dialog.Portal>
         <Dialog.Backdrop />
-        <Dialog.Content placement={placement} size={size}>
+        <Dialog.Content
+          placement={placement}
+          size={size}
+          finalFocus={finalFocus}
+        >
           {/* The form sits between the height-capped Content and the scrolling
               Body, so it must carry the flex column for the cap to reach Body. */}
-          <FormRoot layout="plain" className="flex min-h-0 flex-col" onSubmit={onSubmit}>
+          <FormRoot
+            layout="plain"
+            className="flex min-h-0 flex-col"
+            onSubmit={(event) => {
+              // The DOM form is portalled, but React still bubbles its submit
+              // through the component tree. Keep it from submitting a parent
+              // record form; the authored handler owns preventDefault and work.
+              event.stopPropagation();
+              onSubmit?.(event);
+            }}
+          >
             <Dialog.Header>
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">

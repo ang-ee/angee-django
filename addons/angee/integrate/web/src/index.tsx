@@ -76,7 +76,7 @@ const integrateMenu: readonly BaseMenuItem[] = [
     // child (Integrations), avoiding a duplicate route reference.
     id: INTEGRATE_ID,
     label: "Integrations",
-    icon: "connect",
+    icon: "integration",
     children: [
       {
         // Product connection records and their supporting catalogue.
@@ -135,12 +135,14 @@ const integrate = defineBaseAddon({
       ...formViewRecordActionsSlot(INTEGRATION_MODEL),
       id: INTEGRATION_DISCONNECT_ACTION_ID,
       sequence: 13,
+      recordActionPlacement: "menu",
       content: <DisconnectIntegrationAction />,
     },
     {
       ...formViewRecordActionsSlot(INTEGRATION_MODEL),
       id: INTEGRATION_TEST_CONNECTION_ACTION_ID,
       sequence: 14,
+      recordActionPlacement: "menu",
       content: <TestConnectionAction />,
     },
   ],

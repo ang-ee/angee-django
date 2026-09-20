@@ -102,6 +102,15 @@ class StepAttempt(workflow_models.StepAttempt):
         rebac_resource_type = "workflows/step_attempt"
 
 
+class StepExternalSubscription(workflow_models.StepExternalSubscription):
+    """Concrete attempt-owned external target for workflow engine tests."""
+
+    class Meta(workflow_models.StepExternalSubscription.Meta):
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_step_external_subscription"
+
+
 class StepArtifact(workflow_models.StepArtifact):
     """Concrete explicit result artifact model for source-addon runtime tests."""
 
@@ -156,6 +165,7 @@ WORKFLOW_RUNTIME_MODELS = (
     WorkflowRun,
     StepRun,
     StepAttempt,
+    StepExternalSubscription,
     StepArtifact,
     WorkflowTestFixture,
     WorkflowRecoveryEvidence,
@@ -214,11 +224,8 @@ def no_workflow_queue(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: None)
     monkeypatch.setattr(engine, "enqueue_advance_at", lambda run_id, when: None)
-    monkeypatch.setattr(engine, "enqueue_execute", lambda step_run_id: None)
     monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda: None)
     monkeypatch.setattr(dispatch, "enqueue_task", lambda *args, **kwargs: None)
-    monkeypatch.setattr(engine, "enqueue_decision_escalation_at", lambda decision_id, attempt, when: None)
-    monkeypatch.setattr(engine, "enqueue_decision_expiry_at", lambda decision_id, attempt, when: None)
 
 
 def workflow_with_steps(
@@ -260,10 +267,10 @@ def workflow_with_steps(
         return draft.publish()
 
 
-def start_run(workflow: Workflow, *, subject: Any = None) -> WorkflowRun:
+def start_run(workflow: Workflow, *, subject: Any = None, actor: Any = None) -> WorkflowRun:
     """Start a run without relying on a live queue."""
 
-    return engine.start(workflow, subject=subject, actor=None)
+    return engine.start(workflow, subject=subject, actor=actor)
 
 
 def advance_once(run: Any, *, now: Any | None = None) -> list[Any]:
@@ -292,17 +299,14 @@ def execute_started(run: Any, *, now: Any | None = None, limit: int | None = Non
                 if attempt is not None
                 else None
             )
-        if dispatch is not None:
-            engine.execute_dispatch(
-                dispatch.pk,
-                attempt.pk,
-                attempt.lease_token,
-                now=now,
-            )
-        elif now is None:
-            engine.execute(row.pk)
-        else:
-            engine.execute(row.pk, now=now)
+        if attempt is None or dispatch is None:
+            raise AssertionError(f"Started StepRun {row.pk} has no retained execution dispatch.")
+        engine.execute_dispatch(
+            dispatch.pk,
+            attempt.pk,
+            attempt.lease_token,
+            now=now,
+        )
 
 
 def run_to_terminal(run: Any, *, max_cycles: int = 20) -> Any:

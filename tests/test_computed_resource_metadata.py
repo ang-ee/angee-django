@@ -14,6 +14,7 @@ import pytest
 import strawberry
 from django.core.exceptions import ImproperlyConfigured
 from strawberry_django_hasura import hasura_config
+from strawberry_django_hasura.comparisons import IntComparison, StringComparison
 
 from angee.data.metadata import (
     DataResourceRoots,
@@ -60,6 +61,7 @@ class ComputedMetadataProbeQuery:
 def _finalize_data_resource(
     *,
     node_type: type | None = None,
+    extra_types: tuple[type, ...] = (),
     type_names: DataResourceTypeNames,
     **kwargs: object,
 ) -> object:
@@ -75,7 +77,7 @@ def _finalize_data_resource(
         )
     schema = strawberry.Schema(
         query=ComputedMetadataProbeQuery,
-        types=[] if node_type is None else [node_type],
+        types=[*([] if node_type is None else [node_type]), *extra_types],
         config=hasura_config(),
     )
     return _project_final_data_resource(
@@ -128,6 +130,157 @@ def test_computed_resource_metadata_is_model_optional() -> None:
     assert wire["modelLabel"] == "platform.addon"
     assert wire["recordRepresentation"] == "label"
     assert wire["roots"]["list"] == "platform_addons"
+
+
+def test_resource_metadata_accepts_validated_authored_record_representation() -> None:
+    """A resource owner may override display-field heuristics through the final schema."""
+
+    @strawberry.type(name="RepresentationProbe")
+    class RepresentationProbeType:
+        id: strawberry.ID
+        display_name: str
+        friendly_name: str = strawberry.field(name="friendly_label")
+
+    metadata = _finalize_data_resource(
+        model=None,
+        model_label="platform.representation_probe",
+        node_type=RepresentationProbeType,
+        roots=DataResourceRoots(list_name="representation_probes"),
+        type_names=DataResourceTypeNames(query="representation_probes_Query"),
+        capabilities=("list",),
+        public_id_field="id",
+        record_representation="friendly_name",
+    )
+
+    assert metadata.record_representation == "friendly_label"
+
+
+def test_resource_metadata_projects_validated_record_search_fields() -> None:
+    """Search fields retain final aliases and executable text-filter support."""
+
+    @strawberry.type(name="SearchProbe")
+    class SearchProbeType:
+        id: strawberry.ID
+        friendly_name: str = strawberry.field(name="friendly_label")
+
+    @strawberry.input(name="search_probes_bool_exp")
+    class SearchProbeWhere:
+        friendly_name: StringComparison | None = strawberry.field(
+            name="friendly_label",
+            default=None,
+        )
+
+    metadata = _finalize_data_resource(
+        model=None,
+        model_label="platform.search_probe",
+        node_type=SearchProbeType,
+        extra_types=(SearchProbeWhere,),
+        roots=DataResourceRoots(list_name="search_probes"),
+        type_names=DataResourceTypeNames(
+            query="search_probes_Query",
+            filter="search_probes_bool_exp",
+        ),
+        capabilities=("list",),
+        public_id_field="id",
+        filter_fields=("friendly_name",),
+        record_search_fields=("friendly_name",),
+    )
+
+    search_filter = metadata.query.fields["friendly_label"].filter
+    assert metadata.record_search_fields == ("friendly_label",)
+    assert search_filter is not None
+    assert "iContains" in search_filter.operators
+
+
+def test_resource_metadata_rejects_invalid_record_search_fields() -> None:
+    """A search declaration cannot target absent or non-text comparison fields."""
+
+    @strawberry.type(name="InvalidSearchProbe")
+    class InvalidSearchProbeType:
+        id: strawberry.ID
+        count: int
+
+    @strawberry.input(name="invalid_search_probes_bool_exp")
+    class InvalidSearchProbeWhere:
+        count: IntComparison | None = None
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match="search field 'count'.*not a readable, filterable String with iContains",
+    ):
+        _finalize_data_resource(
+            model=None,
+            model_label="platform.invalid_search_probe",
+            node_type=InvalidSearchProbeType,
+            extra_types=(InvalidSearchProbeWhere,),
+            roots=DataResourceRoots(list_name="invalid_search_probes"),
+            type_names=DataResourceTypeNames(
+                query="invalid_search_probes_Query",
+                filter="invalid_search_probes_bool_exp",
+            ),
+            capabilities=("list",),
+            public_id_field="id",
+            filter_fields=("count",),
+            record_search_fields=("count",),
+        )
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match="declares record_search_fields outside its filter input",
+    ):
+        _finalize_data_resource(
+            model=None,
+            model_label="platform.invalid_search_probe",
+            node_type=InvalidSearchProbeType,
+            extra_types=(InvalidSearchProbeWhere,),
+            roots=DataResourceRoots(list_name="invalid_search_probes"),
+            type_names=DataResourceTypeNames(
+                query="invalid_search_probes_Query",
+                filter="invalid_search_probes_bool_exp",
+            ),
+            capabilities=("list",),
+            public_id_field="id",
+            record_search_fields=("missing",),
+        )
+
+
+def test_resource_metadata_rejects_non_string_record_representation() -> None:
+    """An authored record label must resolve to one readable String scalar."""
+
+    @strawberry.type(name="InvalidRepresentationProbe")
+    class InvalidRepresentationProbeType:
+        id: strawberry.ID
+        count: int
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match="record_representation 'count', which is not a readable String field",
+    ):
+        _finalize_data_resource(
+            model=None,
+            model_label="platform.invalid_representation_probe",
+            node_type=InvalidRepresentationProbeType,
+            roots=DataResourceRoots(list_name="invalid_representation_probes"),
+            type_names=DataResourceTypeNames(query="invalid_representation_probes_Query"),
+            capabilities=("list",),
+            public_id_field="id",
+            record_representation="count",
+        )
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match="record_representation 'missing', which is not a readable String field",
+    ):
+        _finalize_data_resource(
+            model=None,
+            model_label="platform.invalid_representation_probe",
+            node_type=InvalidRepresentationProbeType,
+            roots=DataResourceRoots(list_name="invalid_representation_probes"),
+            type_names=DataResourceTypeNames(query="invalid_representation_probes_Query"),
+            capabilities=("list",),
+            public_id_field="id",
+            record_representation="missing",
+        )
 
 
 def test_resource_metadata_row_model_defaults_to_server() -> None:

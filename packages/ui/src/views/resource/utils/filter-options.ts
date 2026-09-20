@@ -105,11 +105,16 @@ function filterFieldType<TRow extends Row>(
   field: Parameters<typeof metadataFilterFieldType>[1],
 ): ResourceToolbarFilterField["type"] | null {
   if (fieldName === DEFAULT_TEXT_FILTER_FIELD) return "text";
+  // Relation values travel over the filter wire as public-id strings. The
+  // relation layer replaces this text editor with its lazy remote picker; keep
+  // the field in the complete capability catalogue so that layer can augment it.
+  if (field?.kind === "relation") return "text";
+  if (field?.scalar === "ID") return "text";
   return metadataFilterFieldType(fieldName, field, {
     hasOptions: Boolean(column?.options?.length),
     hasTone: Boolean(column?.tone),
     allowStatusFallback: Boolean(column),
-  });
+  }) ?? "text";
 }
 
 export function dateGroupType(

@@ -17,21 +17,25 @@ dependencies = [
 ]
 
 [[migrations]]
+fresh_history = "baseline"
 name = "integration_lifecycle_values"
 app_label = "integrate"
 module = "runtime_migrations.integration_lifecycle_values"
 
 [[migrations]]
+fresh_history = "baseline"
 name = "credential_app_keys"
 app_label = "integrate"
 module = "runtime_migrations.credential_app_keys"
 
 [[migrations]]
+fresh_history = "baseline"
 name = "integration_parent_impl_axis"
 app_label = "integrate"
 module = "runtime_migrations.integration_parent_impl_axis"
 
 [[migrations]]
+fresh_history = "baseline"
 name = "platform_managed_integrations"
 app_label = "integrate"
 module = "runtime_migrations.platform_managed_integrations"

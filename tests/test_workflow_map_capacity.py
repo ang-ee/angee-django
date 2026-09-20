@@ -6,11 +6,12 @@ from typing import Any
 
 import pytest
 from django.db import models
+from django.utils import timezone
 from rebac import system_context
 
 from angee.workflows import engine
 from angee.workflows.models import RunStatus, StepRunStatus
-from tests.workflows import StepRun, Workflow, WorkflowRun, start_run, workflow_with_steps
+from tests.workflows import StepAttempt, StepRun, Workflow, start_run, workflow_with_steps
 
 
 def _map_workflow(*, max_steps: int, items: Any = None, two_maps: bool = False) -> Any:
@@ -171,11 +172,9 @@ def test_waiting_map_recovery_counts_existing_children_once(
     with system_context(reason="test partial Map journal"):
         map_row = StepRun.objects.select_related("step").get(run=run, step__key="map_one")
         body = workflow.steps.get(key="body_one")
-        map_row.status = StepRunStatus.WAITING
-        map_row.resume_state = {
-            "map": {"target_step_key": body.key, "target_step_id": body.pk, "items": ["one", "two"]}
-        }
-        map_row.save(update_fields=["status", "resume_state", "updated_at"])
+        expansion, _plan = StepAttempt.objects.record_map_expansion(
+            map_row, at=timezone.now()
+        )
         StepRun.objects.create(
             run=run,
             step=body,
@@ -183,7 +182,13 @@ def test_waiting_map_recovery_counts_existing_children_once(
             status=StepRunStatus.SCHEDULED,
             input={"item": "one"},
         ).previous.add(map_row)
-        WorkflowRun.objects.filter(pk=run.pk).update(status=RunStatus.RUNNING, steps_taken=1)
+        StepRun.objects.bind_map_membership(
+            run_id=run.pk,
+            target_id=body.pk,
+            expansion_attempt_id=expansion.pk,
+            item_count=2,
+            at=timezone.now(),
+        )
 
     assert engine.advance(run.pk) == {"claimed": 2}
 

@@ -1,5 +1,6 @@
 import type {
   ModelMetadata,
+  QueryField,
   SchemaFieldMetadata,
 } from "@angee/metadata";
 import {
@@ -74,6 +75,19 @@ export function relationFieldInfo(
   const field = modelMetadata?.fields[fieldName];
   if (!field || !isToOneRelationField(field, modelMetadata)) return null;
   return resolveRelationTarget(field, modelMetadata, schemaMetadata);
+}
+
+/** Resolve a relation declared directly by an authored ResourceQuery. */
+export function relationFieldInfoForQueryField(
+  field: QueryField | undefined,
+  schemaMetadata: SchemaFieldMetadata,
+): RelationFieldInfo | null {
+  const target = field?.kind === "relation" ? field.relation?.model : undefined;
+  if (!target) return null;
+  return relationFieldInfoForResource(
+    target,
+    modelMetadataForLabel(schemaMetadata, target),
+  );
 }
 
 /**

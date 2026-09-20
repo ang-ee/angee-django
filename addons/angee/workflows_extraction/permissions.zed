@@ -1,0 +1,25 @@
+// Extraction values may contain sensitive document facts. Access is explicit
+// and deliberately narrower than the polymorphic target/file graph.
+definition workflows_extraction/extraction {
+    relation owner: auth/user // rebac:field=created_by
+    relation viewer: auth/user | auth/group#member
+    relation pending_decision: workflows/decision
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = owner + viewer + pending_decision->assignee + admin->member
+}
+
+definition workflows_extraction/extraction_source {
+    relation extraction: workflows_extraction/extraction // rebac:field=extraction
+    permission read = extraction->read
+}
+
+definition workflows_extraction/extraction_page {
+    relation extraction: workflows_extraction/extraction // rebac:field=extraction
+    permission read = extraction->read
+}
+
+definition workflows_extraction/extraction_part {
+    relation extraction: workflows_extraction/extraction // rebac:field=extraction
+    permission read = extraction->read
+}

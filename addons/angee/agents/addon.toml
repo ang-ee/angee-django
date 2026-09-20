@@ -9,6 +9,7 @@ depends_on = ["angee.integrate", "angee.integrate_vcs", "angee.operator", "angee
 dependencies = ["pydantic-ai-slim>=2.13"]
 
 [[migrations]]
+fresh_history = "baseline"
 name = "vcs_models_cutover"
 app_label = "agents"
 module = "runtime_migrations.vcs_models_cutover"

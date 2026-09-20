@@ -47,9 +47,6 @@ describe("parties addon manifest", () => {
       enPartiesMessages["review.party"],
       enPartiesMessages["relationship.party"],
     ]).toEqual(["Party", "Party", "Party"]);
-    expect(
-      Object.values(enPartiesMessages).filter((value) => /\bcontacts?\b/i.test(value)),
-    ).toEqual([]);
   });
 
   test("builds list, record, and merge hrefs from its declared route templates", () => {

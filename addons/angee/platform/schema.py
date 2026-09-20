@@ -21,6 +21,7 @@ import strawberry_django
 from django.apps import apps
 from rebac import ObjectRef, system_context
 from strawberry import auto
+from strawberry.scalars import JSON
 
 from angee.graphql.access import actor_can_read
 from angee.graphql.actions import ActionResult
@@ -188,6 +189,37 @@ class PlatformExplorerData:
 
 
 @strawberry.type
+class PlatformImplementationDetail:
+    """Detail-only implementation declaration and registered Python source."""
+
+    id: str
+    model: str
+    field: str
+    key: str
+    label: str
+    category: str
+    icon: str
+    registry_setting: str
+    class_path: str
+    base_class_path: str
+    addon_id: str
+    addon_label: str
+    defaults: JSON
+    config_schema: JSON | None
+    description: str
+    source: str | None
+    source_file: str | None
+    source_start_line: int | None
+    source_unavailable_reason: str | None
+
+    @classmethod
+    def from_row(cls, row: composed.PlatformImplementationDetail) -> PlatformImplementationDetail:
+        """Project the Pydantic owner row onto its GraphQL detail type."""
+
+        return cls(**row.model_dump())
+
+
+@strawberry.type
 class PlatformQuery:
     """Read-only platform console introspection queries."""
 
@@ -210,6 +242,13 @@ class PlatformQuery:
                 AddonChangePreview,
                 _Addon.objects.change_preview(addon, action.value),
             )
+
+    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def platform_implementation(self, id: str) -> PlatformImplementationDetail | None:
+        """Return declaration and Python source for one registered implementation."""
+
+        detail = composed.implementation_detail(id)
+        return None if detail is None else PlatformImplementationDetail.from_row(detail)
 
 
 def platform_can_read() -> bool:
@@ -333,6 +372,13 @@ def _field_rows_for(info: strawberry.Info) -> list[composed.PlatformFieldRow]:
     return composed.field_rows() if platform_can_read() else []
 
 
+def _implementation_rows_for(info: strawberry.Info) -> list[composed.PlatformImplementationRow]:
+    """List registered implementations only for platform administrators."""
+
+    del info
+    return composed.implementation_rows() if platform_can_read() else []
+
+
 _MODEL_RESOURCE = hasura_pydantic_resource(
     composed.PlatformModelRow,
     name="platform_models",
@@ -392,6 +438,40 @@ _FIELD_RESOURCE = hasura_pydantic_resource(
 )
 
 
+_IMPLEMENTATION_RESOURCE = hasura_pydantic_resource(
+    composed.PlatformImplementationRow,
+    name="platform_implementations",
+    model_label="platform.Implementation",
+    filterable=[
+        "id",
+        "model",
+        "field",
+        "key",
+        "label",
+        "category",
+        "icon",
+        "registry_setting",
+        "class_path",
+        "base_class_path",
+        "addon_id",
+        "addon_label",
+    ],
+    sortable=[
+        "model",
+        "field",
+        "key",
+        "label",
+        "category",
+        "registry_setting",
+        "class_path",
+        "addon_id",
+        "addon_label",
+    ],
+    rows=_implementation_rows_for,
+    frontend_row_model="client",
+)
+
+
 @strawberry.type
 class AddonInstallMutation:
     """Install/disable an addon by editing ``settings.yaml``'s ``INSTALLED_APPS``.
@@ -433,6 +513,7 @@ schemas = {
             _ADDON_RESOURCE.query,
             _MODEL_RESOURCE.query,
             _FIELD_RESOURCE.query,
+            _IMPLEMENTATION_RESOURCE.query,
         ],
         "mutation": [AddonInstallMutation],
         "types": [
@@ -441,6 +522,8 @@ schemas = {
             *_ADDON_RESOURCE.types,
             *_MODEL_RESOURCE.types,
             *_FIELD_RESOURCE.types,
+            PlatformImplementationDetail,
+            *_IMPLEMENTATION_RESOURCE.types,
         ],
     },
 }

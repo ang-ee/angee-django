@@ -1,5 +1,11 @@
 export { Chatter, type ChatterProps } from "./Chatter";
-export { useRecordPeek, useRecordPeekContext, type RecordPeekReference } from "./record-peek";
+export {
+  useRecordPeek,
+  useRecordPeekContext,
+  type RecordPeekOpen,
+  type RecordPeekOpenOptions,
+  type RecordPeekReference,
+} from "./record-peek";
 export { RevisionsTab, type RevisionsTabProps } from "./RevisionsTab";
 export {
   ChatterProvider,

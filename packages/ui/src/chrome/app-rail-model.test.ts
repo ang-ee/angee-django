@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { MouseEvent } from "react";
 
 import {
-  activeLinkToggleProps,
+  railLinkToggleProps,
   moveRailItem,
   orderedRailItems,
   railDefaultTarget,
@@ -57,12 +57,12 @@ describe("app rail model", () => {
     } as unknown as MouseEvent<HTMLElement>);
 
     // No toggle, no target, or a different target → inert props.
-    expect(activeLinkToggleProps("/notes", "/notes", undefined, true)).toEqual({});
-    expect(activeLinkToggleProps(undefined, "/notes", toggle, true)).toEqual({});
-    expect(activeLinkToggleProps("/notes", "/notes/archive", toggle, true))
+    expect(railLinkToggleProps("/notes", "/notes", undefined, true)).toEqual({});
+    expect(railLinkToggleProps(undefined, "/notes", toggle, true)).toEqual({});
+    expect(railLinkToggleProps("/notes", "/notes/archive", toggle, true))
       .toEqual({});
 
-    const props = activeLinkToggleProps("/notes", "/notes", toggle, false);
+    const props = railLinkToggleProps("/notes", "/notes", toggle, false);
     expect(props["aria-expanded"]).toBe(false);
 
     // Modified and non-primary clicks keep the browser default (new tab).
@@ -85,6 +85,11 @@ describe("app rail model", () => {
     props.onClick!(plain);
     expect(plain.preventDefault).toHaveBeenCalledTimes(1);
     expect(toggle).toHaveBeenCalledTimes(1);
+
+    const openNavigation = vi.fn();
+    const temporary = railLinkToggleProps("/notes", "/projects", toggle, true, openNavigation);
+    expect(temporary).toMatchObject({ "aria-haspopup": "dialog" });
+    expect(temporary).not.toHaveProperty("aria-expanded");
   });
 
   test("compares canonical order arrays", () => {
