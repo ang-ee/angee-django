@@ -99,8 +99,9 @@ export function DecisionField({ name, props, label }: {
 }
 
 /** Open a Decision reference in the host peek, with its canonical route as fallback. */
-export function DecisionReferenceAction({ label, open, reference, target }: {
+export function DecisionReferenceAction({ label, glyph, open, reference, target }: {
   label: string;
+  glyph?: string;
   open?: (reference: RecordPeekReference) => void;
   reference: RecordPeekReference;
   target?: "_blank";
@@ -114,7 +115,7 @@ export function DecisionReferenceAction({ label, open, reference, target }: {
   const labeled = { ...reference, label: reference.label ?? label };
   if (open) {
     return <Button type="button" size="sm" variant="ghost"
-      onClick={() => open(labeled)}>{label}</Button>;
+      onClick={() => open(labeled)}>{glyph ? <Glyph decorative name={glyph} /> : null}{label}</Button>;
   }
   if (href) return <TextLink href={href} target={target}>{label}</TextLink>;
   return <span className="text-13 text-fg-muted">{label}</span>;

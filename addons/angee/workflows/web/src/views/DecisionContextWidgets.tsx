@@ -1,7 +1,7 @@
 import * as React from "react";
 import * as v from "valibot";
 import { Alert, Badge, Collapsible, ComparisonRows, InlineEmpty, optionalTranslation, useRecordPeek,
-  type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
+  type RecordPeekOpen, type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
 import { useWorkflowsT } from "../i18n";
 import { DecisionReferenceAction } from "./ApprovalTask";
 
@@ -31,28 +31,32 @@ function InvalidContext(): React.ReactElement {
   return <Alert tone="warning">{t("inbox.contextInvalid")}</Alert>;
 }
 
-function RecordLine({ record }: { record: v.InferOutput<typeof RecordRef> }): React.ReactElement {
+function RecordLine({ record, open }: {
+  record: v.InferOutput<typeof RecordRef>;
+  open: RecordPeekOpen;
+}): React.ReactElement {
   const t = useWorkflowsT();
-  const open = useRecordPeek();
   const authoredLabel = record.label.trim();
   const label = authoredLabel && authoredLabel !== record.model && authoredLabel !== record.id
     ? authoredLabel : t("inbox.contextOpenRecord");
   return <div className="flex flex-wrap items-center gap-x-2 text-sm">
-    <DecisionReferenceAction label={label} open={open} reference={record} />
+    <DecisionReferenceAction label={label} glyph="workflow-escalate" open={open} reference={record} />
     {record.page != null ? <span className="text-fg-muted">{t("inbox.contextPage", { page: record.page })}</span> : null}
   </div>;
 }
 
 function RecordContext({ value }: WidgetRenderProps): React.ReactElement {
+  const open = useRecordPeek();
   const single = v.safeParse(RecordRef, value);
-  if (single.success) return <RecordLine record={single.output} />;
+  if (single.success) return <RecordLine record={single.output} open={open} />;
   const list = v.safeParse(v.array(RecordRef), value);
   if (!list.success) return <InvalidContext />;
-  return <div className="space-y-2">{list.output.map((record, index) => <RecordLine key={`${record.model}:${record.id}:${index}`} record={record} />)}</div>;
+  return <div className="space-y-2">{list.output.map((record, index) => <RecordLine key={`${record.model}:${record.id}:${index}`} record={record} open={open} />)}</div>;
 }
 
 function FactsContext({ value }: WidgetRenderProps): React.ReactElement {
   const t = useWorkflowsT();
+  const open = useRecordPeek();
   const parsed = v.safeParse(v.array(Fact), value);
   if (!parsed.success) return <InvalidContext />;
   return <div className="space-y-3">{parsed.output.map((fact, index) => <div key={`${fact.pointer}:${index}`} className="rounded-6 border border-border p-3">
@@ -64,13 +68,14 @@ function FactsContext({ value }: WidgetRenderProps): React.ReactElement {
     {fact.subject || fact.evidence.length ? <div className="mt-3 space-y-1 border-t border-border-subtle pt-2">
       <p className="text-xs font-medium text-fg-muted">{t("inbox.contextEvidence")}</p>
       {uniqueRecords([...(fact.subject ? [fact.subject] : []), ...fact.evidence])
-        .map((ref) => <RecordLine key={`${ref.model}:${ref.id}`} record={ref} />)}
+        .map((ref) => <RecordLine key={`${ref.model}:${ref.id}`} record={ref} open={open} />)}
     </div> : null}
   </div>)}</div>;
 }
 
 function DifferencesContext({ value }: WidgetRenderProps): React.ReactElement {
   const t = useWorkflowsT();
+  const open = useRecordPeek();
   const parsed = v.safeParse(v.array(Difference), value);
   if (!parsed.success) return <InvalidContext />;
   return <ComparisonRows
@@ -87,7 +92,7 @@ function DifferencesContext({ value }: WidgetRenderProps): React.ReactElement {
       <p className="text-xs font-medium text-fg-muted">{t("inbox.contextEvidence")}</p>
       {uniqueRecords([...(difference.leftRecord ? [difference.leftRecord] : []),
         ...(difference.rightRecord ? [difference.rightRecord] : [])])
-        .map((ref) => <RecordLine key={`${ref.model}:${ref.id}`} record={ref} />)}
+        .map((ref) => <RecordLine key={`${ref.model}:${ref.id}`} record={ref} open={open} />)}
       </div> : undefined,
     }))}
   />;

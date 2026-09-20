@@ -294,7 +294,7 @@ function lineFieldValue(row: Row, name: string, config: LineDiffConfig): unknown
   return row[name];
 }
 
-/** Normalize an M2M cell value to the de-duped public ids the line input takes. */
+/** Normalize related records or scalar ids to de-duplicated, non-empty public ids. */
 export function relationIdList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map(relationValueId))].filter(Boolean);

@@ -89,7 +89,10 @@ export interface ActionRelationArg extends ActionArgBase {
   filters?: readonly CrudFilter[];
 }
 
-/** A multi relation-list arg, prefilled from the invoking context (explicit edit wins). */
+/**
+ * A multi relation-list arg, prefilled from the invoking context (explicit edit wins).
+ * The action form submits de-duplicated, non-empty string ids.
+ */
 export interface ActionRelationListArg extends ActionArgBase {
   argKind: "relationList";
   /** Target model label the picker lists (as `useModelMetadata` resolves it). */

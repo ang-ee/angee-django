@@ -30,7 +30,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
-import { ActionFormDialog } from "./ActionFormDialog";
+import { ActionFormDialog, serializeActionArgValues } from "./ActionFormDialog";
 import type { ActionArg, ActionDescriptor, ActionFormContext } from "../page";
 
 // cmdk scrolls the active option into view; happy-dom has no layout engine.
@@ -219,7 +219,71 @@ function renderDialog(
   );
 }
 
+describe("serializeActionArgValues", () => {
+  const args: readonly ActionArg[] = [
+    { name: "invoiceIds", argKind: "relationList", resource: "Invoice" },
+  ];
+
+  test("normalizes mixed relation values to ordered unique string ids without mutating the draft", () => {
+    const invoiceIds = Object.freeze([
+      "inv-2", { id: "inv-1", number: "INV-1" }, 7, { id: 7 }, "inv-2", 0,
+      "", null, undefined, false, {}, { id: "" }, { id: false }, ["inv-3"],
+    ]);
+    const values = Object.freeze({ invoiceIds });
+
+    expect(serializeActionArgValues(args, values)).toEqual({
+      invoiceIds: ["inv-2", "inv-1", "7", "0"],
+    });
+  });
+
+  test.each([
+    { invoiceIds: undefined }, { invoiceIds: null }, { invoiceIds: "inv-1" },
+    { invoiceIds: 7 }, { invoiceIds: { id: "inv-1" } }, { invoiceIds: [] },
+  ])(
+    "submits an empty relation list for %j",
+    ({ invoiceIds }) => {
+      expect(serializeActionArgValues(args, { invoiceIds })).toEqual({ invoiceIds: [] });
+    },
+  );
+
+  test("preserves non-list arguments and undeclared values", () => {
+    const values = {
+      invoiceIds: ["inv-1", "inv-1"],
+      tags: ["same", "same", ""],
+      journal: { id: "jnl-bank" },
+      amount: "001.00",
+      extra: [1, 1],
+    };
+
+    expect(serializeActionArgValues([
+      ...args,
+      { name: "tags", argKind: "scalar", widget: "tagInput" },
+      { name: "journal", argKind: "relation", resource: "Journal" },
+      { name: "amount", widget: "text" },
+    ], values)).toEqual({ ...values, invoiceIds: ["inv-1"] });
+  });
+});
+
 describe("ActionFormDialog", () => {
+  test("passes normalized relation-list values to a custom submit", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Done." });
+    renderDialog({
+      id: "collect",
+      label: "Collect",
+      args: [{
+        name: "invoiceIds", argKind: "relationList", resource: "Invoice",
+        fromContext: () => ["inv-2", "inv-1", "inv-2"],
+      }],
+      submit,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledWith(
+      { invoiceIds: ["inv-2", "inv-1"] }, context,
+    ));
+  });
+
   test("does not submit its parent record form through the dialog portal", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: false, message: "Fix the amount." });
     const parentSubmit = vi.fn();
