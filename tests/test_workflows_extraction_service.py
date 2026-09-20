@@ -42,6 +42,7 @@ from angee.workflows_extraction.engines import (
     DocumentResult,
     DocumentSource,
     InferenceMappingEngine,
+    MappingResult,
     PageImage,
     derive_text_claims,
 )
@@ -58,8 +59,10 @@ from angee.workflows_extraction.routing import (
     recognize_pages,
 )
 from angee.workflows_extraction.service import (
+    InferenceResult,
     PreparedDocument,
     PreparedPage,
+    SupersededInference,
     _document_sources,
     _preserve_retained_authority,
     _retained_claim_part_positions,
@@ -902,6 +905,42 @@ class ExtractionServiceTests(TestCase):
                 config=config,
             )
 
+    def _inference_base(self) -> Any:
+        config = {
+            "result": {
+                "number": "BASE",
+                "rows": ["retained line"],
+                "routing_review_reasons": ["missing facts"],
+            },
+            "inference_mode": "permitted",
+        }
+        schema = {
+            **SCHEMA,
+            "properties": {
+                **SCHEMA["properties"],
+                "routing_review_reasons": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+        }
+        with actor_context(self.owner):
+            prepared = prepare_pages(
+                files=self.files,
+                message_parts=(),
+                authorized_target=self.drive,
+                config=config,
+            )
+            return process(
+                prepared,
+                (),
+                schema=schema,
+                model=self.model,
+                authorized_target=self.drive,
+                engine="fake_document",
+                config=config,
+            )
+
     def _retain(
         self,
         *,
@@ -1721,7 +1760,7 @@ class ExtractionServiceTests(TestCase):
             patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
-                return_value=(
+                return_value=MappingResult(
                     {
                         "number": "INFERRED",
                         "rows": ["first line", "second line"],
@@ -1729,16 +1768,23 @@ class ExtractionServiceTests(TestCase):
                     },
                     {},
                     {"route": "test"},
+                    {"input_tokens": 5, "output_tokens": 3, "tokens": 8, "requests": 1},
                 ),
             ),
         ):
-            inferred = infer(
+            invocation = infer(
                 base,
                 model=self.model,
                 authorized_target=self.files[0],
                 operation_step_run=SimpleNamespace(),
             )
+            inferred = invocation.extraction
 
+        self.assertIsInstance(invocation, InferenceResult)
+        self.assertEqual(
+            invocation.usage_delta,
+            {"input_tokens": 5, "output_tokens": 3, "tokens": 8, "requests": 1},
+        )
         inferred_document = inferred.document_refs[0]
         self.assertEqual(inferred_document.identity, document.identity)
         self.assertEqual(
@@ -1757,6 +1803,108 @@ class ExtractionServiceTests(TestCase):
                     base,
                     result={"number": "INFERRED", "rows": changed_lines},
                 )
+
+    def test_inference_schema_failure_exposes_provider_usage_delta(self) -> None:
+        base = self._inference_base()
+        admitted = SimpleNamespace(
+            request_key="schema-failure-usage",
+            input={
+                "base_extraction_id": str(base.sqid),
+                "base_revision": base.revision,
+                "model_id": str(self.model.sqid),
+                "identity_mapping": {},
+                "retired_identities": {},
+            },
+        )
+        usage = {"input_tokens": 17, "output_tokens": 2, "tokens": 19, "requests": 1}
+
+        with (
+            actor_context(self.owner),
+            patch(
+                "angee.workflows_extraction.service.external_operation_request",
+                return_value=admitted,
+            ),
+            patch(
+                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                return_value=MappingResult(
+                    {
+                        "number": "INVALID",
+                        "rows": ["retained line"],
+                        "unexpected": True,
+                    },
+                    {},
+                    {"route": "test", "usage": usage},
+                    usage,
+                ),
+            ),
+            self.assertRaises(DocumentPipelineError) as raised,
+        ):
+            infer(
+                base,
+                model=self.model,
+                authorized_target=self.drive,
+                operation_step_run=SimpleNamespace(),
+            )
+
+        self.assertEqual(raised.exception.code, "candidate_schema_mismatch")
+        self.assertEqual(raised.exception.usage_delta, usage)
+
+    def test_inference_superseded_race_exposes_provider_usage_delta(self) -> None:
+        base = self._inference_base()
+        admitted = SimpleNamespace(
+            request_key="superseded-race-usage",
+            input={
+                "base_extraction_id": str(base.sqid),
+                "base_revision": base.revision,
+                "model_id": str(self.model.sqid),
+                "identity_mapping": {},
+                "retired_identities": {},
+            },
+        )
+        usage = {"input_tokens": 23, "output_tokens": 3, "tokens": 26, "requests": 1}
+        current = SimpleNamespace(pk=base.pk + 1, sqid="ext_race_winner")
+        manager = type(base).objects
+
+        with (
+            actor_context(self.owner),
+            patch(
+                "angee.workflows_extraction.service.external_operation_request",
+                return_value=admitted,
+            ),
+            patch(
+                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                return_value=MappingResult(
+                    {
+                        "number": "INFERRED",
+                        "rows": ["retained line"],
+                        "routing_review_reasons": [],
+                    },
+                    {},
+                    {"route": "test", "usage": usage},
+                    usage,
+                ),
+            ),
+            patch.object(
+                manager,
+                "inference_current_head",
+                side_effect=(base, current),
+            ),
+            patch.object(
+                manager,
+                "create_revision_from_evidence",
+                side_effect=ValidationError("lost the retained-head race"),
+            ),
+        ):
+            result = infer(
+                base,
+                model=self.model,
+                authorized_target=self.drive,
+                operation_step_run=SimpleNamespace(),
+            )
+
+        self.assertIsInstance(result, SupersededInference)
+        self.assertEqual(result.current_extraction_id, "ext_race_winner")
+        self.assertEqual(result.usage_delta, usage)
 
     def test_structural_inference_retains_candidate_and_reviewed_mapping_without_reparse(
         self,
@@ -1820,16 +1968,23 @@ class ExtractionServiceTests(TestCase):
             ),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
-                return_value=(candidate, {}, {"route": "test"}),
+                return_value=MappingResult(
+                    candidate,
+                    {},
+                    {"route": "test"},
+                    {"tokens": 13, "requests": 1},
+                ),
             ),
         ):
-            held = infer(
+            held_invocation = infer(
                 base,
                 model=self.model,
                 authorized_target=target,
                 operation_step_run=SimpleNamespace(),
             )
+            held = held_invocation.extraction
 
+        self.assertEqual(held_invocation.usage_delta, {"tokens": 13, "requests": 1})
         self.assertEqual(held.status, "failed")
         self.assertEqual(
             held.error_code, "source_hold:identity_correspondence_required"
@@ -1863,14 +2018,16 @@ class ExtractionServiceTests(TestCase):
                 side_effect=AssertionError("reviewed correspondence must not reparse"),
             ),
         ):
-            resolved = infer(
+            resolved_invocation = infer(
                 held,
                 model=self.model,
                 authorized_target=target,
                 operation_step_run=SimpleNamespace(),
                 identity_mapping=reviewed_mapping,
             )
+            resolved = resolved_invocation.extraction
 
+        self.assertEqual(resolved_invocation.usage_delta, {})
         self.assertEqual(resolved.status, "succeeded")
         self.assertEqual(
             resolved.result,
@@ -1952,18 +2109,27 @@ class ExtractionServiceTests(TestCase):
             patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
-                return_value=(authority.result, {}, {"route": "test"}),
+                return_value=MappingResult(
+                    authority.result,
+                    {},
+                    {"route": "test"},
+                    {"tokens": 21, "requests": 1},
+                ),
             ) as provider,
         ):
-            inferred = infer(
+            inferred_invocation = infer(
                 preliminary, model=self.model, authorized_target=self.files[0],
                 operation_step_run=SimpleNamespace(),
             )
-            exact_retry = infer(
+            retry_invocation = infer(
                 preliminary, model=self.model, authorized_target=self.files[0],
                 operation_step_run=SimpleNamespace(),
             )
+            inferred = inferred_invocation.extraction
+            exact_retry = retry_invocation.extraction
 
+        self.assertEqual(inferred_invocation.usage_delta, {"tokens": 21, "requests": 1})
+        self.assertEqual(retry_invocation.usage_delta, {})
         self.assertEqual(inferred.status, "succeeded")
         self.assertEqual(exact_retry.pk, inferred.pk)
         self.assertEqual(inferred.document_refs, authority.document_refs)
@@ -1999,14 +2165,21 @@ class ExtractionServiceTests(TestCase):
             patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
-                return_value=(changed_candidate, {}, {"route": "test"}),
+                return_value=MappingResult(
+                    changed_candidate,
+                    {},
+                    {"route": "test"},
+                    {"tokens": 34, "requests": 1},
+                ),
             ) as provider,
         ):
-            populated = infer(
+            populated_invocation = infer(
                 preliminary, model=self.model, authorized_target=self.files[1],
                 operation_step_run=SimpleNamespace(),
             )
+            populated = populated_invocation.extraction
 
+        self.assertEqual(populated_invocation.usage_delta, {"tokens": 34, "requests": 1})
         self.assertEqual(populated.status, "failed")
         self.assertEqual(
             populated.error_code, "source_hold:identity_correspondence_required",
@@ -2144,14 +2317,21 @@ class ExtractionServiceTests(TestCase):
             patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
-                return_value=(authority.result, {}, {"route": "test"}),
+                return_value=MappingResult(
+                    authority.result,
+                    {},
+                    {"route": "test"},
+                    {"tokens": 55, "requests": 1},
+                ),
             ) as provider,
         ):
-            inferred = infer(
+            invocation = infer(
                 upgraded_hold, model=self.model, authorized_target=target,
                 operation_step_run=SimpleNamespace(),
             )
+            inferred = invocation.extraction
 
+        self.assertEqual(invocation.usage_delta, {"tokens": 55, "requests": 1})
         self.assertEqual(inferred.status, "succeeded")
         self.assertEqual(inferred.document_refs, authority.document_refs)
         self.assertEqual(
@@ -2227,14 +2407,16 @@ class ExtractionServiceTests(TestCase):
                 "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
             ) as provider,
         ):
-            inferred = infer(
+            invocation = infer(
                 held,
                 model=self.model,
                 authorized_target=self.drive,
                 operation_step_run=SimpleNamespace(),
                 identity_mapping=continuing,
             )
+            inferred = invocation.extraction
         provider.assert_not_called()
+        self.assertEqual(invocation.usage_delta, {})
         self.assertEqual(inferred.status, "succeeded")
         self.assertEqual(inferred.result, {"number": "HUMAN", "rows": ["source row", "second"]})
         inferred_document = inferred.document_refs[0]

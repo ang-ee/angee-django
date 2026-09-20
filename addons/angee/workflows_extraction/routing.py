@@ -211,8 +211,15 @@ def recognize_pages(
             )
         try:
             result = engine.recognize_page(page, model=model, config=config, timeout=remaining)
-        except DocumentPipelineError:
-            raise
+        except DocumentPipelineError as error:
+            raise DocumentPipelineError(
+                str(error),
+                parts=(*acquired_parts, *parts, *error.parts),
+                stage=error.stage,
+                code=error.code,
+                metadata=error.metadata,
+                usage_delta=error.usage_delta,
+            ) from None
         except (RuntimeError, TimeoutError, ValueError) as error:
             raise DocumentPipelineError(
                 f"Text recognition failed ({type(error).__name__}).", parts=(*acquired_parts, *parts),
@@ -266,7 +273,7 @@ def run_document_pipeline(
         acquired_parts=acquired.parts,
     )
     parts = (*acquired.parts, *recognized)
-    value, claims, metadata = engine.map_text_parts(
+    mapping = engine.map_text_parts(
         parts,
         schema,
         model=model,
@@ -274,12 +281,12 @@ def run_document_pipeline(
         timeout=timeout - (time.monotonic() - started),
     )
     return DocumentResult(
-        value,
+        mapping.value,
         parts,
-        claims,
+        mapping.claims,
         used_model_roles=("mapping", "recognition") if recognized and recognition_model is not None else ("mapping",),
         duration_ms=round((time.monotonic() - started) * 1000),
-        engine_metadata=metadata,
+        engine_metadata=mapping.engine_metadata,
     )
 
 

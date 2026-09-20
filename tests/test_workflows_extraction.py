@@ -18,6 +18,7 @@ from angee.workflows_extraction.engines import (
     DocumentPipelineError,
     DocumentSource,
     InferenceMappingEngine,
+    MappingResult,
     PageImage,
 )
 from angee.workflows_extraction.routing import acquire_native_parts
@@ -202,7 +203,7 @@ def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -
     )
     part = DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-42", "native", "hash")
 
-    value, claims, metadata = InferenceMappingEngine().map_text_parts(
+    result = InferenceMappingEngine().map_text_parts(
         (part,),
         SCHEMA,
         model=model,
@@ -210,14 +211,15 @@ def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -
         timeout=5,
     )
 
-    assert value == {"number": "INV-42"}
-    assert claims["/number"][0]["part_position"] == 0
-    assert metadata["usage"] == {
+    assert result.value == {"number": "INV-42"}
+    assert result.claims["/number"][0]["part_position"] == 0
+    assert result.engine_metadata["usage"] == {
         "input_tokens": 23,
         "output_tokens": 7,
         "tokens": 30,
         "requests": 1,
     }
+    assert result.usage_delta == result.engine_metadata["usage"]
     assert requested["settings"] == {
         "timeout": 5,
         "max_tokens": 128,
@@ -261,6 +263,7 @@ def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -
         "output_text_length": len(raw_output),
         "output_text_sha256": hashlib.sha256(raw_output.encode()).hexdigest(),
     }
+    assert raised.value.usage_delta == metadata["usage"]
     assert raw_output not in str(metadata)
 
 
@@ -275,7 +278,7 @@ def test_inference_mapping_consumes_native_structured_tool_result() -> None:
         ),
     )
 
-    value, _claims, _metadata = InferenceMappingEngine().map_text_parts(
+    result = InferenceMappingEngine().map_text_parts(
         (DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-43", "native", "hash"),),
         SCHEMA,
         model=model,
@@ -283,7 +286,8 @@ def test_inference_mapping_consumes_native_structured_tool_result() -> None:
         timeout=5,
     )
 
-    assert value == {"number": "INV-43"}
+    assert result.value == {"number": "INV-43"}
+    assert isinstance(result, MappingResult)
 
 
 def test_inference_model_roles_and_retired_status_share_the_execution_validator():
@@ -335,6 +339,30 @@ def test_inference_recognition_carries_native_image_and_zero_temperature() -> No
         "tokens": 15,
         "requests": 1,
     }
+    assert result.usage_delta == result.engine_metadata["usage"]
+
+
+def test_inference_recognition_invalid_response_exposes_usage_delta() -> None:
+    usage = {"input_tokens": 7, "output_tokens": 1, "tokens": 8, "requests": 1}
+    model = SimpleNamespace(
+        status="available",
+        model_use="multimodal",
+        infer=lambda *args, **kwargs: (
+            SimpleNamespace(text=None, provider_response_id="recognition-invalid"),
+            usage,
+        ),
+    )
+
+    with pytest.raises(DocumentPipelineError) as raised:
+        InferenceMappingEngine().recognize_page(
+            _page(0, 0),
+            model=model,
+            config={},
+            timeout=5,
+        )
+
+    assert raised.value.stage == "recognition_response"
+    assert raised.value.usage_delta == usage
 
 
 def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures() -> None:

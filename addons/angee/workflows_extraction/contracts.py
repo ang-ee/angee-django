@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from django.db.models import TextChoices
@@ -106,11 +106,22 @@ class PageImage:
 
 @dataclass(frozen=True, slots=True)
 class RecognitionResult:
-    """Recognized text and bounded provider metadata for one page."""
+    """Recognized text, retained telemetry, and this invocation's usage."""
 
     text: str
     duration_ms: int = 0
     engine_metadata: dict[str, Any] | None = None
+    usage_delta: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class MappingResult:
+    """One mapped candidate with retained telemetry and invocation usage."""
+
+    value: dict[str, Any]
+    claims: dict[str, list[dict[str, Any]]]
+    engine_metadata: dict[str, Any]
+    usage_delta: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +167,7 @@ class DocumentResult:
 
 
 class DocumentPipelineError(RuntimeError):
-    """Bounded pipeline failure carrying only already acquired raw evidence."""
+    """Bounded failure with acquired evidence and this invocation's usage."""
 
     def __init__(
         self,
@@ -166,9 +177,11 @@ class DocumentPipelineError(RuntimeError):
         stage: str = "",
         code: str = "",
         metadata: dict[str, Any] | None = None,
+        usage_delta: Mapping[str, int] | None = None,
     ) -> None:
         super().__init__(message)
         self.parts = tuple(parts)
         self.stage = stage
         self.code = code
         self.metadata = dict(metadata or {})
+        self.usage_delta = dict(usage_delta or {})

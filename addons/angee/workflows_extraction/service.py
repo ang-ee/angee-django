@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from django.apps import apps
@@ -125,8 +125,19 @@ class CollectedDocument:
 
 @dataclass(frozen=True, slots=True)
 class SupersededInference:
+    """A racing retained successor plus usage spent by this invocation."""
+
     base_extraction_id: str
     current_extraction_id: str
+    usage_delta: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceResult:
+    """A retained inference result plus usage spent by this invocation."""
+
+    extraction: Any
+    usage_delta: dict[str, int] = field(default_factory=dict)
 
 
 def prepare_pages(
@@ -664,8 +675,8 @@ def infer(
     operation_step_run: Any,
     identity_mapping: Mapping[str, str] | None = None,
     retired_identities: Mapping[str, str] | None = None,
-) -> Any | SupersededInference:
-    """Infer unresolved facts only and retain a successor against the exact base."""
+) -> InferenceResult | SupersededInference:
+    """Retain inferred facts and expose only this call's provider usage."""
 
     actor = current_actor()
     if actor is None:
@@ -798,7 +809,7 @@ def infer(
             or bool(inference_facts.get("automatic_correspondence")) != automatic_correspondence
         ):
             raise ValidationError({"inference": "The frozen request key owns different retained facts."})
-        return existing
+        return InferenceResult(existing)
     current = extraction_model.objects.inference_current_head(base, actor=actor)
     if current.pk != base.pk:
         return SupersededInference(str(base.sqid), str(current.sqid))
@@ -831,6 +842,7 @@ def infer(
         retired_identities=requested_retirement,
     )
     recognition_used = "recognition" in base.provenance.get("used_model_roles", ())
+    usage_delta: dict[str, int] = {}
     if correspondence_hold and not preliminary_correspondence:
         prior_inference = base.stage_provenance.get("inference", {})
         request_metadata = dict(prior_inference.get("provider") or {})
@@ -848,59 +860,93 @@ def infer(
         timeout = float(
             config.get("timeout") or settings.ANGEE_EXTRACTION_TIMEOUT_SECONDS
         )
-        candidate, candidate_claims, request_metadata = mapping_engine.map_text_parts(
+        mapping_result = mapping_engine.map_text_parts(
             parts,
             _validated_schema(base.schema),
             model=model,
             config=dict(config.get("mapping_config") or config),
             timeout=timeout,
         )
-        document_result = profile.normalize_inference_candidate(
-            sources,
-            parts,
-            base.schema,
-            value=candidate,
-            claims=candidate_claims,
-            metadata=request_metadata,
-            config=config,
-            recognition_used=recognition_used,
-        )
+        usage_delta = dict(mapping_result.usage_delta)
+        try:
+            document_result = profile.normalize_inference_candidate(
+                sources,
+                parts,
+                base.schema,
+                value=mapping_result.value,
+                claims=mapping_result.claims,
+                metadata=mapping_result.engine_metadata,
+                config=config,
+                recognition_used=recognition_used,
+            )
+        except DocumentPipelineError as error:
+            raise DocumentPipelineError(
+                str(error),
+                parts=error.parts,
+                stage=error.stage,
+                code=error.code,
+                metadata=error.metadata,
+                usage_delta=usage_delta,
+            ) from None
+        except ValidationError as error:
+            raise DocumentPipelineError(
+                "The inferred candidate failed profile normalization.",
+                parts=parts,
+                stage="inference",
+                code="candidate_normalization_failed",
+                usage_delta=usage_delta,
+            ) from error
     if document_result.parts != parts:
-        raise ValidationError({"inference": "The profile changed the retained carrier ordering."})
+        raise DocumentPipelineError(
+            "The inferred candidate changed the retained carrier ordering.",
+            parts=parts,
+            stage="inference",
+            code="carrier_order_changed",
+            usage_delta=usage_delta,
+        )
     correspondence_required = False
-    if automatic_correspondence:
-        automatic_mapping = implicit_identity_correspondence(
-            document_result.value,
-            layout=config.get("evidence_layout", {}),
-            original=(authority_base if preliminary_correspondence else base),
+    try:
+        if automatic_correspondence:
+            automatic_mapping = implicit_identity_correspondence(
+                document_result.value,
+                layout=config.get("evidence_layout", {}),
+                original=(authority_base if preliminary_correspondence else base),
+            )
+            correspondence_required = automatic_mapping is None
+            effective_mapping = automatic_mapping or {}
+        if not correspondence_required:
+            final_value, final_claims, completed_missing_authority = _preserve_retained_authority(
+                authority_base,
+                document_result.value,
+                document_result.claims,
+                identity_mapping=effective_mapping,
+                retired_identities=requested_retirement,
+                claim_part_positions=claim_part_positions,
+            )
+            document_result = DocumentResult(
+                final_value,
+                document_result.parts,
+                final_claims,
+                document_result.used_model_roles,
+                document_result.duration_ms,
+                document_result.engine_metadata,
+            )
+        else:
+            completed_missing_authority = False
+        _validate_document_result(
+            document_result,
+            source_count=len(sources),
+            has_model=True,
+            has_recognition_model=base.recognition_model_id is not None,
         )
-        correspondence_required = automatic_mapping is None
-        effective_mapping = automatic_mapping or {}
-    if not correspondence_required:
-        final_value, final_claims, completed_missing_authority = _preserve_retained_authority(
-            authority_base,
-            document_result.value,
-            document_result.claims,
-            identity_mapping=effective_mapping,
-            retired_identities=requested_retirement,
-            claim_part_positions=claim_part_positions,
-        )
-        document_result = DocumentResult(
-            final_value,
-            document_result.parts,
-            final_claims,
-            document_result.used_model_roles,
-            document_result.duration_ms,
-            document_result.engine_metadata,
-        )
-    else:
-        completed_missing_authority = False
-    _validate_document_result(
-        document_result,
-        source_count=len(sources),
-        has_model=True,
-        has_recognition_model=base.recognition_model_id is not None,
-    )
+    except ValidationError as error:
+        raise DocumentPipelineError(
+            "The inferred candidate failed retained-evidence validation.",
+            parts=document_result.parts,
+            stage="inference",
+            code="candidate_validation_failed",
+            usage_delta=usage_delta,
+        ) from error
     errors = sorted(
         Draft202012Validator(base.schema).iter_errors(document_result.value), key=lambda error: list(error.path)
     )
@@ -910,6 +956,7 @@ def infer(
             parts=document_result.parts,
             stage="inference",
             code="candidate_schema_mismatch",
+            usage_delta=usage_delta,
         )
     unresolved_reasons = list(
         document_result.value.get("routing_review_reasons") or ()
@@ -950,7 +997,7 @@ def infer(
         },
     }
     try:
-        return extraction_model.objects.create_revision_from_evidence(
+        extraction = extraction_model.objects.create_revision_from_evidence(
             base,
             lineage_key=base.lineage_key,
             reuse_key=reuse_key,
@@ -981,10 +1028,23 @@ def infer(
             object_id=base.object_id,
             created_by_id=actor_user_id(actor),
         )
-    except ValidationError:
+        return InferenceResult(extraction, usage_delta)
+    except ValidationError as error:
         current = extraction_model.objects.inference_current_head(base, actor=actor)
         if current.pk != base.pk:
-            return SupersededInference(str(base.sqid), str(current.sqid))
+            return SupersededInference(
+                str(base.sqid),
+                str(current.sqid),
+                usage_delta,
+            )
+        if usage_delta:
+            raise DocumentPipelineError(
+                "The inferred candidate could not be retained.",
+                parts=document_result.parts,
+                stage="inference",
+                code="candidate_retention_failed",
+                usage_delta=usage_delta,
+            ) from error
         raise
 
 

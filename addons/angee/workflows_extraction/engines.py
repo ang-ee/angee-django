@@ -29,6 +29,7 @@ from angee.workflows_extraction.contracts import (
     DocumentPipelineError,
     DocumentResult,
     DocumentSource,
+    MappingResult,
     PageImage,
     RecognitionResult,
 )
@@ -267,7 +268,7 @@ class ExtractionEngine(ImplBase):
         model: Any | None,
         config: dict[str, Any],
         timeout: float,
-    ) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    ) -> MappingResult:
         """Map retained text evidence into a schema candidate with source claims."""
 
         raise NotImplementedError
@@ -309,13 +310,27 @@ class InferenceMappingEngine(ExtractionEngine):
                 settings=_inference_settings(config, timeout=timeout),
             )
         except (RuntimeError, TimeoutError, TypeError, ValueError) as error:
-            # The routing owner adds all evidence already acquired before this
-            # page; leaking a partial DocumentPipelineError here would bypass it.
-            raise RuntimeError(f"Text recognition request failed ({type(error).__name__}).") from None
+            raise DocumentPipelineError(
+                f"Text recognition request failed ({type(error).__name__}).",
+                stage="recognition_request",
+                code=type(error).__name__,
+            ) from None
         if response.text is None:
-            raise RuntimeError("Text recognition response was invalid.")
+            metadata = _response_metadata(response, usage=usage, started=started)
+            raise DocumentPipelineError(
+                "Text recognition response was invalid.",
+                stage="recognition_response",
+                code="invalid_response",
+                metadata=metadata,
+                usage_delta=usage,
+            )
         metadata = _response_metadata(response, usage=usage, started=started)
-        return RecognitionResult(response.text.strip(), metadata["duration_ms"], metadata)
+        return RecognitionResult(
+            response.text.strip(),
+            metadata["duration_ms"],
+            metadata,
+            dict(usage),
+        )
 
     def map_text_parts(
         self,
@@ -325,7 +340,7 @@ class InferenceMappingEngine(ExtractionEngine):
         model: Any | None,
         config: dict[str, Any],
         timeout: float,
-    ) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    ) -> MappingResult:
         """Request one provider-neutral JSON mapping and derive local source claims."""
 
         mapping_model = cast(Any, model)
@@ -367,9 +382,15 @@ class InferenceMappingEngine(ExtractionEngine):
                 stage="mapping_response",
                 code=type(error).__name__,
                 metadata=metadata,
+                usage_delta=usage,
             ) from None
         metadata = _response_metadata(response, usage=usage, started=started)
-        return value, derive_text_claims(value, parts), metadata
+        return MappingResult(
+            value,
+            derive_text_claims(value, parts),
+            metadata,
+            dict(usage),
+        )
 
     def extract_document(
         self,
