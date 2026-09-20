@@ -31,11 +31,14 @@ from pydantic_ai.messages import (
     TextPart,
     UserPromptPart,
 )
+from pydantic_ai.usage import RunUsage
 from rebac import system_context
 
+from angee.agents.backends import InferenceBackend
 from angee.agents.models import InferenceModel as AbstractInferenceModel
 from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import Skill as AbstractSkill
+from angee.agents.models import normalize_inference_usage
 from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.agents.skills import parse_skill_meta
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
@@ -316,6 +319,47 @@ def test_sdk_backend_still_requires_a_credential_by_default() -> None:
         RequiredSDKBackend(SimpleNamespace(credential=None))._credential_auth()
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("extra_body", {"model": "unchecked-model"}),
+        ("extra_headers", {"Authorization": "Bearer unchecked"}),
+        ("extra_query", {"api-version": "unchecked"}),
+    ],
+)
+def test_inference_backend_rejects_caller_transport_overrides(key: str, value: object) -> None:
+    """Request settings cannot bypass the approved provider deployment."""
+
+    backend = InferenceBackend(SimpleNamespace())
+
+    with pytest.raises(ValueError, match="cannot override provider transport"):
+        backend.request_settings({key: value})  # type: ignore[typeddict-item]
+
+
+def test_normalize_inference_usage_accepts_run_usage_and_tool_calls() -> None:
+    """Session and direct inference share every workflow budget axis."""
+
+    assert normalize_inference_usage(RunUsage(input_tokens=3, output_tokens=2, requests=2, tool_calls=1)) == {
+        "input_tokens": 3,
+        "output_tokens": 2,
+        "tokens": 5,
+        "requests": 2,
+        "tool_calls": 1,
+    }
+
+
+def test_ollama_request_settings_admit_only_deployment_keep_alive() -> None:
+    """The Ollama owner admits its one named extra-body extension only."""
+
+    backend = OllamaInferenceBackend(SimpleNamespace(config={"keep_alive": "7m"}))
+
+    assert backend.request_settings({"extra_body": {"keep_alive": "7m"}})["extra_body"] == {"keep_alive": "7m"}
+    with pytest.raises(ValueError, match="do not admit extra_body keys"):
+        backend.request_settings({"extra_body": {"model": "unchecked-model"}})
+    with pytest.raises(ValueError, match="cannot override provider transport"):
+        backend.request_settings({"extra_headers": {"Authorization": "Bearer unchecked"}})
+
+
 def test_ollama_backend_keeps_an_explicit_gateway_credential() -> None:
     """An attached credential wins over Ollama's unauthenticated fallback."""
 
@@ -588,14 +632,6 @@ def test_anthropic_backend_uses_auth_token_for_oauth_credentials(agents_tables, 
     assert all(client.is_closed() for client in clients)
 
 
-def test_workflow_options_preserve_native_settings_and_vendor_body_fields():
-    from angee.workflows_agents.steps import _model_settings
-
-    assert _model_settings(
-        {"options": {"top_p": 0.9, "metadata": {"user_id": "example"}}, "max_tokens": 12, "temperature": None}
-    ) == {"max_tokens": 12, "top_p": 0.9, "extra_body": {"metadata": {"user_id": "example"}}}
-
-
 @pytest.mark.django_db(transaction=True)
 def test_openai_backend_refresh_syncs_native_and_broker_models(
     agents_tables: None,
@@ -866,14 +902,6 @@ def test_ollama_backend_rejects_invalid_generation_limits(generation_limit: obje
 
     with pytest.raises(ValueError, match="positive integer"):
         backend.request_settings(None)
-
-
-@pytest.mark.parametrize("options", [{"model": "other"}, {"extra_body": {"messages": []}}])
-def test_workflow_options_cannot_replace_owned_request_fields(options):
-    from angee.workflows_agents.steps import _model_settings
-
-    with pytest.raises(ValueError, match="owned"):
-        _model_settings({"options": options, "max_tokens": 12, "temperature": None})
 
 
 @pytest.fixture()

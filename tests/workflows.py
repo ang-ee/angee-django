@@ -25,6 +25,7 @@ from angee.workflows.models import (
 from angee.workflows.models import (
     Workflow as AbstractWorkflow,
 )
+from angee.workflows.steps import StepImpl, StepResult
 from angee.workflows.testing import advance_once as advance_once
 from angee.workflows.testing import execute_started as execute_started
 from angee.workflows.testing import run_to_terminal as run_to_terminal
@@ -155,6 +156,32 @@ class Decision(workflow_models.Decision):
         rebac_resource_type = "workflows/decision"
 
 
+class FixtureStep(StepImpl):
+    """Concrete configurable operation used only by workflow runtime tests."""
+
+    key = "fixture"
+    label = "Fixture"
+    category = "Tests"
+    selectable = False
+    deterministic = False
+
+    def run(self, step_run: Any, *, now: Any) -> StepResult:
+        """Return the explicitly configured test output and outcome."""
+
+        del self, now
+        config = dict(step_run.step.config)
+        if config.get("mode") == "error":
+            raise RuntimeError(str(config.get("error", "fixture failed")))
+        return StepResult.done(
+            output={
+                "key": step_run.step.key,
+                "input": step_run.input,
+                **dict(config.get("output", {})),
+            },
+            outcome=str(config.get("outcome", "done")),
+        )
+
+
 class WorkflowDispatch(workflow_models.WorkflowDispatch):
     """Concrete durable dispatch model for source-addon runtime tests."""
 
@@ -261,7 +288,7 @@ def workflow_with_steps(
                 workflow=draft,
                 key=spec["key"],
                 name=spec.get("name", spec["key"].replace("_", " ").title()),
-                step_class=spec.get("step_class", "handler"),
+                step_class=spec.get("step_class", "fixture"),
                 config=spec.get("config", {}),
                 input_binding=spec.get("input_binding"),
                 join_rule=spec.get("join_rule", workflow_models.JoinRule.ALL_SUCCESS),

@@ -1,11 +1,9 @@
-"""Tests for one-shot agent work and resumable session approvals."""
+"""Tests for one-shot inference and resumable agent-session approvals."""
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -13,12 +11,21 @@ import pytest
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, transaction
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
-from pydantic_ai.messages import ModelResponse, SystemPromptPart, TextPart
-from pydantic_ai.models.function import FunctionModel
+from pydantic import ValidationError as PydanticValidationError
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelRequest,
+    ModelResponse,
+    SystemPromptPart,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.toolsets.function import FunctionToolset
 from pydantic_ai.usage import RequestUsage
@@ -26,12 +33,13 @@ from rebac import actor_context, current_actor, system_context, to_subject_ref
 
 from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, TurnStatus
 from angee.agents.runners import TurnOutcome
+from angee.base.impl import resolve_impl_class
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
-from angee.workflows.attempts import AttemptResultKind
-from angee.workflows.steps import GateStep, TransientStepError
+from angee.workflows.attempts import AttemptResultKind, JsonPresence
+from angee.workflows.steps import GateStep, StepImpl, TransientStepError
 from angee.workflows_agents import sessions
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
@@ -45,6 +53,7 @@ from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
     StepAttempt,
     WorkflowDispatch,
+    WorkflowRun,
     advance_once,
     execute_started,
     start_run,
@@ -93,34 +102,6 @@ def test_agent_approval_uses_dynamic_all_done_resumable_gate_slots() -> None:
     ]
 
 
-def test_journal_serialization_uses_native_values_and_rejects_ambiguous_inputs() -> None:
-    """The journal boundary has a deterministic native JSON contract."""
-
-    from angee.workflows_agents.steps import _journal_jsonable
-
-    assert _journal_jsonable(
-        {
-            "when": datetime(2026, 9, 6, 12, 30, tzinfo=UTC),
-            "amount": Decimal("1.25"),
-            "payload": b"hello",
-            "nested": (True, None),
-        }
-    ) == {
-        "when": "2026-09-06T12:30:00Z",
-        "amount": "1.25",
-        "payload": "hello",
-        "nested": [True, None],
-    }
-    with pytest.raises(TypeError, match="string keys"):
-        _journal_jsonable({1: "integer key"})
-    with pytest.raises(TypeError, match="unordered sets"):
-        _journal_jsonable({"values": {1, 2}})
-    with pytest.raises(Exception, match="Unable to serialize unknown type"):
-        _journal_jsonable({"opaque": object()})
-    with pytest.raises(ValueError, match="Out of range float values"):
-        _journal_jsonable({"value": float("nan")})
-
-
 @pytest.fixture()
 def workflows_agents_tables(transactional_db: Any) -> Iterator[None]:
     """Create workflow runtime plus agent catalogue test tables."""
@@ -146,230 +127,274 @@ def workflows_agents_tables(transactional_db: Any) -> Iterator[None]:
                     schema_editor.delete_model(model)
 
 
-@pytest.fixture()
-def stub_chats(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Capture chat requests sent through the configured stub inference backend."""
+def test_infer_is_the_only_registered_one_shot_step_key() -> None:
+    """The cutover has one key and deliberately provides no ``agent`` alias."""
 
-    calls: list[dict[str, Any]] = []
+    from angee.workflows_agents.steps import InferStepImpl
 
-    def model(self, handle, *, credential=None):
-        def respond(messages, info):
-            calls.append(
-                {
-                    "model": handle,
-                    "messages": messages,
-                    "settings": info.model_settings,
-                    "tools": info.function_tools,
-                    "credential": credential,
-                }
-            )
-            return ModelResponse(
-                parts=[TextPart("stub response " + ("x" * 6000))], usage=RequestUsage(input_tokens=2, output_tokens=3)
-            )
-
-        return FunctionModel(respond)
-
-    monkeypatch.setattr(StubInferenceBackend, "model", model)
-    return calls
+    assert resolve_impl_class("ANGEE_WORKFLOW_STEP_CLASSES", "infer", StepImpl) is InferStepImpl
+    with pytest.raises(ImproperlyConfigured, match="No impl for key 'agent'"):
+        resolve_impl_class("ANGEE_WORKFLOW_STEP_CLASSES", "agent", StepImpl)
 
 
-def test_agent_step_renders_template_and_journals_bounded_io(
+def test_infer_step_passes_native_request_envelope_and_projects_response(
     workflows_agents_tables: None,
     no_workflow_queue: None,
-    stub_chats: list[dict[str, Any]],
+    settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An agent-configured step renders subject/run/step context and bounds its journal."""
+    """Messages, images, schema, settings and timeout reach ``InferenceModel.infer`` unchanged."""
 
     del workflows_agents_tables, no_workflow_queue
-    from angee.workflows_agents.steps import AGENT_STEP_JOURNAL_MAX_BYTES, AGENT_STEP_TRUNCATION_MARKER
+    model = _inference_model("infer-envelope")
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
+    schema = {
+        "type": "object",
+        "properties": {"classification": {"type": "string"}},
+        "required": ["classification"],
+        "additionalProperties": False,
+    }
+    captured: dict[str, Any] = {}
+    debits: list[dict[str, int]] = []
+    original_debit = WorkflowRun.debit_budget
 
-    subject = User.objects.create_user(username="workflow-subject")
-    model = _inference_model("stub-render")
-    with system_context(reason="test workflows agent setup"):
-        agent = Agent.objects.create(
-            name="Workflow reviewer",
-            owner=subject,
-            instructions="Answer with a short summary.",
-            model=model,
+    def respond(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        captured.update(messages=messages, info=info)
+        return ModelResponse(
+            parts=[ToolCallPart("inference_output", {"classification": "invoice"}, "call-1")],
+            usage=RequestUsage(input_tokens=7, output_tokens=3),
         )
-    workflow = workflow_with_steps(
-        name="Workflow agent",
-        steps=(
-            {
-                "key": "agent",
-                "step_class": "agent",
-                "config": {
-                    "agent": agent.sqid,
-                    "prompt_template": "Review {{ subject.username }} in {{ step.key }} for run {{ run.pk }}.",
-                    "max_tokens": 32,
-                },
+
+    bindings = _stub_model_backend(monkeypatch, respond)
+
+    def debit_budget(run: WorkflowRun, delta: dict[str, int]) -> None:
+        debits.append(dict(delta))
+        original_debit(run, delta)
+
+    monkeypatch.setattr(WorkflowRun, "debit_budget", debit_budget)
+    workflow = _infer_workflow()
+    run = _start_infer_run(
+        workflow,
+        {
+            "model": str(model.sqid),
+            "role": "classification",
+            "request": {
+                "messages": [
+                    {
+                        "kind": "request",
+                        "parts": [
+                            {"part_kind": "system-prompt", "content": "Return the declared schema."},
+                            {"part_kind": "user-prompt", "content": "Classify this document."},
+                        ],
+                    }
+                ],
+                "images": [{"kind": "binary", "data": "aW1hZ2U=", "media_type": "image/jpeg"}],
+                "output_schema": schema,
+                "settings": {"temperature": 0},
             },
-        ),
-        edges=(),
+            "timeout": 12.5,
+        },
     )
 
-    run = start_run(workflow, subject=subject)
+    advance_once(run)
+    execute_started(run)
+
+    row = step_run_for(run, "infer")
+    run.refresh_from_db()
+    assert isinstance(captured["messages"][0], ModelRequest)
+    assert isinstance(captured["messages"][0].parts[0], SystemPromptPart)
+    assert isinstance(captured["messages"][0].parts[1], UserPromptPart)
+    image = captured["messages"][1].parts[0].content[0]
+    assert isinstance(image, BinaryContent)
+    assert image.data == b"image"
+    assert captured["info"].model_request_parameters.output_object.json_schema == schema
+    assert captured["info"].model_settings == {"temperature": 0, "timeout": 12.5}
+    assert bindings == [(model.provider_model_name, None)]
+    assert row.outcome == "completed"
+    assert row.output["response"]["kind"] == "response"
+    assert row.output["response"]["parts"][0]["part_kind"] == "tool-call"
+    assert row.output["response"]["parts"][0]["args"] == {"classification": "invoice"}
+    assert row.output["usage"] == {"input_tokens": 7, "output_tokens": 3, "tokens": 10, "requests": 1}
+    assert debits == [{"input_tokens": 7, "output_tokens": 3, "tokens": 10, "requests": 1}]
+    assert run.budget_spent == {"input_tokens": 7, "output_tokens": 3, "tokens": 10, "requests": 1}
+
+
+def test_infer_step_policy_absent_leaves_catalogue_unrestricted(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The policy owner's documented absent-setting behavior applies to the step."""
+
+    del workflows_agents_tables, no_workflow_queue
+    model = _inference_model("unrestricted-infer")
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
+    bindings = _stub_model_backend(
+        monkeypatch,
+        lambda messages, info: ModelResponse(parts=[TextPart("allowed")]),
+    )
+    run = _start_infer_run(_infer_workflow(), _infer_input(model))
+    advance_once(run)
+    execute_started(run)
+
+    assert bindings == [(model.provider_model_name, None)]
+    assert step_run_for(run, "infer").outcome == "completed"
+
+
+def test_infer_step_unresolved_model_id_is_an_invocation_error(
+    workflows_agents_tables: None,
+) -> None:
+    """Catalogue resolution happens before provider outcome conversion or debit."""
+
+    del workflows_agents_tables
+    from angee.workflows_agents.steps import InferStepImpl
+
+    model = _inference_model("missing-infer")
+    public_id = str(model.sqid)
+    with system_context(reason="test remove infer model"):
+        model.delete()
+    debits: list[dict[str, int]] = []
+    step_run = SimpleNamespace(
+        input={**_infer_input(), "model": public_id},
+        run=SimpleNamespace(debit_budget=lambda delta: debits.append(dict(delta))),
+    )
+
+    with pytest.raises(InferenceModel.DoesNotExist):
+        InferStepImpl().run(step_run, now=timezone.now())
+    assert debits == []
+
+
+@pytest.mark.parametrize("rejection", ["role", "endpoint"])
+def test_infer_step_rejects_unapproved_role_or_deployment_before_provider_call(
+    workflows_agents_tables: None,
+    settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    rejection: str,
+) -> None:
+    """A configured policy fails closed on absent roles and identity mismatches."""
+
+    del workflows_agents_tables
+    from angee.workflows_agents.steps import InferStepImpl
+
+    model = _inference_model(f"unapproved-{rejection}")
+    identity = model.deployment_identity()
+    if rejection == "role":
+        settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"mapping": [identity]}
+    else:
+        settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {
+            "classification": [{**identity, "endpoint": "https://different.invalid/v1"}]
+        }
+    bindings = _stub_model_backend(
+        monkeypatch,
+        lambda messages, info: ModelResponse(parts=[TextPart("must not run")]),
+    )
+    debits: list[dict[str, int]] = []
+    step_run = SimpleNamespace(
+        input=_infer_input(model),
+        run=SimpleNamespace(debit_budget=lambda delta: debits.append(dict(delta))),
+    )
+
+    with pytest.raises(ValueError, match="policy is invalid|is not approved"):
+        InferStepImpl().run(step_run, now=timezone.now())
+    assert bindings == []
+    assert debits == []
+
+
+def test_infer_step_rejects_request_timeout_before_provider_error_routing(
+    workflows_agents_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A validation message containing timeout never becomes a transient error."""
+
+    del workflows_agents_tables
+    from angee.workflows_agents.steps import InferStepImpl
+
+    model = _inference_model("invalid-timeout")
+    bindings = _stub_model_backend(
+        monkeypatch,
+        lambda messages, info: ModelResponse(parts=[TextPart("must not run")]),
+    )
+    value = _infer_input(model)
+    value["request"]["settings"] = {"timeout": 2}
+    debits: list[dict[str, int]] = []
+    step_run = SimpleNamespace(
+        input=value,
+        run=SimpleNamespace(debit_budget=lambda delta: debits.append(dict(delta))),
+    )
+
+    with pytest.raises(PydanticValidationError, match="timeout belongs to the infer step input"):
+        InferStepImpl().run(step_run, now=timezone.now())
+    assert bindings == []
+    assert debits == []
+
+
+def test_infer_request_rejects_unknown_model_settings() -> None:
+    """The native settings type does not admit undeclared transport knobs."""
+
+    from angee.workflows_agents.steps import InferStepImpl
+
+    value = _infer_input()
+    value["request"]["settings"] = {"extra_query": {"model": "unchecked"}}
+
+    with pytest.raises(PydanticValidationError, match="Unknown inference request settings: extra_query"):
+        InferStepImpl.validate_input(value)
+
+
+def test_infer_request_usage_is_a_workflow_budget_axis(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The normalized ``requests`` count participates in the generic run budget."""
+
+    del workflows_agents_tables, no_workflow_queue
+    model = _inference_model("infer-request-budget")
+    _stub_model_backend(
+        monkeypatch,
+        lambda messages, info: ModelResponse(
+            parts=[TextPart("done")],
+            usage=RequestUsage(input_tokens=1, output_tokens=1),
+        ),
+    )
+    workflow = _infer_workflow(budget={"requests": 0})
+    run = _start_infer_run(workflow, _infer_input(model))
+
     advance_once(run)
     execute_started(run)
     engine.advance(run.pk)
+    run.refresh_from_db()
 
-    row = step_run_for(run, "agent")
-    encoded_output = json.dumps(row.output, sort_keys=True)
-    assert row.outcome == "completed"
-    assert stub_chats[0]["model"] == model.name
-    message = stub_chats[0]["messages"][0]
-    assert isinstance(message.parts[0], SystemPromptPart)
-    assert message.parts[0].content == "Answer with a short summary."
-    assert message.parts[1].content == f"Review workflow-subject in agent for run {run.pk}."
-    assert stub_chats[0]["settings"]["max_tokens"] == 32
-    assert len(encoded_output.encode("utf-8")) <= AGENT_STEP_JOURNAL_MAX_BYTES
-    assert AGENT_STEP_TRUNCATION_MARKER in encoded_output
-    assert "workflow-subject" in encoded_output
+    assert run.budget_spent == {
+        "input_tokens": 1,
+        "output_tokens": 1,
+        "tokens": 2,
+        "requests": 1,
+    }
+    assert run.status == workflow_models.RunStatus.FAILED
+    assert "requests" in run.error
 
 
-def test_agent_step_serialization_failure_becomes_a_persisted_failed_outcome(
+def test_replay_does_not_reinvoke_completed_infer_step(
     workflows_agents_tables: None,
     no_workflow_queue: None,
-    stub_chats: list[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unsupported success data records its serialization error without masking it."""
-
-    del workflows_agents_tables, no_workflow_queue, stub_chats
-    from angee.workflows_agents import steps
-
-    subject = User.objects.create_user(username="workflow-serialization-subject")
-    model = _inference_model("stub-serialization")
-    workflow = workflow_with_steps(
-        name="Workflow serialization failure",
-        steps=(
-            {
-                "key": "agent",
-                "step_class": "agent",
-                "config": {
-                    "provider": model.provider.sqid,
-                    "model": model.name,
-                    "prompt_template": "Serialize this.",
-                },
-            },
-        ),
-        edges=(),
-    )
-    monkeypatch.setattr(steps, "_success_summary", lambda **kwargs: {"opaque": object()})
-
-    run = start_run(workflow, subject=subject)
-    advance_once(run)
-    execute_started(run)
-
-    row = step_run_for(run, "agent")
-    assert row.outcome == "failed"
-    assert row.output["error"]["type"] == "PydanticSerializationError"
-    assert "Unable to serialize unknown type" in row.output["error"]["message"]
-
-
-def test_agent_step_debits_token_usage_into_run_budget_spent(
-    workflows_agents_tables: None,
-    no_workflow_queue: None,
-    stub_chats: list[dict[str, Any]],
-) -> None:
-    """Token usage returned by the backend lands on the run budget ledger."""
-
-    del workflows_agents_tables, no_workflow_queue, stub_chats
-    model = _inference_model("stub-budget")
-    workflow = workflow_with_steps(
-        name="Workflow agent",
-        steps=(
-            {
-                "key": "agent",
-                "step_class": "agent",
-                "config": {
-                    "provider": model.provider.sqid,
-                    "model": model.name,
-                    "prompt_template": "Count tokens.",
-                },
-            },
-        ),
-        edges=(),
-    )
-
-    run = start_run(workflow)
-    advance_once(run)
-    execute_started(run)
-    run.refresh_from_db()
-
-    assert run.budget_spent == {"input_tokens": 2, "output_tokens": 3, "tokens": 5}
-
-
-@pytest.mark.parametrize("axis,ceiling", [("tokens", 4), ("input_tokens", 1), ("output_tokens", 2)])
-def test_budget_ceiling_fails_run_via_engine(
-    workflows_agents_tables: None,
-    no_workflow_queue: None,
-    stub_chats: list[dict[str, Any]],
-    axis: str,
-    ceiling: int,
-) -> None:
-    """The engine fails a run whose journaled token spend exceeds its budget."""
-
-    del workflows_agents_tables, no_workflow_queue, stub_chats
-    run_status, step_status = workflow_models.RunStatus, workflow_models.StepRunStatus
-    model = _inference_model("stub-ceiling")
-    workflow = workflow_with_steps(
-        name="Workflow agent",
-        budget={axis: ceiling},
-        steps=(
-            {
-                "key": "agent",
-                "step_class": "agent",
-                "config": {
-                    "provider": model.provider.sqid,
-                    "model": model.name,
-                    "prompt_template": "Spend tokens.",
-                },
-            },
-            {"key": "finish", "step_class": "agent_session", "config": {"outcome": "done"}},
-        ),
-        edges=(("agent", "finish", "completed"),),
-    )
-
-    run = start_run(workflow)
-    advance_once(run)
-    execute_started(run)
-    advance_once(run)
-    run.refresh_from_db()
-
-    assert run.status == run_status.FAILED
-    assert "budget" in run.error
-    assert axis in run.error
-    assert step_run_for(run, "finish").status == step_status.SCHEDULED
-
-
-def test_replay_does_not_reinvoke_completed_agent_step(
-    workflows_agents_tables: None,
-    no_workflow_queue: None,
-    stub_chats: list[dict[str, Any]],
-) -> None:
-    """Replaying a completed agent activity reuses the journaled output."""
+    """Replaying a completed inference activity reuses its retained output."""
 
     del workflows_agents_tables, no_workflow_queue
-    model = _inference_model("stub-replay")
-    workflow = workflow_with_steps(
-        name="Workflow agent",
-        steps=(
-            {
-                "key": "agent",
-                "step_class": "agent",
-                "config": {
-                    "provider": model.provider.sqid,
-                    "model": model.name,
-                    "prompt_template": "Run once.",
-                },
-            },
-        ),
-        edges=(),
-    )
-    run = start_run(workflow)
+    model = _inference_model("infer-replay")
+    calls: list[None] = []
+
+    def respond(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        calls.append(None)
+        return ModelResponse(parts=[TextPart("done")])
+
+    _stub_model_backend(monkeypatch, respond)
+    run = _start_infer_run(_infer_workflow(), _infer_input(model))
     row = advance_once(run)[0]
-    with system_context(reason="test workflows capture agent dispatch"):
+    with system_context(reason="test workflows capture infer dispatch"):
         attempt = row.current_attempt
         dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
 
@@ -378,86 +403,122 @@ def test_replay_does_not_reinvoke_completed_agent_step(
     engine.advance(run.pk)
     engine.advance(run.pk)
 
-    assert len(stub_chats) == 1
+    assert calls == [None]
 
 
-def test_backend_error_routes_failed_outcome(
+def test_infer_terminal_provider_error_routes_failed_and_debits_once(
     workflows_agents_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Backend errors are journaled as a failed outcome that normal edge routing can use."""
+    """A terminal provider error is retained and crosses the budget boundary once."""
 
     del workflows_agents_tables, no_workflow_queue
-    model = _inference_model("stub-error")
+    model = _inference_model("infer-terminal")
+    debits: list[dict[str, int]] = []
 
-    def chat(self: StubInferenceBackend, handle, messages, **kwargs) -> ModelResponse:
-        del self, handle, messages, kwargs
+    def respond(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        del messages, info
         raise RuntimeError("backend unavailable")
 
-    monkeypatch.setattr(StubInferenceBackend, "chat", chat)
+    _stub_model_backend(monkeypatch, respond)
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta: debits.append(dict(delta)))
     workflow = workflow_with_steps(
-        name="Workflow agent",
+        name="Inference terminal error",
         steps=(
             {
-                "key": "agent",
-                "step_class": "agent",
-                "config": {
-                    "provider": model.provider.sqid,
-                    "model": model.name,
-                    "prompt_template": "Fail gracefully.",
-                },
+                "key": "infer",
+                "step_class": "infer",
+                "config": {},
+                "input_binding": {"kind": "workflow_input", "path": []},
             },
             {"key": "on_failed", "step_class": "agent_session", "config": {"outcome": "done"}},
         ),
-        edges=(("agent", "on_failed", "failed"),),
+        edges=(("infer", "on_failed", "failed"),),
     )
-    run = start_run(workflow)
+    run = _start_infer_run(workflow, _infer_input(model))
 
     advance_once(run)
     execute_started(run)
     advance_once(run)
 
-    agent_row = step_run_for(run, "agent")
+    infer_row = step_run_for(run, "infer")
     failed_row = step_run_for(run, "on_failed")
-    assert agent_row.status == workflow_models.StepRunStatus.SUCCEEDED
-    assert agent_row.outcome == "failed"
-    assert agent_row.output["error"]["message"] == "backend unavailable"
+    assert infer_row.status == workflow_models.StepRunStatus.SUCCEEDED
+    assert infer_row.outcome == "failed"
+    assert infer_row.output == {
+        "response": None,
+        "usage": {},
+        "error": {"type": "RuntimeError", "message": "backend unavailable"},
+    }
+    assert debits == [{}]
     assert failed_row.status == workflow_models.StepRunStatus.STARTED
 
 
-def test_agent_step_retains_transient_backend_errors_and_allocates_retry(
+def test_infer_error_after_response_debits_returned_usage_once(
     workflows_agents_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Retryable provider errors retain evidence and allocate the policy successor."""
+    """A terminal projection error still debits the usage already returned by the model."""
 
     del workflows_agents_tables, no_workflow_queue
-    model = _inference_model("stub-transient")
+    from angee.workflows_agents import steps
 
-    def chat(self: StubInferenceBackend, handle, messages, **kwargs) -> ModelResponse:
-        del self, handle, messages, kwargs
-        raise TransientStepError("rate limited")
+    model = _inference_model("infer-projection-error")
+    usage = {"input_tokens": 5, "output_tokens": 2, "tokens": 7, "requests": 1}
+    debits: list[dict[str, int]] = []
 
-    monkeypatch.setattr(StubInferenceBackend, "chat", chat)
-    workflow = workflow_with_steps(
-        name="Workflow agent",
-        steps=(
-            {
-                "key": "agent",
-                "step_class": "agent",
-                "config": {
-                    "provider": model.provider.sqid,
-                    "model": model.name,
-                    "prompt_template": "Retry later.",
-                    "retry": {"max_attempts": 2},
-                },
-            },
+    def fail_projection(response: ModelResponse) -> dict[str, Any]:
+        del response
+        raise TypeError("response projection failed")
+
+    _stub_model_backend(
+        monkeypatch,
+        lambda messages, info: ModelResponse(
+            parts=[TextPart("done")],
+            usage=RequestUsage(input_tokens=5, output_tokens=2),
         ),
-        edges=(),
     )
-    run = start_run(workflow)
+    monkeypatch.setattr(steps, "_response_projection", fail_projection)
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta: debits.append(dict(delta)))
+    run = _start_infer_run(_infer_workflow(), _infer_input(model))
+
+    advance_once(run)
+    execute_started(run)
+
+    row = step_run_for(run, "infer")
+    assert row.outcome == "failed"
+    assert row.output == {
+        "response": None,
+        "usage": usage,
+        "error": {"type": "TypeError", "message": "response projection failed"},
+    }
+    assert debits == [usage]
+
+
+def test_infer_retryable_provider_error_allocates_retry_and_debits_once(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shared provider classifier routes a 429 into the workflow retry policy."""
+
+    del workflows_agents_tables, no_workflow_queue
+
+    class RateLimitedError(Exception):
+        status_code = 429
+
+    model = _inference_model("infer-retryable")
+    debits: list[dict[str, int]] = []
+
+    def respond(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        raise RateLimitedError("provider throttled")
+
+    _stub_model_backend(monkeypatch, respond)
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta: debits.append(dict(delta)))
+    run = _start_infer_run(_infer_workflow(retry={"max_attempts": 2}), _infer_input(model))
     step_run = advance_once(run)[0]
 
     execute_started(run)
@@ -468,9 +529,10 @@ def test_agent_step_retains_transient_backend_errors_and_allocates_retry(
     assert step_run.status == workflow_models.StepRunStatus.STARTED
     assert len(attempts) == 2
     assert attempts[0].result_kind == str(AttemptResultKind.TRANSIENT_ERROR)
-    assert attempts[0].error == "rate limited"
+    assert attempts[0].error == "provider throttled"
     assert attempts[1].retry_of_id == attempts[0].pk
     assert attempts[1].started_at is None
+    assert debits == [{}]
 
 
 def test_session_and_turn_reads_and_turn_subscription_are_owner_gated(
@@ -817,12 +879,79 @@ def test_in_process_provision_and_teardown_leave_no_orphaned_waiting_run(
             agent.delete()
 
 
+def _user_request(prompt: str) -> dict[str, Any]:
+    """Return one JSON-native pydantic-ai request message."""
+
+    return {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": prompt}]}
+
+
+def _infer_input(model: InferenceModel | None = None) -> dict[str, Any]:
+    """Return the smallest valid retained input for the ``infer`` step."""
+
+    return {
+        "model": str(model.sqid) if model is not None else "unresolved-model-id",
+        "role": "classification",
+        "request": {"messages": [_user_request("Infer this document.")]},
+        "timeout": 60,
+    }
+
+
+def _infer_workflow(
+    *,
+    budget: dict[str, Any] | None = None,
+    retry: dict[str, Any] | None = None,
+) -> Any:
+    """Publish one workflow whose input is the complete inference envelope."""
+
+    return workflow_with_steps(
+        name="Inference fixture",
+        budget=budget,
+        steps=(
+            {
+                "key": "infer",
+                "step_class": "infer",
+                "config": {} if retry is None else {"retry": retry},
+                "input_binding": {"kind": "workflow_input", "path": []},
+            },
+        ),
+        edges=(),
+    )
+
+
+def _start_infer_run(workflow: Any, value: dict[str, Any]) -> Any:
+    """Start one workflow with a present inference envelope."""
+
+    return engine.start(workflow, subject=None, actor=None, input=JsonPresence(True, value))
+
+
 def _inference_model(slug: str) -> InferenceModel:
     """Create one stub-backed inference model for workflow-agent tests."""
 
     provider = _provider(slug, backend_class="stub_inference", name="Stub provider")
     with system_context(reason="test workflows agent model setup"):
         return InferenceModel.objects.create(provider=provider, name=f"{slug}-model")
+
+
+def _stub_model_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    respond: Any,
+) -> list[tuple[str, Any | None]]:
+    """Stub only the backend binding while retaining the catalogue inference owner."""
+
+    bindings: list[tuple[str, Any | None]] = []
+
+    def model(
+        backend: StubInferenceBackend,
+        handle: str,
+        *,
+        credential: Any | None = None,
+    ) -> FunctionModel:
+        del backend
+        bindings.append((handle, credential))
+        return FunctionModel(respond, model_name=handle)
+
+    monkeypatch.setattr(StubInferenceBackend, "model", model)
+    return bindings
 
 
 def _ready_session_agent(slug: str) -> tuple[Any, Agent]:
@@ -852,73 +981,3 @@ def _session_workflow() -> Any:
         steps=({"key": "session", "step_class": "agent_session", "config": {}},),
         edges=(),
     )
-
-
-@pytest.mark.parametrize(
-    "tool",
-    [
-        {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}},
-        {"name": "lookup", "input_schema": {"type": "object"}},
-    ],
-)
-def test_one_shot_journals_native_tool_response_and_uses_agent_credential(
-    workflows_agents_tables,
-    no_workflow_queue,
-    monkeypatch,
-    tool,
-):
-    from pydantic_ai.messages import ToolCallPart
-
-    owner = User.objects.create_user(username="workflow-override")
-    model = _inference_model("tool-journal")
-    override = _provider("workflow-credential", material={"api_key": "override"}).credential
-    calls = []
-
-    def bind(self, handle, *, credential=None):
-        # Credential resolution must happen before crossing the async boundary.
-        assert credential.pk == override.pk
-        assert credential.secret_value() == "override"
-
-        def respond(messages, info):
-            calls.append(info.function_tools)
-            return ModelResponse(
-                parts=[ToolCallPart("lookup", {"key": "value"}, "call-1")],
-                usage=RequestUsage(input_tokens=2, output_tokens=1),
-            )
-
-        return FunctionModel(respond)
-
-    monkeypatch.setattr(StubInferenceBackend, "model", bind)
-    with system_context(reason="test one-shot credential override"):
-        agent = Agent.objects.create(name="Override", owner=owner, model=model, inference_credential=override)
-    workflow = workflow_with_steps(
-        name="Native journal",
-        steps=(
-            {
-                "key": "agent",
-                "step_class": "agent",
-                "config": {
-                    "agent": agent.sqid,
-                    "prompt_template": "Look up",
-                    "tools": [tool],
-                },
-            },
-        ),
-        edges=(),
-    )
-    run = start_run(workflow)
-    row = advance_once(run)[0]
-    with system_context(reason="test workflows capture native agent dispatch"):
-        attempt = row.current_attempt
-        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
-    execute_started(run)
-    engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)
-    row.refresh_from_db()
-    assert row.outcome == "completed"
-    assert len(calls) == 1
-    assert calls[0][0].name == "lookup"
-    assert row.output["request"]["tools"] == [tool]
-    assert row.output["response"]["format_version"] == 2
-    assert row.output["response"]["text"] == ""
-    assert row.output["response"]["content"][0]["part_kind"] == "tool-call"
-    assert row.output["response"]["usage"]["input_tokens"] == 2

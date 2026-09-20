@@ -15,10 +15,10 @@ from rebac import system_context
 from strawberry.schema.config import StrawberryConfig
 
 from angee.workflows import engine
-from angee.workflows.steps import HandlerStep, StepResult
+from angee.workflows.steps import StepResult
 from tests.conftest import execute_schema, result_data
 from tests.test_workflows import _console_schema, _published_workflow
-from tests.workflows import Workflow, WorkflowDispatch, advance_once
+from tests.workflows import FixtureStep, Workflow, WorkflowDispatch, advance_once
 
 User = get_user_model()
 # Schema resolves concrete workflow models registered by the fixture imports above.
@@ -54,17 +54,17 @@ def test_artifact_target_reference_is_a_computed_object_not_an_unowned_relation(
 
 
 @pytest.fixture()
-def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Give the abstract handler a concrete operation for retained fixtures."""
+def fixture_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Record calls made through the concrete test fixture operation."""
 
     calls: list[dict[str, Any]] = []
 
-    def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         calls.append({"step_run": step_run.pk})
         return StepResult.done(output={"visible": True}, outcome="done")
 
-    monkeypatch.setattr(HandlerStep, "run", run)
+    monkeypatch.setattr(FixtureStep, "run", run)
     return calls
 
 
@@ -72,11 +72,11 @@ def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 def test_attempt_resource_lists_bounded_summary_and_reads_selected_payload(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """The list can stay payload-free while the selected detail reads retained evidence."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     schema = _console_schema()
     owner = User.objects.create_user(username="workflow-inspection-reader")
     subject, workflow = _published_workflow(
@@ -140,11 +140,11 @@ def test_attempt_resource_lists_bounded_summary_and_reads_selected_payload(
 def test_attempt_resource_denies_list_and_guessed_detail_without_step_run_read(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """An attempt identifier grants no visibility beyond its owning logical execution."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     schema = _console_schema()
     owner = User.objects.create_user(username="workflow-inspection-owner")
     plain = User.objects.create_user(username="workflow-inspection-plain")

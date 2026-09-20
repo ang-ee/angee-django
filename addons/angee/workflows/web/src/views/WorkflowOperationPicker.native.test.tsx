@@ -30,10 +30,10 @@ const operations: readonly WorkflowOperationChoice[] = [
     effect_description: "",
   },
   {
-    key: "handler",
-    label: "Handler",
+    key: "fixture",
+    label: "Fixture",
     category: "Internal",
-    description: "Abstract runtime handler.",
+    description: "Test-only operation fixture.",
     selectable: false,
     effect: "UNKNOWN",
     effect_description: "",
@@ -67,7 +67,7 @@ test("groups and searches selectable declared operation metadata", async () => {
   expect(screen.getByText("Control")).toBeTruthy();
   expect(screen.getByText("Effect: Calls the configured service.")).toBeTruthy();
   expect(screen.getByText("Effect: no subject effect")).toBeTruthy();
-  expect(screen.queryByText("Handler")).toBeNull();
+  expect(screen.queryByText("Fixture")).toBeNull();
 
   fireEvent.change(screen.getByPlaceholderText("Search operations…"), {
     target: { value: "approval" },

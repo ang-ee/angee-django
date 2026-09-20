@@ -6,10 +6,15 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
+from django.apps import apps
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_slug
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from angee.workflows.attempts import DecisionRecordAccess
 from angee.workflows.bindings import BindingNode, parse_binding
+from angee.workflows.data_contracts import JsonPath, JsonSchemaDict, schema_data_contract
+from angee.workflows.decision_actions import ReviewAction, build_decision_action
 
 NonBlankString = Annotated[str, Field(min_length=1)]
 _GATE_BINDING_KINDS = frozenset({"constant", "workflow_input", "step_output", "map_item", "object", "array"})
@@ -57,6 +62,38 @@ class WaitConfig(WorkflowStepConfig):
     """Timer-wait configuration."""
 
     until: datetime = Field(description="Date and time when execution may resume.")
+
+
+class CallWorkflowConfig(WorkflowStepConfig):
+    """One pinned, keyed, or input-selected child workflow contract."""
+
+    publication: NonBlankString | None = None
+    workflow_key: NonBlankString | None = None
+    expected_input_schema: JsonSchemaDict | None = Field(default=None, json_schema_extra={"widget": "json"})
+    expected_output_schema: JsonSchemaDict | None = Field(default=None, json_schema_extra={"widget": "json"})
+    expected_subject: str | None = None
+    expected_outcomes: list[NonBlankString] | None = None
+
+    @model_validator(mode="after")
+    def complete_selector(self) -> CallWorkflowConfig:
+        """Require either one static publication or one complete stable contract."""
+
+        contract = (
+            self.expected_input_schema,
+            self.expected_output_schema,
+            self.expected_subject,
+            self.expected_outcomes,
+        )
+        if self.publication is not None:
+            if self.workflow_key is not None or any(value is not None for value in contract):
+                raise ValueError("Static calls cannot also declare a keyed or dynamic contract.")
+            return self
+        if any(value is None for value in contract):
+            raise ValueError("Keyed and input-selected calls require input, output, subject and outcome contracts.")
+        assert self.expected_outcomes is not None
+        if len(set(self.expected_outcomes)) != len(self.expected_outcomes):
+            raise ValueError("Call expected_outcomes must be distinct.")
+        return self
 
 
 class GateSlotConfig(BaseModel):
@@ -138,6 +175,11 @@ class GateConfig(WorkflowStepConfig):
     expires_at: datetime | None = None
     escalate_at: datetime | None = None
     decision_schema: BindingNode | dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
+    actions: list[ReviewAction] = Field(default_factory=list)
+    properties: dict[NonBlankString, dict[str, Any]] = Field(
+        default_factory=dict,
+        json_schema_extra={"widget": "json"},
+    )
     targets: BindingNode | list[GateTargetConfig] = Field(default_factory=list, json_schema_extra={"widget": "json"})
     record_access: BindingNode | list[DecisionRecordAccess] = Field(
         default_factory=list, json_schema_extra={"widget": "json"}
@@ -206,6 +248,84 @@ class GateConfig(WorkflowStepConfig):
     @classmethod
     def empty_optional_datetime(cls, value: Any) -> Any:
         return None if value == "" else value
+
+    @model_validator(mode="after")
+    def validate_static_authoring(self) -> GateConfig:
+        """Keep fixed action declarations separate from bound or per-slot schemas."""
+
+        has_slot_schema = isinstance(self.slots, list) and any(
+            slot.decision_schema is not None for slot in self.slots
+        )
+        if self.actions or self.properties:
+            if not isinstance(self.decision_schema, dict) or self.decision_schema or has_slot_schema:
+                raise ValueError("Static gate actions and properties cannot be combined with a bound or slot schema.")
+            if not self.actions:
+                raise ValueError("Static gate properties require actions.")
+        return self
+
+    def admission_decision_schema(self) -> dict[str, Any]:
+        """Compile fixed actions only when a Decision suspension is admitted."""
+
+        if self.actions:
+            property_names = tuple(self.properties)
+            actions = tuple(action.model_copy(update={"fields": property_names}) for action in self.actions)
+            return build_decision_action(actions=actions, properties=self.properties).decision_schema
+        if not isinstance(self.decision_schema, dict):
+            raise ValueError("A bound gate decision schema must resolve before Decision admission.")
+        return self.decision_schema
+
+
+class JoinContinuationConfig(WorkflowStepConfig):
+    """Contract and bounded reconciliation cadence for a continuation join."""
+
+    child_id_path: JsonPath
+    expected_starter_class: NonBlankString
+    expected_output_schema: JsonSchemaDict = Field(json_schema_extra={"widget": "json"})
+    expected_subject: str = ""
+    expected_outcomes: list[NonBlankString] = Field(min_length=1)
+    reconcile_after: int = Field(default=900, ge=1, le=3600)
+
+    @field_validator("expected_outcomes")
+    @classmethod
+    def distinct_outcomes(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("Join expected_outcomes must be distinct.")
+        return value
+
+class ArtifactBindingConfig(BaseModel):
+    """One emitted result artifact selected from the projected output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: NonBlankString
+    id_path: JsonPath
+    label: NonBlankString
+
+class EmitConfig(WorkflowStepConfig):
+    """Projection contract and explicit artifact bindings."""
+
+    output_schema: JsonSchemaDict = Field(json_schema_extra={"widget": "json"})
+    outcome: NonBlankString = "completed"
+    artifacts: list[ArtifactBindingConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def valid_projection(self) -> EmitConfig:
+        """Validate result routing and artifact targets once at the config owner."""
+
+        try:
+            validate_slug(self.outcome)
+        except ValidationError as error:
+            raise ValueError("Emit outcome must be a valid slug.") from error
+        contract = schema_data_contract(self.output_schema)
+        for binding in self.artifacts:
+            node = contract.catalogue.at_path(binding.id_path)
+            if not contract.guarantees_path(binding.id_path) or node is None or node.json_type != "string":
+                raise ValueError("Every artifact id_path must be a guaranteed string in output_schema.")
+            try:
+                apps.get_model(binding.model)
+            except (LookupError, ValueError) as error:
+                raise ValueError("Every artifact model must be installed.") from error
+        return self
 
 
 class MapConfig(WorkflowStepConfig):

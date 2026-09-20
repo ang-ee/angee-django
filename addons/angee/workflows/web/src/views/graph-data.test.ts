@@ -24,8 +24,8 @@ describe("workflowGraphNodes", () => {
 
   test("names run nodes and edges while allowing compact layout to ignore authoring positions", () => {
     const steps = [
-      { id: "a", key: "source", name: "Source", step_class: "handler", join_rule: "ALL", is_entry: true, position: { x: 900, y: 800 } },
-      { id: "b", key: "target", name: "Target", step_class: "handler", join_rule: "ALL", is_entry: false, position: { x: 1200, y: 800 } },
+      { id: "a", key: "source", name: "Source", step_class: "wait", join_rule: "ALL", is_entry: true, position: { x: 900, y: 800 } },
+      { id: "b", key: "target", name: "Target", step_class: "wait", join_rule: "ALL", is_entry: false, position: { x: 1200, y: 800 } },
     ] as unknown as WorkflowGraphStep[];
     const nodes = workflowGraphNodes(steps, new Map([["a", { status: "FAILED", detail: "1 failed · 1 succeeded" }]]), false);
     const edges = workflowGraphEdges([{ id: "edge", condition: "approved", source: steps[0], target: steps[1] }] as unknown as WorkflowGraphEdge[]);

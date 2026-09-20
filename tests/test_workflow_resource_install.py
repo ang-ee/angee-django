@@ -79,7 +79,7 @@ def _groups(
         "workflow": f"{handle}.lineage",
         "key": "entry",
         "name": entry_name,
-        "step_class": "handler",
+        "step_class": "fixture",
         "is_entry": True,
     }
     if entry_config is not _OMITTED:
@@ -93,21 +93,21 @@ def _groups(
             "workflow": f"{handle}.lineage",
             "key": "alpha",
             "name": "Alpha",
-            "step_class": "handler",
+            "step_class": "fixture",
         },
         {
             "_xref": "beta",
             "workflow": f"{handle}.lineage",
             "key": "beta",
             "name": "Beta",
-            "step_class": "handler",
+            "step_class": "fixture",
         },
         {
             "_xref": "final",
             "workflow": f"{handle}.lineage",
             "key": "final",
             "name": "Final",
-            "step_class": "handler",
+            "step_class": "fixture",
         },
     )
     edges = (

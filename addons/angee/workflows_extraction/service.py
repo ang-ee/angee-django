@@ -11,21 +11,18 @@ from typing import Any
 
 from django.apps import apps
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import DEFAULT_DB_ALIAS, connections, models
 from jsonschema import Draft202012Validator
-from rebac import actor_context, current_actor, system_context, to_subject_ref
+from rebac import current_actor, system_context, to_subject_ref
 
 from angee.agents.deployments import validate_approved_deployment
 from angee.base.actors import actor_user_id
-from angee.base.identity import canonical_subject_ref
 from angee.base.impl import resolve_impl_class
 from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256
-from angee.workflows.attempts import DecisionInputSource, json_values_equal
-from angee.workflows.engine import consume_decision_resolution, external_operation_request
+from angee.workflows.attempts import json_values_equal
+from angee.workflows.engine import external_operation_request
 from angee.workflows_extraction.engines import (
     RETAINED_AUTHORITY_COMPLETION_REVIEW,
     RETAINED_CARRIER_UNAVAILABLE,
@@ -103,7 +100,7 @@ class PreparedDocument:
 
 
 @dataclass(frozen=True, slots=True)
-class _CorrectionBasis:
+class CorrectionBasis:
     """Locked immutable evidence carried through one Decision consumption."""
 
     original: Any
@@ -1267,107 +1264,8 @@ def _authority_identity(
     return matched[0] if matched else None
 
 
-def revise(
-    extraction: Any,
-    *,
-    decision: Any,
-    result: Mapping[str, Any],
-    operation_step_run: Any,
-    resolution_path: tuple[str | int, ...],
-    input_source: DecisionInputSource,
-    expected_action: str,
-    expected_target: tuple[str, str],
-    identity_mapping: Mapping[str, str] | None = None,
-    retired_identities: Mapping[str, str] | None = None,
-    confirmed_paths: Sequence[str] = (),
-) -> Any:
-    """Retain a schema-valid human correction as a new evidence revision.
-
-    ``decision`` is an untrusted actor-readable candidate used only to lock its
-    frozen evidence basis; the current admitted operation must consume that exact
-    completed Decision before retaining any effect. Its active human resolver
-    must either retain ordinary read access
-    to the complete original evidence basis or have received that exact basis
-    through the consumed Decision. The Decision payload names the exact extraction
-    id and revision; its domain correction policy remains the caller's responsibility.
-
-    The new revision clones retained source, page, and part evidence without
-    reacquiring sources or invoking an engine. Claims survive only where their
-    JSON-pointer value is unchanged through exact retained logical identity
-    correspondence. Scalar facts explicitly named by the consumed Decision and
-    confirmed without changing value share the existing Decision-backed
-    correction authority. Displayed or default values never imply confirmation.
-    The admitted operation actor owns the new revision; the human resolver is
-    retained separately in its immutable correction provenance.
-    The original revision remains immutable; exact retries reuse one result
-    while stale or competing corrections fail.
-    """
-
-    admitted_actor = current_actor()
-    if admitted_actor is None:
-        raise PermissionDenied("Authentication required.")
-    alias = extraction._state.db if isinstance(extraction, models.Model) else None
-    decision_model = apps.get_model("workflows", "Decision")
-    if (
-        not isinstance(decision, decision_model)
-        or decision.pk is None
-    ):
-        raise PermissionDenied("Read access to the correction Decision is required.")
-    readable_decisions = read_scoped_queryset(decision_model, admitted_actor)
-    selected_decision = (
-        None
-        if readable_decisions is None
-        else readable_decisions.using(alias or DEFAULT_DB_ALIAS)
-        .filter(pk=decision.pk)
-        .first()
-    )
-    if selected_decision is None:
-        raise PermissionDenied("Read access to the correction Decision is required.")
-    if not connections[alias or DEFAULT_DB_ALIAS].in_atomic_block:
-        raise RuntimeError("Extraction correction requires the active database-command transaction.")
-    basis = _correction_basis(
-        extraction,
-        decision=selected_decision,
-    )
-    authority, resolution = consume_decision_resolution(
-        operation_step_run,
-        resolution_path,
-        input_source=input_source,
-        expected_action=expected_action,
-        expected_target=expected_target,
-        expected_verdict="completed",
-        actor=admitted_actor,
-        required_record_access=basis.records,
-    )
-    if authority.pk != selected_decision.pk:
-        raise ValidationError({
-            "decision": "The consumed correction Decision differs from its frozen authority."
-        })
-    authority = selected_decision
-    revision_owner_id = actor_user_id(admitted_actor)
-    try:
-        resolver_subject = canonical_subject_ref(resolution.resolved_by)
-    except (TypeError, ValueError) as error:
-        raise ValidationError({"decision": "The correction Decision requires a human resolver."}) from error
-    resolver = get_user_model().objects.active_person_for_subject(resolver_subject)
-    if resolver is None:
-        raise ValidationError({"decision": "The correction Decision requires an active human resolver."})
-    if to_subject_ref(resolver) != resolver_subject:
-        raise ValidationError({"decision": "The correction resolver identity is not canonical."})
-    with actor_context(resolver):
-        return _retain_correction_revision(
-            basis,
-            result=result,
-            decision=authority,
-            revision_owner_id=revision_owner_id,
-            identity_mapping=identity_mapping,
-            retired_identities=retired_identities,
-            confirmed_paths=confirmed_paths,
-        )
-
-
-def _retain_correction_revision(
-    basis: _CorrectionBasis,
+def retain_correction_revision(
+    basis: CorrectionBasis,
     *,
     result: Mapping[str, Any],
     decision: Any,
@@ -1376,7 +1274,7 @@ def _retain_correction_revision(
     retired_identities: Mapping[str, str] | None,
     confirmed_paths: Sequence[str],
 ) -> Any:
-    """Retain one correction after native admitted authority resolves its human."""
+    """Clone one immutable correction after ``DecisionApplyStep`` admits its resolver."""
 
     actor = current_actor()
     if actor is None:
@@ -1538,12 +1436,12 @@ def _reviewed_correction_unresolved_reasons(
     ]
 
 
-def _correction_basis(
+def correction_basis(
     extraction: Any,
     *,
     decision: Any,
-) -> _CorrectionBasis:
-    """Load one immutable correction basis before consuming its terminal Decision."""
+) -> CorrectionBasis:
+    """Lock the immutable evidence basis required before Decision admission."""
 
     extraction_model = apps.get_model("workflows_extraction", "Extraction")
     if not isinstance(extraction, extraction_model) or extraction.pk is None:
@@ -1552,7 +1450,7 @@ def _correction_basis(
         decision.payload,
         extraction=extraction,
     )
-    with system_context(reason="workflows_extraction.revise.load_authority"):
+    with system_context(reason="workflows_extraction.correction_basis.load_authority"):
         original = system_queryset(extraction_model, lock=("self",)).filter(pk=extraction.pk).first()
         if original is None:
             raise ValidationError({"extraction": "The retained extraction is unavailable."})
@@ -1619,7 +1517,7 @@ def _correction_basis(
             (original, revision_parent, target, *files, *message_parts)
         )
     )
-    return _CorrectionBasis(
+    return CorrectionBasis(
         original,
         revision_parent,
         binding,

@@ -17,23 +17,44 @@ source paths and simple JSON Schema shapes, and reject unsupported constraints
 conservatively. Completion validates the exact JSON output again.
 
 Resource files continue to declare native Workflow, Step, and Edge rows.
+Every Step names its `step_class` explicitly; the model has no fallback
+operation. Test-only or consumer operations belong in their own composed
+registry and never become a framework default.
 Those models hand their row groups to the Workflow owner, which compares the
 canonical declaration against the saved draft, calls `apply_definition` only
 when it changed, and calls `publish_definition` for requested publications.
 The normal resource transaction, xref ledger, and dry-run rollback still own
 the load. Reinstalling the same graph retains the existing publication id.
 
-The built-in operation key is `call_workflow`. Its input selects an exact
-published child, child subject, and child input. A static config pins a public
-publication id; a dynamic config declares `expected_input_schema`,
-`expected_output_schema`, `expected_subject`, and `expected_outcomes`. The
-parent call's original StepRun is the exact retained child slot, including a
-FRESH recovery. The call waits on the child through its current StepAttempt's
-external target. A child terminal transition commits an artifact-delivery
-intent targeting the child; delivery independently locks the parent run,
-parent step, then current attempt and wakes every exact current call subscribed
-to that child. This avoids taking a parent lock inside a child terminal
-transaction and closes the child-finished-before-wait race.
+The built-in operation key is `call_workflow`. A static config pins a public
+publication id. A keyed config declares `workflow_key` plus
+`expected_input_schema`, `expected_output_schema`, `expected_subject`, and
+`expected_outcomes`; it selects the current publication only when creating a
+new child slot. Dynamic input selection declares the same expected contract.
+Resume and FRESH recovery first resolve the retained child, validate that
+child's publication, input, subject, actor, and outcomes, and ask the run
+manager to admit the exact retained invocation. They never reselect currency.
+The call waits on the child through its current StepAttempt's external target.
+A child terminal transition commits an artifact-delivery intent targeting the
+child; delivery independently locks the parent run, parent step, then current
+attempt and wakes every exact current call subscribed to that child.
+
+A keyed call has this shape:
+
+```yaml
+step_class: call_workflow
+input_binding:
+  kind: object
+  fields:
+    input: {kind: step_output, step_key: prepare, path: [request]}
+    subject: {kind: step_output, step_key: prepare, path: [subject]}
+config:
+  workflow_key: document_extraction
+  expected_input_schema: {type: object}
+  expected_output_schema: {type: object}
+  expected_subject: storage.file
+  expected_outcomes: [processed, source_hold]
+```
 
 `WorkflowRun.parent_relation` is an immutable invocation fact. `owned_call`
 means the parent owns cancellation of its active child; `continuation` retains
@@ -44,6 +65,50 @@ terminal. A child's `child_failed` or `child_canceled` call outcome has
 `StepRun.output_present=false`; parent definitions may route those outcomes,
 and output bindings on those routes are rejected. A Map body of calls completes
 only after each item's child result is complete and joins results in item order.
+
+`join_continuation` consumes a continuation id only through the provenance-bound
+starter output admitted by `StepAttemptManager`. It subscribes to that original
+run before reading completion, treats terminal artifact delivery as the primary
+wake, and retains `reconcile_after` as a bounded missed-delivery check. An exact
+successful FRESH recovery may satisfy the join only through the manager's
+schema, subject, actor, input, lineage, and result checks.
+
+```yaml
+step_class: join_continuation
+input_binding: {kind: step_output, step_key: handoff, path: []}
+config:
+  child_id_path: [continuation_id]
+  expected_starter_class: start_continuation
+  expected_output_schema: {type: object}
+  expected_subject: accounting_intake.invoicesource
+  expected_outcomes: [completed]
+  reconcile_after: 900
+```
+
+`emit` projects its admitted input through a declared output schema. Each artifact
+binding selects a guaranteed string path, resolves that public id through the
+execution actor's read scope, and retains the artifact beside the result. A
+definition may use that projection as a result-rule producer or route it onward.
+
+```yaml
+step_class: emit
+input_binding: {kind: step_output, step_key: finalize, path: []}
+config:
+  output_schema:
+    type: object
+    required: [invoice_id]
+    properties: {invoice_id: {type: string}}
+  outcome: completed
+  artifacts:
+    - model: accounting_intake.Invoice
+      id_path: [invoice_id]
+      label: Accepted invoice
+```
+
+Replay is denied by default. An operation that can prove fresh execution safe
+declares `replay_mode = RecoveryMode.FRESH`; operations with provider-specific
+uncertainty continue to override `recovery_capability()` from that adapter's
+native contract. `DATABASE_COMMAND` no longer implies replay eligibility.
 
 ## Review gates and apply operations
 
@@ -66,6 +131,27 @@ editable property schemas, and typed `ReviewFact`, `ReviewRecordReference`,
 tagged `oneOf`, action metadata, and read-only context schema. The Decision
 manager remains the sole compiler when it admits the suspension; consumers do
 not compile or hand-author action branches.
+
+Static YAML gates declare fixed `actions` and optional editable `properties`.
+The normalized definition retains only those authoring declarations;
+`GateConfig.admission_decision_schema()` feeds them to
+`build_decision_action()` when the Decision suspension is admitted, and that
+Decision freezes the compiled schema. A hand-written static `oneOf`, including
+a slot-local replacement, is invalid.
+
+```yaml
+step_class: gate
+config:
+  policy: one_done
+  action: review_invoice
+  slots:
+    - assignees: [angee/role:admin#member]
+  actions:
+    - {value: approve, label: Approve, verdict: COMPLETE, variant: primary}
+    - {value: reject, label: Reject, verdict: REJECT, variant: destructive, confirm: Reject this invoice?}
+  properties:
+    reason: {type: string, title: Reason}
+```
 
 A consumer pairs the gate with a `DecisionApplyStep` subclass. The subclass
 declares `input_model`, `output_model`, `outcomes`, `effect`, `execution_mode`,

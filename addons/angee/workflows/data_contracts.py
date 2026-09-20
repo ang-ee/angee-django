@@ -3,15 +3,39 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping, Sequence, TypeAlias, cast
+from typing import Annotated, Any, Literal, Mapping, Sequence, TypeAlias, cast
 
-from pydantic import BaseModel
+from django.core.exceptions import ValidationError
+from jsonschema import Draft202012Validator
+from pydantic import AfterValidator, BaseModel
 
 SchemaMode: TypeAlias = Literal["validation", "serialization"]
 ConcretePath: TypeAlias = Sequence[str | int]
 JsonScalarType: TypeAlias = Literal["string", "integer", "number", "boolean", "null"]
 JsonNumber: TypeAlias = int | float
 NumericRange: TypeAlias = tuple[JsonNumber | None, bool, JsonNumber | None, bool]
+
+
+def _validate_json_path(value: tuple[str | int, ...]) -> tuple[str | int, ...]:
+    """Require one non-empty path with exact non-blank string/integer segments."""
+
+    if not value or any(type(part) not in {str, int} or (isinstance(part, str) and not part) for part in value):
+        raise ValueError("JSON paths require non-empty typed segments.")
+    return value
+
+
+def _check_json_schema(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate one JSON Schema declaration through the installed draft owner."""
+
+    try:
+        Draft202012Validator.check_schema(value)
+    except Exception as error:  # noqa: BLE001 - jsonschema reports several exception types.
+        raise ValueError("Value is not valid JSON Schema.") from error
+    return value
+
+
+JsonPath: TypeAlias = Annotated[tuple[str | int, ...], AfterValidator(_validate_json_path)]
+JsonSchemaDict: TypeAlias = Annotated[dict[str, Any], AfterValidator(_check_json_schema)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,12 +91,13 @@ class DataContractNode:
 
         current = self
         for segment in path:
+            is_array_index = isinstance(segment, int) and not isinstance(segment, bool) and segment >= 0
             if current.kind == "object" and isinstance(segment, str):
                 edge = next((edge for edge in current.fields if edge.key == segment), None)
                 if edge is None:
                     return None
                 current = edge.contract
-            elif current.kind == "array" and isinstance(segment, int) and not isinstance(segment, bool) and segment >= 0:
+            elif current.kind == "array" and is_array_index:
                 if current.item is None:
                     return None
                 current = current.item.contract
@@ -103,18 +128,14 @@ class DataContract:
 
         if self.raw_schema is None:
             return None
-        return _literal_values_at_path(
-            self.raw_schema, tuple(path), self.raw_schema, frozenset()
-        )
+        return _literal_values_at_path(self.raw_schema, tuple(path), self.raw_schema, frozenset())
 
     def numeric_ranges_at_path(self, path: ConcretePath) -> tuple[NumericRange, ...] | None:
         """Return every declared numeric range at a bounded scalar path."""
 
         if self.raw_schema is None:
             return None
-        return _numeric_ranges_at_path(
-            self.raw_schema, tuple(path), self.raw_schema, frozenset()
-        )
+        return _numeric_ranges_at_path(self.raw_schema, tuple(path), self.raw_schema, frozenset())
 
     def flat_catalogue(self) -> "FlatDataContract":
         """Return deterministic rows for depth-independent transport."""
@@ -198,22 +219,79 @@ def schema_data_contract(schema: Mapping[str, Any]) -> DataContract:
     return DataContract(raw_schema=copied, catalogue=_CatalogueProjector(copied).project())
 
 
+def json_value_at_path(value: Any, path: ConcretePath, *, field: str) -> Any:
+    """Select one JSON value by an exact typed path without fallback or coercion."""
+
+    current = value
+    for part in path:
+        if isinstance(part, str) and isinstance(current, dict) and part in current:
+            current = current[part]
+        elif type(part) is int and isinstance(current, list) and 0 <= part < len(current):
+            current = current[part]
+        else:
+            raise ValidationError({field: "The declared JSON path does not exist."})
+    return current
+
+
+@dataclass(frozen=True, slots=True)
+class _SupportedSchemaNode:
+    """One checked plain node and any schema variants intersected with it."""
+
+    schema: Mapping[str, Any]
+    variants: tuple[Any, ...]
+    active_refs: frozenset[str]
+
+
+def _supported_node(
+    schema: Any,
+    root: Mapping[str, Any],
+    active_refs: frozenset[str],
+) -> _SupportedSchemaNode | None:
+    """Resolve local refs and admit only the structural vocabulary proofs handle."""
+
+    if not isinstance(schema, Mapping):
+        return None
+    reference = schema.get("$ref")
+    if reference is not None:
+        if (
+            not isinstance(reference, str)
+            or reference in active_refs
+            or not reference.startswith("#/$defs/")
+            or _has_unsupported_structure(schema, allowed={"$ref"})
+        ):
+            return None
+        definitions = root.get("$defs", {})
+        target = definitions.get(reference.removeprefix("#/$defs/")) if isinstance(definitions, Mapping) else None
+        return _supported_node(target, root, active_refs | {reference})
+
+    one_of = schema.get("oneOf")
+    any_of = schema.get("anyOf")
+    if one_of is not None or any_of is not None:
+        if one_of is not None and any_of is not None:
+            return None
+        key = "oneOf" if one_of is not None else "anyOf"
+        variants = one_of if one_of is not None else any_of
+        base = {name: value for name, value in schema.items() if name != key}
+        if not isinstance(variants, list) or not variants or _has_unsupported_plain_structure(base):
+            return None
+        return _SupportedSchemaNode(base, tuple(variants), active_refs)
+
+    if _has_unsupported_plain_structure(schema):
+        return None
+    return _SupportedSchemaNode(schema, (), active_refs)
+
+
 def _guarantees_path(
     schema: Any, path: tuple[str | int, ...], root: Mapping[str, Any], active_refs: frozenset[str]
 ) -> bool:
-    if not isinstance(schema, Mapping):
+    supported = _supported_node(schema, root, active_refs)
+    if supported is None:
         return False
-    reference = schema.get("$ref")
-    if isinstance(reference, str):
-        if reference in active_refs or not reference.startswith("#/$defs/"):
-            return False
-        definitions = root.get("$defs", {})
-        target = definitions.get(reference.removeprefix("#/$defs/")) if isinstance(definitions, Mapping) else None
-        return _guarantees_path(target, path, root, active_refs | {reference})
-    variants = schema.get("oneOf", schema.get("anyOf"))
-    if isinstance(variants, list):
-        return bool(variants) and all(
-            _guarantees_path(choice, path, root, active_refs) for choice in variants
+    schema = supported.schema
+    active_refs = supported.active_refs
+    if supported.variants:
+        return _guarantees_path(schema, path, root, active_refs) or all(
+            _guarantees_path(choice, path, root, active_refs) for choice in supported.variants
         )
     if not path:
         return True
@@ -223,13 +301,16 @@ def _guarantees_path(
             return False
         required, properties = schema.get("required", ()), schema.get("properties", {})
         return (
-            isinstance(required, list | tuple) and segment in required
-            and isinstance(properties, Mapping) and segment in properties
+            isinstance(required, list | tuple)
+            and segment in required
+            and isinstance(properties, Mapping)
+            and segment in properties
             and _guarantees_path(properties[segment], rest, root, active_refs)
         )
     if isinstance(segment, int) and not isinstance(segment, bool) and segment >= 0:
         return (
-            schema.get("type") == "array" and type(schema.get("minItems", 0)) is int
+            schema.get("type") == "array"
+            and type(schema.get("minItems", 0)) is int
             and schema.get("minItems", 0) > segment
             and _guarantees_path(schema.get("items"), rest, root, active_refs)
         )
@@ -244,21 +325,17 @@ def _literal_values_at_path(
 ) -> tuple[Any, ...] | None:
     """Resolve refs/unions and retain only paths with finite literal values."""
 
-    if not isinstance(schema, Mapping):
+    supported = _supported_node(schema, root, active_refs)
+    if supported is None:
         return None
-    reference = schema.get("$ref")
-    if isinstance(reference, str):
-        if reference in active_refs or not reference.startswith("#/$defs/"):
-            return None
-        definitions = root.get("$defs", {})
-        target = definitions.get(reference.removeprefix("#/$defs/")) if isinstance(definitions, Mapping) else None
-        return _literal_values_at_path(target, path, root, active_refs | {reference})
-    variants = schema.get("oneOf", schema.get("anyOf"))
-    if isinstance(variants, list):
-        if not variants:
-            return None
+    schema = supported.schema
+    active_refs = supported.active_refs
+    if supported.variants:
+        base_values = _literal_values_at_path(schema, path, root, active_refs)
+        if base_values is not None:
+            return base_values
         values: list[Any] = []
-        for choice in variants:
+        for choice in supported.variants:
             choice_values = _literal_values_at_path(choice, path, root, active_refs)
             if choice_values is None:
                 return None
@@ -294,19 +371,17 @@ def _numeric_ranges_at_path(
 ) -> tuple[NumericRange, ...] | None:
     """Resolve numeric bounds through local refs and closed schema variants."""
 
-    if not isinstance(schema, Mapping):
+    supported = _supported_node(schema, root, active_refs)
+    if supported is None:
         return None
-    reference = schema.get("$ref")
-    if isinstance(reference, str):
-        if reference in active_refs or not reference.startswith("#/$defs/"):
-            return None
-        definitions = root.get("$defs", {})
-        target = definitions.get(reference.removeprefix("#/$defs/")) if isinstance(definitions, Mapping) else None
-        return _numeric_ranges_at_path(target, path, root, active_refs | {reference})
-    variants = schema.get("oneOf", schema.get("anyOf"))
-    if isinstance(variants, list):
+    schema = supported.schema
+    active_refs = supported.active_refs
+    if supported.variants:
+        base_ranges = _numeric_ranges_at_path(schema, path, root, active_refs)
+        if base_ranges is not None:
+            return base_ranges
         ranges: list[NumericRange] = []
-        for choice in variants:
+        for choice in supported.variants:
             choice_ranges = _numeric_ranges_at_path(choice, path, root, active_refs)
             if choice_ranges is None:
                 return None
@@ -532,6 +607,17 @@ _STRUCTURAL_KEYWORDS = frozenset(
 
 def _has_unsupported_structure(schema: Mapping[str, Any], *, allowed: set[str]) -> bool:
     return bool((_STRUCTURAL_KEYWORDS & schema.keys()) - allowed)
+
+
+def _has_unsupported_plain_structure(schema: Mapping[str, Any]) -> bool:
+    """Fail proof closed when an ordinary node carries unhandled structure."""
+
+    allowed = {"type"}
+    if schema.get("type") == "object":
+        allowed.add("properties")
+    elif schema.get("type") == "array":
+        allowed.add("items")
+    return _has_unsupported_structure(schema, allowed=allowed)
 
 
 def _is_null_schema(schema: Any) -> bool:

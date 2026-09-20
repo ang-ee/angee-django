@@ -169,7 +169,13 @@ def test_reap_records_revocation_without_fabricating_physical_result(
     stale_at = now - timedelta(days=1)
     with system_context(reason="runtime timeout setup"):
         workflow = Workflow.objects.create(name="Runtime timeout")
-        step = Step.objects.create(workflow=workflow, key="start", name="Start", is_entry=True)
+        step = Step.objects.create(
+            workflow=workflow,
+            key="start",
+            name="Start",
+            step_class="fixture",
+            is_entry=True,
+        )
         run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
         step_run = StepRun.objects.create(run=run, step=step, status=StepRunStatus.SCHEDULED)
     attempt = StepAttempt.objects.claim(step_run, claimed_at=stale_at).attempt
@@ -202,7 +208,13 @@ def test_decision_timer_waits_on_run_before_locking_decision(
     actor = get_user_model().objects.create_user(username="decision-lock-order-owner")
     with system_context(reason="decision lock order setup"):
         workflow = Workflow.objects.create(name="Decision lock order")
-        step = Step.objects.create(workflow=workflow, key="gate", name="Gate", is_entry=True)
+        step = Step.objects.create(
+            workflow=workflow,
+            key="gate",
+            name="Gate",
+            step_class="fixture",
+            is_entry=True,
+        )
         run = WorkflowRun.objects.create(
             workflow=workflow,
             status=RunStatus.RUNNING,
@@ -259,7 +271,13 @@ def test_due_decision_timers_serialize_to_one_policy_projection(
     actor = get_user_model().objects.create_user(username="decision-timer-race-owner")
     with system_context(reason="decision timer race setup"):
         workflow = Workflow.objects.create(name="Decision timer race")
-        step = Step.objects.create(workflow=workflow, key="gate", name="Gate", is_entry=True)
+        step = Step.objects.create(
+            workflow=workflow,
+            key="gate",
+            name="Gate",
+            step_class="fixture",
+            is_entry=True,
+        )
         run = WorkflowRun.objects.create(
             workflow=workflow,
             status=RunStatus.RUNNING,

@@ -45,10 +45,12 @@ from angee.workflows.attempts import (
     DecisionResolution,
     ExternalOperationPolicy,
     ExternalOperationRequest,
+    FixtureRole,
     InvocationAdmission,
     JsonPresence,
     MapItemSource,
     RecoveryMode,
+    WorkflowScope,
     map_child_input,
     workflow_result_terminal_match_error,
 )
@@ -60,6 +62,7 @@ from angee.workflows.bindings import (
     evaluate_binding,
     parse_binding,
 )
+from angee.workflows.data_contracts import JsonPath
 from angee.workflows.decision_actions import compile_decision_action_schema
 from angee.workflows.dispatch import (
     DispatchPreflightDisposition,
@@ -76,7 +79,6 @@ from angee.workflows.models import (
     WaitingKind,
 )
 from angee.workflows.steps import MapStep, StepExecutionMode, TransientStepError
-from angee.workflows.testing import FixtureRole, WorkflowScope
 
 VERDICT_PENDING = cast(Verdict, Verdict.PENDING)
 VERDICT_COMPLETED = cast(Verdict, Verdict.COMPLETED)
@@ -603,7 +605,7 @@ def load_predecessor_gate_decision(step_run: Any, gate_step_class: type[Any]) ->
 
 def consume_decision_resolution(
     consumer_step_run: Any,
-    resolution_path: tuple[str | int, ...],
+    resolution_path: JsonPath,
     *,
     input_source: DecisionInputSource = "attempt_input",
     expected_action: str,
@@ -632,7 +634,7 @@ def consume_decision_resolution(
 
 def admitted_continuation_child(
     consumer_step_run: Any,
-    child_id_path: tuple[str | int, ...],
+    child_id_path: JsonPath,
     *,
     expected_starter_class: str,
 ) -> Any:
@@ -651,7 +653,7 @@ def admitted_continuation_child(
 
 def admitted_continuation_completion(
     consumer_step_run: Any,
-    child_id_path: tuple[str | int, ...],
+    child_id_path: JsonPath,
     *,
     expected_starter_class: str,
     actor: Any,
@@ -670,9 +672,32 @@ def admitted_continuation_completion(
     )
 
 
+def join_continuation(
+    consumer_step_run: Any,
+    child_id_path: JsonPath,
+    *,
+    expected_starter_class: str,
+    actor: Any,
+) -> tuple[Any, Any | None]:
+    """Subscribe to one admitted continuation before reading its completion."""
+
+    child = admitted_continuation_child(
+        consumer_step_run,
+        child_id_path,
+        expected_starter_class=expected_starter_class,
+    )
+    subscribe_external(consumer_step_run, (child,))
+    return admitted_continuation_completion(
+        consumer_step_run,
+        child_id_path,
+        expected_starter_class=expected_starter_class,
+        actor=actor,
+    )
+
+
 def target_read_authority(
     consumer_step_run: Any,
-    authority_path: tuple[str | int, ...],
+    authority_path: JsonPath,
     *,
     proposal_gate_path: tuple[str | int, ...] = (),
 ) -> tuple[Any, Any]:
@@ -849,7 +874,6 @@ def cancel(run: Any) -> None:
             dispatch_model.objects.schedule_child_cancel(child)
         if owned_children:
             transaction.on_commit(enqueue_dispatch_publisher)
-
 
 def expire_pending_decisions(run: Any, *, resolved_by: str) -> int:
     """Expire every pending decision for ``run`` through the engine owner."""

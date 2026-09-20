@@ -109,12 +109,12 @@ vi.mock("@angee/refine", async (importOriginal) => {
                 outcomes: [],
               },
               {
-                key: "handler",
-                label: "Handler",
+                key: "fixture",
+                label: "Fixture",
                 category: "Activity",
                 defaults: {},
                 config_schema: null,
-                description: "Legacy handler.",
+                description: "Test-only fixture.",
                 selectable: false,
                 effect: "UNKNOWN",
                 effect_description: "",
@@ -238,7 +238,7 @@ const stepResource = testDataResource("workflows.Step", {
     scalarField("name"),
     scalarField("workflow", "ID"),
     scalarField("key"),
-    scalarField("step_class", "String", ["workflows.steps.CallableStep", "handler", "gate"]),
+    scalarField("step_class", "String", ["workflows.steps.CallableStep", "fixture", "gate"]),
     scalarField("join_rule", "String", ["ALL_SUCCESS", "ONE_SUCCESS"]),
     scalarField("is_entry", "Boolean"),
     scalarField("config", "JSON"),
@@ -826,17 +826,17 @@ describe("WorkflowCanvas native narrow inspector", () => {
   });
 
   test("keeps only the persisted nonselectable operation readable", async () => {
-    mocks.record.step_class = "HANDLER";
+    mocks.record.step_class = "FIXTURE";
     renderCanvas();
     await screen.findByText("Import files");
     fireEvent.click(screen.getByTestId("rf__node-step_1"));
 
     const operation = await screen.findByLabelText("Operation");
-    expect(operation.textContent).toContain("Handler");
-    expect(screen.getByText(/Legacy handler/)).toBeTruthy();
+    expect(operation.textContent).toContain("Fixture");
+    expect(screen.getByText(/Test-only fixture/)).toBeTruthy();
     expect(screen.queryByText(/Operation details are unavailable/)).toBeNull();
     fireEvent.click(operation);
-    expect(screen.getByRole("option", { name: "Handler" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("option", { name: "Fixture" }).getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByRole("option", { name: "Run callable" })).toBeTruthy();
   });
 

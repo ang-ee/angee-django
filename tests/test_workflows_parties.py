@@ -28,7 +28,7 @@ from angee.workflows.attempts import (
     RecoveryMode,
 )
 from angee.workflows.dispatch import WorkflowDispatchKind
-from angee.workflows.steps import DecisionSpec, HandlerStep, StepResult
+from angee.workflows.steps import DecisionSpec, StepResult
 from angee.workflows_parties.autoconfig import SETTINGS as WORKFLOWS_PARTIES_SETTINGS
 from angee.workflows_parties.steps import DedupeExecuteStepImpl, IdentityApplyStepImpl, IdentityReviewStepImpl
 from tests.test_messaging import (
@@ -42,6 +42,7 @@ from tests.test_messaging import (
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
     Decision,
+    FixtureStep,
     StepAttempt,
     StepRun,
     WorkflowDispatch,
@@ -114,7 +115,7 @@ def test_owned_call_gate_delegates_exact_pending_record_access(
     assert not party_handle.with_actor(reviewer).has_access("write")
     monkeypatch.setattr(Decision, "rebac_grantable", {"reader": "share", "pending_decision": "share"})
 
-    def suspend(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def suspend(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         if step_run.step.key == "gate":
             return StepResult.suspend(
@@ -154,13 +155,13 @@ def test_owned_call_gate_delegates_exact_pending_record_access(
             ),
         )
 
-    monkeypatch.setattr(HandlerStep, "run", suspend)
+    monkeypatch.setattr(FixtureStep, "run", suspend)
     child_workflow = workflow_with_steps(
         name="Owned call delegated review",
         steps=(
             {
                 "key": "review",
-                "step_class": "handler",
+                "step_class": "fixture",
                 "config": {},
                 "input_binding": {"kind": "workflow_input", "path": []},
             },
@@ -170,7 +171,7 @@ def test_owned_call_gate_delegates_exact_pending_record_access(
     parent_workflow = workflow_with_steps(
         name="Owned call delegation parent",
         steps=(
-            {"key": "gate", "step_class": "handler", "config": {}},
+            {"key": "gate", "step_class": "fixture", "config": {}},
             {
                 "key": "call",
                 "step_class": "call_workflow",

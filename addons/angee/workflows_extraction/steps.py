@@ -11,7 +11,7 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
 from pydantic import BaseModel, ConfigDict, Field
-from rebac import actor_context
+from rebac import actor_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
 from angee.base.impl import resolve_impl_class
@@ -25,7 +25,14 @@ from angee.workflows.attempts import (
     RecoveryMode,
 )
 from angee.workflows.engine import external_operation_request
-from angee.workflows.steps import StepEffect, StepExecutionMode, StepImpl, StepOutcome, StepResult
+from angee.workflows.steps import (
+    DecisionApplyStep,
+    StepEffect,
+    StepExecutionMode,
+    StepImpl,
+    StepOutcome,
+    StepResult,
+)
 from angee.workflows_extraction.engines import (
     RETAINED_CARRIER_UNAVAILABLE,
     DocumentPipelineError,
@@ -33,14 +40,16 @@ from angee.workflows_extraction.engines import (
     PageImage,
 )
 from angee.workflows_extraction.service import (
+    CorrectionBasis,
     SupersededInference,
     collect_carriers,
+    correction_basis,
     infer,
     prepare_pages,
     process,
     require_approved_model_deployment,
     restore_prepared_pages,
-    revise,
+    retain_correction_revision,
 )
 
 EngineConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
@@ -362,6 +371,13 @@ class ProcessEvidenceStepImpl(StepImpl):
     input_model = ProcessEvidenceInput
     output_model = ProcessEvidenceOutput
     outcomes = (StepOutcome("processed", "Processed"), StepOutcome("source_hold", "Source hold"))
+
+    @classmethod
+    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
+        """Keep evidence retention non-replayable until its write set is reconcilable."""
+
+        del attempt
+        return RecoveryCapability(None, "Processed evidence retention has no recovery reconciliation contract.")
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
@@ -705,7 +721,7 @@ class ReviseEvidenceConfig(BaseModel):
     expected_target_model: str = Field(min_length=1)
 
 
-class ReviseEvidenceStepImpl(StepImpl):
+class ReviseEvidenceStepImpl(DecisionApplyStep):
     """Retain a generic correction from one exact local native Decision gate."""
 
     key = "revise_evidence"
@@ -715,48 +731,73 @@ class ReviseEvidenceStepImpl(StepImpl):
     idempotent = True
     effect = StepEffect.WRITE
     execution_mode = StepExecutionMode.DATABASE_COMMAND
+    replay_mode = RecoveryMode.FRESH
     effect_description = "Consumes one exact Decision resolution and clones immutable evidence once."
     input_model = ReviseEvidenceInput
     output_model = ProcessEvidenceOutput
     config_model = ReviseEvidenceConfig
     outcomes = (StepOutcome("revised", "Revised"),)
+    resolution_path = ("review", "resolutions", 0)
 
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        del now
+    def locked_record_basis(
+        self,
+        step_run: Any,
+        predecessor: Any,
+        *,
+        actor: Any,
+    ) -> CorrectionBasis:
+        """Lock the exact extraction basis named by the predecessor Decision."""
+
+        del actor
         value = self.validate_input(step_run.input)
         config = ReviseEvidenceConfig.model_validate(step_run.step.config)
         if len(value.review.resolutions) != 1:
             raise ValidationError({"review": "Generic evidence correction requires one resolution."})
-        correction = GenericEvidenceCorrection.model_validate_json(
-            json.dumps(value.review.resolutions[0].resolution, allow_nan=False),
-        )
-        actor = step_run.run.admission_actor()
-        if actor is None:
-            raise PermissionDenied("Evidence correction requires the workflow actor.")
-        with actor_context(actor):
+        if (
+            predecessor.action != config.expected_action
+            or predecessor.target_model != config.expected_target_model
+            or predecessor.target_id != value.expected_target_id
+        ):
+            raise ValidationError({"review": "Correction Decision differs from the declared action or target."})
+        execution_actor = step_run.run.execution_admission_actor()
+        with actor_context(execution_actor):
             extraction = apps.get_model("workflows_extraction", "Extraction").objects.get(
                 sqid=value.base_extraction_id,
             )
-            if extraction.revision != value.base_revision:
-                raise ValidationError({"base_revision": "The retained extraction revision differs."})
-            decision = apps.get_model("workflows", "Decision").objects.get(
-                sqid=value.review.resolutions[0].decision_id,
-            )
-            corrected = revise(
-                extraction,
-                decision=decision,
+        if extraction.revision != value.base_revision:
+            raise ValidationError({"base_revision": "The retained extraction revision differs."})
+        return correction_basis(extraction, decision=predecessor)
+
+    def apply_resolution(
+        self,
+        step_run: Any,
+        decision: Any,
+        admitted: Any,
+        *,
+        actor: Any,
+        record_basis: CorrectionBasis,
+        now: datetime,
+    ) -> StepResult:
+        """Retain the correction from the one factory-admitted resolution."""
+
+        del now
+        execution_actor = step_run.run.execution_admission_actor()
+        correction = GenericEvidenceCorrection.model_validate_json(
+            json.dumps(admitted.resolution, allow_nan=False),
+        )
+        with actor_context(actor):
+            corrected = retain_correction_revision(
+                record_basis,
                 result=correction.result,
-                operation_step_run=step_run,
-                resolution_path=("review", "resolutions", 0),
-                input_source="attempt_input",
-                expected_action=config.expected_action,
-                expected_target=(config.expected_target_model, value.expected_target_id),
+                decision=decision,
+                revision_owner_id=actor_user_id(to_subject_ref(execution_actor)),
                 identity_mapping=correction.identity_mapping,
                 retired_identities=correction.retired_identities,
                 confirmed_paths=correction.confirmed_paths,
             )
         return StepResult.done(
-            output=_inference_output(corrected), outcome="revised",
+            output=_inference_output(corrected),
+            outcome="revised",
             artifacts=(ArtifactSpec(corrected, "Corrected extraction evidence"),),
         )
 

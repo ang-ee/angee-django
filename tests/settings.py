@@ -161,12 +161,14 @@ ANGEE_AGENT_RUNTIME_CLASSES = {
     "pydantic": "angee.agents_runtime_pydantic.runtime.PydanticAIRuntime",
 }
 ANGEE_WORKFLOW_STEP_CLASSES = {
-    "handler": "angee.workflows.steps.HandlerStep",
     "wait": "angee.workflows.steps.WaitStep",
     "gate": "angee.workflows.steps.GateStep",
     "map": "angee.workflows.steps.MapStep",
     "call_workflow": "angee.workflows.steps.CallWorkflow",
-    "agent": "angee.workflows_agents.steps.AgentStepImpl",
+    "join_continuation": "angee.workflows.steps.JoinContinuation",
+    "emit": "angee.workflows.steps.EmitStep",
+    "fixture": "tests.workflows.FixtureStep",
+    "infer": "angee.workflows_agents.steps.InferStepImpl",
     "agent_session": "angee.workflows_agents.steps.AgentSessionStepImpl",
     "archive_probe": "angee.workflows_integrate.steps.ArchiveProbeStepImpl",
     "archive_gate": "angee.workflows_integrate.steps.ArchiveGateStepImpl",

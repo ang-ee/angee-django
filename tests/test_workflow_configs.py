@@ -7,10 +7,17 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import system_context
 
-from angee.workflows.configs import GateConfig, MapConfig, WaitConfig
+from angee.workflows.attempts import RecoveryMode
+from angee.workflows.configs import EmitConfig, GateConfig, JoinContinuationConfig, MapConfig, WaitConfig
+from angee.workflows.models import check_database_command_replay_declarations
 from angee.workflows.steps import (
+    CallWorkflow,
+    EmitStep,
     GateStep,
+    JoinContinuation,
     MapStep,
+    StepExecutionMode,
+    StepImpl,
     WaitStep,
     _decision_specs_from_config,
     retry_policy_from_config,
@@ -18,7 +25,7 @@ from angee.workflows.steps import (
 from tests.workflows import Step, Workflow
 
 
-def normalized_twice(step: type[WaitStep | GateStep | MapStep], config: dict[str, object]) -> dict[str, object]:
+def normalized_twice(step: type[StepImpl], config: dict[str, object]) -> dict[str, object]:
     """Assert typed normalization reaches a stable persisted representation."""
 
     first = step.normalize_config(config)
@@ -63,6 +70,167 @@ def test_gate_config_preserves_dynamic_payload_and_defaults_seat_priorities() ->
     assert normalized["payload"] == config["payload"]
     assert normalized["decision_schema"] == config["decision_schema"]
     assert normalized["max_attempts"] == 2
+
+
+def test_static_gate_actions_are_stored_as_declarations_and_derived_on_admission() -> None:
+    normalized = normalized_twice(
+        GateStep,
+        {
+            "action": "approve-note",
+            "slots": [{"assignees": ["auth/user:1"]}],
+            "actions": [
+                {"value": "approve", "label": "Publish", "verdict": "COMPLETE", "variant": "primary"},
+                {
+                    "value": "reject",
+                    "label": "Reject",
+                    "verdict": "REJECT",
+                    "variant": "destructive",
+                    "confirm": "Reject this note?",
+                },
+            ],
+            "properties": {"reason": {"type": "string", "title": "Reason"}},
+        },
+    )
+
+    assert normalized["decision_schema"] == {}
+    schema = GateConfig.model_validate(normalized).admission_decision_schema()
+    assert schema["properties"]["action"]["enum"] == ["approve", "reject"]
+    assert schema["properties"]["action"]["options"][1]["confirm"] == "Reject this note?"
+    assert [branch["properties"]["action"]["const"] for branch in schema["oneOf"]] == [
+        "approve",
+        "reject",
+    ]
+    assert all(branch["required"] == ["action"] for branch in schema["oneOf"])
+    assert all("reason" in branch["properties"] for branch in schema["oneOf"])
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {
+            "action": "approve-note",
+            "slots": [{"assignees": ["auth/user:1"]}],
+            "decision_schema": {"oneOf": [{"type": "object"}]},
+        },
+        {
+            "action": "approve-note",
+            "slots": [
+                {
+                    "assignees": ["auth/user:1"],
+                    "decision_schema": {"oneOf": [{"type": "object"}]},
+                }
+            ],
+        },
+    ],
+)
+def test_static_gate_rejects_hand_written_one_of(config: dict[str, object]) -> None:
+    with pytest.raises(ValidationError, match="hand-written oneOf"):
+        GateStep.validate_config(config)
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "object"},
+        {"kind": "workflow_input", "path": ["decision_schema"]},
+    ],
+)
+def test_static_gate_actions_cannot_mix_with_another_schema_owner(schema: dict[str, object]) -> None:
+    with pytest.raises(ValidationError, match="cannot be combined"):
+        GateStep.validate_config(
+            {
+                "action": "approve-note",
+                "slots": [{"assignees": ["auth/user:1"]}],
+                "decision_schema": schema,
+                "actions": [
+                    {"value": "approve", "label": "Approve", "verdict": "COMPLETE"},
+                ],
+            }
+        )
+
+
+def test_join_and_emit_configs_retain_declared_contracts() -> None:
+    join = normalized_twice(
+        JoinContinuation,
+        {
+            "child_id_path": ["continuation_id"],
+            "expected_starter_class": "start_continuation",
+            "expected_output_schema": {
+                "type": "object",
+                "required": ["invoice_id"],
+                "properties": {"invoice_id": {"type": "string"}},
+            },
+            "expected_subject": "accounting.invoice",
+            "expected_outcomes": ["completed"],
+            "reconcile_after": 45,
+        },
+    )
+    emitted = normalized_twice(
+        EmitStep,
+        {
+            "output_schema": {
+                "type": "object",
+                "required": ["workflow_id"],
+                "properties": {"workflow_id": {"type": "string"}},
+            },
+            "outcome": "accepted",
+            "artifacts": [],
+        },
+    )
+
+    assert join["child_id_path"] == ["continuation_id"]
+    assert join["reconcile_after"] == 45
+    assert emitted["outcome"] == "accepted"
+
+
+def test_emit_artifact_paths_must_be_guaranteed_public_id_strings() -> None:
+    valid = {
+        "output_schema": {
+            "type": "object",
+            "required": ["user_id"],
+            "properties": {"user_id": {"type": "string"}},
+        },
+        "artifacts": [{"model": "auth.User", "id_path": ["user_id"], "label": "Accepted user"}],
+    }
+    EmitStep.validate_config(valid)
+
+    invalid = {
+        **valid,
+        "output_schema": {
+            "type": "object",
+            "properties": {"user_id": {"type": "string"}},
+        },
+    }
+    with pytest.raises(ValidationError, match="guaranteed string"):
+        EmitStep.validate_config(invalid)
+
+
+def test_database_command_replay_requires_an_explicit_operation_declaration() -> None:
+    class UndeclaredDatabaseCommand(StepImpl):
+        execution_mode = StepExecutionMode.DATABASE_COMMAND
+
+    assert UndeclaredDatabaseCommand.recovery_capability(attempt=object()).mode is None
+    assert CallWorkflow.recovery_capability(attempt=object()).mode is RecoveryMode.FRESH
+    assert JoinContinuation.recovery_capability(attempt=object()).mode is RecoveryMode.FRESH
+    assert EmitStep.recovery_capability(attempt=object()).mode is RecoveryMode.FRESH
+
+
+def test_database_command_system_check_warns_only_for_an_implicit_recovery_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UndeclaredDatabaseCommand(StepImpl):
+        key = "undeclared_command"
+        execution_mode = StepExecutionMode.DATABASE_COMMAND
+
+    monkeypatch.setattr(
+        "angee.workflows.models.resolve_all_impl_classes",
+        lambda *args, **kwargs: (UndeclaredDatabaseCommand,),
+    )
+
+    warnings = check_database_command_replay_declarations()
+
+    assert [warning.id for warning in warnings] == ["angee.workflows.W001"]
+    assert warnings[0].obj is UndeclaredDatabaseCommand
 
 
 def test_gate_slot_escalation_preserves_inherited_and_explicit_empty_meanings() -> None:
@@ -191,6 +359,8 @@ def test_builtin_operations_own_their_typed_models() -> None:
     assert WaitStep.config_model is WaitConfig
     assert GateStep.config_model is GateConfig
     assert MapStep.config_model is MapConfig
+    assert JoinContinuation.config_model is JoinContinuationConfig
+    assert EmitStep.config_model is EmitConfig
 
     wait = WaitStep.config_form_spec()
     gate = GateStep.config_form_spec()

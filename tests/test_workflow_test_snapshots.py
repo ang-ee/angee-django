@@ -25,18 +25,19 @@ from angee.workflows.attempts import (
     AttemptInput,
     AttemptResult,
     AttemptResultKind,
+    FixtureRole,
+    FixtureSpec,
     JsonPresence,
     RecoveryCapability,
     RecoveryMode,
     workflow_result_terminal_match_error,
 )
+from angee.workflows.attempts import WorkflowScope as WorkflowTestScope
 from angee.workflows.definitions import StaleDefinitionError
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.managers import _admitted_decision_input
 from angee.workflows.models import RunOrigin, WorkflowStatus
 from angee.workflows.steps import StepImpl, StepResult
-from angee.workflows.testing import FixtureRole, FixtureSpec
-from angee.workflows.testing import WorkflowScope as WorkflowTestScope
 from tests.workflows import (
     Edge,
     Step,
@@ -370,7 +371,7 @@ def test_fresh_recovery_keeps_new_downstream_child_on_the_recovery_run(
     with system_context(reason="downstream recovery child fixture"):
         source_workflow, recovered_step = _draft(name="Recovered predecessor", owner=actor)
         downstream_step = Step.objects.create(
-            workflow=source_workflow, key="handoff", name="Handoff", step_class="handler",
+            workflow=source_workflow, key="handoff", name="Handoff", step_class="fixture",
         )
         Edge.objects.create(
             workflow=source_workflow, source=recovered_step, target=downstream_step,
@@ -510,20 +511,20 @@ def test_repeated_recovery_retains_required_original_and_current_outputs(
     with system_context(reason="repeated recovery fixture"):
         workflow = Workflow.objects.create(name="Repeated recovery", created_by=actor)
         original_step = Step.objects.create(
-            workflow=workflow, key="original", name="Original", step_class="handler", is_entry=True,
+            workflow=workflow, key="original", name="Original", step_class="fixture", is_entry=True,
         )
         middle_step = Step.objects.create(
             workflow=workflow,
             key="middle",
             name="Middle",
-            step_class="handler",
+            step_class="fixture",
             input_binding={"kind": "step_output", "step_key": "original", "path": []},
         )
         end_step = Step.objects.create(
             workflow=workflow,
             key="end",
             name="End",
-            step_class="handler",
+            step_class="fixture",
             input_binding={
                 "kind": "object",
                 "fields": {
@@ -662,13 +663,13 @@ def test_fresh_recovery_rebinds_preparation_error_from_admitted_evidence(
     with system_context(reason="preparation recovery fixture"):
         workflow = Workflow.objects.create(name="Preparation recovery", created_by=actor)
         source_step = Step.objects.create(
-            workflow=workflow, key="source", name="Source", step_class="handler", is_entry=True,
+            workflow=workflow, key="source", name="Source", step_class="fixture", is_entry=True,
         )
         target_step = Step.objects.create(
             workflow=workflow,
             key="target",
             name="Target",
-            step_class="handler",
+            step_class="fixture",
             input_binding={"kind": "step_output", "step_key": "source", "path": []},
         )
         Edge.objects.create(workflow=workflow, source=source_step, target=target_step)
@@ -780,7 +781,7 @@ def test_fresh_recovery_validates_downstream_map_items_against_their_expansion(
     with system_context(reason="downstream recovery map fixture"):
         workflow = Workflow.objects.create(name="Recovery then Map", created_by=actor)
         recovered_step = Step.objects.create(
-            workflow=workflow, key="recover", name="Recover", step_class="handler", is_entry=True,
+            workflow=workflow, key="recover", name="Recover", step_class="fixture", is_entry=True,
         )
         map_step = Step.objects.create(
             workflow=workflow,
@@ -790,7 +791,7 @@ def test_fresh_recovery_validates_downstream_map_items_against_their_expansion(
             config={"target_step": "item", "items": [{"value": "retained"}]},
         )
         item_step = Step.objects.create(
-            workflow=workflow, key="item", name="Item", step_class="handler",
+            workflow=workflow, key="item", name="Item", step_class="fixture",
         )
         Edge.objects.create(
             workflow=workflow, source=recovered_step, target=map_step, condition="done",
@@ -896,10 +897,10 @@ def test_fresh_map_body_recovery_rejoins_retained_results_before_continuing(
             is_entry=True,
         )
         Step.objects.create(
-            workflow=workflow, key="page", name="Page", step_class="handler",
+            workflow=workflow, key="page", name="Page", step_class="fixture",
         )
         collect_step = Step.objects.create(
-            workflow=workflow, key="collect", name="Collect", step_class="handler",
+            workflow=workflow, key="collect", name="Collect", step_class="fixture",
         )
         Edge.objects.create(
             workflow=workflow, source=map_step, target=collect_step, condition="succeeded",
@@ -1279,7 +1280,7 @@ def test_setup_plan_reports_required_map_item_without_rejecting_incomplete_setup
             workflow=workflow,
             key="body",
             name="Body",
-            step_class="handler",
+            step_class="fixture",
         )
         workflow.refresh_from_db()
 
@@ -1622,7 +1623,7 @@ def test_whole_map_body_output_fixture_stays_bound_to_expansion(
         controller.config = {"target_step": "body", "items": ["raw"]}
         controller.save(update_fields={"step_class", "config"})
         body = Step.objects.create(
-            workflow=workflow, key="body", name="Body", step_class="handler"
+            workflow=workflow, key="body", name="Body", step_class="fixture"
         )
         workflow.max_steps = 1
         workflow.save(update_fields={"max_steps"})
@@ -1663,7 +1664,7 @@ def test_whole_map_output_fixture_skips_expansion_when_reached(
         controller.step_class = "map"
         controller.config = {"target_step": "body", "items": [1, 2]}
         controller.save(update_fields={"step_class", "config"})
-        Step.objects.create(workflow=workflow, key="body", name="Body", step_class="handler")
+        Step.objects.create(workflow=workflow, key="body", name="Body", step_class="fixture")
         workflow.refresh_from_db()
     run = WorkflowRun.objects.start_test(
         workflow,
@@ -1810,7 +1811,7 @@ def test_node_snapshot_reuse_revalidates_whole_readiness(
             workflow=workflow,
             key="incomplete",
             name="Incomplete",
-            step_class="handler",
+            step_class="fixture",
         )
         workflow.refresh_from_db()
     node = WorkflowRun.objects.start_test(
@@ -1850,7 +1851,7 @@ def test_map_item_fixture_is_captured_on_real_body_attempt(
             workflow=workflow,
             key="body",
             name="Body",
-            step_class="handler",
+            step_class="fixture",
             input_binding={"kind": "map_item", "path": []} if explicit else None,
         )
         workflow.refresh_from_db()
@@ -1892,7 +1893,7 @@ def test_selected_map_body_requires_one_raw_item_fixture(
         controller.config = {"target_step": "body", "items": [1]}
         controller.save(update_fields={"step_class", "config"})
         body = Step.objects.create(
-            workflow=workflow, key="body", name="Body", step_class="handler"
+            workflow=workflow, key="body", name="Body", step_class="fixture"
         )
         workflow.refresh_from_db()
     with pytest.raises(ValidationError, match="requires exactly one Map item"):
@@ -1950,9 +1951,16 @@ def _failed_child_handoff(
 
 def _published_wait_workflow(*, actor: object) -> Workflow:
     with system_context(reason="recovery child workflow fixture"):
-        workflow = Workflow.objects.create(name="Recovery child", created_by=actor)
+        workflow = Workflow.objects.create(
+            key=f"recovery-child-{uuid.uuid4().hex}",
+            name="Recovery child",
+            created_by=actor,
+        )
         Step.objects.create(
-            workflow=workflow, key="entry", name="Entry", step_class="wait",
+            workflow=workflow,
+            key="entry",
+            name="Entry",
+            step_class="wait",
             config={"until": (timezone.now() + timedelta(hours=1)).isoformat()},
             input_binding={"kind": "workflow_input", "path": []},
             is_entry=True,
@@ -2038,21 +2046,21 @@ def test_fresh_recovery_continues_from_retained_success_blocked_by_skipped_merge
             }],
         )
         direct = Step.objects.create(
-            workflow=workflow, key="direct", name="Direct", step_class="handler", is_entry=True,
+            workflow=workflow, key="direct", name="Direct", step_class="fixture", is_entry=True,
         )
         review = Step.objects.create(
-            workflow=workflow, key="review", name="Review", step_class="handler",
+            workflow=workflow, key="review", name="Review", step_class="fixture",
         )
         apply = Step.objects.create(
-            workflow=workflow, key="apply", name="Apply", step_class="handler",
+            workflow=workflow, key="apply", name="Apply", step_class="fixture",
         )
         merge = Step.objects.create(
-            workflow=workflow, key="merge", name="Merge", step_class="handler",
+            workflow=workflow, key="merge", name="Merge", step_class="fixture",
             join_rule="none_failed_min_one_success",
             input_binding={"kind": "step_output", "step_key": "apply", "path": []},
         )
         terminal = Step.objects.create(
-            workflow=workflow, key="terminal", name="Terminal", step_class="handler",
+            workflow=workflow, key="terminal", name="Terminal", step_class="fixture",
             input_binding={"kind": "step_output", "step_key": "merge", "path": []},
         )
         Edge.objects.create(workflow=workflow, source=direct, target=merge, condition="done")
@@ -2169,7 +2177,8 @@ def test_fresh_recovery_continues_from_retained_success_blocked_by_skipped_merge
 
 @pytest.mark.parametrize("child_finishes_before_recovery", [False, True])
 def test_native_call_recovery_retains_child_and_consumes_exact_completion(
-    workflow_engine_tables: None, child_finishes_before_recovery: bool,
+    workflow_engine_tables: None,
+    child_finishes_before_recovery: bool,
 ) -> None:
     """An early or late child finish wakes the same child slot through FRESH recovery."""
 
@@ -2179,16 +2188,28 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
         child_version = child_head.published_versions.get(status=WorkflowStatus.PUBLISHED)
         source_workflow, source_step = _draft(name="Native call recovery parent", owner=actor)
         source_step.step_class = "call_workflow"
-        source_step.config = {"publication": str(child_version.sqid)}
+        source_step.config = {
+            "workflow_key": child_head.key,
+            "expected_input_schema": child_version.input_schema,
+            "expected_output_schema": child_version.output_schema,
+            "expected_subject": child_version.subject_declaration,
+            "expected_outcomes": ["completed"],
+        }
         source_step.save(update_fields={"step_class", "config"})
-        payload = {"publication": str(child_version.sqid), "input": {"child": "retained"}}
+        payload = {"input": {"child": "retained"}}
         source_run = WorkflowRun.objects.create(
-            workflow=source_workflow, status="running",
-            admitted_actor_ref=str(to_subject_ref(actor)), created_by=actor,
-            input_present=True, input=payload,
+            workflow=source_workflow,
+            status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)),
+            created_by=actor,
+            input_present=True,
+            input=payload,
         )
         source_step_run = StepRun.objects.create(
-            run=source_run, step=source_step, status="scheduled", input=payload,
+            run=source_run,
+            step=source_step,
+            status="scheduled",
+            input=payload,
         )
     source_attempt = StepAttempt.objects.claim(
         source_step_run,
@@ -2196,18 +2217,30 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
         claimed_at=timezone.now(),
     ).attempt
     StepAttempt.objects.admit_invocation(
-        source_attempt.pk, lease_token=source_attempt.lease_token, at=timezone.now(),
+        source_attempt.pk,
+        lease_token=source_attempt.lease_token,
+        at=timezone.now(),
     )
     child = engine.start(
-        child_version, subject=None, actor=actor,
-        parent_step_run=source_step_run, parent_relation="owned_call", origin=RunOrigin.WORKFLOW,
+        child_version,
+        subject=None,
+        actor=actor,
+        parent_step_run=source_step_run,
+        parent_relation="owned_call",
+        origin=RunOrigin.WORKFLOW,
         input=JsonPresence(True, payload["input"]),
     )
     StepAttempt.objects.finalize(
-        source_attempt.pk, lease_token=source_attempt.lease_token,
+        source_attempt.pk,
+        lease_token=source_attempt.lease_token,
         result=AttemptResult(AttemptResultKind.ERROR, error="uncertain child handoff"),
         recorded_at=timezone.now(),
     )
+    with system_context(reason="publish a newer keyed child before call recovery"):
+        child_head.name = "Recovery child republished"
+        child_head.save(update_fields={"name", "updated_at"})
+        newer_child_version = child_head.publish()
+    assert newer_child_version.pk != child.workflow_id
 
     def finish_child() -> None:
         with system_context(reason="native call child dispatch fixture"):
@@ -2243,14 +2276,15 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
         with system_context(reason="native call child completion assertion"):
             child.refresh_from_db()
         assert child.result == {
-            "status": "succeeded", "outcome": "completed", "output": {}, "error": None,
+            "status": "succeeded",
+            "outcome": "completed",
+            "output": {},
+            "error": None,
         }
 
     if child_finishes_before_recovery:
         finish_child()
-    stranger = get_user_model().objects.create_user(
-        username=f"call-recovery-stranger-{child_finishes_before_recovery}"
-    )
+    stranger = get_user_model().objects.create_user(username=f"call-recovery-stranger-{child_finishes_before_recovery}")
     with pytest.raises(PermissionDenied, match="Recovery source evidence is unavailable"):
         WorkflowRun.objects.start_recovery(
             source_attempt,
@@ -2258,7 +2292,9 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
             actor=stranger,
         )
     recovery, attempt = _execute_recovery(
-        source_attempt, actor=actor, request_key=f"native-call-{child_finishes_before_recovery}",
+        source_attempt,
+        actor=actor,
+        request_key=f"native-call-{child_finishes_before_recovery}",
     )
     with system_context(reason="native call retained identity assertion"):
         assert WorkflowRun.objects.filter(parent_step_run=source_step_run).count() == 1
@@ -2274,9 +2310,15 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
             )
         assert engine.deliver_artifact_dispatch(delivery.pk)["woken"] == 1
         with system_context(reason="native call wake dispatch"):
-            advance = WorkflowDispatch.objects.filter(
-                run=recovery, kind=WorkflowDispatchKind.ADVANCE, consumed_at__isnull=True,
-            ).order_by("pk").first()
+            advance = (
+                WorkflowDispatch.objects.filter(
+                    run=recovery,
+                    kind=WorkflowDispatchKind.ADVANCE,
+                    consumed_at__isnull=True,
+                )
+                .order_by("pk")
+                .first()
+            )
             assert advance is not None
         assert engine.advance_dispatch(advance.pk)["claimed"] == 1
         with system_context(reason="native call resumed execution"):

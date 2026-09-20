@@ -771,6 +771,28 @@ and current contracts before applying a historical example to a new deployment.
   from models. Raw SQL is not a supported business-write path. On encountering
   existing trigger machinery, delete it and move the rule to its Django owner
   in the same change.
+- **Write rules use their Django owners.** Keep persistence policy at the
+  level that owns the invariant; do not add a framework-wide operation,
+  payload, token, or consumption protocol.
+
+  | Concern | Owner |
+  |---|---|
+  | Aggregates and multi-row writes | Explicit domain manager methods |
+  | Row invariants and transitions | Model methods |
+  | Atomicity and concurrency | `transaction.atomic()`, `select_for_update()`, and conditional updates |
+  | Uniqueness and row consistency | Database constraints on the model |
+  | Forbidden bulk operations | Explicit overrides on that domain's queryset |
+  | Retention and deletion | Deliberate FK policies and Django's deletion lifecycle |
+  | Exact caller provenance, where required | A small private guard composing `TransactionBoundAuthority` |
+
+  Use `PROTECT`/`RESTRICT` for retained rows. `CASCADE` and `SET_DEFAULT`
+  collector writes bypass every model and queryset hook. Queryset and instance deletion
+  overrides do not protect against every collector path; choose FK policies
+  deliberately, including generic relations that can cascade into retained
+  rows. This is a modelling rule, not a mechanical system check. Shared
+  append-only collections compose [`AppendOnlyQuerySet`](../../angee/base/mixins.py);
+  actor deletion may clear audit FKs through `AuditMixin.is_audit_nullification`.
+  Never replace these rules with a database trigger or function.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.
@@ -1106,6 +1128,12 @@ and current contracts before applying a historical example to a new deployment.
   the credential (or changing placement) invalidates every provisioned agent's bearer
   until reprovision. The verifier logs each decline with its reason; FastMCP's 401 text
   about "expired" tokens is boilerplate.
+- **One-shot inference steps contain no inference policy.** Do not add prompt
+  rendering, provider branching, usage normalization, or a second response
+  protocol to a step; compose the owning
+  [`InferenceModel.infer`](../../addons/angee/agents/models.py),
+  [backend request/error policy](../../addons/angee/agents/backends.py), and
+  [deployment approval policy](../../addons/angee/agents/deployments.py).
 
 ### Workflow execution
 
@@ -1120,6 +1148,11 @@ and current contracts before applying a historical example to a new deployment.
   models. Do not write a consumer-local `oneOf`, serialize fact dictionaries by
   hand, or call the compiler. `DecisionManager.create_for_suspension()` is the
   only compiler and admission boundary.
+- **Static gates declare actions, not schemas.** Put fixed action metadata in
+  `GateConfig.actions` and optional editable field schemas in `properties`.
+  Decision admission delegates to `build_decision_action()` and freezes its
+  tagged schema. A hand-written static or slot-local `oneOf` is invalid; dynamic
+  gates may bind a complete schema built by that same owner upstream.
 - **A reviewed mutation subclasses `DecisionApplyStep`.** Declare its input and
   output models, outcomes, effect, execution mode, and idempotency on the
   implementation. Lock its complete record basis in `locked_record_basis()`;
@@ -1136,11 +1169,21 @@ and current contracts before applying a historical example to a new deployment.
 - **Workflow step implementations persist continuation state in `resume_state`.**
   Pre-suspend side effects must be idempotent because resume replays from the
   journal row, not process memory.
+- **Every workflow Step declares its operation key.** `step_class` has no
+  framework fallback. Register a concrete operation at composition time and
+  name it on every model, resource, and test fixture; never register an abstract
+  catch-all operation to make incomplete declarations executable.
 - **Database-only steps declare `StepImpl.execution_mode = StepExecutionMode.DATABASE_COMMAND`.**
   This runtime contract is separate from the step's `StepEffect` authoring label.
   The retained-attempt engine fences the run, step, and attempt before mutation,
   then commits the domain write, result, artifacts, and continuation dispatch
   together. Keep provider and blob I/O outside this mode.
+- **Replay eligibility is explicit per operation.** The execution mode does not
+  imply recovery safety. Declare `replay_mode = RecoveryMode.FRESH` only when
+  the operation owns that proof, or override `recovery_capability()` from the
+  provider's native idempotency or reconciliation contract. An undeclared
+  operation is not replayable, and the engine rechecks the declaration when it
+  invokes an admitted recovery.
 - **A fenced database command retires another Workflow run through `RUN_CANCEL`.**
   Retain the cancellation intent and target `WorkflowRun` artifact with an
   external wait in the command transaction. The dispatcher cancels the target
@@ -1148,8 +1191,8 @@ and current contracts before applying a historical example to a new deployment.
   intent together. Continue only after the target is terminal; keep a bounded
   timer on the wait to reconcile a missed or racing delivery.
 - **External domain waits subscribe before reading their predicate.** A retained
-  standard invocation calls `engine.subscribe_external(step_run, record)` for one
-  target per attempt, lets that attempt-row write commit, then re-reads the domain
+  standard invocation calls `engine.subscribe_external(step_run, records)` for its
+  complete target set, lets that attempt-row write commit, then re-reads the domain
   record before deciding whether to wait. A database command held in its atomic
   transaction cannot subscribe this way.
   The native domain transition saves an artifact delivery intent
@@ -1158,6 +1201,11 @@ and current contracts before applying a historical example to a new deployment.
   A delivery while the step runs increments the run generation, so finalization
   makes a subsequent wait due; a delivery after finalization wakes its exact
   external wait. Keep a bounded reconciliation timer for missed integrations.
+- **Continuation joins compose retained admission and delivery; they do not
+  re-prove child identity.** See the
+  [workflow operation contract](../../addons/angee/workflows/README.md).
+- **`emit` owns declared projection and artifact binding.** See the
+  [workflow operation contract](../../addons/angee/workflows/README.md).
 - **Workflow joins count rows, not broker messages.** `join_rule` is evaluated
   over sibling `StepRun` rows.
 - **Never trust a workflow step to self-limit.** The engine owns `max_steps` and

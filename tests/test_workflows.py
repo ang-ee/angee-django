@@ -17,6 +17,7 @@ from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows.attempts import JsonPresence
+from angee.workflows.autoconfig import SETTINGS as WORKFLOWS_SETTINGS
 from angee.workflows.models import (
     TriggerKind,
     WorkflowPurpose,
@@ -37,6 +38,20 @@ from tests.workflows import (
 )
 
 User = get_user_model()
+
+
+def test_builtin_step_registry_is_ordered_and_step_selection_is_explicit() -> None:
+    registry = WORKFLOWS_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES"]
+
+    assert tuple(registry) == (
+        "wait",
+        "gate",
+        "map",
+        "call_workflow",
+        "join_continuation",
+        "emit",
+    )
+    assert Step._meta.get_field("step_class").has_default() is False
 
 
 class _ContractProbeConfig(BaseModel):
@@ -114,8 +129,6 @@ def create_entry(workflow: Workflow, *, key: str = "start", name: str = "Start")
         step_class="agent_session",
         is_entry=True,
     )
-
-
 
 
 def _console_schema() -> Any:
@@ -220,7 +233,13 @@ def test_publish_requires_exactly_one_entry_step(workflow_tables: None) -> None:
             workflow.publish()
 
         create_entry(workflow)
-        Step.objects.create(workflow=workflow, key="other", name="Other", is_entry=True)
+        Step.objects.create(
+            workflow=workflow,
+            key="other",
+            name="Other",
+            step_class="fixture",
+            is_entry=True,
+        )
 
         with pytest.raises(ValidationError, match="exactly one entry"):
             workflow.publish()
@@ -234,14 +253,28 @@ def test_step_and_edge_definition_validation(workflow_tables: None) -> None:
         first = create_workflow("First")
         second = create_workflow("Second")
         source = create_entry(first, key="source", name="Source")
-        target = Step.objects.create(workflow=first, key="target", name="Target")
+        target = Step.objects.create(
+            workflow=first,
+            key="target",
+            name="Target",
+            step_class="fixture",
+        )
         other_target = create_entry(second, key="other", name="Other")
+
+        with pytest.raises(ValidationError, match="step_class"):
+            Step.objects.create(workflow=first, key="missing", name="Missing")
 
         with pytest.raises(ValidationError, match="step_class"):
             Step.objects.create(workflow=first, key="bad", name="Bad", step_class="missing")
 
         with pytest.raises(ValidationError, match="config"):
-            Step.objects.create(workflow=first, key="bad-config", name="Bad config", config=["not", "an", "object"])
+            Step.objects.create(
+                workflow=first,
+                key="bad-config",
+                name="Bad config",
+                step_class="fixture",
+                config=["not", "an", "object"],
+            )
 
         Edge.objects.create(workflow=first, source=source, target=target, condition="ok")
 
@@ -537,10 +570,6 @@ def test_workflow_step_operations_are_registry_derived_and_admin_only(
     assert [operation["key"] for operation in operations] == sorted(operation["key"] for operation in operations)
     by_key = {operation["key"]: operation for operation in operations}
 
-    assert "HANDLER" in schema._schema.get_type("WorkflowStepImpl").values
-    assert by_key["handler"]["selectable"] is False
-    assert by_key["handler"]["effect"] == "UNKNOWN"
-    assert by_key["handler"]["idempotent"] is None
     assert by_key["gate"]["idempotent"] is None
     assert by_key["map"]["effect"] == "UNKNOWN"
     assert by_key["map"]["idempotent"] is None
@@ -559,12 +588,13 @@ def test_workflow_step_operations_are_registry_derived_and_admin_only(
     assert probe["idempotent"] is None
     assert probe["subject_declaration"] == "tests.workflow"
     assert "archive_probe" in by_key
-    assert by_key["agent"]["outcomes"] == [
+    assert by_key["infer"]["outcomes"] == [
         {"key": "completed", "label": "Completed", "description": ""},
         {"key": "failed", "label": "Failed", "description": ""},
     ]
-    assert by_key["agent"]["effect"] == "EXTERNAL"
-    assert by_key["agent"]["idempotent"] is False
+    assert by_key["infer"]["effect"] == "EXTERNAL"
+    assert by_key["infer"]["idempotent"] is False
+    assert by_key["infer"]["input_schema"]["required"] == ["model", "role", "request"]
     assert by_key["agent_session"]["selectable"] is False
 
 

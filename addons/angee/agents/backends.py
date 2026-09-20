@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from asgiref.sync import async_to_sync
 from pydantic_ai.direct import model_request
@@ -122,9 +122,18 @@ class InferenceBackend(ImplBase):
         raise NotImplementedError(f"{self.label} does not support in-process inference.")
 
     def request_settings(self, model_settings: ModelSettings | None) -> ModelSettings | None:
-        """Return provider-owned settings for one direct request."""
+        """Reject transport overrides and return safe direct-request settings.
 
-        return model_settings
+        Vendor backends may admit named transport extensions by removing and
+        validating them before composing this owner.
+        """
+
+        result = dict(model_settings or {})
+        forbidden = {"extra_body", "extra_headers", "extra_query"} & result.keys()
+        if forbidden:
+            names = ", ".join(sorted(forbidden))
+            raise ValueError(f"Inference request settings cannot override provider transport: {names}.")
+        return cast(ModelSettings, result)
 
     def chat(
         self,
@@ -137,6 +146,7 @@ class InferenceBackend(ImplBase):
     ) -> ModelResponse:
         """Make one native request; tools are declared but never executed here."""
 
+        request_settings = self.request_settings(model_settings)
         binding = self.model(handle, credential=credential)
 
         async def request() -> ModelResponse:
@@ -144,7 +154,7 @@ class InferenceBackend(ImplBase):
                 return await model_request(
                     model,
                     messages,
-                    model_settings=self.request_settings(model_settings),
+                    model_settings=request_settings,
                     model_request_parameters=model_request_parameters,
                 )
 

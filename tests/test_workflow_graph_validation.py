@@ -19,10 +19,14 @@ from angee.workflows.graph import (
     _choice_sets_coapplicable,
     _result_binding_compatible,
 )
-from angee.workflows.steps import GateStep, HandlerStep, MapStep, StepImpl, StepResult, WaitStep
+from angee.workflows.steps import GateStep, MapStep, StepImpl, StepResult, WaitStep
 from angee.workflows_agents.steps import AgentSessionStepImpl
 from angee.workflows_parties.steps import DedupeExecuteStepImpl, DedupeGateStepImpl, DedupeScanStepImpl
 from example.notes.steps import NotePublishStep, NoteValidateForPublicationStep
+
+
+class UnimplementedStep(StepImpl):
+    """Local non-executable declaration used to exercise readiness diagnostics."""
 
 
 class LegacyOutcomeStep(StepImpl):
@@ -405,7 +409,7 @@ def test_representative_note_party_and_internal_agent_graphs_are_ready() -> None
 
 def test_entry_executability_config_and_outcome_diagnostics_keep_exact_locations() -> None:
     value = graph(
-        [node("abstract", HandlerStep, entry=True), node("wait", WaitStep)],
+        [node("abstract", UnimplementedStep, entry=True), node("wait", WaitStep)],
         [edge("abstract", "wait", "anything"), edge("wait", "abstract", "unexpected")],
     )
 

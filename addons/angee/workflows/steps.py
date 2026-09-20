@@ -12,6 +12,10 @@ typed resume payloads. Suspension persists no in-process state: ``resume_state``
 on the future step-run journal is the only state surviving suspension, and an
 implementation must write any continuation facts there before returning a
 suspended result.
+
+Execution replay is separate from routing determinism. It is unavailable unless
+the operation explicitly declares ``replay_mode`` or proves a narrower provider
+capability by overriding ``recovery_capability()``.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, ClassVar, Literal, Self
 
@@ -34,7 +38,7 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 from rebac import system_context
 
-from angee.base.identity import instance_from_public_id
+from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.impl import ImplBase, ImplChoice
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.workflows.attempts import (
@@ -59,13 +63,21 @@ from angee.workflows.bindings import (
     parse_binding,
 )
 from angee.workflows.configs import (
+    CallWorkflowConfig,
+    EmitConfig,
     GateConfig,
+    JoinContinuationConfig,
     MapConfig,
     WaitConfig,
     is_gate_binding_mapping,
     map_items_expression_path,
 )
-from angee.workflows.data_contracts import DataContract, model_data_contract, schema_data_contract
+from angee.workflows.data_contracts import (
+    DataContract,
+    json_value_at_path,
+    model_data_contract,
+    schema_data_contract,
+)
 
 _MODEL_LABEL_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
 _OUTCOME_KEY_FIELD = models.SlugField(max_length=100)
@@ -309,6 +321,7 @@ class StepImpl(ImplBase):
     deterministic: ClassVar[bool] = True
     decision_schema: ClassVar[type[Any] | None] = None
     map_body_operation: ClassVar[bool] = False
+    replay_mode: ClassVar[RecoveryMode | None] = None
 
     @classmethod
     def validate_input(cls, value: Any) -> Any:
@@ -320,20 +333,11 @@ class StepImpl(ImplBase):
 
     @classmethod
     def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
-        """Return the recovery mode proven by the operation's execution boundary.
-
-        A failed database command has no committed domain effect: the fenced
-        attempt manager invokes the command and finalizes its result inside one
-        transaction, and records any failure only after that transaction rolls
-        back. A committed command already owns a successful retained result and
-        cannot be admitted as failed recovery evidence. Fresh execution is
-        therefore native for this mode; narrower operation-specific policies
-        can still override it.
-        """
+        """Return only the replay mode explicitly declared by this operation."""
 
         del attempt
-        if cls.execution_mode is StepExecutionMode.DATABASE_COMMAND:
-            return RecoveryCapability(mode=RecoveryMode.FRESH)
+        if cls.replay_mode is not None:
+            return RecoveryCapability(mode=cls.replay_mode)
         return RecoveryCapability(mode=None, unavailable_reason="This operation does not support recovery.")
 
     @classmethod
@@ -431,6 +435,8 @@ class StepImpl(ImplBase):
             raise ImproperlyConfigured(f"{owner} declares invalid effect {cls.effect!r}.")
         if not isinstance(cls.execution_mode, StepExecutionMode):
             raise ImproperlyConfigured(f"{owner} declares invalid execution mode {cls.execution_mode!r}.")
+        if cls.replay_mode is not None and not isinstance(cls.replay_mode, RecoveryMode):
+            raise ImproperlyConfigured(f"{owner} declares invalid replay mode {cls.replay_mode!r}.")
         if cls.execution_mode is StepExecutionMode.EXTERNAL_OPERATION and cls.effect is not StepEffect.EXTERNAL:
             raise ImproperlyConfigured(f"{owner} external operation mode requires an external effect.")
         if not isinstance(cls.outcomes, tuple):
@@ -521,17 +527,6 @@ def validate_retry_config(config: Any) -> None:
     retry_policy_from_config(config)
 
 
-class HandlerStep(StepImpl):
-    """Abstract activity step base registered as the built-in ``handler`` key."""
-
-    key = "handler"
-    label = "Handler"
-    category = "Activity"
-    description = "Legacy abstract activity handler retained for stored workflow compatibility."
-    selectable = False
-    deterministic = False
-
-
 class CallWorkflow(StepImpl):
     """Call one exact published workflow and wait for its retained terminal result."""
 
@@ -541,9 +536,11 @@ class CallWorkflow(StepImpl):
     description = "Start one pinned child and route only after its terminal result is retained."
     effect = StepEffect.WRITE
     execution_mode = StepExecutionMode.DATABASE_COMMAND
+    replay_mode = RecoveryMode.FRESH
     idempotent = True
     deterministic = False
     effect_description = "Child admission and the parent wait share one fenced transaction."
+    config_model = CallWorkflowConfig
     outcomes = (
         StepOutcome("child_failed", "Child failed"),
         StepOutcome("child_canceled", "Child canceled"),
@@ -555,27 +552,41 @@ class CallWorkflow(StepImpl):
         publication = instance_from_public_id(
             workflow_model, public_id, queryset=system_queryset(workflow_model, lock=None)
         )
-        if publication is None or publication.published_from_id is None or str(publication.status) != "published":
+        if (
+            publication is None
+            or publication.published_from_id is None
+            or str(publication.status) != "published"
+        ):
             raise ValidationError({"publication": "CallWorkflow requires an exact published workflow id."})
         return publication
 
     @classmethod
-    def selected_publication_id(cls, *, config: Any, payload: Any) -> str:
-        """Return the exact publication selected by one retained call input."""
+    def _workflow_for_start(cls, config: Mapping[str, Any], payload: Mapping[str, Any]) -> Any:
+        """Load one lineage head or exact version for manager-owned admission."""
 
-        if not isinstance(config, Mapping):
-            raise ValidationError({"config": "CallWorkflow config must be an object."})
-        if not isinstance(payload, Mapping):
-            raise ValidationError({"input": "CallWorkflow input must be an object."})
-        selected_id = config.get("publication") or payload.get("publication")
-        if not isinstance(selected_id, str):
+        workflow_model = apps.get_model("workflows", "Workflow")
+        workflow_key = config.get("workflow_key")
+        if workflow_key:
+            with system_context(reason="workflows.call.lineage"):
+                head = (
+                    system_queryset(workflow_model, lock=None)
+                    .filter(published_from__isnull=True, key=workflow_key)
+                    .first()
+                )
+            if head is None:
+                raise ValidationError({"workflow_key": "CallWorkflow requires an existing workflow key."})
+            return head
+        selected = config.get("publication") or payload.get("publication")
+        if not isinstance(selected, str):
             raise ValidationError({"publication": "CallWorkflow input must select a published workflow."})
-        if config.get("publication") and payload.get("publication") not in (
-            None,
-            selected_id,
-        ):
-            raise ValidationError({"publication": "Call input cannot replace its declared static publication."})
-        return selected_id
+        publication = instance_from_public_id(
+            workflow_model,
+            selected,
+            queryset=system_queryset(workflow_model, lock=None),
+        )
+        if publication is None or publication.published_from_id is None:
+            raise ValidationError({"publication": "CallWorkflow requires an exact workflow publication id."})
+        return publication
 
     @classmethod
     def _input_schema(cls, publication: Any) -> dict[str, Any]:
@@ -585,39 +596,29 @@ class CallWorkflow(StepImpl):
 
     @classmethod
     def validate_config(cls, config: Any) -> None:
-        if not isinstance(config, Mapping):
-            raise ValidationError({"config": "CallWorkflow config must be an object."})
-        static = config.get("publication")
-        if static:
-            if not isinstance(static, str):
-                raise ValidationError({"publication": "Static publication must be a public id."})
-            cls._publication(static)
-            if any(
-                key in config
-                for key in ("expected_input_schema", "expected_output_schema", "expected_subject", "expected_outcomes")
-            ):
-                raise ValidationError({"config": "A static call derives its contract from its publication."})
-        else:
-            input_schema = config.get("expected_input_schema")
-            schema = config.get("expected_output_schema")
-            outcomes = config.get("expected_outcomes")
-            subject = config.get("expected_subject")
-            if (
-                not isinstance(input_schema, Mapping)
-                or not isinstance(schema, Mapping)
-                or not isinstance(outcomes, list)
-                or not isinstance(subject, str)
-            ):
-                raise ValidationError(
-                    {"config": "A dynamic call requires expected input, output, subject and outcomes."}
-                )
-            try:
-                Draft202012Validator.check_schema(dict(input_schema))
-                Draft202012Validator.check_schema(dict(schema))
-            except Exception as error:  # noqa: BLE001 - JSON Schema reports several exception types.
-                raise ValidationError({"expected_output_schema": "Expected output schema is invalid."}) from error
-            if any(not isinstance(key, str) or not key for key in outcomes) or len(set(outcomes)) != len(outcomes):
-                raise ValidationError({"expected_outcomes": "Expected outcome keys must be distinct nonempty strings."})
+        super().validate_config(config)
+        normalized = cls.normalize_config(config)
+        if normalized.get("publication"):
+            cls._publication(normalized["publication"])
+
+    @classmethod
+    def _validate_publication_contract(cls, publication: Any, config: Mapping[str, Any]) -> None:
+        """Check the manager-admitted publication against the declared stable contract."""
+
+        if config.get("publication"):
+            if public_id_for(type(publication), publication.pk) != config["publication"]:
+                raise ValidationError({"publication": "Retained child publication differs from the static call."})
+            return
+        if config.get("workflow_key") and publication.key != config["workflow_key"]:
+            raise ValidationError({"workflow_key": "Retained child belongs to a different workflow key."})
+        actual_outcomes = {rule["outcome"] for rule in publication.result_rules} or {"completed"}
+        if (
+            not json_values_equal(cls._input_schema(publication), config["expected_input_schema"])
+            or not json_values_equal(publication.output_schema, config["expected_output_schema"])
+            or publication.subject_declaration != config["expected_subject"].strip().lower()
+            or not actual_outcomes.issubset(set(config["expected_outcomes"]))
+        ):
+            raise ValidationError({"publication": "Selected publication does not satisfy the call contract."})
 
     @classmethod
     def declared_output_contract(cls, config: Any) -> DataContract:
@@ -642,36 +643,13 @@ class CallWorkflow(StepImpl):
         from angee.workflows import engine  # Runtime edge; the operation registry imports this module first.
         from angee.workflows.states import RunOrigin, RunStatus
 
-        config = step_run.step.config
-        type(self).validate_config(config)
+        config = type(self).normalize_config(step_run.step.config)
         payload = step_run.input
-        selected_id = type(self).selected_publication_id(
-            config=config,
-            payload=payload,
-        )
-        publication = type(self)._publication(selected_id)
-        child_input = payload.get("input")
-        if not config.get("publication"):
-            expected = config["expected_output_schema"]
-            expected_input = config["expected_input_schema"]
-            actual_outcomes = {rule["outcome"] for rule in publication.result_rules} or {"completed"}
-            if (
-                not json_values_equal(type(self)._input_schema(publication), expected_input)
-                or not json_values_equal(publication.output_schema, expected)
-                or publication.subject_declaration != config["expected_subject"].strip().lower()
-                or not actual_outcomes.issubset(set(config["expected_outcomes"]))
-            ):
-                raise ValidationError({"publication": "Selected publication does not satisfy the call contract."})
-        else:
-            expected_input = type(self)._input_schema(publication)
-        if list(Draft202012Validator(expected_input).iter_errors(child_input)):
-            raise ValidationError({"input": "Child input does not satisfy its admitted publication contract."})
+        if not isinstance(payload, Mapping):
+            raise ValidationError({"input": "CallWorkflow input must be an object."})
         run_model = apps.get_model("workflows", "WorkflowRun")
-        root_id = step_run.run.execution_lineage_root_id()
-        root = system_queryset(run_model, lock=None).get(pk=root_id)
-        actor = root.admission_actor()
-        if actor is None:
-            raise ValidationError({"actor": "CallWorkflow requires the admitted execution actor."})
+        actor = step_run.run.execution_admission_actor()
+        workflow = type(self)._workflow_for_start(config, payload)
         subject_spec = payload.get("subject", step_run.run.subject)
         if subject_spec is None or isinstance(subject_spec, models.Model):
             subject = subject_spec
@@ -690,7 +668,7 @@ class CallWorkflow(StepImpl):
         else:
             raise ValidationError({"subject": "Child subject must be an exact record reference or null."})
         child = engine.start(
-            publication,
+            workflow,
             subject,
             actor,
             parent_step_run=step_run,
@@ -698,6 +676,7 @@ class CallWorkflow(StepImpl):
             origin=RunOrigin.WORKFLOW,
             input=JsonPresence("input" in payload, payload.get("input")),
         )
+        type(self)._validate_publication_contract(child.workflow, config)
         attempt_model = apps.get_model("workflows", "StepAttempt")
         attempt_model.objects.bind_call_child(
             step_run.current_attempt_id,
@@ -710,13 +689,145 @@ class CallWorkflow(StepImpl):
         if current.result is None:
             raise ValidationError({"result": "Terminal child has no retained workflow result."})
         if current.status == RunStatus.SUCCEEDED:
-            declared = {outcome.key for outcome in type(self).declared_outcomes(config)}
-            if current.result.get("outcome") not in declared - {"child_failed", "child_canceled"}:
+            declared = {rule["outcome"] for rule in child.workflow.result_rules} or {"completed"}
+            if current.result.get("outcome") not in declared:
                 raise ValidationError({"result": "Child produced an undeclared business outcome."})
             return StepResult.done(output=current.result["output"], outcome=current.result["outcome"])
         return StepResult.done(
             output_present=False,
             outcome="child_canceled" if current.status == RunStatus.CANCELED else "child_failed",
+        )
+
+
+class JoinContinuation(StepImpl):
+    """Wait for one provenance-bound continuation and its accepted recovery."""
+
+    key = "join_continuation"
+    label = "Join continuation"
+    category = "Control"
+    description = "Join one admitted continuation, waking on delivery and reconciling on a bounded timer."
+    effect = StepEffect.READ
+    replay_mode = RecoveryMode.FRESH
+    idempotent = True
+    deterministic = False
+    effect_description = "Reads one admitted continuation run and subscribes to its terminal delivery."
+    config_model = JoinContinuationConfig
+    outcomes = (StepOutcome("child_failed", "Child failed"),)
+
+    @classmethod
+    def declared_output_contract(cls, config: Any) -> DataContract:
+        normalized = cls.normalize_config(config)
+        return schema_data_contract(normalized["expected_output_schema"])
+
+    @classmethod
+    def declared_outcomes(cls, config: Any) -> tuple[StepOutcome, ...]:
+        normalized = cls.normalize_config(config)
+        business = tuple(
+            StepOutcome(key, key.replace("_", " ").title())
+            for key in normalized["expected_outcomes"]
+            if key != "child_failed"
+        )
+        return (*business, *cls.outcomes)
+
+    @staticmethod
+    def _validate_child_contract(child: Any, config: Mapping[str, Any]) -> None:
+        publication = child.workflow
+        actual_outcomes = {rule["outcome"] for rule in publication.result_rules} or {"completed"}
+        if (
+            not json_values_equal(publication.output_schema, config["expected_output_schema"])
+            or publication.subject_declaration != config["expected_subject"].strip().lower()
+            or not actual_outcomes.issubset(set(config["expected_outcomes"]))
+        ):
+            raise ValidationError({"child": "Continuation child does not satisfy the declared join contract."})
+
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        from angee.workflows import engine  # Runtime edge; the operation registry imports this module first.
+
+        config = type(self).normalize_config(step_run.step.config)
+        actor = step_run.run.execution_admission_actor()
+        child, completion = engine.join_continuation(
+            step_run,
+            tuple(config["child_id_path"]),
+            expected_starter_class=config["expected_starter_class"],
+            actor=actor,
+        )
+        type(self)._validate_child_contract(child, config)
+        if completion is None:
+            state = step_run.resume_state if isinstance(step_run.resume_state, Mapping) else {}
+            previous = state.get("join_reconcile_after")
+            delay = (
+                config["reconcile_after"]
+                if type(previous) is not int
+                else min(previous * 2, 3600)
+            )
+            return StepResult.wait(
+                until=now + timedelta(seconds=delay),
+                waiting_kind="external",
+                resume_state={"join_reconcile_after": delay},
+            )
+        if completion.status in {"failed", "canceled"}:
+            return StepResult.done(output_present=False, outcome="child_failed")
+        result = completion.result
+        if (
+            not isinstance(result, Mapping)
+            or result.get("status") != "succeeded"
+            or result.get("outcome") not in config["expected_outcomes"]
+            or "output" not in result
+        ):
+            raise ValidationError({"child": "Continuation completion does not satisfy the declared join result."})
+        errors = list(Draft202012Validator(config["expected_output_schema"]).iter_errors(result["output"]))
+        if errors:
+            raise ValidationError({"child": "Continuation output does not satisfy the declared join schema."})
+        return StepResult.done(output=result["output"], outcome=result["outcome"])
+
+
+class EmitStep(StepImpl):
+    """Project a value and bind its explicit result artifacts."""
+
+    key = "emit"
+    label = "Emit result"
+    category = "Control"
+    description = "Emit a schema-checked projection with explicit artifact bindings."
+    effect = StepEffect.READ
+    replay_mode = RecoveryMode.FRESH
+    idempotent = True
+    deterministic = False
+    effect_description = "Reads declared artifact records without changing domain state."
+    config_model = EmitConfig
+
+    @classmethod
+    def declared_output_contract(cls, config: Any) -> DataContract:
+        normalized = cls.normalize_config(config)
+        return schema_data_contract(normalized["output_schema"])
+
+    @classmethod
+    def declared_outcomes(cls, config: Any) -> tuple[StepOutcome, ...]:
+        outcome = cls.normalize_config(config)["outcome"]
+        return (StepOutcome(outcome, outcome.replace("_", " ").title()),)
+
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        del now
+
+        config = type(self).normalize_config(step_run.step.config)
+        output = step_run.input
+        if list(Draft202012Validator(config["output_schema"]).iter_errors(output)):
+            raise ValidationError({"output": "Emit input does not satisfy its declared projection contract."})
+        actor = step_run.run.execution_admission_actor()
+        artifacts: list[ArtifactSpec] = []
+        for binding in config["artifacts"]:
+            model = apps.get_model(binding["model"])
+            public_id = json_value_at_path(output, tuple(binding["id_path"]), field="artifacts")
+            if not isinstance(public_id, str):
+                raise ValidationError({"artifacts": "Artifact id paths must select public-id strings."})
+            queryset = read_scoped_queryset(model, actor, action="read")
+            target = None if queryset is None else instance_from_public_id(model, public_id, queryset=queryset)
+            if target is None:
+                raise ValidationError({"artifacts": "An emitted artifact is unavailable to the workflow actor."})
+            artifacts.append(ArtifactSpec(target, binding["label"]))
+        return StepResult.done(
+            output=output,
+            outcome=config["outcome"],
+            artifacts=artifacts,
         )
 
 
@@ -771,6 +882,29 @@ class GateStep(StepImpl):
     output_model = DecisionGateOutput
     effect_description = "Creates workflow decision journals without changing the workflow subject."
     config_model = GateConfig
+
+    @classmethod
+    def validate_config(cls, config: Any) -> None:
+        """Reject hand-authored static unions at the workflow definition boundary."""
+
+        if not isinstance(config, Mapping):
+            raise ValidationError({"config": "Gate config must be an object."})
+        decision_schema = config.get("decision_schema", {})
+        try:
+            bound_schema = is_gate_binding_mapping(decision_schema)
+        except ValueError as error:
+            raise ValidationError({"decision_schema": str(error)}) from error
+        if isinstance(decision_schema, Mapping) and not bound_schema and "oneOf" in decision_schema:
+            raise ValidationError({"decision_schema": "Static gates declare actions, not hand-written oneOf."})
+        slots = config.get("slots")
+        if isinstance(slots, list) and any(
+            isinstance(slot, Mapping)
+            and isinstance(slot.get("decision_schema"), Mapping)
+            and "oneOf" in slot["decision_schema"]
+            for slot in slots
+        ):
+            raise ValidationError({"slots": "Static gate slots cannot declare hand-written oneOf schemas."})
+        super().validate_config(config)
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Resolve bound declarations and suspend or complete a resumed gate."""
@@ -964,7 +1098,7 @@ class DecisionApplyStep(StepImpl):
         predecessor: Any,
         *,
         actor: Any,
-    ) -> Collection[models.Model]:
+    ) -> Any:
         """Return every already-locked domain row the manager verb will mutate."""
 
         del step_run, predecessor, actor
@@ -977,7 +1111,7 @@ class DecisionApplyStep(StepImpl):
         admitted: DecisionResolution,
         *,
         actor: Any,
-        record_basis: Collection[models.Model],
+        record_basis: Any,
         now: datetime,
     ) -> StepResult:
         """Call the domain manager verb and return its typed workflow result."""
@@ -993,14 +1127,15 @@ class DecisionApplyStep(StepImpl):
         path = type(self).decision_resolution_path(step_run)
         predecessor = engine.load_predecessor_gate_decision(step_run, type(self).gate_step_class)
         actor = engine.resolve_workflow_actor(predecessor.resolved_by, require_person=True).actor
-        retained_basis: list[tuple[models.Model, ...]] = []
+        retained_basis: list[Any] = []
 
         def lock_record_basis() -> tuple[models.Model, ...]:
             if retained_basis:
                 raise RuntimeError("Decision apply record basis was requested more than once.")
-            basis = tuple(self.locked_record_basis(step_run, predecessor, actor=actor))
+            basis = self.locked_record_basis(step_run, predecessor, actor=actor)
             retained_basis.append(basis)
-            return basis
+            records = basis if isinstance(basis, Collection) else basis.records
+            return tuple(records)
 
         decision, resolution = engine.consume_decision_resolution(
             step_run,
@@ -1230,6 +1365,7 @@ def optional_non_negative_int(value: Any) -> int | None:
 def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec, ...]:
     """Return gate decision specs from declarative config."""
 
+    gate_config = GateConfig.model_validate(config)
     slots = config.get("slots")
     if not isinstance(slots, list) or not slots:
         raise ValidationError({"slots": "Gate slots must resolve to a non-empty list."})
@@ -1241,7 +1377,7 @@ def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec
     parsed_max_attempts = None if max_attempts in (None, "") else int(str(max_attempts))
     expires_at = _config_datetime(config.get("expires_at"))
     escalate_at = _config_datetime(config.get("escalate_at"))
-    decision_schema = dict(config.get("decision_schema") or {})
+    decision_schema = gate_config.admission_decision_schema()
     targets = config.get("targets") or []
     if not isinstance(targets, list) or len(targets) not in {0, 1, len(slots)}:
         raise ValidationError({"targets": "Gate targets must be empty, shared once, or aligned with every slot."})

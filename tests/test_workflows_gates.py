@@ -34,7 +34,7 @@ from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
-from angee.workflows.attempts import AttemptResultKind, DecisionRecordAccess, DecisionResolution
+from angee.workflows.attempts import AttemptResultKind, DecisionRecordAccess, DecisionResolution, JsonPresence
 from angee.workflows.decision_actions import (
     ReviewAction,
     ReviewDifference,
@@ -51,7 +51,6 @@ from angee.workflows.steps import (
     DecisionApplyStep,
     DecisionSpec,
     GateStep,
-    HandlerStep,
     StepEffect,
     StepExecutionMode,
     StepOutcome,
@@ -63,6 +62,7 @@ from tests.messaging_models import Party
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
     Decision,
+    FixtureStep,
     StepRun,
     Workflow,
     WorkflowDispatch,
@@ -377,7 +377,7 @@ def test_predecessor_lookup_loads_the_declared_settled_gate_decision(
                     "slots": [{"assignees": [str(to_subject_ref(assignee))]}],
                 },
             },
-            {"key": "apply", "step_class": "handler", "config": {}},
+            {"key": "apply", "step_class": "fixture", "config": {}},
         ),
         edges=(("gate", "apply", "completed"),),
     )
@@ -530,14 +530,14 @@ def test_decision_context_local_defs_are_validated_with_root_scope() -> None:
 
 
 @pytest.fixture(autouse=True)
-def executable_handler(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep legacy handler fixtures executable while tests replace behavior as needed."""
+def executable_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the concrete fixture operation executable while tests replace behavior."""
 
-    def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         return StepResult.done(outcome=str(step_run.step.config.get("outcome", "done")))
 
-    monkeypatch.setattr(HandlerStep, "run", run)
+    monkeypatch.setattr(FixtureStep, "run", run)
 
 
 def test_suspend_result_creates_decision_rows_and_relationship_tuples(
@@ -552,7 +552,7 @@ def test_suspend_result_creates_decision_rows_and_relationship_tuples(
     assignee = User.objects.create_user(username="wdc-assignee")
     escalated = User.objects.create_user(username="wdc-escalated")
 
-    def suspend_from_handler(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def suspend_from_fixture(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
         return StepResult.suspend(
             resume_state={"phase": "awaiting-review"},
@@ -568,10 +568,10 @@ def test_suspend_result_creates_decision_rows_and_relationship_tuples(
             ],
         )
 
-    monkeypatch.setattr(HandlerStep, "run", suspend_from_handler)
+    monkeypatch.setattr(FixtureStep, "run", suspend_from_fixture)
     workflow = workflow_with_steps(
         name="Gate workflow",
-        steps=({"key": "handler", "step_class": "handler", "config": {}},),
+        steps=({"key": "fixture", "step_class": "fixture", "config": {}},),
         edges=(),
     )
 
@@ -579,7 +579,7 @@ def test_suspend_result_creates_decision_rows_and_relationship_tuples(
     advance_once(run)
     execute_started(run)
 
-    decision = _decision_for(run, "handler")
+    decision = _decision_for(run, "fixture")
     assert decision.priority == 0
     assert decision.action == "complete-review"
     assert decision.payload == {"title": "Review"}
@@ -604,7 +604,7 @@ def test_decision_target_is_actor_validated_retained_and_immutable(
     stranger = User.objects.create_user(username="wdc-target-stranger")
     target = workflow_with_steps(
         name="Decision target",
-        steps=({"key": "target", "step_class": "handler", "config": {}},),
+        steps=({"key": "target", "step_class": "fixture", "config": {}},),
         edges=(),
     )
     declaration = DecisionSpec(
@@ -618,20 +618,20 @@ def test_decision_target_is_actor_validated_retained_and_immutable(
     with pytest.raises(ValidationError, match="not found"):
         Decision.objects._validated_target(declaration, actor=stranger)
 
-    def suspend_from_handler(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def suspend_from_fixture(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
         return StepResult.suspend(decisions=(declaration,))
 
-    monkeypatch.setattr(HandlerStep, "run", suspend_from_handler)
+    monkeypatch.setattr(FixtureStep, "run", suspend_from_fixture)
     gate = workflow_with_steps(
         name="Targeted decision",
-        steps=({"key": "handler", "step_class": "handler", "config": {}},),
+        steps=({"key": "fixture", "step_class": "fixture", "config": {}},),
         edges=(),
     )
     run = engine.start(gate, None, actor=admin)
     advance_once(run)
     execute_started(run)
-    decision = _decision_for(run, "handler")
+    decision = _decision_for(run, "fixture")
 
     assert (decision.target_model, decision.target_id, decision.target_tab) == (
         target._meta.label,
@@ -744,7 +744,7 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
     pending_assignee = User.objects.create_user(username="wdc-bound-decision-pending")
     requester = User.objects.create_user(username="wdc-bound-decision-requester")
 
-    def gate_then_consume(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def gate_then_consume(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         if step_run.step.key == "gate":
             return StepResult.suspend(
@@ -763,14 +763,14 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
             )
         return StepResult.done(output=step_run.input)
 
-    monkeypatch.setattr(HandlerStep, "run", gate_then_consume)
+    monkeypatch.setattr(FixtureStep, "run", gate_then_consume)
     workflow = workflow_with_steps(
         name="Bound retained decision output",
         steps=(
-            {"key": "gate", "step_class": "handler", "config": {}},
+            {"key": "gate", "step_class": "fixture", "config": {}},
             {
                 "key": "consumer",
-                "step_class": "handler",
+                "step_class": "fixture",
                 "config": {},
                 "input_binding": {"kind": "step_output", "step_key": "gate", "path": []},
             },
@@ -843,7 +843,7 @@ def test_owned_call_consumes_exact_terminal_record_delegation_or_current_reads(
     assert protected.with_actor(requester).has_access("write")
     assert directly_readable.with_actor(resolver).has_access("read")
 
-    def gate_then_consume(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def gate_then_consume(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         if step_run.step.key == "gate":
             return StepResult.suspend(
@@ -923,13 +923,13 @@ def test_owned_call_consumes_exact_terminal_record_delegation_or_current_reads(
         consumed.append(decision.pk)
         return StepResult.done(output={"decision_id": resolution.decision_id})
 
-    monkeypatch.setattr(HandlerStep, "run", gate_then_consume)
+    monkeypatch.setattr(FixtureStep, "run", gate_then_consume)
     child_workflow = workflow_with_steps(
         name="Owned call gate consumer",
         steps=(
             {
                 "key": "consume",
-                "step_class": "handler",
+                "step_class": "fixture",
                 "config": {},
                 "input_binding": {"kind": "workflow_input", "path": []},
             },
@@ -939,7 +939,7 @@ def test_owned_call_consumes_exact_terminal_record_delegation_or_current_reads(
     parent_workflow = workflow_with_steps(
         name="Owned call gate producer",
         steps=(
-            {"key": "gate", "step_class": "handler", "config": {}},
+            {"key": "gate", "step_class": "fixture", "config": {}},
             {
                 "key": "call",
                 "step_class": "call_workflow",
@@ -995,7 +995,7 @@ def test_force_expiry_wakes_retained_decision_continuation(
     del workflow_gate_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-force-expire")
 
-    def suspend(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def suspend(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
         return StepResult.suspend(
             resume_state={"_resume_after_decisions": True, "gate": {"policy": "all_done"}},
@@ -1007,22 +1007,22 @@ def test_force_expiry_wakes_retained_decision_continuation(
             ),
         )
 
-    monkeypatch.setattr(HandlerStep, "run", suspend)
+    monkeypatch.setattr(FixtureStep, "run", suspend)
     workflow = workflow_with_steps(
         name="Force expiry continuation",
-        steps=({"key": "handler", "step_class": "handler", "config": {}},),
+        steps=({"key": "fixture", "step_class": "fixture", "config": {}},),
         edges=(),
     )
     run = start_run(workflow, actor=assignee)
     advance_once(run)
     execute_started(run)
-    row = _step_run(run, "handler")
+    row = _step_run(run, "fixture")
     prior_attempt_id = row.current_attempt_id
 
     assert engine.expire_pending_decisions(run, resolved_by="test/session-close") == 1
 
     row.refresh_from_db()
-    decision = _decision_for(run, "handler")
+    decision = _decision_for(run, "fixture")
     assert decision.verdict == workflow_models.Verdict.EXPIRED
     assert row.current_attempt_id == prior_attempt_id
     assert row.resume_state["_decision_outcome"] == "completed"
@@ -1039,7 +1039,7 @@ def test_delivery_expires_departed_suspension_before_failed_rerun(
     del workflow_gate_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-delivery-retirement")
 
-    def suspend_then_fail(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def suspend_then_fail(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         if step_run.attempt == 1:
             return StepResult.suspend(
@@ -1052,16 +1052,16 @@ def test_delivery_expires_departed_suspension_before_failed_rerun(
             )
         raise RuntimeError("rerun failed after delivery")
 
-    monkeypatch.setattr(HandlerStep, "run", suspend_then_fail)
+    monkeypatch.setattr(FixtureStep, "run", suspend_then_fail)
     workflow = workflow_with_steps(
         name="Retire delivered suspension",
-        steps=({"key": "handler", "step_class": "handler", "config": {}},),
+        steps=({"key": "fixture", "step_class": "fixture", "config": {}},),
         edges=(),
     )
     run = start_run(workflow, actor=assignee)
     advance_once(run)
     execute_started(run)
-    decision = _decision_for(run, "handler")
+    decision = _decision_for(run, "fixture")
 
     assert engine.deliver(run.pk) == {"woken": 1}
     _refresh_decision(decision)
@@ -1085,7 +1085,7 @@ def test_orphan_repair_refuses_current_approval_and_expires_terminal_orphan(
     del workflow_gate_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-orphan-retirement")
 
-    def suspend(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def suspend(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
         return StepResult.suspend(
             decisions=(
@@ -1096,16 +1096,16 @@ def test_orphan_repair_refuses_current_approval_and_expires_terminal_orphan(
             )
         )
 
-    monkeypatch.setattr(HandlerStep, "run", suspend)
+    monkeypatch.setattr(FixtureStep, "run", suspend)
     workflow = workflow_with_steps(
         name="Repair orphaned suspension",
-        steps=({"key": "handler", "step_class": "handler", "config": {}},),
+        steps=({"key": "fixture", "step_class": "fixture", "config": {}},),
         edges=(),
     )
     run = start_run(workflow, actor=assignee)
     advance_once(run)
     execute_started(run)
-    decision = _decision_for(run, "handler")
+    decision = _decision_for(run, "fixture")
 
     assert engine.expire_orphaned_decisions(run, resolved_by="test/orphan-repair") == 0
     _refresh_decision(decision)
@@ -1130,7 +1130,7 @@ def test_resume_after_decisions_scopes_each_single_and_multi_suspension(
     second = User.objects.create_user(username="wdc-resume-second")
     third = User.objects.create_user(username="wdc-resume-third")
 
-    def suspend_each_attempt(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def suspend_each_attempt(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         assignees = [first] if step_run.attempt == 1 else [second, third]
         return StepResult.suspend(
@@ -1145,18 +1145,18 @@ def test_resume_after_decisions_scopes_each_single_and_multi_suspension(
             ),
         )
 
-    monkeypatch.setattr(HandlerStep, "run", suspend_each_attempt)
+    monkeypatch.setattr(FixtureStep, "run", suspend_each_attempt)
     workflow = workflow_with_steps(
         name="Resumable decision workflow",
-        steps=({"key": "handler", "step_class": "handler", "config": {}},),
+        steps=({"key": "fixture", "step_class": "fixture", "config": {}},),
         edges=(),
     )
     run = start_run(workflow, actor=first)
     advance_once(run)
     execute_started(run)
 
-    row = _step_run(run, "handler")
-    first_decision = _decisions_for(run, "handler")[0]
+    row = _step_run(run, "fixture")
+    first_decision = _decisions_for(run, "fixture")[0]
     assert row.resume_state["_decision_ids"] == [first_decision.pk]
 
     engine.decide(first_decision, "complete", actor=first)
@@ -1167,7 +1167,7 @@ def test_resume_after_decisions_scopes_each_single_and_multi_suspension(
     advance_once(run)
     execute_started(run)
     row.refresh_from_db()
-    all_decisions = _decisions_for(run, "handler")
+    all_decisions = _decisions_for(run, "fixture")
     current = all_decisions[1:]
     assert len(current) == 2
     assert row.resume_state["_decision_ids"] == [decision.pk for decision in current]
@@ -2342,25 +2342,49 @@ def _gate_config(
             "priority": priorities[index] if priorities else index,
         }
         slots.append(slot)
-    return {
+    payload: dict[str, Any] = {"title": "Review"}
+    config: dict[str, Any] = {
         "policy": policy,
         "action": "complete-review",
-        "payload": {"title": "Review"},
+        "payload": payload,
         "slots": slots,
         "requester": str(to_subject_ref(requester)) if requester is not None else "",
         "escalation": [str(to_subject_ref(user)) for user in escalation],
         "max_attempts": max_attempts,
-        "decision_schema": (
-            _action_schema(actions=("complete", "reject", "escalate")) if decision_schema is None else decision_schema
-        ),
         "escalate_at": escalate_at.isoformat() if escalate_at is not None else "",
         "expires_at": expires_at.isoformat() if expires_at is not None else "",
     }
+    if decision_schema is None:
+        config["actions"] = [
+            {
+                "value": action,
+                "label": action.title(),
+                "verdict": verdict,
+            }
+            for action, verdict in (
+                ("complete", "COMPLETE"),
+                ("reject", "REJECT"),
+                ("escalate", "ESCALATE"),
+            )
+        ]
+    else:
+        payload["__test_bound_decision_schema"] = decision_schema
+        config["decision_schema"] = {"kind": "workflow_input", "path": ["decision_schema"]}
+    return config
 
 
 def _open_gate_run(workflow: Workflow, *, now: Any = None) -> Any:
     actor = User.objects.create_user(username=f"wdc-run-actor-{workflow.pk}")
-    run = engine.start(workflow, subject=None, actor=actor)
+    gate = step_for(workflow, "gate")
+    payload = gate.config.get("payload", {})
+    bound_schema_present = isinstance(payload, dict) and "__test_bound_decision_schema" in payload
+    bound_schema = payload.get("__test_bound_decision_schema") if bound_schema_present else None
+    run = engine.start(
+        workflow,
+        subject=None,
+        actor=actor,
+        input=JsonPresence(True, {"decision_schema": bound_schema}) if bound_schema_present else JsonPresence(),
+    )
     advance_once(run, now=now)
     execute_started(run, now=now)
     return run

@@ -21,7 +21,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, RootModel
 
 from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
-from angee.workflows.attempts import DecisionGateOutput, DecisionResolution
+from angee.workflows.attempts import DecisionGateOutput, DecisionResolution, RecoveryCapability
 from angee.workflows.decision_actions import ReviewAction, build_decision_action
 from angee.workflows.steps import (
     DecisionApplyStep,
@@ -312,6 +312,13 @@ class ArchiveExecuteStepImpl(DecisionApplyStep):
     effect_description = "Consumes a reviewed mapping or invokes its registered archive extractor."
     idempotent = True
     gate_step_class = ArchiveGateStepImpl
+
+    @classmethod
+    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
+        """Require archive extractors to declare recovery before replay is available."""
+
+        del attempt
+        return RecoveryCapability(None, "Archive execution has no provider-wide recovery contract.")
 
     @classmethod
     def validate_config(cls, config: Any) -> None:

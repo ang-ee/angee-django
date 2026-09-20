@@ -37,7 +37,7 @@ from rebac import resolve_subjects, system_context
 
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref
-from angee.base.impl import ImplClassField, ImplDefaultsMixin
+from angee.base.impl import ImplClassField, ImplDefaultsMixin, resolve_all_impl_classes
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel
 from angee.base.refs import RecordRefMixin
@@ -50,8 +50,10 @@ from angee.workflows.attempts import (
     AttemptCause,
     AttemptResultKind,
     AttemptStatus,
+    FixtureRole,
     JsonPresence,
     LeaseRevocationReason,
+    WorkflowScope,
     json_values_equal,
     validate_json_presence,
 )
@@ -107,11 +109,8 @@ from angee.workflows.states import (
     WorkflowStatus,
 )
 from angee.workflows.steps import (
+    StepExecutionMode,
     StepImpl,
-)
-from angee.workflows.testing import (
-    FixtureRole,
-    WorkflowScope,
 )
 from angee.workflows.trigger_declarations import (
     EventSource,
@@ -183,9 +182,10 @@ def _save_run_terminal(instance: models.Model, source: Any, target: Any) -> None
     alias = run._state.db or router.db_for_write(type(run), instance=run)
     with transaction.atomic(using=alias), system_context(reason="workflows.runs.terminal"):
         save_state(run, source, target)
-        if run.parent_relation == ParentRelation.OWNED_CALL:
+        delivery_target = run.delivery_target()
+        if delivery_target.parent_relation in {ParentRelation.OWNED_CALL, ParentRelation.CONTINUATION}:
             dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-            dispatch_model.objects.db_manager(alias).schedule_artifact_delivery(run)
+            dispatch_model.objects.db_manager(alias).schedule_artifact_delivery(delivery_target)
 
 
 #: Statuses that participate in version currency: a newer ARCHIVED row
@@ -774,7 +774,6 @@ class Step(WorkflowDefinitionChildMixin, ImplDefaultsMixin, AuditMixin, AngeeDat
     step_class = ImplClassField(
         base_class=StepImpl,
         registry_setting="ANGEE_WORKFLOW_STEP_CLASSES",
-        default="handler",
     )
     config = models.JSONField(default=dict, blank=True)
     input_binding = models.JSONField(null=True, blank=True, default=None)
@@ -1049,6 +1048,39 @@ def check_event_trigger_publishers(
     except (OperationalError, ProgrammingError):
         return []
     return errors
+
+
+def check_database_command_replay_declarations(
+    app_configs: list[object] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Warn when a registered database command leaves recovery policy implicit."""
+
+    del app_configs, kwargs
+    implementations = resolve_all_impl_classes(
+        "ANGEE_WORKFLOW_STEP_CLASSES",
+        StepImpl,
+        on_error=lambda key, error: None,
+    )
+    warnings = []
+    for implementation in implementations:
+        recovery_owner = next(
+            base for base in implementation.__mro__ if "recovery_capability" in base.__dict__
+        )
+        if (
+            implementation.execution_mode is StepExecutionMode.DATABASE_COMMAND
+            and implementation.replay_mode is None
+            and recovery_owner is StepImpl
+        ):
+            warnings.append(
+                checks.Warning(
+                    f"Database command {implementation.key!r} has no explicit recovery policy.",
+                    hint="Declare replay_mode or override recovery_capability() with the reason replay is unavailable.",
+                    obj=implementation,
+                    id="angee.workflows.W001",
+                )
+            )
+    return warnings
 
 
 class Trigger(AuditMixin, AngeeDataModel):
@@ -1542,6 +1574,20 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         subject = self.admission_actor_subject()
         return None if subject is None else resolve_subjects((subject,)).get(subject)
 
+    def execution_admission_actor(self) -> Any:
+        """Resolve the immutable actor admitted by this recovery lineage root."""
+
+        root_id = self.execution_lineage_root_id()
+        root = (
+            self
+            if root_id == self.pk
+            else system_queryset(type(self), using=self._state.db, lock=None).get(pk=root_id)
+        )
+        actor = root.admission_actor()
+        if actor is None:
+            raise ValidationError({"actor": "Workflow execution requires its admitted actor."})
+        return actor
+
     @property
     def is_terminal(self) -> bool:
         """Return whether this run has reached a terminal status."""
@@ -1573,6 +1619,14 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         if current.pk is None:
             raise ValidationError({"run": "Workflow execution lineage requires a saved run."})
         return current.pk
+
+    def delivery_target(self) -> Self:
+        """Return the original run identity subscribed by parent operations."""
+
+        root_id = self.execution_lineage_root_id()
+        if root_id == self.pk:
+            return self
+        return system_queryset(type(self), using=self._state.db, lock=None).get(pk=root_id)
 
     def same_execution_lineage(self, other: Any) -> bool:
         """Return whether two authorized runs share exact recovery provenance."""

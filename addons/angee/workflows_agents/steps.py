@@ -1,36 +1,34 @@
-"""Workflow step implementation backed by the agents inference catalogue.
+"""Workflow steps backed by the agents inference catalogue.
 
-``AgentStepImpl`` is the one-shot activity counterpart to workflow gates: it
-renders one prompt from a minimal Django-template context (``subject``, ``run``,
-``step``), sends one non-streaming chat request through the selected inference
-provider backend, journals a bounded request/response summary on the step-run,
-and debits token usage onto the run budget ledger.
+``InferStepImpl`` is the typed one-shot boundary over
+``agents.InferenceModel.infer``. ``AgentSessionStepImpl`` remains the distinct
+multi-turn session runner with tools and approvals.
 """
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from django.apps import apps
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.template import Context, Engine
 from django.utils import timezone
-from pydantic_ai.messages import ModelRequest, ModelRequestPart, ModelResponse, SystemPromptPart, UserPromptPart
-from pydantic_ai.models import ModelRequestParameters
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic_ai.messages import BinaryContent, ModelMessage, ModelMessagesTypeAdapter, ModelResponse
 from pydantic_ai.settings import ModelSettings
-from pydantic_ai.tools import ToolDefinition
-from pydantic_ai.usage import RequestUsage
-from pydantic_core import to_jsonable_python
 from rebac import actor_context, system_context
 
 from angee.agents.backends import is_retryable_provider_error
-from angee.agents.models import SessionStatus, TurnStatus
+from angee.agents.deployments import validate_approved_deployment
+from angee.agents.models import (
+    InferenceOutputSchema,
+    SessionStatus,
+    TurnStatus,
+)
 from angee.agents.runners import TurnOutcome
 from angee.workflows.decision_actions import ReviewAction, ReviewFact, build_decision_action
 from angee.workflows.models import RunStatus, StepRunStatus
@@ -45,14 +43,6 @@ from angee.workflows.steps import (
 )
 from angee.workflows_agents.sessions import close_session
 
-AGENT_STEP_JOURNAL_MAX_BYTES = 4096
-"""Maximum UTF-8 JSON bytes stored in one agent step-run output journal."""
-
-AGENT_STEP_TRUNCATION_MARKER = "[truncated: workflows_agents.AgentStepImpl journal exceeded 4096 bytes]"
-"""Marker appended when an agent request/response journal is shortened."""
-
-_ONE_SHOT_MODE = "one_shot"
-_TEMPLATE_ENGINE = Engine(debug=False)
 SESSION_PARKED_UNTIL = datetime.max.replace(tzinfo=UTC)
 """Far-future durable wait used because ``StepResult.wait`` requires a due time."""
 
@@ -60,23 +50,70 @@ SESSION_UPDATE_FLUSH_SECONDS = 0.25
 """Minimum interval between streamed turn-row saves."""
 
 
-@dataclass(frozen=True, slots=True)
-class _ResolvedAgentTarget:
-    """Resolved one-shot inference target for an agent workflow step."""
+class InferRequest(BaseModel):
+    """Native pydantic-ai request arguments accepted by ``InferenceModel.infer``."""
 
-    agent: Any | None
-    provider: Any
-    model: Any
-    system: str
+    model_config = ConfigDict(extra="forbid")
+    messages: list[ModelMessage]
+    images: list[BinaryContent] = Field(default_factory=list)
+    output_schema: InferenceOutputSchema | None = None
+    # ``ModelSettings`` cannot build a pydantic schema (``httpx.Timeout``); the
+    # validator below enforces its key set instead.
+    settings: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_settings(cls, value: Any) -> Any:
+        """Reject unknown settings and the step-owned timeout before invocation."""
+
+        if not isinstance(value, Mapping):
+            return value
+        settings = value.get("settings", {})
+        if not isinstance(settings, Mapping):
+            return value
+        unknown = set(settings) - ModelSettings.__optional_keys__ - ModelSettings.__required_keys__
+        if unknown:
+            raise ValueError(f"Unknown inference request settings: {', '.join(sorted(unknown))}.")
+        if "timeout" in settings:
+            raise ValueError("Inference request timeout belongs to the infer step input.")
+        transport = {"extra_body", "extra_headers", "extra_query"} & set(settings)
+        if transport:
+            raise ValueError(f"Transport overrides are not request settings: {', '.join(sorted(transport))}.")
+        return value
 
 
-class AgentStepImpl(StepImpl):
-    """One-shot workflow activity that calls an agents inference backend."""
+class InferInput(BaseModel):
+    """One role-approved catalogue model plus its one-shot request."""
 
-    key = "agent"
-    label = "Agent"
+    model_config = ConfigDict(extra="forbid")
+    model: Annotated[str, Field(min_length=1)]
+    role: Annotated[str, Field(min_length=1)]
+    request: InferRequest
+    timeout: float = Field(default=60, gt=0, description="Provider timeout in seconds for this step invocation.")
+
+
+class InferOutput(BaseModel):
+    """Native response evidence and normalized workflow budget usage.
+
+    Adapter timestamps and provider ids remain retained evidence. They are not a
+    stable reuse key and callers must not hash this projection for replay.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    response: ModelResponse | None = None
+    usage: dict[str, int] = Field(default_factory=dict)
+    error: dict[str, str] | None = None
+
+
+class InferStepImpl(StepImpl):
+    """Make one typed inference request and debit its normalized usage once."""
+
+    key = "infer"
+    label = "Infer"
     category = "Activity"
-    description = "Run one inference request and journal its bounded result."
+    description = "Run one native structured or multimodal inference request."
+    input_model = InferInput
+    output_model = InferOutput
     outcomes = (
         StepOutcome("completed", "Completed"),
         StepOutcome("failed", "Failed"),
@@ -86,68 +123,58 @@ class AgentStepImpl(StepImpl):
     idempotent = False
     deterministic = False
 
-    @classmethod
-    def validate_config(cls, config: Any) -> None:
-        """Validate one-shot agent step config."""
-
-        super().validate_config(config)
-        mode = str(config.get("mode", _ONE_SHOT_MODE) or _ONE_SHOT_MODE)
-        if mode != _ONE_SHOT_MODE:
-            raise ValidationError({"config": "Agent step mode must be one_shot."})
-
-        prompt_template = config.get("prompt_template")
-        if not isinstance(prompt_template, str) or not prompt_template.strip():
-            raise ValidationError({"config": "Agent steps require a prompt_template string."})
-
-        has_agent = bool(str(config.get("agent", "") or "").strip())
-        has_provider = bool(str(config.get("provider", "") or "").strip())
-        has_model = bool(str(config.get("model", "") or "").strip())
-        if has_agent and (has_provider or has_model):
-            raise ValidationError({"config": "Agent steps use either agent or provider plus model, not both."})
-        if not has_agent and not (has_provider and has_model):
-            raise ValidationError({"config": "Agent steps require agent or provider plus model."})
-
-        if "max_tokens" in config:
-            _positive_int(config["max_tokens"], name="max_tokens")
-        if "temperature" in config and config["temperature"] not in (None, ""):
-            _float(config["temperature"], name="temperature")
-        if "options" in config and not isinstance(config["options"], Mapping):
-            raise ValidationError({"config": "Agent step options must be a JSON object."})
-
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Execute one one-shot inference request and return a routing outcome."""
+        """Execute one typed inference request and return its native projection."""
 
         del now
-        config = dict(step_run.step.config)
-        request: dict[str, Any] | None = None
+        value = self.validate_input(step_run.input)
+        with system_context(reason="workflows_agents.infer_step.resolve"):
+            model = _resolve_inference_model(value)
+        settings = cast(ModelSettings, {**value.request.settings, "timeout": value.timeout})
+        usage: dict[str, int] = {}
         try:
-            prompt = _render_prompt(str(config["prompt_template"]), step_run)
-            target = _resolve_target(config)
-            request = _request_for(config, target=target, prompt=prompt)
-            parts: list[ModelRequestPart] = [UserPromptPart(prompt)]
-            if target.system:
-                parts.insert(0, SystemPromptPart(target.system))
-            response = target.model.chat(
-                [ModelRequest(parts=parts)],
-                model_settings=_model_settings(request),
-                model_request_parameters=ModelRequestParameters(function_tools=_tool_definitions(request["tools"])),
-                credential=target.agent.inference_credential_for_runtime() if target.agent is not None else None,
+            response, usage = model.infer(
+                value.request.messages,
+                output_schema=value.request.output_schema,
+                images=value.request.images,
+                settings=settings,
             )
-            with system_context(reason="workflows_agents.agent_step.budget"), transaction.atomic():
-                step_run.run.debit_budget(_usage_delta(response.usage))
             return StepResult.done(
-                output=_bounded_summary(_success_summary(target=target, request=request, response=response)),
+                output={"response": _response_projection(response), "usage": usage, "error": None},
                 outcome="completed",
             )
-        except TransientStepError:
-            raise
         except Exception as error:  # noqa: BLE001 - backend/config failure is a workflow outcome.
+            if isinstance(error, TransientStepError):
+                raise
             if is_retryable_provider_error(error):
                 raise TransientStepError(str(error)) from error
             return StepResult.done(
-                output=_bounded_summary(_failure_summary(request=request, error=error)),
+                output={
+                    "response": None,
+                    "usage": usage,
+                    "error": {"type": type(error).__name__, "message": str(error)},
+                },
                 outcome="failed",
             )
+        finally:
+            # A debit failure aborts this fenced attempt, so the external call is
+            # never re-invoked from a result whose accounting did not persist.
+            step_run.run.debit_budget(usage)
+
+
+def _resolve_inference_model(value: InferInput) -> Any:
+    """Resolve one public model id and enforce the configured role policy."""
+
+    model_class = apps.get_model("agents", "InferenceModel")
+    model = model_class.objects.select_related("provider").get(sqid=value.model)
+    validate_approved_deployment(model, role=value.role)
+    return model
+
+
+def _response_projection(response: ModelResponse) -> dict[str, Any]:
+    """Serialize one native ModelResponse through pydantic-ai's message adapter."""
+
+    return cast(dict[str, Any], ModelMessagesTypeAdapter.dump_python([response], mode="json")[0])
 
 
 class AgentSessionStepImpl(StepImpl):
@@ -459,267 +486,3 @@ def _continue_or_park(session: Any) -> StepResult:
     if session.turns.filter(status=TurnStatus.PENDING).exists():
         return StepResult.wait(until=timezone.now(), resume_state={})
     return _park_session()
-
-
-def _render_prompt(template: str, step_run: Any) -> str:
-    """Render ``template`` with the documented minimal step context."""
-
-    context = Context(
-        {
-            "subject": step_run.run.subject,
-            "run": step_run.run,
-            "step": step_run.step,
-        },
-        autoescape=False,
-    )
-    return _TEMPLATE_ENGINE.from_string(template).render(context)
-
-
-def _resolve_target(config: Mapping[str, Any]) -> _ResolvedAgentTarget:
-    """Resolve an ``agent`` or ``provider`` + ``model`` config into catalogue rows."""
-
-    with system_context(reason="workflows_agents.agent_step.resolve"):
-        agent_ref = str(config.get("agent", "") or "").strip()
-        if agent_ref:
-            agent_model = apps.get_model("agents", "Agent")
-            agent = _by_public_id(
-                agent_model.objects.select_related("model", "model__provider"),
-                agent_ref,
-                label="agent",
-            )
-            model = getattr(agent, "model", None)
-            if model is None:
-                raise ValidationError({"config": "Agent step agent must have an inference model."})
-            return _ResolvedAgentTarget(
-                agent=agent,
-                provider=model.provider,
-                model=model,
-                system=str(config.get("system", "") or agent.instructions or ""),
-            )
-
-        provider_model = apps.get_model("agents", "InferenceProvider")
-        inference_model = apps.get_model("agents", "InferenceModel")
-        provider = _by_public_id(
-            provider_model.objects.all(),
-            str(config.get("provider", "") or "").strip(),
-            label="provider",
-        )
-        try:
-            model = inference_model.objects.select_related("provider").get(
-                provider=provider,
-                name=str(config.get("model", "") or "").strip(),
-            )
-        except ObjectDoesNotExist as error:
-            raise ValidationError({"config": "Agent step model was not found for provider."}) from error
-        return _ResolvedAgentTarget(
-            agent=None,
-            provider=provider,
-            model=model,
-            system=str(config.get("system", "") or ""),
-        )
-
-
-def _by_public_id(queryset: Any, value: str, *, label: str) -> Any:
-    """Return one row by Angee public id, or raise a config validation error."""
-
-    row = queryset.from_public_id(value)
-    if row is None:
-        raise ValidationError({"config": f"Agent step {label} was not found."})
-    return row
-
-
-def _request_for(config: Mapping[str, Any], *, target: _ResolvedAgentTarget, prompt: str) -> dict[str, Any]:
-    """Keep the existing persisted request journal vocabulary at its boundary."""
-
-    return {
-        "model": str(target.model.name),
-        "messages": [{"role": "user", "content": prompt}],
-        "system": target.system,
-        "max_tokens": _positive_int(config.get("max_tokens", _default_max_tokens(target.model)), name="max_tokens"),
-        "temperature": None
-        if config.get("temperature") in (None, "")
-        else _float(config["temperature"], name="temperature"),
-        "tools": list(config.get("tools") or ()),
-        "options": dict(config.get("options") or {}),
-    }
-
-
-def _model_settings(request: Mapping[str, Any]) -> ModelSettings:
-    """Decode stored SDK options once, protecting the workflow's owned inputs."""
-
-    options = dict(request["options"])
-    extra_body = dict(options.pop("extra_body", {}) or {})
-    reserved = {"model", "messages", "system", "tools", "stream", "max_tokens", "max_completion_tokens", "temperature"}
-    collisions = reserved & (options.keys() | extra_body.keys())
-    if collisions:
-        raise ValueError(f"Request options are owned by the workflow: {', '.join(sorted(collisions))}.")
-    settings: dict[str, Any] = {"max_tokens": request["max_tokens"]}
-    if request["temperature"] is not None:
-        settings["temperature"] = request["temperature"]
-    for key, value in options.items():
-        if key in ModelSettings.__annotations__:
-            settings[key] = value
-        elif key in {"extra_query", "api_key", "auth_token", "base_url"}:
-            raise ValueError(f"Unsupported workflow request option: {key}.")
-        else:
-            extra_body[key] = value
-    if extra_body:
-        settings["extra_body"] = extra_body
-    return cast(ModelSettings, settings)
-
-
-def _tool_definitions(tools: list[Mapping[str, Any]]) -> list[ToolDefinition]:
-    """Read persisted OpenAI/Anthropic function declarations as native tools."""
-
-    result = []
-    for tool in tools:
-        declaration = tool.get("function", tool)
-        if tool.get("type", "function") != "function" or not isinstance(declaration, Mapping):
-            raise ValueError("Agent workflow tools must be function declarations.")
-        name = declaration.get("name")
-        schema = declaration.get(
-            "parameters_json_schema", declaration.get("parameters", declaration.get("input_schema"))
-        )
-        if not isinstance(name, str) or not name or not isinstance(schema, dict):
-            raise ValueError("Agent workflow tools require a name and a JSON object parameter schema.")
-        result.append(
-            ToolDefinition(
-                name=name,
-                parameters_json_schema=schema,
-                description=declaration.get("description"),
-                strict=declaration.get("strict"),
-            )
-        )
-    return result
-
-
-def _default_max_tokens(model: Any) -> int:
-    """Return the model's declared output cap or the inference seam default."""
-
-    configured = getattr(model, "max_output_tokens", None)
-    if configured:
-        return int(configured)
-    return 1024
-
-
-def _positive_int(value: Any, *, name: str) -> int:
-    """Return ``value`` as a positive integer config field."""
-
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as error:
-        raise ValidationError({"config": f"Agent step {name} must be an integer."}) from error
-    if parsed < 1:
-        raise ValidationError({"config": f"Agent step {name} must be positive."})
-    return parsed
-
-
-def _float(value: Any, *, name: str) -> float:
-    """Return ``value`` as a float config field."""
-
-    try:
-        return float(value)
-    except (TypeError, ValueError) as error:
-        raise ValidationError({"config": f"Agent step {name} must be a number."}) from error
-
-
-def _usage_delta(usage: RequestUsage) -> dict[str, int]:
-    """Map native request usage to the workflow budget vocabulary."""
-
-    delta = {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens, "tokens": usage.total_tokens}
-    return {key: int(value) for key, value in delta.items() if value}
-
-
-def _success_summary(
-    *,
-    target: _ResolvedAgentTarget,
-    request: Mapping[str, Any],
-    response: ModelResponse,
-) -> dict[str, Any]:
-    """Return the structured request/response summary for a completed call."""
-
-    agent_ref = getattr(target.agent, "sqid", "") if target.agent is not None else ""
-    return {
-        "agent": {
-            "agent": agent_ref,
-            "provider": getattr(target.provider, "sqid", ""),
-            "model": getattr(target.model, "sqid", ""),
-            "model_name": request["model"],
-        },
-        "request": dict(request),
-        "response": {
-            "text": response.text or "",
-            "format_version": 2,
-            "content": to_jsonable_python(response.parts),
-            "usage": to_jsonable_python(response.usage),
-        },
-    }
-
-
-def _failure_summary(request: Mapping[str, Any] | None, *, error: Exception) -> dict[str, Any]:
-    """Return a structured failure summary for routing on the ``failed`` outcome."""
-
-    return {
-        "request": None if request is None else dict(request),
-        "error": {
-            "type": type(error).__name__,
-            "message": str(error),
-        },
-    }
-
-
-def _bounded_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
-    """Return ``summary`` capped to ``AGENT_STEP_JOURNAL_MAX_BYTES`` when encoded."""
-
-    safe = _journal_jsonable(summary)
-    if _json_size(safe) <= AGENT_STEP_JOURNAL_MAX_BYTES:
-        return safe
-
-    text = json.dumps(safe, sort_keys=True, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
-    wrapper: dict[str, Any] = {
-        "truncated": True,
-        "limit_bytes": AGENT_STEP_JOURNAL_MAX_BYTES,
-        "summary": "",
-    }
-    available = AGENT_STEP_JOURNAL_MAX_BYTES - _json_size({**wrapper, "summary": AGENT_STEP_TRUNCATION_MARKER})
-    wrapper["summary"] = f"{text[: max(0, available)]}{AGENT_STEP_TRUNCATION_MARKER}"
-    while _json_size(wrapper) > AGENT_STEP_JOURNAL_MAX_BYTES and wrapper["summary"]:
-        shortened = str(wrapper["summary"])[: -min(128, len(str(wrapper["summary"])))]
-        wrapper["summary"] = f"{shortened}{AGENT_STEP_TRUNCATION_MARKER}"
-    return wrapper
-
-
-def _json_size(value: Any) -> int:
-    """Return the UTF-8 JSON byte size for ``value``."""
-
-    return len(json.dumps(value, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8"))
-
-
-def _journal_jsonable(value: Any) -> Any:
-    """Serialize supported journal values through Pydantic's native JSON owner.
-
-    Persisted mappings must already use JSON string keys. Sets are rejected
-    because their order is not stable, and opaque Python objects are rejected by
-    ``to_jsonable_python`` instead of being persisted through arbitrary ``str``.
-    """
-
-    _validate_journal_input(value)
-    result = to_jsonable_python(value)
-    # Match Django's strict JSON encoder contract for non-finite floats.
-    json.dumps(result, allow_nan=False)
-    return result
-
-
-def _validate_journal_input(value: Any) -> None:
-    """Reject ambiguous mapping keys and unordered collections before serialization."""
-
-    if isinstance(value, Mapping):
-        if any(not isinstance(key, str) for key in value):
-            raise TypeError("Agent step journal mappings require string keys.")
-        for item in value.values():
-            _validate_journal_input(item)
-    elif isinstance(value, list | tuple):
-        for item in value:
-            _validate_journal_input(item)
-    elif isinstance(value, set | frozenset):
-        raise TypeError("Agent step journals do not accept unordered sets.")

@@ -10,10 +10,11 @@ from rebac import system_context, to_subject_ref
 
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
-from angee.workflows.steps import DecisionSpec, HandlerStep, StepResult
+from angee.workflows.steps import DecisionSpec, StepResult
 from tests.workflows import (
     Decision,
     Edge,
+    FixtureStep,
     Step,
     StepRun,
     Workflow,
@@ -37,7 +38,7 @@ def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
     assignee = User.objects.create_user(username="workflow-decision-assignee")
     assignee_ref = str(to_subject_ref(assignee))
 
-    def run_handler(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run_fixture(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         if step_run.step.key == "entry":
             return StepResult.suspend(
@@ -80,7 +81,7 @@ def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
             )
         return StepResult.done(output={}, outcome="done")
 
-    monkeypatch.setattr(HandlerStep, "run", run_handler)
+    monkeypatch.setattr(FixtureStep, "run", run_fixture)
     workflow = _workflow_for_acceptance(assignee_ref)
 
     run = start_run(workflow, actor=assignee)
@@ -152,8 +153,19 @@ def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
 def _workflow_for_acceptance(assignee_ref: str) -> Workflow:
     with system_context(reason="test workflow acceptance definition"):
         draft = Workflow.objects.create(name="Decision acceptance")
-        entry = Step.objects.create(workflow=draft, key="entry", name="Entry", is_entry=True)
-        produce = Step.objects.create(workflow=draft, key="produce", name="Produce")
+        entry = Step.objects.create(
+            workflow=draft,
+            key="entry",
+            name="Entry",
+            step_class="fixture",
+            is_entry=True,
+        )
+        produce = Step.objects.create(
+            workflow=draft,
+            key="produce",
+            name="Produce",
+            step_class="fixture",
+        )
         review = Step.objects.create(
             workflow=draft,
             key="review",

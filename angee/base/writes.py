@@ -20,11 +20,12 @@ from angee.base.authority import TransactionBoundAuthority
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _WritePayloadT = TypeVar("_WritePayloadT")
+_DELETE_OPERATIONS = frozenset({"delete", "raw_delete"})
 
 
 @dataclass(slots=True)
 class WriteFenceToken(Generic[_WritePayloadT]):
-    """One exact manager-owned ORM write inside a live transaction."""
+    """One exact owner-issued ORM write inside a live transaction."""
 
     model: type[models.Model]
     operation: str
@@ -42,16 +43,26 @@ class WriteFenceToken(Generic[_WritePayloadT]):
             and self.object_identity == id(target)
         )
 
+    def matches_queryset(self, queryset: models.QuerySet[Any], operation: str) -> bool:
+        """Return whether this unused token owns ``operation`` on ``queryset``."""
+
+        return (
+            not self.consumed
+            and self.model is queryset.model
+            and self.operation == operation
+            and self.object_identity is None
+        )
+
     def consume(self) -> None:
         """Consume this one-use capability, rejecting a second write."""
 
         if self.consumed:
-            raise RuntimeError("Manager-owned write authority was already consumed.")
+            raise RuntimeError("Write authority was already consumed.")
         self.consumed = True
 
 
 class WriteFence(Generic[_WritePayloadT]):
-    """Bind exact manager-owned write tokens to an existing outer transaction."""
+    """Bind exact owner-issued write tokens to an existing outer transaction."""
 
     def __init__(
         self,
@@ -72,10 +83,12 @@ class WriteFence(Generic[_WritePayloadT]):
         alias: str,
         token: WriteFenceToken[_WritePayloadT],
     ) -> Iterator[WriteFenceToken[_WritePayloadT]]:
-        """Expose ``token`` within its caller-owned outer transaction."""
+        """Expose ``token`` and require a successful scope to consume it."""
 
         with self._authority.scope(alias, token):
             yield token
+            if not token.consumed:
+                raise RuntimeError(f"{token.operation} write authority was not consumed.")
 
     def token(self, alias: str) -> WriteFenceToken[_WritePayloadT] | None:
         """Return the current live token for ``alias``, if this call owns it."""
@@ -88,6 +101,19 @@ class WriteFencedQuerySetMixin:
 
     model: type[models.Model]
 
+    def _is_audit_nullification(self, values: Mapping[str, Any] | None) -> bool:
+        """Return whether Django is clearing only this model's audit actors.
+
+        The audit-actor owner (``AuditMixin``) declares the predicate; the
+        collector's ``SET_NULL`` nullification reaches this queryset through
+        ``update()`` and is admitted here once for every fenced model.
+        """
+
+        if values is None:
+            return False
+        predicate = getattr(self.model, "is_audit_nullification", None)
+        return predicate is not None and bool(predicate(values))
+
     def _validate_write_fence(
         self,
         operation: str,
@@ -99,6 +125,8 @@ class WriteFencedQuerySetMixin:
     ) -> None:
         """Delegate the write decision to a model composing ``WriteFencedModel``."""
 
+        if operation == "update" and self._is_audit_nullification(values):
+            return
         validator = getattr(self.model, "validate_queryset_write_fence", None)
         if validator is not None:
             validator(
@@ -174,34 +202,35 @@ class WriteFencedQuerySetMixin:
         return cast(Any, super()).delete()
 
     def _raw_delete(self, using: str) -> int:
-        """Validate a collector fast-delete before Django issues direct SQL."""
+        """Validate direct SQL deletion; the collector reaches this only for models without delete listeners."""
 
-        self._validate_write_fence("_raw_delete")
+        self._validate_write_fence("raw_delete")
         return cast(Any, super())._raw_delete(using)
 
 
 class WriteFencedModel(models.Model):
-    """Require exact manager-issued authority for instance saves and deletes.
+    """Enforce exact manager-issued authority for fenced instance writes.
 
-    A domain owner supplies one :class:`WriteFence`, an error message, and only
-    the policy facts that differ by overriding :meth:`validate_write_fence`.
-    The base owns exact-instance matching, one-use consumption, instance write
-    entrypoints, and the matching queryset blockers. Inbound foreign keys must
-    use ``on_delete=PROTECT`` or ``RESTRICT``: the collector's ``delete_batch``
-    path cannot be intercepted by a model or queryset mixin, and persistence
-    enforcement is never delegated to a database trigger.
+    A domain owner supplies one :class:`WriteFence` and only the policy facts
+    that differ by overriding :meth:`is_write_fenced`,
+    :meth:`write_fence_error`, or the validation hooks. The base owns exact
+    instance matching, one-use consumption, instance write entrypoints, and the
+    matching queryset blockers. Foreign keys declared on a fenced model cannot
+    use ``CASCADE`` or ``SET_DEFAULT`` because Django's collector bypasses every
+    model and queryset hook for those writes. A ``GenericRelation`` declared on
+    another model can still cascade into fenced generic-foreign-key rows through
+    ``delete_batch``; it has no ``on_delete`` for the system check to inspect.
+    Persistence enforcement is never delegated to a database trigger.
     """
 
     write_fence: ClassVar[WriteFence[Any] | None] = None
-    write_fence_error: ClassVar[str] = "Change this row through its native manager."
-    write_fence_exception: ClassVar[type[Exception]] = TypeError
 
     class Meta:
         abstract = True
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
-        """Require every concrete manager to carry the queryset ingress owner."""
+        """Check manager ingress and collector-safe forward relations."""
 
         errors = super().check(**kwargs)
         if cls._meta.abstract:
@@ -215,7 +244,41 @@ class WriteFencedModel(models.Model):
                         id="angee.E019",
                     )
                 )
+        base_manager = cls._meta.base_manager
+        if not isinstance(base_manager.get_queryset(), WriteFencedQuerySetMixin):
+            errors.append(
+                checks.Error(
+                    f"{cls._meta.label} base manager {base_manager.name} must resolve a "
+                    "WriteFencedQuerySetMixin queryset.",
+                    obj=cls,
+                    id="angee.E019",
+                )
+            )
+        for field in cls._meta.concrete_fields:
+            if not isinstance(field, (models.ForeignKey, models.OneToOneField)):
+                continue
+            if field.remote_field.parent_link:
+                continue
+            on_delete = field.remote_field.on_delete
+            if on_delete not in {models.CASCADE, models.SET_DEFAULT}:
+                continue
+            errors.append(
+                checks.Error(
+                    f"{cls._meta.label}.{field.name} uses "
+                    f"on_delete={getattr(on_delete, '__name__', type(on_delete).__name__)}, "
+                    "which bypasses write-fence hooks during collector writes.",
+                    obj=field,
+                    id="angee.E020",
+                )
+            )
         return errors
+
+    @classmethod
+    def write_fence_error(cls, operation: str) -> Exception:
+        """Return the domain-facing error for a forbidden write operation."""
+
+        action = "Delete" if operation in _DELETE_OPERATIONS else "Change"
+        return TypeError(f"{action} this row through its native manager.")
 
     @classmethod
     def validate_queryset_write_fence(
@@ -230,8 +293,18 @@ class WriteFencedModel(models.Model):
     ) -> None:
         """Reject bulk writes; the manager-owned instance path is the sole writer."""
 
-        del operation, queryset, objects, changed_fields, values, options
-        raise cls.write_fence_exception(cls.write_fence_error)
+        del queryset, objects, changed_fields, values, options
+        raise cls.write_fence_error(operation)
+
+    def is_write_fenced(
+        self,
+        operation: str,
+        values: Mapping[str, Any],
+    ) -> bool:
+        """Return whether this instance write requires manager authority."""
+
+        del operation, values
+        return True
 
     def validate_write_fence(
         self,
@@ -245,16 +318,21 @@ class WriteFencedModel(models.Model):
         del token, operation, values
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Consume one exact manager-owned save authority and persist the row."""
+        """Persist the row, consuming matching authority or enforcing policy."""
 
         self._consume_write_fence("save", kwargs)
         super().save(*args, **kwargs)
 
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Consume one exact manager-owned delete authority and delete the row."""
+    def delete(
+        self,
+        using: str | None = None,
+        keep_parents: bool = False,
+    ) -> tuple[int, dict[str, int]]:
+        """Delete the row, consuming matching authority or enforcing policy."""
 
-        self._consume_write_fence("delete", kwargs)
-        return super().delete(*args, **kwargs)
+        values = {"using": using, "keep_parents": keep_parents}
+        self._consume_write_fence("delete", values)
+        return super().delete(using=using, keep_parents=keep_parents)
 
     def _consume_write_fence(self, operation: str, values: Mapping[str, Any]) -> None:
         """Validate and consume this row's live exact-instance capability."""
@@ -262,10 +340,12 @@ class WriteFencedModel(models.Model):
         fence = type(self).write_fence
         alias = str(values.get("using") or self._state.db or DEFAULT_DB_ALIAS)
         token = fence.token(alias) if fence is not None else None
-        if token is None or not token.matches(self, operation):
-            raise type(self).write_fence_exception(type(self).write_fence_error)
-        self.validate_write_fence(token, operation=operation, values=values)
-        token.consume()
+        if token is not None and token.matches(self, operation):
+            self.validate_write_fence(token, operation=operation, values=values)
+            token.consume()
+            return
+        if self.is_write_fenced(operation, values):
+            raise type(self).write_fence_error(operation)
 
 
 class WriteFencedManagerMixin:
@@ -293,8 +373,6 @@ class WriteFencedManagerMixin:
         )
         with fence.scope(alias, token):
             row.save(using=alias, **kwargs)
-        if not token.consumed:
-            raise RuntimeError("Manager-owned save authority was not consumed.")
         return row
 
 
@@ -319,7 +397,7 @@ class ImmutableEvidenceQuerySet(WriteFencedQuerySetMixin, Generic[_ModelT]):
     def immutable_error(self, operation: str) -> Exception:
         """Return the domain-facing error for a forbidden evidence mutation."""
 
-        action = "deleted" if operation in {"delete", "raw_delete"} else "edited"
+        action = "deleted" if operation in _DELETE_OPERATIONS else "edited"
         return ValidationError(f"Evidence cannot be {action}.")
 
     def validate_evidence_insert(
@@ -338,8 +416,7 @@ class ImmutableEvidenceQuerySet(WriteFencedQuerySetMixin, Generic[_ModelT]):
     def validate_evidence_update(self, values: Mapping[str, Any]) -> bool:
         """Return whether one exceptional owner-approved queryset update may run."""
 
-        del values
-        return False
+        return self._is_audit_nullification(values)
 
     def create(self, **kwargs: Any) -> _ModelT:
         """Validate one append before inserting it."""

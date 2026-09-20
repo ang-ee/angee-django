@@ -34,18 +34,18 @@ def test_workflow_children_preflight_the_proposed_parent_relation(
             )
 
         with actor_context(writer):
-            source = Step.objects.create(workflow=workflow, key="source", name="Source", is_entry=True)
-            target = Step.objects.create(workflow=workflow, key="target", name="Target")
+            source = Step.objects.create(
+                workflow=workflow, key="source", name="Source", step_class="fixture", is_entry=True
+            )
+            target = Step.objects.create(workflow=workflow, key="target", name="Target", step_class="fixture")
             edge = Edge.objects.create(workflow=workflow, source=source, target=target)
             trigger = Trigger.objects.create(workflow=workflow)
 
-        assert {source.created_by_id, target.created_by_id, edge.created_by_id, trigger.created_by_id} == {
-            writer.pk
-        }
+        assert {source.created_by_id, target.created_by_id, edge.created_by_id, trigger.created_by_id} == {writer.pk}
 
         with actor_context(outsider):
             with pytest.raises(PermissionDenied):
-                Step.objects.create(workflow=workflow, key="denied", name="Denied")
+                Step.objects.create(workflow=workflow, key="denied", name="Denied", step_class="fixture")
             with pytest.raises(PermissionDenied):
                 Edge.objects.create(workflow=workflow, source=source, target=target)
             with pytest.raises(PermissionDenied):

@@ -53,8 +53,10 @@ def test_definition_rows_advance_revision_once_per_locked_batch(workflow_tables:
     with system_context(reason="test definition revision batch"):
         workflow = Workflow.objects.create(name="Batch")
         with Workflow.objects._definition_write((workflow.pk,)):
-            first = Step.objects.create(workflow=workflow, key="first", name="First", is_entry=True)
-            second = Step.objects.create(workflow=workflow, key="second", name="Second")
+            first = Step.objects.create(
+                workflow=workflow, key="first", name="First", step_class="fixture", is_entry=True
+            )
+            second = Step.objects.create(workflow=workflow, key="second", name="Second", step_class="fixture")
             Edge.objects.create(workflow=workflow, source=first, target=second, condition="timer")
 
         workflow.refresh_from_db()
@@ -74,7 +76,7 @@ def test_noop_and_update_fields_compare_only_persisted_content(workflow_tables: 
     del workflow_tables
     with system_context(reason="test definition no-op revisions"):
         workflow = Workflow.objects.create(name="No-op")
-        step = Step.objects.create(workflow=workflow, key="start", name="Start", is_entry=True)
+        step = Step.objects.create(workflow=workflow, key="start", name="Start", step_class="fixture", is_entry=True)
         workflow.refresh_from_db()
         revision = workflow.draft_revision
 
@@ -117,7 +119,7 @@ def test_stale_workflow_instance_cannot_regress_database_revision(workflow_table
     with system_context(reason="test stale workflow revision"):
         workflow = Workflow.objects.create(name="Stale")
         stale = Workflow.objects.get(pk=workflow.pk)
-        Step.objects.create(workflow=workflow, key="start", name="Start")
+        Step.objects.create(workflow=workflow, key="start", name="Start", step_class="fixture")
 
         stale.save()
         stale.refresh_from_db()
@@ -136,8 +138,10 @@ def test_step_delete_owns_incident_edges_and_one_revision(workflow_tables: None)
     del workflow_tables
     with system_context(reason="test definition child cascade"):
         workflow = Workflow.objects.create(name="Delete")
-        source = Step.objects.create(workflow=workflow, key="source", name="Source", is_entry=True)
-        target = Step.objects.create(workflow=workflow, key="target", name="Target")
+        source = Step.objects.create(
+            workflow=workflow, key="source", name="Source", step_class="fixture", is_entry=True
+        )
+        target = Step.objects.create(workflow=workflow, key="target", name="Target", step_class="fixture")
         Edge.objects.create(workflow=workflow, source=source, target=target)
         workflow.refresh_from_db()
         revision = workflow.draft_revision
@@ -156,8 +160,8 @@ def test_definition_bulk_writes_are_rejected(workflow_tables: None) -> None:
     del workflow_tables
     with system_context(reason="test guarded definition collections"):
         workflow = Workflow.objects.create(name="Guarded")
-        step = Step.objects.create(workflow=workflow, key="start", name="Start")
-        target = Step.objects.create(workflow=workflow, key="target", name="Target")
+        step = Step.objects.create(workflow=workflow, key="start", name="Start", step_class="fixture")
+        target = Step.objects.create(workflow=workflow, key="target", name="Target", step_class="fixture")
         edge = Edge.objects.create(workflow=workflow, source=step, target=target)
 
         for queryset, fields in (
@@ -168,7 +172,7 @@ def test_definition_bulk_writes_are_rejected(workflow_tables: None) -> None:
             with pytest.raises(TypeError, match=r"QuerySet\.update"):
                 queryset.update(**fields)
         with pytest.raises(TypeError, match="bulk_create"):
-            Step.objects.bulk_create([Step(workflow=workflow, key="bulk", name="Bulk")])
+            Step.objects.bulk_create([Step(workflow=workflow, key="bulk", name="Bulk", step_class="fixture")])
         with pytest.raises(TypeError, match="bulk_update"):
             Step.objects.bulk_update([step], ["name"])
 
@@ -228,8 +232,8 @@ def test_failed_batch_rolls_back_rows_and_revision(workflow_tables: None) -> Non
         other = Workflow.objects.create(name="Other")
         with pytest.raises(ValidationError, match="same workflow"):
             with Workflow.objects._definition_write((workflow.pk, other.pk)):
-                source = Step.objects.create(workflow=workflow, key="source", name="Source")
-                target = Step.objects.create(workflow=other, key="target", name="Target")
+                source = Step.objects.create(workflow=workflow, key="source", name="Source", step_class="fixture")
+                target = Step.objects.create(workflow=other, key="target", name="Target", step_class="fixture")
                 Edge.objects.create(workflow=workflow, source=source, target=target)
 
         workflow.refresh_from_db()
@@ -245,7 +249,7 @@ def test_moves_revise_both_parents_and_reject_connected_steps(workflow_tables: N
     with system_context(reason="test definition moves"):
         first = Workflow.objects.create(name="First")
         second = Workflow.objects.create(name="Second")
-        movable = Step.objects.create(workflow=first, key="movable", name="Movable")
+        movable = Step.objects.create(workflow=first, key="movable", name="Movable", step_class="fixture")
         first.refresh_from_db()
         first_revision = first.draft_revision
 
@@ -256,7 +260,7 @@ def test_moves_revise_both_parents_and_reject_connected_steps(workflow_tables: N
         assert first.draft_revision == first_revision + 1
         assert second.draft_revision == 1
 
-        anchor = Step.objects.create(workflow=second, key="anchor", name="Anchor")
+        anchor = Step.objects.create(workflow=second, key="anchor", name="Anchor", step_class="fixture")
         Edge.objects.create(workflow=second, source=anchor, target=movable)
         movable.workflow = first
         with pytest.raises(ValidationError, match="connected step"):
@@ -292,7 +296,7 @@ def test_published_parent_rejects_child_mutation_even_under_sudo(workflow_tables
         del published._allow_immutable_status_save
 
         with pytest.raises(ValidationError, match="immutable"):
-            Step.objects.create(workflow=published, key="late", name="Late")
+            Step.objects.create(workflow=published, key="late", name="Late", step_class="fixture")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -371,8 +375,8 @@ def test_explicit_actor_bound_child_save_and_cascade_delete(workflow_tables: Non
     with system_context(reason="seed explicit definition actor"):
         admin = create_platform_admin(username="definition-admin", password="admin")
         workflow = Workflow.objects.create(name="Actor-bound")
-        source = Step.objects.create(workflow=workflow, key="source", name="Source")
-        target = Step.objects.create(workflow=workflow, key="target", name="Target")
+        source = Step.objects.create(workflow=workflow, key="source", name="Source", step_class="fixture")
+        target = Step.objects.create(workflow=workflow, key="target", name="Target", step_class="fixture")
         Edge.objects.create(workflow=workflow, source=source, target=target)
 
     bound = Step.objects.as_user(admin).get(pk=source.pk)
@@ -413,8 +417,8 @@ def test_denied_explicit_actor_cascade_rolls_back_children(workflow_tables: None
     with system_context(reason="seed denied definition actor"):
         stranger = User.objects.create_user(username="definition-stranger")
         workflow = Workflow.objects.create(name="Denied cascade")
-        source = Step.objects.create(workflow=workflow, key="source", name="Source")
-        target = Step.objects.create(workflow=workflow, key="target", name="Target")
+        source = Step.objects.create(workflow=workflow, key="source", name="Source", step_class="fixture")
+        target = Step.objects.create(workflow=workflow, key="target", name="Target", step_class="fixture")
         edge = Edge.objects.create(workflow=workflow, source=source, target=target)
         denied = Step.objects.get(pk=source.pk).as_user(stranger)
 

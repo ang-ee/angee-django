@@ -27,7 +27,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.integrate.models import Bridge
 from angee.workflows import models as workflow_models
-from angee.workflows.steps import HandlerStep, StepResult
+from angee.workflows.steps import StepResult
 from tests.conftest import SchemaAddon, execute_schema, make_integration, result_data
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.iam_models import Group
@@ -35,6 +35,7 @@ from tests.integrate_models import Integration
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
     Edge,
+    FixtureStep,
     Step,
     StepRun,
     Trigger,
@@ -52,14 +53,14 @@ User = get_user_model()
 
 
 @pytest.fixture()
-def executable_handler(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make legacy trigger handler fixtures executable with their configured outcome."""
+def executable_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure the trigger fixture operation's outcome."""
 
-    def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         return StepResult.done(outcome=str(step_run.step.config.get("outcome", "done")))
 
-    monkeypatch.setattr(HandlerStep, "run", run)
+    monkeypatch.setattr(FixtureStep, "run", run)
 
 
 class TriggerSubject(models.Model):
@@ -127,11 +128,11 @@ class TriggerSchemaQuery:
 
 @pytest.fixture()
 def workflow_trigger_tables(
-    transactional_db: Any, monkeypatch: pytest.MonkeyPatch, executable_handler: None
+    transactional_db: Any, monkeypatch: pytest.MonkeyPatch, executable_fixture: None
 ) -> Iterator[None]:
     """Create trigger-specific concrete tables and sync workflow REBAC."""
 
-    del transactional_db, executable_handler
+    del transactional_db, executable_fixture
     models = (Group, *WORKFLOW_RUNTIME_MODELS, *TRIGGER_TEST_MODELS)
     workflow_triggers = importlib.import_module("angee.workflows.triggers")
     schemas = GraphQLSchemas(
@@ -161,13 +162,13 @@ def workflow_trigger_tables(
 
 
 @pytest.fixture()
-def item_handler(monkeypatch: pytest.MonkeyPatch, executable_handler: None) -> list[dict[str, Any]]:
-    """Run handlers synchronously and fail one mapped item by value."""
+def item_fixture(monkeypatch: pytest.MonkeyPatch, executable_fixture: None) -> list[dict[str, Any]]:
+    """Run fixture operations synchronously and fail one mapped item by value."""
 
-    del executable_handler
+    del executable_fixture
     calls: list[dict[str, Any]] = []
 
-    def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         calls.append({"key": step_run.step.key, "input": step_run.input})
         if step_run.step.key == "item" and step_run.input.get("item") == "bad":
@@ -177,7 +178,7 @@ def item_handler(monkeypatch: pytest.MonkeyPatch, executable_handler: None) -> l
             outcome=str(step_run.step.config.get("outcome", "done")),
         )
 
-    monkeypatch.setattr(HandlerStep, "run", run)
+    monkeypatch.setattr(FixtureStep, "run", run)
     return calls
 
 
@@ -243,7 +244,11 @@ def test_event_trigger_check_rejects_persisted_non_published_model(
     with system_context(reason="test invalid event trigger check setup"):
         draft = Workflow.objects.create(name="Invalid Event")
         Step.objects.create(
-            workflow=draft, key="start", name="Start", is_entry=True
+            workflow=draft,
+            key="start",
+            name="Start",
+            step_class="fixture",
+            is_entry=True,
         )
         workflow = draft.publish()
     trigger = Trigger(
@@ -794,14 +799,14 @@ def test_bad_schedule_row_is_logged_and_does_not_stop_scan(
 def test_map_aggregates_child_outcomes_and_routes_by_policy(
     workflow_trigger_tables: None,
     no_workflow_queue: None,
-    item_handler: list[dict[str, Any]],
+    item_fixture: list[dict[str, Any]],
     policy: dict[str, Any],
     expected_outcome: str,
     expected_branch: str,
 ) -> None:
     """A map step fans out one target step and routes on aggregate policy."""
 
-    del workflow_trigger_tables, no_workflow_queue, item_handler
+    del workflow_trigger_tables, no_workflow_queue, item_fixture
     workflow = _map_workflow(policy=policy, items=["ok", "bad", "also-ok"])
     run = start_run(workflow)
 
@@ -824,11 +829,11 @@ def test_map_aggregates_child_outcomes_and_routes_by_policy(
 def test_map_replay_does_not_duplicate_sibling_step_runs(
     workflow_trigger_tables: None,
     no_workflow_queue: None,
-    item_handler: list[dict[str, Any]],
+    item_fixture: list[dict[str, Any]],
 ) -> None:
     """Replaying advance while a map is waiting reuses existing indexed siblings."""
 
-    del workflow_trigger_tables, no_workflow_queue, item_handler
+    del workflow_trigger_tables, no_workflow_queue, item_fixture
     workflow = _map_workflow(policy={"all_must_succeed": True}, items=["one", "two", "three"])
     run = start_run(workflow)
 
@@ -1022,7 +1027,13 @@ def test_trigger_list_projects_summary_and_blocker_without_per_row_queries(
     admin = _platform_admin("workflow-trigger-list-admin")
     with system_context(reason="test trigger list projection"):
         draft = Workflow.objects.create(name="Trigger list")
-        Step.objects.create(workflow=draft, key="start", name="Start", is_entry=True)
+        Step.objects.create(
+            workflow=draft,
+            key="start",
+            name="Start",
+            step_class="fixture",
+            is_entry=True,
+        )
         draft.publish()
         Trigger.objects.create(
             workflow=draft,
@@ -1086,7 +1097,11 @@ def _event_trigger(
     with system_context(reason="test workflows event trigger"):
         draft = Workflow.objects.create(name=f"Event {condition}")
         Step.objects.create(
-            workflow=draft, key="start", name="Start", is_entry=True
+            workflow=draft,
+            key="start",
+            name="Start",
+            step_class="fixture",
+            is_entry=True,
         )
         draft.publish()
         trigger = Trigger.objects.create(
@@ -1105,7 +1120,11 @@ def _schedule_trigger(*, config: dict[str, Any], next_fire_at: Any) -> Trigger:
     with system_context(reason="test workflows schedule trigger"):
         draft = Workflow.objects.create(name="Schedule")
         Step.objects.create(
-            workflow=draft, key="start", name="Start", is_entry=True
+            workflow=draft,
+            key="start",
+            name="Start",
+            step_class="fixture",
+            is_entry=True,
         )
         draft.publish()
         trigger = Trigger.objects.create(
@@ -1175,7 +1194,13 @@ def test_trigger_activation_preserves_caller_authorization_and_rejects_stale_lin
 
     with system_context(reason="test stale trigger activation"):
         replacement = Workflow.objects.create(name="Replacement")
-        Step.objects.create(workflow=replacement, key="start", name="Start", is_entry=True)
+        Step.objects.create(
+            workflow=replacement,
+            key="start",
+            name="Start",
+            step_class="fixture",
+            is_entry=True,
+        )
         replacement.publish()
         models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), workflow_id=replacement.pk)
         with pytest.raises(ValidationError, match="lineage changed"):
@@ -1195,7 +1220,13 @@ def test_workflow_head_shares_reach_publications_and_versions_reject_direct_mana
         group = Group.objects.create(name="workflow-share-group")
         group.add_member(str(to_subject_ref(group_reader)))
         head = Workflow.objects.create(name="Shared workflow")
-        Step.objects.create(workflow=head, key="start", name="Start", is_entry=True)
+        Step.objects.create(
+            workflow=head,
+            key="start",
+            name="Start",
+            step_class="fixture",
+            is_entry=True,
+        )
         published = head.publish()
         head.grant_record_access("viewer", reader)
         head.grant_record_access("viewer", group)
@@ -1425,7 +1456,7 @@ def _map_workflow(*, policy: dict[str, Any], items: list[str]) -> Workflow:
             workflow=draft,
             key="entry",
             name="Entry",
-            step_class="handler",
+            step_class="fixture",
             is_entry=True,
             config={"outcome": "map"},
         )
@@ -1436,14 +1467,12 @@ def _map_workflow(*, policy: dict[str, Any], items: list[str]) -> Workflow:
             step_class="map",
             config={"target_step": "item", "items": items, **policy},
         )
-        Step.objects.create(
-            workflow=draft, key="item", name="Item", step_class="handler", config={"outcome": "done"}
-        )
+        Step.objects.create(workflow=draft, key="item", name="Item", step_class="fixture", config={"outcome": "done"})
         passed = Step.objects.create(
-            workflow=draft, key="passed", name="Passed", step_class="handler", config={"outcome": "done"}
+            workflow=draft, key="passed", name="Passed", step_class="fixture", config={"outcome": "done"}
         )
         failed = Step.objects.create(
-            workflow=draft, key="failed", name="Failed", step_class="handler", config={"outcome": "done"}
+            workflow=draft, key="failed", name="Failed", step_class="fixture", config={"outcome": "done"}
         )
         Edge.objects.create(workflow=draft, source=entry, target=map_step, condition="map")
         Edge.objects.create(workflow=draft, source=map_step, target=passed, condition="succeeded")

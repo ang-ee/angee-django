@@ -4,7 +4,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_serializer, model_serializer
 
-from angee.workflows.data_contracts import model_data_contract
+from angee.workflows.data_contracts import model_data_contract, schema_data_contract
+from angee.workflows.decision_actions import ReviewAction, build_decision_action
 
 
 class Address(BaseModel):
@@ -240,3 +241,74 @@ def test_unsupported_and_remote_refs_are_root_only_unknown() -> None:
 
     assert dynamic.matches([]) and not dynamic.matches(["key"])
     assert remote.matches([]) and not remote.matches(["key"])
+
+
+def test_publish_proofs_fail_closed_on_unhandled_structural_vocabulary() -> None:
+    schemas = [
+        {
+            "allOf": [
+                {
+                    "type": "object",
+                    "required": ["result"],
+                    "properties": {"result": {"const": "accepted"}},
+                }
+            ]
+        },
+        {
+            "type": "object",
+            "required": ["result"],
+            "properties": {"result": {"const": "accepted", "not": {"const": "rejected"}}},
+        },
+        {
+            "type": "array",
+            "minItems": 1,
+            "prefixItems": [{"type": "integer", "minimum": 1}],
+            "items": {"type": "integer"},
+        },
+    ]
+
+    all_of, conditional_leaf, tuple_array = (schema_data_contract(schema) for schema in schemas)
+    assert not all_of.guarantees_path(["result"])
+    assert all_of.literal_values_at_path(["result"]) is None
+    assert conditional_leaf.literal_values_at_path(["result"]) is None
+    assert not tuple_array.guarantees_path([0])
+    assert tuple_array.numeric_ranges_at_path([0]) is None
+
+
+def test_publish_proofs_reject_structural_siblings_of_refs_and_unions() -> None:
+    reference = schema_data_contract(
+        {
+            "$defs": {
+                "Result": {
+                    "type": "object",
+                    "required": ["value"],
+                    "properties": {"value": {"const": "accepted"}},
+                }
+            },
+            "$ref": "#/$defs/Result",
+            "if": {"properties": {"value": {"const": "accepted"}}},
+        }
+    )
+    union = schema_data_contract(
+        {
+            "oneOf": [{"const": 1}, {"const": 2}],
+            "not": {"const": 3},
+        }
+    )
+
+    assert not reference.guarantees_path(["value"])
+    assert reference.literal_values_at_path(["value"]) is None
+    assert union.literal_values_at_path([]) is None
+
+
+def test_publish_proofs_accept_builder_base_schema_intersected_with_every_action_branch() -> None:
+    authored = build_decision_action(
+        actions=(
+            ReviewAction(value="approve", label="Approve", verdict="COMPLETE"),
+            ReviewAction(value="reject", label="Reject", verdict="REJECT"),
+        )
+    )
+    contract = schema_data_contract(authored.decision_schema)
+
+    assert contract.guarantees_path(["action"])
+    assert contract.literal_values_at_path(["action"]) == ("approve", "reject")

@@ -19,8 +19,9 @@ from angee.workflows.attempts import (
     MapItemSource,
 )
 from angee.workflows.models import RunStatus, StepRunStatus
-from angee.workflows.steps import HandlerStep, StepResult
+from angee.workflows.steps import StepResult
 from tests.workflows import (
+    FixtureStep,
     StepAttempt,
     StepRun,
     advance_once,
@@ -42,7 +43,7 @@ def _map_workflow(*, item: Any, explicit: bool) -> Any:
             },
             {
                 "key": "body",
-                "step_class": "handler",
+                "step_class": "fixture",
                 "input_binding": {"kind": "map_item", "path": []} if explicit else None,
             },
         ),
@@ -60,11 +61,11 @@ def test_explicit_map_item_uses_exact_raw_json_and_retained_source(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
 
-    def echo(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def echo(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         return StepResult.done(step_run.input, outcome="done")
 
-    monkeypatch.setattr(HandlerStep, "run", echo)
+    monkeypatch.setattr(FixtureStep, "run", echo)
     run = start_run(_map_workflow(item=item, explicit=True))
     run_to_terminal(run)
 
@@ -108,11 +109,11 @@ def test_automatic_map_body_keeps_wrapped_input_and_captures_raw_source(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
 
-    def echo(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def echo(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         return StepResult.done(step_run.input, outcome="done")
 
-    monkeypatch.setattr(HandlerStep, "run", echo)
+    monkeypatch.setattr(FixtureStep, "run", echo)
     run = start_run(_map_workflow(item="scalar", explicit=False))
     run_to_terminal(run)
 
@@ -135,7 +136,7 @@ def test_map_capacity_failure_rolls_back_expansion_and_children(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -149,7 +150,7 @@ def test_map_capacity_failure_rolls_back_expansion_and_children(
             },
             {
                 "key": "body",
-                "step_class": "handler",
+                "step_class": "fixture",
                 "input_binding": {"kind": "map_item", "path": []},
             },
         ),
@@ -179,7 +180,7 @@ def test_map_reexpansion_reserves_reused_terminal_body_execution(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -212,7 +213,7 @@ def test_map_override_shrinks_current_membership_without_rebinding_history(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -220,7 +221,7 @@ def test_map_override_shrinks_current_membership_without_rebinding_history(
         name="Map shrink",
         steps=(
             {"key": "map", "step_class": "map", "config": {"target_step": "body", "items": [1, 2, 3]}},
-            {"key": "body", "step_class": "handler"},
+            {"key": "body", "step_class": "fixture"},
         ),
         edges=(),
     )
@@ -272,7 +273,7 @@ def test_map_aggregate_rejects_nonexpansion_attempt_without_projection(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -305,7 +306,7 @@ def test_map_membership_rejects_wrong_declared_target_without_rebinding(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -337,7 +338,7 @@ def test_map_aggregate_waits_for_complete_current_membership(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -367,22 +368,22 @@ def test_map_expansion_owner_rejects_non_map_step_without_writes(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
-    workflow = workflow_with_steps(steps=({"key": "handler", "step_class": "handler"},), edges=())
+    workflow = workflow_with_steps(steps=({"key": "fixture", "step_class": "fixture"},), edges=())
     run = start_run(workflow)
     with system_context(reason="load non-Map expansion target"):
-        handler = StepRun.objects.get(run=run, step__key="handler")
+        fixture = StepRun.objects.get(run=run, step__key="fixture")
 
     with pytest.raises(ValidationError, match="requires a Map step"):
-        StepAttempt.objects.record_map_expansion(handler, at=timezone.now())
+        StepAttempt.objects.record_map_expansion(fixture, at=timezone.now())
 
     with system_context(reason="verify non-Map expansion rollback"):
-        handler.refresh_from_db()
-        assert StepAttempt.objects.filter(step_run=handler).count() == 0
-    assert handler.status == StepRunStatus.SCHEDULED
+        fixture.refresh_from_db()
+        assert StepAttempt.objects.filter(step_run=fixture).count() == 0
+    assert fixture.status == StepRunStatus.SCHEDULED
 
 
 @pytest.mark.django_db(transaction=True)
@@ -393,7 +394,7 @@ def test_invalid_map_definition_retains_failed_wait_and_aggregate(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -428,7 +429,7 @@ def test_retained_map_advance_ignores_system_journal_rows(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -456,7 +457,7 @@ def test_map_membership_identity_rejects_public_instance_and_bulk_initializers(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -493,7 +494,7 @@ def test_map_claim_rejects_forged_sibling_step_membership(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -532,7 +533,7 @@ def test_map_expansion_signal_cannot_forge_membership_inside_owner_session(
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )

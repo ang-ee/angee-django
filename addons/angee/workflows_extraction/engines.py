@@ -22,8 +22,10 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.settings import ModelSettings
 
+from angee.agents.backends import is_retryable_provider_error
 from angee.agents.models import INFERENCE_OUTPUT_TOOL
 from angee.base.impl import ImplBase
+from angee.workflows.steps import TransientStepError
 from angee.workflows_extraction.contracts import (
     DocumentPart,
     DocumentPipelineError,
@@ -293,6 +295,7 @@ class InferenceMappingEngine(ExtractionEngine):
         """Recognize one page through the shared multimodal request seam."""
 
         self.validate_model(model, role="recognition")
+        settings = _inference_settings(config, timeout=timeout)
         started = time.monotonic()
         try:
             response, usage = model.infer(
@@ -307,9 +310,13 @@ class InferenceMappingEngine(ExtractionEngine):
                     )
                 ],
                 images=(BinaryContent(page.image_bytes, media_type=page.mime_type),),
-                settings=_inference_settings(config, timeout=timeout),
+                settings=settings,
             )
-        except (RuntimeError, TimeoutError, TypeError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - provider SDKs use unrelated exception trees.
+            if is_retryable_provider_error(error):
+                raise TransientStepError(str(error)) from error
+            if not isinstance(error, (RuntimeError, TimeoutError, TypeError, ValueError)):
+                raise
             raise DocumentPipelineError(
                 f"Text recognition request failed ({type(error).__name__}).",
                 stage="recognition_request",
@@ -345,9 +352,10 @@ class InferenceMappingEngine(ExtractionEngine):
 
         mapping_model = cast(Any, model)
         prompt = mapping_prompt(parts, schema, config)
+        self.validate_model(model, role="mapping")
+        settings = _inference_settings(config, timeout=timeout)
         started = time.monotonic()
         try:
-            self.validate_model(model, role="mapping")
             response, usage = mapping_model.infer(
                 [
                     ModelRequest(
@@ -358,9 +366,13 @@ class InferenceMappingEngine(ExtractionEngine):
                     )
                 ],
                 output_schema=schema,
-                settings=_inference_settings(config, timeout=timeout),
+                settings=settings,
             )
-        except (RuntimeError, TimeoutError, TypeError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - provider SDKs use unrelated exception trees.
+            if is_retryable_provider_error(error):
+                raise TransientStepError(str(error)) from error
+            if not isinstance(error, (RuntimeError, TimeoutError, TypeError, ValueError)):
+                raise
             raise DocumentPipelineError(
                 "Text schema mapping request failed.",
                 parts=parts,

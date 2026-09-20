@@ -43,7 +43,13 @@ from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_
 from angee.iam.permissions import read_resource_queryset, request_from_info, session_user
 from angee.iam.schema import UserType
 from angee.workflows import engine
-from angee.workflows.attempts import JsonPresence, deserialize_decision_specs
+from angee.workflows.attempts import (
+    FixtureRole,
+    FixtureSpec,
+    JsonPresence,
+    WorkflowScope,
+    deserialize_decision_specs,
+)
 from angee.workflows.data_contracts import DataContract, FlatDataContractEdge, FlatDataContractNode
 from angee.workflows.definitions import (
     DefinitionEdit,
@@ -61,7 +67,6 @@ from angee.workflows.definitions import (
 from angee.workflows.graph import GraphDiagnostic, GraphIdentity, GraphLocation
 from angee.workflows.models import TriggerKind
 from angee.workflows.steps import StepEffect, StepImpl, StepOperation
-from angee.workflows.testing import FixtureRole, FixtureSpec, WorkflowScope
 from angee.workflows.trigger_conditions import EventConditionCatalogue, EventConditionClause
 from angee.workflows.trigger_declarations import (
     EventTriggerConfig,

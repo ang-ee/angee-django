@@ -443,6 +443,7 @@ class IdentityApplyStepImpl(DecisionApplyStep):
     )
     effect = StepEffect.WRITE
     execution_mode = StepExecutionMode.DATABASE_COMMAND
+    replay_mode = RecoveryMode.FRESH
     effect_description = "Applies approved Party, Address, and PartyHandle facts."
     idempotent = True
     gate_step_class = IdentityReviewStepImpl

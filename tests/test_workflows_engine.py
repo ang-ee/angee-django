@@ -27,10 +27,11 @@ from angee.workflows import models as workflow_models
 from angee.workflows import steps as workflow_steps
 from angee.workflows.attempts import AttemptResult, AttemptResultKind, DecisionSpec, JsonPresence
 from angee.workflows.dispatch import WorkflowDispatchKind
-from angee.workflows.steps import HandlerStep, StepResult
+from angee.workflows.steps import StepResult
 from tests.workflows import (
     Decision,
     Edge,
+    FixtureStep,
     Step,
     StepAttempt,
     StepRun,
@@ -136,7 +137,7 @@ def test_decision_requester_may_share_exact_read_without_delegating_action_or_sh
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_start_captures_input_presence_and_initial_advance_atomically(
     workflow_engine_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -183,7 +184,7 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 @pytest.mark.parametrize(
     "invalid",
     [
@@ -211,12 +212,12 @@ def test_start_rejects_malformed_input_presence_before_writes(
 
 
 @pytest.fixture()
-def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Make the abstract handler testable by journaling calls from config."""
+def fixture_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Journal calls made through the concrete test fixture operation."""
 
     calls: list[dict[str, Any]] = []
 
-    def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         config = dict(step_run.step.config)
         calls.append(
@@ -227,7 +228,7 @@ def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             }
         )
         if config.get("mode") == "error":
-            raise RuntimeError(str(config.get("error", "handler failed")))
+            raise RuntimeError(str(config.get("error", "fixture failed")))
         output = {
             "key": step_run.step.key,
             "input": step_run.input,
@@ -235,7 +236,7 @@ def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         }
         return StepResult.done(output=output, outcome=str(config.get("outcome", "done")))
 
-    monkeypatch.setattr(HandlerStep, "run", run)
+    monkeypatch.setattr(FixtureStep, "run", run)
     return calls
 
 
@@ -243,7 +244,7 @@ def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 def test_two_step_run_completes_end_to_end(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """A run pins the published version, injects output, and succeeds."""
 
@@ -267,11 +268,11 @@ def test_two_step_run_completes_end_to_end(
     assert [row.status for row in rows] == [step_run_status.SUCCEEDED, step_run_status.SUCCEEDED]
     finish = step_run_for(run, "finish")
     assert finish.input["value"] == 7
-    assert [call["key"] for call in handler_calls] == ["start", "finish"]
+    assert [call["key"] for call in fixture_calls] == ["start", "finish"]
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_start_accepts_matching_and_empty_subject_declarations(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -302,7 +303,7 @@ def test_start_accepts_matching_and_empty_subject_declarations(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_start_rejects_subject_outside_subject_declaration(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -330,7 +331,7 @@ def test_start_rejects_subject_outside_subject_declaration(
 def test_crash_replay_does_not_reexecute_completed_steps(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Replaying advance/execute after a completed step reuses journaled output."""
 
@@ -355,7 +356,7 @@ def test_crash_replay_does_not_reexecute_completed_steps(
     execute_started(run)
     run_to_terminal(run)
 
-    assert [call["key"] for call in handler_calls] == ["start", "finish"]
+    assert [call["key"] for call in fixture_calls] == ["start", "finish"]
     assert step_run_for(run, "finish").input["recorded"] == "yes"
 
 
@@ -363,11 +364,11 @@ def test_crash_replay_does_not_reexecute_completed_steps(
 def test_duplicate_advance_claims_a_scheduled_step_once(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Duplicate advance calls are idempotent while a step is already claimed."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=({"key": "start", "config": {"outcome": "done"}},),
@@ -389,11 +390,11 @@ def test_duplicate_advance_claims_a_scheduled_step_once(
 def test_conditional_branch_skip_cascades_through_all_success_join(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Untaken branch targets skip, and default joins skip behind them."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -420,11 +421,11 @@ def test_conditional_branch_skip_cascades_through_all_success_join(
 def test_none_failed_min_one_success_join_cures_post_branch_skip(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """A post-branch join can run when one branch succeeded and the other skipped."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -456,11 +457,11 @@ def test_none_failed_min_one_success_join_cures_post_branch_skip(
 def test_conditional_convergence_counts_each_predecessor_route_once(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Inactive alternatives cannot preempt a later matching converging route."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     step_run_status = workflow_models.StepRunStatus
     converging = workflow_with_steps(
         key="conditional-convergence",
@@ -551,11 +552,11 @@ def test_conditional_convergence_counts_each_predecessor_route_once(
 def test_one_success_join_runs_without_waiting_for_all_siblings(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """The one_success join schedules as soon as one upstream succeeds."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -600,7 +601,7 @@ def test_one_success_join_runs_without_waiting_for_all_siblings(
         (workflow_models.JoinRule.NONE_FAILED_MIN_ONE_SUCCESS, ("skipped", "succeeded"), "started"),
     ],
 )
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_join_rule_truth_table(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -660,11 +661,11 @@ def test_join_rule_truth_table(
 def test_content_routing_uses_outcome_edges(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Only edges matching the source outcome are taken."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -682,7 +683,7 @@ def test_content_routing_uses_outcome_edges(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 @pytest.mark.parametrize("conditions", [("pdf", "image"), ("image", "pdf")])
 def test_alternative_outcomes_to_same_target_route_once_regardless_of_edge_order(
     workflow_engine_tables: None,
@@ -718,11 +719,11 @@ def test_alternative_outcomes_to_same_target_route_once_regardless_of_edge_order
 def test_max_steps_fails_run_before_claiming_next_step(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """The engine, not a step impl, enforces the pinned max_steps bound."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         max_steps=1,
@@ -748,11 +749,11 @@ def test_max_steps_fails_run_before_claiming_next_step(
 def test_timer_wait_resumes_from_wake_sweep(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """A durable wait step becomes executable when the sweep sees its wake time."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     now = timezone.now()
     wake_at = now + timedelta(hours=1)
@@ -797,11 +798,11 @@ def test_timer_wait_resumes_from_wake_sweep(
 def test_deliver_is_idempotent_and_ignores_terminal_runs(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Repeated delivery advances active generations while terminal runs ignore delivery."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     now = timezone.now()
     parked = workflow_with_steps(
         name="Deliver parked run",
@@ -869,7 +870,7 @@ def test_deliver_artifact_wakes_all_exact_external_waits_without_approvals(
     reviewer = User.objects.create_user(username="artifact-reviewer")
     now = timezone.now()
 
-    def wait_on_dependency(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def wait_on_dependency(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self
         if step_run.step.key == "entry":
             return StepResult.done(outcome="done")
@@ -879,12 +880,12 @@ def test_deliver_artifact_wakes_all_exact_external_waits_without_approvals(
             artifacts=(workflow_steps.ArtifactSpec(dependency, "External dependency"),),
         )
 
-    monkeypatch.setattr(HandlerStep, "run", wait_on_dependency)
+    monkeypatch.setattr(FixtureStep, "run", wait_on_dependency)
     workflow = workflow_with_steps(
         name="Exact artifact delivery",
         steps=(
-            {"key": "entry", "step_class": "handler"},
-            {"key": "external", "step_class": "handler"},
+            {"key": "entry", "step_class": "fixture"},
+            {"key": "external", "step_class": "fixture"},
             {
                 "key": "approval",
                 "step_class": "gate",
@@ -977,7 +978,7 @@ def test_deliver_artifact_wakes_all_exact_external_waits_without_approvals(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_cancellation_propagates_to_journal_and_child_runs(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1041,7 +1042,7 @@ def test_cancellation_propagates_to_journal_and_child_runs(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_transient_step_error_uses_configured_retry_backoff(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1065,11 +1066,11 @@ def test_transient_step_error_uses_configured_retry_backoff(
     run = start_run(workflow)
     step_run = advance_once(run)[0]
 
-    def run_transient(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run_transient(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
         raise transient_error("try again")
 
-    monkeypatch.setattr(HandlerStep, "run", run_transient)
+    monkeypatch.setattr(FixtureStep, "run", run_transient)
 
     from angee.workflows import engine
 
@@ -1093,11 +1094,11 @@ def test_transient_step_error_uses_configured_retry_backoff(
 def test_hard_failure_routes_failed_outcome(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Hard impl failures journal outcome=failed and activate matching edges."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -1125,7 +1126,7 @@ def test_hard_failure_routes_failed_outcome(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_step_impl_heartbeat_helper_updates_started_row(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1142,12 +1143,12 @@ def test_step_impl_heartbeat_helper_updates_started_row(
     )
     run = start_run(workflow)
 
-    def run_with_heartbeat(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run_with_heartbeat(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del now
         self.heartbeat(step_run, at=pulse_at)
         return StepResult.done(output={}, outcome="done")
 
-    monkeypatch.setattr(HandlerStep, "run", run_with_heartbeat)
+    monkeypatch.setattr(FixtureStep, "run", run_with_heartbeat)
     advance_once(run, now=started_at)
     execute_started(run, now=started_at)
 
@@ -1160,11 +1161,11 @@ def test_heartbeat_timeout_reaps_started_rows_and_routes_failed_outcome(
     workflow_engine_tables: None,
     no_workflow_queue: None,
     settings: Any,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """The reaper fails stale started rows, enqueues advance, and failed edges route."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     settings.ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT = 60
     step_run_status = workflow_models.StepRunStatus
     now = timezone.now()
@@ -1204,11 +1205,11 @@ def test_reaper_ignores_waiting_rows(
     workflow_engine_tables: None,
     no_workflow_queue: None,
     settings: Any,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Waiting rows represent durable waits and are exempt from heartbeat reaping."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     settings.ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT = 60
     step_run_status = workflow_models.StepRunStatus
     now = timezone.now()
@@ -1234,7 +1235,7 @@ def test_reaper_ignores_waiting_rows(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_reaper_finishes_canceled_started_rows(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1274,11 +1275,11 @@ def test_reaper_finishes_canceled_started_rows(
 def test_error_workflow_fires_once_with_failed_run_subject(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """A failed run starts its linked error workflow once using the failed StepRun as parent."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     run_status = workflow_models.RunStatus
     error_version = workflow_with_steps(
         name="Error workflow",
@@ -1291,6 +1292,7 @@ def test_error_workflow_fires_once_with_failed_run_subject(
             workflow=draft,
             key="explode",
             name="Explode",
+            step_class="fixture",
             config={"mode": "error", "error": "boom"},
             is_entry=True,
         )
@@ -1316,11 +1318,11 @@ def test_error_workflow_fires_once_with_failed_run_subject(
 def test_linked_business_workflow_can_start_its_error_workflow(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Business child linkage must not suppress the child's error handling."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     recovery = workflow_with_steps(
         name="Child recovery", steps=({"key": "recover", "config": {"outcome": "done"}},), edges=()
     )
@@ -1334,6 +1336,7 @@ def test_linked_business_workflow_can_start_its_error_workflow(
             workflow=draft,
             key="explode",
             name="Explode",
+            step_class="fixture",
             config={"mode": "error", "error": "child failed"},
             is_entry=True,
         )
@@ -1357,11 +1360,11 @@ def test_linked_business_workflow_can_start_its_error_workflow(
 def test_error_workflow_run_does_not_start_another_error_workflow(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """A failing run already launched as error handling does not recurse."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
     error_version = workflow_with_steps(
         name="Self error workflow",
         steps=({"key": "recover", "config": {"mode": "error", "error": "recovery failed"}},),
@@ -1376,6 +1379,7 @@ def test_error_workflow_run_does_not_start_another_error_workflow(
             workflow=primary,
             key="explode",
             name="Explode",
+            step_class="fixture",
             config={"mode": "error", "error": "boom"},
             is_entry=True,
         )
@@ -1393,7 +1397,7 @@ def test_error_workflow_run_does_not_start_another_error_workflow(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_override_run_reuses_existing_terminal_step_run(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1434,7 +1438,7 @@ def test_override_run_reuses_existing_terminal_step_run(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_workflow_run_save_checks_current_invocation_under_run_lock(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1462,7 +1466,7 @@ def test_workflow_run_save_checks_current_invocation_under_run_lock(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_ordinary_workflow_run_invocation_is_immutable_across_write_paths(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1510,6 +1514,7 @@ def test_workflow_step_save_preserves_validated_config(
             workflow=workflow,
             key="start",
             name="Start",
+            step_class="fixture",
             config={"outcome": "done"},
             is_entry=True,
         )
@@ -1576,7 +1581,7 @@ def test_postgres_lock_sql_scopes_joined_engine_queries_to_self(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_publish_retargets_new_starts_without_migrating_trigger(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1609,7 +1614,7 @@ def test_publish_retargets_new_starts_without_migrating_trigger(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_published_and_archived_definition_rows_are_immutable(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1629,7 +1634,12 @@ def test_published_and_archived_definition_rows_are_immutable(
         edge = Edge.objects.get(workflow=workflow)
 
         with pytest.raises(ValidationError, match="immutable"):
-            Step.objects.create(workflow=workflow, key="late", name="Late")
+            Step.objects.create(
+                workflow=workflow,
+                key="late",
+                name="Late",
+                step_class="fixture",
+            )
 
         step.name = "Edited"
         with pytest.raises(ValidationError, match="immutable"):
@@ -1646,7 +1656,7 @@ def test_published_and_archived_definition_rows_are_immutable(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_archived_latest_version_refuses_new_runs(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -1668,7 +1678,7 @@ def test_archived_latest_version_refuses_new_runs(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_referenced_published_version_delete_is_rejected_as_immutable(
     workflow_engine_tables: None,
     no_workflow_queue: None,

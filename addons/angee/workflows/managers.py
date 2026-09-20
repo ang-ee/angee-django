@@ -71,6 +71,11 @@ from angee.workflows.attempts import (
     DecisionTimerIntent,
     DecisionTimerKind,
     ExternalOperationPolicy,
+    FixtureRole,
+    FixtureSource,
+    FixtureSourcePage,
+    FixtureSourceSummary,
+    FixtureSpec,
     InvocationAdmission,
     JsonPresence,
     LeaseRevocation,
@@ -81,13 +86,18 @@ from angee.workflows.attempts import (
     RecoveryMode,
     RecoveryPlan,
     RetryIntent,
+    WorkflowRepairContext,
+    WorkflowScope,
+    WorkflowSetupPlan,
     deserialize_decision_specs,
     json_values_equal,
     map_child_input,
     serialize_decision_specs,
+    validate_fixture_spec,
     validate_json_presence,
     workflow_result_terminal_match_error,
 )
+from angee.workflows.data_contracts import JsonPath, json_value_at_path
 from angee.workflows.decision_actions import (
     compile_decision_action_schema,
     retained_decision_form_schema,
@@ -147,17 +157,6 @@ from angee.workflows.states import (
     WorkflowStatus,
 )
 from angee.workflows.steps import StepExecutionMode, retry_policy_from_config
-from angee.workflows.testing import (
-    FixtureRole,
-    FixtureSource,
-    FixtureSourcePage,
-    FixtureSourceSummary,
-    FixtureSpec,
-    WorkflowRepairContext,
-    WorkflowScope,
-    WorkflowSetupPlan,
-    validate_fixture_spec,
-)
 from angee.workflows.trigger_declarations import (
     EventAdmissionPolicy,
     EventSource,
@@ -2988,20 +2987,6 @@ def retained_gate_output(attempt: Any, decisions: Collection[Any]) -> dict[str, 
     return decision_gate_output(selected, outcome=outcome)
 
 
-def _decision_value_at(value: Any, path: Collection[str | int]) -> Any:
-    """Select one JSON value by a typed path without fallback or coercion."""
-
-    current = value
-    for part in path:
-        if isinstance(part, str) and isinstance(current, dict) and part in current:
-            current = current[part]
-        elif type(part) is int and isinstance(current, list) and 0 <= part < len(current):
-            current = current[part]
-        else:
-            raise ValidationError({"resolution_path": "The admitted resolution path does not exist."})
-    return current
-
-
 def _decision_source_leaf(
     provenance: Any, path: tuple[str | int, ...], *, recovery_source_attempt_id: int | None
 ) -> tuple[dict[str, Any], tuple[str | int, ...]]:
@@ -3156,7 +3141,7 @@ def _canonical_declared_target(model_label: str, public_id: str) -> tuple[str, s
 def _admitted_decision_input(
     *,
     input_source: DecisionInputSource,
-    path: tuple[str | int, ...],
+    path: JsonPath,
     step_run: Any,
     attempt: Any,
     using: str,
@@ -3256,10 +3241,10 @@ def _admitted_decision_input(
     if publication_id != public_id_for(type(original_child.workflow), original_child.workflow_id):
         raise ValidationError({"decision": "The owned child publication differs from its retained call."})
 
-    child_value = _decision_value_at(attempt.input, path)
-    original_value = _decision_value_at(original_child.input, path)
+    child_value = json_value_at_path(attempt.input, path, field="resolution_path")
+    original_value = json_value_at_path(original_child.input, path, field="resolution_path")
     parent_path = ("input", *path)
-    parent_value = _decision_value_at(parent_attempt.input, parent_path)
+    parent_value = json_value_at_path(parent_attempt.input, parent_path, field="resolution_path")
     if not json_values_equal(child_value, original_value) or not json_values_equal(
         original_value,
         parent_value,
@@ -3558,7 +3543,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         step_run_id: int,
         *,
         lease_token: uuid.UUID,
-        child_id_path: tuple[str | int, ...],
+        child_id_path: JsonPath,
         expected_starter_class: str,
     ) -> Any:
         """Resolve the exact child named by a current admitted starter output."""
@@ -3608,11 +3593,12 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             selected_path = leaf.get("path", [])
             if not isinstance(selected_path, list) or any(type(part) not in {str, int} for part in selected_path):
                 raise ValidationError({"child": "The retained starter path is invalid."})
-            retained_id = _decision_value_at(
+            retained_id = json_value_at_path(
                 source_attempt.output,
                 (*selected_path, *remaining),
+                field="child_id_path",
             )
-            admitted_id = _decision_value_at(attempt.input, child_id_path)
+            admitted_id = json_value_at_path(attempt.input, child_id_path, field="child_id_path")
             if not isinstance(retained_id, str) or not retained_id or retained_id != admitted_id:
                 raise ValidationError({"child": "The child id differs from its exact admitted starter."})
             run_model = self.model._meta.apps.get_model("workflows", "WorkflowRun")
@@ -3643,7 +3629,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         step_run_id: int,
         *,
         lease_token: uuid.UUID,
-        child_id_path: tuple[str | int, ...],
+        child_id_path: JsonPath,
         expected_starter_class: str,
         actor: Any,
     ) -> tuple[Any, Any | None]:
@@ -3685,11 +3671,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     origin=RunOrigin.RECOVERY,
                     recovery_mode=str(RecoveryMode.FRESH),
                     recovery_source_attempt__step_run__run_id=original.pk,
-                    status=RunStatus.SUCCEEDED,
                 )
                 .order_by("pk")
             )
             exact: list[Any] = []
+            active: list[Any] = []
             for recovery in recoveries:
                 source = recovery.recovery_source_attempt
                 source_step = None if source is None else source.step_run
@@ -3708,19 +3694,25 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     or recovery.admission_actor_subject() != actor_ref
                     or recovery.recovery_request_actor_ref != str(actor_ref)
                     or recovery.execution_lineage_root_id() != original_root_id
-                    or not isinstance(result, dict)
-                    or result.get("status") != "succeeded"
-                    or not isinstance(result.get("outcome"), str)
-                    or not result.get("outcome")
-                    or result.get("error") is not None
-                    or "output" not in result
                 ):
-                    raise ValidationError({"child": "A successful child recovery has conflicting retained facts."})
-                exact.append(recovery)
+                    raise ValidationError({"child": "A child recovery has conflicting retained facts."})
+                if recovery.status in {RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING}:
+                    active.append(recovery)
+                elif recovery.status == RunStatus.SUCCEEDED:
+                    if (
+                        not isinstance(result, dict)
+                        or result.get("status") != "succeeded"
+                        or not isinstance(result.get("outcome"), str)
+                        or not result.get("outcome")
+                        or result.get("error") is not None
+                        or "output" not in result
+                    ):
+                        raise ValidationError({"child": "A successful child recovery has conflicting results."})
+                    exact.append(recovery)
             if len(exact) > 1:
                 raise ValidationError({"child": "The admitted child has multiple successful FRESH recoveries."})
             if not exact:
-                return original, None
+                return (original, None) if active else (original, original)
             completion = exact[0]
             if readable is None or not readable.using(alias).filter(pk=completion.pk).exists():
                 raise PermissionDenied("Successful child recovery is unavailable.")
@@ -3731,7 +3723,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         step_run_id: int,
         *,
         lease_token: uuid.UUID,
-        authority_path: tuple[str | int, ...],
+        authority_path: JsonPath,
         proposal_gate_path: tuple[str | int, ...] = (),
     ) -> tuple[Any, Any]:
         """Resolve a prior human gate through this exact active invocation input."""
@@ -3773,7 +3765,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
     def consume_decision_resolution(
         self,
         step_run_id: int,
-        resolution_path: tuple[str | int, ...],
+        resolution_path: JsonPath,
         *,
         lease_token: uuid.UUID,
         input_source: DecisionInputSource = "attempt_input",
@@ -3864,8 +3856,12 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             selected_path = leaf.get("path", [])
             if not isinstance(selected_path, list) or any(type(part) not in {str, int} for part in selected_path):
                 raise ValidationError({"decision": "The admitted gate source path is invalid."})
-            retained_value = _decision_value_at(projected, (*selected_path, *remaining))
-            admitted_value = _decision_value_at(admitted_input, admitted_path)
+            retained_value = json_value_at_path(
+                projected,
+                (*selected_path, *remaining),
+                field="resolution_path",
+            )
+            admitted_value = json_value_at_path(admitted_input, admitted_path, field="resolution_path")
             if not json_values_equal(admitted_value, retained_value):
                 raise ValidationError({"decision": "The input resolution differs from its retained gate source."})
             try:
@@ -6919,7 +6915,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
     def _resolve_admitted_input_authority(
         *,
         input_source: DecisionInputSource,
-        authority_path: tuple[str | int, ...],
+        authority_path: JsonPath,
         proposal_gate_path: tuple[str | int, ...],
         step_run: Any,
         attempt: Any,
@@ -6936,7 +6932,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             attempt=attempt,
             using=using,
         )
-        selected_id = _decision_value_at(admitted_input, admitted_path)
+        selected_id = json_value_at_path(admitted_input, admitted_path, field="authority_path")
         if not isinstance(selected_id, str) or not selected_id:
             raise ValidationError({"target": "Admitted target authority ID is missing."})
         leaf, remaining = _decision_source_leaf(
@@ -6968,7 +6964,8 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             )
             gate_output = retained_gate_output(gate_attempt, gate_decisions)
             if gate_output is None or not json_values_equal(
-                selected_id, _decision_value_at(gate_output, (*source_path, *remaining))
+                selected_id,
+                json_value_at_path(gate_output, (*source_path, *remaining), field="authority_path"),
             ):
                 raise ValidationError({"target": "Direct target authority differs from its settled gate."})
         elif producer_attempt.result_kind == str(AttemptResultKind.DONE):
@@ -6979,7 +6976,12 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             ):
                 raise ValidationError({"target": "Current proposal output differs from retained evidence."})
             if not producer_attempt.output_present or not json_values_equal(
-                selected_id, _decision_value_at(producer_attempt.output, (*source_path, *remaining))
+                selected_id,
+                json_value_at_path(
+                    producer_attempt.output,
+                    (*source_path, *remaining),
+                    field="authority_path",
+                ),
             ):
                 raise ValidationError({"target": "Proposal did not retain the selected authority ID."})
             gate_leaf, gate_remaining = _decision_source_leaf(
@@ -7004,7 +7006,11 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             )
             gate_output = retained_gate_output(gate_attempt, gate_decisions)
             gate_path = gate_leaf.get("path", [])
-            admitted_gate_value = _decision_value_at(producer_attempt.input, proposal_gate_path)
+            admitted_gate_value = json_value_at_path(
+                producer_attempt.input,
+                proposal_gate_path,
+                field="authority_gate_path",
+            )
             forwarded_id = (
                 admitted_gate_value.get("decision_id") if isinstance(admitted_gate_value, dict) else admitted_gate_value
             )
@@ -7015,7 +7021,11 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 or forwarded_id != selected_id
                 or not json_values_equal(
                     admitted_gate_value,
-                    _decision_value_at(gate_output, (*gate_path, *gate_remaining)),
+                    json_value_at_path(
+                        gate_output,
+                        (*gate_path, *gate_remaining),
+                        field="authority_gate_path",
+                    ),
                 )
             ):
                 raise ValidationError({"target": "Proposal did not admit the original settled gate."})

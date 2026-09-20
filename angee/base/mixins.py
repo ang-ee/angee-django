@@ -87,12 +87,8 @@ class ConditionalSharedReaderQuerySet(
         """Reject write shapes that bypass wildcard-reader reconciliation."""
 
         if operation == "bulk_create":
-            raise ValidationError(
-                "Create conditional shared-reader rows through their native owner."
-            )
-        if operation in {"update", "bulk_update"} and self._policy_fields(
-            self.model, changed_fields
-        ):
+            raise ValidationError("Create conditional shared-reader rows through their native owner.")
+        if operation in {"update", "bulk_update"} and self._policy_fields(self.model, changed_fields):
             raise ValidationError("Change shared-reader eligibility through its native owner.")
         super()._validate_write_fence(
             operation,
@@ -142,9 +138,7 @@ class ConditionalSharedReaderMixin(models.Model):
 
         alias = kwargs.get("using") or self._state.db or DEFAULT_DB_ALIAS
         if alias != DEFAULT_DB_ALIAS:
-            raise ValidationError(
-                "Conditional shared-reader writes require the default authorization database."
-            )
+            raise ValidationError("Conditional shared-reader writes require the default authorization database.")
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             update_fields = {str(field) for field in update_fields}
@@ -294,11 +288,7 @@ class AuditMixin(models.Model):
         """Return whether a bulk update only clears the actor audit fields."""
 
         audit_fields = frozenset(field.name for field in AuditMixin._meta.fields)
-        return (
-            bool(values)
-            and set(values).issubset(audit_fields)
-            and all(value is None for value in values.values())
-        )
+        return bool(values) and set(values).issubset(audit_fields) and all(value is None for value in values.values())
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row after stamping user audit fields."""
@@ -487,15 +477,12 @@ class HierarchyQuerySet(WriteFencedQuerySetMixin, models.QuerySet[_HierarchyMode
 
         return cast(Self, self.filter(path__in=node.ancestor_paths()))
 
-    def _clone(self) -> Self:
+    def _clone(self, **kwargs: Any) -> Self:
         """Carry a live hierarchy-owner token through cooperative queryset narrowing."""
 
-        clone = cast(Self, super()._clone())
+        clone = cast(Self, super()._clone(**kwargs))
         authority = _hierarchy_path_write.token(self.db)
-        if (
-            authority is not None
-            and getattr(self, _HIERARCHY_PATH_WRITE_TOKEN, None) is authority
-        ):
+        if authority is not None and getattr(self, _HIERARCHY_PATH_WRITE_TOKEN, None) is authority:
             setattr(clone, _HIERARCHY_PATH_WRITE_TOKEN, authority)
         return clone
 
@@ -539,12 +526,13 @@ def _hierarchy_path_write_authority(
 ) -> WriteFenceToken[Any] | None:
     """Return the exact live path-write capability carried by ``queryset``."""
 
-    authority = _hierarchy_path_write.token(queryset.db)
+    live_authority = _hierarchy_path_write.token(queryset.db)
+    if live_authority is None:
+        return None
+    authority = cast(WriteFenceToken[Any], live_authority)
     if (
-        authority is None
-        or getattr(queryset, _HIERARCHY_PATH_WRITE_TOKEN, None) is not authority
-        or authority.model is not queryset.model
-        or authority.operation != "update"
+        getattr(queryset, _HIERARCHY_PATH_WRITE_TOKEN, None) is not authority
+        or not authority.matches_queryset(queryset, "update")
         or set(values) != {"path"}
         or values["path"] is not authority.payload
     ):
@@ -558,8 +546,7 @@ def is_hierarchy_path_write_authorized(
 ) -> bool:
     """Tell a composed guard whether this is the hierarchy owner's exact path write."""
 
-    authority = _hierarchy_path_write_authority(queryset, values)
-    return authority is not None and not authority.consumed
+    return _hierarchy_path_write_authority(queryset, values) is not None
 
 
 class HierarchyMixin(models.Model):
@@ -774,9 +761,7 @@ class HierarchyMixin(models.Model):
                 # rewrite the whole table.
                 replacement = Replace(F("path"), Value(old_path), Value(new_path))
                 self._write_hierarchy_path(
-                    system_queryset(type(self), using=database).filter(
-                        path__startswith=old_path
-                    ),
+                    system_queryset(type(self), using=database).filter(path__startswith=old_path),
                     replacement,
                     using=database,
                 )
@@ -801,8 +786,6 @@ class HierarchyMixin(models.Model):
         setattr(queryset, _HIERARCHY_PATH_WRITE_TOKEN, authority)
         with _hierarchy_path_write.scope(using, authority):
             updated = queryset.update(path=path_value)
-        if not authority.consumed:
-            raise RuntimeError("Hierarchy path authority was not consumed.")
         return updated
 
     def _lock_moved_paths(self, *, using: str) -> str:
@@ -846,12 +829,7 @@ class HierarchyMixin(models.Model):
     def _hierarchy_committed_parent_id(self, *, using: str) -> Any:
         """Return this row's committed ``parent_id`` from the database."""
 
-        return (
-            system_queryset(type(self), using=using)
-            .filter(pk=self.pk)
-            .values_list("parent_id", flat=True)
-            .first()
-        )
+        return system_queryset(type(self), using=using).filter(pk=self.pk).values_list("parent_id", flat=True).first()
 
     def _hierarchy_parent(self) -> HierarchyMixin | None:
         """Return the parent instance (cached when assigned), or ``None`` for a root."""

@@ -15,7 +15,7 @@ from django.utils import timezone
 from rebac import system_context, to_subject_ref
 
 from angee.workflows import engine
-from angee.workflows.attempts import ArtifactSpec, InvocationAdmission, LeaseRevocationReason, RecoveryMode
+from angee.workflows.attempts import ArtifactSpec, InvocationAdmission, LeaseRevocationReason
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepEffect, StepExecutionMode, StepResult
@@ -236,14 +236,14 @@ def test_finalization_failure_rolls_back_domain_command_and_result(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_process_evidence_is_fresh_recoverable_and_rolls_back_with_finalization(
+def test_process_evidence_has_no_implicit_replay_and_rolls_back_with_finalization(
     workflow_engine_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     capability = ProcessEvidenceStepImpl.recovery_capability(attempt=object())
-    assert capability.mode is RecoveryMode.FRESH
+    assert capability.mode is None
 
     user, step_run, attempt, dispatch = _scheduled_command(
         monkeypatch,

@@ -91,6 +91,9 @@ def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
     declared = _declared_projection_fact(field, None, "angee_scalar_hint")
     if declared is not None:
         return declared
+    if isinstance(field, models.GeneratedField):
+        # A generated column projects as its declared output field.
+        return model_field_scalar(field.output_field)
     if isinstance(field, models.BooleanField):
         return "Boolean"
     if isinstance(field, models.IntegerField):

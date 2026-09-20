@@ -18,6 +18,7 @@ from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_jsonable_python
 
 from angee.agents.context import render_view_context
+from angee.agents.models import normalize_inference_usage
 from angee.agents.runners import SessionHeartbeat, SessionRunner, SessionUpdateSink, TurnOutcome
 from angee.agents_runtime_pydantic.acp import approval_requests, updates_for_event
 from angee.agents_runtime_pydantic.toolsets import toolsets_for_session
@@ -103,7 +104,7 @@ class PydanticAISessionRunner(SessionRunner):
                 raise RuntimeError("pydantic-ai completed without an AgentRunResultEvent.")
 
             replay_state = to_jsonable_python(_without_binary_content(result.all_messages()))
-            usage = _usage_delta(result.usage)
+            usage = normalize_inference_usage(result.usage)
             if isinstance(result.output, DeferredToolRequests):
                 requests = approval_requests(result.output)
                 if not requests and result.output.calls:
@@ -176,19 +177,3 @@ async def _heartbeat_loop(heartbeat: SessionHeartbeat) -> None:
     while True:
         await asyncio.sleep(60)
         await database_sync_to_async(heartbeat, thread_sensitive=True)()
-
-
-def _usage_delta(usage: Any) -> dict[str, int]:
-    """Normalize pydantic-ai RunUsage to the workflow budget vocabulary."""
-
-    delta = {
-        "input_tokens": int(usage.input_tokens or 0),
-        "output_tokens": int(usage.output_tokens or 0),
-        "requests": int(usage.requests or 0),
-        "tool_calls": int(usage.tool_calls or 0),
-    }
-    delta = {key: value for key, value in delta.items() if value}
-    total = int(usage.total_tokens or 0)
-    if total:
-        delta["tokens"] = total
-    return delta
