@@ -8,7 +8,7 @@ from typing import Any, ClassVar, Self, TypeVar, cast
 import reversion
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, models, router, transaction
+from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
 from rebac import (
@@ -23,6 +23,7 @@ from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id
+from angee.base.db import get_write_alias
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.scoping import system_queryset
@@ -129,9 +130,10 @@ class ConditionalSharedReaderMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist and reconcile when this write can change reader eligibility."""
 
-        alias = kwargs.get("using") or self._state.db or DEFAULT_DB_ALIAS
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         if alias != DEFAULT_DB_ALIAS:
             raise ValidationError("Conditional shared-reader writes require the default authorization database.")
+        kwargs["using"] = alias
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             update_fields = {str(field) for field in update_fields}
@@ -154,7 +156,7 @@ class ConditionalSharedReaderMixin(models.Model):
     def reconcile_shared_reader(self, *, using: str | None = None) -> None:
         """Reconcile only this owner's wildcard tuple from persisted row facts."""
 
-        alias = using or self._state.db or DEFAULT_DB_ALIAS
+        alias = get_write_alias(type(self), using=using, instance=self)
         if alias != DEFAULT_DB_ALIAS:
             raise ValidationError(
                 "Conditional shared-reader reconciliation requires the default authorization database."
@@ -474,10 +476,12 @@ class RevisionMixin(models.Model):
     def revisions(self) -> Any:
         """Return this row's django-reversion versions newest-first."""
 
-        versions = reversion.models.Version.objects.get_for_object(self)
+        versions = reversion.models.Version.objects.get_for_object(
+            self, model_db=get_write_alias(type(self), instance=self)
+        )
         return versions.select_related("revision")
 
-    def revert_to(self, version: Any) -> None:
+    def revert_to(self, version: Any, *, using: str | None = None) -> None:
         """Restore declared revisioned fields from ``version`` and save.
 
         Saves with ``update_fields`` so unrelated in-memory columns are not
@@ -485,6 +489,7 @@ class RevisionMixin(models.Model):
         not depend on the caller's transport opening a reversion block.
         """
 
+        alias = get_write_alias(type(self), using=using, instance=self)
         data = version.field_dict
         reverted: list[str] = []
         for name in self.revisioned_fields:
@@ -493,8 +498,8 @@ class RevisionMixin(models.Model):
                 reverted.append(name)
         if not reverted:
             return
-        with reversion.create_revision():
-            self.save(update_fields=update_fields_with_auto_now(self, reverted))
+        with reversion.create_revision(using=alias):
+            self.save(using=alias, update_fields=update_fields_with_auto_now(self, reverted))
             reversion.set_comment(f"Reverted to revision {version.revision_id}.")
 
 
@@ -688,8 +693,15 @@ class HierarchyMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row, maintaining ``path`` on create and reparent."""
 
-        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = alias
+        deferred = self.get_deferred_fields() & {
+            "parent_id",
+            "path",
+            *(self._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
+        }
+        if deferred:
+            self.refresh_from_db(using=alias, fields=sorted(deferred))
         if self._state.adding:
             self._save_created(alias, *args, **kwargs)
         elif self._hierarchy_needs_repath(using=alias):
@@ -703,7 +715,7 @@ class HierarchyMixin(models.Model):
 
         with transaction.atomic(using=database):
             super().save(*args, **kwargs)
-            parent = self._hierarchy_parent()
+            parent = self._hierarchy_parent(using=database)
             if parent is not None:
                 # Re-read the parent's committed path under lock before deriving the
                 # child prefix: a create racing a reparent of that parent would
@@ -736,7 +748,7 @@ class HierarchyMixin(models.Model):
             if old_path:
                 # Evaluate SELECT FOR UPDATE before moving any descendant's path.
                 list(subtree.order_by("pk").values_list("pk", flat=True))
-            parent = self._hierarchy_parent()
+            parent = self._hierarchy_parent(using=database)
             self._reject_cycle(parent)
             self._reject_cross_scope_parent(parent)
             new_path = self._hierarchy_path(parent)
@@ -785,7 +797,7 @@ class HierarchyMixin(models.Model):
         fresh = self._locked_paths(pks, using=using)
         self.path = fresh.get(self.pk, self.path)
         if self.parent_id is not None and self.parent_id in fresh:
-            parent = self._hierarchy_parent()
+            parent = self._hierarchy_parent(using=using)
             if parent is not None:
                 parent.path = fresh[self.parent_id]
         return self.path
@@ -814,12 +826,23 @@ class HierarchyMixin(models.Model):
 
         return system_queryset(type(self), using=using).filter(pk=self.pk).values_list("parent_id", flat=True).first()
 
-    def _hierarchy_parent(self) -> HierarchyMixin | None:
+    def _hierarchy_parent(self, *, using: str) -> HierarchyMixin | None:
         """Return the parent instance (cached when assigned), or ``None`` for a root."""
 
         if self.parent_id is None:
             return None
-        return cast("HierarchyMixin", self.parent)
+        field = cast(models.ForeignKey[Any, Any], self._meta.get_field("parent"))
+        parent = field.get_cached_value(self, default=None)
+        if parent is None or parent._state.db != using:
+            parent = system_queryset(field.related_model, using=using).get(field.get_reverse_related_filter(self))
+            field.set_cached_value(self, parent)
+        deferred = parent.get_deferred_fields() & {
+            "path",
+            *(parent._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
+        }
+        if deferred:
+            parent.refresh_from_db(using=using, fields=sorted(deferred))
+        return cast("HierarchyMixin", parent)
 
     def _hierarchy_path(self, parent: HierarchyMixin | None) -> str:
         """Return this node's derived path under ``parent`` (a root when ``None``)."""

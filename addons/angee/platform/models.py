@@ -25,11 +25,12 @@ from typing import Any
 
 from django.apps import AppConfig
 from django.conf import settings
-from django.db import DatabaseError, models, router, transaction
+from django.db import DatabaseError, models, transaction
 from hatch_angee import AddonManifest
 from rebac import system_context
 
 from angee.addons import addon_manifest, available_addons, resolve_app_config, resolve_manifest_roots
+from angee.base.db import get_write_alias
 from angee.base.fields import StateField
 from angee.base.models import AngeeManager, AngeeModel
 from angee.base.serialization import canonical_json_sha256
@@ -114,9 +115,10 @@ class AddonManager(AngeeManager):
     def _apply_change(self, name: str, action: str, revision: str | None) -> InstallResult:
         """Validate one plan, write its exact roots, then reconcile the committed intent."""
 
+        using = get_write_alias(self.model, bound=self)
         with system_context(reason=f"platform.addon.{action}"):
             installer = addon_installer()
-            preview = self.change_preview(name, action, installer=installer)
+            preview = self.db_manager(using).change_preview(name, action, installer=installer)
             if not preview.can_apply or (revision is not None and preview.revision != revision):
                 return InstallResult.refusal(
                     name, action, preview.refusal or "The addon preview is stale; review the changes again."
@@ -125,9 +127,7 @@ class AddonManager(AngeeManager):
                 installer.apply_app_names(preview.roots_after, expected_text=preview.settings_text)
             except (OSError, NotImplementedError, StaleAddonPreviewError) as error:
                 return InstallResult.refusal(name, action, str(error))
-            self.reconcile_from_registry(
-                router.db_for_write(self.model), desired=frozenset(preview.roots_after)
-            )
+            self.reconcile_from_registry(using, desired=frozenset(preview.roots_after))
             return InstallResult(
                 name=name, action=action, already=preview.roots_before == preview.roots_after
             )
@@ -208,7 +208,7 @@ class AddonManager(AngeeManager):
                 )
             )
         disabled = tuple(disabled_impacts)
-        inventory = self._data_inventory(impact.name for impact in disabled)
+        inventory = self._data_inventory((impact.name for impact in disabled), using=self._db)
         warning = (
             "Provisioning may generate and apply schema migrations that remove model data or contributed fields; "
             "the exact database effect cannot be forecast safely before migration planning."
@@ -266,7 +266,7 @@ class AddonManager(AngeeManager):
         return tuple(impacts)
 
     @staticmethod
-    def _data_inventory(names: Iterable[str]) -> tuple[AddonDataInventory, ...]:
+    def _data_inventory(names: Iterable[str], *, using: str | None = None) -> tuple[AddonDataInventory, ...]:
         configs = {config.name: config for config in composed.addons()}
         inventories = []
         for name in sorted(names):
@@ -276,7 +276,7 @@ class AddonManager(AngeeManager):
             models_inventory = []
             for model in composed.data_models(config):
                 try:
-                    count = model._default_manager.using(router.db_for_read(model)).count()
+                    count = model._default_manager.using(using).count()
                 except DatabaseError:
                     count = None
                 models_inventory.append(

@@ -38,12 +38,13 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, FieldError, ImproperlyConfigured, ValidationError
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models.query_utils import DeferredAttribute
 from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
 from sqids import Sqids
 
+from angee.base.db import get_write_alias
 from angee.base.scoping import system_queryset
 
 
@@ -293,12 +294,15 @@ class FractionalRankField(models.FloatField):
         """Return the next rank from an unscoped scan of the instance context."""
 
         model = type(instance)
+        database = get_write_alias(model, instance=instance)
         context_fields = self._unique_context_fields(model)
+        deferred = instance.get_deferred_fields() & {field.attname for field in context_fields}
+        if deferred:
+            instance.refresh_from_db(using=database, fields=deferred)
         context = {
             context_field.attname: getattr(instance, context_field.attname)
             for context_field in context_fields
         }
-        database = router.db_for_write(model, instance=instance)
         previous = (
             system_queryset(model, using=database, lock=())
             .filter(**context)
@@ -401,7 +405,7 @@ class FractionalRankField(models.FloatField):
         if model is None or self.name is None:
             raise ImproperlyConfigured("FractionalRankField must be bound to a model before rebalance().")
         context_filter = self._context_filter(context)
-        database = using or router.db_for_write(model)
+        database = get_write_alias(model, using=using)
 
         with transaction.atomic(using=database):
             writer = system_queryset(model, using=database, lock=()).filter(**context_filter)

@@ -7,9 +7,10 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, models
+from django.db import connection, connections, models, router, transaction
 from django.test import override_settings
 
+from angee.base import transitions
 from angee.base.fields import StateField
 from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
 
@@ -26,6 +27,12 @@ def remember_success(instance: Any, source: Any, target: Any) -> None:
     """Record transition hook arguments on the instance."""
 
     instance.success_events.append((instance, source, target))
+
+
+def persist_success(instance: Any, source: Any, target: Any) -> None:
+    """Exercise a legacy three-argument hook that delegates to the shared saver."""
+
+    save_state(instance, source, target)
 
 
 class TransitionTask(models.Model):
@@ -85,6 +92,25 @@ class TransitionTask(models.Model):
         self.note = "persisted"
         self._transition_fields = {"note"}
 
+    @transition(state, source=State.RUNNING, target=State.DONE, on_success=persist_success)
+    def persist_done_using(self, *, using: str | None) -> None:
+        """Keep body reads, transaction and callback on the supplied write alias."""
+
+        assert using is not None
+        self.body_alias = using
+        self.commit_states = []
+        with transaction.atomic(using=using):
+            self.refresh_from_db(using=using, fields=["note"])
+            self.note = "persisted"
+            self._transition_fields = {"note"}
+            transaction.on_commit(
+                lambda: self.commit_states.append(type(self).objects.using(using).get(pk=self.pk).state),
+                using=using,
+            )
+        # The success hook must retain the entry alias even if the body changes
+        # the instance's database hint without writing the instance itself.
+        self._state.db = "changed_by_body"
+
 
 @pytest.fixture
 def transition_task_table() -> Iterator[None]:
@@ -97,6 +123,128 @@ def transition_task_table() -> Iterator[None]:
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(TransitionTask)
+
+
+@pytest.fixture
+def transition_alias(transition_task_table: None) -> Iterator[str]:
+    """Copy the test connection under a dynamic alias, outside configured aliases."""
+
+    alias = "transition_other"
+    connections[alias] = connection.copy(alias=alias)
+    try:
+        yield alias
+    finally:
+        connections[alias].close()
+        del connections[alias]
+
+
+class TransitionRouter:
+    """Reject read routing and record a single operation-level write decision."""
+
+    def __init__(self, alias: str) -> None:
+        self.alias = alias
+        self.writes: list[models.Model | None] = []
+
+    def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
+        raise AssertionError("Transition reads must carry the write alias.")
+
+    def db_for_write(self, model: type[models.Model], **hints: Any) -> str:
+        self.writes.append(hints.get("instance"))
+        return self.alias
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("selection", ["explicit", "persisted", "router"])
+def test_transition_carries_one_alias_through_body_and_hook(
+    transition_alias: str, monkeypatch: pytest.MonkeyPatch, selection: str
+) -> None:
+    """Body, deferred refresh, hook lock/save and commit share the selected alias."""
+
+    task = TransitionTask.objects.using(transition_alias).create(state=TransitionTask.State.RUNNING)
+    task = TransitionTask.objects.using(transition_alias).defer("state").get(pk=task.pk)
+    using = transition_alias if selection == "explicit" else None
+    if selection == "explicit":
+        task._state.db = "other_instance_database"
+    elif selection == "router":
+        task._state.db = None
+    routing = TransitionRouter(transition_alias if selection == "router" else "other_writer")
+    atomic = transaction.atomic
+    atomic_aliases: list[str | None] = []
+
+    def checked_atomic(using: str | None = None, **kwargs: Any) -> Any:
+        atomic_aliases.append(using)
+        assert using == transition_alias
+        return atomic(using=using, **kwargs)
+
+    reader = transitions.system_queryset
+    locked_aliases: list[str | None] = []
+
+    def checked_reader(model: type[models.Model], **kwargs: Any) -> Any:
+        assert kwargs["lock"] == ()
+        locked_aliases.append(kwargs.get("using"))
+        return reader(model, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(router, "routers", [routing])
+        patch.setattr(transaction, "atomic", checked_atomic)
+        patch.setattr(transitions, "system_queryset", checked_reader)
+        with transaction.atomic(using=transition_alias):
+            task.persist_done_using(using=using)
+            assert task.commit_states == []
+
+    assert atomic_aliases == [transition_alias] * 3
+    assert locked_aliases == [transition_alias]
+    assert task.body_alias == transition_alias
+    assert task.commit_states == [TransitionTask.State.DONE]
+    assert routing.writes == ([task] if selection == "router" else [])
+    task.refresh_from_db(using=transition_alias)
+    assert task.note == "persisted"
+    assert task.state == TransitionTask.State.DONE
+    assert not hasattr(task, "_angee_transition_save")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_transition_alias_preserves_concurrency_guard(transition_alias: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale non-default instance is rejected and its hook context is cleared."""
+
+    task = TransitionTask.objects.using(transition_alias).create(state=TransitionTask.State.RUNNING)
+    TransitionTask.objects.using(transition_alias).filter(pk=task.pk).update(state=TransitionTask.State.DONE)
+    with monkeypatch.context() as patch:
+        patch.setattr(router, "routers", [TransitionRouter("other_writer")])
+        with pytest.raises(TransitionNotAllowed, match="concurrent transition"):
+            task.persist_done()
+    assert not hasattr(task, "_angee_transition_save")
+    assert not hasattr(task, "_transition_fields")
+    assert TransitionTask.objects.using(transition_alias).get(pk=task.pk).note == ""
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("stale", [False, True])
+def test_force_state_preserves_outer_hook_alias(
+    transition_alias: str, monkeypatch: pytest.MonkeyPatch, stale: bool
+) -> None:
+    """Explicit force alias wins, and nested hook context survives either result."""
+
+    task = TransitionTask.objects.using(transition_alias).create(state=TransitionTask.State.RUNNING)
+    if stale:
+        TransitionTask.objects.using(transition_alias).filter(pk=task.pk).update(state=TransitionTask.State.DONE)
+    task._state.db = "other_instance_database"
+    outer = ("state", "outer_alias")
+    task._angee_transition_save = outer
+    with monkeypatch.context() as patch:
+        patch.setattr(router, "routers", [TransitionRouter("other_writer")])
+        if stale:
+            with pytest.raises(TransitionNotAllowed, match="concurrent transition"):
+                task.state_transitions.force_state(
+                    task, TransitionTask.State.ARCHIVED, reason="nested test", using=transition_alias
+                )
+        else:
+            task.state_transitions.force_state(
+                task, TransitionTask.State.ARCHIVED, reason="nested test", using=transition_alias
+            )
+    assert task._angee_transition_save == outer
+    stored = TransitionTask.objects.using(transition_alias).get(pk=task.pk)
+    assert stored.state == (TransitionTask.State.DONE if stale else TransitionTask.State.ARCHIVED)
 
 
 @pytest.mark.django_db(transaction=True)

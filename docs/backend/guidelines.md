@@ -133,6 +133,16 @@ Use these owners instead of maintaining another contract in an addon:
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
   promote it to a model or manager method.
+- **Write-alias completeness is a framework invariant.** Use
+  [`get_write_alias`](../../angee/base/db.py): explicit `using`, then a bound
+  manager/queryset's `_db` (never the read-routing `.db`), then a persisted
+  instance's `_state.db`, then `router.db_for_write(model, instance=instance)`.
+  Derive once at the operation's entry owner and pass the alias down through
+  every nested read, lock, transaction, callback, refresh, relation and owner
+  call. Unqualified `atomic`/`on_commit`, `Model.objects` inside a write owner,
+  reverse related managers, `refresh_from_db`, ContentType lookups, and
+  `@transaction.atomic` decorators on instance methods can silently choose the
+  default or read alias; bind them explicitly to the operation's write alias.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction

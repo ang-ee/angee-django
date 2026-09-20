@@ -14,7 +14,7 @@ from datetime import date
 from typing import Any
 
 import pytest
-from django.db import connection, connections, transaction
+from django.db import connection, connections, models, router, transaction
 from rebac import system_context
 
 from angee.sequence.models import Sequence as AbstractSequence
@@ -77,6 +77,106 @@ def _draw(key: str, **kwargs: Any) -> str:
 
     with transaction.atomic():
         return Sequence.objects.next_value(key, **kwargs)
+
+
+class _SequenceRouter:
+    """Permit only the entry lookup; reject routing nested reads or writes."""
+
+    def __init__(self, *, read_sequence: bool = False, write_sequence: bool = False) -> None:
+        self.read_sequence = read_sequence
+        self.write_sequence = write_sequence
+        self.reads: list[type[models.Model]] = []
+        self.writes: list[type[models.Model]] = []
+
+    def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
+        """Route an allowed entry read and fail on any unbound nested read."""
+
+        self.reads.append(model)
+        assert self.read_sequence and model is Sequence, f"Unexpected routed read: {model._meta.label}"
+        return "default"
+
+    def db_for_write(self, model: type[models.Model], **hints: Any) -> str:
+        """Route an allowed entry write and fail on any unbound nested write."""
+
+        self.writes.append(model)
+        assert self.write_sequence and model is Sequence, f"Unexpected routed write: {model._meta.label}"
+        return "default"
+
+
+@pytest.mark.parametrize("entry", ["router", "manager", "using"])
+def test_draw_keeps_one_alias_through_first_and_existing_counter(
+    sequence_tables: None, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    """Entry precedence binds lookup, lock, insert, re-lock and counter save."""
+
+    del sequence_tables
+    _make_sequence(key="routed", name="Routed", template="{number}")
+    routing = _SequenceRouter(write_sequence=entry == "router")
+    manager = Sequence.objects
+    kwargs = {}
+    if entry == "manager":
+        manager = manager.db_manager("default")
+    elif entry == "using":
+        manager = manager.db_manager("wrong_manager")
+        kwargs["using"] = "default"
+
+    with monkeypatch.context() as patch:
+        patch.setattr(router, "routers", [routing])
+        with transaction.atomic(using="default"):
+            assert manager.next_value("routed", **kwargs) == "1"
+            assert manager.next_value("routed", **kwargs) == "2"
+        with system_context(reason="sequence routing assertion"):
+            assert SequenceCounter.objects.using("default").get().value == 2
+
+    assert routing.reads == []
+    assert routing.writes == ([Sequence, Sequence] if entry == "router" else [])
+
+
+@pytest.mark.parametrize("entry", ["instance", "manager", "using"])
+def test_direct_counter_draw_preserves_alias_precedence(
+    sequence_tables: None, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    """A direct counter draw respects its sequence, bound manager and override."""
+
+    del sequence_tables
+    sequence = _make_sequence(key="counter", name="Counter", template="{number}")
+    routing = _SequenceRouter()
+    manager = SequenceCounter.objects
+    kwargs = {}
+    if entry != "instance":
+        sequence._state.db = "wrong_instance"
+        manager = manager.db_manager("default" if entry == "manager" else "wrong_manager")
+    if entry == "using":
+        kwargs["using"] = "default"
+
+    with monkeypatch.context() as patch:
+        patch.setattr(router, "routers", [routing])
+        with system_context(reason="direct sequence counter routing"), transaction.atomic(using="default"):
+            assert manager.draw(sequence, "", **kwargs) == 1
+            assert manager.draw(sequence, "", **kwargs) == 2
+
+    assert routing.reads == []
+    assert routing.writes == []
+
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_preview_keeps_the_sequence_read_alias(
+    sequence_tables: None, monkeypatch: pytest.MonkeyPatch, bound: bool
+) -> None:
+    """Advisory reads stay read-routed while their counter inherits that alias."""
+
+    del sequence_tables
+    _make_sequence(key="preview", name="Preview", template="{number}", preview_enabled=True)
+    assert _draw("preview") == "1"
+    routing = _SequenceRouter(read_sequence=not bound)
+    manager = Sequence.objects.db_manager("default") if bound else Sequence.objects
+
+    with monkeypatch.context() as patch:
+        patch.setattr(router, "routers", [routing])
+        assert manager.preview_next("preview") == "2"
+
+    assert routing.reads == ([] if bound else [Sequence])
+    assert routing.writes == []
 
 
 def test_missing_key_fails_fast(sequence_tables: None) -> None:
