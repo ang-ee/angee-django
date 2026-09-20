@@ -110,10 +110,10 @@ Use these owners instead of maintaining another contract in an addon:
 | Migration history and cleanup | [Addon-owned runtime migrations](../composer.md#addon-owned-runtime-migrations) and [migration pitfalls](#migrations-and-runtime) distinguish generated sources from durable history. |
 | Resource load hooks | [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) is the resources-owned terminal mixin. Contributors delegate exactly once through `super()`, even when skipping local work; an exception aborts the transaction, so never delegate in `finally`. |
 
-- **Addon discovery is a Django app-registry concern**, not a build-only
-  concern: serving code such as schema building enumerates Django's installed
-  app configs and consumes the native manifest through the capability owner.
-  Serving code never imports `angee.compose` just to list addons.
+- **Compose addon discovery through its native owners.** Follow the
+  [discovery flow](../composer.md#addon-discovery) for available candidates,
+  Django identity, and persisted catalogue state. Serving code never imports
+  `angee.compose` just to list addons.
 - **The resource ledger is owned by the resource addon.** The composer discovers
   `angee.resources.models.Resource` as a normal addon source model and emits it
   under the `resources` label. `angee.base` must not import `angee.resources`.
@@ -214,9 +214,9 @@ Use these owners instead of maintaining another contract in an addon:
   compatibility surface. Keep typing-only imports under `TYPE_CHECKING`.
   Comment the actual reason and the point at which the import becomes safe;
   a deferral does not permit a forbidden dependency. Use the native submodule
-  discovery owner (or `importlib.util.find_spec`, checking parents first) to
-  distinguish absent optional/generated modules from broken imports, and retain
-  errors raised by modules that exist.
+  discovery owner to distinguish absent optional/generated modules from broken
+  imports, and retain errors raised by modules that exist. The
+  [addon discovery flow](../composer.md#addon-discovery) owns import boundaries.
 - A pure renderer may remain a function when it transforms explicit values
   without interpreting another object's internal policy. If it decides what an
   object means or how its state behaves, move that decision to the owner. Field

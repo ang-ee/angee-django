@@ -10,6 +10,7 @@ import {
   PLATFORM_ADDON_MUTATION_INVALIDATES,
 } from "../documents";
 import { usePlatformT } from "../i18n";
+import { addonDisplayLabel } from "../lib/rows";
 import { AddonChangeDialog, type AddonChangeAction } from "./AddonChangeDialog";
 
 /** The reflection resource the board reads + invalidates after every lifecycle write. */
@@ -20,6 +21,7 @@ export const ADDON_MODEL = "platform.Addon";
 // snake fields, fetched + grouped client-side by the board's client row model.
 export interface AddonResourceRow extends Record<string, unknown> {
   id: string;
+  name: string;
   label: string;
   namespace: string;
   category: string;
@@ -59,13 +61,13 @@ export const SOURCE_TONES: Record<string, Tone> = {
  */
 export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
   const t = usePlatformT();
-  // The JSON scalar may arrive null (a rollup whose keywords are unset) — guard the
+  // The JSON scalar may arrive null (a catalogue row whose keywords are unset) — guard the
   // boundary, and dedupe so the chip `key` stays unique.
   const keywords = [...new Set(row.keywords ?? [])].slice(0, MAX_CARD_KEYWORDS);
   return (
     <div className="grid min-w-0 gap-2">
       <span className="block min-w-0">
-        <span className="block truncate text-sm font-semibold text-fg">{row.label}</span>
+        <span className="block truncate text-sm font-semibold text-fg">{addonDisplayLabel(row.label, row.id)}</span>
         <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
       </span>
       {row.description ? (
@@ -163,7 +165,7 @@ export function AddonCardActions({
   const dialog = action ? (
     <AddonChangeDialog
       action={action}
-      addonLabel={row.label}
+      addonLabel={addonDisplayLabel(row.label, row.id)}
       preview={preview.data?.addon_change_preview ?? null}
       loading={preview.isFetching}
       applying={applying}

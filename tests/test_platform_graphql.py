@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import importlib
-from types import SimpleNamespace
 from typing import Any, NoReturn
 
 import pytest
 import strawberry
 from django.apps import apps
+from rebac import system_context
 from strawberry.schema.config import StrawberryConfig
 
 from angee.platform import composed
 from tests.conftest import addon_schema, execute_schema
+from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
+from tests.test_platform_install import platform_tables as platform_tables
 
 platform_schema = importlib.import_module("angee.platform.schema")
 
@@ -105,38 +107,36 @@ def test_denied_explorer_is_null_while_computed_collections_are_empty(monkeypatc
     }
 
 
-def test_legacy_explorer_and_computed_resources_bind_the_same_rows(monkeypatch: Any) -> None:
-    """Nested and flat bindings preserve IDs, fields, and graph edges without recopying."""
+def test_explorer_reads_persisted_addons_and_shared_computed_rows(platform_tables: None, monkeypatch: Any) -> None:
+    """Addon facts come from the catalogue while model and field bindings share rows."""
 
+    del platform_tables
+    admin = _platform_admin("explorer-admin")
     config = apps.get_app_config("linesdemo")
     line = apps.get_model("linesdemo", "SaleLine")
     tag = apps.get_model("linesdemo", "Tag")
     line_row = composed.PlatformModelRow.from_model(config, line)
     tag_row = composed.PlatformModelRow.from_model(config, tag)
     tag_field = next(field for field in line_row.fields() if field.name == "tags")
-    rollup = composed.AddonRollup(
-        name=config.name,
-        label=config.label,
-        namespace="tests",
-        kind="consumer",
-        forced=False,
-        model_count=2,
-        field_count=line_row.field_count + tag_row.field_count,
-        resource_count=0,
-        depends_on=[],
-        model_labels=[line_row.label, tag_row.label],
-        description="",
-        keywords=[],
-        category="",
-    )
+    addon = apps.get_model("platform", "Addon")
+    with system_context(reason="test.platform.explorer.seed"):
+        addon.objects.create(
+            name=config.name,
+            label=config.label,
+            namespace="tests",
+            kind=addon.Kind.CONSUMER,
+            state=addon.State.ENABLED,
+            model_count=2,
+            field_count=line_row.field_count + tag_row.field_count,
+            resource_count=7,
+            depends_on=["example.dependency"],
+            model_labels=[line_row.label, tag_row.label],
+        )
+        addon.objects.create(name="example.remote", source=addon.Source.REMOTE)
     monkeypatch.setattr(platform_schema, "platform_can_read", lambda: True)
     monkeypatch.setattr(composed, "model_rows", lambda: [line_row, tag_row])
     monkeypatch.setattr(composed, "field_rows", lambda: [tag_field])
-    monkeypatch.setattr(
-        platform_schema,
-        "_Addon",
-        SimpleNamespace(objects=SimpleNamespace(all=lambda: [rollup])),
-    )
+    monkeypatch.setattr(composed, "resource_counts", _unexpected)
 
     data = _data(
         execute_schema(
@@ -144,7 +144,7 @@ def test_legacy_explorer_and_computed_resources_bind_the_same_rows(monkeypatch: 
             """
             query {
               platform_explorer {
-                addons { id label model_labels }
+                addons { id label model_labels resource_count depends_on }
                 models { label fields { name relation_target } }
                 edges { id source target kind field_name }
               }
@@ -163,16 +163,26 @@ def test_legacy_explorer_and_computed_resources_bind_the_same_rows(monkeypatch: 
               }
             }
             """,
+            user=admin,
         )
     )
 
     explorer = data["platform_explorer"]
     assert explorer["addons"] == [
         {
+            "id": "example.remote",
+            "label": "",
+            "model_labels": [],
+            "resource_count": 0,
+            "depends_on": [],
+        },
+        {
             "id": config.name,
             "label": config.label,
             "model_labels": [line_row.label, tag_row.label],
-        }
+            "resource_count": 7,
+            "depends_on": ["example.dependency"],
+        },
     ]
     nested_line = next(model for model in explorer["models"] if model["label"] == line_row.label)
     assert {field["name"] for field in nested_line["fields"]} == {
@@ -199,15 +209,46 @@ def test_legacy_explorer_and_computed_resources_bind_the_same_rows(monkeypatch: 
     }
 
 
-def test_model_only_explorer_selection_skips_addon_rollups_and_edges(monkeypatch: Any) -> None:
-    """A model-only explorer request reads neither resource counts nor graph edges."""
+def test_addon_names_support_text_search_and_sort_with_unknown_labels(platform_tables: None) -> None:
+    """Canonical names remain searchable and ordered when Django identity is unknown."""
+
+    del platform_tables
+    admin = _platform_admin("catalogue-search-admin")
+    addon = apps.get_model("platform", "Addon")
+    with system_context(reason="test.platform.catalogue.search"):
+        for name, label in (("example.zebra", ""), ("example.alpha", "Zulu"), ("other.hidden", "")):
+            addon.objects.create(name=name, label=label, source=addon.Source.REMOTE)
+
+    data = _data(
+        execute_schema(
+            _schema(),
+            """
+            query {
+              platform_addons(where: {name: {_ilike: "example.%"}}, order_by: [{name: asc}]) {
+                id name label
+              }
+            }
+            """,
+            user=admin,
+        )
+    )
+
+    assert data["platform_addons"] == [
+        {"id": "example.alpha", "name": "example.alpha", "label": "Zulu"},
+        {"id": "example.zebra", "name": "example.zebra", "label": ""},
+    ]
+
+
+def test_model_only_explorer_selection_skips_catalogue_and_edges(monkeypatch: Any) -> None:
+    """A model-only explorer request reads neither the catalogue nor graph edges."""
 
     config = apps.get_app_config("linesdemo")
     model = apps.get_model("linesdemo", "Tag")
     row = composed.PlatformModelRow.from_model(config, model)
     monkeypatch.setattr(platform_schema, "platform_can_read", lambda: True)
     monkeypatch.setattr(composed, "model_rows", lambda: [row])
-    monkeypatch.setattr(composed, "addon_rollups", _unexpected)
+    monkeypatch.setattr(platform_schema._Addon.objects, "all", _unexpected)
+    monkeypatch.setattr(composed, "resource_counts", _unexpected)
     monkeypatch.setattr(platform_schema, "_edge_rows", _unexpected)
 
     data = _data(

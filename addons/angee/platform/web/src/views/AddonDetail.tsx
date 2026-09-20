@@ -6,8 +6,7 @@ import { usePlatformT } from "../i18n";
 import { platformScopeSearch } from "../lib/paths";
 import { LinkedChips, useRouteNavigate } from "../lib/cells";
 import { usePlatformAddon } from "../lib/explorer";
-
-const shortName = (dep: string): string => dep.split(".").pop() ?? dep;
+import { addonDisplayLabel } from "../lib/rows";
 
 export function AddonDetail(): ReactElement {
   const t = usePlatformT();
@@ -31,7 +30,7 @@ export function AddonDetail(): ReactElement {
             }
           : null
       }
-      title={addon?.label}
+      title={addon ? addonDisplayLabel(addon.label, addon.id) : undefined}
       meta={
         addon ? (
           <>
@@ -91,7 +90,6 @@ export function AddonDetail(): ReactElement {
                 <LinkedChips
                   items={dependsOn}
                   href={(id) => routeHref("platform.addons.record", { id })}
-                  format={shortName}
                 />,
               ],
               [
@@ -99,7 +97,6 @@ export function AddonDetail(): ReactElement {
                 <LinkedChips
                   items={dependedBy}
                   href={(id) => routeHref("platform.addons.record", { id })}
-                  format={shortName}
                 />,
               ],
             ]}

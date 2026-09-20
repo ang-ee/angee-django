@@ -4,20 +4,21 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import logging
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string, module_has_submodule
 from hatch_angee import AddonManifest, ManifestError, discover, parse_manifest
 
 ADDON_ENTRY_POINT_GROUP = "angee.addons"
 _MANIFEST_CACHE = "_angee_manifest"
+logger = logging.getLogger(__name__)
 
 
 def addon_manifest(app_config: AppConfig, *, refresh: bool = False) -> AddonManifest | None:
@@ -50,36 +51,27 @@ def addon_manifest(app_config: AppConfig, *, refresh: bool = False) -> AddonMani
     return manifest
 
 
-@dataclass(frozen=True, slots=True)
-class AvailableAddon:
-    """An addon present in the environment, whether or not it is enabled.
+def available_addons(
+    addon_dirs: Iterable[Path | str] = (),
+) -> dict[str, tuple[AddonManifest, metadata.EntryPoint | Path]]:
+    """Return unchanged manifests and native discovery origins, keyed by name.
 
-    ``source`` is ``"installed"`` for an addon advertised by an installed bundle's
-    ``angee.addons`` entry point, or ``"local"`` for one discovered as an
-    ``addon.toml`` under a configured addon dir. ``anchor`` is the entry point's
-    import target (installed) or the addon directory (local).
+    Installed ``angee.addons`` entry points take precedence over local paths;
+    local roots retain hatch-angee's caller-defined precedence. Duplicate
+    installed names are ambiguous and rejected. Discovery does not populate
+    Django's registry or invoke app lifecycle hooks.
     """
 
-    name: str
-    source: str
-    anchor: str
-    manifest: AddonManifest
-
-
-def available_addons(addon_dirs: Iterable[Path | str] = ()) -> dict[str, AvailableAddon]:
-    """Return every *available* addon, keyed by name.
-
-    The available set is the union of (1) the ``angee.addons`` entry points across
-    all installed distributions — the SSOT being ``uv.lock``'s bundles, the same
-    way ``pip``-installed packages are "available" before being added to
-    ``INSTALLED_APPS`` — and (2) any ``addon.toml`` under the configured addon dirs
-    (local/uninstalled consumer addons). The enabled set (``INSTALLED_APPS``) is
-    expected to be a subset of this. Pure ``importlib.metadata`` + filesystem; no
-    Django app loading required, so a catalog/marketplace can read it cheaply.
-    """
-
-    available: dict[str, AvailableAddon] = {}
-    for entry_point in metadata.entry_points(group=ADDON_ENTRY_POINT_GROUP):
+    available: dict[str, tuple[AddonManifest, metadata.EntryPoint | Path]] = {}
+    for entry_point in sorted(
+        metadata.entry_points(group=ADDON_ENTRY_POINT_GROUP), key=lambda entry: (entry.name, entry.value)
+    ):
+        if entry_point.name in available:
+            previous = cast(metadata.EntryPoint, available[entry_point.name][1])
+            raise ImproperlyConfigured(
+                f"Duplicate installed addon entry point {entry_point.name!r}: "
+                f"{previous.value!r} and {entry_point.value!r}"
+            )
         try:
             spec = importlib.util.find_spec(entry_point.module)
         except (ImportError, AttributeError, ValueError) as error:
@@ -101,20 +93,38 @@ def available_addons(addon_dirs: Iterable[Path | str] = ()) -> dict[str, Availab
             raise ImproperlyConfigured(
                 f"{marker}: addon.name {manifest.name!r} disagrees with entry point {entry_point.name!r}"
             )
-        available[entry_point.name] = AvailableAddon(
-            name=entry_point.name,
-            source="installed",
-            anchor=entry_point.value,
-            manifest=manifest,
-        )
+        available[entry_point.name] = (manifest, entry_point)
     for addon_dir, manifest in discover(addon_dirs):
-        available.setdefault(
-            manifest.name,
-            AvailableAddon(
-                name=manifest.name, source="local", anchor=str(addon_dir), manifest=manifest
-            ),
-        )
+        available.setdefault(manifest.name, (manifest, addon_dir))
     return dict(sorted(available.items()))
+
+
+def resolve_app_config(declaration: str, *, expected_name: str | None = None) -> AppConfig | None:
+    """Resolve native identity without enabling an available app.
+
+    Reuse a populated config by its canonical name.
+    Otherwise Django's factory preserves explicit config-class declarations and
+    default-config selection. A config that cannot be constructed leaves identity
+    unknown and logs its declaration. Construction may import app packages and
+    ``apps.py`` but never populates a registry or calls ``ready()``. A supplied
+    manifest name must agree with the resolved native name.
+    """
+
+    config = None
+    if apps.apps_ready:
+        for candidate in apps.get_app_configs():
+            if candidate.name == declaration:
+                config = candidate
+                break
+    if config is None:
+        try:
+            config = AppConfig.create(declaration)
+        except Exception as error:
+            logger.warning("Cannot resolve addon app declaration %r: %s", declaration, error)
+            return None
+    if expected_name is not None and config.name != expected_name:
+        raise ImproperlyConfigured(f"Addon name {expected_name!r} disagrees with AppConfig.name {config.name!r}")
+    return config
 
 
 def resolve_manifest_roots(

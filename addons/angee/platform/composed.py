@@ -8,37 +8,15 @@ are projected here directly from Django's native objects.
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
 from typing import Any
 
 from django.apps import AppConfig, apps
+from django.db import DatabaseError, router
 from django.db.models import Model
 from pydantic import BaseModel, PrivateAttr
 
-from angee.addons import addon_manifest, is_angee_addon
+from angee.addons import is_angee_addon
 from angee.base.impl import ImplChoice, ImplClassField
-
-
-@dataclass(frozen=True, slots=True)
-class AddonRollup:
-    """One composed addon's rolled-up facts, derived from the app registry."""
-
-    name: str
-    label: str
-    namespace: str
-    kind: str
-    forced: bool
-    model_count: int
-    field_count: int
-    resource_count: int
-    depends_on: list[str]
-    model_labels: list[str]
-    # Manifest metadata (the addon's ``addon.toml`` ``[addon]`` block), surfaced for the
-    # marketplace board — the freeform ``category`` it groups by, and the
-    # ``description``/``keywords`` the cards show. The contract owns these; we only read.
-    description: str
-    keywords: list[str]
-    category: str
 
 
 class PlatformFieldRow(BaseModel):
@@ -283,53 +261,25 @@ def contributed_fields(config: AppConfig) -> list[ContributedFieldRow]:
     return sorted(rows, key=lambda row: (row.model_label, row.field_name))
 
 
-def resource_counts() -> dict[str, int]:
-    """Return resource-ledger row counts keyed by source addon.
+def resource_counts(*, using: str | None = None) -> dict[str, int]:
+    """Return resource-ledger row counts keyed by source addon on ``using``.
 
     The ``resources`` addon owns the ledger and its rollup; ask it rather than
-    re-querying its model here.
+    re-querying its model here. During migration, a routed-away or not-yet-created
+    ledger has no counts to project.
     """
 
     try:
         resource = apps.get_model("resources", "Resource")
     except LookupError:
         return {}
-    return resource.objects.counts_by_addon()
-
-
-def addon_rollups() -> list[AddonRollup]:
-    """Roll up every composed addon's model/field/resource facts from the app graph.
-
-    The single derivation the explorer view and the reflection table both read.
-    """
-
-    counts = resource_counts()
-    rollups: list[AddonRollup] = []
-    for config in addons():
-        models = data_models(config)
-        # The manifest owns the addon's descriptive metadata; read it, never re-derive.
-        manifest = addon_manifest(config)
-        rollups.append(
-            AddonRollup(
-                name=config.name,
-                label=config.label,
-                namespace=config.name.split(".")[0],
-                # The composer owns the root/dependency split; read its annotation.
-                kind="consumer" if getattr(config, "angee_addon_root", False) else "required",
-                # The composer owns the dependency closure; read its "forced" annotation
-                # (cannot be uninstalled), never re-derive it from the registry here.
-                forced=bool(getattr(config, "angee_forced", False)),
-                model_count=len(models),
-                field_count=sum(len(own_fields(model)) for model in models),
-                resource_count=counts.get(config.name, 0),
-                depends_on=sorted(manifest.depends_on) if manifest else [],
-                model_labels=sorted(model._meta.label_lower for model in models),
-                description=manifest.description if manifest else "",
-                keywords=list(manifest.keywords) if manifest else [],
-                category=(manifest.category or "") if manifest else "",
-            )
-        )
-    return rollups
+    ledger = resource.objects.using(using)
+    if not router.allow_migrate_model(ledger.db, resource):
+        return {}
+    try:
+        return ledger.counts_by_addon()
+    except DatabaseError:
+        return {}
 
 
 def model_rows() -> list[PlatformModelRow]:

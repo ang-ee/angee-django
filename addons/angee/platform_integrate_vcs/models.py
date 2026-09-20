@@ -74,7 +74,7 @@ class AddonCatalogManager(AngeeManager):
                 addon.objects.update_or_create(
                     name=name,
                     defaults={
-                        "label": str(descriptor.get("label", "")),
+                        "label": "",
                         "namespace": str(descriptor.get("namespace", "")),
                         # The board groups by ``category`` and renders ``description``/
                         # ``keywords`` — a discovered marketplace row carries the same
@@ -86,13 +86,14 @@ class AddonCatalogManager(AngeeManager):
                         "source": addon.Source.REMOTE,
                         "state": addon.State.DISABLED,
                         "depends_on": list(descriptor.get("depends_on", [])),
+                        **addon.reset_runtime_facts(),
                         **provenance,
                     },
                 )
             (
                 addon.objects.filter(vcs_source=source, source=addon.Source.REMOTE)
                 .exclude(name__in=seen)
-                .update(state=addon.State.REMOVED)
+                .update(state=addon.State.REMOVED, **addon.reset_runtime_facts())
             )
             source.last_synced_at = timezone.now()
             source.save(update_fields=["last_synced_at", "updated_at"])
