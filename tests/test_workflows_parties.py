@@ -79,11 +79,11 @@ def test_owned_call_gate_delegates_exact_pending_record_access(
     with system_context(reason="owned-call delegation fixture"):
         target_step = StepRun.objects.get(run=target_run)
         target = Decision.objects.create(
-            step_run=target_step, action="retained-evidence", created_by=resolver,
+            step_run=target_step,
+            action="retained-evidence",
+            created_by=resolver,
         )
-        party = Party.objects.create(
-            display_name="Delegated sender party", created_by=requester
-        )
+        party = Party.objects.create(display_name="Delegated sender party", created_by=requester)
         handle = Handle.objects.create(
             platform="email",
             value="delegated@example.test",
@@ -97,9 +97,15 @@ def test_owned_call_gate_delegates_exact_pending_record_access(
             source="email_match",
             created_by=requester,
         )
-        write_relationships((RelationshipTuple(
-            resource=to_object_ref(target), relation="requester", subject=to_subject_ref(resolver),
-        ),))
+        write_relationships(
+            (
+                RelationshipTuple(
+                    resource=to_object_ref(target),
+                    relation="requester",
+                    subject=to_subject_ref(resolver),
+                ),
+            )
+        )
     assert handle.with_actor(requester).has_access("read")
     assert party_handle.with_actor(requester).has_access("read")
     assert not handle.with_actor(reviewer).has_access("read")
@@ -113,39 +119,52 @@ def test_owned_call_gate_delegates_exact_pending_record_access(
         if step_run.step.key == "gate":
             return StepResult.suspend(
                 resume_state={"gate": {"policy": "one_done"}},
-                decisions=(DecisionSpec(
-                    assignees=(str(to_subject_ref(resolver)),), action="select-delegation-authority",
-                ),),
+                decisions=(
+                    DecisionSpec(
+                        assignees=(str(to_subject_ref(resolver)),),
+                        action="select-delegation-authority",
+                    ),
+                ),
             )
         return StepResult.suspend(
             resume_state={"gate": {"policy": "one_done"}},
-            decisions=(DecisionSpec(
-                assignees=(str(to_subject_ref(reviewer)),),
-                action="review-delegated-record",
-                record_access=(DecisionRecordAccess(
-                    model=target._meta.label,
-                    id=str(target.sqid),
-                    authority_input=AdmittedInputPath(
-                        source="owned_call_input",
-                        path=("resolutions", 0, "decision_id"),
+            decisions=(
+                DecisionSpec(
+                    assignees=(str(to_subject_ref(reviewer)),),
+                    action="review-delegated-record",
+                    record_access=(
+                        DecisionRecordAccess(
+                            model=target._meta.label,
+                            id=str(target.sqid),
+                            authority_input=AdmittedInputPath(
+                                source="owned_call_input",
+                                path=("resolutions", 0, "decision_id"),
+                            ),
+                        ),
+                        DecisionRecordAccess(
+                            model=handle._meta.label,
+                            id=str(handle.sqid),
+                        ),
+                        DecisionRecordAccess(
+                            model=party_handle._meta.label,
+                            id=str(party_handle.sqid),
+                        ),
                     ),
-                ), DecisionRecordAccess(
-                    model=handle._meta.label,
-                    id=str(handle.sqid),
-                ), DecisionRecordAccess(
-                    model=party_handle._meta.label,
-                    id=str(party_handle.sqid),
-                )),
-            ),),
+                ),
+            ),
         )
 
     monkeypatch.setattr(HandlerStep, "run", suspend)
     child_workflow = workflow_with_steps(
         name="Owned call delegated review",
-        steps=({
-            "key": "review", "step_class": "handler", "config": {},
-            "input_binding": {"kind": "workflow_input", "path": []},
-        },),
+        steps=(
+            {
+                "key": "review",
+                "step_class": "handler",
+                "config": {},
+                "input_binding": {"kind": "workflow_input", "path": []},
+            },
+        ),
         edges=(),
     )
     parent_workflow = workflow_with_steps(
@@ -153,7 +172,8 @@ def test_owned_call_gate_delegates_exact_pending_record_access(
         steps=(
             {"key": "gate", "step_class": "handler", "config": {}},
             {
-                "key": "call", "step_class": "call_workflow",
+                "key": "call",
+                "step_class": "call_workflow",
                 "config": {"publication": str(child_workflow.sqid)},
                 "input_binding": {
                     "kind": "object",
@@ -178,7 +198,8 @@ def test_owned_call_gate_delegates_exact_pending_record_access(
 
     with system_context(reason="owned-call delegated review assertion"):
         review = Decision._base_manager.get(
-            step_run__run=child, action="review-delegated-record",
+            step_run__run=child,
+            action="review-delegated-record",
         )
     assert review.record_access == [
         {
@@ -260,11 +281,15 @@ def _identity_workflow() -> Any:
         name="Review identity",
         steps=(
             {
-                "key": "review", "step_class": "parties_identity_review", "config": {},
+                "key": "review",
+                "step_class": "parties_identity_review",
+                "config": {},
                 "input_binding": {"kind": "workflow_input", "path": []},
             },
             {
-                "key": "apply", "step_class": "parties_identity_apply", "config": {},
+                "key": "apply",
+                "step_class": "parties_identity_apply",
+                "config": {},
                 "input_binding": {"kind": "step_output", "step_key": "review", "path": []},
             },
         ),
@@ -288,7 +313,11 @@ def test_party_handle_review_delivers_exact_nonterminal_artifact_runs(
         party = Party._base_manager.create(display_name="Claimed supplier", created_by=operator)
         handle = Handle._base_manager.create(platform="email", value="billing@example.test", created_by=operator)
         link = PartyHandle._base_manager.create(
-            party=party, handle=handle, confidence=0.4, source="email_match", created_by=operator,
+            party=party,
+            handle=handle,
+            confidence=0.4,
+            source="email_match",
+            created_by=operator,
         )
     workflow = workflow_with_steps(
         name="Wait for handle review",
@@ -303,7 +332,9 @@ def test_party_handle_review_delivers_exact_nonterminal_artifact_runs(
             step_run = StepRun.objects.get(run=run)
             attempt = step_run.current_attempt
         StepAttempt.objects.admit_invocation(
-            attempt.pk, lease_token=attempt.lease_token, at=timezone.now(),
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            at=timezone.now(),
         )
         StepAttempt.objects.finalize(
             attempt.pk,
@@ -428,7 +459,7 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
         "enum": ["keep", "replace"],
         "default": "keep",
         "label": "Supplier name",
-        "description": "Keep the current canonical name or use the proposed name from this invoice.",
+        "description": "Keep the current canonical name or use the proposed name from this source.",
         "options": [
             {"value": "keep", "label": "Keep current supplier name"},
             {"value": "replace", "label": "Use proposed supplier name"},
@@ -447,7 +478,8 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
     delegated = {**proposal, "selection_decision_id": str(decision.sqid)}
     with pytest.raises(RuntimeError, match="active fenced invocation lease"):
         IdentityReviewStepImpl().run(
-            SimpleNamespace(input=delegated, run=run, step=SimpleNamespace(config={})), now=timezone.now(),
+            SimpleNamespace(input=delegated, run=run, step=SimpleNamespace(config={})),
+            now=timezone.now(),
         )
     resolution = {
         "action": "apply_identity",
@@ -480,36 +512,78 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
     with system_context(reason="test identity replay remains singular"):
         assert Address._base_manager.filter(party=party).count() == 1
 
-    unchanged_proposal = {**proposal, "proposed": {"name": "Example Supplier", "address": {
-        "street": "10 Example Road", "city": "Exampleton", "country": "GB",
-    }, "handle": {}}}
+    unchanged_proposal = {
+        **proposal,
+        "proposed": {
+            "name": "Example Supplier",
+            "address": {
+                "street": "10 Example Road",
+                "city": "Exampleton",
+                "country": "GB",
+            },
+            "handle": {},
+        },
+    }
     unchanged_review = IdentityReviewStepImpl().run(
-        SimpleNamespace(input=unchanged_proposal, run=run, step=SimpleNamespace(config={})), now=timezone.now(),
+        SimpleNamespace(input=unchanged_proposal, run=run, step=SimpleNamespace(config={})),
+        now=timezone.now(),
     )
     unchanged_apply = IdentityApplyStepImpl().run(
-        SimpleNamespace(input={"review": unchanged_review.output}, run=run), now=timezone.now(),
+        SimpleNamespace(input={"review": unchanged_review.output}, run=run),
+        now=timezone.now(),
     )
     assert unchanged_review.outcome == "unchanged"
     assert unchanged_apply.output == {
-        "party_id": str(party.sqid), "context": proposal["context"],
-        "name_result": "kept", "address_result": "kept", "handle_result": "kept",
+        "party_id": str(party.sqid),
+        "context": proposal["context"],
+        "name_result": "kept",
+        "address_result": "kept",
+        "handle_result": "kept",
     }
 
-    equivalent_country = {**proposal, "proposed": {"name": "Example Supplier", "address": {
-        "street": "10 Example Road", "city": "Exampleton", "country": "United Kingdom",
-    }, "handle": {}}}
-    assert IdentityReviewStepImpl().run(
-        SimpleNamespace(input=equivalent_country, run=run, step=SimpleNamespace(config={})),
-        now=timezone.now(),
-    ).outcome == "unchanged"
+    equivalent_country = {
+        **proposal,
+        "proposed": {
+            "name": "Example Supplier",
+            "address": {
+                "street": "10 Example Road",
+                "city": "Exampleton",
+                "country": "United Kingdom",
+            },
+            "handle": {},
+        },
+    }
+    assert (
+        IdentityReviewStepImpl()
+        .run(
+            SimpleNamespace(input=equivalent_country, run=run, step=SimpleNamespace(config={})),
+            now=timezone.now(),
+        )
+        .outcome
+        == "unchanged"
+    )
 
-    changed_country = {**proposal, "proposed": {"name": "Example Supplier", "address": {
-        "street": "10 Example Road", "city": "Exampleton", "country": "CA",
-    }, "handle": {}}}
-    assert IdentityReviewStepImpl().run(
-        SimpleNamespace(input=changed_country, run=run, step=SimpleNamespace(config={})),
-        now=timezone.now(),
-    ).kind == "suspend"
+    changed_country = {
+        **proposal,
+        "proposed": {
+            "name": "Example Supplier",
+            "address": {
+                "street": "10 Example Road",
+                "city": "Exampleton",
+                "country": "CA",
+            },
+            "handle": {},
+        },
+    }
+    assert (
+        IdentityReviewStepImpl()
+        .run(
+            SimpleNamespace(input=changed_country, run=run, step=SimpleNamespace(config={})),
+            now=timezone.now(),
+        )
+        .kind
+        == "suspend"
+    )
 
 
 def _duplicate_pair(owner: Any, *, named: str, digits: str, spaced: str) -> tuple[Any, Any]:
@@ -609,8 +683,10 @@ def test_dedupe_scan_gate_map_apply_end_to_end(
         units = list(StepRun.objects.filter(run=run, step__key="apply_unit").order_by("pk"))
         assert len(units) == 2
         retained = [
-            (StepAttempt.objects.get(pk=unit.current_attempt_id),
-             WorkflowDispatch.objects.get(step_attempt_id=unit.current_attempt_id))
+            (
+                StepAttempt.objects.get(pk=unit.current_attempt_id),
+                WorkflowDispatch.objects.get(step_attempt_id=unit.current_attempt_id),
+            )
             for unit in units
         ]
         assert all(attempt.applied_at is not None for attempt, _ in retained)
@@ -690,7 +766,13 @@ def test_apply_unit_is_idempotent_on_retry(workflows_parties_tables: None) -> No
     unit = DedupeExecuteStepImpl()
     step_run = SimpleNamespace(
         step=SimpleNamespace(config={"mode": "unit"}),
-        input={"left": str(keep.sqid), "right": str(drop.sqid), "survivor": "left", "action": "merge"},
+        input={
+            "left": str(keep.sqid),
+            "right": str(drop.sqid),
+            "survivor": "left",
+            "action": "merge",
+            "resolved_by": str(to_subject_ref(operator)),
+        },
         run=SimpleNamespace(admission_actor=lambda: operator),
     )
 
@@ -698,17 +780,78 @@ def test_apply_unit_is_idempotent_on_retry(workflows_parties_tables: None) -> No
     assert first.output == {"action": "merge", "result": "merged"}
     second = unit.run(step_run, now=None)  # type: ignore[arg-type]
     assert second.output == {"action": "merge", "result": "already_merged"}
-    capability = unit.recovery_capability(
-        attempt=SimpleNamespace(step_run=SimpleNamespace(step=step_run.step))
-    )
+    capability = unit.recovery_capability(attempt=SimpleNamespace(step_run=SimpleNamespace(step=step_run.step)))
     assert capability.mode == RecoveryMode.FRESH
 
     prepare = unit.recovery_capability(
-        attempt=SimpleNamespace(
-            step_run=SimpleNamespace(step=SimpleNamespace(config={"mode": "prepare"}))
-        )
+        attempt=SimpleNamespace(step_run=SimpleNamespace(step=SimpleNamespace(config={"mode": "prepare"})))
     )
     assert prepare.available is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_apply_unit_authorizes_and_attributes_merge_and_veto_to_decision_resolver(
+    workflows_parties_tables: None,
+) -> None:
+    """The run owner cannot replace the distinct accountable Decision resolver."""
+
+    del workflows_parties_tables
+    run_owner = User.objects.create_user(username="dedupe-run-owner")
+    resolver = User.objects.create_user(username="dedupe-decision-resolver")
+    with system_context(reason="test resolver-owned dedupe fixtures"):
+        merge_into, merge_source = _duplicate_pair(
+            resolver,
+            named="Resolver merge target",
+            digits="+442071838750",
+            spaced="+44 20 7183 8750",
+        )
+        veto_left, veto_right = _duplicate_pair(
+            resolver,
+            named="Resolver veto target",
+            digits="+33142345678",
+            spaced="+33 1 42 34 56 78",
+        )
+    for party in (merge_into, merge_source, veto_left, veto_right):
+        assert party.with_actor(resolver).has_access("write")
+        assert not party.with_actor(run_owner).has_access("write")
+
+    unit = DedupeExecuteStepImpl()
+
+    def apply(value: dict[str, str]) -> StepResult:
+        return unit.run(
+            SimpleNamespace(
+                step=SimpleNamespace(config={"mode": "unit"}),
+                input={**value, "resolved_by": str(to_subject_ref(resolver))},
+                run=SimpleNamespace(admission_actor=lambda: run_owner),
+            ),
+            now=None,  # type: ignore[arg-type]
+        )
+
+    assert apply(
+        {
+            "left": str(merge_into.sqid),
+            "right": str(merge_source.sqid),
+            "survivor": "left",
+            "action": "merge",
+        }
+    ).output == {"action": "merge", "result": "merged"}
+    assert apply(
+        {
+            "left": str(veto_left.sqid),
+            "right": str(veto_right.sqid),
+            "survivor": "left",
+            "action": "keep_separate",
+        }
+    ).output == {"action": "keep_separate", "result": "vetoed"}
+
+    with system_context(reason="test resolver dedupe attribution"):
+        merge_source.refresh_from_db()
+        veto = MergeVeto._base_manager.get()
+    assert merge_source.updated_by_id == resolver.pk
+    assert veto.created_by_id == resolver.pk
+    assert veto.updated_by_id == resolver.pk
+    assert veto.with_actor(resolver).has_access("write")
+    assert not veto.with_actor(run_owner).has_access("write")
 
 
 def test_autoconfig_registers_the_party_governance_step_keys() -> None:
@@ -718,10 +861,6 @@ def test_autoconfig_registers_the_party_governance_step_keys() -> None:
         "ANGEE_WORKFLOW_STEP_CLASSES.parties_dedupe_scan": ("angee.workflows_parties.steps.DedupeScanStepImpl"),
         "ANGEE_WORKFLOW_STEP_CLASSES.parties_dedupe_gate": ("angee.workflows_parties.steps.DedupeGateStepImpl"),
         "ANGEE_WORKFLOW_STEP_CLASSES.parties_dedupe_execute": ("angee.workflows_parties.steps.DedupeExecuteStepImpl"),
-        "ANGEE_WORKFLOW_STEP_CLASSES.parties_identity_review": (
-            "angee.workflows_parties.steps.IdentityReviewStepImpl"
-        ),
-        "ANGEE_WORKFLOW_STEP_CLASSES.parties_identity_apply": (
-            "angee.workflows_parties.steps.IdentityApplyStepImpl"
-        ),
+        "ANGEE_WORKFLOW_STEP_CLASSES.parties_identity_review": ("angee.workflows_parties.steps.IdentityReviewStepImpl"),
+        "ANGEE_WORKFLOW_STEP_CLASSES.parties_identity_apply": ("angee.workflows_parties.steps.IdentityApplyStepImpl"),
     }

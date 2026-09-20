@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -54,6 +55,164 @@ class ReviewReason(BaseModel):
     parameters: dict[StrictStr, StrictStr | StrictInt | StrictBool] = {}
 
 
+class ReviewAction(BaseModel):
+    """One authored action and the editable fields admitted by its branch."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    value: StrictStr
+    label: StrictStr
+    verdict: Literal["COMPLETE", "REJECT", "ESCALATE"]
+    fields: tuple[StrictStr, ...] = ()
+    required: tuple[StrictStr, ...] = ()
+    variant: Literal["primary", "secondary", "destructive", "ghost"] | None = None
+    confirm: StrictStr | None = None
+
+    def model_post_init(self, __context: Any) -> None:
+        """Reject ambiguous or incomplete action declarations at authoring time."""
+
+        del __context
+        if not self.value or not self.label:
+            raise ValueError("Decision actions require non-empty values and labels.")
+        if len(set(self.fields)) != len(self.fields) or len(set(self.required)) != len(self.required):
+            raise ValueError("Decision action fields and required fields must be unique.")
+        if set(self.required) - set(self.fields):
+            raise ValueError("Decision action required fields must be admitted by that action.")
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionActionAuthoring:
+    """One authored tagged-action schema and its typed read-only context payload."""
+
+    decision_schema: dict[str, Any]
+    payload: dict[str, Any]
+
+
+def build_decision_action(
+    *,
+    actions: Collection[ReviewAction],
+    properties: Mapping[str, Mapping[str, Any]] | None = None,
+    payload: Mapping[str, Any] | None = None,
+    facts: Collection[ReviewFact] = (),
+    references: ReviewRecordReference | Collection[ReviewRecordReference] | None = None,
+    differences: Collection[ReviewDifference] = (),
+    reasons: Collection[ReviewReason] = (),
+) -> DecisionActionAuthoring:
+    """Build the one tagged Decision schema and typed review context contract.
+
+    Consumers declare action metadata and ordinary editable property schemas;
+    this owner emits the closed ``oneOf`` branches and serializes the standard
+    review context models. The runtime compiler remains the sole authority that
+    admits the resulting schema when a Decision is retained.
+    """
+
+    declared = tuple(actions)
+    if not declared or len({action.value for action in declared}) != len(declared):
+        raise ValueError("Decision actions must contain distinct non-empty values.")
+    editable = {str(name): copy.deepcopy(dict(schema)) for name, schema in (properties or {}).items()}
+    if "action" in editable or any(not name for name in editable):
+        raise ValueError("Decision editable properties require non-empty names other than 'action'.")
+    for action in declared:
+        unknown = set(action.fields) - set(editable)
+        if unknown:
+            raise ValueError(
+                f"Decision action {action.value!r} admits undeclared fields: {', '.join(sorted(unknown))}."
+            )
+
+    context_values: dict[str, Any] = {}
+    context_schemas: dict[str, dict[str, Any]] = {}
+    definitions: dict[str, Any] = {}
+    if facts:
+        context_values["facts"] = _review_json(tuple(facts))
+        context_schemas["facts"] = _context_schema(TypeAdapter(tuple[ReviewFact, ...]), "facts", definitions)
+    if references is not None:
+        if isinstance(references, ReviewRecordReference):
+            context_values["references"] = _review_json(references)
+            reference_adapter = TypeAdapter(ReviewRecordReference)
+        else:
+            retained_references = tuple(references)
+            context_values["references"] = _review_json(retained_references)
+            reference_adapter = TypeAdapter(tuple[ReviewRecordReference, ...])
+        context_schemas["references"] = _context_schema(reference_adapter, "record", definitions)
+    if differences:
+        context_values["differences"] = _review_json(tuple(differences))
+        context_schemas["differences"] = _context_schema(
+            TypeAdapter(tuple[ReviewDifference, ...]), "differences", definitions
+        )
+    if reasons:
+        context_values["reasons"] = _review_json(tuple(reasons))
+        context_schemas["reasons"] = _context_schema(TypeAdapter(tuple[ReviewReason, ...]), "reasons", definitions)
+    collisions = set(payload or {}).intersection(context_values)
+    if collisions:
+        raise ValueError(f"Decision payload cannot replace typed review context: {', '.join(sorted(collisions))}.")
+
+    action_options = []
+    branches = []
+    for action in declared:
+        option: dict[str, Any] = {
+            "value": action.value,
+            "label": action.label,
+            "verdict": action.verdict,
+        }
+        if action.variant is not None:
+            option["variant"] = action.variant
+        if action.confirm is not None:
+            option["confirm"] = action.confirm
+        action_options.append(option)
+        branches.append(
+            {
+                "type": "object",
+                "required": ["action", *action.required],
+                "properties": {
+                    "action": {"const": action.value},
+                    **{name: copy.deepcopy(editable[name]) for name in action.fields},
+                },
+                "additionalProperties": False,
+            }
+        )
+    schema: dict[str, Any] = {
+        "type": "object",
+        "required": ["action"],
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [action.value for action in declared],
+                "options": action_options,
+            },
+            **editable,
+            **context_schemas,
+        },
+        "oneOf": branches,
+    }
+    if definitions:
+        schema["$defs"] = definitions
+    return DecisionActionAuthoring(
+        decision_schema=schema,
+        payload={**copy.deepcopy(dict(payload or {})), **context_values},
+    )
+
+
+def _context_schema(adapter: TypeAdapter[Any], widget: str, definitions: dict[str, Any]) -> dict[str, Any]:
+    """Embed one Pydantic context schema while hoisting its root-local definitions."""
+
+    schema = adapter.json_schema(mode="serialization")
+    for name, definition in schema.pop("$defs", {}).items():
+        existing = definitions.setdefault(name, definition)
+        if existing != definition:
+            raise ValueError(f"Review context definition {name!r} has competing schemas.")
+    return {**schema, "layout": "context", "widget": widget}
+
+
+def _review_json(value: Any) -> Any:
+    """Serialize strict review models without accepting arbitrary coercion."""
+
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, tuple):
+        return [_review_json(item) for item in value]
+    raise TypeError("Review context values must use their declared Pydantic models.")
+
+
 _CONTEXT_ADAPTERS = {
     "record": (TypeAdapter(ReviewRecordReference), TypeAdapter(tuple[ReviewRecordReference, ...])),
     "facts": (TypeAdapter(tuple[ReviewFact, ...]),),
@@ -87,17 +246,13 @@ def retained_decision_form_schema(schema: dict[str, Any]) -> dict[str, Any]:
                 or len(order) != len(set(order))
                 or set(order) != set(names)
             ):
-                raise ValidationError({
-                    "decision_schema": (
-                        f"{path}.propertyOrder must name every property exactly once."
-                    )
-                })
+                raise ValidationError(
+                    {"decision_schema": (f"{path}.propertyOrder must name every property exactly once.")}
+                )
             for name, field in properties.items():
                 annotate(field, path=f"{path}.properties.{name}")
         elif "propertyOrder" in node:
-            raise ValidationError({
-                "decision_schema": f"{path}.propertyOrder requires object properties."
-            })
+            raise ValidationError({"decision_schema": f"{path}.propertyOrder requires object properties."})
 
         definitions = node.get("$defs")
         if isinstance(definitions, dict):
@@ -141,11 +296,15 @@ class DecisionActionContract:
             # field; validating it in isolation would make a published $ref
             # fail only when an actor resolves the Decision.
             scoped_schema = {
-                "$defs": self.schema.get("$defs", {}), "allOf": [field_schema],
+                "$defs": self.schema.get("$defs", {}),
+                "allOf": [field_schema],
             }
-            errors = list(Draft202012Validator(
-                scoped_schema, format_checker=FormatChecker(),
-            ).iter_errors(value))
+            errors = list(
+                Draft202012Validator(
+                    scoped_schema,
+                    format_checker=FormatChecker(),
+                ).iter_errors(value)
+            )
             if errors:
                 raise ValidationError({"payload": f"Decision context {name!r} does not satisfy its schema."})
             if not any(_valid_context(adapter, value) for adapter in _CONTEXT_ADAPTERS[widget]):
@@ -155,7 +314,7 @@ class DecisionActionContract:
 def _valid_context(adapter: TypeAdapter[Any], value: Any) -> bool:
     try:
         adapter.validate_json(json.dumps(value, allow_nan=False))
-    except (PydanticValidationError, TypeError, ValueError):
+    except PydanticValidationError, TypeError, ValueError:
         return False
     return True
 
@@ -196,8 +355,10 @@ def compile_decision_action_schema(schema: Any) -> DecisionActionContract | None
         label = option.get("label")
         verdict = option.get("verdict")
         if (
-            value not in values or value in verdicts
-            or not isinstance(label, str) or not label
+            value not in values
+            or value in verdicts
+            or not isinstance(label, str)
+            or not label
             or verdict not in _VERDICTS
             or ("variant" in option and option["variant"] not in _VARIANTS)
             or ("confirm" in option and not isinstance(option["confirm"], str))
@@ -217,9 +378,9 @@ def compile_decision_action_schema(schema: Any) -> DecisionActionContract | None
                 raise ValidationError({"decision_schema": f"Context property {name!r} needs a typed widget."})
             context_fields[str(name)] = widget
     if set(context_fields).intersection(schema.get("required", ())):
-        raise ValidationError({
-            "decision_schema": "Read-only Decision context cannot be required in submitted resolution."
-        })
+        raise ValidationError(
+            {"decision_schema": "Read-only Decision context cannot be required in submitted resolution."}
+        )
     checked: dict[str, dict[str, Any]] = {}
     for branch in branches:
         if (
@@ -237,7 +398,9 @@ def compile_decision_action_schema(schema: Any) -> DecisionActionContract | None
             raise ValidationError({"decision_schema": "Action branches need distinct enum const values."})
         admitted = set(branch["properties"])
         if admitted - set(properties) or admitted & set(context_fields) or set(branch["required"]) - admitted:
-            raise ValidationError({"decision_schema": "Action branch admits undeclared/context or unlisted required fields."})
+            raise ValidationError(
+                {"decision_schema": "Action branch admits undeclared/context or unlisted required fields."}
+            )
         checked[value] = branch
     if set(checked) != set(values) or set(verdicts) != set(values):
         raise ValidationError({"decision_schema": "Action options and branches must cover enum exactly."})

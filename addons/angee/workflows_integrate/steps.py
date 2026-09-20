@@ -17,19 +17,68 @@ from datetime import datetime
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
-from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, RootModel
 
-from angee.base.identity import canonical_subject_ref
 from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
-from angee.base.scoping import system_queryset
-from angee.workflows.steps import DecisionSpec, StepImpl, StepResult, positive_int
+from angee.workflows.attempts import DecisionGateOutput, DecisionResolution
+from angee.workflows.decision_actions import ReviewAction, build_decision_action
+from angee.workflows.steps import (
+    DecisionApplyStep,
+    GateStep,
+    StepEffect,
+    StepExecutionMode,
+    StepImpl,
+    StepOutcome,
+    StepResult,
+    positive_int,
+)
 
 ARCHIVE_EXTRACTOR_CLASSES_SETTING = "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES"
 """Settings mapping from stable archive extractor keys to trusted class paths."""
 
 _EXECUTE_MODES = frozenset({"prepare", "unit"})
+
+
+class ArchiveMappingUnit(BaseModel):
+    """One admitted extractor-to-target mapping."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    extractor: str
+    target: str
+
+
+class ArchiveUnsupportedOutput(BaseModel):
+    """Typed failure projection for heterogeneous archive proposals."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    proposals: list[dict[str, str]]
+    target_resources: list[str]
+    unsupported: str
+
+
+class ArchiveGateOutput(RootModel[DecisionGateOutput | ArchiveUnsupportedOutput]):
+    """Typed review evidence or the unsupported heterogeneous proposal result."""
+
+
+class ArchiveExecuteInput(RootModel[DecisionGateOutput | ArchiveUnsupportedOutput | ArchiveMappingUnit]):
+    """Typed prepare-gate, routed failure, or stock-map unit input."""
+
+
+class ArchiveExecutionOutput(BaseModel):
+    """One extractor's durable workflow journal result."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    extractor: str
+    target: str
+    result: Any
+
+
+class ArchiveExecuteOutput(RootModel[list[ArchiveMappingUnit] | ArchiveExecutionOutput]):
+    """Typed prepared mappings or one extractor execution result."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,8 +193,7 @@ class ArchiveProbeStepImpl(StepImpl):
             recognized = extractor_class().recognizes(subject)
             if not isinstance(recognized, bool):
                 raise TypeError(
-                    f"{extractor_class.__name__}.recognizes() must return bool, "
-                    f"got {type(recognized).__name__}."
+                    f"{extractor_class.__name__}.recognizes() must return bool, got {type(recognized).__name__}."
                 )
             if recognized:
                 proposals.append(_proposal(extractor_class))
@@ -155,7 +203,7 @@ class ArchiveProbeStepImpl(StepImpl):
         )
 
 
-class ArchiveGateStepImpl(StepImpl):
+class ArchiveGateStepImpl(GateStep):
     """Suspend for a fixed-row extractor-to-target mapping decision.
 
     v1 renders one shared rows template, so every recognized extractor must
@@ -166,6 +214,9 @@ class ArchiveGateStepImpl(StepImpl):
     key = "archive_gate"
     label = "Map archive targets"
     category = "Control"
+    config_model = None
+    output_model = ArchiveGateOutput
+    outcomes = (*GateStep.outcomes, StepOutcome("failed", "Unsupported archive"))
 
     @classmethod
     def validate_config(cls, config: Any) -> None:
@@ -179,9 +230,8 @@ class ArchiveGateStepImpl(StepImpl):
         positive_int(config.get("max_attempts", 3), "Archive gate max_attempts")
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Author the mapping form from probe output and suspend one decision."""
+        """Route unsupported mixed-resource proposals before using the built-in gate."""
 
-        del now
         proposals = _input_proposals(step_run.input)
         target_resources = sorted({proposal["target_resource"] for proposal in proposals})
         if len(target_resources) != 1:
@@ -193,10 +243,20 @@ class ArchiveGateStepImpl(StepImpl):
                 },
                 outcome="failed",
             )
+        return super().run(step_run, now=now)
+
+    @classmethod
+    def gate_config(cls, step_run: Any) -> Mapping[str, Any]:
+        """Author one built-in gate config from the admitted probe output."""
+
+        proposals = _input_proposals(step_run.input)
+        target_resources = sorted({proposal["target_resource"] for proposal in proposals})
         target_resource = target_resources[0]
         config = dict(step_run.step.config)
-        assignee = str(config.get("assignee") or _run_owner_subject(step_run.run))
-        mappings: list[JsonValue] = [
+        from angee.workflows import engine  # Runtime edge; safe after the operation registry imports this module.
+
+        assignee = str(engine.resolve_workflow_actor(config.get("assignee") or step_run.run).subject)
+        mappings = [
             {
                 "extractor": proposal["extractor"],
                 "label": proposal["label"],
@@ -204,21 +264,30 @@ class ArchiveGateStepImpl(StepImpl):
             }
             for proposal in proposals
         ]
-        return StepResult.suspend(
-            resume_state={"gate": {"policy": "one_done"}},
-            decisions=(
-                DecisionSpec(
-                    assignees=(assignee,),
-                    action=str(config.get("action") or "map-archive"),
-                    payload={"mappings": mappings},
-                    max_attempts=positive_int(config.get("max_attempts", 3), "Archive gate max_attempts"),
-                    decision_schema=_mapping_form_schema(target_resource),
+        review = build_decision_action(
+            actions=(
+                ReviewAction(
+                    value="apply_mappings",
+                    label="Apply mappings",
+                    verdict="COMPLETE",
+                    fields=("mappings",),
+                    required=("mappings",),
                 ),
             ),
+            properties={"mappings": _mapping_rows_schema(target_resource)},
+            payload={"mappings": mappings},
         )
+        return {
+            "policy": "one_done",
+            "action": str(config.get("action") or "map-archive"),
+            "slots": [{"assignees": [assignee]}],
+            "payload": review.payload,
+            "max_attempts": positive_int(config.get("max_attempts", 3), "Archive gate max_attempts"),
+            "decision_schema": review.decision_schema,
+        }
 
 
-class ArchiveExecuteStepImpl(StepImpl):
+class ArchiveExecuteStepImpl(DecisionApplyStep):
     """Prepare a confirmed decision mapping or execute one stock-map unit.
 
     A workflow uses this implementation twice: ``mode=prepare`` follows the
@@ -232,6 +301,17 @@ class ArchiveExecuteStepImpl(StepImpl):
     label = "Execute archive import"
     category = "Activity"
     deterministic = False
+    input_model = ArchiveExecuteInput
+    output_model = ArchiveExecuteOutput
+    outcomes = (
+        StepOutcome("prepared", "Prepared"),
+        StepOutcome("completed", "Completed"),
+    )
+    effect = StepEffect.EXTERNAL
+    execution_mode = StepExecutionMode.STANDARD
+    effect_description = "Consumes a reviewed mapping or invokes its registered archive extractor."
+    idempotent = True
+    gate_step_class = ArchiveGateStepImpl
 
     @classmethod
     def validate_config(cls, config: Any) -> None:
@@ -249,7 +329,7 @@ class ArchiveExecuteStepImpl(StepImpl):
 
         mode = str(step_run.step.config.get("mode") or "")
         if mode == "prepare":
-            return StepResult.done(output=_prepared_mappings(step_run), outcome="prepared")
+            return super().run(step_run, now=now)
 
         subject = _subject_container(step_run)
         extractor_key, target_pk = _mapping_unit(step_run.input)
@@ -265,6 +345,42 @@ class ArchiveExecuteStepImpl(StepImpl):
             },
             outcome="completed",
         )
+
+    def apply_resolution(
+        self,
+        step_run: Any,
+        decision: Any,
+        admitted: DecisionResolution,
+        *,
+        actor: Any,
+        record_basis: Any,
+        now: datetime,
+    ) -> StepResult:
+        """Verify the frozen mapping basis and emit only approved map items."""
+
+        del step_run, actor, record_basis, now
+        mappings: list[dict[str, str]] = []
+        seen: set[str] = set()
+        expected_rows = _mapping_rows(decision.payload, owner="payload")
+        resolved_rows = _mapping_rows(decision.resolution, owner="resolution")
+        if len(expected_rows) != len(resolved_rows):
+            raise ValidationError({"input": "Archive mapping resolution must preserve every proposed row."})
+        for expected, resolved in zip(expected_rows, resolved_rows, strict=True):
+            extractor_key = str(resolved.get("extractor") or "")
+            label = str(resolved.get("label") or "")
+            target_pk = str(resolved.get("target") or "")
+            if extractor_key != str(expected.get("extractor") or "") or label != str(expected.get("label") or ""):
+                raise ValidationError({"input": "Archive mapping resolution changed a proposed extractor."})
+            extractor = _registered_extractor(extractor_key, owner="input")
+            if label != extractor.display_label():
+                raise ValidationError({"input": "Archive mapping resolution has stale extractor metadata."})
+            if not target_pk:
+                raise ValidationError({"input": f"Archive extractor {extractor_key!r} requires a target."})
+            if extractor_key in seen:
+                raise ValidationError({"input": f"Archive extractor {extractor_key!r} is mapped twice."})
+            seen.add(extractor_key)
+            mappings.append({"extractor": extractor_key, "target": target_pk})
+        return StepResult.done(output=mappings, outcome="prepared")
 
 
 def _validate_extractor_declaration(extractor: type[ArchiveExtractor]) -> None:
@@ -283,19 +399,13 @@ def _validate_resource_label(key: str, attr: str, value: str) -> None:
     label = str(value or "")
     app_label, separator, model_name = label.partition(".")
     if not separator or not app_label or not model_name or "." in model_name:
-        raise ImproperlyConfigured(
-            f"Archive extractor {key!r} {attr} must be an app_label.Model string."
-        )
+        raise ImproperlyConfigured(f"Archive extractor {key!r} {attr} must be an app_label.Model string.")
     try:
         model = apps.get_model(app_label, model_name)
     except LookupError as error:
-        raise ImproperlyConfigured(
-            f"Archive extractor {key!r} {attr} {label!r} is not installed."
-        ) from error
+        raise ImproperlyConfigured(f"Archive extractor {key!r} {attr} {label!r} is not installed.") from error
     if model._meta.label != label:
-        raise ImproperlyConfigured(
-            f"Archive extractor {key!r} {attr} must use canonical label {model._meta.label!r}."
-        )
+        raise ImproperlyConfigured(f"Archive extractor {key!r} {attr} must use canonical label {model._meta.label!r}.")
 
 
 def _proposal(extractor: type[ArchiveExtractor]) -> dict[str, str]:
@@ -315,9 +425,7 @@ def _subject_container(step_run: Any) -> Any:
     drive_model = apps.get_model("storage", "Drive")
     subject = step_run.run.subject
     if subject is None or not isinstance(subject, (file_model, drive_model)):
-        raise ValidationError(
-            {"subject": "Archive workflow runs require a storage.File or storage.Drive subject."}
-        )
+        raise ValidationError({"subject": "Archive workflow runs require a storage.File or storage.Drive subject."})
     return subject
 
 
@@ -357,10 +465,10 @@ def _registered_extractor(key: str, *, owner: str) -> type[ArchiveExtractor]:
         raise ValidationError({owner: f"Archive extractor {key!r} is not registered."}) from error
 
 
-def _mapping_form_schema(target_resource: str) -> dict[str, Any]:
-    """Return the serializable fixed-row mapping form for ``target_resource``."""
+def _mapping_rows_schema(target_resource: str) -> dict[str, Any]:
+    """Return the editable fixed-row mapping property for ``target_resource``."""
 
-    mappings = {
+    return {
         "type": "array",
         "widget": "rows",
         "label": "Archive mappings",
@@ -370,96 +478,17 @@ def _mapping_form_schema(target_resource: str) -> dict[str, Any]:
             "properties": {
                 "extractor": {"type": "string", "label": "Extractor key", "readOnly": True},
                 "label": {"type": "string", "label": "Archive type", "readOnly": True},
-                "target": {"type": "string", "label": "Target", "relation": {
-                    "resource": target_resource, "create": {"resource": target_resource},
-                }},
+                "target": {
+                    "type": "string",
+                    "label": "Target",
+                    "relation": {
+                        "resource": target_resource,
+                        "create": {"resource": target_resource},
+                    },
+                },
             },
         },
     }
-    return {
-        "type": "object",
-        "required": ["action"],
-        "properties": {
-            "action": {"type": "string", "enum": ["apply_mappings"],
-                       "options": [{"value": "apply_mappings", "label": "Apply mappings",
-                                    "verdict": "COMPLETE"}]},
-            "mappings": mappings,
-        },
-        "oneOf": [{"type": "object", "required": ["action", "mappings"],
-                   "properties": {"action": {"const": "apply_mappings"}, "mappings": mappings},
-                   "additionalProperties": False}],
-    }
-
-
-def _run_owner_subject(run: Any) -> str:
-    """Return the run's retained admission subject as the mapping assignee."""
-
-    subject = run.admission_actor_subject()
-    if subject is None:
-        raise ValidationError({"run": "Archive mapping gates require an admitted actor or explicit assignee."})
-    return str(subject)
-
-
-def _prepared_mappings(step_run: Any) -> list[dict[str, str]]:
-    """Load completed decision resolutions and return verified map items."""
-
-    value = step_run.input
-    if not isinstance(value, Mapping) or not isinstance(value.get("resolutions"), list):
-        raise ValidationError({"input": "Archive prepare requires the typed gate resolution."})
-    if len(value["resolutions"]) != 1 or not isinstance(value["resolutions"][0], Mapping):
-        raise ValidationError({"input": "Archive prepare requires one exact resolution."})
-    gate_rows = list(
-        system_queryset(type(step_run), using=step_run._state.db, lock=None)
-        .filter(next_step_runs=step_run, step__step_class="archive_gate")
-        .select_related("step")
-    )
-    if len(gate_rows) != 1:
-        raise ValidationError({"gate": "Archive prepare needs one declared predecessor gate."})
-    gate = gate_rows[0]
-    from angee.workflows import engine
-
-    decision, _ = engine.consume_decision_resolution(
-        step_run, ("resolutions", 0),
-        expected_action=str(gate.step.config.get("action") or "map-archive"),
-        expected_target=("", ""), expected_verdict="completed",
-        actor=_resolution_actor(value["resolutions"][0]),
-    )
-
-    mappings: list[dict[str, str]] = []
-    seen: set[str] = set()
-    expected_rows = _mapping_rows(decision.payload, owner="payload")
-    resolved_rows = _mapping_rows(decision.resolution, owner="resolution")
-    if len(expected_rows) != len(resolved_rows):
-        raise ValidationError({"input": "Archive mapping resolution must preserve every proposed row."})
-    for expected, resolved in zip(expected_rows, resolved_rows, strict=True):
-        extractor_key = str(resolved.get("extractor") or "")
-        label = str(resolved.get("label") or "")
-        target_pk = str(resolved.get("target") or "")
-        if extractor_key != str(expected.get("extractor") or "") or label != str(expected.get("label") or ""):
-            raise ValidationError({"input": "Archive mapping resolution changed a proposed extractor."})
-        extractor = _registered_extractor(extractor_key, owner="input")
-        if label != extractor.display_label():
-            raise ValidationError({"input": "Archive mapping resolution has stale extractor metadata."})
-        if not target_pk:
-            raise ValidationError({"input": f"Archive extractor {extractor_key!r} requires a target."})
-        if extractor_key in seen:
-            raise ValidationError({"input": f"Archive extractor {extractor_key!r} is mapped twice."})
-        seen.add(extractor_key)
-        mappings.append({"extractor": extractor_key, "target": target_pk})
-    return mappings
-
-
-def _resolution_actor(value: Mapping[str, Any]) -> Any:
-    """Resolve the retained human Decision resolver for the consumption check."""
-
-    try:
-        subject = canonical_subject_ref(str(value.get("resolved_by") or ""))
-    except (TypeError, ValueError) as error:
-        raise ValidationError({"decision": "Archive mapping requires a human resolver."}) from error
-    actor = get_user_model().objects.active_person_for_subject(subject)
-    if actor is None:
-        raise ValidationError({"decision": "Archive mapping requires a human resolver."})
-    return actor
 
 
 def _mapping_rows(value: Any, *, owner: str) -> list[Mapping[str, Any]]:

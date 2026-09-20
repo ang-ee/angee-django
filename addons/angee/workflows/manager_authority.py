@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import uuid
 from contextvars import ContextVar
-from dataclasses import InitVar, dataclass
+from dataclasses import dataclass
 from typing import Any
-
-from django.db import connections
 
 from angee.base.authority import TransactionBoundContext
 
@@ -31,12 +29,14 @@ _definition_write_session: ContextVar[_DefinitionWriteSession | None] = ContextV
 @dataclass(frozen=True, slots=True)
 class _AttemptWriteSession:
     alias: str
-    connection_id: int
     step_run_id: int
 
 
-_attempt_write_session: ContextVar[_AttemptWriteSession | None] = ContextVar(
-    "workflow_attempt_write_session", default=None
+_attempt_write_session = TransactionBoundContext[_AttemptWriteSession](
+    "workflow_attempt_write_session",
+    alias=lambda session: session.alias,
+    atomic_error="Attempt writes require an active database transaction.",
+    nested_error="Attempt write authority cannot be nested.",
 )
 
 
@@ -45,15 +45,8 @@ class _AtomicWriteCapability:
     """Workflow identity carried inside a shared transaction-bound context."""
 
     alias: str
-    connection_id: InitVar[int]
-    outer_atomic_id: InitVar[int]
     instance_id: int
     consumed: bool = False
-
-    def __post_init__(self, connection_id: int, outer_atomic_id: int) -> None:
-        """Discard caller-captured lifetime facts now owned by the base context."""
-
-        del connection_id, outer_atomic_id
 
     def matches(self, alias: str, instance: Any) -> bool:
         """Match the workflow-owned one-use instance and database identity."""
@@ -101,14 +94,15 @@ _step_run_save_capability = TransactionBoundContext[_StepRunSaveCapability](
 @dataclass(slots=True)
 class _DecisionResolutionSession:
     alias: str
-    connection_id: int
-    outer_atomic_id: int
     decision_id: int
     completed: bool = False
 
 
-_decision_resolution_session: ContextVar[_DecisionResolutionSession | None] = ContextVar(
-    "workflow_decision_resolution_session", default=None
+_decision_resolution_session = TransactionBoundContext[_DecisionResolutionSession](
+    "workflow_decision_resolution_session",
+    alias=lambda session: session.alias,
+    atomic_error="Retained decision resolution requires an outer owner transaction.",
+    nested_error="Retained decision resolution authority cannot be nested.",
 )
 
 
@@ -129,14 +123,16 @@ _decision_save_capability = TransactionBoundContext[_DecisionSaveCapability](
 @dataclass(frozen=True, slots=True)
 class _DecisionWriteSession:
     alias: str
-    connection_id: int
     step_run_id: int
     attempt_id: int
     declaration_index: int
 
 
-_decision_write_session: ContextVar[_DecisionWriteSession | None] = ContextVar(
-    "workflow_decision_write_session", default=None
+_decision_write_session = TransactionBoundContext[_DecisionWriteSession](
+    "workflow_decision_write_session",
+    alias=lambda session: session.alias,
+    atomic_error="Decision creation requires an active manager transaction.",
+    nested_error="Decision creation authority cannot be nested.",
 )
 
 
@@ -172,24 +168,16 @@ _artifact_batch_capability = TransactionBoundContext[_ArtifactBatchCapability](
 
 def _attempt_write_active(alias: str, step_run_id: int | None = None) -> bool:
     session = _attempt_write_session.get()
-    connection = connections[alias]
     return (
-        session is not None
-        and session.alias == alias
-        and session.connection_id == id(connection)
-        and connection.in_atomic_block
-        and (step_run_id is None or session.step_run_id == step_run_id)
+        session is not None and session.alias == alias and (step_run_id is None or session.step_run_id == step_run_id)
     )
 
 
 def _decision_write_active(alias: str, instance: Any) -> bool:
     session = _decision_write_session.get()
-    connection = connections[alias]
     return (
         session is not None
         and session.alias == alias
-        and session.connection_id == id(connection)
-        and connection.in_atomic_block
         and instance._state.adding
         and instance.step_run_id == session.step_run_id
         and instance.suspension_attempt_id == session.attempt_id
@@ -207,9 +195,7 @@ _test_fixture_batch_rows: ContextVar[frozenset[int]] = ContextVar(
 )
 
 
-_test_fixture_apply_ids: ContextVar[frozenset[int]] = ContextVar(
-    "workflow_test_fixture_apply_ids", default=frozenset()
-)
+_test_fixture_apply_ids: ContextVar[frozenset[int]] = ContextVar("workflow_test_fixture_apply_ids", default=frozenset())
 
 
 _recovery_write_run: ContextVar[tuple[str, int, int, int] | None] = ContextVar(
@@ -247,8 +233,6 @@ _dispatch_save_capability = TransactionBoundContext[_DispatchSaveCapability](
 @dataclass(slots=True)
 class _DispatchConsumeSession:
     alias: str
-    connection_id: int
-    outer_atomic_id: int
     kind: str
     target_id: int
     generation: int | None
@@ -257,6 +241,9 @@ class _DispatchConsumeSession:
     consumed: bool = False
 
 
-_dispatch_consume_session: ContextVar[_DispatchConsumeSession | None] = ContextVar(
-    "workflow_dispatch_consume_session", default=None
+_dispatch_consume_session = TransactionBoundContext[_DispatchConsumeSession](
+    "workflow_dispatch_consume_session",
+    alias=lambda session: session.alias,
+    atomic_error="Dispatch consumption requires the owning database transaction.",
+    nested_error="Dispatch consumption authority cannot be nested.",
 )

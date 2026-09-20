@@ -16,9 +16,10 @@ suspended result.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
@@ -41,6 +42,8 @@ from angee.workflows.attempts import (
     AttemptResult,
     AttemptResultKind,
     DecisionGateOutput,
+    DecisionRecordAccess,
+    DecisionResolution,
     DecisionSpec,
     ExternalOperationPolicy,
     JsonPresence,
@@ -48,7 +51,20 @@ from angee.workflows.attempts import (
     RecoveryMode,
     json_values_equal,
 )
-from angee.workflows.configs import GateConfig, MapConfig, WaitConfig, map_items_expression_path
+from angee.workflows.bindings import (
+    BindingContext,
+    SourceValue,
+    UnavailableSource,
+    evaluate_binding,
+    parse_binding,
+)
+from angee.workflows.configs import (
+    GateConfig,
+    MapConfig,
+    WaitConfig,
+    is_gate_binding_mapping,
+    map_items_expression_path,
+)
 from angee.workflows.data_contracts import DataContract, model_data_contract, schema_data_contract
 
 _MODEL_LABEL_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
@@ -136,6 +152,16 @@ class StepOperation:
         """Return the compatibility schema from the Pydantic-owned contract."""
 
         return self.output_contract.raw_schema
+
+
+@dataclass(frozen=True, slots=True)
+class GateResumption:
+    """Retained state and exact terminal slots of one resumable gate suspension."""
+
+    outcome: str
+    resolutions: dict[str, Any]
+    state: dict[str, Any]
+    slots: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -726,7 +752,7 @@ class WaitStep(StepImpl):
 
 
 class GateStep(StepImpl):
-    """Built-in gate step that suspends until Slice 4 decision rows exist."""
+    """The single built-in owner of static, bound, and resumable review gates."""
 
     key = "gate"
     label = "Gate"
@@ -747,14 +773,264 @@ class GateStep(StepImpl):
     config_model = GateConfig
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Suspend the step, keeping only durable resume state."""
+        """Resolve bound declarations and suspend or complete a resumed gate."""
 
         del now
-        config = dict(step_run.step.config)
+        resumed = type(self).resumption(step_run)
+        if resumed is not None:
+            return StepResult.done(output=resumed.resolutions, outcome=resumed.outcome)
+        return type(self).gate_result(step_run, config=type(self).gate_config(step_run))
+
+    @classmethod
+    def gate_config(cls, step_run: Any) -> Mapping[str, Any]:
+        """Return the authored config; domain adapters may derive it from admitted input."""
+
+        config = step_run.step.config
+        if not isinstance(config, Mapping):
+            raise ValidationError({"config": "Gate config must be an object."})
+        return config
+
+    @classmethod
+    def gate_result(
+        cls,
+        step_run: Any,
+        *,
+        config: Mapping[str, Any],
+        retained_state: Mapping[str, Any] | None = None,
+    ) -> StepResult:
+        """Return the canonical clean completion or retained Decision suspension."""
+
+        resolved = cls._resolved_config(step_run, config)
+        if resolved is None:
+            output = DecisionGateOutput(resolutions=(), outcome="completed").model_dump(mode="json")
+            return StepResult.done(output=output, outcome="completed")
+        state: dict[str, Any] = {"gate": {"policy": resolved["policy"]}}
+        if retained_state:
+            state["state"] = copy.deepcopy(dict(retained_state))
+        if resolved["resume"]:
+            state["_resume_after_decisions"] = True
         return StepResult.suspend(
-            resume_state={"gate": config},
-            decisions=_decision_specs_from_config(config),
+            resume_state=state,
+            decisions=_decision_specs_from_config(resolved),
         )
+
+    @classmethod
+    def resumption(cls, step_run: Any) -> GateResumption | None:
+        """Return the exact settled slots of this step's current resumable suspension."""
+
+        state = getattr(step_run, "resume_state", {})
+        if not isinstance(state, Mapping) or not state.get("_resume_after_decisions"):
+            return None
+        outcome = state.get("_decision_outcome")
+        resolutions = state.get("_decision_resolutions")
+        decision_ids = state.get("_decision_ids")
+        if outcome is None and resolutions is None:
+            return None
+        if (
+            not isinstance(outcome, str)
+            or not isinstance(resolutions, dict)
+            or not isinstance(decision_ids, list)
+            or any(type(decision_id) is not int for decision_id in decision_ids)
+        ):
+            raise ValidationError({"gate": "Resumable gate state is incomplete."})
+        decisions = {
+            decision.pk: decision
+            for decision in step_run.decisions.filter(pk__in=decision_ids).order_by("declaration_index", "pk")
+        }
+        if set(decisions) != set(decision_ids):
+            raise ValidationError({"gate": "Resumable gate Decisions are unavailable."})
+        slots = tuple(
+            {
+                **{
+                    key: copy.deepcopy(value)
+                    for key, value in dict(decisions[decision_id].payload or {}).items()
+                    if key != "facts"
+                },
+                "approved": decisions[decision_id].verdict == "completed",
+                "verdict": str(decisions[decision_id].verdict),
+                "resolution": copy.deepcopy(dict(decisions[decision_id].resolution or {})),
+            }
+            for decision_id in decision_ids
+        )
+        retained = state.get("state")
+        if retained is not None and not isinstance(retained, dict):
+            raise ValidationError({"gate": "Resumable gate retained state must be an object."})
+        return GateResumption(
+            outcome=outcome,
+            resolutions=copy.deepcopy(resolutions),
+            state=copy.deepcopy(retained or {}),
+            slots=slots,
+        )
+
+    @classmethod
+    def _resolved_config(
+        cls,
+        step_run: Any,
+        config: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Short-circuit a clean input or validate one fully resolved gate config."""
+
+        resolved = dict(config)
+        clean = cls._bound_value(step_run, resolved.get("clean", False), field="clean")
+        if type(clean) is not bool:
+            raise ValidationError({"clean": "Gate clean bindings must resolve to a boolean."})
+        if clean:
+            return None
+        resolved["clean"] = False
+        for name in ("slots", "payload", "decision_schema", "targets", "record_access"):
+            if name in resolved:
+                resolved[name] = cls._bound_value(step_run, resolved[name], field=name)
+        return cls.normalize_config(resolved)
+
+    @staticmethod
+    def _bound_value(step_run: Any, value: Any, *, field: str) -> Any:
+        """Evaluate one binding tree from the invocation's retained admitted input."""
+
+        try:
+            is_binding = is_gate_binding_mapping(value)
+        except ValueError as error:
+            raise ValidationError({field: str(error)}) from error
+        if not is_binding:
+            return value
+        attempt = getattr(step_run, "current_attempt", None)
+        present = bool(attempt is not None and attempt.input_present)
+        admitted = attempt.input if attempt is not None else step_run.input
+        context = BindingContext(
+            workflow_input=SourceValue(
+                JsonPresence(present, admitted),
+                {"kind": "attempt_input", "step_run_id": getattr(step_run, "pk", None)},
+            ),
+            step_outputs={},
+            map_item=UnavailableSource(
+                "source_unavailable",
+                "Gate config bindings read the admitted step input; bind other sources into it first.",
+                {"kind": "map_item"},
+            ),
+        )
+        evaluation = evaluate_binding(parse_binding(value), context)
+        if evaluation.diagnostics or evaluation.value is None or not evaluation.value.present:
+            messages = "; ".join(item.message for item in evaluation.diagnostics)
+            raise ValidationError({field: messages or "Gate binding did not produce a value."})
+        return evaluation.value.value
+
+
+class DecisionApplyStep(StepImpl):
+    """Consume one gate slot with workflow ancestry locked before domain rows.
+
+    ``consume_decision_resolution`` invokes ``locked_record_basis`` only after
+    locking the run, step run, and current attempt. Database-command adapters
+    therefore keep the manager-wide ancestry-before-record lock order through
+    the surrounding invocation transaction.
+    """
+
+    deterministic = False
+    gate_step_class: ClassVar[type[GateStep]] = GateStep
+    resolution_path: ClassVar[tuple[str | int, ...]] = ("resolutions", 0)
+
+    @classmethod
+    def _validate_operation(cls, *, key: str) -> None:
+        """Require every concrete apply adapter to publish its complete contract."""
+
+        super()._validate_operation(key=key)
+        if cls is DecisionApplyStep:
+            return
+        if (
+            cls.input_model is None
+            or cls.output_model is None
+            or not cls.outcomes
+            or "effect" not in cls.__dict__
+            or "execution_mode" not in cls.__dict__
+            or "idempotent" not in cls.__dict__
+        ):
+            raise ImproperlyConfigured(
+                f"Decision apply implementation {key!r} must declare input/output models, outcomes, "
+                "effect, execution_mode and idempotency."
+            )
+
+    @classmethod
+    def decision_resolution_path(cls, step_run: Any) -> tuple[str | int, ...]:
+        """Locate the gate value inside the ordinary one-predecessor join envelope."""
+
+        value = step_run.input
+        if isinstance(value, Mapping) and "resolutions" in value:
+            return cls.resolution_path
+        if isinstance(value, Mapping) and len(value) == 1:
+            return (next(iter(value)), *cls.resolution_path)
+        return cls.resolution_path
+
+    def locked_record_basis(
+        self,
+        step_run: Any,
+        predecessor: Any,
+        *,
+        actor: Any,
+    ) -> Collection[models.Model]:
+        """Return every already-locked domain row the manager verb will mutate."""
+
+        del step_run, predecessor, actor
+        return ()
+
+    def apply_resolution(
+        self,
+        step_run: Any,
+        decision: Any,
+        admitted: DecisionResolution,
+        *,
+        actor: Any,
+        record_basis: Collection[models.Model],
+        now: datetime,
+    ) -> StepResult:
+        """Call the domain manager verb and return its typed workflow result."""
+
+        del step_run, decision, admitted, actor, record_basis, now
+        raise NotImplementedError
+
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        """Consume retained provenance, then pass the manager result through unchanged."""
+
+        from angee.workflows import engine  # Runtime edge; the operation registry imports this module first.
+
+        path = type(self).decision_resolution_path(step_run)
+        predecessor = engine.load_predecessor_gate_decision(step_run, type(self).gate_step_class)
+        actor = engine.resolve_workflow_actor(predecessor.resolved_by, require_person=True).actor
+        retained_basis: list[tuple[models.Model, ...]] = []
+
+        def lock_record_basis() -> tuple[models.Model, ...]:
+            if retained_basis:
+                raise RuntimeError("Decision apply record basis was requested more than once.")
+            basis = tuple(self.locked_record_basis(step_run, predecessor, actor=actor))
+            retained_basis.append(basis)
+            return basis
+
+        decision, resolution = engine.consume_decision_resolution(
+            step_run,
+            path,
+            expected_action=predecessor.action,
+            expected_target=(predecessor.target_model, predecessor.target_id),
+            expected_verdict="completed",
+            actor=actor,
+            required_record_access=lock_record_basis,
+        )
+        if not retained_basis:
+            raise RuntimeError("Decision consumption did not acquire its record basis.")
+        record_basis = retained_basis[0]
+        result = self.apply_resolution(
+            step_run,
+            decision,
+            resolution,
+            actor=actor,
+            record_basis=record_basis,
+            now=now,
+        )
+        if not isinstance(result, StepResult):
+            raise TypeError("Decision apply manager verbs must return StepResult.")
+        if result.kind == "done":
+            declared = {outcome.key for outcome in type(self).outcomes}
+            if result.outcome not in declared:
+                raise ValidationError({"outcome": "Decision apply returned an undeclared outcome."})
+            if result.output_present:
+                type(self).output_model.model_validate(result.output)
+        return result
 
 
 class MapStep(StepImpl):
@@ -955,6 +1231,8 @@ def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec
     """Return gate decision specs from declarative config."""
 
     slots = config.get("slots")
+    if not isinstance(slots, list) or not slots:
+        raise ValidationError({"slots": "Gate slots must resolve to a non-empty list."})
     action = str(config.get("action", "") or "")
     payload = dict(config.get("payload") or {})
     requester = str(config.get("requester", "") or "")
@@ -964,15 +1242,32 @@ def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec
     expires_at = _config_datetime(config.get("expires_at"))
     escalate_at = _config_datetime(config.get("escalate_at"))
     decision_schema = dict(config.get("decision_schema") or {})
+    targets = config.get("targets") or []
+    if not isinstance(targets, list) or len(targets) not in {0, 1, len(slots)}:
+        raise ValidationError({"targets": "Gate targets must be empty, shared once, or aligned with every slot."})
+    shared_record_access = config.get("record_access") or []
+    if not isinstance(shared_record_access, list):
+        raise ValidationError({"record_access": "Gate record_access must resolve to a list."})
     specs: list[DecisionSpec] = []
-    for index, slot in enumerate(slots if isinstance(slots, list) else []):
+    for index, slot in enumerate(slots):
         if not isinstance(slot, Mapping):
-            continue
+            raise ValidationError({"slots": "Every gate slot must be an object."})
+        target = slot.get("target")
+        if target is None and targets:
+            target = targets[0] if len(targets) == 1 else targets[index]
+        if target is None:
+            target = {}
+        if not isinstance(target, Mapping):
+            raise ValidationError({"targets": "Every gate target must be an object."})
+        slot_record_access = slot.get("record_access")
+        record_access = shared_record_access if slot_record_access is None else slot_record_access
+        if not isinstance(record_access, list):
+            raise ValidationError({"record_access": "Every gate record_access value must be a list."})
         specs.append(
             DecisionSpec(
                 assignees=_slot_assignees(slot),
-                action=action,
-                payload=payload,
+                action=str(slot.get("action") or action),
+                payload=dict(payload if slot.get("payload") is None else slot["payload"]),
                 priority=int(slot.get("priority", index)),
                 requester=str(slot.get("requester", requester) or requester),
                 escalation=tuple(
@@ -983,7 +1278,15 @@ def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec
                 max_attempts=parsed_max_attempts,
                 expires_at=expires_at,
                 escalate_at=escalate_at,
-                decision_schema=decision_schema,
+                decision_schema=dict(
+                    decision_schema if slot.get("decision_schema") is None else slot["decision_schema"]
+                ),
+                target_model=str(target.get("model") or ""),
+                target_id=str(target.get("id") or ""),
+                target_tab=str(target.get("tab") or ""),
+                target_authority_path=tuple(target.get("authority_path") or ()),
+                target_authority_gate_path=tuple(target.get("authority_gate_path") or ()),
+                record_access=tuple(DecisionRecordAccess.model_validate(item) for item in record_access),
             )
         )
     return tuple(specs)

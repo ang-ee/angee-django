@@ -1109,6 +1109,25 @@ and current contracts before applying a historical example to a new deployment.
 
 ### Workflow execution
 
+- **Every human review uses the built-in `GateStep`.** Static declarations and
+  dynamic input-bound slots, payloads, action schemas, targets, record access,
+  target-authority paths, `clean` predicates, `all_done`, and same-step
+  resumption are variants of one gate contract, not reasons to create an addon
+  gate or call `StepResult.suspend()` directly. Bind upstream values into the
+  step's admitted input before the gate evaluates them.
+- **Decision action branches have one authoring owner.** Call
+  `build_decision_action()` with `ReviewAction` plus the typed review context
+  models. Do not write a consumer-local `oneOf`, serialize fact dictionaries by
+  hand, or call the compiler. `DecisionManager.create_for_suspension()` is the
+  only compiler and admission boundary.
+- **A reviewed mutation subclasses `DecisionApplyStep`.** Declare its input and
+  output models, outcomes, effect, execution mode, and idempotency on the
+  implementation. Lock its complete record basis in `locked_record_basis()`;
+  the base loads the one direct predecessor gate and consumes its exact admitted
+  resolution before calling `apply_resolution()`. Return the domain manager
+  verb's `StepResult` unchanged, including durable waits. Do not repeat
+  predecessor queries, resolver lookup, provenance comparison, or Decision
+  record-access checks in an addon.
 - **A gate whose assignee is the run owner must not also set that owner as
   requester.** The decision `act` permission is `(assignee − requester) +
   admin` (separation of duties), so `requester == assignee` locks the owner

@@ -20,6 +20,7 @@ from typing import Any, Literal, cast
 
 from django.apps import apps
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
@@ -32,9 +33,9 @@ from rebac.backends import backend as rebac_backend
 from rebac.resources import to_object_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.identity import instance_from_public_id
+from angee.base.identity import canonical_subject_ref, instance_from_public_id
 from angee.base.refs import CanonicalRecordTarget, canonical_record_target
-from angee.base.scoping import read_scoped_queryset
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.workflows.attempts import (
     AttemptCause,
     AttemptInput,
@@ -106,6 +107,14 @@ class DecisionAttemptResult:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkflowActorResolution:
+    """One canonical actor, assignee, or requester and its REBAC subject."""
+
+    actor: Any | None
+    subject: SubjectRef
+
+
+@dataclass(frozen=True, slots=True)
 class _AttemptPreparation:
     input: AttemptInput
     failure: AttemptResult | None = None
@@ -151,7 +160,11 @@ def start(
 
 
 def recover(
-    source_attempt: Any, *, request_key: str, actor: Any, prior_recovery: Any = None,
+    source_attempt: Any,
+    *,
+    request_key: str,
+    actor: Any,
+    prior_recovery: Any = None,
 ) -> Any:
     """Start or recover one exact same-revision retained recovery request."""
 
@@ -183,9 +196,7 @@ def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
         run.deliveries += 1
         run.save(update_fields=["deliveries", "updated_at"])
         waiting = list(
-            step_run_model.objects.lock_if_supported()
-            .filter(run=run, status=StepRunStatus.WAITING)
-            .order_by("pk")
+            step_run_model.objects.lock_if_supported().filter(run=run, status=StepRunStatus.WAITING).order_by("pk")
         )
         for step_run in waiting:
             apps.get_model("workflows", "StepAttempt").objects.wake_current(step_run.pk, at=timestamp)
@@ -204,7 +215,9 @@ def subscribe_external(step_run: Any, resources: Iterable[Any]) -> None:
     if step_run.current_attempt_id is None or not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("External subscription requires a retained invocation lease.")
     apps.get_model("workflows", "StepAttempt").objects.subscribe_external(
-        step_run.current_attempt_id, lease_token=lease_token, resources=resources,
+        step_run.current_attempt_id,
+        lease_token=lease_token,
+        resources=resources,
     )
 
 
@@ -231,44 +244,74 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
     woken = 0
     delivered_run_ids: list[int] = []
     with system_context(reason="workflows.engine.deliver_artifact"), transaction.atomic():
-        artifact_step_ids = list(artifact_model.objects.filter(
-            target_content_type_id=target.content_type.pk,
-            target_object_id=target.object_id,
-            attempt__step_run__current_attempt_id=models.F("attempt_id"),
-            attempt__step_run__status=StepRunStatus.WAITING,
-            attempt__step_run__waiting_kind=WaitingKind.EXTERNAL,
-        ).order_by().values_list("attempt__step_run_id", flat=True).distinct())
+        artifact_step_ids = list(
+            artifact_model.objects.filter(
+                target_content_type_id=target.content_type.pk,
+                target_object_id=target.object_id,
+                attempt__step_run__current_attempt_id=models.F("attempt_id"),
+                attempt__step_run__status=StepRunStatus.WAITING,
+                attempt__step_run__waiting_kind=WaitingKind.EXTERNAL,
+            )
+            .order_by()
+            .values_list("attempt__step_run_id", flat=True)
+            .distinct()
+        )
         attempt_model = apps.get_model("workflows", "StepAttempt")
-        subscribed_attempt_ids = set(subscription_model.objects.filter(
-            target_content_type_id=target.content_type.pk,
-            target_object_id=target.object_id,
-            attempt__step_run__current_attempt_id=models.F("attempt_id"),
-            attempt__step_run__status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
-            attempt__lease_revoked_at__isnull=True,
-        ).order_by().values_list("attempt_id", flat=True))
-        bound_attempt_ids = set(attempt_model.objects.filter(
-            external_content_type_id=target.content_type.pk,
-            external_object_id=target.object_id,
-            step_run__current_attempt_id=models.F("pk"),
-            step_run__status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
-            lease_revoked_at__isnull=True,
-        ).order_by().values_list("pk", flat=True))
-        subscribed_step_ids = list(attempt_model.objects.filter(
-            pk__in=subscribed_attempt_ids | bound_attempt_ids,
-        ).order_by().values_list("step_run_id", flat=True))
+        subscribed_attempt_ids = set(
+            subscription_model.objects.filter(
+                target_content_type_id=target.content_type.pk,
+                target_object_id=target.object_id,
+                attempt__step_run__current_attempt_id=models.F("attempt_id"),
+                attempt__step_run__status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
+                attempt__lease_revoked_at__isnull=True,
+            )
+            .order_by()
+            .values_list("attempt_id", flat=True)
+        )
+        bound_attempt_ids = set(
+            attempt_model.objects.filter(
+                external_content_type_id=target.content_type.pk,
+                external_object_id=target.object_id,
+                step_run__current_attempt_id=models.F("pk"),
+                step_run__status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
+                lease_revoked_at__isnull=True,
+            )
+            .order_by()
+            .values_list("pk", flat=True)
+        )
+        subscribed_step_ids = list(
+            attempt_model.objects.filter(
+                pk__in=subscribed_attempt_ids | bound_attempt_ids,
+            )
+            .order_by()
+            .values_list("step_run_id", flat=True)
+        )
         candidate_step_ids = sorted(set(artifact_step_ids).union(subscribed_step_ids))
-        candidate_run_ids = list(step_run_model.objects.filter(
-            pk__in=candidate_step_ids,
-        ).order_by().values_list("run_id", flat=True).distinct())
+        candidate_run_ids = list(
+            step_run_model.objects.filter(
+                pk__in=candidate_step_ids,
+            )
+            .order_by()
+            .values_list("run_id", flat=True)
+            .distinct()
+        )
         runs = {
-            run.pk: run for run in run_model.objects.lock_if_supported().filter(
+            run.pk: run
+            for run in run_model.objects.lock_if_supported()
+            .filter(
                 pk__in=candidate_run_ids,
-            ).order_by("pk")
+            )
+            .order_by("pk")
         }
-        step_runs = list(step_run_model.objects.lock_if_supported().filter(
-            pk__in=candidate_step_ids,
-            status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
-        ).select_related("current_attempt").order_by("run_id", "pk"))
+        step_runs = list(
+            step_run_model.objects.lock_if_supported()
+            .filter(
+                pk__in=candidate_step_ids,
+                status__in=[StepRunStatus.STARTED, StepRunStatus.WAITING],
+            )
+            .select_related("current_attempt")
+            .order_by("run_id", "pk")
+        )
         eligible_step_runs = [
             step_run
             for step_run in step_runs
@@ -279,16 +322,17 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
         attempt_ids = {step_run.current_attempt_id for step_run in eligible_step_runs}
         attempts = {
             attempt.pk: attempt
-            for attempt in attempt_model.objects.lock_if_supported().filter(
-                pk__in=attempt_ids
-            ).order_by("pk")
+            for attempt in attempt_model.objects.lock_if_supported().filter(pk__in=attempt_ids).order_by("pk")
         }
         retained_attempt_ids = set(
             artifact_model.objects.filter(
                 attempt_id__in=attempt_ids,
                 target_content_type_id=target.content_type.pk,
                 target_object_id=target.object_id,
-            ).order_by().values_list("attempt_id", flat=True).distinct()
+            )
+            .order_by()
+            .values_list("attempt_id", flat=True)
+            .distinct()
         )
         touched: set[int] = set()
         for step_run in eligible_step_runs:
@@ -299,10 +343,7 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str,
             subscribed = (
                 attempt.pk in subscribed_attempt_ids or attempt.pk in bound_attempt_ids
             ) and attempt.lease_revoked_at is None
-            retained_artifact = (
-                step_run.status == StepRunStatus.WAITING
-                and attempt.pk in retained_attempt_ids
-            )
+            retained_artifact = step_run.status == StepRunStatus.WAITING and attempt.pk in retained_attempt_ids
             if not (subscribed or retained_artifact):
                 continue
             if step_run.status == StepRunStatus.WAITING:
@@ -334,7 +375,10 @@ def deliver_artifact_dispatch(dispatch_id: int, *, now: datetime | None = None) 
     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     with system_context(reason="workflows.engine.deliver_artifact_dispatch"), transaction.atomic():
         with dispatch_model.objects._owner_transition(
-            dispatch_id=dispatch_id, lease_token=None, at=timestamp, using=dispatch_model.objects.db,
+            dispatch_id=dispatch_id,
+            lease_token=None,
+            at=timestamp,
+            using=dispatch_model.objects.db,
         ) as preflight:
             if preflight.disposition != DispatchPreflightDisposition.READY:
                 return {"runs": 0, "woken": 0}
@@ -345,7 +389,8 @@ def deliver_artifact_dispatch(dispatch_id: int, *, now: datetime | None = None) 
                 raise ValidationError({"dispatch": "Artifact delivery envelope is invalid."})
             dispatch = dispatch_model.objects.select_related("artifact_content_type").get(pk=dispatch_id)
             target = CanonicalRecordTarget(
-                dispatch.artifact_content_type, dispatch.artifact_object_id,
+                dispatch.artifact_content_type,
+                dispatch.artifact_object_id,
             )
             outcome = deliver_artifact(target, now=timestamp)
             dispatch_model.objects._consume_locked(dispatch_id, at=timestamp)
@@ -359,7 +404,10 @@ def cancel_child_dispatch(dispatch_id: int, *, expected_child_id: int | None = N
     canceled = 0
     with system_context(reason="workflows.engine.child_cancel_dispatch"), transaction.atomic():
         with dispatch_model.objects._owner_transition(
-            dispatch_id=dispatch_id, lease_token=None, at=timezone.now(), using=dispatch_model.objects.db,
+            dispatch_id=dispatch_id,
+            lease_token=None,
+            at=timezone.now(),
+            using=dispatch_model.objects.db,
         ) as preflight:
             if preflight.disposition != DispatchPreflightDisposition.READY:
                 return {"canceled": 0}
@@ -429,9 +477,7 @@ def advance(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     run_model = apps.get_model("workflows", "WorkflowRun")
     with system_context(reason="workflows.engine.advance.schedule"), transaction.atomic():
         run = run_model.objects.get(pk=run_id)
-        dispatch = apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
-            run, available_at=timestamp
-        )
+        dispatch = apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
     return advance_dispatch(dispatch.pk, expected_run_id=run_id, now=timestamp)
 
 
@@ -455,8 +501,10 @@ def advance_dispatch(
                 if preflight.envelope.kind != WorkflowDispatchKind.ADVANCE:
                     raise ValidationError({"dispatch": "ADVANCE envelope kind does not match its durable intent."})
                 admitted = True
-                run = apps.get_model("workflows", "WorkflowRun").objects.select_related("workflow").get(
-                    pk=preflight.envelope.target_id
+                run = (
+                    apps.get_model("workflows", "WorkflowRun")
+                    .objects.select_related("workflow")
+                    .get(pk=preflight.envelope.target_id)
                 )
                 claimed_ids: list[int] = []
                 if run.status not in RunStatus.TERMINAL:
@@ -489,6 +537,70 @@ def external_operation_request(step_run: Any) -> ExternalOperationRequest:
     return request
 
 
+def resolve_workflow_actor(source: Any, *, require_person: bool = False) -> WorkflowActorResolution:
+    """Resolve run admission, actor, assignee, or requester through one owner."""
+
+    if hasattr(source, "admission_actor") and callable(source.admission_actor):
+        actor = source.admission_actor()
+        if actor is None:
+            raise ValidationError({"actor": "Workflow execution requires its admitted actor."})
+        subject = to_subject_ref(actor)
+    elif isinstance(source, str | SubjectRef):
+        try:
+            subject = canonical_subject_ref(str(source))
+        except (TypeError, ValueError) as error:
+            raise ValidationError({"actor": "Workflow execution requires a canonical subject."}) from error
+        actor = None
+    else:
+        try:
+            subject = to_subject_ref(source)
+        except Exception as error:  # noqa: BLE001 - the REBAC adapter owns accepted actor types.
+            raise ValidationError({"actor": "Workflow execution actor is invalid."}) from error
+        actor = source
+    if require_person:
+        person = get_user_model().objects.active_person_for_subject(subject)
+        if person is None:
+            raise ValidationError({"actor": "Workflow Decision requires an active human actor."})
+        actor = person
+    return WorkflowActorResolution(actor=actor, subject=subject)
+
+
+def load_predecessor_gate_decision(step_run: Any, gate_step_class: type[Any]) -> Any:
+    """Load the one settled Decision from the declared direct predecessor gate."""
+
+    step_run_model = apps.get_model("workflows", "StepRun")
+    candidates = list(
+        system_queryset(step_run_model, using=step_run._state.db, lock=None)
+        .filter(next_step_runs=step_run)
+        .select_related("step", "current_attempt")
+    )
+    gates = [
+        candidate
+        for candidate in candidates
+        if candidate.step is not None and issubclass(candidate.step.resolve_impl("step_class"), gate_step_class)
+    ]
+    if len(gates) != 1 or gates[0].current_attempt is None:
+        raise ValidationError({"gate": "Decision apply requires one declared predecessor gate."})
+    gate = gates[0]
+    settlement = gate.current_attempt.decision_settlement
+    decision_ids = settlement.get("decision_ids") if isinstance(settlement, Mapping) else None
+    if not isinstance(decision_ids, list) or len(decision_ids) != 1 or type(decision_ids[0]) is not int:
+        raise ValidationError({"gate": "Decision apply requires one settled predecessor slot."})
+    decision_model = gate.decisions.model
+    decision = (
+        system_queryset(decision_model, using=step_run._state.db, lock=None)
+        .filter(
+            pk=decision_ids[0],
+            step_run=gate,
+            suspension_attempt=gate.current_attempt,
+        )
+        .first()
+    )
+    if decision is None:
+        raise ValidationError({"gate": "The settled predecessor Decision is unavailable."})
+    return decision
+
+
 def consume_decision_resolution(
     consumer_step_run: Any,
     resolution_path: tuple[str | int, ...],
@@ -498,9 +610,9 @@ def consume_decision_resolution(
     expected_target: tuple[str, str],
     expected_verdict: str,
     actor: Any,
-    required_record_access: Collection[models.Model] = (),
+    required_record_access: Collection[models.Model] | Callable[[], Collection[models.Model]] = (),
 ) -> tuple[Any, DecisionResolution]:
-    """Consume one exact gate value from this invocation's admitted input."""
+    """Consume one gate value, loading any record basis after ancestry locks."""
 
     lease_token = getattr(consumer_step_run, "_workflow_invocation_lease_token", None)
     if not isinstance(lease_token, uuid.UUID):
@@ -519,8 +631,10 @@ def consume_decision_resolution(
 
 
 def admitted_continuation_child(
-    consumer_step_run: Any, child_id_path: tuple[str | int, ...],
-    *, expected_starter_class: str,
+    consumer_step_run: Any,
+    child_id_path: tuple[str | int, ...],
+    *,
+    expected_starter_class: str,
 ) -> Any:
     """Resolve a continuation run from one exact admitted starter output."""
 
@@ -528,8 +642,10 @@ def admitted_continuation_child(
     if not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("Continuation result requires the active fenced invocation lease.")
     return apps.get_model("workflows", "StepAttempt").objects.admitted_continuation_child(
-        consumer_step_run.pk, lease_token=lease_token,
-        child_id_path=child_id_path, expected_starter_class=expected_starter_class,
+        consumer_step_run.pk,
+        lease_token=lease_token,
+        child_id_path=child_id_path,
+        expected_starter_class=expected_starter_class,
     )
 
 
@@ -555,8 +671,10 @@ def admitted_continuation_completion(
 
 
 def target_read_authority(
-    consumer_step_run: Any, authority_path: tuple[str | int, ...],
-    *, proposal_gate_path: tuple[str | int, ...] = (),
+    consumer_step_run: Any,
+    authority_path: tuple[str | int, ...],
+    *,
+    proposal_gate_path: tuple[str | int, ...] = (),
 ) -> tuple[Any, Any]:
     """Return one human resolver and Decision proven by this admitted input."""
 
@@ -564,8 +682,10 @@ def target_read_authority(
     if not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("Target authority requires the active fenced invocation lease.")
     return apps.get_model("workflows", "StepAttempt").objects.target_read_authority(
-        consumer_step_run.pk, lease_token=lease_token,
-        authority_path=authority_path, proposal_gate_path=proposal_gate_path,
+        consumer_step_run.pk,
+        lease_token=lease_token,
+        authority_path=authority_path,
+        proposal_gate_path=proposal_gate_path,
     )
 
 
@@ -586,14 +706,9 @@ def execute_dispatch(
         ) as preflight:
             if preflight.disposition != DispatchPreflightDisposition.READY:
                 return {"executed": 0}
-            if (
-                preflight.envelope.kind != WorkflowDispatchKind.EXECUTE
-                or preflight.envelope.target_id != attempt_id
-            ):
+            if preflight.envelope.kind != WorkflowDispatchKind.EXECUTE or preflight.envelope.target_id != attempt_id:
                 raise ValidationError({"dispatch": "EXECUTE envelope does not match its durable intent."})
-            admission = attempt_model.objects.admit_invocation(
-                attempt_id, lease_token=lease_token, at=timestamp
-            )
+            admission = attempt_model.objects.admit_invocation(attempt_id, lease_token=lease_token, at=timestamp)
             dispatch_model.objects._consume_locked(
                 dispatch_id, at=timestamp, fenced=admission != InvocationAdmission.FIRST_START
             )
@@ -613,9 +728,9 @@ def execute_dispatch(
         if impl_class.execution_mode == StepExecutionMode.EXTERNAL_OPERATION:
             policy = impl_class.external_operation_policy(attempt=owned_attempt)
             if not isinstance(policy, ExternalOperationPolicy):
-                raise ValidationError({
-                    "operation": "External operation policy must be a declared provider capability."
-                })
+                raise ValidationError(
+                    {"operation": "External operation policy must be a declared provider capability."}
+                )
             source = owned_attempt.recovery_source_attempt
             owned_step_run._workflow_external_operation_request = ExternalOperationRequest(
                 request_key=str(source.effect_key if source is not None else owned_attempt.effect_key),
@@ -628,13 +743,9 @@ def execute_dispatch(
         implementation = cast(Any, impl_class)()
         if owned_attempt.cause == AttemptCause.MANUAL_RETRY:
             recovery_mode = RecoveryMode(owned_attempt.recovery_mode)
-            capability = impl_class.recovery_capability(
-                attempt=owned_attempt.recovery_source_attempt
-            )
+            capability = impl_class.recovery_capability(attempt=owned_attempt.recovery_source_attempt)
             if capability.mode is not recovery_mode:
-                raise ValidationError(
-                    {"recovery": "The operation's recovery capability changed after admission."}
-                )
+                raise ValidationError({"recovery": "The operation's recovery capability changed after admission."})
             step_result = implementation.run_recovery(
                 owned_step_run,
                 now=timestamp,
@@ -644,9 +755,7 @@ def execute_dispatch(
         else:
             step_result = implementation.run(owned_step_run, now=timestamp)
         result = (
-            step_result.to_attempt_result()
-            if step_result is not None
-            else AttemptResult(AttemptResultKind.NO_RESULT)
+            step_result.to_attempt_result() if step_result is not None else AttemptResult(AttemptResultKind.NO_RESULT)
         )
         attempt_model.objects.validate_result(result)
         return result
@@ -667,9 +776,7 @@ def execute_dispatch(
             projected = apps.get_model("workflows", "StepRun").objects.select_related("run").get(pk=attempt.step_run_id)
             dispatch_model.objects.schedule_advance(projected.run, available_at=timezone.now())
             if projected.status == StepRunStatus.WAITING and projected.wait_until is not None:
-                dispatch_model.objects.schedule_advance(
-                    projected.run, available_at=projected.wait_until
-                )
+                dispatch_model.objects.schedule_advance(projected.run, available_at=projected.wait_until)
         transaction.on_commit(enqueue_dispatch_publisher)
 
     mode = impl_class.execution_mode
@@ -722,11 +829,13 @@ def cancel(run: Any) -> None:
         locked = run_model.objects.lock_if_supported().get(pk=run_id)
         if locked.status in RunStatus.TERMINAL:
             return
-        owned_children = list(run_model.objects.filter(
-            parent_step_run__run=locked,
-            parent_relation="owned_call",
-            status__in=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
-        ).order_by("pk"))
+        owned_children = list(
+            run_model.objects.filter(
+                parent_step_run__run=locked,
+                parent_relation="owned_call",
+                status__in=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
+            ).order_by("pk")
+        )
         for step_run in step_run_model.objects.lock_if_supported().filter(run=locked).order_by("pk"):
             was_waiting = step_run.status == StepRunStatus.WAITING
             apps.get_model("workflows", "StepAttempt").objects.cancel_current(step_run.pk, at=timezone.now())
@@ -812,8 +921,7 @@ def reap(*, now: datetime | None = None) -> dict[str, int]:
     reaped = 0
     with system_context(reason="workflows.engine.reap.discover"):
         stale_ids = list(
-            step_run_model.objects
-            .filter(status=StepRunStatus.STARTED)
+            step_run_model.objects.filter(status=StepRunStatus.STARTED)
             .filter(
                 models.Q(current_attempt__isnull=False, current_attempt__heartbeat_at__lt=deadline)
                 | models.Q(current_attempt__isnull=True, heartbeat_at__lt=deadline)
@@ -888,32 +996,48 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
 
 
 def escalate_decision_dispatch(
-    dispatch_id: int, *, expected_decision_id: int | None = None,
-    expected_generation: int | None = None, now: datetime | None = None
+    dispatch_id: int,
+    *,
+    expected_decision_id: int | None = None,
+    expected_generation: int | None = None,
+    now: datetime | None = None,
 ) -> dict[str, int]:
     """Consume one exact durable escalation timer."""
 
     return _consume_decision_dispatch(
-        dispatch_id, WorkflowDispatchKind.DECISION_ESCALATE,
-        expected_decision_id=expected_decision_id, expected_generation=expected_generation, now=now
+        dispatch_id,
+        WorkflowDispatchKind.DECISION_ESCALATE,
+        expected_decision_id=expected_decision_id,
+        expected_generation=expected_generation,
+        now=now,
     )
 
 
 def expire_decision_dispatch(
-    dispatch_id: int, *, expected_decision_id: int | None = None,
-    expected_generation: int | None = None, now: datetime | None = None
+    dispatch_id: int,
+    *,
+    expected_decision_id: int | None = None,
+    expected_generation: int | None = None,
+    now: datetime | None = None,
 ) -> dict[str, int]:
     """Consume one exact durable expiry timer."""
 
     return _consume_decision_dispatch(
-        dispatch_id, WorkflowDispatchKind.DECISION_EXPIRE,
-        expected_decision_id=expected_decision_id, expected_generation=expected_generation, now=now
+        dispatch_id,
+        WorkflowDispatchKind.DECISION_EXPIRE,
+        expected_decision_id=expected_decision_id,
+        expected_generation=expected_generation,
+        now=now,
     )
 
 
 def _consume_decision_dispatch(
-    dispatch_id: int, kind: WorkflowDispatchKind, *, expected_decision_id: int | None,
-    expected_generation: int | None, now: datetime | None
+    dispatch_id: int,
+    kind: WorkflowDispatchKind,
+    *,
+    expected_decision_id: int | None,
+    expected_generation: int | None,
+    now: datetime | None,
 ) -> dict[str, int]:
     timestamp = now or timezone.now()
     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
@@ -923,9 +1047,8 @@ def _consume_decision_dispatch(
         ) as preflight:
             if preflight.disposition != DispatchPreflightDisposition.READY:
                 return {"resolved": 0}
-            if (
-                (expected_decision_id is not None and preflight.envelope.target_id != expected_decision_id)
-                or (expected_generation is not None and preflight.envelope.generation != expected_generation)
+            if (expected_decision_id is not None and preflight.envelope.target_id != expected_decision_id) or (
+                expected_generation is not None and preflight.envelope.generation != expected_generation
             ):
                 raise ValidationError({"dispatch": "Decision envelope does not match its durable intent."})
             if preflight.envelope.kind != kind or preflight.envelope.generation is None:
@@ -938,9 +1061,7 @@ def _consume_decision_dispatch(
                 resolved_by=f"workflows/timer:{kind.value}",
                 timestamp=timestamp,
             )
-            dispatch_model.objects._consume_locked(
-                dispatch_id, at=timestamp, fenced=result["resolved"] == 0
-            )
+            dispatch_model.objects._consume_locked(dispatch_id, at=timestamp, fenced=result["resolved"] == 0)
             return result
 
 
@@ -1032,9 +1153,7 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
                     input={},
                 )
             elif row.status in StepRunStatus.TERMINAL:
-                row = step_run_model.objects.reschedule_for_override(
-                    row.pk, input={}, at=timezone.now()
-                )
+                row = step_run_model.objects.reschedule_for_override(row.pk, input={}, at=timezone.now())
             row.previous.set([override])
         if locked.status == RunStatus.WAITING:
             locked.resume()
@@ -1159,24 +1278,20 @@ def _validate_mapping_schema(
     if contract is not None:
         submitted_context = set(contract.context_fields).intersection(resolution)
         if submitted_context:
-            raise ValidationError({
-                name: "Decision context cannot be submitted as a resolution."
-                for name in sorted(submitted_context)
-            })
+            raise ValidationError(
+                {name: "Decision context cannot be submitted as a resolution." for name in sorted(submitted_context)}
+            )
         selected = resolution.get("action")
         branch = contract.branches.get(selected) if isinstance(selected, str) else None
         if branch is None:
             raise ValidationError({"action": "Choose one declared Decision action."})
         extraneous = set(resolution) - set(branch["properties"])
         if extraneous:
-            raise ValidationError({
-                name: "This field is not permitted for the selected action."
-                for name in sorted(extraneous)
-            })
-        try:
-            parsed = _mapping_schema_model(branch, name="DecisionActionResolution").model_validate(
-                resolution
+            raise ValidationError(
+                {name: "This field is not permitted for the selected action." for name in sorted(extraneous)}
             )
+        try:
+            parsed = _mapping_schema_model(branch, name="DecisionActionResolution").model_validate(resolution)
         except PydanticValidationError as error:
             raise _resolution_validation_error(error) from error
         submitted = cast(dict[str, Any], parsed.model_dump(exclude_unset=True))
@@ -1203,10 +1318,12 @@ def _validate_mapping_schema(
     }
     submitted_context = context_fields.intersection(resolution)
     if submitted_context:
-        raise ValidationError({
-            field_name: "Decision context cannot be submitted as a resolution."
-            for field_name in sorted(submitted_context)
-        })
+        raise ValidationError(
+            {
+                field_name: "Decision context cannot be submitted as a resolution."
+                for field_name in sorted(submitted_context)
+            }
+        )
     resolution_schema = dict(schema)
     resolution_schema["properties"] = {
         field_name: field_schema
@@ -1215,8 +1332,7 @@ def _validate_mapping_schema(
     }
     if isinstance(schema.get("required"), list):
         resolution_schema["required"] = [
-            field_name for field_name in schema["required"]
-            if str(field_name) not in context_fields
+            field_name for field_name in schema["required"] if str(field_name) not in context_fields
         ]
     # Human-paced decisions rebuild per attempt; memoize by schema-dict hash before bulk or programmatic reuse.
     model = _mapping_schema_model(resolution_schema, name="DecisionResolution")
@@ -1315,7 +1431,7 @@ def _relation_error(relation: dict[str, Any], value: Any, actor: Any) -> str | N
         return "Relation resource must be an app_label.Model string."
     try:
         model = apps.get_model(app_label, model_name)
-    except (LookupError, ValueError):
+    except LookupError, ValueError:
         return f"Relation resource {resource!r} is not installed."
     permission = relation.get("permission", "write")
     if not isinstance(permission, str) or _RELATION_PERMISSION.fullmatch(permission) is None:
@@ -1392,8 +1508,7 @@ def _apply_decision_policy(step_run: Any) -> None:
     if step_run.status != StepRunStatus.WAITING:
         return
     decisions = list(
-        step_run.decisions.filter(suspension_attempt_id=step_run.current_attempt_id)
-        .order_by("priority", "pk")
+        step_run.decisions.filter(suspension_attempt_id=step_run.current_attempt_id).order_by("priority", "pk")
     )
     outcome = step_run.decision_gate.outcome(decisions)
     if outcome is None:
@@ -1460,9 +1575,7 @@ def _expire_pending_decisions(step_run: Any, *, resolved_by: str) -> int:
     if pending_id is None:
         return 0
     with decision_model.objects._resolution_owner(pending_id):
-        decision = decision_model.objects.expire_retained_suspension(
-            pending_id, resolved_by=resolved_by
-        )
+        decision = decision_model.objects.expire_retained_suspension(pending_id, resolved_by=resolved_by)
         if decision is None:
             decision_model.objects.complete_retained_resolution(pending_id)
             return 0
@@ -1530,16 +1643,13 @@ def _process_recovery_map_aggregate(run: Any, *, timestamp: datetime) -> None:
     if recovered is None or recovered.status != StepRunStatus.SUCCEEDED:
         return
     apps.get_model("workflows", "StepAttempt").objects.record_recovery_map_aggregate(
-        recovered.pk, at=timestamp,
+        recovered.pk,
+        at=timestamp,
     )
 
 
 def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
-    locked_rows = list(
-        run.step_runs.lock_if_supported()
-        .select_related("step")
-        .order_by("pk")
-    )
+    locked_rows = list(run.step_runs.lock_if_supported().select_related("step").order_by("pk"))
     map_rows = [
         row
         for row in locked_rows
@@ -1563,9 +1673,7 @@ def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
                 apps.get_model("workflows", "StepAttempt").objects.record_test_fixture(
                     fixture, at=timestamp, due_step_run_id=step_run.pk
                 )
-                apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
-                    run, available_at=timestamp
-                )
+                apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(run, available_at=timestamp)
                 continue
             if not _expand_retained_map_step(run, step_run, timestamp=timestamp):
                 return False
@@ -1651,8 +1759,7 @@ def _map_capacity_allows(run: Any, *, target: Any, items: list[Any]) -> bool:
 
     step_runs = run.step_runs.lock_if_supported()
     existing_indexes = set(
-        step_runs.filter(step=target, map_index__gte=0, map_index__lt=len(items))
-        .values_list("map_index", flat=True)
+        step_runs.filter(step=target, map_index__gte=0, map_index__lt=len(items)).values_list("map_index", flat=True)
     )
     substituted_indexes = set()
     if run.origin == RunOrigin.TEST:
@@ -1673,20 +1780,14 @@ def _map_capacity_allows(run: Any, *, target: Any, items: list[Any]) -> bool:
 def _workflow_capacity_allows(run: Any, *, additional: int = 0) -> bool:
     """Fail before executing work that cannot fit the run journal budget."""
 
-    scheduled = list(
-        run.step_runs.filter(status=StepRunStatus.SCHEDULED).values_list(
-            "step_id", "map_index"
-        )
-    )
+    scheduled = list(run.step_runs.filter(status=StepRunStatus.SCHEDULED).values_list("step_id", "map_index"))
     substituted: set[tuple[int, int | None]] = set()
     if run.origin == RunOrigin.TEST:
         substituted = {
-            (fixture.step_id, fixture.item_index)
-            for fixture in run.test_fixtures.filter(role=FixtureRole.OUTPUT)
+            (fixture.step_id, fixture.item_index) for fixture in run.test_fixtures.filter(role=FixtureRole.OUTPUT)
         }
     admitted = sum(
-        (step_id, None if map_index == -1 else map_index) not in substituted
-        for step_id, map_index in scheduled
+        (step_id, None if map_index == -1 else map_index) not in substituted for step_id, map_index in scheduled
     )
     if run.steps_taken + admitted + additional <= run.workflow.max_steps:
         return True
@@ -1727,10 +1828,17 @@ def _map_output(children: list[Any]) -> dict[str, Any]:
         }
         for child in children
     ]
-    successes = sum(1 for child in children if child.status == StepRunStatus.SUCCEEDED
-                    and child.outcome not in {"child_failed", "child_canceled"})
-    failures = sum(1 for child in children if child.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
-                   or child.outcome in {"child_failed", "child_canceled"})
+    successes = sum(
+        1
+        for child in children
+        if child.status == StepRunStatus.SUCCEEDED and child.outcome not in {"child_failed", "child_canceled"}
+    )
+    failures = sum(
+        1
+        for child in children
+        if child.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
+        or child.outcome in {"child_failed", "child_canceled"}
+    )
     return {
         "total": len(children),
         "successes": successes,
@@ -1761,9 +1869,10 @@ def _route_skip(run: Any, step_run: Any) -> None:
         target, edges = by_target.setdefault(edge.target_id, (edge.target, []))
         edges.append(edge)
     for target, edges in by_target.values():
-        if any(not edge.condition for edge in edges) or target.incoming_edges.exclude(
-            source_id=step_run.step_id
-        ).exists():
+        if (
+            any(not edge.condition for edge in edges)
+            or target.incoming_edges.exclude(source_id=step_run.step_id).exists()
+        ):
             _maybe_schedule_target(run, target)
         else:
             _ensure_skipped(run, target, previous=[step_run])
@@ -1822,7 +1931,10 @@ def _ensure_skipped(run: Any, step: Any, *, previous: list[Any]) -> Any:
 
 
 def _upstream_join_state(
-    run: Any, target: Any, *, routed_row: Any | None = None,
+    run: Any,
+    target: Any,
+    *,
+    routed_row: Any | None = None,
 ) -> tuple[list[Any], list[Any | None]]:
     """Return one conditional route contribution per predecessor step.
 
@@ -1841,18 +1953,16 @@ def _upstream_join_state(
     statuses: list[Any | None] = []
     for source_id, edges in by_source.items():
         row = step_run_model.objects.filter(
-            run=run, step_id=source_id, map_index=-1,
+            run=run,
+            step_id=source_id,
+            map_index=-1,
         ).first()
         if row is None:
             statuses.append(None)
             continue
-        effective_status = (
-            StepRunStatus.SUCCEEDED if _same_step_run(row, routed_row) else row.status
-        )
+        effective_status = StepRunStatus.SUCCEEDED if _same_step_run(row, routed_row) else row.status
         if effective_status in StepRunStatus.TERMINAL:
-            route_matches = any(
-                not edge.condition or edge.condition == row.outcome for edge in edges
-            )
+            route_matches = any(not edge.condition or edge.condition == row.outcome for edge in edges)
             if not route_matches:
                 continue
         previous.append(row)
@@ -1916,17 +2026,9 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
         for row in locked_rows
         if (
             row.status == StepRunStatus.SCHEDULED
-            or (
-                row.status == StepRunStatus.WAITING
-                and row.wait_until is not None
-                and row.wait_until <= timestamp
-            )
+            or (row.status == StepRunStatus.WAITING and row.wait_until is not None and row.wait_until <= timestamp)
         )
-        and not (
-            row.step_id is not None
-            and row.step.step_class == MapStep.key
-            and row.map_index == -1
-        )
+        and not (row.step_id is not None and row.step.step_class == MapStep.key and row.map_index == -1)
         and run.allows_test_step(row.step)
     ]
     if not due:
@@ -1938,9 +2040,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
             for fixture in run.test_fixtures.filter(role=FixtureRole.OUTPUT)
         }
     substituted = [
-        row
-        for row in due
-        if (row.step_id, None if row.map_index == -1 else row.map_index) in fixture_by_slot
+        row for row in due if (row.step_id, None if row.map_index == -1 else row.map_index) in fixture_by_slot
     ]
     physical_due = [row for row in due if row not in substituted]
     if run.steps_taken + len(physical_due) > run.workflow.max_steps:
@@ -1961,10 +2061,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
             transaction.on_commit(enqueue_dispatch_publisher)
         return claimed
 
-    preparations = [
-        _prepare_attempt_input(run, step_run, source_rows=locked_rows)
-        for step_run in due
-    ]
+    preparations = [_prepare_attempt_input(run, step_run, source_rows=locked_rows) for step_run in due]
     for step_run, preparation in zip(due, preparations, strict=True):
         cause = (
             AttemptCause.CONTINUATION
@@ -2006,9 +2103,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
     return claimed
 
 
-def _prepare_attempt_input(
-    run: Any, step_run: Any, *, source_rows: list[Any]
-) -> _AttemptPreparation:
+def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any]) -> _AttemptPreparation:
     """Resolve one immutable ordinary-step input before any physical invocation."""
 
     if (
@@ -2018,8 +2113,7 @@ def _prepare_attempt_input(
         and run.recovery_source_attempt.step_run.map_index == step_run.map_index
         and not (
             run.recovery_mode == str(RecoveryMode.FRESH)
-            and run.recovery_source_attempt.result_kind
-            == str(AttemptResultKind.PREPARATION_ERROR)
+            and run.recovery_source_attempt.result_kind == str(AttemptResultKind.PREPARATION_ERROR)
         )
     ):
         source = run.recovery_source_attempt
@@ -2033,11 +2127,15 @@ def _prepare_attempt_input(
             else None
         )
         return _AttemptPreparation(
-            AttemptInput(source.input_present, source.input, {
-                "kind": "recovery_input",
-                "attempt_id": source.pk,
-                "source_provenance": source.input_provenance,
-            }),
+            AttemptInput(
+                source.input_present,
+                source.input,
+                {
+                    "kind": "recovery_input",
+                    "attempt_id": source.pk,
+                    "source_provenance": source.input_provenance,
+                },
+            ),
             map_item=map_item,
         )
 
@@ -2121,9 +2219,7 @@ def _prepare_attempt_input(
     )
     sources: dict[str, Any] = {}
     if run.origin == RunOrigin.RECOVERY:
-        for evidence in run.recovery_evidence.select_related(
-            "step", "source_attempt"
-        ).order_by("pk"):
+        for evidence in run.recovery_evidence.select_related("step", "source_attempt").order_by("pk"):
             source_attempt = evidence.source_attempt
             gate_decisions = (
                 list(source_attempt.decisions.order_by("priority", "pk"))
@@ -2142,8 +2238,11 @@ def _prepare_attempt_input(
                     "attempt_id": source_attempt.pk,
                     "step_key": evidence.step.key,
                     "map_index": evidence.map_index,
-                    **({"settled_decision_ids": source_attempt.decision_settlement["decision_ids"]}
-                       if gate_output is not None else {}),
+                    **(
+                        {"settled_decision_ids": source_attempt.decision_settlement["decision_ids"]}
+                        if gate_output is not None
+                        else {}
+                    ),
                 },
             )
     for source in source_rows:
@@ -2162,8 +2261,7 @@ def _prepare_attempt_input(
         settled_decisions: list[Any] = []
         if valid_attempt and attempt.result_kind == str(AttemptResultKind.SUSPEND):
             settled_decisions = list(
-                source.decisions.filter(suspension_attempt_id=attempt.pk)
-                .order_by("priority", "pk")
+                source.decisions.filter(suspension_attempt_id=attempt.pk).order_by("priority", "pk")
             )
         settled_output = retained_gate_output(attempt, settled_decisions) if settled_decisions else None
         valid_done = valid_attempt and attempt.result_kind == str(AttemptResultKind.DONE)
@@ -2180,22 +2278,25 @@ def _prepare_attempt_input(
             "attempt_id": attempt.pk if attempt is not None else None,
             "effect_generation": source.effect_generation,
             **(
-                {"settled_decision_ids": attempt.decision_settlement["decision_ids"]}
-                if valid_settled_decisions
-                else {}
+                {"settled_decision_ids": attempt.decision_settlement["decision_ids"]} if valid_settled_decisions else {}
             ),
         }
-        sources.setdefault(source.step.key, (
-            SourceValue(
-                JsonPresence(
-                    True if valid_settled_decisions else attempt.output_present,
-                    source.output if valid_settled_decisions else attempt.output,
-                ),
-                provenance,
-            )
-            if valid_done or valid_settled_decisions
-            else UnavailableSource("source_unavailable", "The referenced retained output is unavailable.", provenance)
-        ))
+        sources.setdefault(
+            source.step.key,
+            (
+                SourceValue(
+                    JsonPresence(
+                        True if valid_settled_decisions else attempt.output_present,
+                        source.output if valid_settled_decisions else attempt.output,
+                    ),
+                    provenance,
+                )
+                if valid_done or valid_settled_decisions
+                else UnavailableSource(
+                    "source_unavailable", "The referenced retained output is unavailable.", provenance
+                )
+            ),
+        )
     map_item_source: MapItemSource | None = None
     map_binding_source: SourceValue | UnavailableSource
     expansion = step_run.current_map_expansion
@@ -2270,9 +2371,7 @@ def _prepare_attempt_input(
         )
         provenance = dict(evaluation.provenance or {"kind": "binding"})
         provenance["diagnostics"] = diagnostics
-        return _AttemptPreparation(
-            AttemptInput(False, None, provenance), failure, map_item_source, fixture
-        )
+        return _AttemptPreparation(AttemptInput(False, None, provenance), failure, map_item_source, fixture)
     candidate = evaluation.value
     impl_class = step_run.step.resolve_impl("step_class")
     if impl_class.input_model is not None:
@@ -2295,9 +2394,7 @@ def _prepare_attempt_input(
 
 def _preparation_error(message: str, error: Exception) -> AttemptResult:
     details = (
-        error.errors(include_url=False)
-        if isinstance(error, PydanticValidationError)
-        else [{"message": str(error)}]
+        error.errors(include_url=False) if isinstance(error, PydanticValidationError) else [{"message": str(error)}]
     )
     return AttemptResult(
         AttemptResultKind.PREPARATION_ERROR,
@@ -2337,7 +2434,7 @@ def _numeric_budget_value(value: Any) -> float | None:
         return None
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return parsed if parsed >= 0 else None
 
@@ -2348,13 +2445,9 @@ def _update_run_status(run: Any, *, timestamp: datetime) -> None:
     rows = run.step_runs.select_related("step").all()
     if run.origin == RunOrigin.TEST and run.test_scope == WorkflowScope.NODE:
         rows = [row for row in rows if row.step_id is not None and run.allows_test_step(row.step)]
-        active_without_wait = any(
-            row.status in {StepRunStatus.SCHEDULED, StepRunStatus.STARTED} for row in rows
-        )
+        active_without_wait = any(row.status in {StepRunStatus.SCHEDULED, StepRunStatus.STARTED} for row in rows)
     else:
-        active_without_wait = rows.filter(
-            status__in=[StepRunStatus.SCHEDULED, StepRunStatus.STARTED]
-        ).exists()
+        active_without_wait = rows.filter(status__in=[StepRunStatus.SCHEDULED, StepRunStatus.STARTED]).exists()
     if active_without_wait:
         if run.status == RunStatus.PENDING:
             run.mark_running()
@@ -2425,15 +2518,21 @@ def _finish_run_result(run: Any) -> None:
 
     rules = run.workflow.result_rules
     terminals = list(
-        run.step_runs.select_related("step").filter(
-            map_index=-1, status=StepRunStatus.SUCCEEDED, step__isnull=False,
-        ).order_by("pk")
+        run.step_runs.select_related("step")
+        .filter(
+            map_index=-1,
+            status=StepRunStatus.SUCCEEDED,
+            step__isnull=False,
+        )
+        .order_by("pk")
     )
     outgoing_routes = list(run.workflow.edges.values_list("source_id", "condition"))
     unhandled_calls = [
-        row for row in terminals
-        if not any(source_id == row.step_id and condition in {"", row.outcome}
-                   for source_id, condition in outgoing_routes)
+        row
+        for row in terminals
+        if not any(
+            source_id == row.step_id and condition in {"", row.outcome} for source_id, condition in outgoing_routes
+        )
         and row.step.step_class == "call_workflow"
         and row.outcome in {"child_failed", "child_canceled"}
     ]
@@ -2460,10 +2559,12 @@ def _finish_run_result(run: Any) -> None:
         workflow_input=SourceValue(
             JsonPresence(run.input_present, run.input), {"kind": "workflow_input", "run_id": run.pk}
         ),
-        step_outputs={producer.step.key: SourceValue(
-            JsonPresence(producer.output_present, producer.output),
-            {"kind": "step_output", "step_run_id": producer.pk},
-        )},
+        step_outputs={
+            producer.step.key: SourceValue(
+                JsonPresence(producer.output_present, producer.output),
+                {"kind": "step_output", "step_run_id": producer.pk},
+            )
+        },
         map_item=UnavailableSource("source_unavailable", "Result rules cannot read Map items.", {"kind": "map_item"}),
     )
     try:
