@@ -37,6 +37,7 @@ from angee.graphql.data import (
 from angee.graphql.ids import PublicID, instance_for_id, to_public_id
 from angee.graphql.impl import ImplChoice as GraphQLImplChoice
 from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
@@ -92,14 +93,6 @@ StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
 StepArtifact = apps.get_model("workflows", "StepArtifact")
 Decision = apps.get_model("workflows", "Decision")
-
-_PROJECTED_STEP_ID = "_workflows_step_id"
-_PROJECTED_STEP_WORKFLOW_NAME = "_workflows_step_workflow_name"
-_PROJECTED_RUN_WORKFLOW_NAME = "_workflows_run_workflow_name"
-_PROJECTED_STEP_NAME = "_workflows_step_name"
-_PROJECTED_STEP_KEY = "_workflows_step_key"
-_PROJECTED_SYSTEM_KIND = "_workflows_system_kind"
-_PROJECTED_STEP_RUN_ID = "_workflows_step_run_id"
 
 
 def _artifact_queryset_for_actor(actor: Any) -> models.QuerySet[Any]:
@@ -1130,9 +1123,73 @@ class StepArtifactType(AngeeNode):
         )
 
 
+@strawberry.type
+class DecisionContextFields:
+    """Context labels visible with the enclosing Decision's read or act scope.
+
+    Strawberry-Django optimizes querysets using the complete model projection.
+    Producers returning evaluated lists must call ``with_context_projection``
+    before evaluation; single mutation results use ``_decision_projection``.
+    These scalar labels grant no independent journal access.
+    """
+
+    @strawberry_django.field(
+        only=["id"],
+        annotate=cast(Any, Decision).context_projection_annotation(),
+    )
+    def workflow_key(self) -> str:
+        """Return the run's stable workflow lineage key."""
+
+        return str(_decision_projection(self)._decision_workflow_key)
+
+    @strawberry_django.field(
+        only=["id"],
+        annotate=cast(Any, Decision).context_projection_annotation(),
+    )
+    def workflow_name(self) -> str:
+        """Return the run's workflow display name, matching ``workflow_key``."""
+
+        return str(_decision_projection(self)._decision_workflow_name)
+
+    @strawberry_django.field(
+        only=["id"],
+        annotate=cast(Any, Decision).context_projection_annotation(),
+    )
+    def step_key(self) -> str | None:
+        """Return the declared step key, or null for a system-injected event."""
+
+        return cast(str | None, _decision_projection(self)._decision_step_key)
+
+    @strawberry_django.field(
+        only=["id"],
+        annotate=cast(Any, Decision).context_projection_annotation(),
+    )
+    def step_name(self) -> str:
+        """Return the step display name without exposing the StepRun journal."""
+
+        return str(_decision_projection(self)._decision_step_name)
+
+
+def _decision_projection(value: Any) -> Any:
+    """Supply model-owned labels for one authorized, unoptimized mutation result.
+
+    Normal queryset reads carry the complete optimizer annotation. This fallback
+    performs one exact-row system read, copies only its label annotations, and
+    grants no journal relation access. Evaluated list producers must annotate
+    through ``DecisionQuerySet.with_context_projection`` before evaluation.
+    """
+
+    if hasattr(value, "_decision_workflow_key"):
+        return value
+    projected = Decision.system_queryset(using=value._state.db).with_context_projection().only("id").get(pk=value.pk)
+    for name in Decision.context_projection_annotation():
+        setattr(value, name, getattr(projected, name))
+    return value
+
+
 @strawberry_django.type(Decision)
-class DecisionType(DecisionTargetFields, AngeeNode):
-    """Admin projection of one awaited workflow decision."""
+class DecisionType(DecisionContextFields, DecisionTargetFields, AngeeNode):
+    """Console projection of one actionable workflow decision."""
 
     priority: auto
     action: auto
@@ -1148,19 +1205,11 @@ class DecisionType(DecisionTargetFields, AngeeNode):
 
     decision_schema: JSON | None = _decision_schema_field()
 
-    @strawberry_django.field(only=["step_run_id"])
-    def step_run(self, info: strawberry.Info) -> StepRunType | None:
-        """Return the journal row only when it is independently readable."""
-
-        step_run_id = cast(Any, self).step_run_id
-        scoped = read_scoped_queryset(StepRun, session_user(info), action="read")
-        if scoped is None:
-            return None
-        return cast(StepRunType | None, scoped.filter(pk=step_run_id).first())
+    step_run: StepRunType | None = actor_scoped_to_one("step_run")
 
 
 @strawberry_django.type(Decision, name="DecisionType")
-class PublicDecisionType(DecisionTargetFields, AngeeNode):
+class PublicDecisionType(DecisionContextFields, DecisionTargetFields, AngeeNode):
     """Public projection of one awaited workflow decision."""
 
     priority: auto
@@ -1208,38 +1257,6 @@ class PublicDecisionType(DecisionTargetFields, AngeeNode):
         if scoped is None or not scoped.filter(pk=attempt_id).exists():
             return None
         return to_public_id(StepAttempt, attempt_id)
-
-    @strawberry_django.field(
-        only=["id"],
-        annotate={
-            _PROJECTED_STEP_ID: models.F("step_run__step_id"),
-            _PROJECTED_STEP_WORKFLOW_NAME: models.F("step_run__step__workflow__name"),
-            _PROJECTED_RUN_WORKFLOW_NAME: models.F("step_run__run__workflow__name"),
-        },
-    )
-    def workflow_name(self) -> str:
-        """Return the workflow display name without exposing the StepRun journal."""
-
-        if getattr(self, _PROJECTED_STEP_ID) is not None:
-            return str(getattr(self, _PROJECTED_STEP_WORKFLOW_NAME))
-        return str(getattr(self, _PROJECTED_RUN_WORKFLOW_NAME))
-
-    @strawberry_django.field(
-        only=["id"],
-        annotate={
-            _PROJECTED_STEP_ID: models.F("step_run__step_id"),
-            _PROJECTED_STEP_NAME: models.F("step_run__step__name"),
-            _PROJECTED_STEP_KEY: models.F("step_run__step__key"),
-            _PROJECTED_SYSTEM_KIND: models.F("step_run__system_kind"),
-            _PROJECTED_STEP_RUN_ID: models.F("step_run_id"),
-        },
-    )
-    def step_name(self) -> str:
-        """Return the step display name without exposing the StepRun journal."""
-
-        if getattr(self, _PROJECTED_STEP_ID) is not None:
-            return str(getattr(self, _PROJECTED_STEP_NAME) or getattr(self, _PROJECTED_STEP_KEY))
-        return str(getattr(self, _PROJECTED_SYSTEM_KIND) or getattr(self, _PROJECTED_STEP_RUN_ID))
 
 
 @strawberry.type(name="DecisionResolutionPayload")
@@ -1665,7 +1682,7 @@ _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
     ],
     sortable=["workflow", "status", "wake_at", "steps_taken", "created_at", "updated_at"],
     aggregatable=["id", "steps_taken"],
-    groupable=["workflow", "workflow__key", "workflow__name", "origin", "status", "updated_at"],
+    groupable=["workflow", "workflow__name", "origin", "status", "updated_at"],
     insert=False,
     update=False,
     delete=False,
@@ -1764,6 +1781,7 @@ _DECISION_RESOURCE = hasura_model_resource(
         "id",
         "step_run",
         "step_run__step",
+        "step_run__step__key",
         "step_run__step__name",
         "step_run__run",
         "step_run__run__workflow",
@@ -1783,6 +1801,7 @@ _DECISION_RESOURCE = hasura_model_resource(
     sortable=[
         "step_run",
         "step_run__step",
+        "step_run__step__key",
         "step_run__step__name",
         "priority",
         "action",
@@ -1792,13 +1811,19 @@ _DECISION_RESOURCE = hasura_model_resource(
         "created_at",
         "updated_at",
         "step_run__run__workflow",
+        "step_run__run__workflow__key",
         "step_run__run__workflow__name",
     ],
     aggregatable=["id", "priority", "attempts"],
     groupable=[
-        "step_run", "step_run__step", "step_run__step__name",
-        "step_run__run__workflow", "step_run__run__workflow__name",
-        "action", "verdict", "updated_at",
+        "step_run",
+        "step_run__step",
+        "step_run__step__name",
+        "step_run__run__workflow",
+        "step_run__run__workflow__name",
+        "action",
+        "verdict",
+        "updated_at",
     ],
     insert=False,
     update=False,
@@ -1850,9 +1875,13 @@ _PUBLIC_DECISION_RESOURCE = hasura_model_resource(
     ],
     aggregatable=["id", "priority", "attempts"],
     groupable=[
-        "step_run__step", "step_run__step__name",
-        "step_run__run__workflow", "step_run__run__workflow__name",
-        "action", "verdict", "updated_at",
+        "step_run__step",
+        "step_run__step__name",
+        "step_run__run__workflow",
+        "step_run__run__workflow__name",
+        "action",
+        "verdict",
+        "updated_at",
     ],
     insert=False,
     update=False,
@@ -1910,7 +1939,7 @@ class WorkflowSubjectDeclarationQuery:
         children = read_scoped_queryset(WorkflowRun, session_user(info), action="read")
         child_candidates = [] if children is None else list(
             children.filter(parent_step_run__run_id__in=models.Subquery(runs.order_by().values("pk")))
-            .select_related("workflow", "parent_step_run__run").order_by("created_at", "pk")[:201]
+            .rebac_select_related("workflow", "parent_step_run__run").order_by("created_at", "pk")[:201]
         )
         child_rows = child_candidates[:200]
         failure_scope = read_scoped_queryset(StepRun, session_user(info), action="read")
@@ -1918,7 +1947,7 @@ class WorkflowSubjectDeclarationQuery:
             failure_scope.filter(
                 run_id__in=models.Subquery(runs.order_by().values("pk")),
                 status="failed",
-            ).select_related("run", "step", "current_attempt").order_by("-updated_at", "-pk")[:201]
+            ).rebac_select_related("run", "step", "current_attempt").order_by("-updated_at", "-pk")[:201]
         )
         failures = failure_candidates[:200]
         artifacts, artifacts_truncated = _artifact_queryset(info).history_page(runs, limit=200)
@@ -2000,9 +2029,7 @@ def _workflow_subject_history(
         ).distinct().order_by("-created_at", "-pk")
         run_ids = list(candidates.values_list("pk", flat=True)[:101])
         truncated = len(run_ids) > 100
-        runs = readable_runs.filter(pk__in=run_ids[:100]).select_related("workflow").order_by(
-            "-created_at", "-pk",
-        )
+        runs = readable_runs.filter(pk__in=run_ids[:100]).order_by("-created_at", "-pk")
     if readable_decisions is None:
         return runs, empty_decisions, truncated, False
     canonical_model = artifact_content_type.model_class()
@@ -2017,9 +2044,7 @@ def _workflow_subject_history(
         decision_relation |= models.Q(
             step_run__run_id__in=models.Subquery(runs.order_by().values("pk")),
         )
-    decision_scope = readable_decisions.filter(decision_relation).distinct().select_related(
-        "step_run__run", "suspension_attempt",
-    ).order_by(
+    decision_scope = readable_decisions.filter(decision_relation).distinct().order_by(
         models.Case(
             models.When(verdict="pending", then=models.Value(0)),
             default=models.Value(1),

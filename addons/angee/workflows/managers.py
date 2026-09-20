@@ -6298,6 +6298,12 @@ class DecisionQuerySet(AngeeQuerySet[Any]):
         }
     )
 
+    def with_context_projection(self) -> Self:
+        """Annotate the complete context before materializing a Decision list."""
+
+        decision_model = cast(Any, self.model)
+        return cast(Self, self.annotate(**decision_model.context_projection_annotation()))
+
     def update(self, **kwargs: Any) -> int:
         if self._PROTECTED_FIELDS.intersection(kwargs):
             raise TypeError("Decision suspension provenance is owned by DecisionManager.")

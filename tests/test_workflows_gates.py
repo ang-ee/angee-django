@@ -30,6 +30,7 @@ from rebac.models import active_relationship_model
 
 from angee.base.identity import public_subject_ref
 from angee.compose.permissions import apply_schema_paths, extension_source_map
+from angee.dashboards.models import validate_dashboard_queries
 from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import engine
@@ -1739,7 +1740,12 @@ def test_console_dashboard_resources_expose_lineage_and_pending_filters(
     workflow_gate_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    """Dashboard queries compose stable lineage fields with the native verdict filter."""
+    """Keep workflow keys filterable and names as the relation label axis.
+
+    Declaring both ``workflow__key`` and ``workflow__name`` as group leaves
+    raised ``ImproperlyConfigured`` in ``_relation_label_axes``: a grouped
+    relation has one label axis. Pending Decisions retain their native filter.
+    """
 
     del workflow_gate_tables, no_workflow_queue
     workflows_schema = importlib.import_module("angee.workflows.schema")
@@ -1750,9 +1756,138 @@ def test_console_dashboard_resources_expose_lineage_and_pending_filters(
     decision = resources["workflows.Decision"]
 
     assert workflow_run["query"]["fields"]["workflow.key"]["filter"]["field"] == "workflow__key"
-    assert "workflow.key" in workflow_run["query"]["axes"]
+    assert "workflow.key" not in workflow_run["query"]["axes"]
     assert decision["query"]["fields"]["step_run.run.workflow.key"]["filter"]["field"] == "step_run__run__workflow__key"
+    assert decision["query"]["fields"]["step_run.step.key"]["sort"] is not None
+    for field in ("workflow_key", "workflow_name", "step_key", "step_name"):
+        assert decision["query"]["fields"][field]["row"] is not None
+    assert decision["query"]["fields"]["workflow_key"].get("filter") is None
     assert {"from": "PENDING", "to": "pending"} in decision["query"]["fields"]["verdict"]["filter"]["valueMap"]
+
+
+@pytest.mark.parametrize(
+    "columns",
+    (
+        [{"path": "action", "label": "Decision"}, {"path": "created_at"}],
+        [{"path": "step_name"}, {"path": "workflow_name", "label": "Workflow"}],
+    ),
+)
+def test_dashboard_decision_columns_validate_against_selected_context(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    columns: list[dict[str, str]],
+) -> None:
+    """Installed rows widgets may declare ordered labels over flat Decision context."""
+
+    del workflow_gate_tables, no_workflow_queue
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    parts = {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}
+    schemas = GraphQLSchemas([SchemaAddon({"console": parts})])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+    snapshot = {
+        "widgets": [
+            {
+                "isArchived": False,
+                "data": {
+                    "shape": "rows",
+                    "source": {
+                        "resource": "workflows.Decision",
+                        "fields": ["action", "workflow_name", "step_name", "created_at"],
+                        "filter": {
+                            "step_run.run.workflow.key": {"inList": ["review", "verification"]},
+                            "verdict": {"exact": "pending"},
+                        },
+                    },
+                },
+                "options": {"columns": columns},
+            },
+            {
+                "isArchived": False,
+                "data": {
+                    "shape": "rows",
+                    "source": {
+                        "resource": "workflows.WorkflowRun",
+                        "fields": ["id", "workflow", "created_at", "status"],
+                        "filter": {"workflow.key": {"inList": ["review", "verification"]}},
+                    },
+                },
+                "options": {"columns": [{"path": "workflow", "label": "Workflow"}, {"path": "id", "label": "Run"}]},
+            },
+        ]
+    }
+
+    validate_dashboard_queries(snapshot)
+
+
+@pytest.mark.parametrize(
+    "columns",
+    (
+        [{"path": "workflow_name"}],
+        [{"path": "action", "label": 7}],
+        [{"path": "action", "label": ""}],
+        [{"path": "action", "unknown": True}],
+        [{"path": "action"}, {"path": "action"}],
+        [{"path": ""}],
+        [{}],
+        ["action"],
+        [],
+        None,
+        "action",
+    ),
+)
+def test_dashboard_decision_columns_reject_unselected_or_malformed_columns(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    columns: Any,
+) -> None:
+    """A declared column must be a unique selected path with an optional string label."""
+
+    del workflow_gate_tables, no_workflow_queue
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    parts = {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}
+    schemas = GraphQLSchemas([SchemaAddon({"console": parts})])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+    snapshot = {
+        "widgets": [
+            {
+                "isArchived": False,
+                "data": {"shape": "rows", "source": {"resource": "workflows.Decision", "fields": ["action"]}},
+                "options": {"columns": columns},
+            }
+        ]
+    }
+
+    with pytest.raises(ValidationError, match=r"widgets\[0\]\.options\.columns"):
+        validate_dashboard_queries(snapshot)
+
+
+@pytest.mark.parametrize("shape", ("value", "series", "none"))
+@pytest.mark.parametrize("archived", (False, True))
+def test_dashboard_columns_require_active_rows_widgets(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    archived: bool,
+) -> None:
+    """Column declarations fail on active non-row widgets, including source-less actions."""
+
+    del workflow_gate_tables, no_workflow_queue
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    parts = {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}
+    schemas = GraphQLSchemas([SchemaAddon({"console": parts})])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+    snapshot = {
+        "widgets": [{"isArchived": archived, "data": {"shape": shape}, "options": {"columns": [{"path": "action"}]}}]
+    }
+
+    if archived:
+        validate_dashboard_queries(snapshot)
+    else:
+        with pytest.raises(ValidationError, match="columns are only valid for row widgets"):
+            validate_dashboard_queries(snapshot)
 
 
 def test_public_schema_decision_projection_excludes_step_run_journal(
@@ -1772,6 +1907,11 @@ def test_public_schema_decision_projection_excludes_step_run_journal(
     assert "decisionSchema" not in decision_section
     assert "workflow_name" in decision_section
     assert "step_name" in decision_section
+    assert "workflow_key" in decision_section
+    assert "step_key" in decision_section
+    assert "source_run_id: ID" in decision_section
+    assert "\n  run_id:" not in decision_section
+    assert "run_created_at" not in decision_section
     assert "StepRunType" not in sdl
 
 
@@ -1911,14 +2051,39 @@ def test_retained_decision_transition_requires_complete_owner(
     assert decision.attempts == 0
 
 
-def test_public_decision_schema_query_count_stays_flat_for_three_rows(
+@pytest.mark.parametrize("system_kind", ("override", ""))
+def test_system_decision_context_uses_only_the_system_kind_for_its_step_label(
     workflow_gate_tables: None,
     no_workflow_queue: None,
+    system_kind: str,
 ) -> None:
-    """Decision form-schema projection carries its relation in the parent query."""
+    """System events have no step key and never substitute a journal primary key."""
+
+    del workflow_gate_tables, no_workflow_queue
+    with system_context(reason="test system Decision context projection"):
+        workflow = Workflow.objects.create(name="System decision context")
+        run = WorkflowRun.objects.create(workflow=workflow)
+        step_run = StepRun.objects.create(run=run, system_kind=system_kind)
+        decision = Decision.objects.create(step_run=step_run, action="review")
+        projected = Decision.objects.with_context_projection().get(pk=decision.pk)
+
+    assert projected._decision_workflow_name == workflow.name
+    assert projected._decision_step_key is None
+    assert projected._decision_step_name == system_kind
+
+
+@pytest.mark.parametrize("surface, journal_reader", (("public", False), ("console", False), ("console", True)))
+def test_decision_context_and_schema_query_count_stays_flat_for_three_rows(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    surface: str,
+    journal_reader: bool,
+) -> None:
+    """Narrow context projections and independently readable journals batch without row fanout."""
 
     del workflow_gate_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-schema-query-reader")
+    viewer = _platform_admin("wdc-schema-query-admin") if journal_reader else assignee
     decision_schema = _action_schema(
         properties={"approved": {"type": "boolean"}},
     )
@@ -1942,23 +2107,28 @@ def test_public_decision_schema_query_count_stays_flat_for_three_rows(
         )
         _open_gate_run(workflow)
 
-    public = _schema("public")
-    query = """
-        query DecisionSchemas {
-          workflow_decisions(limit: 10, order_by: [{ created_at: asc }]) {
+    schema = _schema(surface)
+    journal_selection = "step_run { id }" if surface == "console" else ""
+    query = f"""
+        query DecisionSchemas {{
+          workflow_decisions(limit: 10, order_by: [{{ created_at: asc }}]) {{
             decision_schema
+            workflow_key
             workflow_name
+            step_key
             step_name
-          }
-        }
+            created_at
+            {journal_selection}
+          }}
+        }}
     """
     open_decisions(1, "One schema query row")
     with CaptureQueriesContext(connection) as one_row:
-        one_data = result_data(_execute(public, query, user=assignee))
+        one_data = result_data(_execute(schema, query, user=viewer))
 
     open_decisions(2, "Two more schema query rows")
     with CaptureQueriesContext(connection) as three_rows:
-        three_data = result_data(_execute(public, query, user=assignee))
+        three_data = result_data(_execute(schema, query, user=viewer))
 
     assert len(one_data["workflow_decisions"]) == 1
     assert len(three_data["workflow_decisions"]) == 3
@@ -1967,8 +2137,155 @@ def test_public_decision_schema_query_count_stays_flat_for_three_rows(
         "Two more schema query rows",
     }
     assert {row["step_name"] for row in three_data["workflow_decisions"]} == {"Gate"}
+    assert {row["step_key"] for row in three_data["workflow_decisions"]} == {"gate"}
+    if surface == "console":
+        assert all((row["step_run"] is not None) == journal_reader for row in three_data["workflow_decisions"])
     assert len(three_rows.captured_queries) == len(one_row.captured_queries)
+    assert sum(f'FROM "{Decision._meta.db_table}"' in query["sql"] for query in three_rows.captured_queries) == 1
     assert "rebac_permissionauditevent" not in " ".join(query["sql"].lower() for query in three_rows.captured_queries)
+
+
+def test_workflow_subject_history_batches_context_and_guarded_journals(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One and three history groups use the same query count for selected related rows."""
+
+    del workflow_gate_tables, no_workflow_queue
+    viewer = _platform_admin("wdc-history-batch-admin")
+    with system_context(reason="test history subject"):
+        subject = Workflow.objects.create(name="History subject")
+    gate_workflow = workflow_with_steps(
+        name="History decisions",
+        steps=({"key": "gate", "step_class": "gate", "config": _gate_config([viewer], None, [])},),
+        edges=(),
+    )
+    failed_workflow = workflow_with_steps(
+        name="History failures",
+        steps=({"key": "failed", "step_class": "handler"},),
+        edges=(),
+    )
+
+    def fail(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, step_run, now
+        raise RuntimeError("retained history failure")
+
+    monkeypatch.setattr(HandlerStep, "run", fail)
+
+    def add_history_group() -> dict[str, str]:
+        gate_run = engine.start(gate_workflow, subject=subject, actor=viewer)
+        advance_once(gate_run)
+        execute_started(gate_run)
+        gate_row = _step_run(gate_run, "gate")
+        decision = _decision_for(gate_run, "gate")
+        failed_run = engine.start(failed_workflow, subject=subject, actor=viewer)
+        advance_once(failed_run)
+        execute_started(failed_run)
+        failed_row = _step_run(failed_run, "failed")
+        assert failed_row.status == workflow_models.StepRunStatus.FAILED
+        with system_context(reason="test history child and retained attempt"):
+            child = WorkflowRun.objects.create(
+                workflow=gate_workflow,
+                parent_step_run=gate_row,
+                parent_relation="owned_call",
+            )
+            return {
+                "gate_run": str(gate_run.sqid),
+                "failed_run": str(failed_run.sqid),
+                "gate_step": str(gate_row.sqid),
+                "decision": str(decision.sqid),
+                "failure": str(failed_row.sqid),
+                "attempt": str(failed_row.current_attempt.sqid),
+                "child": str(child.sqid),
+            }
+
+    schema = _schema("console")
+    query = """
+        query SubjectHistory($subject: WorkflowObjectRefInput!) {
+          workflow_subject_history(subject: $subject) {
+            runs { id }
+            decisions { id workflow_name step_name step_run { id } }
+            pending_decisions { id workflow_key step_key step_run { id } }
+            failures { id run { id } step { key } current_attempt { id } }
+            child_runs { parent_run_id run { id workflow { name } } }
+          }
+        }
+    """
+    variables = {"subject": {"subject_declaration": subject._meta.label, "id": str(subject.sqid)}}
+    groups = [add_history_group()]
+    result_data(_execute(schema, query, variables, user=viewer))
+    with CaptureQueriesContext(connection) as one_group:
+        first = result_data(_execute(schema, query, variables, user=viewer))["workflow_subject_history"]
+    groups.extend((add_history_group(), add_history_group()))
+    with CaptureQueriesContext(connection) as three_groups:
+        all_rows = result_data(_execute(schema, query, variables, user=viewer))["workflow_subject_history"]
+
+    assert len(first["runs"]) == 2
+    assert len(all_rows["runs"]) == 6
+    for field in ("decisions", "pending_decisions", "failures", "child_runs"):
+        assert len(first[field]) == 1
+        assert len(all_rows[field]) == 3
+    assert {row["id"] for row in all_rows["runs"]} == {
+        group[key] for group in groups for key in ("gate_run", "failed_run")
+    }
+    assert {row["step_run"]["id"] for row in all_rows["decisions"]} == {group["gate_step"] for group in groups}
+    assert {row["workflow_name"] for row in all_rows["decisions"]} == {gate_workflow.name}
+    assert {row["step_name"] for row in all_rows["decisions"]} == {"Gate"}
+    assert {row["id"] for row in all_rows["pending_decisions"]} == {group["decision"] for group in groups}
+    assert {row["step_key"] for row in all_rows["pending_decisions"]} == {"gate"}
+    assert {row["current_attempt"]["id"] for row in all_rows["failures"]} == {group["attempt"] for group in groups}
+    assert {row["run"]["id"] for row in all_rows["failures"]} == {group["failed_run"] for group in groups}
+    assert {row["step"]["key"] for row in all_rows["failures"]} == {"failed"}
+    assert {row["parent_run_id"] for row in all_rows["child_runs"]} == {group["gate_run"] for group in groups}
+    assert {row["run"]["id"] for row in all_rows["child_runs"]} == {group["child"] for group in groups}
+    assert {row["run"]["workflow"]["name"] for row in all_rows["child_runs"]} == {gate_workflow.name}
+    assert len(three_groups.captured_queries) == len(one_group.captured_queries)
+
+
+@pytest.mark.parametrize("related_history", ("child", "failure"))
+def test_workflow_subject_history_guards_independent_definition_reads(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    related_history: str,
+) -> None:
+    """Reading a run does not authorize joined workflow or step definitions."""
+
+    del workflow_gate_tables, no_workflow_queue
+    viewer = User.objects.create_user(username="wdc-history-run-reader")
+    private_workflow = workflow_with_steps(name="Private definition", steps=({"key": "private"},), edges=())
+    with system_context(reason="test independently scoped history definitions"):
+        subject = Workflow.objects.create(name="Readable subject", created_by=viewer)
+        run = WorkflowRun.objects.create(workflow=private_workflow, subject=subject, created_by=viewer)
+        row = StepRun.objects.create(
+            run=run,
+            step=step_for(private_workflow, "private"),
+            status=workflow_models.StepRunStatus.FAILED if related_history == "failure" else "scheduled",
+        )
+        if related_history == "child":
+            WorkflowRun.objects.create(
+                workflow=private_workflow,
+                parent_step_run=row,
+                parent_relation="owned_call",
+                created_by=viewer,
+            )
+    query = """
+        query SubjectHistory($subject: WorkflowObjectRefInput!) {
+          workflow_subject_history(subject: $subject) {
+            child_runs { run { id workflow { name } } }
+            failures { id step { key } }
+          }
+        }
+    """
+    result = _execute(
+        _schema("console"),
+        query,
+        {"subject": {"subject_declaration": subject._meta.label, "id": str(subject.sqid)}},
+        user=viewer,
+    )
+
+    assert result.errors
+    assert any(isinstance(error.original_error, PermissionDenied) for error in result.errors)
 
 
 def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
@@ -1983,23 +2300,38 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
     stranger = User.objects.create_user(username="wdc-resource-stranger")
     admin = _platform_admin("wdc-resource-admin")
     decision = _opened_decision([assignee], requester)
-    query = """
+    context_selection = """
+        fragment DecisionContext on DecisionType {
+          action
+          workflow_key
+          workflow_name
+          step_key
+          step_name
+          created_at
+        }
+    """
+    query = (
+        """
         query DecisionReads($id: String!, $run: String!) {
           workflow_decisions(where: {step_run__run: {_eq: $run}}, limit: 10) {
             id
             source_run_id
             source_execution_id
             source_attempt_id
+            ...DecisionContext
           }
           workflow_decisions_by_pk(id: $id) {
             id
             source_run_id
             source_execution_id
             source_attempt_id
+            ...DecisionContext
           }
           workflow_decisions_aggregate { aggregate { count } }
         }
     """
+        + context_selection
+    )
     public = _schema("public")
     variables = {"id": str(decision.sqid), "run": str(decision.step_run.run.sqid)}
 
@@ -2007,16 +2339,19 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
     requester_read = result_data(_execute(public, query, variables, user=requester))
     denied = result_data(_execute(public, query, variables, user=stranger))
     privileged = result_data(_execute(public, query, variables, user=admin))
-    console_query = """
+    console_query = (
+        """
         query ConsoleDecision($id: String!, $workflowKey: String!) {
           workflow_decisions(
             where: {step_run__run__workflow__key: {_eq: $workflowKey}}
             limit: 10
-          ) { id step_run { id } }
-          workflow_decisions_by_pk(id: $id) { id step_run { id } }
+          ) { id ...DecisionContext step_run { id } }
+          workflow_decisions_by_pk(id: $id) { id ...DecisionContext step_run { id } }
           workflow_decisions_aggregate { aggregate { count } }
         }
     """
+        + context_selection
+    )
     console = _schema("console")
     console_variables = {
         "id": str(decision.sqid),
@@ -2024,10 +2359,20 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
     }
     assigned_console = result_data(_execute(console, console_query, console_variables, user=assignee))
     requester_console = result_data(_execute(console, console_query, console_variables, user=requester))
+    denied_console = result_data(_execute(console, console_query, console_variables, user=stranger))
     privileged_console = result_data(_execute(console, console_query, console_variables, user=admin))
 
+    expected_context = {
+        "action": decision.action,
+        "workflow_key": decision.step_run.run.workflow.key,
+        "workflow_name": decision.step_run.run.workflow.name,
+        "step_key": decision.step_run.step.key,
+        "step_name": decision.step_run.step.name,
+        "created_at": decision.created_at.isoformat(),
+    }
     assert assigned["workflow_decisions"] == [
         {
+            **expected_context,
             "id": str(decision.sqid),
             "source_run_id": None,
             "source_execution_id": None,
@@ -2044,6 +2389,7 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
     assert privileged["workflow_decisions_by_pk"]["source_execution_id"] == str(decision.step_run.sqid)
     assert privileged["workflow_decisions_by_pk"]["source_attempt_id"] == str(decision.suspension_attempt.sqid)
     expected_assigned_console = {
+        **expected_context,
         "id": str(decision.sqid),
         "step_run": None,
     }
@@ -2053,7 +2399,11 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
     assert requester_console["workflow_decisions"] == []
     assert requester_console["workflow_decisions_by_pk"] is None
     assert requester_console["workflow_decisions_aggregate"]["aggregate"]["count"] == 0
+    assert denied_console["workflow_decisions"] == []
+    assert denied_console["workflow_decisions_by_pk"] is None
+    assert denied_console["workflow_decisions_aggregate"]["aggregate"]["count"] == 0
     expected_privileged_console = {
+        **expected_context,
         "id": str(decision.sqid),
         "step_run": {"id": str(decision.step_run.sqid)},
     }
@@ -2062,23 +2412,30 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
     assert privileged_console["workflow_decisions_aggregate"]["aggregate"]["count"] == 1
 
 
-def test_public_decide_mutation_uses_actor_scoped_act_permission(
+@pytest.mark.parametrize("surface", ("public", "console"))
+def test_decide_mutation_uses_actor_scoped_act_permission_and_projects_context(
     workflow_gate_tables: None,
     no_workflow_queue: None,
+    surface: str,
 ) -> None:
-    """The public mutation resolves as the session actor, not as system."""
+    """Authorized mutation results expose context without relying on queryset optimization."""
 
     del workflow_gate_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-gql-assignee")
     stranger = User.objects.create_user(username="wdc-gql-stranger")
     decision = _opened_decision([assignee], None)
-    public = _schema("public")
+    schema = _schema(surface)
     mutation = """
         mutation Decide($decision: ID!, $verdict: DecisionVerb!, $payload: JSON) {
           decide(decision: $decision, verdict: $verdict, payload: $payload) {
             decision {
               verdict
               resolution
+              workflow_key
+              workflow_name
+              step_key
+              step_name
+              created_at
             }
             validation_errors
           }
@@ -2090,12 +2447,20 @@ def test_public_decide_mutation_uses_actor_scoped_act_permission(
         "verdict": "COMPLETE",
         "payload": {"action": "complete"},
     }
-    denied = _execute(public, mutation, variables, user=stranger)
+    denied = _execute(schema, mutation, variables, user=stranger)
     assert denied.errors is not None
 
-    data = result_data(_execute(public, mutation, variables, user=assignee))
+    data = result_data(_execute(schema, mutation, variables, user=assignee))
     assert data["decide"] == {
-        "decision": {"verdict": "COMPLETED", "resolution": {"action": "complete"}},
+        "decision": {
+            "verdict": "COMPLETED",
+            "resolution": {"action": "complete"},
+            "workflow_key": decision.step_run.run.workflow.key,
+            "workflow_name": decision.step_run.run.workflow.name,
+            "step_key": decision.step_run.step.key,
+            "step_name": decision.step_run.step.name,
+            "created_at": decision.created_at.isoformat(),
+        },
         "validation_errors": None,
     }
 

@@ -429,6 +429,7 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
     ? titleCase(sourceMetadata.resource.modelName)
     : titleCase(sourceResource.split(".").at(-1) ?? sourceResource);
   const visibleTitle = normalizeDashboardWidgetTitle(widget.title, sourceResource, resourceLabel);
+  const titleId = React.useId();
   const drag = useDraggable({ id: widget.id, disabled: !editing });
   const transform = drag.transform;
   return (
@@ -462,6 +463,7 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
       }}
     >
       <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border-subtle px-2">
+        <h3 id={titleId} className={editing ? "sr-only" : "min-w-0 flex-1 truncate text-13 font-medium text-fg"}>{visibleTitle}</h3>
         {editing ? <button type="button" className="cursor-grab rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.move", { title: visibleTitle })} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" size={14} /></button> : null}
         {editing ? (
           <Input
@@ -471,7 +473,7 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
             aria-label={t("surface.widgetTitle")}
             className="min-w-0 flex-1"
           />
-        ) : <h3 className="min-w-0 flex-1 truncate text-13 font-medium text-fg">{visibleTitle}</h3>}
+        ) : null}
         {editing ? (
           <>
             <button type="button" className="rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.moveLeft")} onClick={() => onMove(-1, 0)}><Glyph name="arrow-left" size={12} /></button>
@@ -481,23 +483,24 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
           </>
         ) : null}
       </header>
-      <ResolvedWidget widget={widget} registry={registry} definition={definition} pageScope={pageScope} />
+      <ResolvedWidget widget={widget} registry={registry} definition={definition} pageScope={pageScope} titleId={titleId} />
     </article>
   );
 }
 
-function ResolvedWidget({ widget, registry, definition, pageScope }: {
+function ResolvedWidget({ widget, registry, definition, pageScope, titleId }: {
   widget: WidgetSpec;
   registry: DashboardRegistry;
   definition?: DashboardDefinition;
   pageScope?: DashboardPageScope;
+  titleId: string;
 }): React.ReactElement {
   const t = useDashboardT();
   const kind = registry.widgetKinds[widget.kind];
   if (!kind || kind.version !== widget.kindVersion || kind.shape !== widget.data.shape) {
     return <ErrorBanner className="m-3" description={t("surface.widgetKindUnavailable", { kind: widget.kind, version: widget.kindVersion })} />;
   }
-  return <WidgetDataBody widget={widget} kind={kind} definition={definition} pageScope={pageScope} />;
+  return <WidgetDataBody widget={widget} kind={kind} definition={definition} pageScope={pageScope} titleId={titleId} />;
 }
 
 function normalizeDashboardWidgetTitle(title: string, resource: string, resourceLabel: string): string {
@@ -507,11 +510,12 @@ function normalizeDashboardWidgetTitle(title: string, resource: string, resource
   return title;
 }
 
-function WidgetDataBody({ widget, kind, definition, pageScope }: {
+function WidgetDataBody({ widget, kind, definition, pageScope, titleId }: {
   widget: WidgetSpec;
   kind: DashboardWidgetKind;
   definition?: DashboardDefinition;
   pageScope?: DashboardPageScope;
+  titleId: string;
 }): React.ReactElement {
   const t = useDashboardT();
   const data = useDashboardWidgetData(widget, pageScope);
@@ -523,7 +527,7 @@ function WidgetDataBody({ widget, kind, definition, pageScope }: {
       "px-3 pt-2 pb-1.5",
     )}>
       <div className={cn("min-h-0 flex-1", kind.shape === "rows" ? "overflow-auto" : "overflow-hidden")}>
-        <Component spec={widget} data={data} authored={Authored ? <Authored /> : undefined} />
+        <Component spec={widget} data={data} titleId={titleId} authored={Authored ? <Authored /> : undefined} />
       </div>
       <footer className="flex shrink-0 items-center justify-end gap-2 pt-1 text-2xs text-fg-subtle">
         {pageScope && widget.data.shape !== "none" ? (

@@ -284,11 +284,12 @@ history uses native Query pages with domain-owned
   `use<Addon>T()` in an addon (created with `createNamespaceT(ns, fallback)`),
   with namespace-relative English keys in the namespace bundle. A prop whose default is a
   label defaults to `undefined` and resolves `?? t("key")` in the body — never call
-  `t()` in a default parameter. No hardcoded copy in a component. Three boundaries
+  `t()` in a default parameter. No hardcoded copy in a component. Four boundaries
   stay plain English: an addon's declarative manifest menu/route `label:` and
   chatter/drawer contribution labels (chrome data, not in-component copy — none
-  are routed), and a form registered via `forms:` (a statically parsed element,
-  never rendered as a component, so a hook cannot reach its `<Field label>`).
+  are routed), a form registered via `forms:` (a statically parsed element,
+  never rendered as a component, so a hook cannot reach its `<Field label>`),
+  and a dashboard widget row-column `label` (authored resource data).
 - Every icon is a registered glyph rendered via `<Glyph name="…">` (or the
   `renderGlyph(icon)` slot adapter). A component never imports `lucide-react`
   directly: base glyphs live in `chrome/icon-registry.ts`; an addon contributes its
