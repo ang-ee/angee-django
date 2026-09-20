@@ -126,12 +126,19 @@ function BoardRowCardContent<TRow extends Row>({
     <article
       ref={dragEnabled ? setNodeRef : undefined}
       style={style}
+      // The card is the pointer activator: a grip-only activator reads as a dead
+      // card, because the body is a link the browser drags natively. Only the
+      // listeners belong here -- `attributes` carry role="button", tabIndex and
+      // aria-describedby, which would wrap a link and a button in a third
+      // control. They stay on the grip, whose keydown bubbles to this handler.
+      // dnd-kit's activation distance keeps a click a click.
+      {...(dragEnabled ? listeners : {})}
       className={cn(
         "board-card-grid grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs",
         isDragging
           ? "transition-none"
           : "transition hover:-translate-y-0.5 hover:border-border hover:shadow-md",
-        dragEnabled && "select-none",
+        dragEnabled && "touch-none select-none",
         isDragging && "z-10 border-border-focus shadow-lg",
       )}
     >
@@ -161,7 +168,6 @@ function BoardRowCardContent<TRow extends Row>({
             aria-label={t("board.dragCard")}
             className="grid size-7 shrink-0 touch-none cursor-grab place-content-center rounded-6 text-fg-subtle outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring active:cursor-grabbing"
             {...attributes}
-            {...listeners}
           >
             <Glyph name="grip-vertical" />
           </button>
@@ -252,7 +258,12 @@ function BoardCardFrame({
   );
   if (href) {
     return (
-      <a href={href} className={BOARD_CARD_SHELL_CLASS} onClick={handleLinkClick}>
+      <a
+        href={href}
+        className={BOARD_CARD_SHELL_CLASS}
+        onClick={handleLinkClick}
+        draggable={false}
+      >
         {children}
       </a>
     );

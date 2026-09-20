@@ -58,3 +58,47 @@ test("relation search reaches records beyond the first page and resolves a selec
   fireEvent.click(match);
   expect(change).toHaveBeenCalledWith(selected.id);
 });
+
+test("resolves a preset relation's label instead of showing its id", async () => {
+  // A create dialog's preset holds only an id, so the form hands the widget a
+  // placeholder option labelled with that id. Treating that as a resolved label
+  // is what showed `prj_…` / `grp_…` / `stg_…` in every demo create.
+  const record = { id: "prj_7", name: "Signage refresh" };
+  const getOne = vi.fn(async () => ({ data: record }));
+  const getList = vi.fn(async () => ({ data: [record], total: 1 }));
+  const provider = {
+    getApiUrl: () => "test://relations",
+    getOne, getList, create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
+  } as unknown as DataProvider;
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+  clients.push(client);
+
+  render(
+    <Refine
+      dataProvider={{ default: provider, console: provider }}
+      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}
+    >
+      <ModelMetadataProvider
+        metadata={schemaFieldMetadataFromDataResources([
+          testDataResource("projects.Project"),
+        ])}
+      >
+        <RelationFieldWidget
+          value="prj_7"
+          selectedOption={{ value: "prj_7", label: "prj_7" }}
+          onChange={vi.fn()}
+          relation={{ resource: "projects.Project", labelField: "name", canCreate: false }}
+          aria-label="Project"
+        />
+      </ModelMetadataProvider>
+    </Refine>,
+  );
+
+  // The id holds the trigger while the record read is in flight -- an id beats
+  // an empty control -- and the real label replaces it once resolved.
+  await screen.findByText("Signage refresh");
+  expect(screen.queryByText("prj_7")).toBeNull();
+  expect(getOne).toHaveBeenCalledOnce();
+});

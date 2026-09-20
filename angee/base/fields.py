@@ -14,16 +14,17 @@ row stores one finite binary64 rank; its model defines the surrounding context
 and must enforce ``UniqueConstraint(fields=(*context_fields, rank_field))``
 (``nulls_distinct=False`` when a context field is nullable). Append with
 ``get_append_rank(last_rank)`` and insert or move with
-``get_rank_between(previous_rank, next_rank)``. Ranks start and rebalance at
-``1024.0`` intervals, a power-of-two spread whose midpoints stay exact until the
-available binary64 values are genuinely exhausted. ``FractionalRankExhausted``
-is the signal to enqueue the durable ``jobs.rebalance_fractional_ranks`` task
-with the concrete model label, exact context values, and rank-field name; callers
-must not guess an epsilon or silently reuse a rank. Rebalance rewrites only that
-context under one transaction, preserves its visible ``(rank, pk)`` order, and
-is idempotent. Allocation is optimistic: the contextual unique constraint
-arbitrates concurrent writers, and a losing writer rereads its neighbors before
-retrying.
+``get_rank_between(previous_rank, next_rank)``; validation releases a saved row's
+unchanged rank when another row in its new context holds it, so save re-appends
+it. Ranks start and rebalance at ``1024.0`` intervals, a power-of-two spread
+whose midpoints stay exact until the available binary64 values are genuinely
+exhausted. ``FractionalRankExhausted`` is the signal to enqueue the durable
+``jobs.rebalance_fractional_ranks`` task with the concrete model label, exact
+context values, and rank-field name; callers must not guess an epsilon or
+silently reuse a rank. Rebalance rewrites only that context under one
+transaction, preserves its visible ``(rank, pk)`` order, and is idempotent.
+Allocation is optimistic: the contextual unique constraint arbitrates concurrent
+writers, and a losing writer rereads its neighbors before retrying.
 """
 
 from __future__ import annotations
@@ -243,7 +244,8 @@ class FractionalRankField(models.FloatField):
     The field owns rank arithmetic and transactional rebalance. The consumer
     model owns the context columns and their database uniqueness constraint;
     the field cannot infer whether a list is scoped by a lane, parent, project,
-    or another domain fact.
+    or another domain fact. Validated writes are placed in ``clean()``;
+    unvalidated writes are arbitrated by the unique constraint.
     """
 
     STEP = 1024.0
@@ -279,6 +281,23 @@ class FractionalRankField(models.FloatField):
             return
         super().validate(value, model_instance)
 
+    def clean(self, value: Any, model_instance: models.Model) -> float | None:
+        """Resolve a rank that the context's unique constraint would reject.
+
+        Validation runs before ``pre_save``, and every write from the browser
+        validates: the mutation roots call ``full_clean()``, whose
+        ``validate_constraints()`` checks the rank the instance holds. So a rank
+        this field means to move has to move here, or the write is rejected
+        before ``pre_save`` is ever reached.
+
+        A rank a moved row carried into a context already holding it becomes the
+        pending ``None`` that ``pre_save`` appends. A rank written explicitly that
+        another row holds is placed after that row; ``clean_fields()`` writes it
+        back, so ``validate_constraints()`` then sees a free rank.
+        """
+
+        return self._resolve_rank(model_instance, super().clean(value, model_instance))
+
     def pre_save(self, model_instance: models.Model, add: bool) -> float:
         """Honor an explicit rank or append within the model's unique context."""
 
@@ -288,6 +307,54 @@ class FractionalRankField(models.FloatField):
         rank = self._append_rank_for_instance(model_instance)
         setattr(model_instance, self.attname, rank)
         return rank
+
+    def _resolve_rank(self, instance: models.Model, rank: float | None) -> float | None:
+        """Keep free ranks, release carried collisions, and place explicit collisions."""
+
+        if rank is None:
+            return None
+        model = type(instance)
+        constraint = self._unique_context_constraint(model)
+        if constraint is None:
+            return rank
+        context = {
+            context_field.attname: getattr(instance, context_field.attname)
+            for context_field in self._unique_context_fields(model)
+        }
+        database = router.db_for_write(model, instance=instance)
+        rows = system_queryset(model, using=database, lock=())
+        holders = rows.filter(**context, **{self.attname: rank}).exclude(pk=instance.pk)
+        if constraint.condition is not None:
+            holders = holders.filter(constraint.condition)
+        if not holders.exists():
+            return rank
+        if not instance._state.adding and rows.filter(pk=instance.pk, **{self.attname: rank}).exists():
+            return None
+        return self._rank_after_holder(instance, rank)
+
+    def _rank_after_holder(self, instance: models.Model, rank: float) -> float:
+        """Return a rank between ``rank`` and the next one above it in this context.
+
+        With nothing above, this appends one clean step past the holder. Exhaustion
+        raises :class:`FractionalRankExhausted` from :meth:`get_rank_between`, which
+        is the caller's signal to rebalance rather than a silent reorder.
+        """
+
+        model = type(instance)
+        context = {
+            context_field.attname: getattr(instance, context_field.attname)
+            for context_field in self._unique_context_fields(model)
+        }
+        database = router.db_for_write(model, instance=instance)
+        following = (
+            system_queryset(model, using=database, lock=())
+            .filter(**context, **{f"{self.name}__gt": rank})
+            .exclude(pk=instance.pk)
+            .order_by(self.name)
+            .values_list(self.name, flat=True)
+            .first()
+        )
+        return self.get_rank_between(rank, following)
 
     def _append_rank_for_instance(self, instance: models.Model) -> float:
         """Return the next rank from an unscoped scan of the instance context."""
@@ -308,24 +375,30 @@ class FractionalRankField(models.FloatField):
         )
         return self.get_append_rank(previous)
 
+    def _unique_context_constraint(self, model: type[models.Model]) -> models.UniqueConstraint | None:
+        """Return the one field-based unique constraint declaring this rank, if exactly one does."""
+
+        constraints = [
+            constraint
+            for constraint in model._meta.constraints
+            if isinstance(constraint, models.UniqueConstraint)
+            and self.name in constraint.fields
+        ]
+        return constraints[0] if len(constraints) == 1 else None
+
     def _unique_context_fields(
         self,
         model: type[models.Model],
     ) -> tuple[models.Field[Any, Any], ...]:
         """Resolve the one field-based unique context declaring this rank."""
 
-        contexts = [
-            tuple(name for name in constraint.fields if name != self.name)
-            for constraint in model._meta.constraints
-            if isinstance(constraint, models.UniqueConstraint)
-            and self.name in constraint.fields
-        ]
-        if len(contexts) != 1:
+        constraint = self._unique_context_constraint(model)
+        if constraint is None:
             raise ImproperlyConfigured(
                 f"{model._meta.label}.{self.name} must belong to exactly one "
                 "field-based UniqueConstraint so a missing rank can be allocated."
             )
-        return tuple(model._meta.get_field(name) for name in contexts[0])
+        return tuple(model._meta.get_field(name) for name in constraint.fields if name != self.name)
 
     def to_python(self, value: Any) -> float | None:
         """Coerce a rank and reject NaN or infinity at validation boundaries."""

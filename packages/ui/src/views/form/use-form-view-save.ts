@@ -9,7 +9,6 @@ import {
 } from "@angee/metadata";
 import { useAngeeResourceSave } from "@angee/refine";
 import {
-  useInvalidate,
   useOne,
   useCreate,
   useUpdate,
@@ -46,7 +45,10 @@ import {
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
-import { useSaveOperation } from "../resource/resource-operations";
+import {
+  useInvalidateDataResource,
+  useSaveOperation,
+} from "../resource/resource-operations";
 import { validationErrorsFromError, serverErrorsFromForm } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 
@@ -129,6 +131,10 @@ export interface FormViewSaveSurface {
   form: FormViewForm;
   displayRecord: Row | null;
   loading: boolean;
+  /** The read settled and resolved no record: the id names nothing readable. */
+  recordMissing: boolean;
+  /** The read settled having failed. Distinct from `recordMissing`: retryable. */
+  readFailure: HttpError | null;
   formReadOnly: boolean;
   formIsDirty: boolean;
   pending: boolean;
@@ -240,6 +246,20 @@ export function useFormViewSave({
     : read.result ?? null;
   const displayRecord = record;
   const loading = acknowledgedSource?.loading ?? read.query.isFetching;
+  const readSettled =
+    acknowledgedSource === undefined && !isCreate && Boolean(id);
+  // A retry parked by the online manager after a lost attempt is a failure the
+  // reader can act on (retry), not a form to edit; `failureReason` is that
+  // attempt's error. A read paused before any attempt stays pending.
+  const readFailure = !readSettled
+    ? null
+    : read.query.isError
+      ? read.query.error
+      : read.query.isPaused
+        ? read.query.failureReason
+        : null;
+  const recordMissing =
+    readSettled && read.query.isSuccess && record === null;
   const reload = React.useCallback(() => {
     if (acknowledgedSource !== undefined) {
       acknowledgedSource.reload?.();
@@ -273,7 +293,6 @@ export function useFormViewSave({
   const resourceSave = useAngeeResourceSave(saveOperation.target, {
     document: saveOperation.document,
   });
-  const invalidate = useInvalidate();
   const linesActive =
     linesConfig !== null &&
     linesField !== null &&
@@ -299,15 +318,11 @@ export function useFormViewSave({
         : null,
     [linesActive, linesConfig, linesField],
   );
+  const invalidateDataResource = useInvalidateDataResource();
   const invalidateResource = React.useCallback(async () => {
     if (!dataResource) return;
-    await invalidate({
-      resource: refineResourceName(dataResource),
-      dataProviderName: dataResource.schemaName,
-      id: id ?? undefined,
-      invalidates: ["list", "many", "detail"],
-    });
-  }, [dataResource, id, invalidate]);
+    await invalidateDataResource(dataResource, id ?? undefined);
+  }, [dataResource, id, invalidateDataResource]);
 
   const values = React.useMemo(() => {
     if (acknowledgedSource !== undefined) {
@@ -723,6 +738,8 @@ export function useFormViewSave({
     form,
     displayRecord,
     loading,
+    recordMissing,
+    readFailure,
     formReadOnly,
     formIsDirty,
     pending,

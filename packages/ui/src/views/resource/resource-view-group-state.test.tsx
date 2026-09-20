@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import type { ReactNode } from "react";
 
@@ -53,4 +53,38 @@ describe("useResourceViewGroupState", () => {
       });
     },
   );
+});
+
+describe("a pinned board re-applies its default group after a clear", () => {
+  // The reconciliation cases above cover applying and removing a *declared*
+  // default. This is the distinct product contract of a pinned board: its
+  // grouping is fixed, so clearing the group is undone and the default lands
+  // again. (The route-scope render churn that motivated the interim guard needs
+  // an async router to reproduce -- the board integration suites own that; the
+  // observable outcome asserted here is that the group settles back to the
+  // pinned default rather than staying cleared.)
+  test("clearing the group re-applies the pinned default", async () => {
+    const { result } = renderHook(
+      () => {
+        const view = useResourceView();
+        useResourceViewGroupState({
+          resourceView: view,
+          defaultGroup: DEFAULT_GROUP,
+          modelMetadata: null,
+          pinned: true,
+        });
+        return view;
+      },
+      { wrapper: LocalViewProvider },
+    );
+
+    await waitFor(() =>
+      expect(result.current.state.group?.field).toBe(DEFAULT_GROUP.field),
+    );
+
+    act(() => result.current.setGroup(null));
+    await waitFor(() =>
+      expect(result.current.state.group?.field).toBe(DEFAULT_GROUP.field),
+    );
+  });
 });

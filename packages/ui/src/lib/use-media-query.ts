@@ -6,6 +6,13 @@ export const LARGE_VIEWPORT_QUERY = "(min-width: 64rem)";
 /** Handheld layout boundary, kept in sync with Tailwind's `sm` boundary. */
 export const MOBILE_VIEWPORT_QUERY = "(max-width: 39.999rem)";
 
+/**
+ * Tailwind's `xl` boundary. The width a record needs before it can carry a
+ * third pane: below it, nav plus a form plus an open rail do not fit, and the
+ * rail's own controls clip against the edge.
+ */
+export const XL_VIEWPORT_QUERY = "(min-width: 80rem)";
+
 /** Subscribe to one browser media query without mirroring it through effects. */
 export function useMediaQuery(query: string): boolean {
   const subscribe = useCallback(

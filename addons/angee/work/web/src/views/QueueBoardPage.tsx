@@ -22,13 +22,14 @@ export function QueueBoardPage(): React.ReactElement {
   const queue = useQueueContext(queueId);
   const name = queue.data?.work_queues_by_pk?.name ?? queueId;
   const scale = queue.data?.work_queues_by_pk?.estimate_scale;
+
   return (
     <Page>
       <PageHeader
         title={t("board.title", { queue: name })}
         description={t("board.description")}
       />
-      <PageBody gutter="none" scroll="hidden">
+      <PageBody gutter="none" scroll="hidden" className="flex flex-col">
         {queue.error ? <ErrorBanner description={queue.error.message} /> : null}
         <TaskBoardSurface<WorkTaskRow> createDefaults={{ queue: queueId }}>
           <List<WorkTaskRow>
@@ -56,7 +57,8 @@ export function QueueBoardPage(): React.ReactElement {
             <Column field="work_key" header={t("common.key")} />
             <Column field="title" />
             <Column field="estimate" header={t("common.estimate")} />
-            <Column field="priority" />
+            <Column field="assignee" />
+            <Column field="priority" widget="angee.projects.priority" />
             <Column field="due_date" />
           </List>
         </TaskBoardSurface>

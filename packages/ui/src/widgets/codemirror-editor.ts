@@ -27,6 +27,10 @@ export const CODEMIRROR_THEME = EditorView.theme({
     minHeight: "12rem",
     padding: "0.5rem 0.75rem",
   },
+  // basicSetup's drawSelection hides the native caret and draws `.cm-cursor`,
+  // whose default border is black: invisible on a dark sheet. Colour it with
+  // the same token as the caret so a click in the text shows where typing goes.
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--brand)" },
   ".cm-line": { lineHeight: "1.5rem" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
     backgroundColor: "var(--brand-soft)",

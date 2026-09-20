@@ -240,7 +240,11 @@ function NestedMenuItem({
     activeChildId !== null,
     activeChildId ?? "",
   );
-  const active = item.matchesPath(pathname);
+  // A child lights up only as its siblings' most specific match: a list at
+  // `/projects` also contains `/projects/tasks`, and lighting both reads as
+  // two current places.
+  const active = item.matchesPath(pathname)
+    && (item.parentNode?.activeTargetedChild(pathname) ?? item) === item;
   if (!item.target) return null;
   if (!children.length) {
     return (

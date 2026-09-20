@@ -21,11 +21,20 @@ export function createAngeeI18nRuntime(
     instance: instance as RuntimeI18n,
     provider: {
       translate(key, vars, defaultMessage) {
-        const namespace = namespaceOption(vars);
+        // refine calls this two ways, and its own `safeTranslate` helper spells
+        // both out: `translate(key, options, defaultMessage)` and, when there
+        // are no options, `translate(key, defaultMessage)`. Reading the second
+        // argument as options only drops every default in the short form, so a
+        // missing key reaches the screen as the key itself -- which is how the
+        // create toast came to show `notifications.success`.
+        const shorthand = typeof vars === "string";
+        const options = shorthand ? undefined : vars;
+        const fallback = shorthand ? vars : defaultMessage;
+        const namespace = namespaceOption(options);
         const result = instance.t(key, {
-          ...messageVars(vars),
+          ...messageVars(options),
           ...(namespace ? { ns: namespace } : {}),
-          ...(defaultMessage ? { defaultValue: defaultMessage } : {}),
+          ...(fallback ? { defaultValue: fallback } : {}),
         } satisfies TOptions);
         return typeof result === "string" ? result : String(result);
       },
@@ -54,6 +63,11 @@ function createAngeeI18nInstance(
     ns: namespaces,
     resources: { en: resources },
     keySeparator: false,
+    // Resource identifiers are `<schema>:<modelLabel>`, and refine builds i18n
+    // keys out of them, so the default ":" namespace separator would read the
+    // schema as a namespace and look up the wrong key. Namespaces reach this
+    // instance through the `ns` option instead (see `namespaceOption`).
+    nsSeparator: false,
     interpolation: {
       prefix: "{",
       suffix: "}",

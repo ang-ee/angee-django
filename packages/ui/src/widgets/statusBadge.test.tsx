@@ -4,6 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { statusBadgeWidget } from "./statusBadge";
+import { StatusSelectEdit } from "./index";
 
 describe("statusBadge widget tone", () => {
   afterEach(() => {
@@ -113,6 +114,7 @@ describe("statusBadge widget tone", () => {
 
   test("edit renders the shared status select owner", () => {
     const Edit = statusBadgeWidget.edit;
+    expect(Edit).toBe(StatusSelectEdit);
 
     render(
       <Edit
