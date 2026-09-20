@@ -5,6 +5,49 @@ import type {
   MutationDialogValues,
 } from "./views/form/MutationDialog";
 
+type UiModule = typeof import("./index");
+export type UiTestDoubles = Partial<Record<keyof UiModule, unknown>>;
+
+export interface UiRouteTestDoubleOptions {
+  routeHref?: (route: string, parameters?: Record<string, unknown>) => string;
+  recordHref?: (model: string, id: string) => string | undefined;
+  search?: Readonly<Record<string, unknown>>;
+  mediaQuery?: boolean;
+}
+
+/** Merge grouped UI doubles over the real module without repeating mock boilerplate. */
+export async function createUiTestModule(
+  importOriginal: <T = UiModule>() => Promise<T>,
+  ...groups: readonly UiTestDoubles[]
+): Promise<UiModule> {
+  const original = await importOriginal<UiModule>();
+  return Object.assign({}, original, ...groups) as UiModule;
+}
+
+/** Reproduce composed namespace lookup, including the interpolation tests rely on. */
+export function createNamespaceTTestDouble(): UiModule["createNamespaceT"] {
+  return (_namespace, messages) => () => (key, values) => Object.entries(values ?? {})
+    .reduce(
+      (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+      messages[key] ?? key,
+    );
+}
+
+/** Group the route/runtime hooks most addon view tests replace together. */
+export function createUiRouteTestDoubles({
+  routeHref = (route, parameters) => parameters?.id ? `/${route}/${String(parameters.id)}` : `/${route}`,
+  recordHref = (model, id) => `/records/${model}/${id}`,
+  search = {},
+  mediaQuery = false,
+}: UiRouteTestDoubleOptions = {}): UiTestDoubles {
+  return {
+    useRouteHref: () => routeHref,
+    useResourceRecordHrefLookup: () => recordHref,
+    useRouteSearch: () => search,
+    useMediaQuery: () => mediaQuery,
+  } as UiTestDoubles;
+}
+
 export type MutationDialogTestDoubleProps = MutationDialogProps<
   Record<string, unknown>,
   unknown

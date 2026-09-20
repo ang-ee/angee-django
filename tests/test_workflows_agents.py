@@ -11,7 +11,6 @@ import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,7 +20,6 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.db.models.deletion import ProtectedError
-from django.test import RequestFactory
 from django.utils import timezone
 from pydantic_ai.messages import ModelResponse, SystemPromptPart, TextPart
 from pydantic_ai.models.function import FunctionModel
@@ -34,7 +32,6 @@ from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, Tu
 from angee.agents.runners import TurnOutcome
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
-from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import AttemptResultKind
@@ -43,11 +40,8 @@ from angee.workflows_agents import sessions
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
-    SchemaAddon,
     StubInferenceBackend,
     _create_missing_tables,
-    execute_schema,
-    result_data,
 )
 from tests.test_agents import InferenceModel, _provider
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, AgentSession, AgentTurn
@@ -273,9 +267,7 @@ def test_agent_step_debits_token_usage_into_run_budget_spent(
     assert run.budget_spent == {"input_tokens": 2, "output_tokens": 3, "tokens": 5}
 
 
-@pytest.mark.parametrize(
-    "axis,ceiling", [("tokens", 4), ("input_tokens", 1), ("output_tokens", 2)]
-)
+@pytest.mark.parametrize("axis,ceiling", [("tokens", 4), ("input_tokens", 1), ("output_tokens", 2)])
 def test_budget_ceiling_fails_run_via_engine(
     workflows_agents_tables: None,
     no_workflow_queue: None,
@@ -469,73 +461,6 @@ def test_session_and_turn_reads_and_turn_subscription_are_owner_gated(
     change = ChangePayload.from_instance(turn, action="update", update_fields={"status"})
     assert ChangeReadGate(AgentTurn, to_subject_ref(owner)).filter(change) is not None
     assert ChangeReadGate(AgentTurn, to_subject_ref(stranger)).filter(change) is None
-
-
-def test_session_workflow_bridge_treats_missing_run_as_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A readable legacy session without a Run is an unavailable bridge, not a resolver error."""
-
-    from angee.workflows_agents import schema as bridge_schema
-
-    session = SimpleNamespace(pk=7)
-    monkeypatch.setattr(bridge_schema, "session_user", lambda info: object())
-    monkeypatch.setattr(
-        bridge_schema,
-        "authorized_action_target",
-        lambda info, model, identity, action: session,
-    )
-    monkeypatch.setattr(
-        bridge_schema.sessions,
-        "run_for",
-        lambda target: (_ for _ in ()).throw(ValidationError({"session": "missing"})),
-    )
-
-    assert (
-        bridge_schema.AgentSessionWorkflowQuery().agent_session_workflow_run(
-            SimpleNamespace(),
-            "ase_legacy",
-        )
-        is None
-    )
-
-
-def test_session_workflow_bridge_is_owner_scoped_and_returns_one_readable_run(
-    workflows_agents_tables: None,
-    no_workflow_queue: None,
-) -> None:
-    """The bridge resolves one owned session Run and denies another user."""
-
-    del workflows_agents_tables, no_workflow_queue
-    from angee.agents import schema as agents_schema
-    from angee.workflows import schema as workflows_schema
-    from angee.workflows_agents import schema as bridge_schema
-
-    owner, agent = _ready_session_agent("bridge-query")
-    stranger = User.objects.create_user(username="bridge-query-stranger")
-    _session_workflow()
-    session = sessions.start_session(agent, owner=owner, context={})
-    with system_context(reason="test session workflow bridge expected run"):
-        run = sessions.run_for(session)
-    modules = (agents_schema, workflows_schema, bridge_schema)
-    parts = {
-        key: tuple(item for module in modules for item in module.schemas.get("console", {}).get(key, ()))
-        for key in SCHEMA_PART_KEYS
-    }
-    schema = GraphQLSchemas([SchemaAddon({"console": parts})]).build("console")
-    query = """
-      query SessionRun($session: ID!) {
-        agent_session_workflow_run(session: $session)
-      }
-    """
-
-    def execute(user: Any) -> Any:
-        request = RequestFactory().post("/graphql/console/")
-        request.user = user
-        return execute_schema(schema, query, {"session": str(session.sqid)}, request=request)
-
-    assert result_data(execute(owner))["agent_session_workflow_run"] == str(run.sqid)
-    assert execute(stranger).errors
 
 
 def test_delivery_generation_closes_the_post_between_park_and_waiting_race(

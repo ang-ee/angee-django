@@ -121,15 +121,8 @@ vi.mock("@angee/iam", () => ({
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
-  return {
-    ...actual,
-    useRouteHref: () => (route: string, parameters?: { id?: string }) => (
-      parameters?.id ? `/${route}/${parameters.id}` : `/${route}`
-    ),
-    useResourceRecordHrefLookup: () => (model: string, id: string) => `/records/${model}/${id}`,
-    useRouteSearch: () => ({}),
-  };
+  const { createUiRouteTestDoubles, createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, createUiRouteTestDoubles());
 });
 
 vi.mock("../documents.console", () => ({
@@ -171,4 +164,15 @@ test("current external-wait artifacts become one routed next-action block while 
   expect(within(outputs!).queryByText("Supplier eligibility needs confirmation")).toBeNull();
   expect(screen.getAllByText("Supplier eligibility needs confirmation")).toHaveLength(1);
   expect(screen.getAllByText("Waiting for an update")).toHaveLength(1);
+});
+
+test("collapsible presentation keeps subject history inside the shared bounded activity pane", () => {
+  render(<WorkflowSubjectHistoryPane
+    subjectDeclaration="agents.AgentSession"
+    subjectId="session-1"
+    presentation="collapsible"
+  />);
+
+  expect(screen.getByText("inbox.title")).toBeTruthy();
+  expect(screen.getByText("Supplier review").closest("[class*='max-h']")).toBeTruthy();
 });

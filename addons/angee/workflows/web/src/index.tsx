@@ -143,9 +143,24 @@ export {
   useInitialDecisionPeek,
 } from "./views/ApprovalTask";
 export type { ApprovalTaskProps, ApprovalVerdict, WorkflowDecisionContentComponent, WorkflowDecisionContentProps, WorkflowDecisionRecordReference } from "./views/ApprovalTask";
+export {
+  DecisionContextUnavailable,
+  WorkflowDecisionScaffold,
+  presentRows,
+  reasonLabel,
+  textValue,
+  unique,
+} from "./views/WorkflowDecisionScaffold";
+export type {
+  WorkflowDecisionHeader,
+  WorkflowDecisionReference,
+  WorkflowDecisionScaffoldProps,
+  WorkflowDecisionWarning,
+} from "./views/WorkflowDecisionScaffold";
 export { WorkflowApprovals } from "./views/WorkflowApprovals";
 export type { WorkflowApprovalsProps } from "./views/WorkflowApprovals";
 export { useWorkflowsT } from "./i18n";
 export { workflowTriggerAssignmentForm } from "./views/WorkflowTriggersPanel";
 export { WorkflowSubjectHistoryPane } from "./views/WorkflowSubjectHistoryPane";
+export type { WorkflowSubjectHistoryPaneProps } from "./views/WorkflowSubjectHistoryPane";
 export { useWorkflowSubjectActionResult } from "./useWorkflowSubjectActionResult";

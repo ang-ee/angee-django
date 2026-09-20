@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { attemptStateLabel, inspectionSelectionSearch, mapItemLabel, runCollectionFilter, runOriginLabel, waitLabel } from "./RunsPage";
+import { attemptStateLabel, inspectionSelectionSearch, mapItemLabel, runCollectionFilter, runOriginLabel, waitLabel } from "./RunInspection";
 
 const labels: Record<string, string> = {
   "runs.waitScheduled": "Scheduled",

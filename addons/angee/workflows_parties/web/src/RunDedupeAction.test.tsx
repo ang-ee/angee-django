@@ -20,13 +20,15 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   useAuthoredMutation: () => [mocks.start, { fetching: false }],
 }));
 
-vi.mock("@angee/ui", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/ui")>()),
-  useActionResultRun: (options: Record<string, unknown>) => {
-    mocks.settleOptions = options;
-    return mocks.settle;
-  },
-}));
+vi.mock("@angee/ui", async (importOriginal) => {
+  const { createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, {
+    useActionResultRun: (options: Record<string, unknown>) => {
+      mocks.settleOptions = options;
+      return mocks.settle;
+    },
+  });
+});
 
 import { RunDedupeAction } from "./RunDedupeAction";
 

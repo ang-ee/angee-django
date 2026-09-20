@@ -28,7 +28,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
   };
 });
 
-import { AttemptHistory } from "./RunsPage";
+import { AttemptHistory } from "./RunInspection";
 
 const field = (name: string, scalar = "String") => ({
   name, kind: "scalar" as const, scalar, values: [], readable: true, filterable: true,

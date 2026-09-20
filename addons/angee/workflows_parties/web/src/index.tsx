@@ -21,6 +21,7 @@ import {
   decisionSearch,
   WORKFLOW_DECISION_CONTENT_SLOT,
   WorkflowApprovals,
+  WorkflowSubjectHistoryPane,
 } from "@angee/workflows";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
@@ -78,23 +79,7 @@ function WorkflowActivityLabel(): ReactElement {
 
 function PartyWorkflowActivity(): ReactElement {
   const record = useRecordChromeContext();
-  const search = useRouteSearch();
-  const navigate = useNavigate();
-  const decisionId = routeSearchParam(search, DECISION_SEARCH_KEY) ?? null;
-  return (
-    <WorkflowApprovals
-      target={{ model: "parties.Party", id: record.recordId }}
-      includeResolved
-      decisionId={decisionId}
-      onDecisionChange={(decision) => {
-        void navigate({
-          to: ".",
-          replace: true,
-          search: (previous: Record<string, unknown>) => decisionSearch(previous, decision),
-        });
-      }}
-    />
-  );
+  return <WorkflowSubjectHistoryPane subjectDeclaration="parties.Party" subjectId={record.recordId} />;
 }
 
 export function SelectedPartyDecision(): ReactElement | null {

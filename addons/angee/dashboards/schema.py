@@ -188,26 +188,7 @@ def _summary_offset(user: Any, version: str, cursor: str | None) -> int:
 
 
 def _snapshot(dashboard: Any) -> dict[str, Any]:
-    widgets = []
-    for widget in dashboard.widgets.all().order_by("sequence", "sqid"):
-        widgets.append(
-            {
-                "schemaVersion": widget.spec_version,
-                "id": widget.widget_key,
-                **({"definitionRef": widget.definition_ref} if widget.definition_ref else {}),
-                "kind": widget.kind,
-                "kindVersion": widget.kind_version,
-                "title": widget.title,
-                "data": widget.data,
-                "options": widget.options,
-                "x": widget.x,
-                "y": widget.y,
-                "w": widget.w,
-                "h": widget.h,
-                "isArchived": widget.is_archived,
-            }
-        )
-    return {"schemaVersion": dashboard.spec_version, "columns": dashboard.columns, "widgets": widgets}
+    return cast(dict[str, Any], dashboard.snapshot())
 
 
 def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
@@ -233,7 +214,19 @@ def _resolve_target(info: strawberry.Info, target: DashboardTargetInput) -> Any 
         return row if row is not None and row.scope == "personal" else None
     if not target.key:
         raise ValidationError({"target": "A scoped dashboard key is required."})
-    return Dashboard.objects.filter(owner=user, scope=target.scope.value, scope_key=target.key).first()
+    authored = Dashboard.objects.filter(owner=user, scope=target.scope.value, scope_key=target.key).first()
+    if authored is not None:
+        return authored
+    with system_context(reason="dashboards.resolve installed target"):
+        return (
+            Dashboard.system_queryset()
+            .filter(
+                owner__isnull=True,
+                scope=target.scope.value,
+                scope_key=target.key,
+            )
+            .first()
+        )
 
 
 def _target_parts(target: DashboardTargetInput, existing: Any | None) -> tuple[str, str | None]:
@@ -272,6 +265,16 @@ class DashboardQuery:
             .prefetch_related("widgets")
             .order_by("sqid")[:5_001]
         )
+        with system_context(reason="dashboards.installed catalogue"):
+            installed = list(
+                Dashboard.system_queryset()
+                .filter(owner__isnull=True)
+                .select_related("owner")
+                .prefetch_related("widgets")
+                .order_by("sqid")[:5_001]
+            )
+        rows.extend(installed)
+        rows.sort(key=lambda row: row.sqid)
         if len(rows) > 5_000:
             return DashboardSummaryPageType(status="limit", total=len(rows))
         items = [_summary_item(row, info) for row in rows]
@@ -291,6 +294,7 @@ class DashboardQuery:
             total=len(items),
             items=page,
         )
+
 
 @strawberry.type
 class DashboardMutation:

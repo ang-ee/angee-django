@@ -664,6 +664,11 @@ Hard-won traps — the wise learn from others' mistakes
   item's id) or the chrome derivation throws "referenced by multiple menu items" —
   or make the root route-less so it inherits its target through a descendant and the
   leaf is the route's sole reference.
+- **Keep the navigation accordion and selectable ARIA tree distinct.**
+  `AppRailTree` owns app-chrome parent activation, expansion, routing, and
+  temporary-drawer behavior. `ui/tree.tsx` owns selectable-tree keyboard
+  semantics and selection state. Keep both; never replace either with a private
+  approximation of the other.
 - **A group names the resource's canonical query axis.** `ResourceQuery` owns
   the translation from that axis to relation identity, label selections, server
   inputs and bucket keys. Never derive those transport names from casing or

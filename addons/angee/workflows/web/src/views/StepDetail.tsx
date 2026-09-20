@@ -7,6 +7,11 @@ import { canonicalOptionValue, Code, ErrorBanner, errorMessage, FormView, jsonOb
 import { WorkflowStepOperationsDocument } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
 import { WorkflowInputBindingEditor } from "./WorkflowInputBindingEditor";
+import {
+  WORKFLOW_STEP_USAGE_FIELDS,
+  workflowLabel,
+  workflowUsage,
+} from "./workflow-step-usage";
 
 type Operation = DocumentType<typeof WorkflowStepOperationsDocument>["workflow_step_operations"][number];
 
@@ -41,12 +46,15 @@ export function StepDetail(): React.ReactElement {
   const recordExtras = React.useCallback((context: RecordPanelContext) => {
     const record = context.form.displayRecord;
     if (!record) return null;
-    const workflowId = relationValueId(record.workflow);
+    const workflow = workflowUsage(record.workflow);
+    const workflowId = workflow?.id ?? relationValueId(record.workflow);
     const operation = operationFor(record);
     const errors = diagnosticMessages(record.config_errors);
     return <div className="grid gap-4">
       {operationsQuery.error ? <ErrorBanner description={errorMessage(operationsQuery.error, t("steps.typesUnavailable"))} /> : null}
-      {workflowId ? <p><TextLink href={routeHref("workflows.workflow", { id: workflowId })}>{t("steps.openWorkflow")}</TextLink></p> : null}
+      {workflowId ? <p><TextLink href={routeHref("workflows.workflow", { id: workflowId })}>
+        {workflow ? workflowLabel(workflow) : t("steps.openWorkflow")}
+      </TextLink></p> : null}
       {errors.length ? <ErrorBanner title={t("steps.configDiagnostics")} description={errors.join(" ")} /> : null}
       <section className="grid gap-2">
         <h2 className="text-base font-semibold">{t("steps.inputBinding")}</h2>
@@ -54,7 +62,9 @@ export function StepDetail(): React.ReactElement {
       </section>
     </div>;
   }, [operationFor, operationsQuery.error, routeHref, t]);
-  return <FormView resource="workflows.Step" id={id} readOnly publishBreadcrumbLabel fields={fields} headerExtras={headerExtras} recordExtras={recordExtras} />;
+  return <FormView resource="workflows.Step" id={id} readOnly publishBreadcrumbLabel
+    fields={fields} returning={WORKFLOW_STEP_USAGE_FIELDS}
+    headerExtras={headerExtras} recordExtras={recordExtras} />;
 }
 
 function diagnosticMessages(value: unknown): string[] {

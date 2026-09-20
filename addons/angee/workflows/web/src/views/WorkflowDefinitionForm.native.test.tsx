@@ -46,13 +46,12 @@ vi.mock("../documents.console", () => ({
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
-  return {
-    ...actual,
+  const { createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, {
     Form: (props: Record<string, unknown>) => <FormProbe {...props} />,
     registerForm: (_resource: string, component: unknown) => component,
     useRouteHref: () => (_route: string, parameters: { id: string }) => `/workflows/${parameters.id}`,
-  };
+  });
 });
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...await importOriginal<typeof import("@tanstack/react-router")>(),

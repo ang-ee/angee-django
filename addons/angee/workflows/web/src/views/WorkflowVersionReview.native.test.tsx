@@ -25,9 +25,9 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   useAuthoredMutation: () => [restore, { fetching: false, error: null }],
 }));
 vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
-  return { ...actual, GraphView: ({ nodes }: { nodes: Array<{ id: string; selected?: boolean }> }) =>
-    <div aria-label="comparison graph">{nodes.map((node) => <span key={node.id} data-selected={node.selected}>{node.id}</span>)}</div> };
+  const { createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, { GraphView: ({ nodes }: { nodes: Array<{ id: string; selected?: boolean }> }) =>
+    <div aria-label="comparison graph">{nodes.map((node) => <span key={node.id} data-selected={node.selected}>{node.id}</span>)}</div> });
 });
 
 import { WorkflowVersionReview } from "./WorkflowVersionReview";

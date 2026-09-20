@@ -1,6 +1,6 @@
 import * as React from "react";
 import * as v from "valibot";
-import { Badge, Button, Collapsible, Glyph, optionalTranslation, useRecordPeek,
+import { Badge, Button, Collapsible, ComparisonRows, Glyph, optionalTranslation, useRecordPeek,
   type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
 import { useWorkflowsT } from "../i18n";
 
@@ -77,17 +77,24 @@ function DifferencesContext({ value }: WidgetRenderProps): React.ReactElement {
   const t = useWorkflowsT();
   const parsed = v.safeParse(v.array(Difference), value);
   if (!parsed.success) return <InvalidContext value={value} />;
-  return <div className="space-y-3">{parsed.output.map((difference, index) => <div key={`${difference.field}:${index}`} className="rounded-6 border border-border p-3">
-    <div className="text-sm font-medium">{difference.label}</div>
-    <div className="grid grid-cols-2 gap-3 text-xs text-fg-muted"><span>{t("inbox.contextBefore")}</span><span>{t("inbox.contextAfter")}</span></div>
-    <div className="grid grid-cols-2 gap-3"><ContextValue value={difference.left} /><ContextValue value={difference.right} /></div>
-    {difference.leftRecord || difference.rightRecord ? <div className="mt-2 space-y-1 border-t border-border-subtle pt-2">
+  return <ComparisonRows
+    fieldLabel={t("inbox.contextField")}
+    beforeLabel={t("inbox.contextBefore")}
+    afterLabel={t("inbox.contextAfter")}
+    rows={parsed.output.map((difference, index) => ({
+      key: `${difference.field}:${index}`,
+      label: difference.label,
+      before: <ContextValue value={difference.left} />,
+      after: <ContextValue value={difference.right} />,
+      changed: difference.changed,
+      details: difference.leftRecord || difference.rightRecord ? <div className="space-y-1 pt-2">
       <p className="text-xs font-medium text-fg-muted">{t("inbox.contextEvidence")}</p>
       {uniqueRecords([...(difference.leftRecord ? [difference.leftRecord] : []),
         ...(difference.rightRecord ? [difference.rightRecord] : [])])
         .map((ref) => <RecordLine key={`${ref.model}:${ref.id}`} record={ref} />)}
-    </div> : null}
-  </div>)}</div>;
+      </div> : undefined,
+    }))}
+  />;
 }
 
 function ReasonsContext({ value }: WidgetRenderProps): React.ReactElement {
