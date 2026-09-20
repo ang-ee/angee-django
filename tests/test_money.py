@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from types import SimpleNamespace
 from typing import Any
 
@@ -331,8 +331,8 @@ def test_context_is_validated_before_same_currency_identity(money_tables: None) 
         )
 
 
-def test_currency_rate_identity_and_precision_are_native_owned(money_tables: None) -> None:
-    """Ordinary saves cannot move a slot or silently round its value."""
+def test_currency_rate_identity_is_native_owned(money_tables: None) -> None:
+    """Ordinary saves and bulk writes cannot move a rate slot."""
 
     del money_tables
     eur = _make_currency("EUR")
@@ -359,14 +359,65 @@ def test_currency_rate_identity_and_precision_are_native_owned(money_tables: Non
         assert CurrencyRate.objects.bulk_update([rate], ["is_archived"]) == 1
     rate.refresh_from_db()
     assert rate.is_archived is False
-    rate.rate = Decimal("0.123456789012345678901")
-    with system_context(reason="money rate precision test"), pytest.raises(ValidationError):
-        rate.save(update_fields={"rate"})
-    with system_context(reason="money wide exact rate test"):
-        exact = CurrencyRate(
-            currency=eur,
-            date=date(2026, 1, 2),
-            rate=Decimal("123456789012345678.12345678901234567890"),
-        )
-        exact.save()
-    assert exact.rate == Decimal("123456789012345678.12345678901234567890")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "123456789012345678.12345678901234567890",
+        "123456789012345678.1234567890123456789000",
+        "100000000000000000.0000000000000000000000",
+        "0.0000000000000000000100",
+    ],
+)
+def test_currency_rate_accepts_exact_values_with_trailing_zeros(money_tables: None, value: str) -> None:
+    """Field validation ignores redundant zeros without rounding significant digits."""
+
+    del money_tables
+    eur = _make_currency("EUR")
+    rate = CurrencyRate(currency=eur, date=date(2026, 1, 1), rate=value)
+    with system_context(reason="money exact rate test"), localcontext(prec=6, Emax=9, Emin=-9):
+        rate.save()
+    assert rate.pk is not None
+    assert rate.rate.as_tuple() == Decimal(value).as_tuple()
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["create", "update"])
+@pytest.mark.parametrize(
+    ("value", "error_code"),
+    [
+        ("0.123456789012345678901", "max_decimal_places"),
+        ("123456789012345678.123456789012345678901", "max_digits"),
+        ("1E18", "max_whole_digits"),
+        ("1E39", "max_digits"),
+        ("1E-21", "max_decimal_places"),
+        ("1E1000000", "max_digits"),
+        ("1E-1000000", "max_digits"),
+    ],
+)
+def test_currency_rate_rejects_inexact_values_before_writing(
+    money_tables: None, value: str, error_code: str, existing: bool
+) -> None:
+    """Native field limits reject inserts and updates independently of Decimal context."""
+
+    del money_tables
+    eur = _make_currency("EUR")
+    rate = (
+        _make_rate(eur, date(2026, 1, 1), "0.9")
+        if existing
+        else CurrencyRate(currency=eur, date=date(2026, 1, 1))
+    )
+    rate.rate = Decimal(value)
+    with (
+        system_context(reason="money invalid rate test"),
+        localcontext(prec=6, Emax=9, Emin=-9),
+        pytest.raises(ValidationError) as error,
+    ):
+        rate.save(update_fields={"rate"} if existing else None)
+    assert [item.code for item in error.value.error_list] == [error_code]
+    with system_context(reason="money unchanged rate test"):
+        if existing:
+            rate.refresh_from_db()
+            assert rate.rate == Decimal("0.9")
+        else:
+            assert not CurrencyRate.objects.filter(currency=eur).exists()

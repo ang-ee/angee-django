@@ -22,7 +22,7 @@ the converted amount at the point that owns the business policy.
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import MAX_EMAX, MAX_PREC, MIN_EMIN, Context, Decimal
 from typing import Any
 
 from django.apps import apps
@@ -469,16 +469,12 @@ class CurrencyRate(
         alias = kwargs.get("using") or self._state.db or DEFAULT_DB_ALIAS
         with transaction.atomic(using=alias):
             self.date = self._meta.get_field("date").to_python(self.date)
-            self.rate = self._meta.get_field("rate").to_python(self.rate)
+            rate_field = self._meta.get_field("rate")
+            self.rate = rate_field.to_python(self.rate)
             self.source_priority = self._meta.get_field("source_priority").to_python(
                 self.source_priority
             )
-            if (
-                self.date is None
-                or self.rate is None
-                or not self.rate.is_finite()
-                or self.rate <= 0
-            ):
+            if self.date is None or self.rate is None or self.rate <= 0:
                 raise ValidationError(
                     "A currency rate requires a date and positive finite rate."
                 )
@@ -490,7 +486,10 @@ class CurrencyRate(
                 raise ValidationError(
                     "A currency rate requires a non-negative source priority."
                 )
-            _require_exact_rate_decimal(self)
+            normalized = self.rate.normalize(
+                Context(prec=MAX_PREC, Emax=MAX_EMAX, Emin=MIN_EMIN)
+            )
+            rate_field.run_validators(normalized)
             if self.pk is not None:
                 previous = type(self).system_queryset(
                     using=alias,
@@ -530,22 +529,6 @@ class CurrencyRate(
         """Return a readable label for Django displays."""
 
         return f"{self.currency_id}@{self.date}={self.rate}"
-
-
-def _require_exact_rate_decimal(row: models.Model) -> None:
-    """Reject a rate that the owning DecimalField would silently round or clamp."""
-
-    field = row._meta.get_field("rate")
-    quantum = Decimal(1).scaleb(-int(field.decimal_places))
-    try:
-        with localcontext() as context:
-            context.prec = int(field.max_digits) + 2
-            quantized = row.rate.quantize(quantum)
-    except InvalidOperation as error:
-        raise ValidationError("The currency-rate value exceeds native precision.") from error
-    integer_digits = max(0, quantized.adjusted() + 1)
-    if quantized != row.rate or integer_digits > int(field.max_digits) - int(field.decimal_places):
-        raise ValidationError("The currency-rate value is not exactly representable.")
 
 
 MoneyRole = role_anchor("money/role")
