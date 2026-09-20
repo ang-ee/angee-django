@@ -88,7 +88,20 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
     def request_settings(self, model_settings: ModelSettings | None) -> ModelSettings:
         """Map deployment keepalive and generation limits to the native SDK request."""
 
-        result = dict(super().request_settings(model_settings) or {})
+        requested = dict(model_settings or {})
+        raw_extra_body = requested.pop("extra_body", None)
+        if raw_extra_body is None:
+            caller_extra_body: dict[str, Any] = {}
+        elif isinstance(raw_extra_body, Mapping):
+            caller_extra_body = dict(raw_extra_body)
+        else:
+            raise ValueError("Ollama extra_body must be an object containing only keep_alive.")
+        unknown_extra_body = set(caller_extra_body) - {"keep_alive"}
+        if unknown_extra_body:
+            names = ", ".join(sorted(unknown_extra_body))
+            raise ValueError(f"Ollama request settings do not admit extra_body keys: {names}.")
+
+        result = dict(super().request_settings(cast(ModelSettings, requested)) or {})
         raw_limit = self._config_value("generation_limit")
         if raw_limit is not None:
             try:
@@ -107,11 +120,9 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
             or (isinstance(keep_alive, str) and not keep_alive.strip())
         ):
             raise ValueError("Ollama keep_alive must be a duration string or integer seconds.")
-        extra_body = dict(result.get("extra_body") or {})
-        if "keep_alive" in extra_body and extra_body["keep_alive"] != keep_alive:
+        if "keep_alive" in caller_extra_body and caller_extra_body["keep_alive"] != keep_alive:
             raise ValueError("Ollama keep_alive is owned by the inference provider deployment.")
-        extra_body["keep_alive"] = keep_alive
-        result["extra_body"] = extra_body
+        result["extra_body"] = {"keep_alive": keep_alive}
         return cast(ModelSettings, result)
 
     def _discovered_model_use(self) -> str:

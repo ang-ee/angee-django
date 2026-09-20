@@ -13,6 +13,7 @@ from pydantic import ValidationError as PydanticValidationError
 from pydantic_ai.messages import BinaryContent, ModelResponse, ToolCallPart
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.workflows.steps import TransientStepError
 from angee.workflows_extraction import service
 from angee.workflows_extraction.engines import (
     DocumentPart,
@@ -430,6 +431,37 @@ def test_inference_recognition_invalid_response_exposes_usage_delta() -> None:
 
     assert raised.value.stage == "recognition_response"
     assert raised.value.usage_delta == usage
+
+
+@pytest.mark.parametrize("operation", ["mapping", "recognition"])
+def test_inference_engine_preserves_retryable_provider_failures(operation: str) -> None:
+    """Provider 429s reach the workflow retry seam instead of becoming terminal pipeline errors."""
+
+    class RateLimitedError(RuntimeError):
+        status_code = 429
+
+    def infer(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RateLimitedError("provider throttled")
+
+    model = SimpleNamespace(
+        status="available",
+        model_use="multimodal" if operation == "recognition" else "chat",
+        infer=infer,
+    )
+    engine = InferenceMappingEngine()
+
+    with pytest.raises(TransientStepError, match="provider throttled"):
+        if operation == "recognition":
+            engine.recognize_page(_page(0, 0), model=model, config={}, timeout=5)
+        else:
+            engine.map_text_parts(
+                (DocumentPart(0, None, "text/plain", "native_text", "Invoice", "native", "hash"),),
+                SCHEMA,
+                model=model,
+                config={},
+                timeout=5,
+            )
 
 
 def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures() -> None:

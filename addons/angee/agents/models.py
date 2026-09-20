@@ -34,11 +34,12 @@ from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.output import OutputObjectDefinition
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
-from pydantic_ai.usage import RequestUsage
+from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import SubjectRef, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
 from angee.agents.backends import InferenceBackend
+from angee.agents.deployments import InferenceDeploymentIdentity
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
 from angee.base.fields import StateField
@@ -120,14 +121,20 @@ def inference_request_parameters(
     return ModelRequestParameters(function_tools=function_tools)
 
 
-def normalize_inference_usage(usage: RequestUsage) -> dict[str, int]:
-    """Project native one-request usage into the workflow budget vocabulary."""
+def normalize_inference_usage(usage: RequestUsage | RunUsage) -> dict[str, int]:
+    """Project native usage into every numeric workflow budget axis.
+
+    ``requests`` is retained deliberately: ``WorkflowRun.debit_budget`` and the
+    engine budget gate accept arbitrary top-level numeric axes, and both agent
+    sessions and extraction already account for provider request count.
+    """
 
     values = {
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
         "tokens": usage.total_tokens,
         "requests": usage.requests,
+        "tool_calls": usage.tool_calls if isinstance(usage, RunUsage) else 0,
     }
     return {key: int(value) for key, value in values.items() if value}
 
@@ -362,7 +369,7 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
 
         return self.provider.backend.model(self.provider_model_name, credential=credential)
 
-    def deployment_identity(self) -> dict[str, str]:
+    def deployment_identity(self) -> InferenceDeploymentIdentity:
         """Return the non-secret endpoint binding used by role approval policy."""
 
         provider = self.provider
@@ -671,6 +678,7 @@ class MCPTool(SqidMixin, AuditMixin, AngeeModel):
         """Return the tool's name."""
 
         return self.name
+
 
 class AgentManager(AngeeManager):
     """Manager owning service-user lifecycle for agent principals."""

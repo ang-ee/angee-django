@@ -559,12 +559,13 @@ def test_workflow_step_operations_are_registry_derived_and_admin_only(
     assert probe["idempotent"] is None
     assert probe["subject_declaration"] == "tests.workflow"
     assert "archive_probe" in by_key
-    assert by_key["agent"]["outcomes"] == [
+    assert by_key["infer"]["outcomes"] == [
         {"key": "completed", "label": "Completed", "description": ""},
         {"key": "failed", "label": "Failed", "description": ""},
     ]
-    assert by_key["agent"]["effect"] == "EXTERNAL"
-    assert by_key["agent"]["idempotent"] is False
+    assert by_key["infer"]["effect"] == "EXTERNAL"
+    assert by_key["infer"]["idempotent"] is False
+    assert by_key["infer"]["input_schema"]["required"] == ["model", "role", "request"]
     assert by_key["agent_session"]["selectable"] is False
 
 
