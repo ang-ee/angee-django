@@ -50,6 +50,7 @@ dependencies = [
   "django-choices-field>=4.0.0",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
+  "pydantic>=2.13",
   # ASGI server: serves the composed app and addon-contributed channels WebSocket
   # and HTTP mounts. uvicorn sends the ASGI lifespan that runs mount lifespans;
   # [standard] adds WebSocket and --reload support for dev.
@@ -119,7 +120,6 @@ addons = [
     "pydantic-ai-slim[anthropic]>=2.13",
     "pydantic-ai-slim[mcp]>=2.13",
     "pydantic-ai-slim[openai]>=2.13",
-    "pydantic>=2.13",
     "pyjwt[crypto]>=2.12",
     "pypdfium2>=4.30",
     "python-dateutil>=2.9",

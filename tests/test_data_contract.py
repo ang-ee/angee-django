@@ -1,22 +1,33 @@
 """Tests for the data-surface description contract without GraphQL producers."""
 
+from datetime import date
+from decimal import Decimal
+from uuid import UUID
+
+from django.db import models
+
 from angee.data.metadata import (
+    DataLinesMetadata,
+    DataQueryField,
+    DataQueryFilter,
     DataQueryIdentity,
+    DataQueryValueMap,
     DataResourceFieldMetadata,
     DataResourceMetadata,
     DataResourceQuery,
     DataResourceRoots,
     DataResourceSubtitleMetadata,
     DataResourceTypeNames,
-    _metadata_key,
     serialize_data_resources,
 )
 
 
 def test_final_resource_description_serializes_without_projection_types() -> None:
-    """The sole final neutral description retains its historical wire envelope."""
+    """The final declaration owns aliases and exclusions throughout the envelope."""
 
-    title_field = DataResourceFieldMetadata(name="title", kind="scalar", scalar="String")
+    title_field = DataResourceFieldMetadata(
+        name="title", kind="scalar", scalar="String", model_field_name="internal_title"
+    )
     status_field = DataResourceFieldMetadata(
         name="status",
         kind="enum",
@@ -24,7 +35,7 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
     )
 
     final = DataResourceMetadata(
-        model=None,
+        model=models.Model,
         model_label="catalog.item",
         resource_type=None,
         app_label="catalog",
@@ -36,6 +47,7 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         capabilities=("list", "detail", "create"),
         fields=(title_field, status_field),
         subtitle=DataResourceSubtitleMetadata(created="created_at", word_count="body.word_count"),
+        lines=DataLinesMetadata(field="items", model_label="catalog.line", fields=(title_field,)),
     )
 
     [wire] = serialize_data_resources((final,), schema_name="console")
@@ -59,12 +71,68 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         "changes": None,
     }
     assert wire["fields"][1]["requiredOnCreate"] is True
+    assert "modelFieldName" not in wire["fields"][0]
+    assert wire["subtitle"] == {"created": "created_at", "updated": None, "wordCount": "body.word_count"}
+    assert wire["linesResource"]["modelLabel"] == "catalog.line"
+    assert wire["linesResource"]["fields"] == [wire["fields"][0]]
+    assert wire["linesResource"]["defaults"] == {}
+    assert wire["aggregateFields"] == []
+    assert wire["query"]["axes"] == {}
+    assert wire["query"]["sort"] == {"default": []}
     assert {"model", "contributors", "nodeType", "filterType", "orderType"}.isdisjoint(wire)
 
 
-def test_metadata_keys_match_the_historical_envelope_casing() -> None:
-    """Envelope field names use the contract's stable camelCase conversion."""
+def test_resource_query_values_use_native_json_serialization() -> None:
+    """Nested declarations use aliases while arbitrary value keys remain unchanged."""
 
-    assert _metadata_key("model_label") == "modelLabel"
-    assert _metadata_key("delete_preview_name") == "deletePreviewName"
-    assert _metadata_key("already") == "already"
+    final = DataResourceMetadata(
+        model=None,
+        model_label="catalog.item",
+        resource_type=None,
+        app_label="catalog",
+        model_name="item",
+        query=DataResourceQuery(
+            identity=DataQueryIdentity("public_id"),
+            fields={
+                "created_at": DataQueryField(
+                    kind="scalar",
+                    filter=DataQueryFilter(
+                        field="created_at",
+                        operators=("eq",),
+                        scalar="Date",
+                        value_map=(
+                            DataQueryValueMap(
+                                from_value={
+                                    "booked_on": date(2026, 9, 20),
+                                    "amount": Decimal("12.50"),
+                                    "record_ids": (UUID("00000000-0000-0000-0000-000000000001"),),
+                                },
+                                to_value=False,
+                            ),
+                            DataQueryValueMap(from_value=None, to_value=0),
+                        ),
+                    ),
+                ),
+            },
+        ),
+        roots=DataResourceRoots(),
+        type_names=DataResourceTypeNames(),
+    )
+
+    wire = final.as_wire(schema_name="console")
+
+    assert wire["query"]["identity"] == {"field": "public_id"}
+    [field_name] = wire["query"]["fields"]
+    assert field_name == "created_at"
+    assert wire["query"]["fields"][field_name]["filter"]["valueMap"] == [
+        {
+            "from": {
+                "booked_on": "2026-09-20",
+                "amount": "12.50",
+                "record_ids": ["00000000-0000-0000-0000-000000000001"],
+            },
+            "to": False,
+        },
+        {"from": None, "to": 0},
+    ]
+    assert wire["linesResource"] is None

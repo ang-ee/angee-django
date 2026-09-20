@@ -15,7 +15,7 @@ Dependency changes must update this file in the same change.
   addon's `addon.toml` owns that addon's dependencies; `angee build` projects the
   composed manifests into the host's generated `[dependency-groups].addons` key.
   `uv.lock` pins the resolved Python graph. The `angee.graphql` folder addon's
-  manifest owns its Strawberry stack, Pydantic, Channels Redis adapter, and exact
+  manifest owns its Strawberry stack, Channels Redis adapter, and exact
   Strawberry fork reference. REBAC, Hasura and aggregates use published release
   floors in their owning manifests and registry artifacts in `uv.lock`. The
   Strawberry fork remains necessary for native input/object extensions.
@@ -42,7 +42,7 @@ Dependency changes must update this file in the same change.
 | python-stdnum >= 2.2 | International VAT, IBAN, BIC/SWIFT, and other identifier normalization and checksums | Accounting models select the country-specific validator and enforce cross-field identity rules |
 | strawberry-django-aggregates >= 0.12.0 | Aggregation, JSON-path grouping, canonical group naming/type helpers, caller-owned to-one group expressions, group key encoders and exact grouped cardinality | Declarative dimensions/measures, public-ID key encoding and actor-scoped related-axis expressions |
 | strawberry-django-hasura >= 0.11.0 | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`, exact `Decimal` filters, nested to-one filter paths, nested to-many `NestedInsert`), resource-local lookup types, declared queryset sort aliases with lazy expression preparation from resolved ordering and stable paging ties, named generated resource members, request-bound grouped-expression providers, exact grouped-count roots, plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`, incl. actor-safe related grouping and `lines=` editable-child nested inserts) and the pydantic computed-source emitter (`hasura_pydantic_resource`); finalizes one `DataResourceQuery` from the composed schema and executable capabilities, consumed by `@angee/metadata`'s `ResourceQuery` |
-| pydantic | Typed model validation/parsing | Row-shape SSOT for computed (non-model) Hasura resources — the node + filter scalars derive from the pydantic model (`hasura_pydantic_resource`) |
+| pydantic >= 2.13 | Typed declaration defaults, validation/parsing and JSON serialization; a core wheel dependency | `ImplBase` derives config defaults and FormSpec from one typed declaration; `angee.data.metadata` declares the resource envelope's aliases and exclusions; computed (non-model) Hasura node and filter scalars derive from the Pydantic model (`hasura_pydantic_resource`) |
 | jsonschema | Draft 2020-12 validation | `workflows_extraction` validates declared and merged evidence; native `workflows` validates frozen tagged Decision actions, branches, and typed context |
 | defusedxml | Bounded, hardened XML parsing | `workflows_extraction` detects structured invoice carriers without enabling external entities, DTD expansion, or network retrieval |
 | pypdfium2 + Pillow | Native PDF text extraction, bounded PDF rasterization, and image normalization | `workflows_extraction` retains text layers directly and turns only scanned pages/images into ordered, capped JPEG recognition inputs |

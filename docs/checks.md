@@ -73,7 +73,6 @@ They are distinct lifecycle operations, not a mandatory sequence for every task:
 | Purpose | Command | Prerequisite / effect |
 |---|---|---|
 | Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/compose/management/commands/angee.py) defines ordering and options |
-| Prepare explicitly reset migration history | `uv run manage.py angee provision --fresh-history` | Empty database only; after generating final-model initial leaves, records audited historical declarations and executes unmarked operational declarations before migration |
 | Build composed runtime | `uv run manage.py angee build` | Updates generated runtime and host dependency declarations and materializes pending addon migrations |
 | Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts/dependency projection/migration history; Django bootstrap can repair runtime sources before dispatch |
 | Author schema migrations | `uv run manage.py makemigrations <app-labels>` | After composition; preserves existing migration history |

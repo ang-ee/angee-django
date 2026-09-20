@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.addons import addon_manifest
+from angee.addons import addon_manifest, order_app_dependencies
 
 
 class AppGraph:
@@ -81,29 +81,14 @@ class AppGraph:
             if config.name in expanded:
                 return
             expanded.add(config.name)
-            for dependency in dependencies_by_name[config.name]:
+            for dependency in sorted(dependencies_by_name[config.name]):
                 dependency_name = aliases.get(dependency, dependency)
                 dependency_config = app_configs_by_name.get(dependency_name)
                 if dependency_config is None:
                     dependency_config = create_app_config(dependency_name, owner=config)
                     dependency_config = app_configs_by_name.get(dependency_config.name) or register(dependency_config)
+                aliases[dependency] = dependency_config.name
                 include_dependencies(dependency_config)
-
-        def visit_app(name: str, *, ordered: list[AppConfig], visiting: set[str], visited: set[str]) -> None:
-            if name in visited:
-                return
-            if name in visiting:
-                raise ImproperlyConfigured(f"Cycle in app dependencies at {name}")
-            visiting.add(name)
-            config = app_configs_by_name[name]
-            for dependency in sorted(dependencies_by_name[config.name]):
-                dependency_name = aliases.get(dependency)
-                if dependency_name is None:
-                    raise ImproperlyConfigured(f"{config.name} depends on unknown app {dependency!r}")
-                visit_app(dependency_name, ordered=ordered, visiting=visiting, visited=visited)
-            visiting.remove(name)
-            visited.add(name)
-            ordered.append(config)
 
         for root in roots:
             config = root if isinstance(root, AppConfig) else create_app_config(aliases.get(root, root))
@@ -111,28 +96,20 @@ class AppGraph:
             if config.name in seen_root_names:
                 raise ImproperlyConfigured(f"Duplicate root app {config.name!r}")
             seen_root_names.add(config.name)
-            if config.name in app_configs_by_name:
-                root_names.append(config.name)
-                if declared is None or declaration in declared:
-                    root_name_set.add(config.name)
-                    root_declarations[config.name] = declaration
-                continue
             root_name = register(config).name
             root_names.append(root_name)
             if declared is None or declaration in declared:
                 root_name_set.add(root_name)
                 root_declarations[root_name] = declaration
 
-        for name in tuple(root_names):
+        for name in root_names:
             include_dependencies(app_configs_by_name[name])
 
-        ordered: list[AppConfig] = []
-        visiting: set[str] = set()
-        visited: set[str] = set()
-        for name in root_names:
-            visit_app(name, ordered=ordered, visiting=visiting, visited=visited)
-        for name in sorted(app_configs_by_name):
-            visit_app(name, ordered=ordered, visiting=visiting, visited=visited)
+        try:
+            ordered_names = order_app_dependencies(root_names, dependencies_by_name, aliases=aliases)
+        except RuntimeError as error:
+            raise ImproperlyConfigured(str(error)) from error
+        ordered = tuple(app_configs_by_name[name] for name in ordered_names)
 
         depended_upon: set[str] = set()
         for config in ordered:
@@ -142,4 +119,4 @@ class AppGraph:
             config.angee_addon_root = config.name in root_name_set
             config.angee_root_declaration = root_declarations.get(config.name)
             config.angee_forced = config.name in depended_upon
-        return tuple(ordered)
+        return ordered
