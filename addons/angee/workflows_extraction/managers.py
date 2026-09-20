@@ -11,7 +11,6 @@ from django.db import DEFAULT_DB_ALIAS, IntegrityError, models, transaction
 from rebac import system_context
 
 from angee.base.authority import TransactionBoundAuthority
-from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.writes import ImmutableEvidenceQuerySet as BaseImmutableEvidenceQuerySet
 from angee.workflows.attempts import json_values_equal
@@ -83,11 +82,6 @@ class ImmutableEvidenceQuerySet(
         del objects
         if not evidence_insert_allowed(self.db) or ignore_conflicts or update_conflicts:
             raise ValueError("Extraction evidence can only be inserted by the retention owner.")
-
-    def validate_evidence_update(self, values: Mapping[str, Any]) -> bool:
-        """Allow only the framework audit-owner's nullification update."""
-
-        return AuditMixin.is_audit_nullification(values)
 
 
 ImmutableEvidenceManager: Any = AngeeManager.from_queryset(ImmutableEvidenceQuerySet)

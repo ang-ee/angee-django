@@ -771,6 +771,29 @@ and current contracts before applying a historical example to a new deployment.
   from models. Raw SQL is not a supported business-write path. On encountering
   existing trigger machinery, delete it and move the rule to its Django owner
   in the same change.
+- **Manager-owned writes compose the framework write fence.** A
+  `WriteFencedModel` declares its `WriteFence` and only the domain facts that
+  differ: `is_write_fenced(operation, values)` for conditional instance
+  writes, `write_fence_error(operation)` for operation-specific errors,
+  `validate_write_fence(...)` for exact-token policy, and
+  `validate_queryset_write_fence(...)` for queryset policy. `WriteFence.scope`
+  requires successful work to consume its token; callers do not assert
+  consumption. Every concrete manager, including the collector's base manager,
+  must preserve `WriteFencedQuerySetMixin` (`angee.E019`). Foreign keys declared
+  on a fenced model cannot use `CASCADE` or `SET_DEFAULT` (`angee.E020`): the
+  collector applies those operations through `delete_batch` / `update_batch`,
+  bypassing every model and queryset hook; evaluated instance-list updates also
+  use raw `update_batch`. `SET_NULL` and `SET(...)` are lazy on Django 6.0 and
+  call `queryset.update(...)` through the fenced base manager, so they remain
+  explicit policy choices; the framework admits
+  `AuditMixin.created_by` / `updated_by` nullification there so deleting an actor
+  preserves audited rows. A `GenericRelation` declared on another model remains
+  a mechanical-check gap: it can cascade into fenced generic-foreign-key rows
+  through `delete_batch`, but exposes no `on_delete` for `angee.E020` to inspect.
+  `django-zed-rebac` registers a sender-less `pre_delete` receiver, so in this
+  stack Django's collector never takes the fast path and never reaches
+  `_raw_delete`; direct `_raw_delete` calls remain fenced. Never replace these
+  contracts with a database trigger.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.
