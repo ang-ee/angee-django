@@ -3,6 +3,7 @@ import { Alert, Badge, Button, Dialog, Glyph, LoadingPanel } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import type { AddonChangePreviewData } from "../documents";
+import { addonDisplayLabel } from "../lib/rows";
 
 export type AddonChangeAction = "INSTALL" | "DISABLE";
 type AddonChangeImpact = AddonChangePreviewData["addons_to_enable"][number];
@@ -127,7 +128,7 @@ function AddonImpactItem({ addon }: { addon: AddonChangeImpact }): ReactElement 
   return (
     <li className="flex items-center justify-between gap-2 rounded-6 border border-border-subtle px-3 py-2">
       <span className="min-w-0">
-        <span className="block truncate font-medium text-fg">{addon.label}</span>
+        <span className="block truncate font-medium text-fg">{addonDisplayLabel(addon.label, addon.name)}</span>
         <span className="block truncate text-12 text-fg-muted">{addon.name}</span>
         {addon.depends_on.length ? (
           <span className="block truncate text-12 text-fg-muted">

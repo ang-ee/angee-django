@@ -104,6 +104,28 @@ Django accepts `AppConfig` instances in `INSTALLED_APPS`, so app loading uses th
 same config objects the composer already resolved instead of resolving strings a
 second time.
 
+### Addon Discovery
+
+Catalogue discovery keeps hatch-angee's native manifests paired with their
+`importlib.metadata.EntryPoint` or local `Path` origins in
+[`available_addons()`](../angee/addons.py). Installed lookup uses `find_spec()`,
+which can import parent packages; only filesystem `discover()` belongs in the
+import-free dependency bootstrap. Neither path populates Django's app registry.
+When an available local or installed addon needs identity, `resolve_app_config()`
+reuses the loaded config or delegates the actual app declaration to Django's
+factory. Constructing a disabled config preserves its declared label without
+enabling it or calling `ready()`. Unresolved available candidates and remote VCS
+entries retain `label=""`, with the canonical name as their display fallback.
+Remote entries do not resolve or import the named app: a matching local package
+cannot establish the remote declaration's Django identity.
+
+[`platform.Addon`](../addons/angee/platform/models.py) owns the persisted
+catalogue projection. Its `depends_on` always records declared direct manifest
+dependencies, including disabled and remote entries and the last known
+declaration for removed rows. Its `depended_by` projection includes disabled
+declarers from the available catalogue as well as loaded apps. The loaded
+composition graph owns forced dependencies and disable admission.
+
 ## Autoconfig
 
 After `INSTALLED_APPS` is resolved, `Composer` applies optional app settings

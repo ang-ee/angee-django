@@ -5,6 +5,11 @@ import type {
   PlatformModelData,
 } from "../documents";
 
+/** Display the native Django label, or the canonical name while identity is unknown. */
+export function addonDisplayLabel(label: string, name: string): string {
+  return label || name;
+}
+
 export function modelGraphNodes(
   models: readonly PlatformModelData[],
   highlightId?: string | null,

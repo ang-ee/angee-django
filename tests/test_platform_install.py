@@ -9,7 +9,7 @@ reflection table the way the composed console does:
   compose on the next boot) and the in-process reconcile flips its reflected row to
   ``pending``;
 - disable removes the root;
-- a ``forced`` (depended-on) addon refuses disable, leaving the file untouched;
+- an addon required by the loaded graph refuses disable regardless of catalogue state;
 - a non-admin actor is denied by the REBAC gate.
 """
 
@@ -209,6 +209,13 @@ def test_preview_revision_binds_every_change_decision() -> None:
         ),
         revision(
             "INSTALLED_APPS: []\n",
+            (AddonManifest(name="example.demo", description="original", depends_on=("example.dependency",)),),
+            action="install",
+            addon="example.demo",
+            roots_after=("example.demo",),
+        ),
+        revision(
+            "INSTALLED_APPS: []\n",
             (manifest,),
             action="install",
             addon="example.demo",
@@ -263,28 +270,59 @@ def test_disable_removes_the_root(
     assert _AVAILABLE_ADDON not in project_settings_yaml.read_text(encoding="utf-8")
 
 
-def test_disable_refuses_a_forced_addon(
+@pytest.mark.parametrize("persisted_forced", [True, False, None])
+def test_disable_refuses_an_addon_required_by_the_loaded_graph(
     platform_tables: None,
     project_settings_yaml: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    persisted_forced: bool | None,
 ) -> None:
-    """A forced (depended-on) reflection row refuses disable; the file is untouched."""
+    """The loaded dependency graph refuses disable even with a stale or absent row."""
 
     del platform_tables
     admin = _platform_admin("forced-admin")
-    # The reflection table is system-synced; mark a row forced (the composer derives
-    # this in production) to exercise the resolver's refusal.
-    with system_context(reason="test.platform.forced.seed"):
-        Addon.objects.update_or_create(
-            name="angee.iam",
-            defaults={"forced": True, "state": Addon.State.ENABLED},
-        )
+    monkeypatch.setattr(apps.get_app_config("iam"), "angee_forced", True, raising=False)
+    if persisted_forced is not None:
+        with system_context(reason="test.platform.forced.seed"):
+            Addon.objects.update_or_create(
+                name="angee.iam",
+                defaults={"forced": persisted_forced, "state": Addon.State.ENABLED},
+            )
     before = project_settings_yaml.read_text(encoding="utf-8")
 
     result = _data(_execute(_schema(), _DISABLE, {"addon": "angee.iam"}, user=admin))["disable"]
 
     assert result["ok"] is False
     assert "cannot be disabled" in result["message"]
+    assert "angee.platform" in result["message"]  # a dependant from the loaded manifest
     assert project_settings_yaml.read_text(encoding="utf-8") == before  # refusal never edits
+
+
+def test_disable_ignores_stale_catalogue_dependency_flags(
+    platform_tables: None,
+    project_settings_yaml: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale forced row and catalogue reverse edges cannot block a free loaded root."""
+
+    del platform_tables
+    admin = _platform_admin("stale-forced-admin")
+    monkeypatch.setattr(apps.get_app_config("platform"), "angee_forced", False, raising=False)
+    with system_context(reason="test.platform.stale-forced.seed"):
+        Addon.objects.update_or_create(
+            name="angee.platform",
+            defaults={
+                "forced": True,
+                "depended_by": ["example.disabled"],
+                "state": Addon.State.ENABLED,
+            },
+        )
+
+    result = _data(_execute(_schema(), _DISABLE, {"addon": "angee.platform"}, user=admin))["disable"]
+
+    assert result["ok"] is True
+    assert "Disabled" in result["message"]
+    assert "angee.platform" not in project_settings_yaml.read_text(encoding="utf-8")
 
 
 def test_install_denies_a_non_admin(

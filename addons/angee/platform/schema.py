@@ -1,9 +1,9 @@
 """GraphQL introspection surface for the Angee platform console.
 
 One read-only console query reflects the runtime back to platform admins:
-``platformExplorer`` reads addon detail from the persistent catalogue and walks
-the Django app registry for concrete models, fields, and relation edges. It rolls
-up each addon's import-ledger count. The ledger *listing* itself is owned by the
+``platformExplorer`` reads addon detail and reconciled resource counts from the
+persistent catalogue and walks the Django app registry for concrete models,
+fields, and relation edges. The ledger *listing* itself is owned by the
 ``resources`` addon (``resources.resourceLedger``), which contributes its own
 section into the platform console. Reads here are gated on ``read`` over the
 table-less ``platform/explorer`` anchor (``permissions.zed``). The platform addon
@@ -298,6 +298,7 @@ class AddonNode:
     table is system-synced (``post_migrate``), so this resource is read-only.
     """
 
+    name: auto
     label: auto
     namespace: auto
     description: auto
@@ -322,7 +323,7 @@ class AddonNode:
     def id(self) -> str:
         """Return the addon name as the row identity."""
 
-        return self.name  # type: ignore[attr-defined]
+        return self.name
 
 
 # Read is gated by the model's own ``platform/addon`` REBAC scope (const-backed
@@ -335,6 +336,7 @@ _ADDON_RESOURCE = hasura_model_resource(
     model_label="platform.Addon",
     public_id_field="id",
     filterable=[
+        "name",
         "label",
         "namespace",
         "category",
@@ -347,7 +349,7 @@ _ADDON_RESOURCE = hasura_model_resource(
         "field_count",
         "resource_count",
     ],
-    sortable=["label", "namespace", "category", "kind", "state", "model_count", "field_count", "resource_count"],
+    sortable=["name", "namespace", "category", "kind", "state", "model_count", "field_count", "resource_count"],
     aggregatable=["id"],
     groupable=["namespace", "category", "kind", "source", "state", "forced", "pending"],
     insert=False,
@@ -474,14 +476,10 @@ _IMPLEMENTATION_RESOURCE = hasura_pydantic_resource(
 
 @strawberry.type
 class AddonInstallMutation:
-    """Install/disable an addon by editing ``settings.yaml``'s ``INSTALLED_APPS``.
+    """Dispatch admin-authorized changes to the addon manager's reviewed plan.
 
-    Thin admin-gated edge over :class:`~angee.platform.models.AddonManager`, which owns
-    the whole flow — validate the target, edit the one install source (``settings.yaml``)
-    through the :class:`~angee.platform.installer.AddonInstaller`, refuse a forced
-    (depended-on) addon, and re-run the reflection reconcile so the board shows the new
-    ``pending`` state at once (the addon itself composes on the next ``angee dev`` boot).
-    These resolvers only dispatch and relay the result's ``ok``/``summary``.
+    The manager owns loaded-graph admission, settings edits and reconciliation.
+    These resolvers only relay its outcome.
     """
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
