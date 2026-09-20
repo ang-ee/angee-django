@@ -46,7 +46,6 @@ INSTALLED_APPS = [
     "angee.workflows",
     "angee.workflows_agents",
     "angee.workflows_parties",
-    "angee.workflows_integrate",
     "angee.workflows_extraction",
     "angee.knowledge",
     "angee.mcp",
@@ -168,9 +167,6 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "call_workflow": "angee.workflows.steps.CallWorkflow",
     "infer": "angee.workflows_agents.steps.InferStepImpl",
     "agent_session": "angee.workflows_agents.steps.AgentSessionStepImpl",
-    "archive_probe": "angee.workflows_integrate.steps.ArchiveProbeStepImpl",
-    "archive_gate": "angee.workflows_integrate.steps.ArchiveGateStepImpl",
-    "archive_execute": "angee.workflows_integrate.steps.ArchiveExecuteStepImpl",
     "parties_dedupe_scan": "angee.workflows_parties.steps.DedupeScanStepImpl",
     "parties_identity_review": "angee.workflows_parties.steps.IdentityReviewStepImpl",
     "parties_identity_apply": "angee.workflows_parties.steps.IdentityApplyStepImpl",
@@ -184,19 +180,11 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
 }
 ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
 ANGEE_EXTRACTION_ENGINE_CLASSES = {
-    "none": "angee.workflows_extraction.engines.NoExtractionEngine",
     "inference": "angee.workflows_extraction.engines.InferenceMappingEngine",
-    "fake": "tests.extraction_engines.FakePageExtractionEngine",
     "fake_document": "tests.extraction_engines.FakeDocumentEngine",
 }
 ANGEE_EXTRACTION_MAX_BYTES = 25 * 1024 * 1024
-ANGEE_EXTRACTION_MAX_PAGES = 10
-ANGEE_EXTRACTION_MAX_EDGE = 3500
-ANGEE_EXTRACTION_DPI = 200
 ANGEE_EXTRACTION_TIMEOUT_SECONDS = 120
-ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES = {
-    "fixture_archive": "tests.test_workflows_integrate.FixtureArchiveExtractor",
-}
 ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
     "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",
 }
@@ -233,7 +221,6 @@ ANGEE_OAUTH_PROVIDER_TYPES = {
     "generic_oidc": "angee.iam_integrate_oidc.providers.GenericOidc",
     "google": "angee.iam_integrate_oidc.providers.GoogleType",
 }
-ANGEE_CREDENTIAL_DISCONNECT_GUARDS = ("angee.iam_integrate_oidc.identity.guard_last_sign_in_disconnect",)
 ANGEE_WORK_MERGE_CONTRIBUTORS = ("angee.intake.merge.move_task_needs",)
 # Bare tests run Django's per-process LocMem cache. Production OAuth redirects
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.

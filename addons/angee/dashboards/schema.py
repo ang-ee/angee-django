@@ -187,10 +187,6 @@ def _summary_offset(user: Any, version: str, cursor: str | None) -> int:
     return offset
 
 
-def _snapshot(dashboard: Any) -> dict[str, Any]:
-    return cast(dict[str, Any], dashboard.snapshot())
-
-
 def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
     return DashboardPayload(
         status=status,
@@ -198,7 +194,7 @@ def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
         revision=dashboard.revision,
         name=dashboard.name,
         description=dashboard.description,
-        snapshot=cast(JSON, _snapshot(dashboard)),
+        snapshot=cast(JSON, dashboard.snapshot()),
         can_edit=dashboard.has_access("write"),
         can_reset=dashboard.scope != "personal" and dashboard.has_access("reset"),
         can_archive=dashboard.scope == "personal" and dashboard.has_access("archive"),
@@ -423,7 +419,7 @@ class DashboardMutation:
             name=name,
             client_creation_key=client_creation_key,
         )
-        snapshot = _snapshot(source)
+        snapshot = source.snapshot()
         duplicated_widgets = []
         for index, widget in enumerate(snapshot["widgets"]):
             if widget["isArchived"]:

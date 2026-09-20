@@ -52,7 +52,7 @@ def pairing_graphql(
             {"name": name, "kwargs": kwargs, "queue": queue, "expires": expires}
         ),
     )
-    monkeypatch.setattr("angee.integrate.tasks.bridge_models", lambda _base: (Channel,))
+    monkeypatch.setattr("angee.integrate.tasks.models_with", lambda *, base: (Channel,))
     return sent
 
 

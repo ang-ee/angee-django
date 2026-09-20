@@ -226,12 +226,12 @@ def test_resource_republication_preserves_omitted_same_impl_config_until_explici
 
     steps_path.write_text(steps_path.read_text().replace(
         "      step_class: agent_session\n      config: {}\n",
-        "      step_class: archive_probe\n",
+        "      step_class: parties_dedupe_scan\n",
         1,
     ))
     edges_path = Path(owner.path) / "resources" / "demo" / "102_workflows.edge.yaml"
     edges_path.write_text(edges_path.read_text().replace(
-        "      condition: needs_review\n", "      condition: recognized\n", 1,
+        "      condition: needs_review\n", "      condition: found\n", 1,
     ))
     WorkflowResourceLedger.objects.load_addons(
         (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True,
@@ -239,7 +239,7 @@ def test_resource_republication_preserves_omitted_same_impl_config_until_explici
     with system_context(reason="test changed implementation config reset"):
         draft.refresh_from_db()
         entry = draft.steps.get(key="entry")
-        assert entry.step_class == "archive_probe"
+        assert entry.step_class == "parties_dedupe_scan"
         assert entry.config == {}
 
 

@@ -1,11 +1,55 @@
-"""OIDC login fields contributed onto ``integrate.OAuthClient``."""
+"""OIDC login policy contributed onto OAuth clients and credentials."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django.db import models
+from rebac import system_context
+
+from angee.iam_integrate_oidc.errors import ONLY_SIGN_IN_METHOD, IdentityFlowError
+from angee.integrate.credentials import CredentialKind
+
+if TYPE_CHECKING:
+    from angee.integrate.models import Credential
+
+
+class CredentialOidc(models.Model):
+    """Prevent explicit disconnect from removing the user's last sign-in method."""
+
+    extends = "integrate.Credential"
+
+    class Meta:
+        """Abstract behavior contributed to the native credential model."""
+
+        abstract = True
+
+    def check_disconnect(self) -> None:
+        """Keep a passwordless user's final OIDC account linked."""
+
+        super().check_disconnect()
+        credential = cast("Credential", self)
+        if credential.kind != CredentialKind.OAUTH:
+            return
+        oauth_client = credential.oauth_client
+        if oauth_client is None or not oauth_client.login_enabled or credential.user.has_usable_password():
+            return
+        with system_context(reason="iam_integrate_oidc.unlink.guard"):
+            account_count = (
+                type(credential)
+                .objects.filter(
+                    user=credential.user,
+                    kind=CredentialKind.OAUTH,
+                    oauth_client__login_enabled=True,
+                    external_account__isnull=False,
+                )
+                .values("external_account_id")
+                .distinct()
+                .count()
+            )
+        if account_count <= 1:
+            raise IdentityFlowError(ONLY_SIGN_IN_METHOD, 409)
 
 
 class OAuthClientOidc(models.Model):

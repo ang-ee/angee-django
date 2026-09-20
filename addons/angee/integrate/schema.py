@@ -46,13 +46,13 @@ from angee.iam.permissions import request_from_info as _request
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
-from angee.integrate.credentials import handler_for
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import Bridge, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.queue import queue_bridge_sync
-from angee.integrate.registry import bridge_models
+from angee.integrate.registry import models_with
 
 logger = logging.getLogger(__name__)
 
@@ -667,7 +667,7 @@ def _credential_material(data: CredentialInput) -> dict[str, str]:
     """Read the secret(s) the kind's handler names out of the discriminated input."""
 
     material: dict[str, str] = {}
-    for field in handler_for(data.kind).input_material_fields():
+    for field in CredentialKind(data.kind).handler.input_material_fields():
         if not hasattr(data, field):
             raise ValueError(f"Cannot create a credential of kind {data.kind!r}.")
         material[field] = getattr(data, field)
@@ -1008,10 +1008,10 @@ class ConnectionMutation:
     ) -> UnlinkAccountResult:
         """Remove this session user's credential link to an external account.
 
-        ``Credential.objects.check_disconnect`` runs installed guards before the
-        credential is deleted; the login addon, when installed, vetoes removing a
-        user's last sign-in account by raising an :class:`OAuthFlowError`, surfaced
-        here as a typed error rather than a 500.
+        ``Credential.check_disconnect()`` validates the model invariant before
+        deletion. The login addon's model contribution vetoes removing a user's
+        last sign-in account by raising an :class:`OAuthFlowError`, surfaced here
+        as a typed error rather than a 500.
         """
 
         user = _session_user(info)
@@ -1494,7 +1494,7 @@ class IntegrationActionMutation:
         queued = 0
         with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
             now = timezone.now()
-            for model in bridge_models(Bridge):
+            for model in models_with(base=Bridge):
                 for bridge in model._default_manager.filter(pk=integration.pk).order_by("pk"):
                     queue_bridge_sync(bridge, now=now)
                     queued += 1

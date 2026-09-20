@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import io
 from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
-from PIL import Image
 from pydantic import ValidationError as PydanticValidationError
 from pydantic_ai.messages import BinaryContent, ModelResponse, ToolCallPart
 
@@ -32,7 +30,6 @@ from angee.workflows_extraction.steps import (
     RecognizePageStepImpl,
 )
 from tests.conftest import SchemaAddon
-from tests.extraction_engines import FakePageExtractionEngine
 from tests.extraction_models import Extraction as _Extraction  # noqa: F401 - registers composed test models.
 from tests.test_agents import InferenceModel as _InferenceModel  # noqa: F401 - registers composed test models.
 
@@ -234,13 +231,6 @@ def test_message_part_source_requires_actor_read_access() -> None:
 
     with pytest.raises(PermissionDenied, match="every extraction source"):
         service._authorize((), (denied,), target, actor=actor)
-
-
-def test_fake_engine_addresses_pages_by_source_and_page_without_collisions() -> None:
-    engine = FakePageExtractionEngine()
-    config = {"page_results": {"0:1": {"number": "first"}, "1:0": {"number": "second"}}}
-    assert engine.extract_page(_page(0, 1), SCHEMA, model=None, config=config, timeout=1).value == {"number": "first"}
-    assert engine.extract_page(_page(1, 0), SCHEMA, model=None, config=config, timeout=1).value == {"number": "second"}
 
 
 def test_schema_owner_requires_object_root() -> None:
@@ -488,67 +478,16 @@ def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures(
     assert (empty.value.stage, empty.value.code) == ("acquisition", "empty_source")
 
 
-@pytest.mark.parametrize("kind", ["text", "scan", "structured"])
-def test_inference_document_pipeline_uses_native_evidence_before_model_mapping(kind):
-    if kind == "text":
-        content, mime = b"Invoice DOC-1", "text/plain"
-    elif kind == "scan":
-        stream = io.BytesIO()
-        Image.new("RGB", (32, 32), "white").save(stream, format="PNG")
-        content, mime = stream.getvalue(), "image/png"
-    else:
-        content = (
-            b'<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" '
-            b'xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">'
-            b"<cbc:ID>DOC-1</cbc:ID></Invoice>"
-        )
-        mime = "application/xml"
-    calls: list[dict[str, object]] = []
-
-    def inference_response(messages, **kwargs):
-        calls.append({"messages": messages, **kwargs})
-        response = SimpleNamespace(
-            text="Invoice DOC-1" if kwargs.get("images") else '{"number":"DOC-1"}',
-            provider_response_id="response-1",
-            finish_reason="stop",
-        )
-        return response, {"input_tokens": 2, "output_tokens": 1, "tokens": 3, "requests": 1}
-
-    model = SimpleNamespace(status="available", model_use="chat", infer=inference_response)
-    recognizer = SimpleNamespace(
-        status="available",
-        model_use="multimodal",
-        infer=inference_response,
-    )
-    result = InferenceMappingEngine().extract_document(
-        (DocumentSource(0, "a" * 64, mime, content),),
-        SCHEMA,
-        model=model,
-        recognition_model=recognizer,
-        config={},
-        timeout=10,
-    )
-    assert result.value == {"number": "DOC-1"}
-    assert len(calls) == (2 if kind == "scan" else 1)
-    assert calls[-1]["output_schema"] == SCHEMA
-    assert result.parts[0].kind == {"text": "native_text", "scan": "recognized_text", "structured": "structured"}[kind]
-    if kind == "scan":
-        assert calls[0]["images"]
-    else:
-        assert "images" not in calls[0]
-
-
 def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_vendor_error():
     def fail(*args, **kwargs):
         raise RuntimeError("private vendor response")
 
     model = SimpleNamespace(status="available", model_use="chat", infer=fail)
     with pytest.raises(DocumentPipelineError) as failure:
-        InferenceMappingEngine().extract_document(
-            (DocumentSource(0, "b" * 64, "text/plain", b"Invoice DOC-1"),),
+        InferenceMappingEngine().map_text_parts(
+            (DocumentPart(0, None, "text/plain", "native_text", "Invoice DOC-1", "native", "b" * 64),),
             SCHEMA,
             model=model,
-            recognition_model=None,
             config={},
             timeout=10,
         )

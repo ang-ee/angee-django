@@ -558,7 +558,6 @@ def test_workflow_step_operations_are_registry_derived_and_admin_only(
     assert probe["effect"] == "UNKNOWN"
     assert probe["idempotent"] is None
     assert probe["subject_declaration"] == "tests.workflow"
-    assert "archive_probe" in by_key
     assert by_key["infer"]["outcomes"] == [
         {"key": "completed", "label": "Completed", "description": ""},
         {"key": "failed", "label": "Failed", "description": ""},

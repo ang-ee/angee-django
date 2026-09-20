@@ -25,6 +25,7 @@ from rebac.roles import grant as grant_role
 from angee.addons import addon_manifest
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential
@@ -97,7 +98,7 @@ class ExternalAccount(AbstractExternalAccount):
         rebac_resource_type = "integrate/external_account"
 
 
-class Credential(AbstractCredential):
+class Credential(AbstractCredentialOidc, AbstractCredential):
     """Concrete integration credential used by source-addon tests."""
 
     class Meta(AbstractCredential.Meta):

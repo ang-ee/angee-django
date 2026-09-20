@@ -5,10 +5,37 @@ from __future__ import annotations
 import pytest
 from django.db import models
 
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
-from angee.integrate.registry import bridge_models
+from angee.integrate.registry import models_with
 from angee.integrate_vcs.registry import check_source_kind_contracts, source_kind_models
-from tests.conftest import Integration, Source, Template
+from tests.conftest import Credential, Integration, Source, Template
+
+
+@pytest.mark.parametrize(
+    ("kind", "material", "headers"),
+    [
+        (CredentialKind.OAUTH, {"access_token": "token"}, {"Authorization": "Bearer token"}),
+        (CredentialKind.STATIC_TOKEN, {"api_key": "token"}, {"Authorization": "Bearer token"}),
+        (CredentialKind.SSH_KEY, {"private_key": "key"}, {}),
+        (CredentialKind.BASIC_AUTH, {"username": "user", "password": "pass"}, {"Authorization": "Basic dXNlcjpwYXNz"}),
+        (CredentialKind.APP_KEYS, {"app_id": "app", "app_secret": "secret"}, {}),
+    ],
+)
+def test_credential_kind_owns_material_validation_and_authentication(kind, material, headers) -> None:
+    """Every supported persisted kind dispatches to its existing implementation."""
+
+    handler = CredentialKind(kind.value).handler
+    assert set(handler.input_material_fields()) == set(material)
+    handler.validate(material)
+    credential = Credential(kind=kind.value, material=Credential.encode_material(material))
+    assert credential.reveal() == material
+    assert credential.auth_headers() == headers
+
+
+def test_unknown_credential_kind_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        CredentialKind("unsupported")
 
 
 class ConcreteBridge(Bridge, Integration):
@@ -57,8 +84,8 @@ def test_concrete_bridge_uses_django_mti_parent_link() -> None:
 def test_bridge_registry_is_explicit_about_the_bridge_base() -> None:
     """Bridge discovery takes the base model from the caller that owns it."""
 
-    assert bridge_models(Bridge)
-    assert all(issubclass(model, Bridge) for model in bridge_models(Bridge))
+    assert models_with(base=Bridge)
+    assert all(issubclass(model, Bridge) for model in models_with(base=Bridge))
 
 
 def test_source_kind_registry_is_deterministic_and_checked() -> None:

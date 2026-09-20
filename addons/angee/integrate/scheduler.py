@@ -10,7 +10,7 @@ from rebac import system_context
 
 from angee.integrate.models import Bridge
 from angee.integrate.queue import queue_bridge_sync
-from angee.integrate.registry import bridge_models
+from angee.integrate.registry import models_with
 
 _QUEUED_RECOVERY_SECONDS = 300
 
@@ -24,7 +24,7 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
     skipped = 0
 
     with system_context(reason="integrate.scheduler"):
-        for model in bridge_models(Bridge):
+        for model in models_with(base=Bridge):
             due_ids = list(
                 model._default_manager.due_for_enqueue(timestamp=timestamp, stale_before=stale_before)
                 .order_by("pk")

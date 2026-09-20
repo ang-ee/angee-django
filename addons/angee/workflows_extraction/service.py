@@ -164,10 +164,11 @@ def prepare_pages(
     options = _json_object(config or {}, field="config")
     acquired = acquire_native_parts(
         sources,
-        dpi=int(options.get("dpi", 200)),
-        max_edge=int(options.get("max_edge", 3500)),
-        max_pages=int(options.get("max_pages", 10)),
-        max_text_bytes=int(options.get("max_text_bytes", 2_000_000)),
+        **{
+            key: int(options[key])
+            for key in ("dpi", "max_edge", "max_pages", "max_text_bytes")
+            if key in options
+        },
     )
     file_model = apps.get_model("storage", "File")
     owner_id = actor_user_id(actor)
