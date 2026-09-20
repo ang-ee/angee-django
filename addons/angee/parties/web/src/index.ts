@@ -125,6 +125,7 @@ export { addressFields, PartyAddresses } from "./PartyAddresses";
 export {
   PartyContactSummary,
   partyAddressLines,
+  partyAddressText,
   partyContactValues,
   type PartyContactSummaryProps,
 } from "./PartyContactSummary";

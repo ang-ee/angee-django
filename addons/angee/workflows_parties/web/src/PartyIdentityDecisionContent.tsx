@@ -1,9 +1,16 @@
+import { partyAddressText } from "@angee/parties";
+import {
+  Badge,
+  ComparisonRows,
+  DetailSection,
+  MetaGrid,
+  type MetaGridRow,
+} from "@angee/ui";
 import {
   WorkflowDecisionScaffold,
   textValue,
   type WorkflowDecisionContentProps,
 } from "@angee/workflows";
-import { Badge, MetaGrid, SectionEyebrow, type MetaGridRow } from "@angee/ui";
 import type * as React from "react";
 import * as v from "valibot";
 
@@ -114,11 +121,9 @@ function PartyIdentityComparison({ review }: {
   );
   const proposedContact = proposedHandle.value || proposedLink?.value || "";
   const proposedStatus = proposedContact ? handleStatus(proposedLink ?? proposedHandle) : "";
-  const proposedRows: MetaGridRow[] = [
-    [t("identityReview.name"), proposedName || t("identityReview.notProvided")],
-    [t("identityReview.address"), formatAddress(proposedAddress) || t("identityReview.notProvided")],
-    [t("identityReview.contact"), proposedContact || t("identityReview.notProvided")],
-  ];
+  const currentAddress = addressList(currentAddresses);
+  const proposedAddressValue = partyAddressText(proposedAddress);
+  const proposedRows: MetaGridRow[] = [];
   if (proposedStatus) {
     proposedRows.push([t("identityReview.contactStatus"), statusBadge(proposedStatus, t)]);
   }
@@ -126,32 +131,42 @@ function PartyIdentityComparison({ review }: {
     proposedRows.push([t("identityReview.contactEvidence"), proposedHandle.evidence]);
   }
   return <div className="space-y-4">
-    <div className="grid gap-4 md:grid-cols-2">
-      <IdentityPanel title={t("identityReview.current")}>
-        <MetaGrid rows={[
-          [t("identityReview.name"), currentName || t("identityReview.notRecorded")],
-          [t("identityReview.address"), addressList(currentAddresses) || t("identityReview.notRecorded")],
-        ]} />
-        <ContactList handles={currentHandles} />
-      </IdentityPanel>
-
-      <IdentityPanel title={t("identityReview.proposed")}>
-        <MetaGrid rows={proposedRows} />
-      </IdentityPanel>
-    </div>
-
+    <DetailSection title={t("identityReview.kind")}>
+      <ComparisonRows
+        beforeLabel={t("identityReview.current")}
+        afterLabel={t("identityReview.proposed")}
+        rows={[
+          {
+            key: "name",
+            label: t("identityReview.name"),
+            before: currentName || t("identityReview.notRecorded"),
+            after: proposedName || t("identityReview.notProvided"),
+            changed: Boolean(proposedName && proposedName !== currentName),
+          },
+          {
+            key: "address",
+            label: t("identityReview.address"),
+            before: currentAddress || t("identityReview.notRecorded"),
+            after: proposedAddressValue || t("identityReview.notProvided"),
+            changed: Boolean(proposedAddressValue && !currentAddresses.some(
+              (address) => partyAddressText(address) === proposedAddressValue,
+            )),
+          },
+          {
+            key: "contact",
+            label: t("identityReview.contact"),
+            before: <ContactList handles={currentHandles} />,
+            after: proposedContact || t("identityReview.notProvided"),
+            changed: Boolean(proposedContact && !currentHandles.some(
+              (handle) => textValue(handle.value) === proposedContact,
+            )),
+            details: proposedRows.length ? <MetaGrid rows={proposedRows} /> : undefined,
+          },
+        ]}
+      />
+    </DetailSection>
     <p className="text-xs text-fg-muted">{t("identityReview.history")}</p>
   </div>;
-}
-
-function IdentityPanel({ children, title }: {
-  children: React.ReactNode;
-  title: React.ReactNode;
-}): React.ReactElement {
-  return <section className="space-y-3 rounded-lg border border-border-subtle p-4">
-    <SectionEyebrow>{title}</SectionEyebrow>
-    {children}
-  </section>;
 }
 
 function ContactList({ handles }: { handles: UnknownRecord[] }): React.ReactElement {
@@ -181,10 +196,5 @@ function handleStatus(handle: UnknownRecord): HandleStatus {
 }
 
 function addressList(addresses: UnknownRecord[]): string {
-  return addresses.map(formatAddress).filter(Boolean).join("\n\n");
-}
-
-function formatAddress(address: UnknownRecord): string {
-  return ["label", "street", "extended", "po_box", "city", "region", "postal_code", "country"]
-    .map((key) => textValue(address[key])).filter(Boolean).join(", ");
+  return addresses.map(partyAddressText).filter(Boolean).join("\n\n");
 }

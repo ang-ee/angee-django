@@ -5,7 +5,12 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("./i18n", () => ({ usePartiesT: () => (key: string) => key }));
 
-import { PartyContactSummary, partyAddressLines, partyContactValues } from "./PartyContactSummary";
+import {
+  PartyContactSummary,
+  partyAddressLines,
+  partyAddressText,
+  partyContactValues,
+} from "./PartyContactSummary";
 
 afterEach(cleanup);
 
@@ -30,6 +35,9 @@ describe("PartyContactSummary", () => {
     expect(partyAddressLines(party)).toEqual([
       "Billing", "151 Main St", "Suite 8", "San Juan, PR, 00901", "US",
     ]);
+    expect(partyAddressText(party.addresses[1])).toBe(
+      "Billing · 151 Main St · Suite 8 · San Juan, PR, 00901 · US",
+    );
     expect(partyContactValues(party)).toEqual({
       email: "billing@piloto.test",
       phone: "+1 555 0100",

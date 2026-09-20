@@ -45,6 +45,10 @@ describe("PartyIdentityDecisionContent", () => {
 
     expect(screen.getByText("Current party")).toBeTruthy();
     expect(screen.getByText("Proposed from source")).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Current party" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Proposed from source" })).toBeTruthy();
+    expect(screen.getByText("Billing · Main 1 · Prague, 110 00 · CZ")).toBeTruthy();
+    expect(screen.getByText("Billing · Main 2 · Prague · CZ")).toBeTruthy();
     expect(screen.getAllByText("billing@example.com")).toHaveLength(2);
     expect(screen.getAllByText("Confirmed").length).toBeGreaterThan(0);
     expect(screen.getByText("Printed supplier contact")).toBeTruthy();
