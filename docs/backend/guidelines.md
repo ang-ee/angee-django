@@ -766,6 +766,8 @@ and current contracts before applying a historical example to a new deployment.
   `transaction.on_commit(using=...)` or a post-commit phase.
   Save guards use `get_transition_save_field(instance)` to read the active save
   field's attname, or `None`, through the public contract.
+  Custom success hooks use `get_transition_save_using(instance)` for their database
+  work rather than re-deriving the operation's write alias from the instance.
 - **Integration children use the ordinary emitted Django MRO.** The composer
   emits donors, the child's abstract source, then its concrete parent, so child
   behavior can override parent behavior and cooperative methods delegate with

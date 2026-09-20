@@ -49,6 +49,8 @@ wait for the outermost transaction.
 
 ``get_transition_save_field(instance)`` exposes the active save context's field
 attname, or ``None``, for model save guards without inspecting private markers.
+``get_transition_save_using(instance)`` exposes its write alias, or ``None``, so
+custom success hooks bind their database work to the transition's selected alias.
 
 Direct Python assignment to a guarded field is rejected at descriptor level after
 initial model construction. The descriptor still permits initial loading,
@@ -513,6 +515,20 @@ def get_transition_save_field(instance: models.Model) -> str | None:
 
     context = cast(tuple[str, str] | None, getattr(instance, "_angee_transition_save", None))
     return context[0] if context is not None else None
+
+
+def get_transition_save_using(instance: models.Model) -> str | None:
+    """Return the write alias of the transition currently saving ``instance``.
+
+    The lifetime matches ``get_transition_save_field``: the success hook or a
+    saved-row ``force_state`` save, with nested contexts restored on exit.
+    Return ``None`` outside that context, without deriving an alias from the
+    instance or router. Custom success hooks use this alias for their database
+    work even when the instance's database differs from the transition's alias.
+    """
+
+    context = cast(tuple[str, str] | None, getattr(instance, "_angee_transition_save", None))
+    return context[1] if context is not None else None
 
 
 def save_state(instance: models.Model, source: Any, target: Any, *, using: str | None = None) -> None:
