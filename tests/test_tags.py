@@ -342,10 +342,10 @@ def test_targeted_content_save_skips_shared_reader_reconciliation(tags_tables: N
 
 
 def test_policy_bulk_writes_cannot_bypass_reader_reconciliation(tags_tables: None) -> None:
-    """Bulk creation and policy changes are fenced onto the instance save owner."""
+    """Queryset overrides reject policy writes and allow unrelated content edits."""
 
     del tags_tables
-    with system_context(reason="tags bulk write fence"):
+    with system_context(reason="tags bulk policy writes"):
         tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
         with pytest.raises(ValidationError, match="native owner"):
             ScopeFlagTag.objects.filter(pk=tag.pk).update(shared_marker=False)
@@ -354,6 +354,15 @@ def test_policy_bulk_writes_cannot_bypass_reader_reconciliation(tags_tables: Non
             ScopeFlagTag.objects.bulk_update([tag], ["shared_marker"])
         with pytest.raises(ValidationError, match="native owner"):
             ScopeFlagTag.objects.bulk_create([ScopeFlagTag(name="Bulk")])
+        assert ScopeFlagTag.objects.filter(pk=tag.pk).update(name="Renamed") == 1
+        tag.refresh_from_db()
+        assert tag.shared_marker is True
+        assert tag.name == "Renamed"
+        tag.name = "Bulk renamed"
+        assert ScopeFlagTag.objects.bulk_update([tag], ["name"]) == 1
+        tag.refresh_from_db()
+        assert tag.name == "Bulk renamed"
+    assert _shared_reader_exists(tag)
 
 
 @pytest.fixture()

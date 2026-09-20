@@ -25,9 +25,9 @@ from angee.workflows_extraction.contracts import (
 )
 from angee.workflows_extraction.engines import ExtractionEngine, ExtractionPartKind, ExtractionStatus
 from angee.workflows_extraction.managers import (
+    EvidenceManager,
     ExtractionManager,
     ExtractionSystemManager,
-    ImmutableEvidenceManager,
     evidence_insert_allowed,
 )
 from angee.workflows_extraction.pointers import json_pointer_value
@@ -51,7 +51,7 @@ class ExtractionLineage(AngeeModel):
     head = models.ForeignKey(
         "workflows_extraction.Extraction", null=True, on_delete=models.PROTECT, related_name="+"
     )
-    objects = ImmutableEvidenceManager()
+    objects = EvidenceManager()
 
     class Meta:
         abstract = True
@@ -237,7 +237,7 @@ class ExtractionSource(SqidMixin, AngeeModel):
     )
     position = models.PositiveIntegerField(editable=False)
     content_hash = models.CharField(max_length=64, editable=False)
-    objects = ImmutableEvidenceManager()
+    objects = EvidenceManager()
 
     class Meta:
         abstract = True
@@ -297,7 +297,7 @@ class ExtractionPage(SqidMixin, AngeeModel):
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
     result = models.JSONField(editable=False)
     engine_metadata = models.JSONField(default=dict, blank=True, editable=False)
-    objects = ImmutableEvidenceManager()
+    objects = EvidenceManager()
 
     class Meta:
         abstract = True
@@ -345,7 +345,7 @@ class ExtractionPart(SqidMixin, AngeeModel):
     claims = models.JSONField(default=dict, blank=True, editable=False)
     metadata = models.JSONField(default=dict, blank=True, editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
-    objects = ImmutableEvidenceManager()
+    objects = EvidenceManager()
 
     class Meta:
         abstract = True

@@ -199,6 +199,15 @@ def test_direct_dispatch_mutations_and_unowned_consumption_are_rejected(run: Wor
         dispatch.save(update_fields=["send_count"])
     with pytest.raises(TypeError, match="collection updates"):
         WorkflowDispatch.objects.filter(pk=dispatch.pk).update(send_count=99)
+    with pytest.raises(TypeError, match="bulk_create"):
+        WorkflowDispatch.objects.bulk_create([dispatch])
+    with pytest.raises(TypeError, match="bulk_update"):
+        WorkflowDispatch.objects.bulk_update([dispatch], ["send_count"])
+    queryset = WorkflowDispatch.objects.filter(pk=dispatch.pk)
+    with pytest.raises(TypeError, match="durable delivery evidence"):
+        queryset.delete()
+    with pytest.raises(TypeError, match="durable delivery evidence"):
+        queryset._raw_delete(using=queryset.db)
     with pytest.raises(RuntimeError, match="domain-owner authority"):
         WorkflowDispatch.objects._consume_locked(dispatch.pk, at=timezone.now())
 

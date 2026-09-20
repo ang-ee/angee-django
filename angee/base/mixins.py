@@ -26,8 +26,8 @@ from angee.base.actors import actor_user_id
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.scoping import system_queryset
-from angee.base.writes import WriteFence, WriteFencedQuerySetMixin, WriteFenceToken
 
+_ModelT = TypeVar("_ModelT", bound=models.Model)
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)
 _HierarchyModelT = TypeVar("_HierarchyModelT", bound="HierarchyMixin")
 
@@ -61,10 +61,7 @@ def _shared_reader_policy_field_spellings(model: type[models.Model]) -> frozense
     )
 
 
-class ConditionalSharedReaderQuerySet(
-    WriteFencedQuerySetMixin,
-    models.QuerySet[_ArchiveModelT],
-):
+class ConditionalSharedReaderQuerySet(models.QuerySet[_ArchiveModelT]):
     """Protect fields that decide whether one row receives a wildcard reader."""
 
     @classmethod
@@ -75,28 +72,17 @@ class ConditionalSharedReaderQuerySet(
     ) -> set[str]:
         return {str(field) for field in fields} & _shared_reader_policy_field_spellings(model)
 
-    def _validate_write_fence(
-        self,
-        operation: str,
-        *,
-        objects: tuple[models.Model, ...] = (),
-        changed_fields: tuple[str, ...] = (),
-        values: Mapping[str, Any] | None = None,
-        options: Mapping[str, Any] | None = None,
-    ) -> None:
-        """Reject write shapes that bypass wildcard-reader reconciliation."""
+    def update(self, **kwargs: Any) -> int:
+        """Keep eligibility changes on the owner that reconciles wildcard readers."""
 
-        if operation == "bulk_create":
-            raise ValidationError("Create conditional shared-reader rows through their native owner.")
-        if operation in {"update", "bulk_update"} and self._policy_fields(self.model, changed_fields):
+        if self._policy_fields(self.model, kwargs):
             raise ValidationError("Change shared-reader eligibility through its native owner.")
-        super()._validate_write_fence(
-            operation,
-            objects=objects,
-            changed_fields=changed_fields,
-            values=values,
-            options=options,
-        )
+        return super().update(**kwargs)
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[_ArchiveModelT]:
+        """Require instance creation so wildcard readers are reconciled."""
+
+        raise ValidationError("Create conditional shared-reader rows through their native owner.")
 
 
 class ConditionalSharedReaderMixin(models.Model):
@@ -323,6 +309,69 @@ class AuditMixin(models.Model):
         super().save(*args, **kwargs)
 
 
+class AppendOnlyQuerySet(models.QuerySet[_ModelT]):
+    """Allow inserts and audited actor deletion, but never edits or deletion.
+
+    Compose before the domain's base queryset to preserve authorization.
+    Instance invariants and collector retention remain model/FK concerns.
+    """
+
+    def immutable_error(self, operation: str) -> Exception:
+        """Return the owner's error for a forbidden queryset mutation."""
+
+        action = "deleted" if operation in {"delete", "_raw_delete"} else "edited"
+        return ValidationError(f"{self.model._meta.label} rows cannot be {action}.")
+
+    def validate_insert(self) -> None:
+        """Let the domain owner narrow insert admission."""
+
+    def create(self, **kwargs: Any) -> _ModelT:
+        """Validate one append before its ordinary authorized insertion."""
+
+        self.validate_insert()
+        return super().create(**kwargs)
+
+    def bulk_create(
+        self,
+        objs: Iterable[_ModelT],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Iterable[str] | None = None,
+        unique_fields: Iterable[str] | None = None,
+    ) -> list[_ModelT]:
+        """Reject conflict handling before asking the owner to admit inserts."""
+
+        if ignore_conflicts or update_conflicts:
+            raise self.immutable_error("bulk_create")
+        self.validate_insert()
+        return super().bulk_create(
+            objs, batch_size=batch_size, update_fields=update_fields, unique_fields=unique_fields,
+        )
+
+    def update(self, **kwargs: Any) -> int:
+        """Admit the collector's audit nullification only on audited models."""
+
+        if issubclass(self.model, AuditMixin) and AuditMixin.is_audit_nullification(kwargs):
+            return super().update(**kwargs)
+        raise self.immutable_error("update")
+
+    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
+        """Reject every batched edit."""
+
+        raise self.immutable_error("bulk_update")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        """Reject deletion through the collection."""
+
+        raise self.immutable_error("delete")
+
+    def _raw_delete(self, using: str) -> int:
+        """Reject direct SQL deletion through the queryset."""
+
+        raise self.immutable_error("_raw_delete")
+
+
 class ArchiveMixin(models.Model):
     """Add a soft-archive flag to a model.
 
@@ -449,12 +498,15 @@ class RevisionMixin(models.Model):
             reversion.set_comment(f"Reverted to revision {version.revision_id}.")
 
 
-class HierarchyQuerySet(WriteFencedQuerySetMixin, models.QuerySet[_HierarchyModelT]):
+class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
     """Subtree read scopes for models composing :class:`HierarchyMixin`.
 
     Compose alongside the model's base queryset (e.g.
     ``class LocationQuerySet(HierarchyQuerySet[Location], AngeeQuerySet[Location])``)
-    so the subtree vocabulary — :meth:`subtree_of` / :meth:`ancestors_of` — reads
+    and put it FIRST: the owner's path rewrite skips only this class's write
+    guard through ``super(HierarchyQuerySet, ...)``, so any write-guarding
+    queryset composed before it would be skipped too. The subtree vocabulary
+    — :meth:`subtree_of` / :meth:`ancestors_of` — reads
     as chainable predicates over the maintained ``path`` column, served by the
     prefix index rather than a client-side ``parent`` walk.
     """
@@ -477,76 +529,12 @@ class HierarchyQuerySet(WriteFencedQuerySetMixin, models.QuerySet[_HierarchyMode
 
         return cast(Self, self.filter(path__in=node.ancestor_paths()))
 
-    def _clone(self, **kwargs: Any) -> Self:
-        """Carry a live hierarchy-owner token through cooperative queryset narrowing."""
+    def update(self, **kwargs: Any) -> int:
+        """Keep parent moves and derived paths on the saved-row owner."""
 
-        clone = cast(Self, super()._clone(**kwargs))
-        authority = _hierarchy_path_write.token(self.db)
-        if authority is not None and getattr(self, _HIERARCHY_PATH_WRITE_TOKEN, None) is authority:
-            setattr(clone, _HIERARCHY_PATH_WRITE_TOKEN, authority)
-        return clone
-
-    def _validate_write_fence(
-        self,
-        operation: str,
-        *,
-        objects: tuple[models.Model, ...] = (),
-        changed_fields: tuple[str, ...] = (),
-        values: Mapping[str, Any] | None = None,
-        options: Mapping[str, Any] | None = None,
-    ) -> None:
-        """Admit only the hierarchy owner's exact derived-path queryset write."""
-
-        write_values = dict(values or {})
-        if operation == "update" and "path" in write_values:
-            authority = _hierarchy_path_write_authority(self, write_values)
-            if authority is None:
-                raise ValidationError("The hierarchy path belongs to the saved-row owner.")
-            authority.consume()
-        super()._validate_write_fence(
-            operation,
-            objects=objects,
-            changed_fields=changed_fields,
-            values=values,
-            options=options,
-        )
-
-
-_HIERARCHY_PATH_WRITE_TOKEN = "_angee_hierarchy_path_write_token"
-_hierarchy_path_write = WriteFence[Any](
-    "angee_hierarchy_path_write",
-    atomic_error="Hierarchy path writes require one atomic owner.",
-    nested_error="Hierarchy path owners cannot be nested.",
-)
-
-
-def _hierarchy_path_write_authority(
-    queryset: models.QuerySet[Any],
-    values: dict[str, Any],
-) -> WriteFenceToken[Any] | None:
-    """Return the exact live path-write capability carried by ``queryset``."""
-
-    live_authority = _hierarchy_path_write.token(queryset.db)
-    if live_authority is None:
-        return None
-    authority = cast(WriteFenceToken[Any], live_authority)
-    if (
-        getattr(queryset, _HIERARCHY_PATH_WRITE_TOKEN, None) is not authority
-        or not authority.matches_queryset(queryset, "update")
-        or set(values) != {"path"}
-        or values["path"] is not authority.payload
-    ):
-        return None
-    return authority
-
-
-def is_hierarchy_path_write_authorized(
-    queryset: models.QuerySet[Any],
-    values: dict[str, Any],
-) -> bool:
-    """Tell a composed guard whether this is the hierarchy owner's exact path write."""
-
-    return _hierarchy_path_write_authority(queryset, values) is not None
+        if {"path", "parent", "parent_id"} & kwargs.keys():
+            raise ValidationError("The hierarchy parent and path belong to the saved-row owner.")
+        return super().update(**kwargs)
 
 
 class HierarchyMixin(models.Model):
@@ -730,7 +718,6 @@ class HierarchyMixin(models.Model):
                 self._write_hierarchy_path(
                     system_queryset(type(self), using=database).filter(pk=self.pk),
                     new_path,
-                    using=database,
                 )
                 self.path = new_path
 
@@ -745,6 +732,10 @@ class HierarchyMixin(models.Model):
             kwargs["update_fields"] = set(update_fields) | {"parent", "path"}
         with transaction.atomic(using=database):
             old_path = self._lock_moved_paths(using=database)
+            subtree = system_queryset(type(self), using=database, lock=()).filter(path__startswith=old_path)
+            if old_path:
+                # Evaluate SELECT FOR UPDATE before moving any descendant's path.
+                list(subtree.order_by("pk").values_list("pk", flat=True))
             parent = self._hierarchy_parent()
             self._reject_cycle(parent)
             self._reject_cross_scope_parent(parent)
@@ -761,32 +752,24 @@ class HierarchyMixin(models.Model):
                 # rewrite the whole table.
                 replacement = Replace(F("path"), Value(old_path), Value(new_path))
                 self._write_hierarchy_path(
-                    system_queryset(type(self), using=database).filter(path__startswith=old_path),
+                    subtree,
                     replacement,
-                    using=database,
                 )
 
     def _write_hierarchy_path(
         self,
         queryset: models.QuerySet[Any],
         path_value: Any,
-        *,
-        using: str,
     ) -> int:
-        """Perform one exact derived-path update through the cooperative queryset."""
+        """Rewrite the caller's system-scoped queryset inside its atomic block.
 
-        if not isinstance(queryset, HierarchyQuerySet):
-            return queryset.update(path=path_value)
-        authority = WriteFenceToken(
-            model=type(self),
-            operation="update",
-            object_identity=None,
-            payload=path_value,
-        )
-        setattr(queryset, _HIERARCHY_PATH_WRITE_TOKEN, authority)
-        with _hierarchy_path_write.scope(using, authority):
-            updated = queryset.update(path=path_value)
-        return updated
+        Skip only the hierarchy's external-write guard; the remaining queryset
+        chain, including REBAC, still owns authorization and persistence.
+        """
+
+        if isinstance(queryset, HierarchyQuerySet):
+            return super(HierarchyQuerySet, queryset).update(path=path_value)
+        return queryset.update(path=path_value)
 
     def _lock_moved_paths(self, *, using: str) -> str:
         """Row-lock this node and its new parent, refreshing committed paths.
