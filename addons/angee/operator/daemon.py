@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -15,6 +14,7 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from graphql import build_client_schema, get_introspection_query, print_schema
 
+from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClient
 
 logger = logging.getLogger(__name__)
@@ -313,8 +313,7 @@ class OperatorDaemon:
             "scope": self.scope,
             "ttl": self.ttl,
         }
-        encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
-        return f"{_TOKEN_CACHE_PREFIX}{hashlib.sha256(encoded).hexdigest()}"
+        return f"{_TOKEN_CACHE_PREFIX}{canonical_json_sha256(material)}"
 
     @staticmethod
     def _setting(name: str) -> str | None:

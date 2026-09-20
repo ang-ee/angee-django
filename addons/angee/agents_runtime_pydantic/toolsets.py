@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -46,6 +45,7 @@ from angee.agents.grants import (
     tool_grant_ref,
 )
 from angee.agents.models import BUILTIN_MCP_ANGEE
+from angee.base.serialization import canonical_json, json_safe
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.server import mcp_server
 
@@ -359,7 +359,7 @@ def _tool_result_value(result: ToolResult) -> Any:
 def _bounded_tool_result(value: Any) -> Any:
     """Return ``value`` inline when bounded, otherwise a truncated JSON preview."""
 
-    serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    serialized = canonical_json(json_safe(value))
     if len(serialized) <= MAX_TOOL_RESULT_CHARS:
         return value
     preview_length = MAX_TOOL_RESULT_CHARS - len(TOOL_RESULT_TRUNCATED)

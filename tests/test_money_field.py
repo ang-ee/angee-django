@@ -29,7 +29,7 @@ from angee.data.metadata import (
     serialize_data_resources,
 )
 from angee.graphql.data.metadata import _finalize_data_resource
-from angee.money.fields import MoneyField
+from angee.money.fields import MONEY_CURRENCY_FIELD_METADATA_KEY, MoneyField
 from tests.money_models import MoneyDocument, MoneyLine, MoneyStatement
 
 
@@ -50,7 +50,11 @@ def test_declared_projection_facts_classify_without_concrete_field_type() -> Non
     assert resource_field_widget(field, "scalar") == "money"
     assert money_currency_field(field) == "currency"
     assert resource_field_widget(field, "scalar", {"angee_widget": "integer"}) == "integer"
-    assert money_currency_field(field, {"angee_currency_field": "ledger_currency"}) == "ledger_currency"
+    assert MONEY_CURRENCY_FIELD_METADATA_KEY == "angee_currency_field"
+    assert money_currency_field(
+        field,
+        {MONEY_CURRENCY_FIELD_METADATA_KEY: "ledger_currency"},
+    ) == "ledger_currency"
 
 
 def test_sqid_field_declares_id_scalar_for_metadata() -> None:

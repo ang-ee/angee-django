@@ -22,7 +22,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import JsonValue
 
 from angee.base.identity import canonical_subject_ref
-from angee.base.impl import ImplBase, impl_registry, resolve_impl_class
+from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
 from angee.base.scoping import system_queryset
 from angee.workflows.steps import DecisionSpec, StepImpl, StepResult, positive_int
 
@@ -101,15 +101,16 @@ class ArchiveExtractor(ImplBase, ABC):
 def archive_extractor_classes() -> tuple[type[ArchiveExtractor], ...]:
     """Return configured extractor classes in deterministic stable-key order."""
 
-    classes: list[type[ArchiveExtractor]] = []
-    for key in sorted(impl_registry(ARCHIVE_EXTRACTOR_CLASSES_SETTING)):
-        extractor = cast(
-            type[ArchiveExtractor],
-            resolve_impl_class(ARCHIVE_EXTRACTOR_CLASSES_SETTING, key, ArchiveExtractor),
-        )
-        _validate_extractor_declaration(key, extractor)
-        classes.append(extractor)
-    return tuple(classes)
+    classes = cast(
+        tuple[type[ArchiveExtractor], ...],
+        resolve_all_impl_classes(
+            ARCHIVE_EXTRACTOR_CLASSES_SETTING,
+            ArchiveExtractor,
+        ),
+    )
+    for extractor in classes:
+        _validate_extractor_declaration(extractor)
+    return classes
 
 
 def archive_extractor_class(key: str) -> type[ArchiveExtractor]:
@@ -119,7 +120,7 @@ def archive_extractor_class(key: str) -> type[ArchiveExtractor]:
         type[ArchiveExtractor],
         resolve_impl_class(ARCHIVE_EXTRACTOR_CLASSES_SETTING, key, ArchiveExtractor),
     )
-    _validate_extractor_declaration(key, extractor)
+    _validate_extractor_declaration(extractor)
     return extractor
 
 
@@ -266,14 +267,10 @@ class ArchiveExecuteStepImpl(StepImpl):
         )
 
 
-def _validate_extractor_declaration(key: str, extractor: type[ArchiveExtractor]) -> None:
-    """Fail fast when configured extractor metadata disagrees with its registry key."""
+def _validate_extractor_declaration(extractor: type[ArchiveExtractor]) -> None:
+    """Fail fast when configured extractor metadata is incomplete."""
 
-    if extractor.key != key:
-        raise ImproperlyConfigured(
-            f"settings.{ARCHIVE_EXTRACTOR_CLASSES_SETTING}[{key!r}] resolves "
-            f"{extractor.__name__} with key {extractor.key!r}."
-        )
+    key = extractor.key
     if not extractor.display_label().strip():
         raise ImproperlyConfigured(f"Archive extractor {key!r} must declare a display label.")
     _validate_resource_label(key, "target_resource", extractor.target_resource)

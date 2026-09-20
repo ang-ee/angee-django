@@ -34,6 +34,7 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
+from angee.base.writes import WriteFencedQuerySetMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -70,7 +71,11 @@ class _PublicIdQuerySetMixin(Generic[_ModelT]):
             return None
 
 
-class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
+class AngeeQuerySet(
+    WriteFencedQuerySetMixin,
+    _PublicIdQuerySetMixin[_ModelT],
+    RebacQuerySet[_ModelT],
+):
     """QuerySet API shared by Angee source and runtime models."""
 
     def readable_scalar_subquery(
@@ -200,7 +205,11 @@ class AngeeQuerySet(_PublicIdQuerySetMixin[_ModelT], RebacQuerySet[_ModelT]):
         return self.lock_if_supported().get(*args, **kwargs)
 
 
-class AngeeUnscopedQuerySet(_PublicIdQuerySetMixin[_ModelT], models.QuerySet[_ModelT]):
+class AngeeUnscopedQuerySet(
+    WriteFencedQuerySetMixin,
+    _PublicIdQuerySetMixin[_ModelT],
+    models.QuerySet[_ModelT],
+):
     """Angee queryset API for models that intentionally have no REBAC row policy."""
 
     def scoped_for_aggregate(self) -> Self:

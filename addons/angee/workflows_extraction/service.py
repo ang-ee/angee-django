@@ -23,6 +23,7 @@ from angee.base.identity import canonical_subject_ref
 from angee.base.impl import resolve_impl_class
 from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset, system_queryset
+from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import DecisionInputSource, json_values_equal
 from angee.workflows.engine import consume_decision_resolution, external_operation_request
 from angee.workflows_extraction.engines import (
@@ -423,7 +424,9 @@ def process(
         prepared,
         map_results,
         recognition_model_id=str(recognition_model.sqid) if recognition_model is not None else "",
-        recognition_config_digest=_digest(dict(normalized_config.get("recognition_config") or {})),
+        recognition_config_digest=canonical_json_sha256(
+            dict(normalized_config.get("recognition_config") or {})
+        ),
     )
     schema_id = str(normalized_schema.get("$id") or normalized_schema.get("x-version") or "")
     if not schema_id:
@@ -433,7 +436,7 @@ def process(
     source_facts = [_source_fact(source) for source in prepared.sources]
     target_ref = record_ref_for(authorized_target)
     lineage_key = _lineage_key(source_facts=source_facts, target_ref=target_ref)
-    reuse_key = _digest(
+    reuse_key = canonical_json_sha256(
         {
             "stage": "deterministic_process",
             "lineage": lineage_key,
@@ -493,7 +496,7 @@ def process(
                 authority = extraction_model.objects.latest_succeeded_identity_authority(
                     existing, actor=actor,
                 )
-                repair_reuse_key = _digest({
+                repair_reuse_key = canonical_json_sha256({
                     "stage": "deterministic_process_authority_repair",
                     "request_reuse_key": reuse_key,
                     "invalid_hold_id": str(existing.sqid),
@@ -618,7 +621,7 @@ def process(
         error_code=error_code,
         schema_id=schema_id,
         schema=normalized_schema,
-        schema_digest=_digest(normalized_schema),
+        schema_digest=canonical_json_sha256(normalized_schema),
         engine=engine,
         model=model,
         recognition_model=recognition_model,
@@ -631,7 +634,7 @@ def process(
             "claims": claims,
             "document": {
                 "stages": ["prepare_pages", "collect_carriers", "process_parts"],
-                "config_digest": _digest(normalized_config),
+                "config_digest": canonical_json_sha256(normalized_config),
                 **metadata,
             },
             "unresolved_reasons": list(
@@ -757,7 +760,7 @@ def infer(
         if preliminary_correspondence
         else None
     )
-    reuse_key = _digest(
+    reuse_key = canonical_json_sha256(
         {
             "stage": "bound_inference",
             "base_id": str(base.sqid),
@@ -788,7 +791,8 @@ def infer(
             or correspondence.get("expected_base_id") != expected_identity_base_id
             or inference_facts.get("base_extraction_id") != str(base.sqid)
             or inference_facts.get("request_key") != request_key
-            or inference_facts.get("mapping_config_digest") != _digest(config.get("mapping_config") or config)
+            or inference_facts.get("mapping_config_digest")
+            != canonical_json_sha256(config.get("mapping_config") or config)
             or inference_facts.get("requested_identity_mapping") != requested_mapping
             or inference_facts.get("requested_retirement") != requested_retirement
             or bool(inference_facts.get("automatic_correspondence")) != automatic_correspondence
@@ -934,7 +938,9 @@ def infer(
                 "authority_extraction_id": str(authority_base.sqid),
                 "authority_revision": authority_base.revision,
                 "request_key": request_key,
-                "mapping_config_digest": _digest(config.get("mapping_config") or config),
+                "mapping_config_digest": canonical_json_sha256(
+                    config.get("mapping_config") or config
+                ),
                 "requested_identity_mapping": requested_mapping,
                 "requested_retirement": requested_retirement,
                 "automatic_correspondence": automatic_correspondence,
@@ -1181,7 +1187,7 @@ def _carrier_identity(
         part.width,
         part.height,
         part.dpi,
-        _digest({"value": part.value}),
+        canonical_json_sha256({"value": part.value}),
     )
 
 
@@ -1335,7 +1341,7 @@ def _retain_correction_revision(
     if (
         not schema_id
         or schema_id != str(original.schema_id)
-        or _digest(normalized_schema) != str(original.schema_digest)
+        or canonical_json_sha256(normalized_schema) != str(original.schema_digest)
     ):
         raise ValidationError({"extraction": "The retained extraction schema identity is invalid."})
     normalized_result = _json_object(result, field="result")
@@ -1401,7 +1407,7 @@ def _retain_correction_revision(
         "decision_resolved_by": str(authority.resolved_by),
         "recorded_by": str(to_subject_ref(actor)),
         "corrected_paths": sorted(changed_paths | confirmed),
-        "result_digest": _digest(normalized_result),
+        "result_digest": canonical_json_sha256(normalized_result),
     }
     if basis.revision_parent.pk != original.pk:
         revision_parent_ref = record_ref_for(basis.revision_parent)
@@ -1428,7 +1434,7 @@ def _retain_correction_revision(
             revision_parent_id=str(basis.revision_parent.sqid),
             revision_parent_revision=basis.revision_parent.revision,
         )
-    reuse_key = _digest({"human_correction": reuse_basis})
+    reuse_key = canonical_json_sha256({"human_correction": reuse_basis})
     return extraction_model.objects.create_revision_from_evidence(
         original,
         revision_parent=basis.revision_parent,
@@ -1913,7 +1919,7 @@ def _lineage_key(*, source_facts: Sequence[Mapping[str, Any]], target_ref: Recor
         else None
     )
 
-    return _digest(
+    return canonical_json_sha256(
         {
             "original_source": original_file,
             "target": {
@@ -2025,11 +2031,6 @@ def _reject_json_nul(value: Any, *, field: str) -> None:
     elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
         for item in value:
             _reject_json_nul(item, field=field)
-
-
-def _digest(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _engine_class(key: str) -> type[Any]:

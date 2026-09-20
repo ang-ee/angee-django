@@ -12,8 +12,6 @@ apply step performs only what its resolution approved.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
@@ -28,6 +26,7 @@ from rebac.actors import to_subject_ref
 
 from angee.base.identity import canonical_subject_ref
 from angee.base.scoping import system_queryset
+from angee.base.serialization import canonical_json_sha256
 from angee.parties.fields import normalize_country_code
 from angee.workflows.attempts import (
     DecisionGateOutput,
@@ -237,7 +236,7 @@ class IdentityReviewStepImpl(StepImpl):
         payload = {
             **proposal,
             "current": current,
-            "facts_hash": _facts_hash(current),
+            "facts_hash": canonical_json_sha256(current),
             "facts": [
                 {"pointer": "/current", "label": "Current Party identity",
                  "value": current, "authority": "source",
@@ -310,7 +309,7 @@ class IdentityApplyStepImpl(StepImpl):
             _, current = _identity_snapshot(
                 passthrough["party_id"], actor=_run_owner(step_run.run),
             )
-            if _facts_hash(current) != passthrough["facts_hash"]:
+            if canonical_json_sha256(current) != passthrough["facts_hash"]:
                 return StepResult.done(
                     output={"party_id": passthrough["party_id"], "context": passthrough["context"]},
                     outcome="conflict",
@@ -325,7 +324,7 @@ class IdentityApplyStepImpl(StepImpl):
         approved = _identity_decision(step_run, value)
         actor = _decision_actor(approved)
         party, current = _identity_snapshot(approved["party_id"], actor=actor)
-        if _facts_hash(current) != approved["facts_hash"]:
+        if canonical_json_sha256(current) != approved["facts_hash"]:
             return StepResult.done(
                 output={"party_id": approved["party_id"], "context": approved["context"]},
                 outcome="conflict",
@@ -451,10 +450,6 @@ def _identity_snapshot(party_id: str, *, actor: Any) -> tuple[Any, dict[str, Any
         addresses = list(address_model.objects.filter(party=party).order_by("is_primary", "sqid"))
         links = list(link_model.objects.filter(party=party).select_related("handle").order_by("sqid"))
     return party, _snapshot_values(party, addresses, links)
-
-
-def _facts_hash(current: Mapping[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(current, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def _address_identity_key(address: Mapping[str, Any]) -> tuple[str, ...]:
@@ -617,7 +612,7 @@ def _apply_identity(
             party=locked,
         ).select_related("handle").order_by("sqid"))
         locked_current = _snapshot_values(locked, locked_addresses, locked_links)
-        if _facts_hash(locked_current) != approved["facts_hash"]:
+        if canonical_json_sha256(locked_current) != approved["facts_hash"]:
             raise ValidationError({"input": "Party identity facts changed during review."})
         if approved["name_action"] == "replace":
             results["name_result"] = party.__class__.objects.replace_name_exact(

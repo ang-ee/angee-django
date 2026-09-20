@@ -8,7 +8,7 @@ from contextvars import copy_context
 import pytest
 from django.db import connection, connections, transaction
 
-from angee.base.authority import TransactionBoundAuthority
+from angee.base.authority import TransactionBoundAuthority, TransactionBoundContext
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -136,3 +136,27 @@ def test_authority_rejects_same_context_in_a_later_outer_atomic() -> None:
 
     with transaction.atomic(using=alias):
         assert not retained.run(authority.is_active, alias)
+
+
+def test_context_facade_keeps_set_reset_callers_on_shared_lifetime_rules() -> None:
+    """Separated write brackets inherit atomic and copied-context revocation."""
+
+    alias = connection.alias
+    context = TransactionBoundContext[tuple[str, object]](
+        "test_transaction_bound_context",
+        alias=lambda payload: payload[0],
+        atomic_error="context requires atomic",
+        nested_error="context cannot nest",
+    )
+    payload = (alias, object())
+
+    with pytest.raises(RuntimeError, match="context requires atomic"):
+        context.set(payload)
+
+    with transaction.atomic(using=alias):
+        token = context.set(payload)
+        copied = copy_context()
+        assert context.get() is payload
+        context.reset(token)
+        assert context.get() is None
+        assert copied.run(context.get) is None

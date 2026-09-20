@@ -16,7 +16,6 @@ their owning addons; this addon never imports them.
 
 from __future__ import annotations
 
-import json
 import logging
 import secrets
 from collections.abc import Iterable, Mapping
@@ -54,6 +53,7 @@ from angee.base.fields import EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.integrate.credentials import CredentialKind, handler_for
 from angee.integrate.errors import INTEGRATION_FAILURE_MESSAGE, IntegrationError
@@ -1125,7 +1125,7 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
     def encode_material(material: Mapping[str, Any]) -> str:
         """Encode credential material into its deterministic encrypted-field payload."""
 
-        return json.dumps(dict(material), sort_keys=True, separators=(",", ":"))
+        return canonical_json(dict(material))
 
     def update_material(self, **changes: Any) -> None:
         """Merge encrypted material changes under a row lock; ``None`` deletes.
@@ -2607,7 +2607,7 @@ class WebhookSubscriptionManager(AngeeManager):
     def _event_body(payload: Any) -> bytes:
         """Return the canonical webhook JSON body for an event payload."""
 
-        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return canonical_json(payload).encode("utf-8")
 
     def _deliver_event_body(
         self,
@@ -2738,10 +2738,8 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
     def deliver_test(self) -> tuple[bool, str]:
         """Send a test event, persist telemetry, and return an action result tuple."""
 
-        body = json.dumps(
-            {"type": "test", "subscription": self.public_id},
-            sort_keys=True,
-            separators=(",", ":"),
+        body = canonical_json(
+            {"type": "test", "subscription": self.public_id}
         ).encode("utf-8")
         ok, result = self.deliver_recorded(body)
         return (True, f"Delivered (status {result}).") if ok else (False, f"Delivery failed: {result}")

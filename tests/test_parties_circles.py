@@ -427,6 +427,24 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
         review = PartyHandle.objects.filter(is_confirmed=False, is_dismissed=False, confidence__lt=0.5)
         assert list(review.values_list("pk", flat=True)) == [weak.pk]
 
+        with pytest.raises(TypeError, match="transitions must use"):
+            PartyHandle.objects.filter(pk=weak.pk).update(confidence=0.8)
+        weak.confidence = 0.8
+        with pytest.raises(TypeError, match="transitions must use"):
+            PartyHandle.objects.bulk_update([weak], ["confidence"])
+        with pytest.raises(TypeError, match="must be created through"):
+            PartyHandle.objects.bulk_create(
+                [
+                    PartyHandle(
+                        party=alice,
+                        handle=handle,
+                        confidence=0.5,
+                        source=LinkSource.IMPORT,
+                        created_by_id=owner.pk,
+                    )
+                ]
+            )
+
 
 @pytest.mark.django_db(transaction=True)
 def test_person_for_user_is_the_one_person_per_user_owner(parties_tables: None) -> None:

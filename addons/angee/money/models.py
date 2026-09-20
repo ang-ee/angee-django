@@ -22,6 +22,7 @@ the converted amount at the point that owns the business policy.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation, localcontext
 from typing import Any
 
@@ -161,7 +162,6 @@ class Currency(ArchiveMixin, AngeeDataModel):
             self,
             to_currency,
             using=alias,
-            lock=False,
         )
         if canonical_source.pk == canonical_target.pk:
             return amount
@@ -198,21 +198,28 @@ class CurrencyRateQuerySet(
         "source_priority",
     }
 
-    def update(self, **kwargs: Any) -> int:
-        if self._identity_fields & set(kwargs):
-            raise ValidationError("Currency-rate identity changes through its native owner.")
-        return super().update(**kwargs)
-
-    def bulk_update(
+    def _validate_write_fence(
         self,
-        objs: Any,
-        fields: Any,
-        batch_size: int | None = None,
-    ) -> int:
-        rows, names = list(objs), tuple(fields)
-        if self._identity_fields & set(names):
+        operation: str,
+        *,
+        objects: tuple[models.Model, ...] = (),
+        changed_fields: tuple[str, ...] = (),
+        values: Mapping[str, Any] | None = None,
+        options: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Keep rate identity immutable across every bulk update ingress."""
+
+        if operation in {"update", "bulk_update"} and self._identity_fields & set(
+            changed_fields
+        ):
             raise ValidationError("Currency-rate identity changes through its native owner.")
-        return super().bulk_update(rows, names, batch_size=batch_size)
+        super()._validate_write_fence(
+            operation,
+            objects=objects,
+            changed_fields=changed_fields,
+            values=values,
+            options=options,
+        )
 
 
 class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # type: ignore[misc]
@@ -244,11 +251,10 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
             currency,
             reference_currency,
             using=self.db,
-            lock=False,
         )
         context_ref = None
         if context is not None:
-            context_ref = self._canonical_context(context, using=self.db, lock=False)[0]
+            context_ref = self._canonical_context(context, using=self.db)
         code = (
             reference_currency_code()
             if reference_currency is None
@@ -298,192 +304,20 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
 
         if context is None or reference_currency is None:
             raise ValidationError("Contextual currency conversion requires saved canonical owners.")
-        context_ref, _locked = self._canonical_context(
-            context,
-            using=self.db,
-            lock=False,
-        )
+        context_ref = self._canonical_context(context, using=self.db)
         self._canonical_currencies(
             reference_currency,
             reference_currency,
             using=self.db,
-            lock=False,
         )
         return context_ref
-
-    def apply_contextual_projection(
-        self,
-        expected: models.Model | None,
-        prepared: models.Model,
-        *,
-        context: models.Model,
-        reference_currency: models.Model,
-    ) -> models.Model:
-        """Create or exactly correct one company/context-specific effective rate."""
-
-        if not isinstance(prepared, self.model) or prepared.pk is not None:
-            raise ValidationError("Prepare one unsaved composed currency-rate projection.")
-        if (
-            prepared.context_content_type_id is not None
-            or prepared.context_object_id
-            or prepared.reference_currency_id is not None
-        ):
-            raise ValidationError("The currency-rate manager owns contextual identity fields.")
-        alias = self.db
-        if alias != DEFAULT_DB_ALIAS:
-            raise ValidationError(
-                "Contextual currency-rate writes require the default authorization database."
-            )
-        with transaction.atomic(using=alias):
-            canonical_context, locked_context = self._canonical_context(
-                context,
-                using=alias,
-                lock=True,
-            )
-            currency, reference = self._canonical_currencies(
-                prepared.currency,
-                reference_currency,
-                using=alias,
-                lock=True,
-            )
-            prepared.date = prepared._meta.get_field("date").to_python(prepared.date)
-            prepared.rate = prepared._meta.get_field("rate").to_python(prepared.rate)
-            prepared.source_priority = prepared._meta.get_field(
-                "source_priority"
-            ).to_python(prepared.source_priority)
-            if prepared.date is None or prepared.rate is None or not prepared.rate.is_finite() or prepared.rate <= 0:
-                raise ValidationError("A contextual currency rate requires a date and positive finite rate.")
-            if (
-                isinstance(prepared.source_priority, bool)
-                or prepared.source_priority is None
-                or prepared.source_priority < 0
-            ):
-                raise ValidationError(
-                    "A contextual currency rate requires a non-negative source priority."
-                )
-            _require_exact_rate_decimal(prepared)
-            current = None
-            if expected is not None:
-                if (
-                    not isinstance(expected, self.model)
-                    or expected.pk is None
-                    or expected._state.adding
-                    or expected._state.db != alias
-                ):
-                    raise ValidationError(
-                        "A contextual currency-rate correction requires its exact saved target."
-                    )
-                current = self.model.system_queryset(
-                    using=alias,
-                    lock=("self",),
-                ).get(pk=expected.pk)
-                if _currency_rate_projection_facts(current) != _currency_rate_projection_facts(
-                    expected
-                ):
-                    raise ValidationError(
-                        "The contextual currency rate changed before its projection was applied."
-                    )
-                if (
-                    current.currency_id != currency.pk
-                    or current.date != prepared.date
-                    or current.context_content_type_id != canonical_context.content_type.pk
-                    or current.context_object_id != str(canonical_context.object_id)
-                    or current.reference_currency_id != reference.pk
-                ):
-                    raise ValidationError("A contextual currency-rate identity is immutable.")
-                prepared.pk = current.pk
-                prepared._state.adding = False
-                prepared._state.db = alias
-            prepared.currency = currency
-            prepared.context_content_type = canonical_context.content_type
-            prepared.context_object_id = str(canonical_context.object_id)
-            prepared.reference_currency = reference
-            prepared.is_archived = False
-            prepared.validate_contextual_projection_policy(
-                context=locked_context,
-                currency=currency,
-                reference_currency=reference,
-            )
-            if current is not None and _currency_rate_projection_facts(
-                current
-            ) == _currency_rate_projection_facts(prepared):
-                return current
-            prepared.save(
-                using=alias,
-                update_fields=(
-                    None
-                    if current is None
-                    else {"rate", "source_priority", "is_archived", "updated_at"}
-                ),
-            )
-            return prepared
-
-    def withdraw_contextual_projection(
-        self,
-        expected: models.Model,
-        *,
-        context: models.Model,
-        reference_currency: models.Model,
-    ) -> models.Model:
-        """Deactivate one exact contextual rate without exposing a global fallback."""
-
-        if (
-            not isinstance(expected, self.model)
-            or expected.pk is None
-            or expected._state.adding
-            or expected._state.db != self.db
-        ):
-            raise ValidationError("Withdraw an exact saved contextual currency rate.")
-        alias = self.db
-        if alias != DEFAULT_DB_ALIAS:
-            raise ValidationError(
-                "Contextual currency-rate writes require the default authorization database."
-            )
-        with transaction.atomic(using=alias):
-            canonical_context, locked_context = self._canonical_context(
-                context,
-                using=alias,
-                lock=True,
-            )
-            _currency, reference = self._canonical_currencies(
-                expected.currency,
-                reference_currency,
-                using=alias,
-                lock=True,
-            )
-            current = self.model.system_queryset(
-                using=alias,
-                lock=("self",),
-            ).get(pk=expected.pk)
-            if _currency_rate_projection_facts(current) != _currency_rate_projection_facts(
-                expected
-            ):
-                raise ValidationError(
-                    "The contextual currency rate changed before its withdrawal."
-                )
-            if (
-                current.context_content_type_id != canonical_context.content_type.pk
-                or current.context_object_id != str(canonical_context.object_id)
-                or current.reference_currency_id != reference.pk
-            ):
-                raise ValidationError("The contextual currency-rate withdrawal identity is invalid.")
-            current.validate_contextual_projection_policy(
-                context=locked_context,
-                currency=current.currency,
-                reference_currency=reference,
-            )
-            if not current.is_archived:
-                current.is_archived = True
-                current.save(using=alias, update_fields={"is_archived", "updated_at"})
-            return current
 
     @staticmethod
     def _canonical_context(
         context: models.Model,
         *,
         using: str,
-        lock: bool,
-    ) -> tuple[Any, models.Model]:
+    ) -> CanonicalRecordTarget:
         if context.pk is None or context._state.db != using:
             raise ValidationError("A contextual currency rate requires one saved context.")
         model = canonical_record_model(type(context))
@@ -491,15 +325,9 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
             raise ValidationError("The currency-rate context is not a canonical resource.")
         content_type = ContentType.objects.db_manager(using).get_for_model(model)
         canonical = CanonicalRecordTarget(content_type, context.pk)
-        locked = model.system_queryset(
-            using=using,
-            lock=("self",) if lock else None,
-        ).filter(
-            pk=canonical.object_id
-        ).first()
-        if locked is None or locked.pk != canonical.object_id:
+        if not model.system_queryset(using=using).filter(pk=canonical.object_id).exists():
             raise ValidationError("The currency-rate context is unavailable.")
-        return canonical, locked
+        return canonical
 
     def _canonical_currencies(
         self,
@@ -507,7 +335,6 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
         reference_currency: models.Model | None,
         *,
         using: str,
-        lock: bool,
     ) -> tuple[models.Model, models.Model]:
         if currency is None or currency.pk is None or currency._state.db != using:
             raise ValidationError("Currency-rate reads require saved canonical currencies.")
@@ -527,7 +354,6 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
             row.pk: row
             for row in declared_model.system_queryset(
                 using=using,
-                lock=("self",) if lock else None,
             )
             .filter(pk__in=ids)
             .order_by("pk")
@@ -654,17 +480,6 @@ class CurrencyRate(
             and self.reference_currency_id is None
         )
 
-    def validate_contextual_projection_policy(
-        self,
-        *,
-        context: models.Model,
-        currency: models.Model,
-        reference_currency: models.Model,
-    ) -> None:
-        """Cooperate with composed source policy after canonical rebinding."""
-
-        del context, currency, reference_currency
-
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Keep every rate slot identity immutable after its first persistence."""
 
@@ -732,21 +547,6 @@ class CurrencyRate(
         """Return a readable label for Django displays."""
 
         return f"{self.currency_id}@{self.date}={self.rate}"
-
-
-def _currency_rate_projection_facts(row: models.Model) -> tuple[Any, ...]:
-    """Return every native fact participating in contextual-rate CAS."""
-
-    return (
-        row.currency_id,
-        row.date,
-        row.rate,
-        row.context_content_type_id,
-        row.context_object_id,
-        row.reference_currency_id,
-        row.source_priority,
-        row.is_archived,
-    )
 
 
 def _require_exact_rate_decimal(row: models.Model) -> None:

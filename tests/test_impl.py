@@ -13,7 +13,13 @@ from django.db import models
 from django.test import override_settings
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from angee.base.impl import ImplBase, ImplChoice, ImplClassField, model_config_form_spec
+from angee.base.impl import (
+    ImplBase,
+    ImplChoice,
+    ImplClassField,
+    model_config_form_spec,
+    resolve_all_impl_classes,
+)
 from tests.conftest import Integration, OAuthClient, VcsBridge
 
 
@@ -70,6 +76,7 @@ def test_impl_owner_public_import_contract() -> None:
         ImplClassField,
         ImplDefaultsMixin,
         impl_registry,
+        resolve_all_impl_classes,
         resolve_impl_class,
     )
 
@@ -78,10 +85,54 @@ def test_impl_owner_public_import_contract() -> None:
     assert ImplClassField.__name__ == "ImplClassField"
     assert ImplDefaultsMixin.__name__ == "ImplDefaultsMixin"
     assert callable(impl_registry)
+    assert callable(resolve_all_impl_classes)
     assert callable(resolve_impl_class)
     legacy_modules = ("impl_types", "registry")
     for legacy_module in legacy_modules:
         assert importlib.util.find_spec(f"angee.base.{legacy_module}") is None
+
+
+@override_settings(
+    ANGEE_TEST_IMPLS={
+        "refined": "tests.test_impl._RefinedImpl",
+        "base": "tests.test_impl._BaseImpl",
+    }
+)
+def test_resolve_all_impl_classes_is_sorted_and_validates_keys() -> None:
+    """Registry enumeration is deterministic and owns declaration-key agreement."""
+
+    assert resolve_all_impl_classes("ANGEE_TEST_IMPLS", _BaseImpl) == (
+        _BaseImpl,
+        _RefinedImpl,
+    )
+
+    with (
+        override_settings(ANGEE_TEST_IMPLS={"wrong": "tests.test_impl._RefinedImpl"}),
+        pytest.raises(ImproperlyConfigured, match="with key 'refined'"),
+    ):
+        resolve_all_impl_classes("ANGEE_TEST_IMPLS", _BaseImpl)
+
+
+@override_settings(
+    ANGEE_TEST_IMPLS={
+        "base": "tests.test_impl._BaseImpl",
+        "missing": "tests.test_impl.MissingImpl",
+        "wrong_base": "builtins.str",
+    }
+)
+def test_resolve_all_impl_classes_can_collect_every_registry_fault() -> None:
+    """System-check callers receive all failures without duplicating resolution."""
+
+    faults: list[tuple[str, Exception]] = []
+
+    assert resolve_all_impl_classes(
+        "ANGEE_TEST_IMPLS",
+        _BaseImpl,
+        on_error=lambda key, error: faults.append((key, error)),
+    ) == (_BaseImpl,)
+    assert [key for key, _error in faults] == ["missing", "wrong_base"]
+    assert isinstance(faults[0][1], ImportError)
+    assert isinstance(faults[1][1], ImproperlyConfigured)
 
 
 @override_settings(ANGEE_EMPTY_IMPLS={})

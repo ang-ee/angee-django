@@ -7,12 +7,13 @@ from typing import Any
 from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import DEFAULT_DB_ALIAS, IntegrityError, transaction
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, models, transaction
 from rebac import system_context
 
 from angee.base.authority import TransactionBoundAuthority
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.writes import ImmutableEvidenceQuerySet as BaseImmutableEvidenceQuerySet
 from angee.workflows.attempts import json_values_equal
 from angee.workflows_extraction.contracts import CorrectionBinding
 from angee.workflows_extraction.engines import DocumentPart, DocumentSource, PageImage, PageResult
@@ -55,32 +56,38 @@ def _same_identity_basis(authority: Any, evidence: Any) -> bool:
     )
 
 
-class ImmutableEvidenceQuerySet(AngeeQuerySet[Any]):
-    """Prevent post-insert mutation and deletion through bulk ORM paths."""
+class ImmutableEvidenceQuerySet(
+    BaseImmutableEvidenceQuerySet[Any],
+    AngeeQuerySet[Any],
+):
+    """Preserve extraction's authority and audit-nullification exceptions."""
 
-    def update(self, **kwargs: Any) -> int:
-        if AuditMixin.is_audit_nullification(kwargs):
-            return super().update(**kwargs)
-        raise ValueError("Extraction evidence is immutable.")
+    def immutable_error(self, operation: str) -> Exception:
+        """Return extraction's established error for each forbidden mutation."""
 
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise ValueError("Extraction evidence is retained and cannot be deleted through the ORM.")
+        if operation == "delete":
+            return ValueError("Extraction evidence is retained and cannot be deleted through the ORM.")
+        if operation == "raw_delete":
+            return ValueError("Extraction evidence cannot be deleted through relation cascades.")
+        return ValueError("Extraction evidence is immutable.")
 
-    def _raw_delete(self, using: str) -> int:
-        raise ValueError("Extraction evidence cannot be deleted through relation cascades.")
+    def validate_evidence_insert(
+        self,
+        *,
+        objects: tuple[models.Model, ...],
+        ignore_conflicts: bool,
+        update_conflicts: bool,
+    ) -> None:
+        """Admit only retention-owner inserts without conflict rewriting."""
 
-    def create(self, **kwargs: Any) -> Any:
-        if not evidence_insert_allowed(self.db):
+        del objects
+        if not evidence_insert_allowed(self.db) or ignore_conflicts or update_conflicts:
             raise ValueError("Extraction evidence can only be inserted by the retention owner.")
-        return super().create(**kwargs)
 
-    def bulk_create(self, objs: Any, **kwargs: Any) -> Any:
-        if not evidence_insert_allowed(self.db) or kwargs.get("update_conflicts") or kwargs.get("ignore_conflicts"):
-            raise ValueError("Extraction evidence can only be inserted by the retention owner.")
-        return super().bulk_create(objs, **kwargs)
+    def validate_evidence_update(self, values: Mapping[str, Any]) -> bool:
+        """Allow only the framework audit-owner's nullification update."""
 
-    def bulk_update(self, objs: Any, fields: Any, **kwargs: Any) -> Any:
-        raise ValueError("Extraction evidence is immutable.")
+        return AuditMixin.is_audit_nullification(values)
 
 
 ImmutableEvidenceManager: Any = AngeeManager.from_queryset(ImmutableEvidenceQuerySet)
