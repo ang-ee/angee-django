@@ -100,6 +100,15 @@ export function validationErrorMap(
   );
 }
 
+/** Format an opaque field-to-messages validation map for a summary surface. */
+export function validationErrorMessages(value: unknown): string[] {
+  const errors = validationErrorMap(value);
+  if (!errors) return [];
+  return Object.entries(errors).flatMap(([field, messages]) =>
+    messages.map((message) => `${field}: ${message}`),
+  );
+}
+
 /**
  * Re-scope the descendant-message strings returned by
  * {@link useDottedPathFieldErrors} to one nested dotted path. Exact messages

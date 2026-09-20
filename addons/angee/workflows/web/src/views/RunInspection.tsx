@@ -8,8 +8,11 @@ import {
   EmptyState,
   errorMessage,
   ErrorBanner,
+  Checkbox,
   FieldDescriptorControl,
   Field,
+  FieldLabel,
+  FieldRoot,
   Form,
   GraphView,
   List,
@@ -386,6 +389,7 @@ function AttemptArtifactsPanel({ attemptId }: { attemptId: string }): React.Reac
 
 export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): React.ReactElement {
   const t = useWorkflowsT();
+  const uncertaintyAckId = React.useId();
   const navigate = useNavigate();
   const recordHref = useResourceRecordHrefLookup();
   const plan = useAuthoredQuery(
@@ -455,10 +459,13 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
         : recovery?.unavailable_reason || t("runs.recoveryUnavailable")}</p>
       {recovery?.requires_uncertainty_ack ? <div className="mt-3 space-y-2">
         <p className="text-13 text-fg-muted">{recovery.uncertainty_reason}</p>
-        <label className="flex items-start gap-2 text-13 text-fg">
-          <input type="checkbox" checked={uncertaintyAck} onChange={(event) => setUncertaintyAck(event.target.checked)} />
-          <span>{t("runs.uncertainExternalAck")}</span>
-        </label>
+        <FieldRoot>
+          <div className="flex items-start gap-2 text-13 text-fg">
+            <Checkbox id={uncertaintyAckId} checked={uncertaintyAck}
+              onCheckedChange={(checked) => setUncertaintyAck(checked)} />
+            <FieldLabel htmlFor={uncertaintyAckId}>{t("runs.uncertainExternalAck")}</FieldLabel>
+          </div>
+        </FieldRoot>
       </div> : null}
       {recovery?.map_index != null ? <div className="mt-3 text-13 text-fg">
         <p>{t("runs.priorMapRecovery")}</p>

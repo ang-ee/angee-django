@@ -2,7 +2,7 @@ import * as React from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
-  Badge, Button, Collapsible, ErrorBanner,
+  Badge, Button, Collapsible, ErrorBanner, fieldErrorMessages,
   Glyph, JsonValueView, LabeledDescriptorField, LazyBoundary, TextLink, formSpecInitialValues,
   LARGE_VIEWPORT_QUERY,
   PageAside,
@@ -418,7 +418,7 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
       submitting.current = false;
     }
   }
-  const messagesFor = (name: string): readonly string[] => fieldErrorMessages(errors[name]);
+  const messagesFor = (name: string): readonly string[] => fieldErrorMessages([errors[name]]);
   const selectAction = React.useCallback((action: string) => {
     if (!form?.options.some((option) => option.value === action)) return;
     rhf.clearErrors();
@@ -484,14 +484,6 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
 function isOpaqueDecisionInput(field: FormSpecFieldDescriptor): boolean {
   return (field.kind === "object" || field.kind === "array" || field.kind === "any")
     && !field.objectTemplate && !field.itemTemplate && !field.rowTemplate;
-}
-
-function fieldErrorMessages(value: unknown): readonly string[] {
-  if (!value || typeof value !== "object") return [];
-  const entries = value as Record<string, unknown>;
-  return [...(typeof entries.message === "string" ? [entries.message] : []),
-    ...Object.entries(entries).filter(([key]) => key !== "message" && key !== "type")
-      .flatMap(([, child]) => fieldErrorMessages(child))];
 }
 
 function useApprovalResolver(onResolved: ApprovalTaskProps["onResolved"], reconcile: ReconcileApproval | undefined, onCommitted: (verdict: string) => void): {

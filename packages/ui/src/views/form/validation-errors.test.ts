@@ -11,6 +11,7 @@ import {
   messagesForDottedPath,
   useDottedPathFieldErrors,
   validationErrorMap,
+  validationErrorMessages,
   validationErrorsFromError,
 } from "./validation-errors";
 
@@ -75,6 +76,22 @@ describe("validationErrorMap", () => {
 
   test("rejects a malformed JSON error map", () => {
     expect(validationErrorMap({ title: "Required" })).toBeNull();
+  });
+});
+
+describe("validationErrorMessages", () => {
+  test("formats every translated field message through the canonical map", () => {
+    expect(
+      validationErrorMessages({
+        "config.mode": ["Choose a supported mode."],
+        timeout: ["Must be positive.", "Must be finite."],
+      }),
+    ).toEqual([
+      "config.mode: Choose a supported mode.",
+      "timeout: Must be positive.",
+      "timeout: Must be finite.",
+    ]);
+    expect(validationErrorMessages({ timeout: "Must be positive." })).toEqual([]);
   });
 });
 

@@ -4,6 +4,7 @@ import type { FieldDescriptor } from "../page";
 import {
   emptyDraft,
   addFieldSelection,
+  fieldErrorMessages,
   formViewFieldLayout,
   missingRequiredFieldNames,
   mutationData,
@@ -16,6 +17,17 @@ const fields: readonly FieldDescriptor[] = [
   { name: "config.local_root", widget: "text" },
   { name: "config.local_name", widget: "text" },
 ];
+
+test("field errors retain nested messages while excluding RHF refs", () => {
+  expect(fieldErrorMessages([{
+    message: "Choose another title.",
+    ref: { message: "DOM input details are not validation." },
+    nested: { message: "Choose a valid relation." },
+  }])).toEqual(["Choose another title."]);
+  expect(fieldErrorMessages([{
+    nested: { message: "Choose a valid relation.", ref: { current: null } },
+  }])).toEqual(["Choose a valid relation."]);
+});
 
 test("titleText preserves string and numeric scalar titles", () => {
   expect(titleText("Daily briefing", "Untitled")).toBe("Daily briefing");

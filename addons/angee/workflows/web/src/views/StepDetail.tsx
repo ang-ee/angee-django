@@ -2,7 +2,7 @@ import * as React from "react";
 
 import type { DocumentType } from "@angee/gql/console";
 import { useAuthoredQuery } from "@angee/refine";
-import { canonicalOptionValue, Code, ErrorBanner, errorMessage, FormView, jsonObjectFromUnknown, relationValueId, TextLink, useImplConfigFields, useRouteHref, useRouteRecordId, type FormField, type RecordPanelContext, type RecordToolbarContext } from "@angee/ui";
+import { canonicalOptionValue, Code, ErrorBanner, errorMessage, FormView, jsonObjectFromUnknown, relationValueId, TextLink, useImplConfigFields, useRouteHref, useRouteRecordId, validationErrorMessages, type FormField, type RecordPanelContext, type RecordToolbarContext } from "@angee/ui";
 
 import { WorkflowStepOperationsDocument } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
@@ -49,7 +49,7 @@ export function StepDetail(): React.ReactElement {
     const workflow = workflowUsage(record.workflow);
     const workflowId = workflow?.id ?? relationValueId(record.workflow);
     const operation = operationFor(record);
-    const errors = diagnosticMessages(record.config_errors);
+    const errors = validationErrorMessages(record.config_errors);
     return <div className="grid gap-4">
       {operationsQuery.error ? <ErrorBanner description={errorMessage(operationsQuery.error, t("steps.typesUnavailable"))} /> : null}
       {workflowId ? <p><TextLink href={routeHref("workflows.workflow", { id: workflowId })}>
@@ -65,9 +65,4 @@ export function StepDetail(): React.ReactElement {
   return <FormView resource="workflows.Step" id={id} readOnly publishBreadcrumbLabel
     fields={fields} returning={WORKFLOW_STEP_USAGE_FIELDS}
     headerExtras={headerExtras} recordExtras={recordExtras} />;
-}
-
-function diagnosticMessages(value: unknown): string[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-  return Object.entries(value).flatMap(([field, messages]) => Array.isArray(messages) ? messages.map((message) => `${field}: ${String(message)}`) : [`${field}: ${String(messages)}`]);
 }

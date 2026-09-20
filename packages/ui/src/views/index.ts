@@ -104,12 +104,14 @@ export {
 export {
   useDottedPathFieldErrors,
   lineRowErrorsFromDottedPaths,
+  validationErrorMessages,
   validationErrorMap,
   validationErrorsFromError,
   type DottedPathFieldErrorMap,
   type DottedPathFieldErrors,
   type ValidationErrors,
 } from "./form/validation-errors";
+export { fieldErrorMessages } from "./form/form-view-model";
 export {
   FieldDescriptorControl,
   type FieldDescriptorControlProps,

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   runStatus: "RUNNING",
   runError: null as string | null,
   recoveryMapIndex: null as number | null,
+  recoveryRequiresUncertaintyAck: false,
   payloadVariables: [] as unknown[],
   resources: [] as Array<Record<string, unknown>>,
   mutation: vi.fn(),
@@ -34,7 +35,16 @@ vi.mock("@angee/refine", async (importOriginal) => {
       );
       if (Object.hasOwn(variables, "sourceAttempt")) return {
         data: {
-          workflow_recovery_plan: { available: true, mode: "reconcile", unavailable_reason: "", map_index: mocks.recoveryMapIndex },
+          workflow_recovery_plan: {
+            available: true,
+            mode: "reconcile",
+            unavailable_reason: "",
+            map_index: mocks.recoveryMapIndex,
+            requires_uncertainty_ack: mocks.recoveryRequiresUncertaintyAck,
+            uncertainty_reason: mocks.recoveryRequiresUncertaintyAck
+              ? "The external request may already have run."
+              : "",
+          },
           workflow_test_repair_context: null,
         },
         isFetching: false, error: null,
@@ -167,6 +177,7 @@ beforeEach(() => {
   mocks.runStatus = "RUNNING";
   mocks.runError = null;
   mocks.recoveryMapIndex = null;
+  mocks.recoveryRequiresUncertaintyAck = false;
   mocks.payloadVariables.length = 0;
   mocks.resources.length = 0;
   mocks.mutation.mockReset();
@@ -265,6 +276,24 @@ test("a successful recovery without a route retains its acknowledged run and can
   expect((screen.getByRole("button", { name: "Recover from this attempt" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Recover from this attempt" }));
   expect(mocks.mutation).toHaveBeenCalledTimes(1);
+});
+
+test("an uncertain recovery requires the shared labeled checkbox acknowledgement", async () => {
+  mocks.loading = false;
+  mocks.recoveryRequiresUncertaintyAck = true;
+  mocks.mutation.mockResolvedValue({ start_workflow_recovery: { ok: true, id: "run-uncertain" } });
+  render(<AttemptRecoveryPanel attemptId="attempt-uncertain" />);
+  const start = await screen.findByRole("button", { name: "Recover from this attempt" });
+  expect((start as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("checkbox", {
+    name: "I understand the external request may already have run, and I choose to start a new recovery attempt.",
+  }));
+  expect((start as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(start);
+  await waitFor(() => expect(mocks.mutation).toHaveBeenCalledWith(expect.objectContaining({
+    sourceAttempt: "attempt-uncertain",
+    acknowledgeUncertainExternal: true,
+  })));
 });
 
 test("a Map recovery can name the exact retained prior recovery basis", async () => {
