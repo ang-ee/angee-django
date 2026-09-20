@@ -10,20 +10,24 @@ from dataclasses import asdict, dataclass
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pypdfium2 as pdfium
+from django.conf import settings
 from PIL import Image
 
-from angee.workflows_extraction.engines import (
+from angee.workflows_extraction.contracts import (
     DocumentPart,
     DocumentPipelineError,
+    DocumentResult,
     DocumentSource,
-    ExtractionEngine,
     ExtractionPartKind,
     PageImage,
 )
 from angee.workflows_extraction.structured import extract_structured_sources
+
+if TYPE_CHECKING:
+    from angee.workflows_extraction.engines import ExtractionEngine
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +236,51 @@ def recognize_pages(
             )
         )
     return tuple(parts)
+
+
+def run_document_pipeline(
+    engine: ExtractionEngine,
+    sources: Sequence[DocumentSource],
+    schema: dict[str, Any],
+    *,
+    model: Any | None,
+    recognition_model: Any | None,
+    config: dict[str, Any],
+    timeout: float,
+) -> DocumentResult:
+    """Acquire, recognize and map a document within one shared deadline."""
+
+    started = time.monotonic()
+    acquired = acquire_native_parts(
+        sources,
+        dpi=int(settings.ANGEE_EXTRACTION_DPI),
+        max_edge=int(settings.ANGEE_EXTRACTION_MAX_EDGE),
+        max_pages=int(settings.ANGEE_EXTRACTION_MAX_PAGES),
+    )
+    recognized = recognize_pages(
+        acquired.recognition_pages,
+        engine=engine,
+        model=recognition_model or model,
+        config=config,
+        timeout=timeout - (time.monotonic() - started),
+        acquired_parts=acquired.parts,
+    )
+    parts = (*acquired.parts, *recognized)
+    value, claims, metadata = engine.map_text_parts(
+        parts,
+        schema,
+        model=model,
+        config=config,
+        timeout=timeout - (time.monotonic() - started),
+    )
+    return DocumentResult(
+        value,
+        parts,
+        claims,
+        used_model_roles=("mapping", "recognition") if recognized and recognition_model is not None else ("mapping",),
+        duration_ms=round((time.monotonic() - started) * 1000),
+        engine_metadata=metadata,
+    )
 
 
 def _message_text(source: DocumentSource) -> str:

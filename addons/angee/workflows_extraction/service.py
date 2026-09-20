@@ -17,6 +17,7 @@ from django.db import DEFAULT_DB_ALIAS, connections, models
 from jsonschema import Draft202012Validator
 from rebac import actor_context, current_actor, system_context, to_subject_ref
 
+from angee.agents.deployments import validate_approved_deployment
 from angee.base.actors import actor_user_id
 from angee.base.identity import canonical_subject_ref
 from angee.base.impl import resolve_impl_class
@@ -1937,46 +1938,13 @@ def _model_fingerprint(model: Any | None) -> dict[str, Any] | None:
     }
 
 
-def model_deployment_identity(model: Any) -> dict[str, str]:
-    """Return the non-secret endpoint binding checked before model invocation."""
-
-    provider = model.provider
-    backend = provider.backend
-    effective_url = str(provider.base_url or getattr(backend, "default_base_url", "")).strip().rstrip("/")
-    return {
-        "model": str(model.sqid),
-        "provider": str(provider.sqid),
-        "backend": str(provider.backend_class),
-        "native_model": str(model.provider_model_name),
-        "endpoint": effective_url,
-    }
-
-
 def require_approved_model_deployment(model: Any | None, *, role: str) -> None:
-    """Fail closed when the extraction deployment allowlist excludes a model."""
+    """Enforce the agents-owned role policy at extraction's permission boundary."""
 
     try:
-        validate_model_deployment(model, role=role)
+        validate_approved_deployment(model, role=role)
     except ValueError as error:
         raise PermissionDenied(str(error)) from error
-
-
-def validate_model_deployment(model: Any | None, *, role: str) -> None:
-    """Validate one configured model against the shared deployment allowlist."""
-
-    if model is None:
-        return
-    policy = getattr(settings, "ANGEE_EXTRACTION_APPROVED_MODEL_DEPLOYMENTS", None)
-    if policy is None:
-        return
-    if not isinstance(policy, Mapping):
-        raise ValueError("The extraction model deployment policy is invalid.")
-    approved = policy.get(role)
-    if not isinstance(approved, (list, tuple)) or not all(isinstance(item, Mapping) for item in approved):
-        raise ValueError(f"The extraction {role} deployment policy is invalid.")
-    identity = model_deployment_identity(model)
-    if not any(dict(item) == identity for item in approved):
-        raise ValueError(f"The configured extraction {role} model deployment is not approved.")
 
 
 def _validate_document_result(

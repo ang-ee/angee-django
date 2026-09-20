@@ -48,7 +48,6 @@ INSTALLED_APPS = [
     "angee.workflows_parties",
     "angee.workflows_integrate",
     "angee.workflows_extraction",
-    "angee.workflows_extraction_glm",
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",
@@ -154,6 +153,7 @@ ANGEE_INFERENCE_BACKEND_CLASSES = {
     "openai": "angee.agents_integrate_openai.backend.OpenAIInferenceBackend",
     "stub_inference": "tests.conftest.StubInferenceBackend",
 }
+ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
 ANGEE_AGENT_RUNTIME_CLASSES = {
     "none": "angee.agents.runtimes.NoRuntime",
     "claude_code": "angee.agents.runtimes.ClaudeCodeRuntime",
@@ -188,7 +188,6 @@ ANGEE_EXTRACTION_ENGINE_CLASSES = {
     "inference": "angee.workflows_extraction.engines.InferenceMappingEngine",
     "fake": "tests.extraction_engines.FakePageExtractionEngine",
     "fake_document": "tests.extraction_engines.FakeDocumentEngine",
-    "glm": "angee.workflows_extraction_glm.engine.GlmOllamaEngine",
 }
 ANGEE_EXTRACTION_MAX_BYTES = 25 * 1024 * 1024
 ANGEE_EXTRACTION_MAX_PAGES = 10
