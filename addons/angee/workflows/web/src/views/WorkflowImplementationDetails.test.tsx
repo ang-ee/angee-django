@@ -1,14 +1,16 @@
 // @vitest-environment happy-dom
 
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  listProps: null as Record<string, unknown> | null,
-  choice: { key: "wait", category: "Flow", defaults: {}, config_schema: null },
-}));
+import { ModelMetadataProvider, ResourceQuery, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
+import { Refine, type DataProvider } from "@angee/refine";
+import { AppRuntimeProvider, IMPLEMENTATION_DETAIL_SLOT, ImplementationDetails, ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/ui";
 
-vi.mock("@angee/refine", () => ({
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: () => ({
     isFetching: false,
     data: { workflow_step_operations: [{
@@ -22,37 +24,63 @@ vi.mock("@angee/refine", () => ({
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
-  const { createUiTestModule } = await import("@angee/ui/testing");
-  return createUiTestModule(importOriginal, {
-    useImplementationDetailContext: () => ({ model: "workflows.Step", field: "step_class", choice: mocks.choice }),
-    useRouteHref: () => (name: string, params?: { id?: string }) => `/${name}/${params?.id ?? ""}`,
-    Code: ({ children }: { children: unknown }) => <code>{String(children)}</code>,
-    CodeBlock: ({ children }: { children: unknown }) => <pre>{String(children)}</pre>,
-    ControlBandProvider: ({ children }: { children: unknown }) => <>{children as never}</>,
-    DetailSection: ({ title, rows }: { title: string; rows: readonly (readonly [string, unknown])[] }) => <section><h2>{title}</h2>{rows.map(([label, value]) => <div key={label}>{label}{value as never}</div>)}</section>,
-    LoadingPanel: ({ message }: { message: string }) => <div>{message}</div>,
-    TextLink: ({ children, href }: { children: unknown; href: string }) => <a href={href}>{children as never}</a>,
-    ListView: (props: Record<string, unknown>) => { mocks.listProps = props; return <div>usage-list</div>; },
-  });
+  const { createUiRouteTestDoubles, createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, createUiRouteTestDoubles());
 });
-
-vi.mock("../i18n", () => ({ useWorkflowsT: () => (key: string) => key }));
-vi.mock("../documents.console", () => ({ WorkflowStepOperationsDocument: "WorkflowStepOperations" }));
 
 import { WorkflowImplementationDetails } from "./WorkflowImplementationDetails";
 
-describe("WorkflowImplementationDetails", () => {
-  beforeEach(() => { mocks.listProps = null; });
+const resource = testDataResource("workflows.Step", {
+  rowModel: "client",
+  roots: { aggregate: "steps_aggregate" },
+  typeNames: { filter: "StepBoolExp", order: "StepOrderBy" },
+  query: ResourceQuery.forRows({ fields: {
+    id: { scalar: "ID" },
+    name: { scalar: "String" },
+    key: { scalar: "String" },
+    step_class: { scalar: "String" },
+    workflow: { kind: "relation", identityPath: "workflow.id", labelPath: "workflow.name" },
+  } }).contract,
+});
 
-  test("shows declared contracts and scopes configured usage to the implementation key", () => {
-    render(<WorkflowImplementationDetails />);
-    expect(screen.getByText("stepTypes.contracts")).toBeTruthy();
-    expect(screen.getByText("stepTypes.behavior")).toBeTruthy();
-    expect(screen.getByText("usage-list")).toBeTruthy();
-    expect(mocks.listProps).toMatchObject({
-      resource: "workflows.Step",
-      baseFilter: { step_class: { exact: "wait" } },
-      selectable: false,
-    });
+afterEach(cleanup);
+
+describe("WorkflowImplementationDetails", () => {
+  test("shows declared contracts and scopes configured usage to the implementation key", async () => {
+    const workflow = { id: "flow-1", name: "Dispatch", version: 2, status: "PUBLISHED" };
+    const rows = [
+      { id: "step-wait", name: "Wait for dispatch", key: "wait-for-dispatch", step_class: "wait", workflow },
+      { id: "step-call", name: "Send dispatch", key: "send-dispatch", step_class: "call", workflow },
+    ];
+    const provider = {
+      getApiUrl: () => "test://workflows",
+      getList: vi.fn(async () => ({ data: rows, total: rows.length })),
+      getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
+    } as DataProvider;
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory() });
+    render(
+      <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
+        <RouterContextProvider router={router}>
+          <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+            <ModalsHost><ToastProvider>
+              <AppRuntimeProvider runtime={{ widgets: defaultWidgets, icons: baseIcons, slots: [
+                { slot: IMPLEMENTATION_DETAIL_SLOT, model: "workflows.Step", id: "usage", content: <WorkflowImplementationDetails /> },
+              ] }}>
+                <ImplementationDetails value={{ model: "workflows.Step", field: "step_class", choice: { key: "wait", category: "Flow", defaults: {}, config_schema: null } }} />
+              </AppRuntimeProvider>
+            </ToastProvider></ModalsHost>
+          </ModelMetadataProvider>
+        </RouterContextProvider>
+      </Refine>,
+    );
+
+    expect(screen.getByRole("heading", { name: "Data contracts" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Workflow behavior" })).toBeTruthy();
+    expect(screen.getByText("Pauses execution")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Dispatch 1", expanded: false }));
+    expect((await screen.findByRole("link", { name: "Wait for dispatch" })).getAttribute("href")).toBe("/workflows.step/step-wait");
+    expect(screen.getByRole("link", { name: "Dispatch · v2 · PUBLISHED" }).getAttribute("href")).toBe("/workflows.workflow/flow-1");
+    expect(screen.queryByText("Send dispatch")).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
   });
 });
