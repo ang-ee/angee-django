@@ -28,6 +28,7 @@ from angee.workflows.models import (
 from angee.workflows.steps import StepImpl, StepResult
 from angee.workflows.testing import advance_once as advance_once
 from angee.workflows.testing import execute_started as execute_started
+from angee.workflows.testing import owned_run as owned_run
 from angee.workflows.testing import run_to_terminal as run_to_terminal
 from angee.workflows.testing import start_run as start_run
 from angee.workflows.testing import step_run_for as step_run_for

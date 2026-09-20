@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import datetime
 from typing import Any
 
 from django.contrib.contenttypes.models import ContentType
-from django.db import models
+from django.db import DEFAULT_DB_ALIAS, models
 from django.db.models import F, Q
 from django.utils import timezone
 from rebac import system_context
@@ -21,10 +22,22 @@ def _workflow_model(run: Any, name: str) -> type[models.Model]:
     return run._meta.apps.get_model("workflows", name)
 
 
+def _require_default_database(value: Any, *, label: str) -> None:
+    """Reject objects the workflow engine cannot safely route by database."""
+
+    alias = value._state.db
+    if value.pk is None or value._state.adding or alias != DEFAULT_DB_ALIAS:
+        raise ValueError(
+            "workflows.testing requires a retained object from the default "
+            f"database; {label} uses {alias!r}."
+        )
+
+
 def _run_tree(root: Any) -> list[Any]:
     """Return a root and its owned-call/continuation descendants in stable order."""
 
     run_model = _workflow_model(root, "WorkflowRun")
+    _require_default_database(root, label="run")
     runs = [root]
     seen = {root.pk}
     while True:
@@ -42,11 +55,32 @@ def _run_tree(root: Any) -> list[Any]:
         seen.update(child.pk for child in added)
 
 
+def _run_states(root: Any, tree: list[Any] | None = None) -> list[Any]:
+    """Return retained run/step/attempt diagnostics for an exact run tree."""
+
+    step_run_model = _workflow_model(root, "StepRun")
+    tree = tree or _run_tree(root)
+    with system_context(reason="workflows.testing run diagnostics"):
+        return list(
+            step_run_model.objects
+            .filter(run_id__in=[current.pk for current in tree])
+            .order_by("pk")
+            .values_list(
+                "run_id",
+                "run__status",
+                "step__key",
+                "status",
+                "current_attempt__error",
+            )
+        )
+
+
 def _retained_run_targets(root: Any) -> tuple[int, ...]:
     """Return WorkflowRun artifacts currently awaited by the run tree."""
 
     step_artifact = _workflow_model(root, "StepArtifact")
     run_model = _workflow_model(root, "WorkflowRun")
+    _require_default_database(root, label="run")
     tree_ids = [current.pk for current in _run_tree(root)]
     with system_context(reason="workflows.testing retained run targets"):
         run_type = ContentType.objects.get_for_model(run_model)
@@ -69,6 +103,7 @@ def _deliver_results(root: Any, *, now: datetime | None = None) -> None:
 
     dispatch_model = _workflow_model(root, "WorkflowDispatch")
     run_model = _workflow_model(root, "WorkflowRun")
+    _require_default_database(root, label="run")
     timestamp = now or timezone.now()
     tree_ids = {current.pk for current in _run_tree(root)}
     descendant_ids = tree_ids - {root.pk}
@@ -107,25 +142,48 @@ def _deliver_results(root: Any, *, now: datetime | None = None) -> None:
 def start_run(workflow: Any, *, subject: Any = None, actor: Any = None) -> Any:
     """Start a workflow run without relying on a live queue."""
 
+    _require_default_database(workflow, label="workflow")
     return engine.start(workflow, subject=subject, actor=actor)
 
 
 def advance_once(run: Any, *, now: datetime | None = None) -> list[Any]:
     """Advance one run and return its started rows in stable order."""
 
+    _require_default_database(run, label="run")
     engine.advance(run.pk, **({"now": now} if now is not None else {}))
     step_run_model = _workflow_model(run, "StepRun")
     with system_context(reason="workflows.testing read started"):
-        return list(step_run_model.objects.filter(run=run, status=StepRunStatus.STARTED).order_by("pk"))
+        return list(
+            step_run_model.objects
+            .filter(run=run, status=StepRunStatus.STARTED)
+            .order_by("pk")
+        )
 
 
-def execute_started(run: Any, *, now: datetime | None = None, limit: int | None = None) -> None:
+def execute_started(
+    run: Any,
+    *,
+    now: datetime | None = None,
+    limit: int | None = None,
+    key: str | None = None,
+) -> None:
     """Execute currently started step-runs synchronously in stable order."""
 
+    if key is not None and limit is not None:
+        raise TypeError("execute_started() accepts either key or limit, not both.")
     step_run_model = _workflow_model(run, "StepRun")
     dispatch_model = _workflow_model(run, "WorkflowDispatch")
+    _require_default_database(run, label="run")
     with system_context(reason="workflows.testing read started"):
-        rows = list(step_run_model.objects.filter(run=run, status=StepRunStatus.STARTED).order_by("pk"))
+        started = step_run_model.objects.filter(
+            run=run,
+            status=StepRunStatus.STARTED,
+        )
+        rows = (
+            [started.select_related("step").get(step__key=key)]
+            if key is not None
+            else list(started.order_by("pk"))
+        )
     if limit is not None:
         rows = rows[:limit]
     for row in rows:
@@ -146,14 +204,20 @@ def run_to_terminal(
     *,
     max_cycles: int = 80,
     stop_key: str | None = None,
+    allow_failed: Collection[Any] = (),
+    allow_canceled: Collection[Any] = (),
 ) -> Any:
-    """Drive a run tree until terminal, or stop before executing ``stop_key``."""
+    """Drive a run tree until terminal, rejecting unnamed failures and cancellations."""
 
     step_run_model = _workflow_model(run, "StepRun")
+    _require_default_database(run, label="run")
+    allowed_failed_ids = set(allow_failed)
+    allowed_canceled_ids = set(allow_canceled)
     for _ in range(max_cycles):
         tree = _run_tree(run)
         for current in tree:
-            current.refresh_from_db()
+            with system_context(reason="workflows.testing refresh run"):
+                current.refresh_from_db()
             if current.status not in RunStatus.TERMINAL:
                 advance_once(current)
 
@@ -169,7 +233,8 @@ def run_to_terminal(
                 .order_by("pk")
             )
         if stop_key is not None and any(row.step.key == stop_key for row in started):
-            run.refresh_from_db()
+            with system_context(reason="workflows.testing refresh stopped run"):
+                run.refresh_from_db()
             return run
         for current in tree:
             execute_started(current)
@@ -177,18 +242,34 @@ def run_to_terminal(
 
         tree = _run_tree(run)
         for current in tree:
-            current.refresh_from_db()
+            with system_context(reason="workflows.testing refresh terminal run"):
+                current.refresh_from_db()
         if all(current.status in RunStatus.TERMINAL for current in tree):
-            run.refresh_from_db()
+            unexpected = [
+                (current.pk, current.status)
+                for current in tree
+                if (
+                    current.status == RunStatus.FAILED
+                    and current.pk not in allowed_failed_ids
+                )
+                or (
+                    current.status == RunStatus.CANCELED
+                    and current.pk not in allowed_canceled_ids
+                )
+            ]
+            if unexpected:
+                raise AssertionError(
+                    f"Workflow run tree settled with unexpected terminal runs "
+                    f"{unexpected}: {_run_states(run, tree)}"
+                )
+            with system_context(reason="workflows.testing refresh completed root"):
+                run.refresh_from_db()
             return run
 
-    with system_context(reason="workflows.testing unsettled diagnostics"):
-        states = list(
-            step_run_model.objects.filter(run_id__in=[current.pk for current in _run_tree(run)])
-            .order_by("pk")
-            .values_list("run_id", "step__key", "status", "current_attempt__error")
-        )
-    raise AssertionError(f"Workflow run tree did not settle after {max_cycles} cycles: {states}")
+    raise AssertionError(
+        f"Workflow run tree did not settle after {max_cycles} cycles: "
+        f"{_run_states(run)}"
+    )
 
 
 def step_run_for(run: Any, key: str) -> Any:
@@ -200,3 +281,24 @@ def step_run_for(run: Any, key: str) -> Any:
             run_id__in=[current.pk for current in _run_tree(run)],
             step__key=key,
         )
+
+
+def owned_run(root: Any, workflow_key: str, *, subject: Any = None) -> Any:
+    """Return one workflow-keyed run in the root's exact owned tree."""
+
+    run_model = _workflow_model(root, "WorkflowRun")
+    _require_default_database(root, label="run")
+    tree_ids = [current.pk for current in _run_tree(root)]
+    filters: dict[str, Any] = {
+        "pk__in": tree_ids,
+        "workflow__key": workflow_key,
+    }
+    if subject is not None:
+        _require_default_database(subject, label="subject")
+        subject_type = ContentType.objects.get_for_model(subject)
+        filters.update(
+            subject_content_type=subject_type,
+            subject_object_id=subject.pk,
+        )
+    with system_context(reason="workflows.testing owned run read"):
+        return run_model.objects.get(**filters)

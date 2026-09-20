@@ -41,6 +41,7 @@ from tests.workflows import (
     WorkflowRun,
     advance_once,
     execute_started,
+    owned_run,
     run_to_terminal,
     start_run,
     step_for,
@@ -269,6 +270,210 @@ def test_two_step_run_completes_end_to_end(
     finish = step_run_for(run, "finish")
     assert finish.input["value"] == 7
     assert [call["key"] for call in fixture_calls] == ["start", "finish"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_run_to_terminal_rejects_failed_owned_descendant_with_diagnostics(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    fixture_calls: list[dict[str, Any]],
+) -> None:
+    """A terminal root cannot hide a failed run in its exact owned tree."""
+
+    del workflow_engine_tables, no_workflow_queue, fixture_calls
+    actor = User.objects.create_user(username="testing-failed-descendant-actor")
+    parent_workflow = workflow_with_steps(
+        key="testing-parent",
+        steps=({"key": "handoff", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    failed_workflow = workflow_with_steps(
+        key="testing-failed-child",
+        steps=(
+            {
+                "key": "explode",
+                "config": {"mode": "error", "error": "owned child boom"},
+            },
+        ),
+        edges=(),
+    )
+    parent = run_to_terminal(start_run(parent_workflow, actor=actor))
+    child = engine.start(
+        failed_workflow,
+        subject=None,
+        actor=actor,
+        parent_step_run=step_run_for(parent, "handoff"),
+        parent_relation="owned_call",
+    )
+
+    with pytest.raises(AssertionError, match="owned child boom"):
+        run_to_terminal(parent)
+
+    child.refresh_from_db()
+    assert child.status == workflow_models.RunStatus.FAILED
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("fixture_calls")
+def test_run_to_terminal_allows_only_named_canceled_descendant(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """A caller can admit one intentional cancellation by retained run ID."""
+
+    del workflow_engine_tables, no_workflow_queue
+    actor = User.objects.create_user(username="testing-canceled-descendant-actor")
+    parent_workflow = workflow_with_steps(
+        key="testing-cancel-parent",
+        steps=({"key": "handoff", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    child_workflow = workflow_with_steps(
+        key="testing-canceled-child",
+        steps=({"key": "work", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    parent = run_to_terminal(start_run(parent_workflow, actor=actor))
+    child = engine.start(
+        child_workflow,
+        subject=None,
+        actor=actor,
+        parent_step_run=step_run_for(parent, "handoff"),
+        parent_relation="continuation",
+    )
+    engine.cancel(child, actor=actor)
+
+    with pytest.raises(AssertionError, match="unexpected terminal runs"):
+        run_to_terminal(parent)
+    assert run_to_terminal(parent, allow_canceled={child.pk}) == parent
+
+
+@pytest.mark.django_db(transaction=True)
+def test_execute_started_selects_one_exact_step_key(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    fixture_calls: list[dict[str, Any]],
+) -> None:
+    """Keyed execution does not depend on started-row ordering."""
+
+    del workflow_engine_tables, no_workflow_queue
+    workflow = workflow_with_steps(
+        steps=(
+            {"key": "first", "config": {"outcome": "done"}, "is_entry": True},
+            {"key": "second", "config": {"outcome": "done"}, "is_entry": True},
+        ),
+        edges=(),
+    )
+    run = start_run(workflow)
+    advance_once(run)
+
+    execute_started(run, key="second")
+
+    first = step_run_for(run, "first")
+    second = step_run_for(run, "second")
+    assert first.status == workflow_models.StepRunStatus.STARTED
+    assert second.status == workflow_models.StepRunStatus.SUCCEEDED
+    assert [call["key"] for call in fixture_calls] == ["second"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_testing_helpers_reject_non_default_database_objects(
+    workflow_engine_tables: None,
+) -> None:
+    """Helpers fail before engine operations that cannot route a database alias."""
+
+    del workflow_engine_tables
+    workflow = workflow_with_steps(
+        steps=({"key": "work", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    workflow._state.db = "other"
+    with pytest.raises(ValueError, match="workflow uses 'other'"):
+        start_run(workflow)
+
+    workflow._state.db = "default"
+    run = start_run(workflow)
+    run._state.db = "other"
+    with pytest.raises(ValueError, match="run uses 'other'"):
+        advance_once(run)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_testing_helpers_reject_unretained_objects_before_engine_mutation(
+    workflow_engine_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown database provenance cannot reach mutating engine entrypoints."""
+
+    del workflow_engine_tables
+    workflow = workflow_with_steps(
+        steps=({"key": "work", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    run = start_run(workflow)
+    engine_calls: list[str] = []
+    monkeypatch.setattr(engine, "start", lambda *args, **kwargs: engine_calls.append("start"))
+    monkeypatch.setattr(engine, "advance", lambda *args, **kwargs: engine_calls.append("advance"))
+
+    workflow.pk = None
+    workflow._state.adding = True
+    workflow._state.db = None
+    with pytest.raises(ValueError, match="workflow uses None"):
+        start_run(workflow)
+
+    run._state.db = None
+    with pytest.raises(ValueError, match="run uses None"):
+        advance_once(run)
+
+    assert engine_calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("fixture_calls")
+def test_owned_run_resolves_exact_workflow_key_subject_and_owned_tree(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Owned-run lookup is unique by lineage key and optional subject."""
+
+    del workflow_engine_tables, no_workflow_queue
+    actor = User.objects.create_user(username="testing-owned-run-actor")
+    parent_workflow = workflow_with_steps(
+        key="testing-owned-parent",
+        steps=({"key": "handoff", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    child_workflow = workflow_with_steps(
+        key="testing-owned-child",
+        steps=({"key": "work", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    parent = run_to_terminal(start_run(parent_workflow, actor=actor))
+    handoff = step_run_for(parent, "handoff")
+    first = engine.start(
+        child_workflow,
+        subject=parent_workflow,
+        actor=actor,
+        parent_step_run=handoff,
+        parent_relation="owned_call",
+    )
+    second = engine.start(
+        child_workflow,
+        subject=handoff.step,
+        actor=actor,
+        parent_step_run=handoff,
+        parent_relation="continuation",
+    )
+    engine.start(child_workflow, subject=parent_workflow, actor=actor)
+
+    assert owned_run(
+        parent,
+        "testing-owned-child",
+        subject=parent_workflow,
+    ) == first
+    assert owned_run(parent, "testing-owned-child", subject=handoff.step) == second
+    with pytest.raises(WorkflowRun.MultipleObjectsReturned):
+        owned_run(parent, "testing-owned-child")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1297,7 +1502,8 @@ def test_error_workflow_fires_once_with_failed_run_subject(
             is_entry=True,
         )
         workflow = draft.publish()
-    run = run_to_terminal(start_run(workflow))
+    run = start_run(workflow)
+    run_to_terminal(run, allow_failed={run.pk})
     failed = step_run_for(run, "explode")
 
     from angee.workflows import engine
@@ -1349,7 +1555,7 @@ def test_linked_business_workflow_can_start_its_error_workflow(
         parent_relation="continuation",
         origin=workflow_models.RunOrigin.WORKFLOW,
     )
-    run_to_terminal(child)
+    run_to_terminal(child, allow_failed={child.pk})
     with system_context(reason="test linked business child recovery"):
         error_run = WorkflowRun.objects.get(parent_step_run=step_run_for(child, "explode"))
     assert error_run.origin == workflow_models.RunOrigin.ERROR_WORKFLOW
@@ -1385,12 +1591,13 @@ def test_error_workflow_run_does_not_start_another_error_workflow(
         )
         workflow = primary.publish()
 
-    run = run_to_terminal(start_run(workflow))
+    run = start_run(workflow)
+    run_to_terminal(run, allow_failed={run.pk})
     failed = step_run_for(run, "explode")
     with system_context(reason="test workflows first error workflow child"):
         child = WorkflowRun.objects.get(parent_step_run=failed)
 
-    run_to_terminal(child)
+    run_to_terminal(child, allow_failed={child.pk})
 
     with system_context(reason="test workflows cyclic error workflow children"):
         assert WorkflowRun.objects.filter(parent_step_run__run=child).count() == 0

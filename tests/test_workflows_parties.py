@@ -749,7 +749,7 @@ def test_prepare_rejects_a_tampered_pair_identity(
     )
     assert attempted.validation_error is None
 
-    run_to_terminal(run)
+    run_to_terminal(run, allow_failed={run.pk})
     run.refresh_from_db()
     assert run.status == workflow_models.RunStatus.FAILED
     prepare = step_run_for(run, "prepare")
