@@ -1577,13 +1577,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     def execution_admission_actor(self) -> Any:
         """Resolve the immutable actor admitted by this recovery lineage root."""
 
-        root_id = self.execution_lineage_root_id()
-        root = (
-            self
-            if root_id == self.pk
-            else system_queryset(type(self), using=self._state.db, lock=None).get(pk=root_id)
-        )
-        actor = root.admission_actor()
+        actor = self.delivery_target().admission_actor()
         if actor is None:
             raise ValidationError({"actor": "Workflow execution requires its admitted actor."})
         return actor

@@ -2163,15 +2163,15 @@ def test_workflow_subject_history_batches_context_and_guarded_journals(
     )
     failed_workflow = workflow_with_steps(
         name="History failures",
-        steps=({"key": "failed", "step_class": "handler"},),
+        steps=({"key": "failed", "step_class": "fixture"},),
         edges=(),
     )
 
-    def fail(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def fail(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
         raise RuntimeError("retained history failure")
 
-    monkeypatch.setattr(HandlerStep, "run", fail)
+    monkeypatch.setattr(FixtureStep, "run", fail)
 
     def add_history_group() -> dict[str, str]:
         gate_run = engine.start(gate_workflow, subject=subject, actor=viewer)

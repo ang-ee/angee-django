@@ -875,6 +875,7 @@ def cancel(run: Any) -> None:
         if owned_children:
             transaction.on_commit(enqueue_dispatch_publisher)
 
+
 def expire_pending_decisions(run: Any, *, resolved_by: str) -> int:
     """Expire every pending decision for ``run`` through the engine owner."""
 

@@ -253,9 +253,7 @@ class GateConfig(WorkflowStepConfig):
     def validate_static_authoring(self) -> GateConfig:
         """Keep fixed action declarations separate from bound or per-slot schemas."""
 
-        has_slot_schema = isinstance(self.slots, list) and any(
-            slot.decision_schema is not None for slot in self.slots
-        )
+        has_slot_schema = isinstance(self.slots, list) and any(slot.decision_schema is not None for slot in self.slots)
         if self.actions or self.properties:
             if not isinstance(self.decision_schema, dict) or self.decision_schema or has_slot_schema:
                 raise ValueError("Static gate actions and properties cannot be combined with a bound or slot schema.")
@@ -292,6 +290,7 @@ class JoinContinuationConfig(WorkflowStepConfig):
             raise ValueError("Join expected_outcomes must be distinct.")
         return value
 
+
 class ArtifactBindingConfig(BaseModel):
     """One emitted result artifact selected from the projected output."""
 
@@ -300,6 +299,7 @@ class ArtifactBindingConfig(BaseModel):
     model: NonBlankString
     id_path: JsonPath
     label: NonBlankString
+
 
 class EmitConfig(WorkflowStepConfig):
     """Projection contract and explicit artifact bindings."""

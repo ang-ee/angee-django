@@ -552,11 +552,7 @@ class CallWorkflow(StepImpl):
         publication = instance_from_public_id(
             workflow_model, public_id, queryset=system_queryset(workflow_model, lock=None)
         )
-        if (
-            publication is None
-            or publication.published_from_id is None
-            or str(publication.status) != "published"
-        ):
+        if publication is None or publication.published_from_id is None or str(publication.status) != "published":
             raise ValidationError({"publication": "CallWorkflow requires an exact published workflow id."})
         return publication
 
@@ -755,11 +751,7 @@ class JoinContinuation(StepImpl):
         if completion is None:
             state = step_run.resume_state if isinstance(step_run.resume_state, Mapping) else {}
             previous = state.get("join_reconcile_after")
-            delay = (
-                config["reconcile_after"]
-                if type(previous) is not int
-                else min(previous * 2, 3600)
-            )
+            delay = config["reconcile_after"] if type(previous) is not int else min(previous * 2, 3600)
             return StepResult.wait(
                 until=now + timedelta(seconds=delay),
                 waiting_kind="external",
