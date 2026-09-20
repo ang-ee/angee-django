@@ -25,6 +25,12 @@ export {
   workflowLaunchClaim,
 } from "./slots";
 export type { WorkflowLaunchClaim } from "./slots";
+export {
+  compileDecisionActionFormSpec,
+  type DecisionActionFormSpec,
+  type DecisionFormActionOption,
+  type DecisionFormValidation,
+} from "./decision-action-form";
 
 import { CHATTER_TAB_SEARCH_KEY } from "@angee/ui";
 import { DECISION_SEARCH_KEY, WORKFLOW_RUN_SEARCH_KEY } from "./decision-navigation";

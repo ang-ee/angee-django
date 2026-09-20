@@ -1,8 +1,63 @@
-import { expect, test } from "vitest";
-import { defaultWidgets } from "../../widgets";
-import { compileDecisionActionFormSpec, formSpecInitialValues } from "./form-spec";
+// @vitest-environment happy-dom
+
+import { renderHook } from "@testing-library/react";
+import { beforeAll, expect, test } from "vitest";
+import { defaultWidgets, formSpecInitialValues, type UiTranslate } from "@angee/ui";
+import { useWorkflowsT } from "./i18n";
+import { compileDecisionActionFormSpec } from "./decision-action-form";
+
+let t: UiTranslate;
+beforeAll(() => {
+  t = renderHook(() => useWorkflowsT()).result.current;
+});
 
 const widgets = { ...defaultWidgets, facts: { read: () => null } };
+
+test("provider-less workflow translations own plurals and fallback", () => {
+  expect(t("inbox.validation.minLength", { label: "Note", count: 1 }))
+    .toBe("Note must contain at least 1 character.");
+  expect(t("inbox.validation.minLength", { label: "Note", count: 2 }))
+    .toBe("Note must contain at least 2 characters.");
+  expect(t("inbox.validation.invalidSchema")).toBe("The Decision schema is invalid.");
+});
+
+test("Decision annotations are parsed by workflows after the generic form boundary", () => {
+  const schema = {
+    type: "object", required: ["action"], properties: {
+      action: { type: "string", enum: ["approve"], options: [
+        { value: "approve", label: "Approve", verdict: "COMPLETE", confirm: "Continue?" },
+      ] },
+      reviewed: { type: "array", layout: "context", widget: "facts", items: { type: "object" } },
+    },
+    oneOf: [{
+      type: "object", required: ["action"],
+      properties: { action: { const: "approve" } }, additionalProperties: false,
+    }],
+  };
+  expect(compileDecisionActionFormSpec(schema, widgets, t).options[0]).toEqual({
+    value: "approve", label: "Approve", verdict: "COMPLETE", confirm: "Continue?",
+  });
+  expect(() => compileDecisionActionFormSpec({
+    ...schema,
+    properties: {
+      ...schema.properties,
+      action: { ...schema.properties.action, options: [
+        { value: "approve", label: "Approve", verdict: "PENDING" },
+      ] },
+    },
+  }, widgets, t)).toThrow("native verdict");
+  expect(() => compileDecisionActionFormSpec({
+    ...schema,
+    properties: {
+      ...schema.properties,
+      action: { ...schema.properties.action, options: [
+        { value: "approve", label: "Approve", verdict: "COMPLETE", unsupported: true },
+      ] },
+    },
+  }, widgets, t)).toThrow("unique enum value");
+  expect(() => compileDecisionActionFormSpec({ ...schema, type: "unsupported" }, widgets, t))
+    .toThrow("The Decision schema is invalid.");
+});
 
 test("native terms, bank, and source action schemas retain exact branch values and full constraints", () => {
   const terms = compileDecisionActionFormSpec({
@@ -27,13 +82,21 @@ test("native terms, bank, and source action schemas retain exact branch values a
         action: { const: "escalate" }, note: { type: "string", minLength: 1 },
       }, additionalProperties: false },
     ],
-  }, widgets);
+  }, widgets, t);
   expect(terms.options.map((option) => option.verdict)).toEqual(["COMPLETE", "REJECT", "ESCALATE"]);
   expect(terms.project("reject", { party_id: "pty_existing", note: "", reviewed: [] }))
     .toEqual({ action: "reject", note: "" });
   expect(terms.validate({ action: "reject", note: "" }).valid).toBe(false);
   expect(terms.validate({ action: "reject", note: "Reason" }).valid).toBe(true);
   expect(terms.validateContext({ reviewed: [] }).valid).toBe(true);
+  expect(terms.validateContext({})).toEqual({
+    valid: false,
+    messages: { reviewed: ["Frozen Decision context is missing."] },
+  });
+  expect(terms.validateContext({ reviewed: "invalid" })).toEqual({
+    valid: false,
+    messages: { reviewed: ["Frozen Decision context is invalid."] },
+  });
 
   const bank = compileDecisionActionFormSpec({
     type: "object", required: ["action"], properties: {
@@ -52,7 +115,7 @@ test("native terms, bank, and source action schemas retain exact branch values a
       }, additionalProperties: false },
       { type: "object", required: ["action"], properties: { action: { const: "reject" } }, additionalProperties: false },
     ],
-  }, widgets);
+  }, widgets, t);
   const frozenDigest = "a".repeat(64);
   expect(bank.project("verify", { expected_identity_digest: frozenDigest, evidence: null, reviewed: [{ pointer: "/bank" }] }))
     .toEqual({ action: "verify", expected_identity_digest: frozenDigest, evidence: null });
@@ -78,7 +141,7 @@ test("native terms, bank, and source action schemas retain exact branch values a
         action: { const: "keep_separate" }, reason: { type: "string", pattern: ".*\\S.*" },
       }, additionalProperties: false },
     ],
-  }, widgets);
+  }, widgets, t);
   expect(source.project("link_existing", { invoice_id: "inv_current", reason: "Source reviewed", approved: false, count: 0, reviewed: [] }))
     .toEqual({ action: "link_existing", invoice_id: "inv_current", reason: "Source reviewed", approved: false, count: 0 });
   expect(source.validate(source.project("link_existing", { invoice_id: "inv_current", reason: "Source reviewed", approved: false, count: 0 })).valid).toBe(true);
@@ -111,7 +174,7 @@ test("alternative correction fields produce one labelled instruction without dup
         action: { const: "reject" }, note: { type: "string", minLength: 1 },
       }, additionalProperties: false },
     ],
-  }, widgets);
+  }, widgets, t);
 
   expect(form.validate({
     action: "correct", note: "", currency: null, invoice_date: null, vendor_name: null,
@@ -152,7 +215,7 @@ test("nested Decision errors remain visible through their owning top-level field
         } } },
       } } },
     }, additionalProperties: false }],
-  }, widgets);
+  }, widgets, t);
 
   expect(form.validate({
     action: "apply", documents: [{ lines: [{ account_id: null }] }],
@@ -184,7 +247,7 @@ test("retains omitted optional reasons inside a structured Decision object", () 
         source_2: { type: "string", minLength: 1 },
       }, additionalProperties: false },
     }, additionalProperties: false }],
-  }, widgets);
+  }, widgets, t);
 
   const initial = formSpecInitialValues(form.inputFields, { retired_reasons: {} });
   expect(initial).toEqual({ retired_reasons: {} });

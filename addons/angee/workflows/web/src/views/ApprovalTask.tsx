@@ -6,13 +6,14 @@ import {
   Glyph, JsonValueView, LabeledDescriptorField, LazyBoundary, TextLink, formSpecInitialValues,
   LARGE_VIEWPORT_QUERY,
   PageAside,
-  compileDecisionActionFormSpec, deserializeFormSpec, errorMessage, jsonValueFromUnknown, normalizeFormSpecValues, statusTone, useAppRuntime, useConfirm, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
+  deserializeFormSpec, errorMessage, jsonValueFromUnknown, normalizeFormSpecValues, statusTone, useAppRuntime, useConfirm, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
   recordTargetHref, useMediaQuery, useModelSlot,
   useRecordPeek,
   type DottedPathFieldErrorMap, type FormSpecFieldDescriptor, type JsonValue, type RecordPeekOpen, type RecordPeekReference,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { decisionHref } from "../decision-navigation";
+import { compileDecisionActionFormSpec } from "../decision-action-form";
 import { DecideWorkflowDecisionDocument, type PendingWorkflowDecision } from "../documents.public";
 import { useWorkflowsT } from "../i18n";
 import { WORKFLOW_DECISION_CONTENT_SLOT } from "../slots";
@@ -348,12 +349,13 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
   onOpenEvidence?: WorkflowDecisionContentProps["openEvidence"];
 }): React.ReactElement {
   const t = useWorkflowsT();
-  const { widgets } = useAppRuntime();
+  const { i18n, widgets } = useAppRuntime();
+  const locale = i18n?.language ?? "en";
   const confirm = useConfirm();
   const compiled = React.useMemo(() => {
-    try { return { form: compileDecisionActionFormSpec(approval.decision_schema, widgets), error: null }; }
+    try { return { form: compileDecisionActionFormSpec(approval.decision_schema, widgets, t, locale), error: null }; }
     catch (cause) { return { form: null, error: errorMessage(cause, t("inbox.decisionFormUnavailable")) }; }
-  }, [approval.decision_schema, t, widgets]);
+  }, [approval.decision_schema, locale, t, widgets]);
   const form = compiled.form;
   const contextFields = form?.contextFields ?? [];
   const inputFields = form?.inputFields ?? [];

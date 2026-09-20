@@ -71,16 +71,15 @@ const FieldBaseSchema = v.object({
   format: v.optional(NonEmptyString),
   pattern: v.optional(v.string()),
   enum: v.optional(v.array(v.string("form-spec select values must be strings."))),
-  options: v.optional(v.array(v.object({
+  // Option annotations are an extension seam. The generic form owner consumes
+  // only value/label/disabled and preserves domain annotations for its caller.
+  options: v.optional(v.array(v.looseObject({
     // JSON Pointer uses the empty string for the root document. It is a valid
     // authored choice value even though human-facing option labels stay
     // non-empty.
     value: v.string(),
     label: NonEmptyString,
     disabled: v.optional(v.boolean()),
-    verdict: v.optional(v.picklist(["COMPLETE", "REJECT", "ESCALATE"])),
-    variant: v.optional(v.picklist(["primary", "secondary", "destructive", "ghost"])),
-    confirm: v.optional(v.string()),
   }))),
   relation: v.optional(RelationSchema),
 });
@@ -133,3 +132,9 @@ export function parseFormSpecPayload(payload: unknown): Record<string, unknown> 
   const result = v.safeParse(v.record(v.string(), v.unknown()), payload);
   return result.success ? result.output : {};
 }
+
+/** Presentation annotations registered with full JSON Schema validators. */
+export const FORM_SPEC_ANNOTATIONS = [
+  "widget", "label", "addLabel", "removeLabel", "placeholder", "layout", "defaultValue", "propertyOrder",
+  "omittable", "presenceRequired", "options", "relation",
+] as const;

@@ -783,8 +783,6 @@
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.14.3",
     "@xyflow/react": "^12.11.1",
-    "ajv": "^8.20.0",
-    "ajv-formats": "^3.0.1",
     "cmdk": "^1.1.1",
     "codemirror": "^6.0.0",
     "date-fns": "^4.1.0",

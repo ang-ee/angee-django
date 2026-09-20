@@ -41,6 +41,7 @@ export type {
   WidgetFocusTarget,
 } from "./types";
 export { canonicalOptionValue, optionToken, relationValueId } from "./types";
+export { JsonValueSchema } from "./json-value";
 export { widgetLabel } from "./label";
 export { slugify } from "./slug";
 export { STATUS_TONES, statusTone, type StatusToneOptions } from "./status-tones";

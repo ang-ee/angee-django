@@ -33,6 +33,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
 });
 
 import type { PendingWorkflowDecision } from "../documents.public";
+import { enWorkflowsMessages } from "../i18n";
 import { WORKFLOW_DECISION_CONTENT_SLOT } from "../slots";
 import { ApprovalTask, DecisionField, type WorkflowDecisionContentProps } from "./ApprovalTask";
 
@@ -250,7 +251,7 @@ describe("ApprovalTask", () => {
     expect(action.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  test("shows the native compile error without invoking contributed content", () => {
+  test("shows the translated generic schema error without invoking contributed content", () => {
     const rendered = vi.fn();
     function Specialized() {
       rendered();
@@ -270,7 +271,7 @@ describe("ApprovalTask", () => {
     }] }}><ApprovalTask approval={{ ...approval, decision_schema: invalidSchema }}
       onResolved={() => undefined} /></AppRuntimeProvider>);
 
-    expect(screen.getByText(/Invalid action\.options\.0\.label/)).toBeTruthy();
+    expect(screen.getByText(enWorkflowsMessages["inbox.validation.invalidSchema"]!)).toBeTruthy();
     expect(screen.queryByText("Frozen Decision context is unavailable.")).toBeNull();
     expect(rendered).not.toHaveBeenCalled();
   });
@@ -569,7 +570,7 @@ describe("ApprovalTask", () => {
 
     expect(screen.getByText("Retained supplier context · record · Retained history")).toBeTruthy();
     expect(screen.queryByText("Default title")).toBeNull();
-    expect(screen.queryByText(/Invalid Decision schema/)).toBeNull();
+    expect(screen.queryByText(enWorkflowsMessages["inbox.validation.invalidSchema"]!)).toBeNull();
     expect(screen.queryByRole("button", { name: "Record decision" })).toBeNull();
   });
 
@@ -586,7 +587,7 @@ describe("ApprovalTask", () => {
     render(<TestRuntime><ApprovalTask approval={{ ...approval, decision_schema: obsoleteHistoricalSchema }}
       onResolved={() => undefined} /></TestRuntime>);
 
-    expect(screen.getByText(/enum must have non-empty array/)).toBeTruthy();
+    expect(screen.getByText(enWorkflowsMessages["inbox.validation.invalidSchema"]!)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Record decision" })).toBeNull();
   });
 
