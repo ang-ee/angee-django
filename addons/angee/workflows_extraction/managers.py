@@ -7,14 +7,14 @@ from typing import Any
 from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import DEFAULT_DB_ALIAS, IntegrityError, models, transaction
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, transaction
 from rebac import system_context
 
 from angee.base.authority import TransactionBoundAuthority
+from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.writes import ImmutableEvidenceQuerySet as BaseImmutableEvidenceQuerySet
 from angee.workflows.attempts import json_values_equal
-from angee.workflows_extraction.contracts import CorrectionBinding
+from angee.workflows_extraction.contracts import CorrectionBinding, DocumentRef
 from angee.workflows_extraction.engines import DocumentPart, DocumentSource, PageImage, PageResult
 from angee.workflows_extraction.pointers import (
     implicit_identity_correspondence,
@@ -55,39 +55,32 @@ def _same_identity_basis(authority: Any, evidence: Any) -> bool:
     )
 
 
-class ImmutableEvidenceQuerySet(
-    BaseImmutableEvidenceQuerySet[Any],
+class EvidenceQuerySet(
+    AppendOnlyQuerySet[Any],
     AngeeQuerySet[Any],
 ):
-    """Preserve extraction's authority and audit-nullification exceptions."""
+    """Preserve extraction's insertion authority and immutable evidence."""
 
     def immutable_error(self, operation: str) -> Exception:
         """Return extraction's established error for each forbidden mutation."""
 
         if operation == "delete":
             return ValueError("Extraction evidence is retained and cannot be deleted through the ORM.")
-        if operation == "raw_delete":
-            return ValueError("Extraction evidence cannot be deleted through relation cascades.")
+        if operation == "_raw_delete":
+            return ValueError("Extraction evidence cannot be directly deleted.")
         return ValueError("Extraction evidence is immutable.")
 
-    def validate_evidence_insert(
-        self,
-        *,
-        objects: tuple[models.Model, ...],
-        ignore_conflicts: bool,
-        update_conflicts: bool,
-    ) -> None:
-        """Admit only retention-owner inserts without conflict rewriting."""
+    def validate_insert(self) -> None:
+        """Admit only retention-owner inserts."""
 
-        del objects
-        if not evidence_insert_allowed(self.db) or ignore_conflicts or update_conflicts:
+        if not evidence_insert_allowed(self.db):
             raise ValueError("Extraction evidence can only be inserted by the retention owner.")
 
 
-ImmutableEvidenceManager: Any = AngeeManager.from_queryset(ImmutableEvidenceQuerySet)
+EvidenceManager: Any = AngeeManager.from_queryset(EvidenceQuerySet)
 
 
-class ExtractionManager(ImmutableEvidenceManager):
+class ExtractionManager(EvidenceManager):
     """Persist one authorized result and all of its ordered evidence atomically."""
 
     def automatic_inference_mapping(
@@ -942,7 +935,7 @@ class ExtractionManager(ImmutableEvidenceManager):
 class ExtractionSystemManager(ExtractionManager):
     """Expose guarded unscoped rows to Django and field-backed REBAC traversal."""
 
-    def get_queryset(self) -> ImmutableEvidenceQuerySet:
+    def get_queryset(self) -> EvidenceQuerySet:
         return super().get_queryset().system_context(
             reason="workflows_extraction.extraction.base_manager"
         )
@@ -983,7 +976,7 @@ def _document_mapping(
     """Allocate once, or carry reviewed correspondence without matching printed facts."""
 
     requested = result_selectors(result, layout)
-    previous = tuple(original.document_refs) if original is not None else ()
+    previous: tuple[DocumentRef, ...] = tuple(original.document_refs) if original is not None else ()
     mapping = dict(identity_mapping or {})
     retirement = dict(retired_identities or {})
     if original is not None and previous and not mapping:

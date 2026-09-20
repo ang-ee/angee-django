@@ -17,7 +17,7 @@ import os
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection, models, transaction
+from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
@@ -91,33 +91,20 @@ def test_explicit_using_is_forwarded_through_create_and_reparent() -> None:
 
 @pytest.mark.django_db
 def test_direct_path_update_cannot_bypass_the_saved_row_owner() -> None:
-    """A composed queryset guard recognizes only the hierarchy's live capability."""
+    """Public and cloned querysets reject writes to the derived path."""
 
     with system_context(reason="test hierarchy path bypass"):
         node = HierNode.objects.create(name="guarded")
+        queryset = HierNode.objects.filter(pk=node.pk)
         with pytest.raises(ValidationError, match="saved-row owner"):
-            HierNode.objects.filter(pk=node.pk).update(path="/forged/")
+            queryset.update(path="/forged/")
+        with pytest.raises(ValidationError, match="saved-row owner"):
+            queryset.all().update(path="/forged/")
+        node.path = "/forged/"
+        with pytest.raises(ValidationError, match="saved-row owner"):
+            queryset.bulk_update([node], ["path"])
         node.refresh_from_db()
     assert node.path != "/forged/"
-
-
-@pytest.mark.django_db
-def test_hierarchy_owner_authorizes_its_exact_path_update() -> None:
-    """The internal one-use capability admits the matching path-only update."""
-
-    with system_context(reason="test hierarchy authorized path update"):
-        node = HierNode.objects.create(name="guarded")
-        path = f"/{node.pk:0{HierNode.path_segment_width}d}/authorized/"
-        with transaction.atomic():
-            updated = node._write_hierarchy_path(
-                HierNode.objects.filter(pk=node.pk),
-                path,
-                using="default",
-            )
-        node.refresh_from_db()
-
-    assert updated == 1
-    assert node.path == path
 
 
 @pytest.mark.django_db
@@ -317,18 +304,41 @@ def test_create_under_reparented_parent_uses_committed_path() -> None:
 
 
 @pytest.mark.django_db
+def test_bulk_parent_updates_cannot_bypass_the_saved_row_owner() -> None:
+    """Both FK spellings and bulk_update must use the row's reparent owner."""
+
+    with system_context(reason="test hierarchy parent bypass"):
+        nodes = _tree()
+        home = HierNode.objects.create(name="H")
+        node = nodes["B"]
+        old_parent, old_path = node.parent_id, node.path
+        queryset = HierNode.objects.filter(pk=node.pk)
+        with pytest.raises(ValidationError, match="saved-row owner"):
+            queryset.update(parent=home)
+        with pytest.raises(ValidationError, match="saved-row owner"):
+            queryset.update(parent_id=home.pk)
+        node.parent = home
+        with pytest.raises(ValidationError, match="saved-row owner"):
+            queryset.bulk_update([node], ["parent"])
+        node.refresh_from_db()
+        assert (node.parent_id, node.path) == (old_parent, old_path)
+
+
+@pytest.mark.django_db
 def test_refresh_from_db_resyncs_the_reparent_baseline() -> None:
     """A refreshed row is not misclassified as reparented on its next save.
 
-    An external queryset ``update`` moves the FK behind the instance's back;
-    after ``refresh_from_db`` a plain field save must stay a plain save — no
-    forced parent/path write, no subtree cascade.
+    An external move performed through another instance changes the FK behind
+    this instance's back; after ``refresh_from_db`` a plain field save must stay
+    a plain save with no forced parent/path write and no subtree cascade.
     """
 
     with system_context(reason="test hierarchy refresh baseline"):
         nodes = _tree()
         home = HierNode.objects.create(name="H")
-        HierNode.objects.filter(pk=nodes["B"].pk).update(parent=home)
+        other = HierNode.objects.get(pk=nodes["B"].pk)
+        other.parent = home
+        other.save()
 
         node = nodes["B"]
         node.refresh_from_db()

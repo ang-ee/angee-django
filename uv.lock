@@ -681,6 +681,7 @@ dependencies = [
     { name = "django-yamlconf" },
     { name = "django-zed-rebac" },
     { name = "hatch-angee" },
+    { name = "pydantic" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -714,7 +715,6 @@ addons = [
     { name = "phonenumbers" },
     { name = "pillow" },
     { name = "pycountry" },
-    { name = "pydantic" },
     { name = "pydantic-ai-slim", extra = ["anthropic", "mcp", "openai"] },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pypdfium2" },
@@ -757,6 +757,7 @@ requires-dist = [
     { name = "django-zed-rebac", specifier = ">=0.17.2" },
     { name = "hatch-angee", specifier = ">=0.2.4" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
+    { name = "pydantic", specifier = ">=2.13" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 provides-extras = ["postgres"]
@@ -786,7 +787,6 @@ addons = [
     { name = "phonenumbers", specifier = ">=9.0" },
     { name = "pillow", specifier = ">=11.0" },
     { name = "pycountry", specifier = ">=26,<27" },
-    { name = "pydantic", specifier = ">=2.13" },
     { name = "pydantic-ai-slim", specifier = ">=2.13" },
     { name = "pydantic-ai-slim", extras = ["anthropic"], specifier = ">=2.13" },
     { name = "pydantic-ai-slim", extras = ["mcp"], specifier = ">=2.13" },

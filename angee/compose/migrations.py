@@ -26,7 +26,6 @@ from angee.fs import write_atomic
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
 ORIGIN_ATTR = "angee_origin"
 SOURCE_SHA256_ATTR = "angee_source_sha256"
-BASELINE_ATTR = "angee_fresh_baseline"
 logger = logging.getLogger(__name__)
 
 
@@ -44,7 +43,6 @@ class RuntimeMigrationPlan:
     dependencies: tuple[tuple[str, str], ...]
     latest_dependencies: tuple[tuple[tuple[str, str], tuple[str, str]], ...]
     migration_class: type[Migration]
-    baseline: bool = False
 
 
 class RuntimeMigrations:
@@ -65,7 +63,6 @@ class RuntimeMigrations:
         self,
         *,
         apps: Apps | None = None,
-        fresh_history: bool = False,
         defer_drop_check: bool = False,
     ) -> tuple[RuntimeMigrationPlan, ...]:
         """Plan applicable writes, guarding adopted tables against the supplied apps.
@@ -91,51 +88,6 @@ class RuntimeMigrations:
                 declared_origins.add(origin)
                 self._validate_declaration(declaration, origin)
                 declarations.append((addon, declaration))
-
-        if fresh_history:
-            if apps is None:
-                raise RuntimeError("fresh-history migration planning requires the current app registry")
-            if not declarations:
-                return ()
-            baseline_origins = {
-                f"{addon.name}:{declaration['name']}"
-                for addon, declaration in declarations
-                if declaration.get("fresh_history") == "baseline"
-            }
-            if existing:
-                missing_baselines = sorted(baseline_origins - existing.keys())
-                if missing_baselines:
-                    raise RuntimeError(
-                        "fresh-history migration planning found partial baseline history; missing "
-                        + ", ".join(missing_baselines)
-                    )
-                non_baseline = sorted(
-                    origin
-                    for origin in baseline_origins
-                    if not getattr(existing[origin][1], BASELINE_ATTR, False)
-                )
-                if non_baseline:
-                    raise RuntimeError(
-                        "fresh-history migration planning found full-body history for baseline origins: "
-                        + ", ".join(non_baseline)
-                    )
-                fresh_history = False
-        if fresh_history:
-            target_labels = {str(declaration["app_label"]) for _, declaration in declarations}
-            if target_labels and all(not loader.graph.leaf_nodes(label) for label in target_labels):
-                logger.info("fresh generated migration history has no leaves; deferring addon migrations")
-                return ()
-            if not self._is_fresh_final_baseline(loader, state, ProjectState.from_apps(apps)):
-                raise RuntimeError("fresh-history migration graph is not an exact final-model initial baseline")
-            baseline_declarations = [
-                item for item in declarations if item[1].get("fresh_history") == "baseline"
-            ]
-            declarations = [
-                item for item in declarations if item[1].get("fresh_history") != "baseline"
-            ]
-            baseline_plans = self._baseline_plans(loader, baseline_declarations)
-            self._attach_baseline_plans(loader, baseline_plans)
-            plans.extend(baseline_plans)
 
         pending = declarations
         round_number = 0
@@ -280,7 +232,6 @@ class RuntimeMigrations:
         self,
         *,
         apps: Apps | None = None,
-        fresh_history: bool = False,
     ) -> tuple[Path, ...]:
         """Stage sources, then fail closed before Django can autodetect unsafe drops.
 
@@ -295,7 +246,6 @@ class RuntimeMigrations:
 
         plans = self.plan(
             apps=apps,
-            fresh_history=fresh_history,
             defer_drop_check=apps is not None,
         )
         rendered = tuple((plan, self._render(plan)) for plan in plans)
@@ -303,7 +253,7 @@ class RuntimeMigrations:
             write_atomic(plan.output_path, source)
         importlib.invalidate_caches()
         if apps is not None:
-            remaining = self.plan(apps=apps, fresh_history=False)
+            remaining = self.plan(apps=apps)
             if remaining:
                 origins = ", ".join(plan.origin for plan in remaining)
                 raise RuntimeError(
@@ -447,105 +397,10 @@ class RuntimeMigrations:
                 raise RuntimeError(f"{origin}: cannot read materialized migration {path}") from error
             if not marker:
                 raise RuntimeError(f"{origin}: materialized migration footer is missing")
-            if getattr(migration, BASELINE_ATTR, False):
-                expected_body = self._baseline_body(tuple(migration.dependencies)).encode()
-                valid_body = body == expected_body
-            else:
-                valid_body = hashlib.sha256(body).hexdigest() == digest
-            if not valid_body:
+            if hashlib.sha256(body).hexdigest() != digest:
                 raise RuntimeError(f"{origin}: materialized body digest changed")
             existing[origin] = (node, migration, path)
         return existing
-
-    def _is_fresh_final_baseline(
-        self,
-        loader: MigrationLoader,
-        from_state: ProjectState,
-        to_state: ProjectState,
-    ) -> bool:
-        """Recognize Django's final-model initial graph before any addon history exists."""
-
-        owned = [
-            migration
-            for (label, _), migration in loader.disk_migrations.items()
-            if label in self.labels
-        ]
-        if not owned or any(migration.initial is not True for migration in owned):
-            return False
-        changes = MigrationAutodetector(from_state, to_state).changes(graph=loader.graph)
-        if changes:
-            logger.debug(
-                "fresh-history final-state changes: %r",
-                {
-                    label: [operation for migration in migrations for operation in migration.operations]
-                    for label, migrations in changes.items()
-                },
-            )
-        return not changes
-
-    def _baseline_plans(
-        self,
-        loader: MigrationLoader,
-        declarations: list[tuple[AppConfig, Mapping[str, Any]]],
-    ) -> tuple[RuntimeMigrationPlan, ...]:
-        """Attach historical declaration identities as empty native graph nodes."""
-
-        plans: list[RuntimeMigrationPlan] = []
-        leaves = {label: self._target_leaf(loader, label, origin="fresh baseline") for label in self.labels}
-        next_numbers: dict[str, int] = {}
-        for addon, declaration in declarations:
-            origin = f"{addon.name}:{declaration['name']}"
-            module = self._source_module(addon, declaration, origin)
-            migration_class = self._migration_class(module, origin)
-            source_path = self._source_path(module, origin)
-            source_bytes = source_path.read_bytes()
-            source = source_bytes.decode("utf-8")
-            app_label = str(declaration["app_label"])
-            if app_label not in next_numbers:
-                next_numbers[app_label] = self._next_number(loader, app_label)
-            number = next_numbers[app_label]
-            next_numbers[app_label] += 1
-            name = f"{number:04d}_{declaration['name']}"
-            dependencies: tuple[tuple[str, str], ...] = ()
-            target_leaf = leaves.get(app_label)
-            if target_leaf is not None:
-                dependencies = (target_leaf,)
-            plan = RuntimeMigrationPlan(
-                origin=origin,
-                app_label=app_label,
-                name=name,
-                source_path=source_path,
-                source=source,
-                output_path=self.runtime_dir / app_label / "migrations" / f"{name}.py",
-                source_sha256=hashlib.sha256(source_bytes).hexdigest(),
-                dependencies=dependencies,
-                latest_dependencies=(),
-                migration_class=migration_class,
-                baseline=True,
-            )
-            plans.append(plan)
-            leaves[app_label] = (app_label, name)
-        return tuple(plans)
-
-    @staticmethod
-    def _attach_baseline_plans(
-        loader: MigrationLoader,
-        plans: tuple[RuntimeMigrationPlan, ...],
-    ) -> None:
-        """Make empty history nodes visible while planning required fresh operations."""
-
-        try:
-            for plan in plans:
-                node = (plan.app_label, plan.name)
-                migration = Migration(plan.name, plan.app_label)
-                migration.dependencies = list(plan.dependencies)
-                loader.graph.add_node(node, migration)
-                for dependency in plan.dependencies:
-                    loader.graph.add_dependency(migration, node, dependency)
-            loader.graph.validate_consistency()
-            loader.graph.ensure_not_cyclic()
-        except Exception as error:
-            raise RuntimeError("fresh-history baseline migration graph is invalid") from error
 
     @staticmethod
     def _dependency_node(raw: object, *, origin: str, kind: str) -> tuple[str, str]:
@@ -590,9 +445,6 @@ class RuntimeMigrations:
             raise RuntimeError(
                 f"{origin}: compatible_source_sha256 must be a list of lowercase SHA-256 digests"
             )
-        fresh_history = declaration.get("fresh_history")
-        if fresh_history not in (None, "baseline"):
-            raise RuntimeError(f'{origin}: fresh_history must be "baseline" when declared')
 
     @staticmethod
     def _source_module(addon: AppConfig, declaration: Mapping[str, Any], origin: str) -> ModuleType:
@@ -624,32 +476,7 @@ class RuntimeMigrations:
         return Path(module_file)
 
     @staticmethod
-    def _baseline_body(dependencies: tuple[tuple[str, str], ...]) -> str:
-        rendered = ",\n".join(
-            f"        ({json.dumps(label)}, {json.dumps(name)})"
-            for label, name in dependencies
-        )
-        return (
-            '"""Fresh-history baseline for one released addon migration."""\n\n'
-            "from django.db import migrations\n\n\n"
-            "class Migration(migrations.Migration):\n"
-            f"    dependencies = [\n{rendered}\n    ]\n"
-            "    operations = []\n"
-        )
-
-    @staticmethod
     def _render(plan: RuntimeMigrationPlan) -> str:
-        if plan.baseline:
-            body = RuntimeMigrations._baseline_body(plan.dependencies)
-            return "".join(
-                (
-                    body,
-                    f"{MATERIALIZED_FOOTER}\n",
-                    f"Migration.{ORIGIN_ATTR} = {json.dumps(plan.origin)}\n",
-                    f"Migration.{SOURCE_SHA256_ATTR} = {json.dumps(plan.source_sha256)}\n",
-                    f"Migration.{BASELINE_ATTR} = True\n",
-                )
-            )
         source = plan.source
         if not source.endswith("\n"):
             raise RuntimeError(f"{plan.origin}: source migration must end with a newline")

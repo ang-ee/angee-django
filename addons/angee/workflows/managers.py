@@ -52,7 +52,7 @@ from angee.base.identity import (
     public_data_id_field,
     public_id_for,
 )
-from angee.base.mixins import AuditMixin
+from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_model, canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
@@ -2761,22 +2761,18 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         return primed
 
 
-class WorkflowTestFixtureQuerySet(AngeeQuerySet[Any]):
+class WorkflowTestFixtureQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
     """Keep admitted test fixture facts append-only."""
 
-    def update(self, **kwargs: Any) -> int:
-        if AuditMixin.is_audit_nullification(kwargs):
-            return super().update(**kwargs)
-        raise TypeError("Workflow test fixtures are immutable admission facts.")
+    def immutable_error(self, operation: str) -> Exception:
+        """Keep the fixture owner's immutable and retained-row errors."""
+
+        if operation in {"delete", "_raw_delete"}:
+            return TypeError("Workflow test fixtures are retained admission facts.")
+        return TypeError("Workflow test fixtures are immutable admission facts.")
 
     def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
         raise TypeError("Workflow test fixtures can only be created by WorkflowRunManager.")
-
-    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
-        raise TypeError("Workflow test fixtures are immutable admission facts.")
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise TypeError("Workflow test fixtures are retained admission facts.")
 
 
 class WorkflowTestFixtureManager(AngeeManager.from_queryset(WorkflowTestFixtureQuerySet)):  # type: ignore[misc]
@@ -3517,22 +3513,21 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
             return step_run
 
 
-class StepAttemptQuerySet(AngeeQuerySet[Any]):
+class StepAttemptQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
     """Reject collection mutations that would bypass retained-evidence rules."""
 
-    def update(self, **kwargs: Any) -> int:
-        if AuditMixin.is_audit_nullification(kwargs):
-            return super().update(**kwargs)
-        raise TypeError("Step attempts do not support collection updates.")
+    def immutable_error(self, operation: str) -> Exception:
+        """Keep the attempt owner's collection-update and retention errors."""
+
+        if operation in {"delete", "_raw_delete"}:
+            return TypeError("Step attempts are retained execution evidence and cannot be deleted.")
+        return TypeError("Step attempts do not support collection updates.")
 
     def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
         raise TypeError("Step attempts do not support bulk_create().")
 
     def bulk_update(self, *args: Any, **kwargs: Any) -> int:
         raise TypeError("Step attempts do not support bulk_update().")
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise TypeError("Step attempts are retained execution evidence and cannot be deleted.")
 
 
 class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # type: ignore[misc]
@@ -6299,6 +6294,12 @@ class DecisionQuerySet(AngeeQuerySet[Any]):
         }
     )
 
+    def with_context_projection(self) -> Self:
+        """Annotate the complete context before materializing a Decision list."""
+
+        decision_model = cast(Any, self.model)
+        return cast(Self, self.annotate(**decision_model.context_projection_annotation()))
+
     def update(self, **kwargs: Any) -> int:
         if self._PROTECTED_FIELDS.intersection(kwargs):
             raise TypeError("Decision suspension provenance is owned by DecisionManager.")
@@ -7066,22 +7067,21 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         )
 
 
-class WorkflowDispatchQuerySet(AngeeQuerySet[Any]):
+class WorkflowDispatchQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
     """Read durable delivery intents without exposing collection mutation bypasses."""
 
-    def update(self, **kwargs: Any) -> int:
-        if AuditMixin.is_audit_nullification(kwargs):
-            return super().update(**kwargs)
-        raise TypeError("Workflow dispatches do not support collection updates.")
+    def immutable_error(self, operation: str) -> Exception:
+        """Keep the dispatch owner's collection-update and retention errors."""
+
+        if operation in {"delete", "_raw_delete"}:
+            return TypeError("Workflow dispatches are durable delivery evidence and cannot be deleted.")
+        return TypeError("Workflow dispatches do not support collection updates.")
 
     def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
         raise TypeError("Workflow dispatches do not support bulk_create().")
 
     def bulk_update(self, *args: Any, **kwargs: Any) -> int:
         raise TypeError("Workflow dispatches do not support bulk_update().")
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise TypeError("Workflow dispatches are durable delivery evidence and cannot be deleted.")
 
 
 class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySet)):  # type: ignore[misc]

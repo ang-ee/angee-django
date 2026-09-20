@@ -855,6 +855,12 @@ and current contracts before applying a historical example to a new deployment.
 - **Implementation subclasses must replace every inherited semantic default that changes.**
   See `ImplBase.effective_defaults()` for the merge contract. An OpenAI-compatible
   backend that omits its own `name` and `vendor` silently creates an OpenAI provider row.
+- **Pydantic declarations own implementation config defaults.**
+  [`ImplBase.config_defaults()`](../../angee/base/impl.py) reads static input
+  suggestions from Pydantic's validation JSON Schema independently of FormSpec
+  support; forms project the same declaration downstream. Dynamic factories
+  resolve through `normalize_config()`
+  during runtime validation, keeping generated choice metadata deterministic.
 - **Actor-scoped scalar subqueries and keyset cursors belong to `angee/base`.**
   The `Coalesce(Subquery(related.with_actor().scoped().filter(pk=OuterRef).values(v)[:1]), "")`
   shape and the signed `(order_at, pk)` cursor pager are framework primitives;
@@ -960,10 +966,16 @@ and current contracts before applying a historical example to a new deployment.
   existing Hasura/Pydantic resource and authored-root helpers; do not construct
   partial resource descriptions for later reconciliation.
 - **Metadata callers consume the built schema's finalized descriptions.**
-  [`GraphQLSchemas`](../../addons/angee/graphql/schema.py) owns resource metadata
-  access and serialization. Do not restore a separate snapshot/merge pipeline
-  that reconstructs partial resource descriptions or validates selections
-  independently of the composed schema.
+  [`GraphQLSchemas`](../../addons/angee/graphql/schema.py) owns schema lookup and
+  attaching the finalized payload;
+  [`angee.data.metadata`](../../angee/data/metadata.py) owns the transport-neutral
+  declarations. Declare aliases and exclusions through Pydantic and compose its
+  JSON serializer (`as_wire` dumps with `mode="json"`, so non-JSON leaves in
+  `Any`-typed fields become strings or lists at build time and an
+  unserializable leaf fails at schema build, not at encoding); do not maintain
+  a recursive metadata serializer or turn descriptions into persistent models. Do not restore a separate snapshot/merge
+  pipeline that reconstructs partial resource descriptions or validates
+  selections independently of the composed schema.
 - **A custom model value field registers its GraphQL wire type when its field
   module imports.** Call `angee.graphql.field_types.register_field_type()` beside
   the field declaration. `GraphQLConfig.ready()` imports schema declarations to
@@ -1094,6 +1106,12 @@ and current contracts before applying a historical example to a new deployment.
   baked into the opencode image (the `OPENCODE_ANTHROPIC_AUTH_PLUGIN` build arg) and using a
   Pro/Max token there violates Anthropic's ToS — enabling it without the plugin silently drops
   Anthropic from OpenCode's model list.
+- **One-shot inference steps contain no inference policy.** Do not add prompt
+  rendering, provider branching, usage normalization, or a second response
+  protocol to a step; compose the owning
+  [`InferenceModel.infer`](../../addons/angee/agents/models.py),
+  [backend request/error policy](../../addons/angee/agents/backends.py), and
+  [deployment approval policy](../../addons/angee/agents/deployments.py).
 - **Task locks are advisory, row locks are authoritative.** Celery task bodies may
   use `angee.jobs.locks.task_lock()` to prevent duplicate workers from doing the
   same external work, but persisted state transitions still use model/queryset row

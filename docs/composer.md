@@ -48,7 +48,8 @@ below.
 | Bounded django-yamlconf loading and provenance | [`angee.compose.yamlconf`](../angee/compose/yamlconf.py) |
 | Overridable framework defaults and ordered always-on core apps | [`angee.compose.defaults`](../angee/compose/defaults.py) |
 | Reserved composed settings and final settings mutation | [`Composer`](../angee/compose/composer.py) |
-| Root/dependency graph, app aliases, root annotations | [`AppGraph`](../angee/compose/appgraph.py) |
+| Django app discovery, identity aliases and root annotations | [`AppGraph`](../angee/compose/appgraph.py) |
+| Dependency ordering and cycle rejection for both discovery paths | [`order_app_dependencies`](../angee/addons.py) |
 | Addon settings fragments and declared `ANGEE_*` env overlays | [`AutoConfig`](../angee/compose/autoconfig.py) |
 | Addon declarations and parsing | `addon.toml` and hatch-angee's native `AddonManifest`; [`angee.addons`](../angee/addons.py) binds the result to a native config |
 | Abstract-source discovery, donor order, parent relationships and collisions | [`ModelComposition`](../angee/compose/model_composition.py) |
@@ -92,9 +93,12 @@ set through `AppGraph`, writes the resolved `AppConfig` objects back to
 addon dependencies from the native manifest. `addon_manifest()` validates that
 manifest identity agrees with `AppConfig.name`; capability readers share that
 upstream parser result during the composition. AppConfig has no independently
-configurable copy of these declarations. Graph annotations record derived root
-and required-app facts. Aliasing, duplicate handling and cycle validation belong
-to `AppGraph`.
+configurable copy of these declarations. `AppGraph` owns Django identity aliases
+and root/required-app annotations. Both it and the import-free
+`resolve_manifest_roots()` projection delegate ordering and cycle rejection to
+[`order_app_dependencies()`](../angee/addons.py). This shared owner preserves
+declared root precedence and visits dependency subtrees in lexical order;
+manifest discovery omits plain Django apps and unselected available addons.
 
 Django accepts `AppConfig` instances in `INSTALLED_APPS`, so app loading uses the
 same config objects the composer already resolved instead of resolving strings a
@@ -177,7 +181,6 @@ model transition cannot be represented losslessly by downstream
 name = "rename_legacy"
 app_label = "resources"
 module = "runtime_migrations.rename_legacy"
-fresh_history = "baseline"
 ```
 
 The source module is an ordinary, self-contained Django migration with a
@@ -216,18 +219,13 @@ read-only filesystem probe. After a successful build, normal `makemigrations` ma
 generate any remaining lossless changes and Django handles the rest of the
 migration lifecycle.
 
-`fresh_history = "baseline"` is an explicit, audited classification for a
-historical transition whose terminal model state is already represented by a
-generated final-model initial migration. `angee provision --fresh-history`
-accepts it only against an empty database and an exact all-initial migration
-graph, then records the declaration's existing origin and digest as a canonical
-empty native graph node. Unmarked declarations still run their original
-`applies()` guard and migration body. A retry before `migrate` accepts only a
-complete set of validated canonical baseline nodes and resumes ordinary
-planning for operational declarations. Ordinary build and provision ignore
-baseline eligibility and retain the complete upgrade chain. Use the fresh flag
-only to create a genuinely new migration history, including a new installation
-or an explicitly approved database reset; after migration, use ordinary commands.
+For an explicitly authorized reset of disposable migration history, delete the
+obsolete `[[migrations]]` declarations, their source modules and the disposable
+`runtime/<label>/migrations/` history, then run plain
+`uv run manage.py makemigrations` through the [stack host](checks.md#composition-and-schema)
+to generate initial migrations from the final models. The [migration
+policy](backend/guidelines.md#migrations-and-runtime) still protects released and
+applied migration bodies; ordinary builds do not authorize their deletion.
 
 [`angee provision`](../angee/compose/management/commands/angee.py) owns full
 runtime preparation. It builds in the initial process, then starts one fresh

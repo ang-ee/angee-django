@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { QueryField } from "@angee/metadata";
 import type { Tone } from "../../lib/tones";
 import type { WidgetOption } from "../../widgets/types";
 
@@ -36,6 +37,8 @@ export interface ColumnDescriptor<
   TRow extends object = Record<string, unknown>,
 > {
   field: string;
+  /** Native query metadata for a resolved column's projected values. */
+  queryField?: QueryField;
   /** Concrete GraphQL leaf paths selected when `field` names an object relation. */
   selectionPaths?: readonly string[];
   header?: ReactNode;

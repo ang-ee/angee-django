@@ -13,6 +13,7 @@ export interface DashboardPageScope {
 
 const EMPTY_SOURCE: WidgetSource = { resource: "__angee_disabled__" };
 const COUNT_MEASURE: AggregateMeasure = { op: "count", field: null };
+const EMPTY_FIELDS: DashboardWidgetData["queryFields"] = {};
 
 function bucketValue(bucket: AggregateBucket | null, measure: AggregateMeasure): number | null {
   if (!bucket) return null;
@@ -68,11 +69,11 @@ export function useDashboardWidgetData(
       const where = query.toWhere(filter);
       const groups = query.groupsFrom(source.groups ?? []);
       const sort = query.sortFrom(source.sort);
-      const logicalFields = source.fields ?? [resource.query.identity.field];
-      const fields = [...new Set(logicalFields.flatMap((field) => {
-        const projection = query.fields[field]?.row;
-        if (!projection) throw new Error(`Field "${field}" has no readable row projection.`);
-        return projection.paths;
+      const logicalFields = [query.contract.identity.field, ...(source.fields ?? [])];
+      const fields = [...new Set(logicalFields.flatMap((name) => {
+        const field = query.fields[name];
+        if (!field?.row) throw new Error(`Field "${name}" has no readable row projection.`);
+        return [...field.row.paths, ...(field.relation?.labelPath ? [field.relation.labelPath] : [])];
       }))];
       const declaredMeasure = source.measure ?? COUNT_MEASURE;
       const measure = declaredMeasure.op === "count"
@@ -190,6 +191,8 @@ export function useDashboardWidgetData(
     value: wantsValue ? bucketValue(aggregate.aggregate, prepared.measure ?? COUNT_MEASURE) : null,
     series: seriesResult.series,
     rows: wantsRows ? (rows.result.data as readonly Record<string, unknown>[] ?? []) : [],
+    queryFields: prepared.query?.fields ?? EMPTY_FIELDS,
+    identity: prepared.query?.contract.identity ?? null,
     fetching: Boolean(
       (wantsValue && aggregate.fetching)
       || (wantsSeries && grouped.fetching)
