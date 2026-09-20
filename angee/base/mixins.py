@@ -526,9 +526,10 @@ def _hierarchy_path_write_authority(
 ) -> WriteFenceToken[Any] | None:
     """Return the exact live path-write capability carried by ``queryset``."""
 
-    authority = cast(WriteFenceToken[Any] | None, _hierarchy_path_write.token(queryset.db))
-    if authority is None:
+    live_authority = _hierarchy_path_write.token(queryset.db)
+    if live_authority is None:
         return None
+    authority = cast(WriteFenceToken[Any], live_authority)
     if (
         getattr(queryset, _HIERARCHY_PATH_WRITE_TOKEN, None) is not authority
         or not authority.matches_queryset(queryset, "update")
