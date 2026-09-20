@@ -1,0 +1,33 @@
+_meta:
+  model: workflows.Edge
+rows:
+  - xref: document_extraction_prepare_to_map
+    fields:
+      workflow: workflows_extraction.document_extraction
+      source: workflows_extraction.document_extraction_prepare_pages
+      target: workflows_extraction.document_extraction_map_pages
+      condition: prepared
+  - xref: document_extraction_map_to_collect
+    fields:
+      workflow: workflows_extraction.document_extraction
+      source: workflows_extraction.document_extraction_map_pages
+      target: workflows_extraction.document_extraction_collect_carriers
+      condition: succeeded
+  - xref: document_extraction_map_failure_to_collect
+    fields:
+      workflow: workflows_extraction.document_extraction
+      source: workflows_extraction.document_extraction_map_pages
+      target: workflows_extraction.document_extraction_collect_carriers
+      condition: failed
+  - xref: document_extraction_collect_to_process
+    fields:
+      workflow: workflows_extraction.document_extraction
+      source: workflows_extraction.document_extraction_collect_carriers
+      target: workflows_extraction.document_extraction_process_evidence
+      condition: collected
+  - xref: document_extraction_collect_hold_to_process
+    fields:
+      workflow: workflows_extraction.document_extraction
+      source: workflows_extraction.document_extraction_collect_carriers
+      target: workflows_extraction.document_extraction_process_evidence
+      condition: source_hold
