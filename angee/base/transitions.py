@@ -42,6 +42,13 @@ Write bodies accept a keyword-only ``using`` and callers pass their operation's
 alias (or ``None`` to derive it here). That keyword is resolved before the body
 and carried through ``save_state``, including when a three-argument hook wraps it.
 Bodies, conditions and custom hooks own explicit binding of their database work.
+The body, target write and success hook share one ``transaction.atomic`` on that
+alias, so a hook failure rolls back the body's database writes too. Existing outer
+transactions on that alias compose through Django savepoints; commit callbacks
+wait for the outermost transaction.
+
+``get_transition_save_field(instance)`` exposes the active save context's field
+attname, or ``None``, for model save guards without inspecting private markers.
 
 Direct Python assignment to a guarded field is rejected at descriptor level after
 initial model construction. The descriptor still permits initial loading,
@@ -257,7 +264,7 @@ class StateTransitions:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        """Execute one decorated transition method under this declaration."""
+        """Execute the body, target write and success hook atomically on one alias."""
 
         using = get_write_alias(type(instance), using=kwargs.get("using"), instance=instance)
         if "using" in kwargs:
@@ -276,18 +283,19 @@ class StateTransitions:
             if not condition(instance):
                 self._raise_not_allowed(source, target, "condition returned false")
 
-        result = method(instance, *args, **kwargs)
-        self._write_target(instance, target)
-        if spec.on_success is not None:
-            previous = getattr(instance, "_angee_transition_save", None)
-            setattr(instance, "_angee_transition_save", (self.field.attname, using))
-            try:
-                spec.on_success(instance, source, target)
-            finally:
-                if previous is None:
-                    delattr(instance, "_angee_transition_save")
-                else:
-                    setattr(instance, "_angee_transition_save", previous)
+        with transaction.atomic(using=using):
+            result = method(instance, *args, **kwargs)
+            self._write_target(instance, target)
+            if spec.on_success is not None:
+                previous = getattr(instance, "_angee_transition_save", None)
+                setattr(instance, "_angee_transition_save", (self.field.attname, using))
+                try:
+                    spec.on_success(instance, source, target)
+                finally:
+                    if previous is None:
+                        delattr(instance, "_angee_transition_save")
+                    else:
+                        setattr(instance, "_angee_transition_save", previous)
         return result
 
     def force_state(self, instance: models.Model, target: Any, *, reason: str, using: str | None = None) -> None:
@@ -492,6 +500,19 @@ def _as_values(value: Any) -> tuple[Any, ...]:
     if isinstance(value, list | tuple | set | frozenset):
         return tuple(value)
     return (value,)
+
+
+def get_transition_save_field(instance: models.Model) -> str | None:
+    """Return the active transition-save field's attname, or ``None``.
+
+    The context spans the success hook (including ``save_state``) or a saved-row
+    ``force_state`` save, not the transition body. A nested transition on the same
+    instance retains the outer context until its own hook begins, then restores
+    it when that hook exits, including on failure.
+    """
+
+    context = cast(tuple[str, str] | None, getattr(instance, "_angee_transition_save", None))
+    return context[0] if context is not None else None
 
 
 def save_state(instance: models.Model, source: Any, target: Any, *, using: str | None = None) -> None:

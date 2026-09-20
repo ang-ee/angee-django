@@ -758,6 +758,14 @@ and current contracts before applying a historical example to a new deployment.
   A subclass that needs REBAC side effects overrides the transition; never add
   REBAC writes to the shared mixin.
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
+  [`StateTransitions`](../../angee/base/transitions.py) owns one transaction on
+  the operation's write alias around the body and success hook, including
+  `save_state`; consumer outer transactions on that alias compose through Django
+  savepoints. Since the body runs inside that transaction, follow the
+  [two-phase side-effect rule](#rules): defer non-database effects to
+  `transaction.on_commit(using=...)` or a post-commit phase.
+  Save guards use `get_transition_save_field(instance)` to read the active save
+  field's attname, or `None`, through the public contract.
 - **Integration children use the ordinary emitted Django MRO.** The composer
   emits donors, the child's abstract source, then its concrete parent, so child
   behavior can override parent behavior and cooperative methods delegate with
