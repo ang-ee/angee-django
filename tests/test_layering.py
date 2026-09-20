@@ -87,7 +87,7 @@ def test_core_serving_import_closure_stays_vendor_free() -> None:
 
 
 def test_data_contract_import_closure_stays_transport_neutral() -> None:
-    """The data description contract reaches neither GraphQL nor Strawberry."""
+    """The data description contract reaches neither GraphQL, Strawberry, nor money."""
 
     script = "\n".join(
         (
@@ -115,6 +115,8 @@ def test_data_contract_import_closure_stays_transport_neutral() -> None:
         for module in closure
         if module == "angee.graphql"
         or module.startswith("angee.graphql.")
+        or module == "angee.money"
+        or module.startswith("angee.money.")
         or module == "strawberry"
         or module.startswith("strawberry.")
     }

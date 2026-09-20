@@ -246,8 +246,8 @@ Use these owners instead of maintaining another contract in an addon:
   `strawberry_django.field(metadata=...)`. The shared classifiers in
   `angee.data.field_classification` own resolution: surface metadata first,
   Django field declarations second, then the ordinary type fallback. Money
-  projections use `MONEY_CURRENCY_FIELD_METADATA_KEY` from `angee.money.fields`
-  instead of repeating its metadata key. Presentation metadata alone grants no
+  projections use `MONEY_CURRENCY_FIELD_METADATA_KEY` from its owner
+  `angee.data.metadata` instead of repeating its metadata key. Presentation metadata alone grants no
   ORM write or aggregation capability; those still come from a real model field
   or explicit resource input policy.
 - Manually ordered rows use `FractionalRankField` (NOT NULL) plus a database

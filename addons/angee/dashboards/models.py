@@ -384,12 +384,23 @@ class DashboardQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
 
 
 class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: ignore[misc]
-    """The sole snapshot write owner, including CAS and child diffs."""
+    """Own target resolution and snapshot writes, including CAS and child diffs."""
 
     def for_target(self, owner: Any, scope: str, scope_key: str | None) -> Any | None:
+        """Return the actor-readable authored target, then the system-read installed baseline."""
+
         if scope == "personal":
             raise ValueError("Personal dashboards resolve by public id.")
-        return self.filter(owner=owner, scope=scope, scope_key=scope_key).first()
+        authored = self.filter(owner=owner, scope=scope, scope_key=scope_key).first()
+        if authored is not None:
+            return authored
+        with system_context(reason="dashboards.resolve installed target"):
+            return (
+                cast(Any, self.model)
+                .system_queryset()
+                .filter(owner__isnull=True, scope=scope, scope_key=scope_key)
+                .first()
+            )
 
     def create_personal(
         self,

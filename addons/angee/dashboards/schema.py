@@ -210,19 +210,7 @@ def _resolve_target(info: strawberry.Info, target: DashboardTargetInput) -> Any 
         return row if row is not None and row.scope == "personal" else None
     if not target.key:
         raise ValidationError({"target": "A scoped dashboard key is required."})
-    authored = Dashboard.objects.filter(owner=user, scope=target.scope.value, scope_key=target.key).first()
-    if authored is not None:
-        return authored
-    with system_context(reason="dashboards.resolve installed target"):
-        return (
-            Dashboard.system_queryset()
-            .filter(
-                owner__isnull=True,
-                scope=target.scope.value,
-                scope_key=target.key,
-            )
-            .first()
-        )
+    return Dashboard.objects.for_target(user, target.scope.value, target.key)
 
 
 def _target_parts(target: DashboardTargetInput, existing: Any | None) -> tuple[str, str | None]:

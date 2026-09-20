@@ -102,11 +102,7 @@ class PlatformModelRow(BaseModel):
             field_count=len(fields),
             relation_count=len(relations),
             depends_on=sorted(
-                {
-                    field.related_model._meta.label_lower
-                    for field in relations
-                    if field.related_model is not None
-                }
+                {field.related_model._meta.label_lower for field in relations if field.related_model is not None}
             ),
         )
         row._model = model
@@ -117,10 +113,7 @@ class PlatformModelRow(BaseModel):
         """Lazily project and cache field rows from the retained native fields."""
 
         if self._field_rows is None:
-            self._field_rows = tuple(
-                PlatformFieldRow.from_field(self._model, field)
-                for field in self._native_fields
-            )
+            self._field_rows = tuple(PlatformFieldRow.from_field(self._model, field) for field in self._native_fields)
         return list(self._field_rows)
 
 
@@ -151,6 +144,32 @@ class PlatformImplementationRow(BaseModel):
 
     _implementation: type = PrivateAttr()
     _choice: ImplChoice = PrivateAttr()
+
+    @classmethod
+    def from_field(
+        cls, model: type[Model], field: ImplClassField, key: str, choice: ImplChoice, configs: list[AppConfig]
+    ) -> PlatformImplementationRow:
+        """Project one field-owned registered key without inspecting Python source."""
+
+        implementation = field.resolve_class(key)
+        owner = _implementation_addon(implementation, configs)
+        row = cls(
+            id=f"{model._meta.label}.{field.name}:{key}",
+            model=model._meta.label,
+            field=field.name,
+            key=key,
+            label=choice.label,
+            category=choice.category,
+            icon=choice.icon,
+            registry_setting=field.registry_setting,
+            class_path=_class_path(implementation),
+            base_class_path=_class_path(field.base_class),
+            addon_id=owner.name if owner is not None else "",
+            addon_label=owner.label if owner is not None else "",
+        )
+        row._implementation = implementation
+        row._choice = choice
+        return row
 
     def detail(self) -> PlatformImplementationDetail:
         """Inspect source only when this canonical registered row is selected."""
@@ -285,11 +304,7 @@ def resource_counts(*, using: str | None = None) -> dict[str, int]:
 def model_rows() -> list[PlatformModelRow]:
     """Project composed Django models without reading addon resource rollups or graph edges."""
 
-    return [
-        PlatformModelRow.from_model(config, model)
-        for config in addons()
-        for model in data_models(config)
-    ]
+    return [PlatformModelRow.from_model(config, model) for config in addons() for model in data_models(config)]
 
 
 def field_rows() -> list[PlatformFieldRow]:
@@ -309,45 +324,16 @@ def _class_path(value: type | None) -> str:
     return "" if value is None else f"{value.__module__}.{value.__qualname__}"
 
 
-def _implementation_addon(
-    implementation: type, configs: list[AppConfig]
-) -> AppConfig | None:
+def _implementation_addon(implementation: type, configs: list[AppConfig]) -> AppConfig | None:
     """Return the installed addon whose native Python module owns ``implementation``."""
 
     module_name = implementation.__module__
     candidates = [
         config
         for config in configs
-        if module_name == config.module.__name__
-        or module_name.startswith(f"{config.module.__name__}.")
+        if module_name == config.module.__name__ or module_name.startswith(f"{config.module.__name__}.")
     ]
     return max(candidates, key=lambda config: len(config.module.__name__), default=None)
-
-
-def _implementation_row(
-    model: type[Model], field: ImplClassField, key: str, choice: ImplChoice, configs: list[AppConfig]
-) -> PlatformImplementationRow:
-    """Project one field-owned registered key without inspecting Python source."""
-
-    implementation = field.resolve_class(key)
-    owner = _implementation_addon(implementation, configs)
-    row = PlatformImplementationRow(
-        id=f"{model._meta.label}.{field.name}:{key}",
-        model=model._meta.label,
-        field=field.name,
-        key=key,
-        label=choice.label,
-        category=choice.category,
-        icon=choice.icon,
-        registry_setting=field.registry_setting,
-        class_path=_class_path(implementation),
-        base_class_path=_class_path(field.base_class),
-        addon_id=owner.name if owner is not None else "",
-        addon_label=owner.label if owner is not None else "",
-    )
-    row._implementation = implementation
-    row._choice = choice
-    return row
 
 
 def implementation_rows() -> list[PlatformImplementationRow]:
@@ -362,7 +348,9 @@ def implementation_rows() -> list[PlatformImplementationRow]:
                     continue
                 keys = field.registered_keys()
                 choices = {choice.key: choice for choice in field.impl_choices()}
-                rows.extend(_implementation_row(model, field, key, choices[key], configs) for key in keys)
+                rows.extend(
+                    PlatformImplementationRow.from_field(model, field, key, choices[key], configs) for key in keys
+                )
     return sorted(rows, key=lambda row: row.id)
 
 

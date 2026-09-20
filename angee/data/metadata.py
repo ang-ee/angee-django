@@ -16,6 +16,7 @@ from pydantic import Field, TypeAdapter, with_config
 from pydantic.alias_generators import to_camel
 
 __all__ = [
+    "MONEY_CURRENCY_FIELD_METADATA_KEY",
     "DataAggregateMeasureMetadata",
     "DataDefaultSortMetadata",
     "DataLinesMetadata",
@@ -39,6 +40,9 @@ __all__ = [
     "DataResourceTypeNames",
     "serialize_data_resources",
 ]
+
+MONEY_CURRENCY_FIELD_METADATA_KEY = "angee_currency_field"
+"""Field-metadata key naming a money projection's currency path."""
 
 
 @dataclass(frozen=True, slots=True)

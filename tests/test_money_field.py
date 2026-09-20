@@ -21,15 +21,17 @@ from django.db.migrations.state import ModelState, ProjectState
 from strawberry import auto
 
 import angee.base.fields as base_fields
+import angee.money.fields as money_fields
 from angee.base.fields import SqidField
 from angee.data.field_classification import model_field_scalar, money_currency_field, resource_field_widget
 from angee.data.metadata import (
+    MONEY_CURRENCY_FIELD_METADATA_KEY,
     DataResourceRoots,
     DataResourceTypeNames,
     serialize_data_resources,
 )
 from angee.graphql.data.metadata import _finalize_data_resource
-from angee.money.fields import MONEY_CURRENCY_FIELD_METADATA_KEY, MoneyField
+from angee.money.fields import MoneyField
 from tests.money_models import MoneyDocument, MoneyLine, MoneyStatement
 
 
@@ -51,10 +53,13 @@ def test_declared_projection_facts_classify_without_concrete_field_type() -> Non
     assert money_currency_field(field) == "currency"
     assert resource_field_widget(field, "scalar", {"angee_widget": "integer"}) == "integer"
     assert MONEY_CURRENCY_FIELD_METADATA_KEY == "angee_currency_field"
-    assert money_currency_field(
-        field,
-        {MONEY_CURRENCY_FIELD_METADATA_KEY: "ledger_currency"},
-    ) == "ledger_currency"
+    assert (
+        money_currency_field(
+            field,
+            {MONEY_CURRENCY_FIELD_METADATA_KEY: "ledger_currency"},
+        )
+        == "ledger_currency"
+    )
 
 
 def test_sqid_field_declares_id_scalar_for_metadata() -> None:
@@ -68,6 +73,13 @@ def test_moneyfield_is_owned_by_money_fields_module() -> None:
 
     assert MoneyField.__module__ == "angee.money.fields"
     assert not hasattr(base_fields, "MoneyField")
+
+
+def test_money_currency_metadata_key_reexports_the_core_contract() -> None:
+    """Existing addon imports and field declarations share the core metadata key."""
+
+    assert money_fields.MONEY_CURRENCY_FIELD_METADATA_KEY is MONEY_CURRENCY_FIELD_METADATA_KEY
+    assert getattr(MoneyField(currency_field="order.currency"), MONEY_CURRENCY_FIELD_METADATA_KEY) == "order.currency"
 
 
 def test_check_passes_for_a_sibling_currency_fk() -> None:
@@ -197,9 +209,9 @@ def test_resource_metadata_wire_projects_the_money_widget_and_currency_path() ->
             filter="money_docs_bool_exp",
             order="money_docs_order_by",
         ),
-            capabilities=("list", "aggregate"),
-            public_id_field="id",
-            filter_fields=("id", "amount"),
+        capabilities=("list", "aggregate"),
+        public_id_field="id",
+        filter_fields=("id", "amount"),
     )
 
     [wire] = serialize_data_resources((metadata,), schema_name="console")
