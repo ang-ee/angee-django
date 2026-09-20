@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, NoReturn, cast, get_args
 
@@ -33,6 +33,7 @@ __all__ = [
     "ImplClassField",
     "ImplDefaultsMixin",
     "impl_registry",
+    "resolve_all_impl_classes",
     "resolve_impl_class",
     "model_config_form_spec",
 ]
@@ -526,6 +527,39 @@ def resolve_impl_class(registry_setting: str, key: str, base_class: type) -> typ
         base_name = getattr(base_class, "__name__", base_class)
         raise ImproperlyConfigured(f"settings.{registry_setting}[{key!r}] = {dotted!r} is not a {base_name}.")
     return impl
+
+
+def resolve_all_impl_classes(
+    registry_setting: str,
+    base_class: type,
+    *,
+    on_error: Callable[[str, Exception], None] | None = None,
+) -> tuple[type, ...]:
+    """Resolve and validate every configured impl in deterministic key order.
+
+    A class registry is a declaration, not merely an import list: each class's
+    stable ``key`` must agree with the mapping key that selected it. System-check
+    callers may supply ``on_error`` to collect every invalid declaration while
+    ordinary callers retain fail-fast resolution.
+    """
+
+    classes: list[type] = []
+    for key in sorted(impl_registry(registry_setting)):
+        try:
+            impl = resolve_impl_class(registry_setting, key, base_class)
+            declared_key = getattr(impl, "key", None)
+            if declared_key != key:
+                raise ImproperlyConfigured(
+                    f"settings.{registry_setting}[{key!r}] resolves "
+                    f"{impl.__name__} with key {declared_key!r}."
+                )
+        except (ImportError, ImproperlyConfigured) as error:
+            if on_error is None:
+                raise
+            on_error(key, error)
+            continue
+        classes.append(impl)
+    return tuple(classes)
 
 
 class ImplClassField(TextChoicesField):

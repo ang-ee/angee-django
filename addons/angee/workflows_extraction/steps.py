@@ -16,6 +16,7 @@ from rebac import actor_context
 from angee.base.actors import actor_user_id
 from angee.base.impl import resolve_impl_class
 from angee.base.refs import canonical_record_target
+from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import (
     ArtifactSpec,
     DecisionGateOutput,
@@ -117,7 +118,7 @@ class PreparePagesStepImpl(StepImpl):
             )
         model_id = value.recognition_model or ""
         recognition_options = dict(options.get("recognition_config") or {})
-        config_digest = _json_digest(recognition_options)
+        config_digest = canonical_json_sha256(recognition_options)
         recognition_pages = [
             {
                 "source_position": page.source_position,
@@ -222,7 +223,7 @@ class RecognizePageStepImpl(StepImpl):
         request = external_operation_request(step_run)
         value = self.validate_input(request.input)
         config = RecognizePageConfig.model_validate(step_run.step.config)
-        if value.config_digest != _json_digest(config.engine_config):
+        if value.config_digest != canonical_json_sha256(config.engine_config):
             raise ValidationError({"recognition": "The page item names a different published recognizer config."})
         actor = step_run.run.admission_actor()
         if actor is None:
@@ -313,7 +314,10 @@ class CollectCarriersStepImpl(StepImpl):
             raise PermissionDenied("Carrier collection requires the workflow actor.")
         with actor_context(actor):
             prepared, manifest = _restore_prepared(value.prepared, options)
-            if _json_digest(dict(options.get("recognition_config") or {})) != manifest.recognition_config_digest:
+            if (
+                canonical_json_sha256(dict(options.get("recognition_config") or {}))
+                != manifest.recognition_config_digest
+            ):
                 raise ValidationError({"recognition": "The published recognizer configuration changed."})
             results = value.recognition.get("results")
             if not isinstance(results, list):
@@ -784,12 +788,6 @@ def _restore_prepared(
     ] != manifest.recognition_pages:
         raise ValidationError({"pages": "The recognition subset changed after preparation."})
     return prepared, manifest
-
-
-def _json_digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
-    ).encode()).hexdigest()
 
 
 def _resolve_sources(value: ExtractionInput) -> tuple[list[Any], list[Any], Any]:

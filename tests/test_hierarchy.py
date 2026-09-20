@@ -17,7 +17,7 @@ import os
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection, models
+from django.db import connection, models, transaction
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
@@ -99,6 +99,25 @@ def test_direct_path_update_cannot_bypass_the_saved_row_owner() -> None:
             HierNode.objects.filter(pk=node.pk).update(path="/forged/")
         node.refresh_from_db()
     assert node.path != "/forged/"
+
+
+@pytest.mark.django_db
+def test_hierarchy_owner_authorizes_its_exact_path_update() -> None:
+    """The internal one-use capability admits the matching path-only update."""
+
+    with system_context(reason="test hierarchy authorized path update"):
+        node = HierNode.objects.create(name="guarded")
+        path = f"/{node.pk:0{HierNode.path_segment_width}d}/authorized/"
+        with transaction.atomic():
+            updated = node._write_hierarchy_path(
+                HierNode.objects.filter(pk=node.pk),
+                path,
+                using="default",
+            )
+        node.refresh_from_db()
+
+    assert updated == 1
+    assert node.path == path
 
 
 @pytest.mark.django_db

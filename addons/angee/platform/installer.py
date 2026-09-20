@@ -39,11 +39,10 @@ from django.conf import settings
 from django.core.checks import CheckMessage, Error, register
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files import locks
-from django.utils.module_loading import import_string
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from angee.base.impl import resolve_impl_class
+from angee.base.impl import resolve_all_impl_classes, resolve_impl_class
 from angee.fs import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
@@ -411,24 +410,23 @@ def _check_installer_backends(app_configs: Any, **kwargs: Any) -> list[CheckMess
                 id="angee.platform.E001",
             )
         ]
-    for key, dotted in registry.items():
-        try:
-            backend_cls = import_string(str(dotted))
-        except ImportError as error:
-            errors.append(
-                Error(
-                    f"settings.{_REGISTRY_SETTING}[{key!r}] = {dotted!r} does not import: {error}",
-                    id="angee.platform.E002",
-                )
+    resolution_errors: list[Exception] = []
+    resolve_all_impl_classes(
+        _REGISTRY_SETTING,
+        AddonInstallerBackend,
+        on_error=lambda _key, error: resolution_errors.append(error),
+    )
+    for error in resolution_errors:
+        errors.append(
+            Error(
+                str(error),
+                id=(
+                    "angee.platform.E002"
+                    if isinstance(error, ImportError)
+                    else "angee.platform.E003"
+                ),
             )
-            continue
-        if not (isinstance(backend_cls, type) and issubclass(backend_cls, AddonInstallerBackend)):
-            errors.append(
-                Error(
-                    f"settings.{_REGISTRY_SETTING}[{key!r}] = {dotted!r} is not an AddonInstallerBackend subclass.",
-                    id="angee.platform.E003",
-                )
-            )
+        )
     selected = getattr(settings, _BACKEND_SETTING, "local")
     if selected not in registry:
         errors.append(

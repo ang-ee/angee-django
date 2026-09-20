@@ -16,13 +16,15 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import call_command
 from django.db import connection
 from django.test import override_settings
-from rebac import system_context
+from rebac import system_context, to_object_ref
+from rebac.models import active_relationship_model
 
-from angee.graphql.schema import GraphQLSchemas, SCHEMA_PART_KEYS
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.money.rounding import RoundingMode
 from tests.conftest import SchemaAddon, _clear_model_tables, _create_missing_tables
 from tests.money_models import MONEY_TEST_MODELS, Currency, CurrencyRate
@@ -64,6 +66,40 @@ def _make_rate(currency: Any, on_date: date, rate: str) -> Any:
 
     with system_context(reason="money tests setup"):
         return CurrencyRate.objects.create(currency=currency, date=on_date, rate=Decimal(rate))
+
+
+def _make_contextual_rate(
+    currency: Any,
+    on_date: date,
+    rate: str,
+    *,
+    context: Any,
+    reference_currency: Any,
+    source_priority: int = 0,
+) -> Any:
+    """Create one contextual rate directly through its native model contract."""
+
+    return CurrencyRate.objects.create(
+        currency=currency,
+        date=on_date,
+        rate=Decimal(rate),
+        context_content_type=ContentType.objects.get_for_model(context),
+        context_object_id=str(context.pk),
+        reference_currency=reference_currency,
+        source_priority=source_priority,
+    )
+
+
+def _shared_reader_exists(row: Any) -> bool:
+    """Return whether a rate carries the authenticated-user wildcard reader."""
+
+    return active_relationship_model().objects.filter(
+        resource_type=row._meta.rebac_resource_type,
+        resource_id=to_object_ref(row).resource_id,
+        relation="shared",
+        subject_type="auth/user",
+        subject_id="*",
+    ).exists()
 
 
 def test_currency_resource_authors_human_label_and_exact_search_fields() -> None:
@@ -213,7 +249,7 @@ def test_contextual_rates_never_fall_back_to_global_history(money_tables: None) 
     usd = _make_currency("USD")
     eur = _make_currency("EUR")
     context = _make_currency("GBP")
-    _make_rate(eur, date(2026, 1, 1), "0.9")
+    global_rate = _make_rate(eur, date(2026, 1, 1), "0.9")
     with system_context(reason="money contextual rate test"):
         with pytest.raises(CurrencyRate.DoesNotExist):
             CurrencyRate.objects.rate_for(
@@ -222,23 +258,23 @@ def test_contextual_rates_never_fall_back_to_global_history(money_tables: None) 
                 context=context,
                 reference_currency=usd,
             )
-        projected = CurrencyRate.objects.apply_contextual_projection(
-            None,
-            CurrencyRate(currency=eur, date=date(2026, 1, 1), rate=Decimal("0.85")),
+        contextual = _make_contextual_rate(
+            eur,
+            date(2026, 1, 1),
+            "0.85",
             context=context,
             reference_currency=usd,
         )
+        assert _shared_reader_exists(global_rate)
+        assert not _shared_reader_exists(contextual)
         assert CurrencyRate.objects.rate_for(
             eur,
             date(2026, 1, 1),
             context=context,
             reference_currency=usd,
         ) == Decimal("0.85")
-        CurrencyRate.objects.withdraw_contextual_projection(
-            projected,
-            context=context,
-            reference_currency=usd,
-        )
+        contextual.is_archived = True
+        contextual.save(update_fields={"is_archived"})
         with pytest.raises(CurrencyRate.DoesNotExist):
             CurrencyRate.objects.rate_for(
                 eur,
@@ -256,27 +292,21 @@ def test_contextual_rate_priority_precedes_date(money_tables: None) -> None:
     eur = _make_currency("EUR")
     context = _make_currency("GBP")
     with system_context(reason="money contextual priority test"):
-        CurrencyRate.objects.apply_contextual_projection(
-            None,
-            CurrencyRate(
-                currency=eur,
-                date=date(2026, 1, 10),
-                rate=Decimal("0.8"),
-                source_priority=0,
-            ),
+        _make_contextual_rate(
+            eur,
+            date(2026, 1, 10),
+            "0.8",
             context=context,
             reference_currency=usd,
+            source_priority=0,
         )
-        CurrencyRate.objects.apply_contextual_projection(
-            None,
-            CurrencyRate(
-                currency=eur,
-                date=date(2026, 1, 1),
-                rate=Decimal("0.9"),
-                source_priority=1,
-            ),
+        _make_contextual_rate(
+            eur,
+            date(2026, 1, 1),
+            "0.9",
             context=context,
             reference_currency=usd,
+            source_priority=1,
         )
         assert CurrencyRate.objects.rate_for(
             eur,
@@ -311,6 +341,10 @@ def test_currency_rate_identity_and_precision_are_native_owned(money_tables: Non
     rate.currency = gbp
     with system_context(reason="money rate identity test"), pytest.raises(ValidationError):
         rate.save(update_fields={"currency"})
+    with system_context(reason="money queryset identity test"), pytest.raises(ValidationError):
+        CurrencyRate.objects.filter(pk=rate.pk).update(currency=gbp)
+    with system_context(reason="money bulk identity test"), pytest.raises(ValidationError):
+        CurrencyRate.objects.bulk_update([rate], ["currency"])
     rate.refresh_from_db()
     rate.rate = Decimal("0.123456789012345678901")
     with system_context(reason="money rate precision test"), pytest.raises(ValidationError):
@@ -323,37 +357,3 @@ def test_currency_rate_identity_and_precision_are_native_owned(money_tables: Non
         )
         exact.save()
     assert exact.rate == Decimal("123456789012345678.12345678901234567890")
-
-
-def test_contextual_projection_rejects_wrong_alias_expected(money_tables: None) -> None:
-    """An equal-PK object from another database is not an exact CAS witness."""
-
-    del money_tables
-    usd = _make_currency("USD")
-    eur = _make_currency("EUR")
-    context = _make_currency("GBP")
-    with system_context(reason="money contextual alias test"):
-        projected = CurrencyRate.objects.apply_contextual_projection(
-            None,
-            CurrencyRate(currency=eur, date=date(2026, 1, 1), rate=Decimal("0.85")),
-            context=context,
-            reference_currency=usd,
-        )
-        projected._state.db = "other"
-        with pytest.raises(ValidationError):
-            CurrencyRate.objects.apply_contextual_projection(
-                projected,
-                CurrencyRate(
-                    currency=eur,
-                    date=date(2026, 1, 1),
-                    rate=Decimal("0.86"),
-                ),
-                context=context,
-                reference_currency=usd,
-            )
-        with pytest.raises(ValidationError):
-            CurrencyRate.objects.withdraw_contextual_projection(
-                projected,
-                context=context,
-                reference_currency=usd,
-            )

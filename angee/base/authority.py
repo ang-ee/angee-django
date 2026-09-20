@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from threading import get_ident
-from typing import Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 from django.db import connections
 from django.db.backends.base.base import BaseDatabaseWrapper
@@ -64,14 +64,33 @@ class TransactionBoundAuthority(Generic[_PayloadT]):
         thread and outer transaction; closing it restores the parent token.
         """
 
+        binding = self.bind(alias, payload, allow_nested=allow_nested)
+        try:
+            yield payload
+        finally:
+            self.reset(binding)
+
+    def bind(
+        self,
+        alias: str,
+        payload: _PayloadT,
+        *,
+        allow_nested: bool = False,
+    ) -> tuple[_AuthorityToken[_PayloadT], Any]:
+        """Bind ``payload`` and return an opaque token for :meth:`reset`.
+
+        This is the manual-lifetime form of :meth:`scope`, used only by owners
+        whose established ContextVar-shaped API brackets a write in separate
+        calls. The same transaction, thread, copied-context revocation and
+        nesting rules apply.
+        """
+
         connection = connections[alias]
         normalized_alias = connection.alias
         if not connection.in_atomic_block or not connection.atomic_blocks:
             raise RuntimeError(self._atomic_error)
         parent = self._current.get()
-        if parent is not None and (
-            not allow_nested or self._active_token(alias) is not parent
-        ):
+        if parent is not None and (not allow_nested or self._active_token(alias) is not parent):
             raise RuntimeError(self._nested_error)
         authority = _AuthorityToken(
             alias=normalized_alias,
@@ -80,12 +99,20 @@ class TransactionBoundAuthority(Generic[_PayloadT]):
             thread_id=get_ident(),
             payload=payload,
         )
-        token = self._current.set(authority)
-        try:
-            yield payload
-        finally:
-            authority.closed = True
-            self._current.reset(token)
+        return authority, self._current.set(authority)
+
+    def reset(self, binding: tuple[_AuthorityToken[_PayloadT], Any]) -> None:
+        """Close one token returned by :meth:`bind` and revoke copied contexts."""
+
+        authority, token = binding
+        authority.closed = True
+        self._current.reset(token)
+
+    def current_payload(self) -> _PayloadT | None:
+        """Return the current live payload without requiring its alias from a caller."""
+
+        authority = self._current.get()
+        return None if authority is None else self.payload(authority.alias)
 
     def payload(self, alias: str) -> _PayloadT | None:
         """Return the live payload, or ``None`` when this call has no authority.
@@ -122,3 +149,43 @@ class TransactionBoundAuthority(Generic[_PayloadT]):
         ):
             return None
         return authority
+
+
+class TransactionBoundContext(Generic[_PayloadT]):
+    """ContextVar-shaped facade over :class:`TransactionBoundAuthority`.
+
+    It exists for owners that already bracket capabilities with ``set`` and
+    ``reset`` at separate call sites. Lifetime policy remains entirely on the
+    shared authority primitive instead of being reimplemented in each owner.
+    """
+
+    def __init__(
+        self,
+        context_name: str,
+        *,
+        alias: Callable[[_PayloadT], str],
+        atomic_error: str,
+        nested_error: str,
+    ) -> None:
+        self._alias = alias
+        self._authority = TransactionBoundAuthority[_PayloadT](
+            context_name,
+            atomic_error=atomic_error,
+            nested_error=nested_error,
+        )
+
+    def get(self, default: _PayloadT | None = None) -> _PayloadT | None:
+        """Return the live payload, or ``default`` outside its exact lifetime."""
+
+        payload = self._authority.current_payload()
+        return default if payload is None else payload
+
+    def set(self, payload: _PayloadT) -> tuple[_AuthorityToken[_PayloadT], Any]:
+        """Bind one payload using the alias it owns."""
+
+        return self._authority.bind(self._alias(payload), payload)
+
+    def reset(self, token: tuple[_AuthorityToken[_PayloadT], Any]) -> None:
+        """Close and reset one token returned by :meth:`set`."""
+
+        self._authority.reset(token)

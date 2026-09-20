@@ -23,6 +23,8 @@ from pydantic import (
     model_validator,
 )
 
+from angee.base.serialization import canonical_json
+
 
 def map_child_input(value: JsonValue) -> JsonValue:
     """Project a raw Map item through the established Automatic input contract."""
@@ -189,9 +191,7 @@ def validate_json_presence(value: JsonPresence, *, label: str = "JSON value") ->
 def json_values_equal(left: Any, right: Any) -> bool:
     """Compare validated JSON values through their canonical native encoding."""
 
-    return json.dumps(
-        left, sort_keys=True, separators=(",", ":"), allow_nan=False
-    ) == json.dumps(right, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return canonical_json(left) == canonical_json(right)
 
 
 @dataclass(frozen=True, slots=True)

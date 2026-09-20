@@ -12,33 +12,18 @@ carries no ``addon.toml``, so the composer never sees them.
 
 from __future__ import annotations
 
-from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.base.mixins import (
-    HierarchyMixin,
-    HierarchyQuerySet,
-    is_hierarchy_path_write_authorized,
-)
+from angee.base.mixins import HierarchyMixin, HierarchyQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 
 
 class HierNodeQuerySet(HierarchyQuerySet["HierNode"], AngeeQuerySet["HierNode"]):
     """Angee queryset for the plain hierarchy demo, with the subtree scopes."""
 
-    def update(self, **kwargs):
-        if "path" in kwargs and not is_hierarchy_path_write_authorized(self, kwargs):
-            raise ValidationError("The hierarchy path belongs to the saved-row owner.")
-        return super().update(**kwargs)
-
 
 class ScopedHierNodeQuerySet(HierarchyQuerySet["ScopedHierNode"], AngeeQuerySet["ScopedHierNode"]):
     """Angee queryset for the locally scoped hierarchy demo."""
-
-    def update(self, **kwargs):
-        if "path" in kwargs and not is_hierarchy_path_write_authorized(self, kwargs):
-            raise ValidationError("The hierarchy path belongs to the saved-row owner.")
-        return super().update(**kwargs)
 
 
 HierNodeManager = AngeeManager.from_queryset(HierNodeQuerySet)

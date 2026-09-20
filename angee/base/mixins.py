@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
@@ -24,10 +23,10 @@ from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id
-from angee.base.authority import TransactionBoundAuthority
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.scoping import system_queryset
+from angee.base.writes import WriteFence, WriteFencedQuerySetMixin, WriteFenceToken
 
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)
 _HierarchyModelT = TypeVar("_HierarchyModelT", bound="HierarchyMixin")
@@ -45,7 +44,27 @@ rows and lists expose an archived facet without per-model wiring.
 _EVERY_AUTHENTICATED_USER = SubjectRef.of("auth/user", "*")
 
 
-class ConditionalSharedReaderQuerySet(models.QuerySet[_ArchiveModelT]):
+def _shared_reader_policy_field_spellings(model: type[models.Model]) -> frozenset[str]:
+    """Return every model field spelling that participates in reader policy."""
+
+    names = {
+        name
+        for owner in model.__mro__
+        for declaration in (owner.__dict__.get("shared_reader_policy_fields", ()),)
+        for name in declaration
+    }
+    return frozenset(
+        spelling
+        for name in names
+        for field in (model._meta.get_field(name),)
+        for spelling in (field.name, field.attname)
+    )
+
+
+class ConditionalSharedReaderQuerySet(
+    WriteFencedQuerySetMixin,
+    models.QuerySet[_ArchiveModelT],
+):
     """Protect fields that decide whether one row receives a wildcard reader."""
 
     @classmethod
@@ -54,48 +73,34 @@ class ConditionalSharedReaderQuerySet(models.QuerySet[_ArchiveModelT]):
         model: type[models.Model],
         fields: Iterable[str],
     ) -> set[str]:
-        names = {
-            name
-            for owner in model.__mro__
-            for declaration in (
-                owner.__dict__.get("shared_reader_policy_fields", ()),
-                owner.__dict__.get("shared_scope_source_fields", ()),
-            )
-            for name in declaration
-        }
-        spellings = {
-            spelling
-            for name in names
-            for field in (model._meta.get_field(name),)
-            for spelling in (field.name, field.attname)
-        }
-        return {str(field) for field in fields} & spellings
+        return {str(field) for field in fields} & _shared_reader_policy_field_spellings(model)
 
-    def update(self, **kwargs: Any) -> int:
-        """Reject eligibility changes that would bypass tuple reconciliation."""
-
-        if self._policy_fields(self.model, kwargs):
-            raise ValidationError("Change shared-reader eligibility through its native owner.")
-        return super().update(**kwargs)
-
-    def bulk_update(
+    def _validate_write_fence(
         self,
-        objs: Iterable[models.Model],
-        fields: Iterable[str],
-        batch_size: int | None = None,
-    ) -> int:
-        """Reject batched eligibility changes while preserving ordinary batching."""
+        operation: str,
+        *,
+        objects: tuple[models.Model, ...] = (),
+        changed_fields: tuple[str, ...] = (),
+        values: Mapping[str, Any] | None = None,
+        options: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Reject write shapes that bypass wildcard-reader reconciliation."""
 
-        rows, names = list(objs), tuple(fields)
-        if self._policy_fields(self.model, names):
+        if operation == "bulk_create":
+            raise ValidationError(
+                "Create conditional shared-reader rows through their native owner."
+            )
+        if operation in {"update", "bulk_update"} and self._policy_fields(
+            self.model, changed_fields
+        ):
             raise ValidationError("Change shared-reader eligibility through its native owner.")
-        return super().bulk_update(rows, names, batch_size=batch_size)
-
-    def bulk_create(self, *args: Any, **kwargs: Any) -> list[models.Model]:
-        """Require create-through-save so every eligible row receives its tuple."""
-
-        del args, kwargs
-        raise ValidationError("Create conditional shared-reader rows through their native owner.")
+        super()._validate_write_fence(
+            operation,
+            objects=objects,
+            changed_fields=changed_fields,
+            values=values,
+            options=options,
+        )
 
 
 class ConditionalSharedReaderMixin(models.Model):
@@ -106,7 +111,9 @@ class ConditionalSharedReaderMixin(models.Model):
     reconciler reads a fresh canonical row after persistence,
     so deferred or dirty values excluded by ``update_fields`` never drive access.
     It changes only its configured wildcard tuple; manual and source-scope grants
-    remain owned by their distinct relations.
+    remain owned by their distinct relations. Shared-reader persistence and tuple
+    reconciliation require the default database alias because authorization is
+    not split across databases.
     """
 
     shared_reader_relation: ClassVar[str | None] = "shared"
@@ -131,7 +138,7 @@ class ConditionalSharedReaderMixin(models.Model):
         return contributions
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist and reconcile the wildcard from a fresh row in one transaction."""
+        """Persist and reconcile when this write can change reader eligibility."""
 
         alias = kwargs.get("using") or self._state.db or DEFAULT_DB_ALIAS
         if alias != DEFAULT_DB_ALIAS:
@@ -139,7 +146,18 @@ class ConditionalSharedReaderMixin(models.Model):
                 "Conditional shared-reader writes require the default authorization database."
             )
         update_fields = kwargs.get("update_fields")
-        if update_fields is not None and not update_fields:
+        if update_fields is not None:
+            update_fields = {str(field) for field in update_fields}
+            kwargs["update_fields"] = update_fields
+            if not update_fields:
+                super().save(*args, **kwargs)
+                return
+        reconcile = (
+            self._state.adding
+            or update_fields is None
+            or bool(update_fields & _shared_reader_policy_field_spellings(type(self)))
+        )
+        if not reconcile:
             super().save(*args, **kwargs)
             return
         with transaction.atomic(using=alias):
@@ -147,12 +165,7 @@ class ConditionalSharedReaderMixin(models.Model):
             self.reconcile_shared_reader(using=alias)
 
     def reconcile_shared_reader(self, *, using: str | None = None) -> None:
-        """Reconcile only this owner's wildcard tuple from persisted row facts.
-
-        This public hook is also the cooperative boundary for a manager that
-        changes a declared eligibility fact through an exact locked queryset
-        write, such as an immutable external-provenance claim.
-        """
+        """Reconcile only this owner's wildcard tuple from persisted row facts."""
 
         alias = using or self._state.db or DEFAULT_DB_ALIAS
         if alias != DEFAULT_DB_ALIAS:
@@ -446,7 +459,7 @@ class RevisionMixin(models.Model):
             reversion.set_comment(f"Reverted to revision {version.revision_id}.")
 
 
-class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
+class HierarchyQuerySet(WriteFencedQuerySetMixin, models.QuerySet[_HierarchyModelT]):
     """Subtree read scopes for models composing :class:`HierarchyMixin`.
 
     Compose alongside the model's base queryset (e.g.
@@ -478,7 +491,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
         """Carry a live hierarchy-owner token through cooperative queryset narrowing."""
 
         clone = cast(Self, super()._clone())
-        authority = _hierarchy_path_write.payload(self.db)
+        authority = _hierarchy_path_write.token(self.db)
         if (
             authority is not None
             and getattr(self, _HIERARCHY_PATH_WRITE_TOKEN, None) is authority
@@ -486,29 +499,34 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
             setattr(clone, _HIERARCHY_PATH_WRITE_TOKEN, authority)
         return clone
 
-    def update(self, **kwargs: Any) -> int:
-        """Consume an exact internal path write before continuing the queryset MRO."""
+    def _validate_write_fence(
+        self,
+        operation: str,
+        *,
+        objects: tuple[models.Model, ...] = (),
+        changed_fields: tuple[str, ...] = (),
+        values: Mapping[str, Any] | None = None,
+        options: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Admit only the hierarchy owner's exact derived-path queryset write."""
 
-        authority = _hierarchy_path_write_authority(self, kwargs)
-        if authority is not None:
-            if authority.consumed:
-                raise RuntimeError("Hierarchy path authority was already consumed.")
-            authority.consumed = True
-        return super().update(**kwargs)
-
-
-@dataclass(slots=True)
-class _HierarchyPathWrite:
-    """One path-only queryset write owned by one concrete hierarchy operation."""
-
-    model: type[models.Model]
-    alias: str
-    path_value: Any
-    consumed: bool = False
+        write_values = dict(values or {})
+        if operation == "update" and "path" in write_values:
+            authority = _hierarchy_path_write_authority(self, write_values)
+            if authority is None:
+                raise ValidationError("The hierarchy path belongs to the saved-row owner.")
+            authority.consume()
+        super()._validate_write_fence(
+            operation,
+            objects=objects,
+            changed_fields=changed_fields,
+            values=values,
+            options=options,
+        )
 
 
 _HIERARCHY_PATH_WRITE_TOKEN = "_angee_hierarchy_path_write_token"
-_hierarchy_path_write = TransactionBoundAuthority[_HierarchyPathWrite](
+_hierarchy_path_write = WriteFence[Any](
     "angee_hierarchy_path_write",
     atomic_error="Hierarchy path writes require one atomic owner.",
     nested_error="Hierarchy path owners cannot be nested.",
@@ -518,17 +536,17 @@ _hierarchy_path_write = TransactionBoundAuthority[_HierarchyPathWrite](
 def _hierarchy_path_write_authority(
     queryset: models.QuerySet[Any],
     values: dict[str, Any],
-) -> _HierarchyPathWrite | None:
+) -> WriteFenceToken[Any] | None:
     """Return the exact live path-write capability carried by ``queryset``."""
 
-    authority = _hierarchy_path_write.payload(queryset.db)
+    authority = _hierarchy_path_write.token(queryset.db)
     if (
         authority is None
         or getattr(queryset, _HIERARCHY_PATH_WRITE_TOKEN, None) is not authority
         or authority.model is not queryset.model
-        or authority.alias != queryset.db
+        or authority.operation != "update"
         or set(values) != {"path"}
-        or values["path"] is not authority.path_value
+        or values["path"] is not authority.payload
     ):
         return None
     return authority
@@ -774,10 +792,11 @@ class HierarchyMixin(models.Model):
 
         if not isinstance(queryset, HierarchyQuerySet):
             return queryset.update(path=path_value)
-        authority = _HierarchyPathWrite(
+        authority = WriteFenceToken(
             model=type(self),
-            alias=using,
-            path_value=path_value,
+            operation="update",
+            object_identity=None,
+            payload=path_value,
         )
         setattr(queryset, _HIERARCHY_PATH_WRITE_TOKEN, authority)
         with _hierarchy_path_write.scope(using, authority):

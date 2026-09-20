@@ -11,6 +11,7 @@ from typing import Any
 from django.db import models
 
 from angee.base.mixins import ARCHIVE_FLAG_FIELD
+from angee.money.fields import MONEY_CURRENCY_FIELD_METADATA_KEY
 
 RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list", "object"})
 """Supported resource field kind names."""
@@ -144,7 +145,7 @@ def money_currency_field(
 ) -> str | None:
     """Return the currency path a field declares for money metadata, if any."""
 
-    return _declared_projection_fact(field, metadata, "angee_currency_field")
+    return _declared_projection_fact(field, metadata, MONEY_CURRENCY_FIELD_METADATA_KEY)
 
 
 def resource_field_widget(

@@ -18,6 +18,7 @@ from angee.platform.installer import (
     AddonInstaller,
     LocalInstallerBackend,
     StaleAddonPreviewError,
+    _check_installer_backends,
     addon_installer,
 )
 
@@ -248,3 +249,23 @@ def test_addon_installer_rejects_non_backend_class(settings: Any) -> None:
 
     with pytest.raises(ImproperlyConfigured, match="AddonInstallerBackend"):
         addon_installer()
+
+
+def test_installer_check_reports_every_backend_fault_with_distinct_ids(
+    settings: Any,
+) -> None:
+    """Import, subclass, and selected-key faults are all reported in one pass."""
+
+    settings.ANGEE_ADDON_INSTALLER_BACKEND = "absent"
+    settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {
+        "missing": "tests.test_addon_installer.MissingBackend",
+        "wrong_base": "builtins.str",
+    }
+
+    issues = _check_installer_backends(None)
+
+    assert [issue.id for issue in issues] == [
+        "angee.platform.E002",
+        "angee.platform.E003",
+        "angee.platform.E004",
+    ]

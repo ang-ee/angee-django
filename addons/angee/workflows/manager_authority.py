@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import uuid
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from typing import Any
 
 from django.db import connections
+
+from angee.base.authority import TransactionBoundContext
 
 
 @dataclass
@@ -40,25 +42,23 @@ _attempt_write_session: ContextVar[_AttemptWriteSession | None] = ContextVar(
 
 @dataclass(slots=True)
 class _AtomicWriteCapability:
-    """One-use authority bound to an exact instance and outer transaction."""
+    """Workflow identity carried inside a shared transaction-bound context."""
 
     alias: str
-    connection_id: int
-    outer_atomic_id: int
+    connection_id: InitVar[int]
+    outer_atomic_id: InitVar[int]
     instance_id: int
     consumed: bool = False
 
+    def __post_init__(self, connection_id: int, outer_atomic_id: int) -> None:
+        """Discard caller-captured lifetime facts now owned by the base context."""
+
+        del connection_id, outer_atomic_id
+
     def matches(self, alias: str, instance: Any) -> bool:
-        connection = connections[alias]
-        return (
-            not self.consumed
-            and self.alias == alias
-            and self.connection_id == id(connection)
-            and connection.in_atomic_block
-            and bool(connection.atomic_blocks)
-            and self.outer_atomic_id == id(connection.atomic_blocks[0])
-            and self.instance_id == id(instance)
-        )
+        """Match the workflow-owned one-use instance and database identity."""
+
+        return not self.consumed and self.alias == alias and self.instance_id == id(instance)
 
     def consume(self, alias: str, instance: Any) -> bool:
         if not self.matches(alias, instance):
@@ -75,8 +75,11 @@ class _AttemptSaveCapability:
     adding: bool
 
 
-_attempt_save_capability: ContextVar[_AttemptSaveCapability | None] = ContextVar(
-    "workflow_attempt_save_capability", default=None
+_attempt_save_capability = TransactionBoundContext[_AttemptSaveCapability](
+    "workflow_attempt_save_capability",
+    alias=lambda capability: capability.atomic.alias,
+    atomic_error="Attempt saves require an active manager transaction.",
+    nested_error="Attempt save authority cannot be nested.",
 )
 
 
@@ -87,8 +90,11 @@ class _StepRunSaveCapability:
     step_run_id: int
 
 
-_step_run_save_capability: ContextVar[_StepRunSaveCapability | None] = ContextVar(
-    "workflow_step_run_save_capability", default=None
+_step_run_save_capability = TransactionBoundContext[_StepRunSaveCapability](
+    "workflow_step_run_save_capability",
+    alias=lambda capability: capability.atomic.alias,
+    atomic_error="Step-run saves require an active manager transaction.",
+    nested_error="Step-run save authority cannot be nested.",
 )
 
 
@@ -112,8 +118,11 @@ class _DecisionSaveCapability:
     decision_id: int
 
 
-_decision_save_capability: ContextVar[_DecisionSaveCapability | None] = ContextVar(
-    "workflow_decision_save_capability", default=None
+_decision_save_capability = TransactionBoundContext[_DecisionSaveCapability](
+    "workflow_decision_save_capability",
+    alias=lambda capability: capability.atomic.alias,
+    atomic_error="Decision saves require an active manager transaction.",
+    nested_error="Decision save authority cannot be nested.",
 )
 
 
@@ -138,8 +147,11 @@ class _ArtifactWriteCapability:
     declaration_index: int
 
 
-_artifact_write_capability: ContextVar[_ArtifactWriteCapability | None] = ContextVar(
-    "workflow_artifact_write_capability", default=None
+_artifact_write_capability = TransactionBoundContext[_ArtifactWriteCapability](
+    "workflow_artifact_write_capability",
+    alias=lambda capability: capability.atomic.alias,
+    atomic_error="Artifact saves require an active manager transaction.",
+    nested_error="Artifact save authority cannot be nested.",
 )
 
 
@@ -150,8 +162,11 @@ class _ArtifactBatchCapability:
     rows: tuple[tuple[int, int, str], ...]
 
 
-_artifact_batch_capability: ContextVar[_ArtifactBatchCapability | None] = ContextVar(
-    "workflow_artifact_batch_capability", default=None
+_artifact_batch_capability = TransactionBoundContext[_ArtifactBatchCapability](
+    "workflow_artifact_batch_capability",
+    alias=lambda capability: capability.atomic.alias,
+    atomic_error="Artifact batches require an active manager transaction.",
+    nested_error="Artifact batch authority cannot be nested.",
 )
 
 
@@ -221,8 +236,11 @@ class _DispatchSaveCapability:
     target: tuple[int | None, ...]
 
 
-_dispatch_save_capability: ContextVar[_DispatchSaveCapability | None] = ContextVar(
-    "workflow_dispatch_save_capability", default=None
+_dispatch_save_capability = TransactionBoundContext[_DispatchSaveCapability](
+    "workflow_dispatch_save_capability",
+    alias=lambda capability: capability.atomic.alias,
+    atomic_error="Dispatch saves require an active manager transaction.",
+    nested_error="Dispatch save authority cannot be nested.",
 )
 
 

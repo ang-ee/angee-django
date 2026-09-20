@@ -20,8 +20,6 @@ remote marketplace — addons known from VCS provenance but not materialised —
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -34,6 +32,7 @@ from rebac import system_context
 from angee.addons import addon_manifest, available_addons, resolve_manifest_roots
 from angee.base.fields import StateField
 from angee.base.models import AngeeManager, AngeeModel
+from angee.base.serialization import canonical_json_sha256
 from angee.platform import composed
 from angee.platform.installer import (
     AddonInstaller,
@@ -409,9 +408,7 @@ def _preview_revision(
         "addon": addon,
         "roots_after": roots_after,
     }
-    return hashlib.sha256(
-        json.dumps(decision, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return canonical_json_sha256(decision)
 
 
 class Addon(AngeeModel):
