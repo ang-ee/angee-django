@@ -16,7 +16,7 @@ from django.core.exceptions import ValidationError
 
 from angee.resources.entries import LoadResult
 from angee.resources.exceptions import ResourceLoadError
-from angee.resources.widgets import _split_xref
+from angee.resources.widgets import split_xref
 from angee.workflows.attempts import json_values_equal
 from angee.workflows.definitions import (
     DefinitionEdit,
@@ -37,7 +37,9 @@ def _rows(group: Any) -> list[dict[str, Any]]:
     return [dict(zip(headers, row, strict=True)) for row in group.dataset]
 
 
-def _declared_fields(resource: Any, row: Mapping[str, Any], names: frozenset[str]) -> dict[str, Any]:
+def _declaration_values(resource: Any, row: Mapping[str, Any], names: frozenset[str]) -> dict[str, Any]:
+    """Coerce declared values and apply the Django model's omission policy."""
+
     values: dict[str, Any] = {}
     for name in sorted(names):
         model_field = resource._meta.model._meta.get_field(name)
@@ -52,19 +54,20 @@ def _declared_fields(resource: Any, row: Mapping[str, Any], names: frozenset[str
     return values
 
 
-def _same(left: Any, right: Any) -> bool:
-    if hasattr(left, "pk") or hasattr(right, "pk"):
-        return getattr(left, "pk", left) == getattr(right, "pk", right)
-    return json_values_equal(left, right)
+def _import_export_patch(resource: Any, instance: Any, wanted: Mapping[str, Any]) -> dict[str, Any]:
+    """Return declared changes through each import-export field widget."""
 
-
-def _changed(instance: Any, wanted: Mapping[str, Any]) -> dict[str, Any]:
-    return {name: value for name, value in wanted.items() if not _same(getattr(instance, name), value)}
+    patch: dict[str, Any] = {}
+    for name, value in wanted.items():
+        field = resource.fields[name]
+        if field.widget.render(field.get_value(instance)) != field.widget.render(value):
+            patch[name] = value
+    return patch
 
 
 def _handle(value: str, aliases: Mapping[str, str]) -> tuple[str, str]:
     try:
-        return _split_xref(value, aliases)
+        return split_xref(value, aliases)
     except ValueError as error:
         raise ResourceLoadError(f"Invalid workflow declaration reference {value!r}") from error
 
@@ -88,6 +91,7 @@ def import_resource_groups(
         for row in _rows(group):
             by_model[group.model].append((group, resource, row))
     heads: dict[tuple[str, str], Any] = {}
+    workflow_resources: dict[int, Any] = {}
     publications: dict[int, bool] = {}
     counts = {"created": 0, "updated": 0, "skipped": 0}
     try:
@@ -113,13 +117,14 @@ def import_resource_groups(
                 instance.key = declared_key
                 instance.save(update_fields=["key", "updated_at"])
             heads[key] = instance
+            workflow_resources.setdefault(instance.pk, resource)
             publications[instance.pk] = publications.get(instance.pk, False) or group.entry.publish
             counts[resource.record_declared_instance(row, instance)] += 1
 
         workflow_fields: dict[int, dict[str, Any]] = {}
         for group, resource, row in by_model[workflow_model]:
             head = heads[(group.entry.addon.name, str(row["_xref"]))]
-            wanted = _declared_fields(resource, row, workflow_model.objects._WORKFLOW_FIELDS)
+            wanted = _declaration_values(resource, row, workflow_model.objects._WORKFLOW_FIELDS)
             previous = workflow_fields.setdefault(head.pk, wanted)
             if not json_values_equal(previous, wanted):
                 raise ResourceLoadError(f"{group.entry.display}: conflicting workflow declarations")
@@ -134,7 +139,7 @@ def import_resource_groups(
                 raise ResourceLoadError(f"{group.entry.display}: step parent is outside this graph declaration")
             if not isinstance(head, workflow_model) or head.published_from_id is not None:
                 raise ResourceLoadError(f"{group.entry.display}: step parent must be a draft head")
-            wanted = _declared_fields(resource, row, workflow_model.objects._NODE_FIELDS)
+            wanted = _declaration_values(resource, row, workflow_model.objects._NODE_FIELDS)
             declared_nodes[head.pk].append((group, resource, row, wanted))
 
         declared_edges: dict[int, list[tuple[Any, Any, dict[str, Any]]]] = defaultdict(list)
@@ -170,11 +175,7 @@ def import_resource_groups(
                     raise ResourceLoadError(f"{group.entry.display}: step xref changed workflow parent")
                 existing = existing or saved_nodes.get(key)
                 config_declared = "config" in row and row["config"] is not None
-                if (
-                    existing is not None
-                    and not config_declared
-                    and existing.step_class == wanted["step_class"]
-                ):
+                if existing is not None and not config_declared and existing.step_class == wanted["step_class"]:
                     # Omission leaves an operator-authored typed policy intact while
                     # another declared field changes. Explicit config, including {},
                     # remains authoritative; a changed implementation starts from its
@@ -190,7 +191,7 @@ def import_resource_groups(
                 else:
                     if existing.pk in retained_node_ids:
                         raise ResourceLoadError(f"{group.entry.display}: two xrefs identify one step")
-                    patch = _changed(existing, wanted)
+                    patch = _import_export_patch(resource, existing, wanted)
                     if patch:
                         node_patches.append(NodePatch(existing.pk, patch))
                     wanted_nodes[(group.entry.addon.name, str(row["_xref"]))] = EndpointRef(existing_id=existing.pk)
@@ -232,24 +233,41 @@ def import_resource_groups(
                     if existing.pk in retained_edge_ids:
                         raise ResourceLoadError(f"{group.entry.display}: two xrefs identify one edge")
                     retained_edge_ids.add(existing.pk)
-                    endpoint_changed = (
-                        existing.source.key != signature[0] or existing.target.key != signature[1]
-                    )
+                    endpoint_changed = existing.source.key != signature[0] or existing.target.key != signature[1]
                     patch = {"condition": condition} if existing.condition != condition else {}
                     if endpoint_changed or patch:
                         edge_patches.append(
-                            EdgePatch(existing.pk, patch, source_ref if endpoint_changed else None,
-                                      target_ref if endpoint_changed else None)
+                            EdgePatch(
+                                existing.pk,
+                                patch,
+                                source_ref if endpoint_changed else None,
+                                target_ref if endpoint_changed else None,
+                            )
                         )
             edge_deletes = [EdgeDelete(edge.pk) for edge in snapshot.edges if edge.pk not in retained_edge_ids]
-            workflow_patch = _changed(snapshot.workflow, workflow_fields.get(head_id, {}))
+            workflow_patch = _import_export_patch(
+                workflow_resources[head_id],
+                snapshot.workflow,
+                workflow_fields.get(head_id, {}),
+            )
             edit = DefinitionEdit(
                 workflow=workflow_patch,
-                node_creates=tuple(node_creates), node_patches=tuple(node_patches), node_deletes=tuple(node_deletes),
-                edge_creates=tuple(edge_creates), edge_patches=tuple(edge_patches), edge_deletes=tuple(edge_deletes),
+                node_creates=tuple(node_creates),
+                node_patches=tuple(node_patches),
+                node_deletes=tuple(node_deletes),
+                edge_creates=tuple(edge_creates),
+                edge_patches=tuple(edge_patches),
+                edge_deletes=tuple(edge_deletes),
             )
-            changed = bool(workflow_patch or node_creates or node_patches or node_deletes or
-                           edge_creates or edge_patches or edge_deletes)
+            changed = bool(
+                workflow_patch
+                or node_creates
+                or node_patches
+                or node_deletes
+                or edge_creates
+                or edge_patches
+                or edge_deletes
+            )
             revision = snapshot.revision
             if changed:
                 applied = workflow_model.objects.apply_definition(head, expected_revision=revision, edit=edit)
