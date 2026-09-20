@@ -1095,6 +1095,12 @@ and current contracts before applying a historical example to a new deployment.
   baked into the opencode image (the `OPENCODE_ANTHROPIC_AUTH_PLUGIN` build arg) and using a
   Pro/Max token there violates Anthropic's ToS — enabling it without the plugin silently drops
   Anthropic from OpenCode's model list.
+- **One-shot inference steps contain no inference policy.** Do not add prompt
+  rendering, provider branching, usage normalization, or a second response
+  protocol to a step; compose the owning
+  [`InferenceModel.infer`](../../addons/angee/agents/models.py),
+  [backend request/error policy](../../addons/angee/agents/backends.py), and
+  [deployment approval policy](../../addons/angee/agents/deployments.py).
 - **Task locks are advisory, row locks are authoritative.** Celery task bodies may
   use `angee.jobs.locks.task_lock()` to prevent duplicate workers from doing the
   same external work, but persisted state transitions still use model/queryset row

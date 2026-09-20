@@ -166,7 +166,7 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "gate": "angee.workflows.steps.GateStep",
     "map": "angee.workflows.steps.MapStep",
     "call_workflow": "angee.workflows.steps.CallWorkflow",
-    "agent": "angee.workflows_agents.steps.AgentStepImpl",
+    "infer": "angee.workflows_agents.steps.InferStepImpl",
     "agent_session": "angee.workflows_agents.steps.AgentSessionStepImpl",
     "archive_probe": "angee.workflows_integrate.steps.ArchiveProbeStepImpl",
     "archive_gate": "angee.workflows_integrate.steps.ArchiveGateStepImpl",

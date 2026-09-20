@@ -3,17 +3,30 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypedDict
 
 from django.conf import settings
 
 
+class InferenceDeploymentIdentity(TypedDict):
+    """Non-secret exact identity of one callable inference deployment."""
+
+    model: str
+    provider: str
+    backend: str
+    native_model: str
+    endpoint: str
+
+
 def validate_approved_deployment(model: Any | None, *, role: str) -> None:
-    """Fail closed when the configured role policy excludes ``model``.
+    """Enforce the configured role allowlist for ``model``.
 
     Roles are consumer vocabulary (for example ``mapping`` or ``recognition``);
     agents owns the common endpoint identity and exact allowlist comparison.
-    ``None`` means that the caller has elected not to invoke a model.
+    An absent ``ANGEE_INFERENCE_APPROVED_DEPLOYMENTS`` setting leaves the
+    catalogue unrestricted. Once configured, missing roles and identity
+    mismatches fail closed. ``None`` means that the caller elected not to invoke
+    a model.
     """
 
     if model is None:
