@@ -25,17 +25,16 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   extractActionOutcome: (data: Record<string, unknown>, root: string) => data[root],
 }));
 vi.mock("@angee/ui", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@angee/ui")>();
-  const { createMutationDialogTestDouble } = await import("@angee/ui/testing");
-  return { ...original,
-    createNamespaceT: (_ns: string, messages: Record<string, string>) => () => (key: string, values?: Record<string, unknown>) => Object.entries(values ?? {}).reduce((message, [name, value]) => message.replace(`{${name}}`, String(value)), messages[key] ?? key),
+  const { createMutationDialogTestDouble, createNamespaceTTestDouble, createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, {
+    createNamespaceT: createNamespaceTTestDouble(),
     useRecordChromeContext: () => mocks.chrome,
     useActionResultRun: () => mocks.settle,
     Button: ({ children, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => <button type="button" {...props}>{children}</button>,
     Glyph: ({ name }: { name: string }) => <span aria-hidden>{name}</span>,
     MutationDialog: createMutationDialogTestDouble({ capture: (props) => { mocks.dialogProps = props; }, values: { subject: "note_7" }, submitLabel: "Confirm launch" }),
     DropdownMenu: { Root: ({ children }: { children: React.ReactNode }) => <>{children}</>, Trigger: ({ render }: { render: React.ReactNode }) => <>{render}</>, Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>, Positioner: ({ children }: { children: React.ReactNode }) => <>{children}</>, Content: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, Group: ({ children }: { children: React.ReactNode }) => <div data-menu-group>{children}</div>, Label: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, Item: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button type="button" {...props}>{children}</button> },
-  };
+  });
 });
 
 import { RunWorkflowMenu } from "./RunWorkflowMenu";

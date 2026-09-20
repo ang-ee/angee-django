@@ -4,14 +4,13 @@ import { cleanup, render, screen } from "@testing-library/react";
 import type { WorkflowDecisionContentProps } from "@angee/workflows";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-vi.mock("@angee/ui", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@angee/ui")>(),
-  createNamespaceT: (_namespace: string, messages: Record<string, string>) => () => (
-    key: string,
-  ) => messages[key] ?? key,
-  useMediaQuery: () => false,
-  useResourceRecordHrefLookup: () => (model: string, id: string) => `/records/${model}/${id}`,
-}));
+vi.mock("@angee/ui", async (importOriginal) => {
+  const { createNamespaceTTestDouble, createUiRouteTestDoubles, createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal,
+    { createNamespaceT: createNamespaceTTestDouble() },
+    createUiRouteTestDoubles(),
+  );
+});
 
 import { PartyIdentityDecisionContent } from "./PartyIdentityDecisionContent";
 
@@ -82,7 +81,7 @@ describe("PartyIdentityDecisionContent", () => {
 function decisionProps(payload: Record<string, unknown>): WorkflowDecisionContentProps {
   return {
     approval: { id: "wdc_identity", payload } as WorkflowDecisionContentProps["approval"],
-    contextFields: [], contextValues: {}, inputFields: [], values: {},
+    contextFields: [], contextValues: { review_context: payload }, inputFields: [], values: {},
     setValue: vi.fn(), selectAction: vi.fn(), messagesFor: () => [],
     editable: true, fetching: false, readOnly: false,
   };

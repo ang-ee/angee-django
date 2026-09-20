@@ -3,11 +3,12 @@ import type { ReactElement } from "react";
 import { Code, ListView, TextLink, useRouteHref, type ListColumn, type ResourceToolbarGroupOption, type StringIdRow } from "@angee/ui";
 
 import { useWorkflowsT } from "../i18n";
+import { WORKFLOW_STEP_USAGE_FIELDS, workflowLabel, type WorkflowStepUsage } from "./workflow-step-usage";
 
 interface StepRow extends StringIdRow {
   key: string;
   name: string;
-  workflow: { id: string; name: string; version: number; status: string };
+  workflow: WorkflowStepUsage;
   step_class: string;
   join_rule: string;
   is_entry: boolean;
@@ -28,9 +29,5 @@ export function StepsPage(): ReactElement {
     { id: "workflow", label: t("steps.workflow"), group: { field: "workflow" }, type: "value" },
     { id: "step_class", label: t("steps.type"), group: { field: "step_class" }, type: "value" },
   ];
-  return <ListView<StepRow> resource="workflows.Step" columns={columns} fields={["workflow.id", "workflow.name", "workflow.version", "workflow.status"]} groupOptions={groups} defaultGroup={{ field: "workflow" }} rowHref={(row) => routeHref("workflows.step", { id: row.id })} emptyContent={t("steps.empty")} />;
-}
-
-function workflowLabel(workflow: StepRow["workflow"]): string {
-  return `${workflow.name} · v${workflow.version} · ${workflow.status}`;
+  return <ListView<StepRow> resource="workflows.Step" columns={columns} fields={WORKFLOW_STEP_USAGE_FIELDS} groupOptions={groups} defaultGroup={{ field: "workflow" }} rowHref={(row) => routeHref("workflows.step", { id: row.id })} emptyContent={t("steps.empty")} />;
 }

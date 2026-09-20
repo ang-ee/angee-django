@@ -1,11 +1,10 @@
-import * as React from "react";
-
 import {
-  DecisionReferenceAction,
-  useInitialDecisionPeek,
+  WorkflowDecisionScaffold,
+  textValue,
   type WorkflowDecisionContentProps,
 } from "@angee/workflows";
-import { Alert, Badge, MetaGrid, SectionEyebrow, type MetaGridRow } from "@angee/ui";
+import { Badge, MetaGrid, SectionEyebrow, type MetaGridRow } from "@angee/ui";
+import type * as React from "react";
 import * as v from "valibot";
 
 import { useWorkflowsPartiesT } from "./i18n";
@@ -54,25 +53,56 @@ export function PartyIdentityDecisionContent(
   props: WorkflowDecisionContentProps,
 ): React.ReactElement {
   const t = useWorkflowsPartiesT();
-  const parsed = v.safeParse(IdentityReviewSchema, props.approval.payload);
-  const review = parsed.success ? parsed.output : null;
-  const source = review?.evidence.find(
-    (item) => text(item.source_model) && text(item.source_id),
-  );
-  const titleId = React.useId();
-  useInitialDecisionPeek(props, source ? {
-    model: source.source_model,
-    id: source.source_id,
-    label: source.label,
-    tab: source.source_model === "workflows_extraction.Extraction" ? "evidence" : undefined,
-  } : undefined);
+  return <WorkflowDecisionScaffold
+    props={props}
+    schema={IdentityReviewSchema}
+    actionPickerPlacement="before-content"
+    header={(review) => ({
+      eyebrow: t("identityReview.kind"),
+      title: review.current.name || review.proposed.name || t("identityReview.unknownParty"),
+      description: t("identityReview.description"),
+    })}
+    initialPeek={(review) => {
+      const source = review.evidence.find(
+        (item) => textValue(item.source_model) && textValue(item.source_id),
+      );
+      return source ? {
+        model: source.source_model,
+        id: source.source_id,
+        label: source.label,
+        tab: source.source_model === "workflows_extraction.Extraction" ? "evidence" : undefined,
+      } : undefined;
+    }}
+    references={(review) => [{
+      key: "party",
+      label: t("identityReview.openParty"),
+      reference: {
+        model: "parties.Party",
+        id: review.party_id,
+        label: review.current.name || review.proposed.name,
+      },
+    }, ...review.evidence.filter(
+      (item) => item.source_model && item.source_id,
+    ).map((item) => ({
+      key: `${item.source_model}:${item.source_id}`,
+      label: item.label || t("identityReview.openEvidence"),
+      kind: "evidence" as const,
+      reference: {
+        model: item.source_model,
+        id: item.source_id,
+        label: item.label,
+        tab: item.source_model === "workflows_extraction.Extraction" ? "evidence" : undefined,
+      },
+    }))]}
+  >{(review) => <PartyIdentityComparison review={review} />}</WorkflowDecisionScaffold>;
+}
 
-  if (!review) {
-    return <Alert tone="warning" title={t("identityReview.unavailable")}>
-      {t("identityReview.unavailableDescription")}
-    </Alert>;
-  }
+PartyIdentityDecisionContent.placesActionPicker = true;
 
+function PartyIdentityComparison({ review }: {
+  review: v.InferOutput<typeof IdentityReviewSchema>;
+}): React.ReactElement {
+  const t = useWorkflowsPartiesT();
   const currentName = review.current.name;
   const proposedName = review.proposed.name;
   const currentAddresses = review.current.addresses;
@@ -95,36 +125,7 @@ export function PartyIdentityDecisionContent(
   if (proposedHandle.evidence) {
     proposedRows.push([t("identityReview.contactEvidence"), proposedHandle.evidence]);
   }
-  return <section className="space-y-4" aria-labelledby={titleId}>
-    <header className="space-y-1">
-      <SectionEyebrow>{t("identityReview.kind")}</SectionEyebrow>
-      <h2 id={titleId} className="text-xl font-semibold tracking-tight">
-        {currentName || proposedName || t("identityReview.unknownParty")}
-      </h2>
-      <p className="text-13 text-fg-muted">{t("identityReview.description")}</p>
-    </header>
-
-    <div className="flex flex-wrap gap-2">
-      <DecisionReferenceAction
-        label={t("identityReview.openParty")}
-        open={props.openRecord}
-        reference={{ model: "parties.Party", id: review.party_id, label: currentName || proposedName }}
-      />
-      {review.evidence.filter(
-        (item) => item.source_model && item.source_id,
-      ).map((item) => <DecisionReferenceAction
-        key={`${item.source_model}:${item.source_id}`}
-        label={item.label || t("identityReview.openEvidence")}
-        open={props.openEvidence}
-        reference={{
-          model: item.source_model,
-          id: item.source_id,
-          label: item.label,
-          tab: item.source_model === "workflows_extraction.Extraction" ? "evidence" : undefined,
-        }}
-      />)}
-    </div>
-
+  return <div className="space-y-4">
     <div className="grid gap-4 md:grid-cols-2">
       <IdentityPanel title={t("identityReview.current")}>
         <MetaGrid rows={[
@@ -140,7 +141,7 @@ export function PartyIdentityDecisionContent(
     </div>
 
     <p className="text-xs text-fg-muted">{t("identityReview.history")}</p>
-  </section>;
+  </div>;
 }
 
 function IdentityPanel({ children, title }: {
@@ -159,9 +160,9 @@ function ContactList({ handles }: { handles: UnknownRecord[] }): React.ReactElem
   return <ul className="space-y-2" aria-label={t("identityReview.contacts")}>
     {handles.map((handle, index) => {
       const status = handleStatus(handle);
-      return <li key={`${text(handle.value)}:${index}`} className="flex flex-wrap items-center gap-2 text-13">
-        <span className="break-all">{text(handle.value) || t("identityReview.notRecorded")}</span>
-        {text(handle.platform) ? <span className="text-fg-muted">{text(handle.platform)}</span> : null}
+      return <li key={`${textValue(handle.value)}:${index}`} className="flex flex-wrap items-center gap-2 text-13">
+        <span className="break-all">{textValue(handle.value) || t("identityReview.notRecorded")}</span>
+        {textValue(handle.platform) ? <span className="text-fg-muted">{textValue(handle.platform)}</span> : null}
         {statusBadge(status, t)}
       </li>;
     })}
@@ -185,9 +186,5 @@ function addressList(addresses: UnknownRecord[]): string {
 
 function formatAddress(address: UnknownRecord): string {
   return ["label", "street", "extended", "po_box", "city", "region", "postal_code", "country"]
-    .map((key) => text(address[key])).filter(Boolean).join(", ");
-}
-
-function text(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+    .map((key) => textValue(address[key])).filter(Boolean).join(", ");
 }

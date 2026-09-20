@@ -21,17 +21,20 @@ vi.mock("@angee/refine", () => ({
   }),
 }));
 
-vi.mock("@angee/ui", () => ({
-  useImplementationDetailContext: () => ({ model: "workflows.Step", field: "step_class", choice: mocks.choice }),
-  useRouteHref: () => (name: string, params?: { id?: string }) => `/${name}/${params?.id ?? ""}`,
-  Code: ({ children }: { children: unknown }) => <code>{String(children)}</code>,
-  CodeBlock: ({ children }: { children: unknown }) => <pre>{String(children)}</pre>,
-  ControlBandProvider: ({ children }: { children: unknown }) => <>{children as never}</>,
-  DetailSection: ({ title, rows }: { title: string; rows: readonly (readonly [string, unknown])[] }) => <section><h2>{title}</h2>{rows.map(([label, value]) => <div key={label}>{label}{value as never}</div>)}</section>,
-  LoadingPanel: ({ message }: { message: string }) => <div>{message}</div>,
-  TextLink: ({ children, href }: { children: unknown; href: string }) => <a href={href}>{children as never}</a>,
-  ListView: (props: Record<string, unknown>) => { mocks.listProps = props; return <div>usage-list</div>; },
-}));
+vi.mock("@angee/ui", async (importOriginal) => {
+  const { createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, {
+    useImplementationDetailContext: () => ({ model: "workflows.Step", field: "step_class", choice: mocks.choice }),
+    useRouteHref: () => (name: string, params?: { id?: string }) => `/${name}/${params?.id ?? ""}`,
+    Code: ({ children }: { children: unknown }) => <code>{String(children)}</code>,
+    CodeBlock: ({ children }: { children: unknown }) => <pre>{String(children)}</pre>,
+    ControlBandProvider: ({ children }: { children: unknown }) => <>{children as never}</>,
+    DetailSection: ({ title, rows }: { title: string; rows: readonly (readonly [string, unknown])[] }) => <section><h2>{title}</h2>{rows.map(([label, value]) => <div key={label}>{label}{value as never}</div>)}</section>,
+    LoadingPanel: ({ message }: { message: string }) => <div>{message}</div>,
+    TextLink: ({ children, href }: { children: unknown; href: string }) => <a href={href}>{children as never}</a>,
+    ListView: (props: Record<string, unknown>) => { mocks.listProps = props; return <div>usage-list</div>; },
+  });
+});
 
 vi.mock("../i18n", () => ({ useWorkflowsT: () => (key: string) => key }));
 vi.mock("../documents.console", () => ({ WorkflowStepOperationsDocument: "WorkflowStepOperations" }));

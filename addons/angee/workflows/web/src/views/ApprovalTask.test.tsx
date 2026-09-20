@@ -28,8 +28,8 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 vi.mock("../documents.public", () => ({ DecideWorkflowDecisionDocument: { kind: "Document", name: "DecideWorkflowDecision" } }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
-  return { ...actual, useConfirm: () => async () => true };
+  const { createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, { useConfirm: () => async () => true });
 });
 
 import type { PendingWorkflowDecision } from "../documents.public";

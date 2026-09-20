@@ -6,12 +6,13 @@ import { Code, CodeBlock, ControlBandProvider, DetailSection, ErrorBanner, error
 
 import { WorkflowStepOperationsDocument } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
+import { WORKFLOW_STEP_USAGE_FIELDS, workflowLabel, type WorkflowStepUsage } from "./workflow-step-usage";
 
 type Operation = DocumentType<typeof WorkflowStepOperationsDocument>["workflow_step_operations"][number];
 interface UsageRow extends StringIdRow {
   name: string;
   key: string;
-  workflow: { id: string; name: string; version: number; status: string };
+  workflow: WorkflowStepUsage;
 }
 
 export function WorkflowImplementationDetails(): ReactElement | null {
@@ -42,7 +43,7 @@ export function WorkflowImplementationDetails(): ReactElement | null {
     <section className="grid gap-3">
       <h2 className="text-base font-semibold">{t("stepTypes.usedBy")}</h2>
       <ControlBandProvider host={undefined}>
-        <ListView<UsageRow> resource="workflows.Step" presentation="embedded" selectable={false} columns={columns} fields={["workflow.id", "workflow.name", "workflow.version", "workflow.status"]} baseFilter={{ step_class: { exact: choice.key } }} groupOptions={groups} defaultGroup={{ field: "workflow" }} rowHref={(row) => routeHref("workflows.step", { id: row.id })} emptyContent={t("stepTypes.unused")} />
+        <ListView<UsageRow> resource="workflows.Step" presentation="embedded" selectable={false} columns={columns} fields={WORKFLOW_STEP_USAGE_FIELDS} baseFilter={{ step_class: { exact: choice.key } }} groupOptions={groups} defaultGroup={{ field: "workflow" }} rowHref={(row) => routeHref("workflows.step", { id: row.id })} emptyContent={t("stepTypes.unused")} />
       </ControlBandProvider>
     </section>
   </div>;
@@ -64,8 +65,4 @@ function ContractSummary({ contract, schema, t }: { contract: Operation["input_c
     </div>)}
     {schema ? <details><summary className="cursor-pointer text-xs text-fg-muted">{t("stepTypes.schema")}</summary><CodeBlock wrap>{JSON.stringify(schema, null, 2)}</CodeBlock></details> : null}
   </div>;
-}
-
-function workflowLabel(workflow: UsageRow["workflow"]): string {
-  return `${workflow.name} · v${workflow.version} · ${workflow.status}`;
 }

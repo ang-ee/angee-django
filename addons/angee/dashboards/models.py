@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NoReturn, cast
 
 from django.conf import settings
@@ -14,6 +14,7 @@ from rebac import PermissionDenied, current_actor, system_context, to_subject_re
 
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.resources.mixins import ResourceLoadMixin
 
 DASHBOARD_SCHEMA_VERSION = 1
 MAX_COLUMNS = 24
@@ -84,8 +85,19 @@ def canonical_dashboard_snapshot(value: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
             raise ValidationError({"snapshot": f"{path} must be an object."})
         allowed_widget_keys = {
-            "schemaVersion", "id", "definitionRef", "kind", "kindVersion", "title",
-            "data", "options", "x", "y", "w", "h", "isArchived",
+            "schemaVersion",
+            "id",
+            "definitionRef",
+            "kind",
+            "kindVersion",
+            "title",
+            "data",
+            "options",
+            "x",
+            "y",
+            "w",
+            "h",
+            "isArchived",
         }
         if set(raw) - allowed_widget_keys:
             raise ValidationError({"snapshot": f"{path} contains unknown fields."})
@@ -193,9 +205,23 @@ def _validate_filter(value: Any, resource: Any, path: str, *, depth: int = 0, cl
             if operator in {"inList", "notInList", "hasKeysAny", "hasKeysAll"} and not isinstance(operand, list):
                 _invalid_query(f"{path}.{field_name}.{operator}", "operand must be an array")
             string_operators = {
-                "hasKey", "contains", "iContains", "startsWith", "iStartsWith",
-                "endsWith", "iEndsWith", "like", "iLike", "notLike", "notILike",
-                "similar", "notSimilar", "regex", "iRegex", "notRegex", "notIRegex",
+                "hasKey",
+                "contains",
+                "iContains",
+                "startsWith",
+                "iStartsWith",
+                "endsWith",
+                "iEndsWith",
+                "like",
+                "iLike",
+                "notLike",
+                "notILike",
+                "similar",
+                "notSimilar",
+                "regex",
+                "iRegex",
+                "notRegex",
+                "notIRegex",
             }
             if operator in string_operators and not isinstance(operand, str):
                 _invalid_query(f"{path}.{field_name}.{operator}", "operand must be a string")
@@ -292,9 +318,7 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
                 _invalid_query(f"{path}.source.fields", f'field "{field_name}" has no readable row projection')
 
         limit = source.get("limit")
-        if limit is not None and (
-            not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100
-        ):
+        if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100):
             _invalid_query(f"{path}.source.limit", "limit must be an integer from 1 to 100")
 
         sort = source.get("sort", [])
@@ -412,9 +436,16 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                     raise DashboardConflictError()
                 if scope == "personal":
                     raise ValidationError({"scope": "Create personal dashboards before saving them."})
-                current = cast(Any, self.model).system_queryset(lock=("self",)).filter(
-                    owner=owner, scope=scope, scope_key=scope_key,
-                ).first()
+                current = (
+                    cast(Any, self.model)
+                    .system_queryset(lock=("self",))
+                    .filter(
+                        owner=owner,
+                        scope=scope,
+                        scope_key=scope_key,
+                    )
+                    .first()
+                )
                 if current is not None:
                     raise DashboardConflictError(current.revision)
                 current = self.model(
@@ -463,7 +494,10 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                     "title": item["title"],
                     "data": item["data"],
                     "options": item["options"],
-                    "x": item["x"], "y": item["y"], "w": item["w"], "h": item["h"],
+                    "x": item["x"],
+                    "y": item["y"],
+                    "w": item["w"],
+                    "h": item["h"],
                     "sequence": sequence,
                     "is_archived": item["isArchived"],
                 }
@@ -508,8 +542,8 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
 DashboardObjects = DashboardManager()
 
 
-class Dashboard(ArchiveMixin, AuditMixin, AngeeDataModel):
-    """One actor-owned complete dashboard snapshot."""
+class Dashboard(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
+    """One installed baseline or actor-owned complete dashboard snapshot."""
 
     runtime = True
     sqid_prefix = "dsh_"
@@ -520,7 +554,13 @@ class Dashboard(ArchiveMixin, AuditMixin, AngeeDataModel):
         ADDON = "addon", "Addon"
         RESOURCE = "resource", "Resource"
 
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="dashboards")
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="dashboards",
+        null=True,
+        blank=True,
+    )
     scope = models.CharField(max_length=16, choices=Scope, db_index=True)
     scope_key = models.CharField(max_length=255, null=True, blank=True)
     name = models.CharField(max_length=200)
@@ -540,7 +580,7 @@ class Dashboard(ArchiveMixin, AuditMixin, AngeeDataModel):
         constraints = (
             models.CheckConstraint(
                 condition=(
-                    models.Q(scope="personal", scope_key__isnull=True)
+                    models.Q(scope="personal", scope_key__isnull=True, owner__isnull=False)
                     | (
                         models.Q(scope__in=("addon", "resource"))
                         & models.Q(scope_key__isnull=False)
@@ -560,8 +600,13 @@ class Dashboard(ArchiveMixin, AuditMixin, AngeeDataModel):
             ),
             models.UniqueConstraint(
                 fields=("owner", "scope", "scope_key"),
-                condition=~models.Q(scope="personal"),
+                condition=models.Q(owner__isnull=False) & ~models.Q(scope="personal"),
                 name="dashboard_owner_scoped_target",
+            ),
+            models.UniqueConstraint(
+                fields=("scope", "scope_key"),
+                condition=models.Q(owner__isnull=True),
+                name="dashboard_installed_scoped_target",
             ),
             models.UniqueConstraint(
                 fields=("owner", "client_creation_key"),
@@ -573,6 +618,64 @@ class Dashboard(ArchiveMixin, AuditMixin, AngeeDataModel):
     def __str__(self) -> str:
         return self.name
 
+    def snapshot(self) -> dict[str, Any]:
+        """Return the complete persisted snapshot in the public wire shape."""
+
+        widget_model = self._meta.get_field("widgets").related_model
+        widget_rows = (
+            widget_model.system_queryset().filter(dashboard=self) if self.owner_id is None else self.widgets.all()
+        )
+        widgets = [
+            {
+                "schemaVersion": widget.spec_version,
+                "id": widget.widget_key,
+                **({"definitionRef": widget.definition_ref} if widget.definition_ref else {}),
+                "kind": widget.kind,
+                "kindVersion": widget.kind_version,
+                "title": widget.title,
+                "data": widget.data,
+                "options": widget.options,
+                "x": widget.x,
+                "y": widget.y,
+                "w": widget.w,
+                "h": widget.h,
+                "isArchived": widget.is_archived,
+            }
+            for widget in widget_rows.order_by("sequence", "sqid")
+        ]
+        return {"schemaVersion": self.spec_version, "columns": self.columns, "widgets": widgets}
+
+    def validate_installed_snapshot(self) -> None:
+        """Validate one resource-owned baseline after all declared rows load."""
+
+        if self.owner_id is not None:
+            raise ValidationError({"owner": "Resource-installed dashboards cannot name an actor owner."})
+        if self.scope not in {self.Scope.ADDON, self.Scope.RESOURCE}:
+            raise ValidationError({"scope": "Resource-installed dashboards require addon or resource scope."})
+        snapshot = self.snapshot()
+        canonical = canonical_dashboard_snapshot(snapshot)
+        if canonical != snapshot:
+            raise ValidationError(
+                {"widgets": "Installed dashboard widgets must use a canonical, non-overlapping layout."}
+            )
+        validate_dashboard_queries(snapshot)
+
+    @classmethod
+    def after_resource_load(
+        cls,
+        instances: Iterable[models.Model],
+        *,
+        tier: str,
+        source: str,
+        publish: bool = False,
+    ) -> None:
+        """Validate complete installed snapshots after every resource write."""
+
+        loaded = tuple(instances)
+        for dashboard in loaded:
+            cast("Dashboard", dashboard).validate_installed_snapshot()
+        super().after_resource_load(loaded, tier=tier, source=source, publish=publish)
+
 
 class DashboardWidgetQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
     """Archive scopes layered over dashboard widget reads."""
@@ -581,7 +684,7 @@ class DashboardWidgetQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
 DashboardWidgetManager = AngeeManager.from_queryset(DashboardWidgetQuerySet)
 
 
-class DashboardWidget(ArchiveMixin, AuditMixin, AngeeDataModel):
+class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
     """One versioned widget specification inside a snapshot."""
 
     runtime = True
@@ -624,3 +727,21 @@ class DashboardWidget(ArchiveMixin, AuditMixin, AngeeDataModel):
 
     def __str__(self) -> str:
         return self.title
+
+    @classmethod
+    def after_resource_load(
+        cls,
+        instances: Iterable[models.Model],
+        *,
+        tier: str,
+        source: str,
+        publish: bool = False,
+    ) -> None:
+        """Revalidate installed parents when a widget resource is loaded alone."""
+
+        loaded = tuple(instances)
+        dashboard_model = cls._meta.get_field("dashboard").remote_field.model
+        dashboard_ids = sorted({cast("DashboardWidget", widget).dashboard_id for widget in loaded})
+        for dashboard in dashboard_model.system_queryset().filter(pk__in=dashboard_ids, owner__isnull=True):
+            dashboard.validate_installed_snapshot()
+        super().after_resource_load(loaded, tier=tier, source=source, publish=publish)

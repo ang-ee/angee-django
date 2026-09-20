@@ -25,6 +25,11 @@ from angee.workflows.models import (
 from angee.workflows.models import (
     Workflow as AbstractWorkflow,
 )
+from angee.workflows.testing import advance_once as advance_once
+from angee.workflows.testing import execute_started as execute_started
+from angee.workflows.testing import run_to_terminal as run_to_terminal
+from angee.workflows.testing import start_run as start_run
+from angee.workflows.testing import step_run_for as step_run_for
 from tests.conftest import _clear_model_tables, _create_missing_tables
 
 
@@ -265,76 +270,6 @@ def workflow_with_steps(
         for source, target, condition in edges:
             Edge.objects.create(workflow=draft, source=by_key[source], target=by_key[target], condition=condition)
         return draft.publish()
-
-
-def start_run(workflow: Workflow, *, subject: Any = None, actor: Any = None) -> WorkflowRun:
-    """Start a run without relying on a live queue."""
-
-    return engine.start(workflow, subject=subject, actor=actor)
-
-
-def advance_once(run: Any, *, now: Any | None = None) -> list[Any]:
-    """Advance one run and return started rows."""
-
-    if now is None:
-        engine.advance(run.pk)
-    else:
-        engine.advance(run.pk, now=now)
-    with system_context(reason="test workflows read started"):
-        return list(StepRun.objects.filter(run=run, status=workflow_models.StepRunStatus.STARTED).order_by("pk"))
-
-
-def execute_started(run: Any, *, now: Any | None = None, limit: int | None = None) -> None:
-    """Execute currently started step-runs synchronously."""
-
-    with system_context(reason="test workflows read started"):
-        rows = list(StepRun.objects.filter(run=run, status=workflow_models.StepRunStatus.STARTED).order_by("pk"))
-    if limit is not None:
-        rows = rows[:limit]
-    for row in rows:
-        with system_context(reason="test retained execute dispatch"):
-            attempt = row.current_attempt
-            dispatch = (
-                WorkflowDispatch.objects.filter(step_attempt=attempt).first()
-                if attempt is not None
-                else None
-            )
-        if attempt is None or dispatch is None:
-            raise AssertionError(f"Started StepRun {row.pk} has no retained execution dispatch.")
-        engine.execute_dispatch(
-            dispatch.pk,
-            attempt.pk,
-            attempt.lease_token,
-            now=now,
-        )
-
-
-def run_to_terminal(run: Any, *, max_cycles: int = 20) -> Any:
-    """Drive a run synchronously until it reaches a terminal state."""
-
-    for _ in range(max_cycles):
-        run.refresh_from_db()
-        if run.status in workflow_models.RunStatus.TERMINAL:
-            return run
-        advance_once(run)
-        execute_started(run)
-        run.refresh_from_db()
-        with system_context(reason="test workflows active check"):
-            active = StepRun.objects.filter(
-                run=run,
-                status__in=[workflow_models.StepRunStatus.SCHEDULED, workflow_models.StepRunStatus.STARTED],
-            ).exists()
-        if not active:
-            advance_once(run)
-    run.refresh_from_db()
-    return run
-
-
-def step_run_for(run: Any, key: str) -> Any:
-    """Return one step-run row under elevated test read context."""
-
-    with system_context(reason="test workflows step_run read"):
-        return StepRun.objects.get(run=run, step__key=key)
 
 
 def step_for(workflow: Workflow, key: str) -> Step:

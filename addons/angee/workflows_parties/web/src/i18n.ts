@@ -3,8 +3,6 @@ import { createNamespaceT } from "@angee/ui";
 export const enWorkflowsPartiesMessages: Record<string, string> = {
   "activity.label": "Workflow activity",
   "decision.reviewTitle": "Review party details",
-  "identityReview.unavailable": "Party identity evidence unavailable",
-  "identityReview.unavailableDescription": "Open the processing details to inspect this decision's retained evidence.",
   "identityReview.kind": "Party identity",
   "identityReview.description": "Compare the current Party record with the identity proposed from retained source evidence.",
   "identityReview.unknownParty": "Unknown party",

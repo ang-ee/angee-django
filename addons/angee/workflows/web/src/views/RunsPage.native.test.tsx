@@ -108,10 +108,9 @@ vi.mock("@angee/refine", async (importOriginal) => {
 });
 
 vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
+  const { createUiTestModule } = await import("@angee/ui/testing");
   const ReactRuntime = await import("react");
-  return {
-    ...actual,
+  return createUiTestModule(importOriginal, {
     useRouteHref: () => (_route: string, parameters: { id: string }) => `/runs/${parameters.id}`,
     useResourceRecordHrefLookup: () => (_model: string, id: string) => mocks.routeAvailable ? `/records/${id}` : undefined,
     useContainerQuery: () => [{ current: null }, mocks.wide],
@@ -153,10 +152,10 @@ vi.mock("@angee/ui", async (importOriginal) => {
     SplitPanes: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
     SplitPane: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
     SplitPaneHandle: () => null,
-  };
+  });
 });
 
-import { AttemptPayloadPanel, AttemptRecoveryPanel, RunTimelinePanel } from "./RunsPage";
+import { AttemptPayloadPanel, AttemptRecoveryPanel, RunTimelinePanel } from "./RunInspection";
 
 beforeEach(() => {
   cleanup();

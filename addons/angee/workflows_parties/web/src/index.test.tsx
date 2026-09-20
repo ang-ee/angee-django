@@ -13,10 +13,12 @@ vi.mock("@angee/workflows", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/workflows")>(),
   WorkflowApprovals: (props: Record<string, unknown>) => { approvalProps.current = props; return null; },
 }));
-vi.mock("@angee/ui", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@angee/ui")>(),
-  useRouteSearch: () => ({ recordTab: "accounting", decision: "decision-7" }),
-}));
+vi.mock("@angee/ui", async (importOriginal) => {
+  const { createUiRouteTestDoubles, createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, createUiRouteTestDoubles({
+    search: { recordTab: "accounting", decision: "decision-7" },
+  }));
+});
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...await importOriginal<typeof import("@tanstack/react-router")>(),
   useNavigate: () => vi.fn(),
