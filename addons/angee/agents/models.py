@@ -23,9 +23,18 @@ from django.contrib.auth import get_user_model
 from django.db import models, transaction
 from django.db.models.signals import class_prepared, post_delete
 from django.utils import timezone
-from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    UserPromptPart,
+)
 from pydantic_ai.models import Model, ModelRequestParameters
+from pydantic_ai.output import OutputObjectDefinition
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.tools import ToolDefinition
+from pydantic_ai.usage import RequestUsage
 from rebac import SubjectRef, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
@@ -76,6 +85,51 @@ class MCPTransport(models.TextChoices):
 
 BUILTIN_MCP_ANGEE = "angee"
 """``MCPServer.config["builtin"]`` value for this process's built-in Angee MCP server."""
+
+INFERENCE_OUTPUT_TOOL = "inference_output"
+"""Native output-tool name used when a provider implements JSON output through tools."""
+
+InferenceOutputSchema = Mapping[str, Any] | Sequence[ToolDefinition]
+"""One JSON output schema or native function-tool declarations for a direct request."""
+
+
+def inference_request_parameters(
+    output_schema: InferenceOutputSchema | None,
+) -> ModelRequestParameters:
+    """Build the one native request-parameter envelope used by direct inference.
+
+    A JSON-schema mapping requests one structured result. A sequence retains
+    pydantic-ai's native :class:`ToolDefinition` values as callable function tools;
+    direct inference returns those calls without executing a tool loop.
+    """
+
+    if output_schema is None:
+        return ModelRequestParameters()
+    if isinstance(output_schema, Mapping):
+        return ModelRequestParameters(
+            output_mode="auto",
+            output_object=OutputObjectDefinition(
+                json_schema=dict(output_schema),
+                name=INFERENCE_OUTPUT_TOOL,
+                description="A structured result matching the declared JSON schema.",
+            ),
+        )
+    function_tools = list(output_schema)
+    if not all(isinstance(tool, ToolDefinition) for tool in function_tools):
+        raise TypeError("Inference function tools must be native pydantic-ai ToolDefinition values.")
+    return ModelRequestParameters(function_tools=function_tools)
+
+
+def normalize_inference_usage(usage: RequestUsage) -> dict[str, int]:
+    """Project native one-request usage into the workflow budget vocabulary."""
+
+    values = {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "tokens": usage.total_tokens,
+        "requests": usage.requests,
+    }
+    return {key: int(value) for key, value in values.items() if value}
 
 
 ToolRole = role_anchor("agents/toolrole", name="ToolRole")
@@ -308,6 +362,20 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
 
         return self.provider.backend.model(self.provider_model_name, credential=credential)
 
+    def deployment_identity(self) -> dict[str, str]:
+        """Return the non-secret endpoint binding used by role approval policy."""
+
+        provider = self.provider
+        backend = provider.backend
+        effective_url = str(provider.base_url or getattr(backend, "default_base_url", "")).strip().rstrip("/")
+        return {
+            "model": str(self.sqid),
+            "provider": str(provider.sqid),
+            "backend": str(provider.backend_class),
+            "native_model": str(self.provider_model_name),
+            "endpoint": effective_url,
+        }
+
     def chat(
         self,
         messages: Sequence[ModelMessage],
@@ -325,6 +393,37 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
             model_request_parameters=model_request_parameters,
             credential=credential,
         )
+
+    def infer(
+        self,
+        messages: Sequence[ModelMessage],
+        *,
+        output_schema: InferenceOutputSchema | None = None,
+        images: Sequence[BinaryContent] = (),
+        settings: ModelSettings | None = None,
+        credential: Any | None = None,
+    ) -> tuple[ModelResponse, dict[str, int]]:
+        """Make one structured or multimodal request and return native response data.
+
+        Images stay as pydantic-ai :class:`BinaryContent` values. They are appended
+        as one user message so provider adapters retain ownership of their wire
+        representation. A sequence passed as ``output_schema`` is interpreted as
+        native function tools; no tool is executed by this one-shot call.
+        """
+
+        request_messages = list(messages)
+        image_parts = list(images)
+        if not all(isinstance(image, BinaryContent) for image in image_parts):
+            raise TypeError("Inference images must be native pydantic-ai BinaryContent values.")
+        if image_parts:
+            request_messages.append(ModelRequest(parts=[UserPromptPart(image_parts)]))
+        response = self.chat(
+            request_messages,
+            model_settings=settings,
+            model_request_parameters=inference_request_parameters(output_schema),
+            credential=credential,
+        )
+        return response, normalize_inference_usage(response.usage)
 
 
 class SkillManager(AngeeManager):

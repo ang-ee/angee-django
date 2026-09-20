@@ -9,6 +9,10 @@ SETTINGS = {
     "ANGEE_INFERENCE_BACKEND_CLASSES": {
         "manual": "angee.agents.backends.ManualInferenceBackend",
     },
+    # Optional exact endpoint/model allowlists keyed by consumer-defined roles.
+    # ``None`` leaves role approval to the deployment; a configured mapping fails
+    # closed for a missing or non-matching role.
+    "ANGEE_INFERENCE_APPROVED_DEPLOYMENTS": None,
     # An agent selects its runtime (the program it is rendered into) with a
     # ``runtime_class`` field. The runtime owns how it consumes an inference
     # credential as container env and which operator service template renders it

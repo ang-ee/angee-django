@@ -121,6 +121,11 @@ class InferenceBackend(ImplBase):
 
         raise NotImplementedError(f"{self.label} does not support in-process inference.")
 
+    def request_settings(self, model_settings: ModelSettings | None) -> ModelSettings | None:
+        """Return provider-owned settings for one direct request."""
+
+        return model_settings
+
     def chat(
         self,
         handle: str,
@@ -139,7 +144,7 @@ class InferenceBackend(ImplBase):
                 return await model_request(
                     model,
                     messages,
-                    model_settings=model_settings,
+                    model_settings=self.request_settings(model_settings),
                     model_request_parameters=model_request_parameters,
                 )
 
@@ -161,3 +166,25 @@ class ManualInferenceBackend(InferenceBackend):
         """Return no models; the catalogue is maintained by hand on this backend."""
 
         return ()
+
+
+def is_retryable_provider_error(error: Exception) -> bool:
+    """Return whether an SDK/provider exception represents a transient failure."""
+
+    status = getattr(error, "status_code", None)
+    if status in {408, 409, 425, 429, 500, 502, 503, 504, 529}:
+        return True
+    error_type = type(error).__name__.lower()
+    message = str(error).lower()
+    retryable_terms = (
+        "ratelimit",
+        "rate_limit",
+        "rate limit",
+        "overload",
+        "overloaded",
+        "temporarily unavailable",
+        "timeout",
+        "timed out",
+        "try again",
+    )
+    return any(term in error_type or term in message for term in retryable_terms)

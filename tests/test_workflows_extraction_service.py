@@ -41,6 +41,7 @@ from angee.workflows_extraction.engines import (
     DocumentPipelineError,
     DocumentResult,
     DocumentSource,
+    InferenceMappingEngine,
     PageImage,
     derive_text_claims,
 )
@@ -66,7 +67,6 @@ from angee.workflows_extraction.service import (
     _unchanged_claims,
     collect_carriers,
     infer,
-    model_deployment_identity,
     prepare_pages,
     process,
     require_approved_model_deployment,
@@ -75,7 +75,6 @@ from angee.workflows_extraction.service import (
     revise as retain_revision,
 )
 from angee.workflows_extraction.steps import ExtractionConfig, InferEvidenceStepImpl
-from angee.workflows_extraction_glm.engine import GlmOllamaEngine
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
 from tests.extraction_models import EXTRACTION_MODELS, Extraction, ExtractionPage, ExtractionSource
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
@@ -749,7 +748,7 @@ class PageAggregationTests(SimpleTestCase):
     def test_missing_models_retain_acquired_evidence(self) -> None:
         part = DocumentPart(0, 0, "text/plain", "native_text", "Invoice 22121", "test", "a" * 64)
         with self.assertRaises(DocumentPipelineError) as mapping_error:
-            GlmOllamaEngine().map_text_parts((part,), SCHEMA, model=None, config={}, timeout=1)
+            InferenceMappingEngine().map_text_parts((part,), SCHEMA, model=None, config={}, timeout=1)
         self.assertEqual(mapping_error.exception.parts, (part,))
 
         page = PageImage(0, 1, "image/jpeg", b"bytes", 10, 10, 200)
@@ -1051,9 +1050,9 @@ class ExtractionServiceTests(TestCase):
 
     def test_deployment_allowlist_blocks_unapproved_models_and_endpoint_repointing(self) -> None:
         with actor_context(self.owner):
-            approved = model_deployment_identity(self.model)
+            approved = self.model.deployment_identity()
         policy = {"mapping": [approved], "recognition": []}
-        with override_settings(ANGEE_EXTRACTION_APPROVED_MODEL_DEPLOYMENTS=policy):
+        with override_settings(ANGEE_INFERENCE_APPROVED_DEPLOYMENTS=policy):
             evidence = self._extract(config={"page_results": {"0:0": {"number": "LOCAL", "rows": []}}})
         self.assertEqual(evidence.status, "succeeded")
 
@@ -1066,7 +1065,7 @@ class ExtractionServiceTests(TestCase):
                 config={"provider_model": "unapproved"},
                 created_by=self.owner,
             )
-        with actor_context(self.owner), override_settings(ANGEE_EXTRACTION_APPROVED_MODEL_DEPLOYMENTS=policy):
+        with actor_context(self.owner), override_settings(ANGEE_INFERENCE_APPROVED_DEPLOYMENTS=policy):
             with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
                 require_approved_model_deployment(unapproved, role="mapping")
             with self.assertRaisesRegex(DjangoPermissionDenied, "recognition model deployment is not approved"):
@@ -1076,7 +1075,7 @@ class ExtractionServiceTests(TestCase):
         with system_context(reason="test repointed extraction deployment"):
             provider.base_url = "https://external.invalid/v1"
             provider.save(update_fields=("base_url", "updated_at"))
-        with override_settings(ANGEE_EXTRACTION_APPROVED_MODEL_DEPLOYMENTS=policy):
+        with override_settings(ANGEE_INFERENCE_APPROVED_DEPLOYMENTS=policy):
             with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
                 require_approved_model_deployment(self.model, role="mapping")
 

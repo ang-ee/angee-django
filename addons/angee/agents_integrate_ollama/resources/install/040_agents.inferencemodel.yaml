@@ -1,0 +1,7 @@
+# GLM-OCR is a model deployment, not an extraction engine. The shared inference
+# engine supplies structured mapping and recognition through this Ollama model.
+- xref: model_glm_ocr
+  provider: agents_integrate_ollama.provider_ollama_demo
+  name: glm-ocr:latest
+  display_name: GLM-OCR
+  model_use: multimodal

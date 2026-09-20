@@ -273,10 +273,17 @@ def test_ollama_addon_owns_vendor_install_provider_and_demo_models() -> None:
         "angee.integrate",
     )
     assert manifest["master"] == ({"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},)
-    assert manifest["install"] == ({
-        "path": "resources/install/030_agents.inferenceprovider.yaml",
-        "depends_on": ("resources/master/010_integrate.vendor.yaml",),
-    },)
+    assert manifest["install"] == (
+        {
+            "path": "resources/install/030_agents.inferenceprovider.yaml",
+            "depends_on": ("resources/master/010_integrate.vendor.yaml",),
+        },
+        {
+            "path": "resources/install/040_agents.inferencemodel.yaml",
+            "depends_on": ("resources/install/030_agents.inferenceprovider.yaml",),
+            "adopt": ("provider", "name"),
+        },
+    )
     assert [item["path"] for item in manifest["demo"]] == ["resources/demo/040_agents.inferencemodel.yaml"]
     vendor_rows = _resource_rows(config, "master", "resources/master/010_integrate.vendor.yaml")
     assert vendor_rows["ollama"]["slug"] == "ollama"
@@ -285,6 +292,17 @@ def test_ollama_addon_owns_vendor_install_provider_and_demo_models() -> None:
         "vendor": "agents_integrate_ollama.ollama",
         "backend_class": "ollama",
         "name": "Ollama",
+    }
+    install_models = _resource_rows(
+        config,
+        "install",
+        "resources/install/040_agents.inferencemodel.yaml",
+    )
+    assert install_models["model_glm_ocr"] == {
+        "provider": "agents_integrate_ollama.provider_ollama_demo",
+        "name": "glm-ocr:latest",
+        "display_name": "GLM-OCR",
+        "model_use": "multimodal",
     }
     model_rows = _resource_rows(config, "demo", "resources/demo/040_agents.inferencemodel.yaml")
     assert model_rows["model_ollama_demo"]["provider"] == "agents_integrate_ollama.provider_ollama_demo"

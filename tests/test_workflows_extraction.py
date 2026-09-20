@@ -1,4 +1,4 @@
-"""Focused contracts for generic extraction evidence and the local GLM adapter."""
+"""Focused contracts for generic extraction evidence and inference adapters."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from PIL import Image
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import BinaryContent, ModelResponse, ToolCallPart
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows_extraction import service
@@ -23,7 +23,6 @@ from angee.workflows_extraction.engines import (
 from angee.workflows_extraction.routing import acquire_native_parts
 from angee.workflows_extraction.service import _validated_schema
 from angee.workflows_extraction.steps import PreparePagesStepImpl, RecognizePageStepImpl
-from angee.workflows_extraction_glm.engine import GlmOllamaEngine
 from tests.conftest import SchemaAddon
 from tests.extraction_engines import FakePageExtractionEngine
 from tests.extraction_models import Extraction as _Extraction  # noqa: F401 - registers composed test models.
@@ -103,7 +102,7 @@ def test_recognize_page_config_retains_authored_defaults() -> None:
         "defaultValue": 60,
         "omittable": True,
     }
-    assert RecognizePageStepImpl.config_defaults() == {"engine": "glm", "timeout": 60}
+    assert RecognizePageStepImpl.config_defaults() == {"engine": "inference", "timeout": 60}
     with pytest.raises(ValidationError, match="config.timeout"):
         RecognizePageStepImpl.normalize_config({"timeout": 0})
 
@@ -184,14 +183,13 @@ def test_schema_owner_requires_object_root() -> None:
 def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -> None:
     response = SimpleNamespace(
         text='{"number":"INV-42"}',
-        usage=SimpleNamespace(input_tokens=23, output_tokens=7),
         provider_response_id="response-1",
     )
     requested = {}
 
-    def chat(messages, *, model_settings, model_request_parameters):
-        requested.update(settings=model_settings, parameters=model_request_parameters)
-        return response
+    def infer(messages, *, output_schema, settings):
+        requested.update(messages=messages, output_schema=output_schema, settings=settings)
+        return response, {"input_tokens": 23, "output_tokens": 7, "tokens": 30, "requests": 1}
 
     model = SimpleNamespace(
         status="available",
@@ -200,35 +198,49 @@ def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -
             backend_class="anthropic",
             backend=SimpleNamespace(),
         ),
-        chat=chat,
+        infer=infer,
     )
     part = DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-42", "native", "hash")
 
     value, claims, metadata = InferenceMappingEngine().map_text_parts(
-        (part,), SCHEMA, model=model, config={"max_tokens": 128, "thinking": False}, timeout=5,
+        (part,),
+        SCHEMA,
+        model=model,
+        config={"max_tokens": 128, "thinking": False},
+        timeout=5,
     )
 
     assert value == {"number": "INV-42"}
     assert claims["/number"][0]["part_position"] == 0
-    assert metadata["input_tokens"] == 23
-    assert metadata["output_tokens"] == 7
-    assert requested["settings"] == {"timeout": 5, "max_tokens": 128, "thinking": False}
-    assert requested["parameters"].output_mode == "auto"
-    assert requested["parameters"].output_object.json_schema == SCHEMA
+    assert metadata["usage"] == {
+        "input_tokens": 23,
+        "output_tokens": 7,
+        "tokens": 30,
+        "requests": 1,
+    }
+    assert requested["settings"] == {
+        "timeout": 5,
+        "max_tokens": 128,
+        "temperature": 0,
+        "thinking": False,
+    }
+    assert requested["output_schema"] == SCHEMA
 
 
 def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -> None:
     raw_output = "invoice data, but not JSON"
     response = SimpleNamespace(
         text=raw_output,
-        usage=SimpleNamespace(input_tokens=31, output_tokens=9),
         provider_response_id="response-invalid",
         finish_reason="length",
     )
     model = SimpleNamespace(
         status="available",
         model_use="chat",
-        chat=lambda *args, **kwargs: response,
+        infer=lambda *args, **kwargs: (
+            response,
+            {"input_tokens": 31, "output_tokens": 9, "tokens": 40, "requests": 1},
+        ),
     )
     part = DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-42", "native", "hash")
 
@@ -238,8 +250,12 @@ def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -
     metadata = raised.value.metadata
     assert metadata == {
         "duration_ms": metadata["duration_ms"],
-        "input_tokens": 31,
-        "output_tokens": 9,
+        "usage": {
+            "input_tokens": 31,
+            "output_tokens": 9,
+            "tokens": 40,
+            "requests": 1,
+        },
         "provider_response_id": "response-invalid",
         "finish_reason": "length",
         "output_text_length": len(raw_output),
@@ -249,15 +265,14 @@ def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -
 
 
 def test_inference_mapping_consumes_native_structured_tool_result() -> None:
-    response = ModelResponse(
-        parts=[ToolCallPart("document_extraction", {"number": "INV-43"}, "call-1")]
-    )
-    response.usage.input_tokens = 19
-    response.usage.output_tokens = 5
+    response = ModelResponse(parts=[ToolCallPart("inference_output", {"number": "INV-43"}, "call-1")])
     model = SimpleNamespace(
         status="available",
         model_use="chat",
-        chat=lambda *args, **kwargs: response,
+        infer=lambda *args, **kwargs: (
+            response,
+            {"input_tokens": 19, "output_tokens": 5, "tokens": 24, "requests": 1},
+        ),
     )
 
     value, _claims, _metadata = InferenceMappingEngine().map_text_parts(
@@ -271,40 +286,12 @@ def test_inference_mapping_consumes_native_structured_tool_result() -> None:
     assert value == {"number": "INV-43"}
 
 
-def test_glm_engine_rejects_nonlocal_provider_before_sending_page() -> None:
+def test_inference_model_roles_and_retired_status_share_the_execution_validator():
     model = SimpleNamespace(
-        name="glm-ocr:latest",
-        provider=SimpleNamespace(backend_class="ollama", base_url="https://example.invalid/v1"),
+        status="available",
+        model_use="chat",
     )
-    with pytest.raises(ValueError, match="loopback Ollama"):
-        GlmOllamaEngine().extract_page(_page(0, 0), SCHEMA, model=model, config={}, timeout=1)
-
-
-@pytest.mark.parametrize("base_url", [
-    "https://example.invalid/v1", "ftp://localhost/v1", "http://user:pass@localhost/v1",
-    "http://localhost/v1?token=secret", "http://localhost/v1#fragment",
-])
-def test_glm_configuration_and_execution_reject_the_same_provider(base_url, monkeypatch):
-    model = SimpleNamespace(
-        status="available", model_use="multimodal", provider_model_name="test-model",
-        provider=SimpleNamespace(backend_class="ollama", base_url=base_url),
-    )
-    def unexpected_request(*args, **kwargs):
-        raise AssertionError("An invalid provider must never receive document evidence.")
-    monkeypatch.setattr("httpx.Client", unexpected_request)
-    engine = GlmOllamaEngine()
-    with pytest.raises(ValueError, match="loopback Ollama"):
-        engine.validate_model(model, role="recognition")
-    with pytest.raises(ValueError, match="loopback Ollama"):
-        engine.recognize_page(_page(0, 0), model=model, config={}, timeout=1)
-
-
-def test_glm_model_roles_and_retired_status_share_the_execution_validator():
-    model = SimpleNamespace(
-        status="available", model_use="chat",
-        provider=SimpleNamespace(backend_class="ollama", base_url="http://localhost:11434/v1"),
-    )
-    engine = GlmOllamaEngine()
+    engine = InferenceMappingEngine()
     engine.validate_model(model, role="mapping")
     with pytest.raises(ValueError, match="image-capable"):
         engine.validate_model(model, role="recognition")
@@ -313,6 +300,41 @@ def test_glm_model_roles_and_retired_status_share_the_execution_validator():
     model.status = "retired"
     with pytest.raises(ValueError, match="available"):
         engine.validate_model(model, role="mapping")
+
+
+def test_inference_recognition_carries_native_image_and_zero_temperature() -> None:
+    requested: dict[str, object] = {}
+    response = SimpleNamespace(
+        text="Invoice INV-44",
+        provider_response_id="recognition-1",
+        finish_reason="stop",
+    )
+
+    def infer(messages, *, images, settings):
+        requested.update(messages=messages, images=images, settings=settings)
+        return response, {"input_tokens": 11, "output_tokens": 4, "tokens": 15, "requests": 1}
+
+    model = SimpleNamespace(status="available", model_use="multimodal", infer=infer)
+
+    result = InferenceMappingEngine().recognize_page(
+        _page(0, 0),
+        model=model,
+        config={"max_tokens": 256},
+        timeout=5,
+    )
+
+    assert result.text == "Invoice INV-44"
+    assert requested["settings"] == {"timeout": 5, "max_tokens": 256, "temperature": 0}
+    images = requested["images"]
+    assert isinstance(images, tuple)
+    assert len(images) == 1 and isinstance(images[0], BinaryContent)
+    assert images[0].data == b"synthetic"
+    assert result.engine_metadata["usage"] == {
+        "input_tokens": 11,
+        "output_tokens": 4,
+        "tokens": 15,
+        "requests": 1,
+    }
 
 
 def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures() -> None:
@@ -340,7 +362,7 @@ def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures(
 
 
 @pytest.mark.parametrize("kind", ["text", "scan", "structured"])
-def test_glm_document_pipeline_uses_native_evidence_before_model_mapping(kind, monkeypatch):
+def test_inference_document_pipeline_uses_native_evidence_before_model_mapping(kind):
     if kind == "text":
         content, mime = b"Invoice DOC-1", "text/plain"
     elif kind == "scan":
@@ -354,16 +376,24 @@ def test_glm_document_pipeline_uses_native_evidence_before_model_mapping(kind, m
             b"<cbc:ID>DOC-1</cbc:ID></Invoice>"
         )
         mime = "application/xml"
-    calls = []
-    model, recognizer = object(), object()
+    calls: list[dict[str, object]] = []
 
-    def generate(self, prompt, **kwargs):
-        calls.append((prompt, kwargs))
-        assert 0 < kwargs["timeout"] <= 10
-        return ("Invoice DOC-1" if kwargs.get("page") else '{"number":"DOC-1"}'), {"duration_ms": 1}
+    def inference_response(messages, **kwargs):
+        calls.append({"messages": messages, **kwargs})
+        response = SimpleNamespace(
+            text="Invoice DOC-1" if kwargs.get("images") else '{"number":"DOC-1"}',
+            provider_response_id="response-1",
+            finish_reason="stop",
+        )
+        return response, {"input_tokens": 2, "output_tokens": 1, "tokens": 3, "requests": 1}
 
-    monkeypatch.setattr(GlmOllamaEngine, "_generate", generate)
-    result = GlmOllamaEngine().extract_document(
+    model = SimpleNamespace(status="available", model_use="chat", infer=inference_response)
+    recognizer = SimpleNamespace(
+        status="available",
+        model_use="multimodal",
+        infer=inference_response,
+    )
+    result = InferenceMappingEngine().extract_document(
         (DocumentSource(0, "a" * 64, mime, content),),
         SCHEMA,
         model=model,
@@ -373,25 +403,24 @@ def test_glm_document_pipeline_uses_native_evidence_before_model_mapping(kind, m
     )
     assert result.value == {"number": "DOC-1"}
     assert len(calls) == (2 if kind == "scan" else 1)
-    assert calls[-1][1]["model"] is model
-    assert "DOC-1" in calls[-1][0]
+    assert calls[-1]["output_schema"] == SCHEMA
     assert result.parts[0].kind == {"text": "native_text", "scan": "recognized_text", "structured": "structured"}[kind]
     if kind == "scan":
-        assert calls[0][1]["model"] is recognizer
+        assert calls[0]["images"]
     else:
-        assert not calls[0][1].get("page")
+        assert "images" not in calls[0]
 
 
-def test_glm_mapping_failure_retains_acquired_evidence_and_bounds_vendor_error(monkeypatch):
+def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_vendor_error():
     def fail(*args, **kwargs):
         raise RuntimeError("private vendor response")
 
-    monkeypatch.setattr(GlmOllamaEngine, "_generate", fail)
+    model = SimpleNamespace(status="available", model_use="chat", infer=fail)
     with pytest.raises(DocumentPipelineError) as failure:
-        GlmOllamaEngine().extract_document(
+        InferenceMappingEngine().extract_document(
             (DocumentSource(0, "b" * 64, "text/plain", b"Invoice DOC-1"),),
             SCHEMA,
-            model=object(),
+            model=model,
             recognition_model=None,
             config={},
             timeout=10,

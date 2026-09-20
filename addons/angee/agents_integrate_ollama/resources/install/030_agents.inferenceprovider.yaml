@@ -1,5 +1,7 @@
 # Platform-managed provider baseline. A blank base_url delegates to the backend
-# default; operators may configure their own endpoint after installation.
+# loopback default; operators may select another loopback port. ``keep_alive``
+# and ``generation_limit`` are provider config. ``num_ctx`` belongs in each
+# deployed model's Ollama Modelfile and is discovered as catalogue metadata.
 - xref: provider_ollama_demo
   vendor: agents_integrate_ollama.ollama
   backend_class: ollama

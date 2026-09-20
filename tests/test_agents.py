@@ -24,7 +24,13 @@ from django.db import connection
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
-from pydantic_ai.messages import ModelRequest, SystemPromptPart, TextPart, UserPromptPart
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelRequest,
+    SystemPromptPart,
+    TextPart,
+    UserPromptPart,
+)
 from rebac import system_context
 
 from angee.agents.models import InferenceModel as AbstractInferenceModel
@@ -782,23 +788,84 @@ def test_openai_backend_can_configure_max_completion_tokens(agents_tables, infer
 
 @pytest.mark.django_db(transaction=True)
 def test_ollama_backend_translates_native_thinking_setting(agents_tables, inference_http):
-    """Ollama's OpenAI endpoint receives its supported reasoning control field."""
+    """Ollama maps deployment and analytical defaults onto its SDK request."""
 
-    provider = _provider("ollama-chat", backend_class="ollama", name="Ollama")
+    provider = _provider(
+        "ollama-chat",
+        backend_class="ollama",
+        name="Ollama",
+        config={"keep_alive": "7m", "generation_limit": 2048},
+    )
 
     response = provider.chat(
         model="qwen3.6:35b-a3b",
         messages=[ModelRequest(parts=[UserPromptPart("Map retained evidence")])],
-        model_settings={"max_tokens": 2048, "thinking": False},
+        model_settings={"temperature": 0, "thinking": False},
     )
 
     requests, clients = inference_http
     payload = json.loads(requests[-1].content)
     assert payload["reasoning_effort"] == "none"
     assert payload["max_tokens"] == 2048
+    assert payload["temperature"] == 0
+    assert payload["keep_alive"] == "7m"
     assert "think" not in payload
     assert response.text == "pong"
     assert all(client.is_closed() for client in clients)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://example.invalid/v1",
+        "ftp://localhost/v1",
+        "http://user:pass@localhost/v1",
+        "http://localhost/v1?token=secret",
+        "http://localhost/v1#fragment",
+    ],
+)
+def test_ollama_backend_rejects_non_loopback_endpoints(base_url: str) -> None:
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url=base_url, config={}))
+
+    with pytest.raises(ValueError, match="loopback endpoint"):
+        backend._client_kwargs()
+
+
+def test_ollama_backend_disables_environment_proxies_for_both_sdk_clients(
+    monkeypatch: Any,
+) -> None:
+    from angee.agents_integrate_ollama import backend as ollama_backend
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        ollama_backend,
+        "DefaultHttpxClient",
+        lambda **kwargs: calls.append(("sync", kwargs)) or object(),
+    )
+    monkeypatch.setattr(
+        ollama_backend,
+        "DefaultAsyncHttpxClient",
+        lambda **kwargs: calls.append(("async", kwargs)) or object(),
+    )
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="http://127.0.0.1:11434/v1", config={}))
+
+    backend._client_kwargs()
+    backend._async_client_kwargs()
+
+    assert calls == [
+        ("sync", {"trust_env": False, "follow_redirects": False}),
+        ("async", {"trust_env": False, "follow_redirects": False}),
+    ]
+
+
+@pytest.mark.parametrize("generation_limit", [0, -1, True, "unbounded"])
+def test_ollama_backend_rejects_invalid_generation_limits(generation_limit: object) -> None:
+    backend = OllamaInferenceBackend(
+        SimpleNamespace(credential=None, base_url="", config={"generation_limit": generation_limit})
+    )
+
+    with pytest.raises(ValueError, match="positive integer"):
+        backend.request_settings(None)
 
 
 @pytest.mark.parametrize("options", [{"model": "other"}, {"extra_body": {"messages": []}}])
@@ -884,25 +951,23 @@ def inference_http(monkeypatch, request):
 @pytest.mark.parametrize("inference_http", ["tool"], indirect=True)
 def test_direct_native_request_returns_tool_calls_without_executing_a_loop(agents_tables, inference_http):
     from pydantic_ai.messages import ToolCallPart
-    from pydantic_ai.models import ModelRequestParameters
     from pydantic_ai.tools import ToolDefinition
 
     provider = _provider("openai-tools", backend_class="openai", material={"api_key": "api-key"})
-    response = provider.chat(
-        model="gpt-4.1",
+    with system_context(reason="test direct inference tools"):
+        model = InferenceModel.objects.create(provider=provider, name="gpt-4.1")
+    response, usage = model.infer(
         messages=[ModelRequest(parts=[UserPromptPart("Look up a value")])],
-        model_request_parameters=ModelRequestParameters(
-            function_tools=[
-                ToolDefinition(
-                    name="lookup",
-                    parameters_json_schema={
-                        "type": "object",
-                        "properties": {"key": {"type": "string"}},
-                        "required": ["key"],
-                    },
-                )
-            ]
-        ),
+        output_schema=[
+            ToolDefinition(
+                name="lookup",
+                parameters_json_schema={
+                    "type": "object",
+                    "properties": {"key": {"type": "string"}},
+                    "required": ["key"],
+                },
+            )
+        ],
     )
     requests, clients = inference_http
     assert len(requests) == 1
@@ -910,6 +975,42 @@ def test_direct_native_request_returns_tool_calls_without_executing_a_loop(agent
     assert isinstance(response.parts[0], ToolCallPart)
     assert response.parts[0].args_as_dict() == {"key": "value"}
     assert response.usage.total_tokens == 5
+    assert usage == {"input_tokens": 3, "output_tokens": 2, "tokens": 5, "requests": 1}
+    assert all(client.is_closed() for client in clients)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_direct_inference_builds_one_structured_multimodal_envelope(
+    agents_tables,
+    inference_http,
+):
+    provider = _provider(
+        "openai-structured-image",
+        backend_class="openai",
+        material={"api_key": "api-key"},
+    )
+    with system_context(reason="test structured multimodal inference"):
+        model = InferenceModel.objects.create(provider=provider, name="gpt-4.1")
+
+    response, usage = model.infer(
+        [ModelRequest(parts=[UserPromptPart("Read the image")])],
+        output_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        images=(BinaryContent(b"image", media_type="image/jpeg"),),
+        settings={"max_tokens": 16},
+    )
+
+    requests, clients = inference_http
+    payload = json.loads(requests[-1].content)
+    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"]["json_schema"]["name"] == "inference_output"
+    assert "data:image/jpeg;base64,aW1hZ2U=" in json.dumps(payload["messages"])
+    assert response.text == "pong"
+    assert usage == {"input_tokens": 3, "output_tokens": 1, "tokens": 4, "requests": 1}
     assert all(client.is_closed() for client in clients)
 
 
@@ -920,12 +1021,12 @@ def test_native_provider_errors_preserve_retry_classification_and_close_clients(
 ):
     from pydantic_ai.exceptions import ModelHTTPError
 
-    from angee.workflows_agents.steps import _is_retryable_provider_error
+    from angee.agents.backends import is_retryable_provider_error
 
     provider = _provider("openai-errors", backend_class="openai", material={"api_key": "api-key"})
     with pytest.raises(ModelHTTPError) as error:
         provider.chat(model="gpt-4.1", messages=[ModelRequest(parts=[UserPromptPart("Fail")])])
     requests, clients = inference_http
     assert len(requests) == 1
-    assert _is_retryable_provider_error(error.value) is retryable
+    assert is_retryable_provider_error(error.value) is retryable
     assert all(client.is_closed() for client in clients)
