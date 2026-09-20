@@ -1,0 +1,65 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: document_extraction
+    fields:
+      key: document_extraction
+      name: Document extraction
+      description: Retain schema-validated evidence from authorized Files and Message parts.
+      subject_declaration: ""
+      budget: {}
+      input_schema:
+        type: object
+        additionalProperties: false
+        required:
+          - files
+          - message_parts
+          - schema
+          - engine
+          - engine_config
+          - recognition_engine
+          - recognition_timeout
+          - model
+          - recognition_model
+          - target_model
+          - target_id
+        properties:
+          files:
+            type: array
+            items: {type: string, minLength: 1}
+          message_parts:
+            type: array
+            items: {type: string, minLength: 1}
+          schema: {type: object}
+          engine: {type: string, minLength: 1}
+          engine_config:
+            type: object
+            required: [recognition_config]
+            properties:
+              recognition_config: {type: object}
+            additionalProperties: true
+          recognition_engine: {type: string, minLength: 1, default: inference}
+          recognition_timeout: {type: integer, minimum: 1, default: 60}
+          model: {type: [string, "null"]}
+          recognition_model: {type: [string, "null"]}
+          target_model: {type: string, minLength: 1}
+          target_id: {type: string, minLength: 1}
+      output_schema:
+        type: object
+        additionalProperties: false
+        required: [extraction_id, revision, status, error_code, unresolved_reasons]
+        properties:
+          extraction_id: {type: string}
+          revision: {type: integer}
+          status: {type: string}
+          error_code: {type: string}
+          unresolved_reasons: {type: array, items: {type: string}}
+      result_rules:
+        - outcome: processed
+          producer: process_evidence
+          when_outcome: processed
+          binding: {kind: step_output, step_key: process_evidence, path: []}
+        - outcome: source_hold
+          producer: process_evidence
+          when_outcome: source_hold
+          binding: {kind: step_output, step_key: process_evidence, path: []}

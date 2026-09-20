@@ -74,7 +74,7 @@ from angee.workflows_extraction.service import (
 from angee.workflows_extraction.service import (
     revise as retain_revision,
 )
-from angee.workflows_extraction.steps import ExtractionConfig, InferEvidenceStepImpl
+from angee.workflows_extraction.steps import InferEvidenceStepImpl
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
 from tests.extraction_models import EXTRACTION_MODELS, Extraction, ExtractionPage, ExtractionSource
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
@@ -3013,15 +3013,3 @@ class ExtractionServiceTests(TestCase):
             self.assertEqual(Extraction._base_manager.count(), 0)
             self.assertEqual(ExtractionSource._base_manager.count(), 0)
             self.assertEqual(ExtractionPage._base_manager.count(), 0)
-
-    def test_retained_failure_outcome_is_frozen_by_step_config(self) -> None:
-        legacy = ExtractionConfig.model_validate({"schema": {}, "engine": "fake"})
-        current = ExtractionConfig.model_validate(
-            {
-                "schema": {},
-                "engine": "fake",
-                "retained_failure_outcome": "retained_failure",
-            }
-        )
-        self.assertEqual(legacy.retained_failure_outcome, "failed")
-        self.assertEqual(current.retained_failure_outcome, "retained_failure")

@@ -11,3 +11,10 @@ dependencies = [
   "pypdfium2>=4.30",
   "pillow>=11.0",
 ]
+
+[resources]
+install = [
+  { path = "resources/install/100_workflows.workflow.yaml", publish = true },
+  { path = "resources/install/101_workflows.step.yaml", depends_on = "resources/install/100_workflows.workflow.yaml" },
+  { path = "resources/install/102_workflows.edge.yaml", depends_on = "resources/install/101_workflows.step.yaml" },
+]
