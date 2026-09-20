@@ -20,3 +20,14 @@ def test_generic_relation_without_one_fixed_model_is_not_a_to_one_axis() -> None
         "related_model": None,
     })())
     assert is_to_one_relation(generic) is False
+
+
+def test_generated_field_projects_as_its_output_field_scalar() -> None:
+    from angee.data.field_classification import model_field_scalar
+
+    field = models.GeneratedField(
+        expression=models.Q(active=True),
+        output_field=models.BooleanField(),
+        db_persist=True,
+    )
+    assert model_field_scalar(field) == "Boolean"
