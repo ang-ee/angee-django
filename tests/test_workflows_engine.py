@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import os
 from datetime import timedelta
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import connection, models, transaction
-from django.db.migrations.state import ProjectState
+from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
@@ -69,16 +66,7 @@ def test_run_retains_admitted_actor_identity_after_audit_user_deletion(
         edges=(),
     )
     run = engine.start(workflow, subject=None, actor=actor)
-    with system_context(reason="test legacy workflow actor attribution"):
-        models.QuerySet.update(
-            WorkflowRun.objects.filter(pk=run.pk), admitted_actor_ref="",
-        )
-    from angee.workflows.runtime_migrations.workflow_admitted_actor import (
-        backfill_known_admission_actors,
-    )
-
-    historical_apps = ProjectState.from_apps(django_apps).apps
-    backfill_known_admission_actors(historical_apps, SimpleNamespace(connection=connection))
+    assert run.admitted_actor_ref == actor_ref
     with system_context(reason="test delete workflow admission actor"):
         actor.delete()
         run.refresh_from_db()
@@ -1322,46 +1310,6 @@ def test_error_workflow_fires_once_with_failed_run_subject(
     assert child.workflow == error_version
     assert child.subject == run
     assert child.origin == workflow_models.RunOrigin.ERROR_WORKFLOW
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
-def test_identity_migration_backfills_only_structurally_known_run_origins(
-    workflow_engine_tables: None,
-) -> None:
-    """Trigger and parent links recover origins while unexplained history stays unknown."""
-
-    del workflow_engine_tables
-    from django.apps import apps as django_apps
-
-    from angee.workflows.runtime_migrations.workflow_identity import backfill_structural_run_origins
-
-    version = workflow_with_steps(
-        name="Origin backfill",
-        steps=({"key": "start", "config": {"outcome": "done"}},),
-        edges=(),
-    )
-    with system_context(reason="test structural origins setup"):
-        trigger = Trigger.objects.create(workflow=version.published_from, kind=workflow_models.TriggerKind.MANUAL)
-        trigger_run = WorkflowRun.objects.create(workflow=version, trigger=trigger)
-        unexplained = WorkflowRun.objects.create(workflow=version)
-        parent_run = WorkflowRun.objects.create(workflow=version)
-        parent_step = StepRun.objects.create(run=parent_run, step=step_for(version, "start"))
-        child = WorkflowRun.objects.create(
-            workflow=version, parent_step_run=parent_step, parent_relation="continuation"
-        )
-
-    editor = SimpleNamespace(connection=connection)
-    historical_apps = ProjectState.from_apps(django_apps).apps
-    backfill_structural_run_origins(historical_apps, editor)
-    backfill_structural_run_origins(historical_apps, editor)
-
-    trigger_run.refresh_from_db()
-    unexplained.refresh_from_db()
-    child.refresh_from_db()
-    assert trigger_run.origin == workflow_models.RunOrigin.TRIGGER
-    assert child.origin == workflow_models.RunOrigin.ERROR_WORKFLOW
-    assert unexplained.origin == workflow_models.RunOrigin.UNKNOWN
 
 
 @pytest.mark.django_db(transaction=True)

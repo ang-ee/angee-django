@@ -56,12 +56,10 @@ class RuntimeMigrations:
         *,
         runtime_dir: Path,
         labels: Iterable[str],
-        protected_history_labels: Iterable[str] = (),
     ) -> None:
         self.addons = tuple(addons)
         self.runtime_dir = runtime_dir
         self.labels = frozenset(labels)
-        self.protected_history_labels = frozenset(protected_history_labels)
 
     def plan(
         self,
@@ -123,11 +121,7 @@ class RuntimeMigrations:
                     )
                 fresh_history = False
         if fresh_history:
-            target_labels = {
-                str(declaration["app_label"])
-                for _, declaration in declarations
-                if declaration["app_label"] not in self.protected_history_labels
-            }
+            target_labels = {str(declaration["app_label"]) for _, declaration in declarations}
             if target_labels and all(not loader.graph.leaf_nodes(label) for label in target_labels):
                 logger.info("fresh generated migration history has no leaves; deferring addon migrations")
                 return ()
@@ -290,14 +284,13 @@ class RuntimeMigrations:
     ) -> tuple[Path, ...]:
         """Stage sources, then fail closed before Django can autodetect unsafe drops.
 
-        A retained-label adoption may need to materialize its destination schema
-        and data migration before downstream model diffs can point at the new
-        graph.  Those source files are safe to persist: no database operation has
-        run.  The second plan reloads that exact staged graph and applies the
-        physical-owner/history deletion guard.  A blocked cleanup therefore
-        stops the enclosing build before its following ``makemigrations`` step,
-        while leaving the reviewed staging nodes available for the downstream
-        cutover migration.
+        An app-label adoption may need to materialize its destination schema and
+        data migration before downstream model diffs can point at the new graph.
+        Those source files are safe to persist: no database operation has run.
+        The second plan reloads that exact staged graph and applies the physical
+        table-owner deletion guard. A blocked cleanup therefore stops the build
+        before its following ``makemigrations`` step while leaving the reviewed
+        staging nodes available for the downstream cutover migration.
         """
 
         plans = self.plan(
@@ -343,12 +336,6 @@ class RuntimeMigrations:
                     if model._meta.proxy or not model._meta.managed or model._meta.swapped:
                         continue
                     table = model._meta.db_table
-                    if app_label in self.protected_history_labels:
-                        drops.append(
-                            f"{model._meta.label_lower}: DeleteModel would retire protected "
-                            f"migration-history table {table!r} before its declared cleanup"
-                        )
-                        continue
                     owners = sorted(owner for owner in table_owners.get(table, ()) if owner != model._meta.label_lower)
                     if owners:
                         drops.append(

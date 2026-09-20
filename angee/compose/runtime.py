@@ -128,16 +128,6 @@ class Runtime:
 
         return self.composition.labels
 
-    @property
-    def migration_history_configs(self) -> tuple[AppConfig, ...]:
-        """Return installed apps that retain a retired Django migration graph."""
-
-        return tuple(
-            config
-            for config in self.addons
-            if getattr(config, "angee_runtime_migration_history", False) is True
-        )
-
     def render_sources(self) -> dict[Path, str]:
         """Render one coherent model/web/permission source map before any write."""
 
@@ -154,16 +144,6 @@ class Runtime:
             sources[root / "migrations" / "__init__.py"] = ""
             sources[root / "models.py"] = render_models(
                 self.composition, label, runtime_module=self.runtime_module,
-            )
-        for config in self.migration_history_configs:
-            root = Path(config.label)
-            sources[root / "__init__.py"] = ""
-            sources[root / "migrations" / "__init__.py"] = (
-                '"""Composer-owned retained migration graph; no serving models."""\n\n'
-                f"from {config.name} import migrations as _source_migrations\n\n"
-                "for _path in _source_migrations.__path__:\n"
-                "    if _path not in __path__:\n"
-                "        __path__.append(_path)\n"
             )
         sources.update(WebRuntime(self.addons, runtime_dir=self.runtime_dir).render_sources())
         sources.update(extension_source_map(self.addons))
@@ -182,12 +162,10 @@ class Runtime:
     def runtime_migrations(self) -> RuntimeMigrations:
         """Return the native addon migration materializer."""
 
-        history_labels = {config.label for config in self.migration_history_configs}
         return RuntimeMigrations(
             self.addons,
             runtime_dir=self.runtime_dir,
-            labels=(*self.labels, *sorted(history_labels)),
-            protected_history_labels=history_labels,
+            labels=self.labels,
         )
 
     @property
@@ -237,7 +215,7 @@ class Runtime:
         """
 
         migration_modules = dict(getattr(settings, "MIGRATION_MODULES", {}))
-        for label in (*self.labels, *(config.label for config in self.migration_history_configs)):
+        for label in self.labels:
             module = f"{self.runtime_module}.{label}.migrations"
             if label in migration_modules and migration_modules[label] != module:
                 raise ImproperlyConfigured(f"Project settings define Runtime-owned MIGRATION_MODULES[{label!r}]")

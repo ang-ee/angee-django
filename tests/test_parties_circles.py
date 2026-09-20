@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -10,7 +9,6 @@ from typing import Any
 
 import pytest
 import yaml
-from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
@@ -475,52 +473,6 @@ def test_claim_own_writes_control_and_identity_facts(parties_tables: None) -> No
         link = PartyHandle.objects.get(handle=handle, party=person)
         assert link.is_confirmed and link.source == LinkSource.OAUTH and link.confidence == 1.0
         assert PartyHandle.objects.filter(handle=handle, party=person).count() == 1
-
-
-@pytest.mark.django_db(transaction=True)
-def test_handle_confirmation_migration_backfills_only_confirmed_winners(parties_tables: None) -> None:
-    """The source migration derives the flag from the same surviving party-link pair."""
-
-    del parties_tables
-    with system_context(reason="test handle confirmation backfill"):
-        owner = _user("confirmation-backfill")
-        confirmed_party = Party._base_manager.create(display_name="Confirmed", created_by=owner)
-        suggested_party = Party._base_manager.create(display_name="Suggested", created_by=owner)
-        confirmed = Handle._base_manager.create(
-            platform=Handle.Platform.EMAIL,
-            value="confirmed@example.com",
-            created_by=owner,
-        )
-        suggested = Handle._base_manager.create(
-            platform=Handle.Platform.EMAIL,
-            value="suggested@example.com",
-            created_by=owner,
-        )
-        PartyHandle.objects.link(
-            confirmed_party,
-            confirmed,
-            is_confirmed=True,
-            created_by_id=owner.pk,
-        )
-        PartyHandle.objects.link(
-            suggested_party,
-            suggested,
-            is_confirmed=False,
-            created_by_id=owner.pk,
-        )
-        Handle._base_manager.filter(pk__in=(confirmed.pk, suggested.pk)).update(
-            party_link_confirmed=False
-        )
-
-        module = importlib.import_module(
-            "angee.parties.runtime_migrations.handle_party_link_confirmed"
-        )
-        module.backfill_confirmed_winners(django_apps, type("Editor", (), {"connection": connection})())
-
-    confirmed.refresh_from_db()
-    suggested.refresh_from_db()
-    assert confirmed.party_link_confirmed is True
-    assert suggested.party_link_confirmed is False
 
 
 @pytest.mark.django_db(transaction=True)

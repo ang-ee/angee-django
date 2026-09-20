@@ -10,27 +10,3 @@ depends_on = ["angee.iam", "angee.parties", "angee.integrate", "angee.storage", 
 dependencies = [
   "django-anymail>=15.1",
 ]
-
-[[migrations]]
-fresh_history = "baseline"
-name = "public_thread_message_kind"
-app_label = "messaging"
-module = "runtime_migrations.public_thread_message_kind"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "alter_message_status"
-app_label = "messaging"
-module = "runtime_migrations.alter_message_status"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "thread_attachment_source_edges"
-app_label = "messaging"
-module = "runtime_migrations.thread_attachment_source_edges"
-
-[[migrations]]
-name = "name_unnamed_attachment_parts"
-app_label = "messaging"
-module = "runtime_migrations.name_unnamed_attachment_parts"
-compatible_source_sha256 = ["a02e643dbe9edde2e7805c8ac24c01a251edfd63f98db0ce3656f2bbcec7e7d8"]

@@ -7,9 +7,6 @@ _EXTRACTION_ENGINE_CLASSES = {
 
 SETTINGS = {
     "ANGEE_EXTRACTION_ENGINE_CLASSES": _EXTRACTION_ENGINE_CLASSES,
-    # Preserved generated migrations reconstruct their historical field during
-    # app loading; active extraction code reads only the canonical setting.
-    "ANGEE_OCR_ENGINE_CLASSES": _EXTRACTION_ENGINE_CLASSES,
     "ANGEE_WORKFLOW_STEP_CLASSES.prepare_pages": "angee.workflows_extraction.steps.PreparePagesStepImpl",
     "ANGEE_WORKFLOW_STEP_CLASSES.recognize_page": "angee.workflows_extraction.steps.RecognizePageStepImpl",
     "ANGEE_WORKFLOW_STEP_CLASSES.collect_carriers": "angee.workflows_extraction.steps.CollectCarriersStepImpl",

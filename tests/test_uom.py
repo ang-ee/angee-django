@@ -9,15 +9,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from decimal import Decimal
-from importlib import import_module
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, connection, models, transaction
-from django.db.migrations.state import ModelState, ProjectState
+from django.db import IntegrityError, connection, transaction
 from rebac import system_context, to_object_ref
 from rebac.models import active_relationship_model
 
@@ -111,24 +109,6 @@ def test_native_categories_and_units_receive_per_record_shared_readers(
     )
     assert _shared_reader_exists(category)
     assert _shared_reader_exists(unit)
-
-
-def test_native_reader_backfill_applies_only_to_exact_unextended_shapes() -> None:
-    """A composed visibility donor must own its own persisted-row classification."""
-
-    module = import_module(
-        "angee.uom.runtime_migrations.native_catalogue_shared_readers"
-    )
-    state = ProjectState()
-    state.add_model(ModelState.from_model(UomCategory))
-    state.add_model(ModelState.from_model(Uom))
-    assert module.applies(state)
-
-    extended = state.clone()
-    extended.models["uom", "uom"].fields["source_company"] = models.IntegerField(
-        null=True
-    )
-    assert not module.applies(extended)
 
 
 @pytest.fixture()
