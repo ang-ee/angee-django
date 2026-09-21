@@ -25,6 +25,7 @@ from rebac import (
 )
 
 from angee.graphql.deletion import DeletePreview
+from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
@@ -321,6 +322,117 @@ def test_message_parts_projection_returns_depth_first_order(messaging_graphql_ta
     ]
     assert _part_projection(generic_parts) == expected
     assert _part_projection(record_parts) == expected
+
+
+@pytest.mark.parametrize(
+    ("surface", "expected_mime_queries"),
+    [("messages", (1, 1, 1, 1)), ("record_thread", (1, 1, 1, 0))],
+)
+def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
+    messaging_graphql_tables: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    django_assert_num_queries: Any,
+    surface: str,
+    expected_mime_queries: tuple[int, int, int, int],
+) -> None:
+    """Narrow transcripts keep MIME loading constant at three and six messages.
+
+    MessageType loads parts, fragments, files and MIME types in four prefetch
+    queries. RecordMessageType consumes for_record's three prefetch queries:
+    parts, fragments and files joined to MIME types. Every real reading-order
+    call must then issue zero queries under the manager's complete-cache gate.
+    """
+
+    admin = _platform_admin(f"transcript-prefetch-{surface}")
+    variables: dict[str, Any] = {}
+    expected = []
+    with system_context(reason="test.messaging.transcript.prefetch.seed"), mute_changes():
+        _storage_drive(tmp_path, owner=admin)
+        if surface == "record_thread":
+            ticket = messaging_models.ThreadedTicket.objects.create(title="Prefetched transcript", created_by=admin)
+            thread = ticket.message_thread()
+            variables = {"model": "messaging.ThreadedTicket", "id": str(ticket.sqid)}
+        else:
+            thread = messaging_models.Thread.objects.create(platform="email", created_by=admin)
+        for index in range(6):
+            message = messaging_models.Message.objects.create(
+                thread=thread,
+                platform="email",
+                sent_at=datetime(2026, 9, 1, tzinfo=timezone.utc) + timedelta(minutes=index),
+                created_by=admin,
+            )
+            _replace_with_nested_part_tree(message, admin)
+            file = StorageFile.objects.ingest_bytes(f"Attachment {index}".encode(), filename=f"{index}.txt")
+            assert file.mime_type_id is not None
+            messaging_models.Part.objects.create(
+                message=message, position=4, type="text/plain", disposition="attachment", file=file, created_by=admin
+            )
+            # The helper inserts in depth-first order; the attachment is the last root.
+            expected.append({
+                "id": str(message.sqid),
+                "parts": [{"id": str(part.sqid)} for part in message.parts.order_by("pk")],
+            })
+
+    # IDs alone must not incidentally request the structural/content fields
+    # whose deferral would make the manager reject the optimizer's prefetch.
+    query = (
+        """
+        query Transcript($limit: Int!) {
+          messages(limit: $limit, order_by: [{sent_at: asc}]) { id parts { id } }
+        }
+        """
+        if surface == "messages"
+        else """
+        query Transcript($model: String!, $id: ID!, $limit: Int!) {
+          record_thread(input: {model_label: $model, record_id: $id, message_limit: $limit}) {
+            messages { id parts { id } }
+          }
+        }
+        """
+    )
+    schema = _schema()
+    # Warm process-wide metadata caches, then measure fresh requests/querysets.
+    _data(execute_schema(schema, query, {**variables, "limit": 1}, request=_request(admin)))
+    part_manager = messaging_models.Part.objects
+    reading_order = part_manager.reading_order_for_message
+    visited: list[str] = []
+
+    def read_prefetched(message: messaging_models.Message, *, using: str | None = None) -> list[messaging_models.Part]:
+        with django_assert_num_queries(0):
+            parts = reading_order(message, using=using)
+        visited.append(str(message.sqid))
+        return parts
+
+    monkeypatch.setattr(part_manager, "reading_order_for_message", read_prefetched)
+    tables = [
+        connection.ops.quote_name(model._meta.db_table)
+        for model in (messaging_models.Part, messaging_models.Fragment, StorageFile, MimeType)
+    ]
+    counts = []
+    for size in (3, 6):
+        visited.clear()
+        with CaptureQueriesContext(connection) as captured:
+            payload = _data(execute_schema(schema, query, {**variables, "limit": size}, request=_request(admin)))
+        rows = payload["messages"] if surface == "messages" else payload["record_thread"]["messages"]
+        # Chatter selects the newest page, then returns it chronologically.
+        page = expected[:size] if surface == "messages" else expected[-size:]
+        assert rows == page
+        assert visited == [row["id"] for row in page]
+        # Count owning-table reads, excluding chatter's separate attachment COUNT
+        # and references to MIME tables inside another query's joins/subqueries.
+        mime_queries = tuple(
+            sum(
+                item["sql"].startswith("SELECT ")
+                and not item["sql"].startswith("SELECT COUNT(")
+                and item["sql"].partition(" FROM ")[2].startswith(f"{table} ")
+                for item in captured
+            )
+            for table in tables
+        )
+        assert mime_queries == expected_mime_queries, captured.captured_queries
+        counts.append(len(captured))
+    assert counts[0] == counts[1], f"{surface} transcript SQL grew at 3/6 messages: {counts}"
 
 
 def test_inbox_labels_coexist_with_guarded_relation_selections(messaging_graphql_tables: None) -> None:
