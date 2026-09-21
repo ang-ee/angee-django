@@ -15,6 +15,7 @@ import yaml
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from django.db.models.fields import NOT_PROVIDED
 from django.db.models.utils import make_model_tuple
 from import_export.results import Result, RowResult
 
@@ -286,10 +287,11 @@ class ResourceEntry:
             return self._groups
         records, file_model = self._read_records()
         self._check_model_conflict(file_model)
-        if not records:
-            self._groups = ()
-            return self._groups
         fallback_model = self.model or file_model
+        if not records:
+            label = fallback_model or self.infer_model_label()
+            self._groups = (ResourceGroup(self, label, tablib.Dataset(headers=["_xref"]), []),)
+            return self._groups
         if isinstance(records, tablib.Dataset):
             headers = records.headers or []
             if not {"model", "fields", "_meta"} & set(headers) and len(headers) == len(set(headers)):
@@ -312,8 +314,8 @@ class ResourceEntry:
             values = self._values_for(record)
             for name in values:
                 if name not in group.dataset.headers:
-                    group.dataset.append_col([None] * len(group.dataset), header=name)
-            group.dataset.append([xref, *(values.get(name) for name in group.dataset.headers[1:])])
+                    group.dataset.append_col([NOT_PROVIDED] * len(group.dataset), header=name)
+            group.dataset.append([xref, *(values.get(name, NOT_PROVIDED) for name in group.dataset.headers[1:])])
             group.source_rows.append(index)
         self._groups = tuple(groups.values())
         return self._groups

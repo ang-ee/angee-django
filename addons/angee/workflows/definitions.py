@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import ValidationError
+from django.db import DEFAULT_DB_ALIAS, transaction
 
 from angee.base.db import get_write_alias
+from angee.base.identity import public_id_of
 from angee.base.scoping import system_queryset
 from angee.workflows.attempts import json_values_equal
 from angee.workflows.graph import (
@@ -219,6 +221,162 @@ class WorkflowDefinitionManagerMixin:
         {"key", "name", "step_class", "config", "input_binding", "join_rule", "is_entry", "position"}
     )
     _EDGE_FIELDS = frozenset({"condition"})
+
+    def install_definition(
+        self,
+        model: type[Any],
+        declarations: Mapping[str, Any],
+        *,
+        ledger_model: type[Any],
+        source_addon: str,
+        source_path: str,
+        using: str | None = None,
+    ) -> dict[str, Any]:
+        """Reconcile one native-cleaned, exactly source-owned definition facet.
+
+        Import-export owns identity, coercion, row outcomes and ledger upserts.
+        This owner composes snapshots and checked edits, including omission.
+        Incident edges must be explicitly removed by their own facet before a
+        step can be omitted; a facet never cascades another source's declaration.
+        """
+
+        alias = get_write_alias(self.model, bound=self, using=using)
+        if alias != DEFAULT_DB_ALIAS:
+            raise ValidationError("Resource definition installation requires the default database.")
+        steps = self.model._meta.get_field("steps").related_model
+        edges = self.model._meta.get_field("edges").related_model
+        if model not in {self.model, steps, edges}:
+            raise ValidationError("Unsupported workflow definition facet.")
+        with transaction.atomic(using=alias):
+            owned = ledger_model._default_manager.using(alias).filter(
+                source_addon=source_addon, source_path=source_path, target_model=model._meta.label,
+            )
+            omitted = list(owned.exclude(xref__in=declarations))
+            removed = {row.pk: row for ledger in omitted if (row := ledger.target_instance()) is not None}
+            candidates = list(declarations.values())
+            if any(not isinstance(row, model) for row in candidates):
+                raise ValidationError("A workflow declaration must contain its native cleaned instance.")
+            retained_ids = {row.pk for row in candidates if not row._state.adding}
+            if len(retained_ids) != sum(not row._state.adding for row in candidates):
+                raise ValidationError("Two resource xrefs identify the same workflow definition row.")
+            removed = {pk: row for pk, row in removed.items() if pk not in retained_ids}
+            targets = (*candidates, *removed.values())
+            target_ids = [public_id_of(row) for row in targets if not row._state.adding]
+            foreign = ledger_model._default_manager.using(alias).filter(
+                target_model=model._meta.label, target_id__in=target_ids,
+            ).exclude(source_addon=source_addon, source_path=source_path)
+            if foreign.exists():
+                raise ValidationError("A workflow definition row is owned by another resource contribution.")
+            head_ids = {
+                row.pk if model is self.model else row.workflow_id
+                for row in targets if model is not self.model or not row._state.adding
+            }
+            with self._definition_write(head_ids, using=alias):
+                persisted: dict[str, Any] = {}
+                if model is self.model:
+                    for xref, row in declarations.items():
+                        row._state.db = alias
+                        if row.error_workflow is not None:
+                            # An earlier buffered native row now has its PK;
+                            # reassign the cached relation before comparing IDs.
+                            row.error_workflow = row.error_workflow
+                        if row._state.adding:
+                            row.save(using=alias)
+                        else:
+                            snapshot = self.db_manager(alias).definition_snapshot(row)
+                            if row.key != snapshot.workflow.key:
+                                # The model owns one-time key backfill and rejects renames.
+                                row.save(using=alias, update_fields={"key"})
+                            patch = self._installation_patch(row, snapshot.workflow, self._WORKFLOW_FIELDS)
+                            if patch:
+                                self.db_manager(alias).apply_definition(
+                                    row, expected_revision=snapshot.revision, edit=DefinitionEdit(workflow=patch),
+                                )
+                        persisted[xref] = self.using(alias).get(pk=row.pk)
+                    for row in removed.values():
+                        if (
+                            row.steps.using(alias).exists() or row.edges.using(alias).exists()
+                            or row.triggers.using(alias).exists() or row.error_for_workflows.using(alias).exists()
+                        ):
+                            raise ValidationError("Omitted workflow still has contributions; remove its facets first.")
+                        row.delete(using=alias)
+                else:
+                    for head_id in sorted(head_ids):
+                        head = self.using(alias).get(pk=head_id)
+                        current = {xref: row for xref, row in declarations.items() if row.workflow_id == head_id}
+                        omitted_rows = [row for row in removed.values() if row.workflow_id == head_id]
+                        persisted.update(self._install_definition_children(
+                            head, model, current, omitted_rows, using=alias,
+                        ))
+                # Upserts remain exclusively in AngeeResource.after_save_instance.
+                owned.filter(pk__in=[ledger.pk for ledger in omitted]).delete()
+                return persisted
+
+    @staticmethod
+    def _installation_patch(candidate: Any, stored: Any, names: frozenset[str]) -> dict[str, Any]:
+        """Compare native cleaned values without repeating import field coercion."""
+
+        return {
+            name: getattr(candidate, name)
+            for name in sorted(names)
+            if not json_values_equal(
+                getattr(candidate, candidate._meta.get_field(name).attname),
+                getattr(stored, stored._meta.get_field(name).attname),
+            )
+        }
+
+    def _install_definition_children(
+        self, head: Any, model: type[Any], declarations: Mapping[str, Any], omitted: list[Any], *, using: str,
+    ) -> dict[str, Any]:
+        snapshot = self.db_manager(using).definition_snapshot(head)
+        is_step = model is self.model._meta.get_field("steps").related_model
+        saved = {row.pk: row for row in (snapshot.nodes if is_step else snapshot.edges)}
+        node_creates: list[NodeCreate] = []
+        node_patches: list[NodePatch] = []
+        edge_creates: list[EdgeCreate] = []
+        edge_patches: list[EdgePatch] = []
+        for xref, row in declarations.items():
+            row._state.db = using
+            if not row._state.adding and row.pk not in saved:
+                raise ValidationError(f"{xref}: a resource definition cannot move to another workflow.")
+            names = self._NODE_FIELDS if is_step else self._EDGE_FIELDS
+            wanted = {name: getattr(row, name) for name in names}
+            if is_step:
+                if row._state.adding:
+                    node_creates.append(NodeCreate(xref, wanted))
+                else:
+                    patch = self._installation_patch(row, saved[row.pk], names)
+                    if patch:
+                        node_patches.append(NodePatch(row.pk, patch))
+            else:
+                source, target = EndpointRef(existing_id=row.source_id), EndpointRef(existing_id=row.target_id)
+                if row._state.adding:
+                    edge_creates.append(EdgeCreate(xref, source, target, wanted))
+                else:
+                    old = saved[row.pk]
+                    patch = self._installation_patch(row, old, names)
+                    changed = old.source_id != row.source_id or old.target_id != row.target_id
+                    if patch or changed:
+                        edge_patches.append(EdgePatch(
+                            row.pk, patch, source if changed else None, target if changed else None,
+                        ))
+        removed_ids = {row.pk for row in omitted}
+        if is_step and any(edge.source_id in removed_ids or edge.target_id in removed_ids for edge in snapshot.edges):
+            raise ValidationError("Omitted step still has incident edges; remove those edge declarations first.")
+        edit = DefinitionEdit(
+            node_creates=tuple(node_creates), node_patches=tuple(node_patches),
+            node_deletes=tuple(NodeDelete(pk) for pk in sorted(removed_ids)) if is_step else (),
+            edge_creates=tuple(edge_creates), edge_patches=tuple(edge_patches),
+            edge_deletes=() if is_step else tuple(EdgeDelete(pk) for pk in sorted(removed_ids)),
+        )
+        created: dict[str, int] = {}
+        if any((node_creates, node_patches, edge_creates, edge_patches, removed_ids)):
+            result = self.db_manager(using).apply_definition(head, expected_revision=snapshot.revision, edit=edit)
+            created = {item.client_key: item.identity for item in (result.nodes if is_step else result.edges)}
+        rows = model._default_manager.using(using).in_bulk(
+            [created.get(xref, row.pk) for xref, row in declarations.items()],
+        )
+        return {xref: rows[created.get(xref, row.pk)] for xref, row in declarations.items()}
 
     def definition_snapshot(self, workflow: Any) -> DefinitionSnapshot:
         """Read one coherent revision and definition under its lineage lock."""

@@ -838,6 +838,15 @@ and current contracts before applying a historical example to a new deployment.
   `audit_set_null` FK policy to materialize the collector selection and schedule
   Django's native `UpdateQuery.update_batch` path for actor deletion.
   Never replace these rules with a database trigger or function.
+- **Resource imports use the native import-export lifecycle.** Models may declare
+  an `AngeeResource` subclass through `resource_class`; [`build_resource`](../../addons/angee/resources/loader.py)
+  composes it with native identity loading, validation, row results and the single
+  ledger hook. Domain adapters may defer persistence to a manager without
+  inventing another importer or ledger API. A batch preflight may acquire only
+  the complete ordered domain lock set; it must not consume groups or write rows.
+  [`WorkflowDefinitionResource`](../../addons/angee/workflows/resources.py) is the
+  facet-reconciliation example. Source omission and explicit null must remain
+  distinguishable through dataset normalization.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Barrier, Event
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -15,7 +15,6 @@ from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
 from rebac import system_context
 
-from angee.resources.managers import ResourceManager
 from angee.resources.models import Resource
 from angee.workflows.definitions import DefinitionEdit, StaleDefinitionError
 from tests.conftest import write_addon_manifest
@@ -269,37 +268,6 @@ def test_old_parent_delete_serializes_against_a_concurrent_move(workflow_tables:
         assert new.draft_revision == new_revision
 
 
-def test_resource_preparation_merges_opposite_lineage_orders_before_writes(workflow_tables: None) -> None:
-    del workflow_tables
-    with system_context(reason="prepare resource lock order"):
-        left = Workflow.objects.create(name="Left")
-        right = Workflow.objects.create(name="Right")
-    start = Barrier(2)
-
-    def prepare(rows: tuple[Workflow, Workflow]) -> tuple[int, ...]:
-        resource = SimpleNamespace(
-            related_instances=lambda _dataset, _field: rows,
-            instance_for_xref=lambda _xref: None,
-        )
-        group = SimpleNamespace(model=Step, dataset={"_xref": ("a", "b")})
-        plans = ResourceManager._write_preparations([(group, resource)])
-        assert len(plans) == 1
-        start.wait(timeout=5)
-        with ExitStack() as stack:
-            for plan in plans:
-                stack.enter_context(plan.owner.prepare_resource_writes(plan.targets))
-            return tuple(sorted(plans[0].targets))
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = (
-            pool.submit(_thread, lambda: prepare((left, right))),
-            pool.submit(_thread, lambda: prepare((right, left))),
-        )
-        results = [future.result(timeout=10) for future in futures]
-
-    assert results == [(left.pk, right.pk), (left.pk, right.pk)]
-
-
 def test_native_resource_loaders_serialize_opposite_lineage_orders(
     concurrency_resource_tables: None,
     tmp_path: Path,
@@ -378,3 +346,58 @@ def test_delete_rechecks_parent_when_a_move_commits_after_its_initial_read(
         assert step.workflow_id == new.pk
         assert old.draft_revision == old_revision + 1
         assert new.draft_revision == new_revision + 1
+
+
+@pytest.mark.parametrize("omit_left", (False, True))
+def test_native_resource_preflight_locks_across_separate_oppositely_ordered_facets(
+    concurrency_resource_tables: None, tmp_path: Path, omit_left: bool,
+) -> None:
+    """Per-dataset locking cannot serialize these opposite two-dataset loads."""
+
+    del concurrency_resource_tables
+
+    def addon(path: Path, suffix: str, *, reverse: bool = False, include_heads: bool = False) -> AppConfig:
+        owner = _resource_addon(path, suffix=suffix)
+        directory = path / "resources" / "install"
+        entries: list[dict[str, Any]] = []
+        if include_heads:
+            entries.append({"path": "resources/install/100_workflows.workflow.yaml", "adopt": "key"})
+        heads = ["left", "right"]
+        if reverse:
+            heads.reverse()
+        for head in heads:
+            source = f"resources/install/{head}_workflows.step.yaml"
+            (path / source).write_text(
+                "_meta: {model: workflows.Step}\nrows:\n"
+                f"  - xref: {head}-step\n    fields:\n      workflow: race.{head}\n"
+                f"      key: wait\n      name: {head.title()} {suffix}\n"
+                "      step_class: wait\n      config: {until: '2030-01-02T03:04:05Z'}\n      is_entry: true\n"
+            )
+            entries.append({"path": source})
+        (directory / "101_workflows.step.yaml").unlink()
+        write_addon_manifest(owner, resources={"master": (), "install": tuple(entries), "demo": ()})
+        return owner
+
+    initial = addon(tmp_path / "initial", "Initial", include_heads=True)
+    ConcurrencyResourceLedger.objects.load_addons((initial,), tiers=[Resource.Tier.INSTALL])
+    first = addon(tmp_path / "first", "Alpha")
+    if omit_left:
+        # Its old parent must join the global lock set even though no row
+        # now references that head in this source file.
+        (Path(first.path) / "resources/install/left_workflows.step.yaml").write_text(
+            "_meta: {model: workflows.Step}\nrows: []\n"
+        )
+    second = addon(tmp_path / "second", "Beta", reverse=True)
+    start = Barrier(2)
+
+    def load(owner: AppConfig) -> None:
+        start.wait(timeout=5)
+        ConcurrencyResourceLedger.objects.load_addons((owner,), tiers=[Resource.Tier.INSTALL])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(_thread, lambda owner=owner: load(owner)) for owner in (first, second)]
+        for future in futures:
+            future.result(timeout=15)
+    with system_context(reason="verify complete resource lock set"):
+        assert {step.name.split()[-1] for step in Step.objects.all()} in ({"Alpha"}, {"Beta"})
+        assert ConcurrencyResourceLedger.objects.count() == 2 + Step.objects.count()

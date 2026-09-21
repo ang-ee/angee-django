@@ -9,13 +9,14 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import tablib
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist
-from django.db import models
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.db import DEFAULT_DB_ALIAS, models
+from django.db.models.fields import NOT_PROVIDED
 from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
-from import_export.results import RowResult
 from import_export.utils import get_related_model
 
+from angee.base.db import get_write_alias
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplDefaultsMixin
 from angee.base.models import AngeeModel
@@ -68,6 +69,20 @@ class AngeeResource(resources.ModelResource):
                 field.widget.addon_aliases = addon_aliases
 
     @classmethod
+    def lock_imports(cls, loaded_groups: Sequence[tuple[Any, AngeeResource]], *, using: str | None = None) -> None:
+        """Acquire batch-wide domain locks before imports; never import or write rows.
+
+        Called once per declared resource class inside the loader's transaction.
+        A subclass may inspect the complete batch solely to order its locks.
+        """
+
+    def after_init_instance(self, instance: models.Model, new: bool, row: Mapping[str, Any], **kwargs: Any) -> None:
+        """Pin native model validation and save hooks to the resource transaction."""
+
+        instance._state.db = self.get_db_connection_name()
+        super().after_init_instance(instance, new, row, **kwargs)
+
+    @classmethod
     def get_fk_widget(cls, field: Any) -> functools.partial[Any]:
         """Return the xref-aware widget factory for a foreign key."""
 
@@ -91,18 +106,19 @@ class AngeeResource(resources.ModelResource):
         del kwargs
         self._validate_catalogue_tier()
         self._validate_headers(list(dataset.headers or []))
+        self._hash_skips: set[str] = set()
+        self._instances.clear()
         self._prime_existing_ledgers(dataset)
 
-    def import_row(
-        self,
-        row: Mapping[str, Any],
-        instance_loader: BaseInstanceLoader,
-        **kwargs: Any,
-    ) -> RowResult:
-        """Return a row import result after ledger skip/adoption checks."""
+    def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:
+        """Resolve ledger identity inside the native row diagnostic boundary."""
 
+        for name in tuple(row):
+            if row[name] is NOT_PROVIDED:
+                del row[name]
         row_number = kwargs["row_number"]
         xref = self._row_xref(row.get("_xref"), row_number=row_number)
+        row["_xref"] = xref
         row_hash = self._row_content_hash(row)
         ledger = self._ledger_for_xref(xref)
         self._record_row_state(xref, row_hash, ledger)
@@ -118,15 +134,22 @@ class AngeeResource(resources.ModelResource):
 
         self._instances[xref] = instance
         adopted = self._adopt_for_row(xref, row, identity, ledger, instance)
-        if adopted is None:
-            skip = self._skip_decision(ledger, instance, row_hash)
-            if skip is not None:
-                return skip
+        if adopted is None and ledger is not None and instance is not None and ledger.content_hash == row_hash:
+            self._hash_skips.add(xref)
+        super().before_import_row(row, **kwargs)
 
-        return cast(
-            RowResult,
-            super().import_row(row, instance_loader, **kwargs),
-        )
+    def import_instance(self, instance: models.Model, row: Mapping[str, Any], **kwargs: Any) -> None:
+        """Keep hash-skipped instances intact, including operator-authored values."""
+
+        if row["_xref"] not in self._hash_skips:
+            super().import_instance(instance, row, **kwargs)
+
+    def skip_row(
+        self, instance: Any, original: Any, row: Mapping[str, Any], import_validation_errors: Any = None,
+    ) -> bool:
+        """Let native import-export record hash skips and all other row outcomes."""
+
+        return row["_xref"] in self._hash_skips or super().skip_row(instance, original, row, import_validation_errors)
 
     def after_save_instance(
         self,
@@ -171,51 +194,6 @@ class AngeeResource(resources.ModelResource):
             self._instances[xref] = self._instance_from_ledger(ledger)
         return self._instances[xref]
 
-    def declared_instance(self, row: Mapping[str, Any]) -> models.Model | None:
-        """Resolve a declaration through the native ledger and adoption rules."""
-
-        xref = self._row_xref(row.get("_xref"), row_number=0)
-        ledger = self._ledger_for_xref(xref)
-        identity = self._adopt_identity(row)
-        instance = self._instance_from_ledger(ledger)
-        if instance is not None and self._ledger_resolution_is_stale(identity, instance):
-            instance = None
-        if instance is None:
-            instance = self._adopt_existing_target(row, identity)
-        self._instances[xref] = instance
-        return instance
-
-    def record_declared_instance(self, row: Mapping[str, Any], instance: models.Model) -> str:
-        """Write the native resource ledger after a model-owned checked command."""
-
-        xref = self._row_xref(row.get("_xref"), row_number=0)
-        ledger = self._ledger_for_xref(xref)
-        self._check_ledger_target(xref, ledger)
-        row_hash = self._row_content_hash(row)
-        prior = self._instance_from_ledger(ledger)
-        kind = "created" if prior is None else "skipped" if ledger.content_hash == row_hash else "updated"
-        self._upsert_ledger(xref=xref, instance=instance, row_hash=row_hash)
-        self._instances[xref] = instance
-        return kind
-
-    def related_instances(self, dataset: tablib.Dataset, field_name: str) -> tuple[models.Model, ...]:
-        """Resolve one imported relation column for model-owned write preparation."""
-
-        field = self.fields[field_name]
-        if field.column_name not in dataset.headers:
-            return ()
-        instances: dict[tuple[type[models.Model], Any], models.Model] = {}
-        for raw in dataset[field.column_name]:
-            try:
-                instance = field.widget.clean(raw)
-                if instance is not None and not isinstance(instance, models.Model):
-                    instance = field.widget.model._base_manager.get(pk=instance)
-            except (LookupError, ObjectDoesNotExist, ValueError):
-                continue
-            if instance is not None:
-                instances[(type(instance), instance.pk)] = instance
-        return tuple(instances[key] for key in sorted(instances, key=lambda item: (item[0]._meta.label, item[1])))
-
     def _prime_existing_ledgers(self, dataset: tablib.Dataset) -> None:
         """Load existing ledger rows for this import dataset in one query."""
 
@@ -223,7 +201,7 @@ class AngeeResource(resources.ModelResource):
         self._existing_ledgers = {xref: None for xref in xrefs}
         if not xrefs:
             return
-        ledgers = self.ledger_model._default_manager.filter(
+        ledgers = self.ledger_model._default_manager.using(self.get_db_connection_name()).filter(
             source_addon=self.entry.addon.name,
             xref__in=xrefs,
         )
@@ -263,20 +241,6 @@ class AngeeResource(resources.ModelResource):
         self._instances[xref] = adopted
         return adopted
 
-    def _skip_decision(
-        self,
-        ledger: Resource | None,
-        instance: models.Model | None,
-        row_hash: str,
-    ) -> RowResult | None:
-        """Return a skip result when the ledger row needs no import."""
-
-        if ledger is None:
-            return None
-        if instance is not None and ledger.content_hash == row_hash:
-            return self._skip_result(instance)
-        return None
-
     def _row_xref(self, value: Any, *, row_number: int) -> str:
         """Return the normalized xref for one import row."""
 
@@ -301,7 +265,7 @@ class AngeeResource(resources.ModelResource):
         if xref in self._existing_ledgers:
             return self._existing_ledgers[xref]
         ledger = (
-            self.ledger_model._default_manager.filter(
+            self.ledger_model._default_manager.using(self.get_db_connection_name()).filter(
                 source_addon=self.entry.addon.name,
                 xref=xref,
             )
@@ -338,7 +302,7 @@ class AngeeResource(resources.ModelResource):
     ) -> None:
         """Create or update the ledger row for an imported object."""
 
-        ledger, _ = self.ledger_model._default_manager.update_or_create(
+        ledger, _ = self.ledger_model._default_manager.using(self.get_db_connection_name()).update_or_create(
             source_addon=self.entry.addon.name,
             xref=xref,
             defaults={
@@ -472,7 +436,7 @@ class AngeeResource(resources.ModelResource):
         if isinstance(self.entry.adopt, tuple) and condition is not None:
             if not self._row_matches_condition(row, condition):
                 return None
-        queryset = self._meta.model._default_manager.filter(**identity)
+        queryset = self._meta.model._default_manager.using(self.get_db_connection_name()).filter(**identity)
         if condition is not None:
             queryset = queryset.filter(condition)
         matches = list(queryset[:2])
@@ -637,17 +601,6 @@ class AngeeResource(resources.ModelResource):
 
         return not field.primary_key and bool(getattr(field, "unique", False))
 
-    def _skip_result(self, instance: models.Model | None) -> RowResult:
-        """Return an import-export skip result for one row."""
-
-        row_result = self.get_row_result_class()()
-        row_result.import_type = RowResult.IMPORT_TYPE_SKIP
-        if instance is not None:
-            row_result.add_instance_info(instance)
-            if self._meta.store_instance:
-                row_result.instance = instance
-        return row_result
-
     def _validate_headers(self, headers: Sequence[str]) -> None:
         """Reject primary-key and unknown field headers."""
 
@@ -708,8 +661,8 @@ class AngeeResource(resources.ModelResource):
 
         if not updates:
             return
-        type(instance)._default_manager.filter(pk=instance.pk).update(**updates)
-        instance.refresh_from_db(fields=list(updates))
+        type(instance)._default_manager.using(self.get_db_connection_name()).filter(pk=instance.pk).update(**updates)
+        instance.refresh_from_db(using=self.get_db_connection_name(), fields=list(updates))
 
 
 class XrefInstanceLoader(BaseInstanceLoader):
@@ -730,13 +683,25 @@ def build_resource(
     *,
     ledger_model: type[models.Model],
     addon_aliases: Mapping[str, str],
+    using: str | None = None,
 ) -> AngeeResource:
-    """Return an xref-aware import-export resource for ``model``."""
+    """Compose the model's ``resource_class`` with native xref import options.
 
+    The declaration defaults to AngeeResource and must subclass it so every
+    adapter retains the same identity, row diagnostics and canonical ledger.
+    """
+
+    alias = get_write_alias(model, using=using)
+    if alias != DEFAULT_DB_ALIAS:
+        raise ResourceLoadError("Resource loading requires the default database.")
+    resource_class = getattr(model, "resource_class", AngeeResource)
+    if not isinstance(resource_class, type) or not issubclass(resource_class, AngeeResource):
+        raise ImproperlyConfigured(f"{model._meta.label}.resource_class must subclass AngeeResource")
     resource_type = resources.modelresource_factory(
         model,
-        resource_class=AngeeResource,
+        resource_class=resource_class,
         meta_options={
+            "using_db": alias,
             "clean_model_instances": True,
             "import_id_fields": (),
             "instance_loader_class": XrefInstanceLoader,

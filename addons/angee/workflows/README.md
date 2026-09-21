@@ -1,6 +1,6 @@
 # Workflow publications, results, and native calls
 
-`Workflow` is a mutable lineage head. `WorkflowDefinitionManager` applies checked
+`Workflow` is a mutable lineage head. `WorkflowManager` applies checked
 definition edits to it and publishes immutable versions. Its public
 `input_schema` validates the JSON supplied to an invocation before a run is
 retained. The entry operation's `input_model` validates a later step input after
@@ -16,15 +16,38 @@ cannot be proved within that bound is rejected. Binding checks prove required
 source paths and simple JSON Schema shapes, and reject unsupported constraints
 conservatively. Completion validates the exact JSON output again.
 
-Resource files continue to declare native Workflow, Step, and Edge rows.
-Every Step names its `step_class` explicitly; the model has no fallback
-operation. Test-only or consumer operations belong in their own composed
-registry and never become a framework default.
-Those models hand their row groups to the Workflow owner, which compares the
-canonical declaration against the saved draft, calls `apply_definition` only
-when it changed, and calls `publish_definition` for requested publications.
-The normal resource transaction, xref ledger, and dry-run rollback still own
-the load. Reinstalling the same graph retains the existing publication id.
+Resource files declare separate native Workflow, Step, and Edge rows, in dependency
+order. Every Step names its `step_class` explicitly; the model has no fallback
+operation. Test-only or consumer operations belong in their own composed registry.
+The models select [`WorkflowDefinitionResource`](resources.py), a native
+import-export adapter. Its cleaned instances feed `WorkflowManager.install_definition`,
+which composes the definition snapshot and edit commands. Native row outcomes,
+adoption and the canonical resources ledger remain authoritative. One lock-only
+preflight acquires every affected existing workflow in primary-key order before
+any dataset writes, including heads reached through other addons, adoption and
+omitted rows. It does not import declarations or retain write authority.
+
+Omission is scoped to the exact source addon, source path and target model. A
+facet removes its omitted targets and ledgers without removing other contributions.
+Remove incident Edge declarations before omitting their Step; an attempted
+cross-facet cascade fails and rolls back the load. Similarly, a Workflow with
+remaining children, incoming workflow references or publication history cannot be
+removed by omission. Empty facet files must still identify their target model.
+Omitted config on an unchanged step class preserves operator-authored config;
+a changed class uses its defaults, and explicit config is canonicalized by the
+Step owner. Explicit null remains distinct from omission and must satisfy the
+model field's contract.
+
+Xrefs can cross addons and earlier datasets. A Workflow may also reference an
+earlier new Workflow row in the same dataset; an unresolved forward reference
+receives the native row error, so declare its target first. Imported M2M fields
+are unsupported for definition facets and fail explicitly.
+
+The resources transaction owns rollback of rows, ledgers, grants and draft
+revisions, including dry runs. Requested publication runs through the final
+`after_resource_load` chain after every selected row and grant import. Reinstalling
+the same graph retains the existing publication id. Dry runs retain the loader's
+existing policy of skipping post-load hooks and rolling back all import writes.
 
 The built-in operation key is `call_workflow`. A static config pins a public
 publication id. A keyed config declares `workflow_key` plus

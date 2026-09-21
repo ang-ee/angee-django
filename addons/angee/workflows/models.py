@@ -53,7 +53,7 @@ from angee.base.transitions import (
 )
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.schema import GraphQLSchemas
-from angee.resources.mixins import ResourceLoadMixin, ResourceWritePreparation
+from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.attempts import (
     AttemptCause,
     AttemptResultKind,
@@ -91,6 +91,7 @@ from angee.workflows.managers import (
     _combined_delete_results,
     _definition_rows,
 )
+from angee.workflows.resources import WorkflowDefinitionResource
 from angee.workflows.states import (
     DecisionGate,
     JoinRule,
@@ -211,6 +212,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     mutable display name and is shared by every published version.
     """
 
+    resource_class = WorkflowDefinitionResource
     runtime = True
     rebac_grantable = {"editor": "write", "viewer": "write"}
 
@@ -315,54 +317,6 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         }
 
     @classmethod
-    def resource_import_owner(cls) -> type[Any]:
-        """Keep checked graph declarations under the Workflow definition owner."""
-
-        return cls
-
-    @classmethod
-    def import_resource_groups(
-        cls, groups: tuple[tuple[Any, Any], ...], *, ledger_model: type[Any], addon_aliases: Mapping[str, str]
-    ) -> Any:
-        """Install native Workflow/Step/Edge groups through checked definition commands."""
-
-        # Import after model loading: resource_install imports Workflow while
-        # this method is a safe runtime hook invoked only after app population.
-        from angee.workflows.resource_install import import_resource_groups
-
-        return import_resource_groups(cls, groups, ledger_model=ledger_model, addon_aliases=addon_aliases)
-
-    @classmethod
-    def resource_write_preparation(cls, resource: Any, dataset: Any) -> ResourceWritePreparation | None:
-        """Declare existing lineage heads before a resource batch starts writing."""
-
-        targets = frozenset(
-            instance.pk
-            for xref in dataset["_xref"]
-            if (instance := resource.instance_for_xref(xref)) is not None
-        )
-        return ResourceWritePreparation(cls, targets) if targets else None
-
-    @classmethod
-    @contextmanager
-    def prepare_resource_writes(cls, workflow_ids: Iterable[int]) -> Iterator[None]:
-        """Prelock every declared resource lineage in deterministic order."""
-
-        ids = sorted(set(workflow_ids))
-        alias = get_write_alias(cls)
-        with transaction.atomic(using=alias):
-            rows = list(
-                system_queryset(cls, using=alias, lock=("self",))
-                .filter(pk__in=ids)
-                .order_by("pk")
-            )
-            if len(rows) != len(ids):
-                raise ValidationError("A workflow definition parent no longer exists.")
-            if any(row.is_immutable for row in rows):
-                raise ValidationError("Published workflow versions are immutable.")
-            yield
-
-    @classmethod
     def after_resource_load(
         cls,
         instances: Iterable[Any],
@@ -370,13 +324,19 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         tier: str,
         source: str,
         publish: bool = False,
+        using: str | None = None,
     ) -> None:
-        """Reconcile stable keys after the checked resource definition install."""
+        """Publish complete installed graphs after all rows and grants have loaded."""
 
+        instances = tuple(instances)
+        alias = get_write_alias(cls, using=using, instance=instances[0] if instances else None)
         for workflow in sorted(instances, key=lambda instance: instance.pk or 0):
             if workflow.published_from_id is not None:
                 continue
-            workflow._propagate_resource_key_backfill(using=get_write_alias(cls, instance=workflow))
+            workflow._state.db = alias
+            workflow._propagate_resource_key_backfill(using=alias)
+            if publish:
+                workflow.publish_if_changed()
         super().after_resource_load(instances, tier=tier, source=source, publish=publish)
 
     @transition(status, source=WorkflowStatus.DRAFT, target=WorkflowStatus.PUBLISHED, on_success=_save_workflow_status)
@@ -786,32 +746,10 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         return self.status in {WorkflowStatus.TEST, WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}
 
 
-class WorkflowDefinitionChildMixin:
-    """Share resource-install ownership for rows belonging to a Workflow."""
-
-    @classmethod
-    def resource_import_owner(cls) -> type[Any]:
-        return cls._meta.get_field("workflow").remote_field.model
-
-    @classmethod
-    def resource_write_preparation(cls, resource: Any, dataset: Any) -> ResourceWritePreparation | None:
-        """Declare old and proposed workflow parents for a child resource batch."""
-
-        workflows = set(resource.related_instances(dataset, "workflow"))
-        workflows.update(
-            instance.workflow
-            for xref in dataset["_xref"]
-            if (instance := resource.instance_for_xref(xref)) is not None
-        )
-        if not workflows:
-            return None
-        workflow_model = cls._meta.get_field("workflow").remote_field.model
-        return ResourceWritePreparation(workflow_model, frozenset(row.pk for row in workflows))
-
-
-class Step(WorkflowDefinitionChildMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
+class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     """One node in a workflow definition graph."""
 
+    resource_class = WorkflowDefinitionResource
     runtime = True
 
     sqid_prefix = "wfs_"
@@ -870,7 +808,7 @@ class Step(WorkflowDefinitionChildMixin, ImplDefaultsMixin, AuditMixin, AngeeDat
         except Exception as error:
             raise ValidationError({"step_class": "Unknown workflow step class."}) from error
 
-    def validate_impl_configs(self, *, update_fields: Any = None) -> None:
+    def validate_impl_configs(self, *, update_fields: Any = None, using: str | None = None) -> None:
         """Canonicalize complete drafts while preserving incomplete object configs."""
 
         if not self._state.adding and update_fields is not None and "config" not in update_fields:
@@ -970,9 +908,10 @@ class Step(WorkflowDefinitionChildMixin, ImplDefaultsMixin, AuditMixin, AngeeDat
                 session.changed(workflow_id)
             return _combined_delete_results(edges, step)
 
-class Edge(WorkflowDefinitionChildMixin, AuditMixin, AngeeDataModel):
+class Edge(AuditMixin, AngeeDataModel):
     """Directed edge between two workflow steps."""
 
+    resource_class = WorkflowDefinitionResource
     runtime = True
 
     sqid_prefix = "wfe_"

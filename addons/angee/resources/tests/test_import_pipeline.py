@@ -11,6 +11,7 @@ import tablib
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection, models, router, transaction
+from django.db.models.fields import NOT_PROVIDED
 from rebac.models import active_relationship_model
 
 from angee.base.models import AngeeModel
@@ -56,7 +57,7 @@ def test_rectangular_sources_reuse_the_loaded_dataset(
 
 
 def test_mixed_sources_keep_sparse_cells_and_original_row_indexes(tmp_path: Path) -> None:
-    """Envelope model precedence and native rectangular nulls remain explicit."""
+    """Structured omissions survive rectangularization, separate from explicit null."""
 
     path = tmp_path / "mixed.json"
     path.write_text(
@@ -78,8 +79,8 @@ def test_mixed_sources_keep_sparse_cells_and_original_row_indexes(tmp_path: Path
     assert second.source_rows == [2]
     assert first.dataset.headers == ["_xref", "title", "model", "enabled"]
     assert first.dataset.dict == [
-        {"_xref": "first", "title": "one", "model": None, "enabled": None},
-        {"_xref": "third", "title": None, "model": "real field", "enabled": True},
+        {"_xref": "first", "title": "one", "model": NOT_PROVIDED, "enabled": NOT_PROVIDED},
+        {"_xref": "third", "title": NOT_PROVIDED, "model": "real field", "enabled": True},
     ]
 
 

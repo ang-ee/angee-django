@@ -19,7 +19,7 @@ from angee.base.models import CATALOGUE_TIERS, AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
-from angee.resources.loader import build_resource
+from angee.resources.loader import AngeeResource, build_resource
 from angee.resources.models import Resource
 from angee.resources.tiers import ResourceTier
 from angee.resources.widgets import (
@@ -2326,3 +2326,54 @@ def _write_resource_files(tmp_path: Path) -> AppConfig:
             "demo": (),
         },
     )
+
+
+def test_resource_factory_defaults_and_model_declared_native_subclass(tmp_path: Path) -> None:
+    """The selected native subclass retains the shared xref and ledger contract."""
+
+    class CustomResource(AngeeResource):
+        def before_import_row(self, row: Any, **kwargs: Any) -> None:
+            super().before_import_row(row, **kwargs)
+
+    class DefaultModel(AngeeModel):
+        name = models.CharField(max_length=30)
+
+        class Meta:
+            abstract = True
+
+    class SelectedModel(DefaultModel):
+        resource_class = CustomResource
+
+        class Meta:
+            abstract = True
+
+    source = entry(tmp_path, {"path": "resources/model.yaml"})
+    default = build_resource(DefaultModel, source, ledger_model=Resource, addon_aliases={})
+    selected = build_resource(SelectedModel, source, ledger_model=Resource, addon_aliases={})
+    assert isinstance(default, AngeeResource)
+    assert not isinstance(default, CustomResource)
+    assert isinstance(selected, CustomResource)
+    assert selected._meta.model is SelectedModel
+    assert selected._meta.instance_loader_class is default._meta.instance_loader_class
+    assert selected.fields["_xref"].readonly
+    assert selected._meta.store_instance and selected._meta.report_skipped
+
+    class InvalidModel(DefaultModel):
+        resource_class = object
+
+        class Meta:
+            abstract = True
+
+    with pytest.raises(ImproperlyConfigured, match="must subclass AngeeResource"):
+        build_resource(InvalidModel, source, ledger_model=Resource, addon_aliases={})
+
+
+def test_empty_structured_entry_retains_its_facet_model(tmp_path: Path) -> None:
+    """An empty declaration still reaches native hooks to reconcile omissions."""
+
+    (tmp_path / "rows.yaml").write_text("_meta: {model: workflows.Step}\nrows: []\n")
+    (group,) = entry(tmp_path, {"path": "rows.yaml"}).read_groups()
+    assert group.model_label == "workflows.Step"
+    assert group.dataset.headers == ["_xref"]
+    assert len(group.dataset) == 0
+    assert group.source_rows == []
