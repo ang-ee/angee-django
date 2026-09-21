@@ -27,7 +27,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, HierarchyMixin
 from angee.base.models import (
@@ -122,8 +122,7 @@ class WorkspaceVisibleMixin(models.Model):
         require_authorization_database(
             using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         with transaction.atomic(using=using):
             super().save(*args, **kwargs)
@@ -289,8 +288,7 @@ class Initiative(WorkspaceVisibleMixin, HierarchyMixin, AuditMixin, AngeeDataMod
         require_authorization_database(
             using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         parent_changed = False
         saved_parent_id = None
@@ -397,8 +395,7 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
         require_authorization_database(
             using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         with transaction.atomic(using=using):
             self._validate_ancestry(lock=True, using=using)
@@ -582,8 +579,7 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         require_authorization_database(
             using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.health in (None, ""):
             raise ValidationError({"health": "A portfolio update must assert health."})
@@ -632,8 +628,7 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         require_authorization_database(
             using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         target = self.target
         content_type_id = self.content_type_id
@@ -770,8 +765,7 @@ class ProjectPortfolio(models.Model):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         product_model = apps.get_model("portfolio", "Product")
         return product_model.objects.db_manager(using).from_project(self)

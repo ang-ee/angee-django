@@ -1,4 +1,4 @@
-"""Native read/write alias selection and explicit FK reload contracts."""
+"""Native read/write alias selection, deferred refresh and explicit FK reload contracts."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, router
 from django.test.utils import CaptureQueriesContext, isolate_apps
 
-from angee.base.db import get_read_alias, get_write_alias, related_on
+from angee.base.db import get_read_alias, get_write_alias, refresh_deferred, related_on
 
 
 @pytest.fixture
@@ -281,6 +281,53 @@ def related_models(
             with connection.schema_editor() as editor:
                 editor.delete_model(RelatedRecord)
                 editor.delete_model(RelatedTarget)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("fields", [None, ("label", "parent_id"), ("label",), ()])
+def test_refresh_deferred_preserves_loaded_assignments_and_uses_explicit_alias(
+    related_models: tuple[type[models.Model], type[models.Model], str],
+    write_router: WriteRouter,
+    fields: tuple[str, ...] | None,
+) -> None:
+    """Only missing requested columns are queried, even with conflicting instance affinity."""
+
+    target_model, _, using = related_models
+    target = target_model._base_manager.db_manager(using).create(label="stored")
+    instance = target_model._base_manager.db_manager(using).only("pk").get(pk=target.pk)
+    instance.label = "unsaved"
+    instance._state.db = "conflicting_affinity"
+    should_refresh = fields is None or "parent_id" in fields
+
+    with CaptureQueriesContext(connections[using]) as queries:
+        assert refresh_deferred(instance, using=using, fields=fields) is instance
+
+    assert len(queries) == int(should_refresh)
+    assert instance.label == "unsaved"
+    assert instance.get_deferred_fields() == (set() if should_refresh else {"parent_id"})
+    assert instance._state.db == (using if should_refresh else "conflicting_affinity")
+    assert write_router.calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_refresh_deferred_leaves_unrequested_columns_deferred(
+    related_models: tuple[type[models.Model], type[models.Model], str],
+    write_router: WriteRouter,
+) -> None:
+    """An attname iterator limits the native refresh without loading another deferred FK."""
+
+    target_model, _, using = related_models
+    target = target_model._base_manager.db_manager(using).create(label="stored")
+    instance = target_model._base_manager.db_manager(using).only("pk").get(pk=target.pk)
+
+    with CaptureQueriesContext(connections[using]) as queries:
+        assert refresh_deferred(instance, using=using, fields=iter(("label",))) is instance
+        assert instance.label == "stored"
+
+    assert len(queries) == 1
+    assert instance.get_deferred_fields() == {"parent_id"}
+    assert instance._state.db == using
+    assert write_router.calls == []
 
 
 @pytest.mark.django_db(transaction=True)

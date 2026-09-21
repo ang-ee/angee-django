@@ -23,7 +23,7 @@ from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, refresh_deferred
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.permissions import require_authorization_database
@@ -704,13 +704,15 @@ class HierarchyMixin(models.Model):
 
         alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = alias
-        deferred = self.get_deferred_fields() & {
-            "parent_id",
-            "path",
-            *(self._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
-        }
-        if deferred:
-            self.refresh_from_db(using=alias, fields=sorted(deferred))
+        refresh_deferred(
+            self,
+            using=alias,
+            fields={
+                "parent_id",
+                "path",
+                *(self._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
+            },
+        )
         if self._state.adding:
             self._save_created(alias, *args, **kwargs)
         elif self._hierarchy_needs_repath(using=alias):
@@ -845,12 +847,14 @@ class HierarchyMixin(models.Model):
         if parent is None or parent._state.db != using:
             parent = system_queryset(field.related_model, using=using).get(field.get_reverse_related_filter(self))
             field.set_cached_value(self, parent)
-        deferred = parent.get_deferred_fields() & {
-            "path",
-            *(parent._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
-        }
-        if deferred:
-            parent.refresh_from_db(using=using, fields=sorted(deferred))
+        refresh_deferred(
+            parent,
+            using=using,
+            fields={
+                "path",
+                *(parent._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
+            },
+        )
         return cast("HierarchyMixin", parent)
 
     def _hierarchy_path(self, parent: HierarchyMixin | None) -> str:

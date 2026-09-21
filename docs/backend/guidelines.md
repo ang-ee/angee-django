@@ -153,6 +153,7 @@ Use these owners instead of maintaining another contract in an addon:
   the operation's explicit alias (write, or read where the caller derived a read
   alias), leaving result caching to the caller; its native deferred-FK refresh
   invalidates the relation cache and repoints `instance._state.db`.
+  Before a write reads deferred columns, use [`refresh_deferred`](../../angee/base/db.py) with the pinned alias.
   The invariant is **never silently misroute**: use the native alias-bound form,
   or fail closed at the operation's entry owner for a non-default alias when
   Django or the upstream library cannot honour it; do not rebuild that library.

@@ -15,7 +15,7 @@ from typing import Any, ClassVar, cast
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import StateField
 
 
@@ -106,8 +106,7 @@ class Stage(models.Model):
         using = get_write_alias(cls, using=using, instance=container)
         container._state.db = using
         default_attname = f"{cls.default_stage_field_name}_id"
-        if default_attname in container.get_deferred_fields():
-            container.refresh_from_db(using=using, fields=[default_attname])
+        refresh_deferred(container, using=using, fields=(default_attname,))
         default_id = getattr(container, default_attname, None)
         stages = cls.for_container(container)
         if default_id is not None:
@@ -179,8 +178,7 @@ class StagedModelMixin(models.Model):
 
         using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
         stage_attname = f"{self.stage_field_name}_id"
-        if stage_attname in self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=[stage_attname])
+        refresh_deferred(self, using=using, fields=(stage_attname,))
         stage_id = getattr(self, stage_attname, None)
         if stage_id is None:
             return

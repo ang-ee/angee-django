@@ -36,7 +36,7 @@ from rebac.mixins import RebacModelBase
 from rebac.types import RelationshipFilter
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager
@@ -277,8 +277,7 @@ class Queue(models.Model, metaclass=RebacModelBase):
         )
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         adding = self._state.adding
         self.key = self.key.strip().upper()
@@ -298,8 +297,7 @@ class Queue(models.Model, metaclass=RebacModelBase):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         sequence_model = apps.get_model("sequence", "Sequence")
         with system_context(reason="work.queue.ensure_task_sequence"):
@@ -320,8 +318,7 @@ class Queue(models.Model, metaclass=RebacModelBase):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         self.ensure_task_sequence()
         sequence_model = apps.get_model("sequence", "Sequence")
@@ -416,8 +413,7 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if not ambient_is_sudo():
             loaded_category = getattr(self, "_loaded_category", None)
@@ -444,8 +440,7 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if not ambient_is_sudo() and self.category in self.SYSTEM_CATEGORIES:
             raise ValidationError({"category": "System-provisioned stages cannot be deleted."})
@@ -631,8 +626,7 @@ class Cycle(AuditMixin, AngeeDataModel):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.starts_on is not None and self.ends_on is not None and self.ends_on < self.starts_on:
             raise ValidationError({"ends_on": "Cycle end must be on or after its start."})
@@ -675,8 +669,7 @@ class Cycle(AuditMixin, AngeeDataModel):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None:
             raise ValidationError("A cycle must be saved before it can close.")
@@ -933,8 +926,7 @@ class TaskWork(StagedModelMixin):
 
         using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         relationships: dict[str, Sequence[Any]] = {}
         parent = getattr(super(), "apply_create_defaults", None)
@@ -963,8 +955,7 @@ class TaskWork(StagedModelMixin):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         self._reject_direct_status_write()
         update_fields = set(kwargs["update_fields"]) if kwargs.get("update_fields") is not None else None
@@ -993,8 +984,7 @@ class TaskWork(StagedModelMixin):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.queue_id is None:
             return self._base_verb("complete", using=using)
@@ -1007,8 +997,7 @@ class TaskWork(StagedModelMixin):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         try:
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
@@ -1027,8 +1016,7 @@ class TaskWork(StagedModelMixin):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.queue_id is None:
             return self._base_verb("reopen", using=using)
@@ -1044,8 +1032,7 @@ class TaskWork(StagedModelMixin):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.queue_id is None:
             raise ValidationError({"queue": "A queued task is required for triage."})
@@ -1080,8 +1067,7 @@ class TaskWork(StagedModelMixin):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         try:
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
@@ -1118,8 +1104,7 @@ class TaskWork(StagedModelMixin):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if timezone.is_naive(until):
             raise ValidationError({"until": "Snooze time must include a timezone."})
@@ -1207,8 +1192,7 @@ class TaskWork(StagedModelMixin):
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
         require_authorization_database(using, operation="Work relationship writes", error_class=ImproperlyConfigured)
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None or canonical.pk is None:
             raise ValidationError("Both duplicate and canonical tasks must be saved.")
@@ -1558,8 +1542,7 @@ class TaskWork(StagedModelMixin):
         """Run a projects-only lifecycle verb for a legacy queue-less task."""
 
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
         with self._work_verb_write():
             return getattr(super(), name)(*args)
 

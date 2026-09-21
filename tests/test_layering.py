@@ -275,6 +275,12 @@ def _routing_drift(tree: ast.Module, *, addon: bool) -> Iterator[tuple[str, int,
     Native row/scalar-returning calls terminate that recognition. Other .db
     attributes (instance._state.db, version.db, environment.db) are not ORM
     collection expressions. This is not cross-module or dynamic type inference.
+
+    Inline deferred refresh preambles belong to refresh_deferred. Recognize a
+    same-receiver refresh with explicit fields directly inside a get_deferred_fields
+    guard, including membership, walrus and locally assigned field sets/intersections.
+    Unrestricted refreshes reload loaded columns and retain Django's native owner.
+    Arbitrary dataflow and indirect refresh calls are outside this syntactic check.
     """
 
     imports: dict[str, str] = {}
@@ -389,6 +395,42 @@ def _routing_drift(tree: ast.Module, *, addon: bool) -> Iterator[tuple[str, int,
         for call in calls
     )
 
+    deferred_preambles: set[ast.Call] = set()
+    for conditional in (node for node in ast.walk(tree) if isinstance(node, ast.If)):
+        refreshes = [
+            statement.value for statement in conditional.body
+            if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Attribute) and statement.value.func.attr == "refresh_from_db"
+        ]
+        if not refreshes:
+            continue
+        conditions = [conditional.test]
+        names = {node.id for node in ast.walk(conditional.test) if isinstance(node, ast.Name)}
+        local_values: dict[str, ast.expr | None] = {}
+        for assignment in sorted(assignments, key=lambda node: node.lineno):
+            if assignment.lineno >= conditional.lineno or scope_of(assignment) is not scope_of(conditional):
+                continue
+            targets = assignment.targets if isinstance(assignment, ast.Assign) else [assignment.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in names:
+                    local_values[target.id] = assignment.value
+        conditions.extend(value for value in local_values.values() if value is not None)
+        receivers = {
+            ast.dump(node.func.value)
+            for condition in conditions for node in ast.walk(condition)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get_deferred_fields"
+        }
+        for call in refreshes:
+            fields = next(
+                (keyword.value for keyword in call.keywords if keyword.arg == "fields"),
+                call.args[1] if len(call.args) > 1 else None,
+            )
+            if fields is None or isinstance(fields, ast.Constant) and fields.value is None:
+                continue
+            if ast.dump(call.func.value) in receivers:
+                deferred_preambles.add(call)
+
     for node in [*calls, *bare_decorators, *manager_db_reads]:
         parents = sorted(
             (owner for owner in owners if owner.lineno <= node.lineno <= (owner.end_lineno or owner.lineno)),
@@ -399,7 +441,9 @@ def _routing_drift(tree: ast.Module, *, addon: bool) -> Iterator[tuple[str, int,
             yield "manager_db" if node in manager_db_reads else "transaction", node.lineno, owner_name
             continue
         called = name_of(node.func)
-        if called in {"django.db.router.db_for_read", "django.db.router.db_for_write"}:
+        if node in deferred_preambles:
+            yield "deferred_refresh", node.lineno, owner_name
+        elif called in {"django.db.router.db_for_read", "django.db.router.db_for_write"}:
             yield "router", node.lineno, owner_name
         elif write_owner and called in boundaries:
             alias = next((keyword.value for keyword in node.keywords if keyword.arg == "using"), None)
@@ -440,7 +484,7 @@ def test_write_owners_keep_routing_at_the_database_owner() -> None:
     """Guard production core/addons; preserve history, test probes and the router owner.
 
     Migrations/runtime_migrations are released history, tests exercise routers
-    and native APIs deliberately, and base/db.py implements alias selection.
+    and native APIs deliberately, and base/db.py owns alias selection and deferred refresh.
     Those are the only path-wide exemptions. Remaining exceptions are exact
     module/kind/owner entries above; unused entries fail to prevent exemption rot.
     """
@@ -457,7 +501,7 @@ def test_write_owners_keep_routing_at_the_database_owner() -> None:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for kind, line, owner in _routing_drift(tree, addon=relative.startswith("addons/")):
-                if kind in {"router", "manager_db"} and relative == "angee/base/db.py":
+                if kind in {"router", "manager_db", "deferred_refresh"} and relative == "angee/base/db.py":
                     continue
                 key = (relative, kind, owner)
                 if key in _ROUTING_EXEMPTIONS:
@@ -465,7 +509,8 @@ def test_write_owners_keep_routing_at_the_database_owner() -> None:
                 else:
                     violations.append(f"{relative}:{line} {owner}: {kind}")
     assert not violations, (
-        "Use database alias owners, explicit transaction aliases and full_clean_for_write:\n" + "\n".join(violations)
+        "Use database alias owners, refresh_deferred, explicit transaction aliases and full_clean_for_write:\n"
+        + "\n".join(violations)
     )
     assert used == _ROUTING_EXEMPTIONS.keys(), f"Remove stale routing exemptions: {_ROUTING_EXEMPTIONS.keys() - used}"
 
@@ -507,6 +552,50 @@ def test_write_owners_keep_routing_at_the_database_owner() -> None:
         ("version.db", []),
         ("Version.objects.get(pk=1).db", []),
         ("VersionManager().get(pk=1).db", []),
+        (
+            "if deferred := row.get_deferred_fields():\n"
+            "    row.refresh_from_db(using=alias, fields=deferred)",
+            ["deferred_refresh"],
+        ),
+        (
+            "deferred = row.get_deferred_fields()\n"
+            "if deferred:\n    row.refresh_from_db(using=alias, fields=deferred)",
+            ["deferred_refresh"],
+        ),
+        (
+            "needed = row.get_deferred_fields() & {'state'}\n"
+            "if needed:\n    row.refresh_from_db(using=alias, fields=sorted(needed))",
+            ["deferred_refresh"],
+        ),
+        (
+            "if field.attname in row.get_deferred_fields():\n"
+            "    row.refresh_from_db(using=alias, fields=[field.attname])",
+            ["deferred_refresh"],
+        ),
+        (
+            "if deferred := row.get_deferred_fields():\n"
+            "    row.refresh_from_db(alias, deferred)",
+            ["deferred_refresh"],
+        ),
+        (
+            "if deferred := row.get_deferred_fields():\n"
+            "    other.refresh_from_db(using=alias, fields=deferred)",
+            [],
+        ),
+        (
+            "def inspect():\n    deferred = row.get_deferred_fields()\n"
+            "def reload(deferred):\n    if deferred:\n        row.refresh_from_db(using=alias, fields=deferred)",
+            [],
+        ),
+        (
+            "fields = row.get_deferred_fields()\nfields = {'label'}\n"
+            "if fields:\n    row.refresh_from_db(using=alias, fields=fields)",
+            [],
+        ),
+        ("if row.get_deferred_fields():\n    row.refresh_from_db(using=alias)", []),
+        ("if row.get_deferred_fields():\n    row.refresh_from_db(using=alias, fields=None)", []),
+        ("row.refresh_from_db(using=alias, fields=['state'])", []),
+        ("refresh_deferred(row, using=alias, fields=['state'])", []),
     ],
 )
 def test_routing_drift_syntax(source: str, expected: list[str]) -> None:

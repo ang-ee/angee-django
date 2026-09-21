@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, refresh_deferred
 from angee.base.fields import enum_member_for
 
 __all__ = [
@@ -475,8 +475,7 @@ class ImplBase:
             if field_name in provided or getattr(field, "attname", field_name) in provided:
                 continue
             attname = getattr(field, "attname", field_name)
-            if attname in instance.get_deferred_fields():
-                instance.refresh_from_db(using=alias, fields=[field_name])
+            refresh_deferred(instance, using=alias, fields=(attname,))
             before = getattr(instance, attname)
             if field.many_to_one and isinstance(value, str):
                 cls._materialize_fk(instance, field, value, using=alias)
@@ -859,8 +858,7 @@ class ImplDefaultsMixin(models.Model):
                 loaded[field.attname] = stored
             if updated is not None and field.name not in updated and field.attname not in updated:
                 continue
-            if field.attname in self.get_deferred_fields():
-                self.refresh_from_db(using=alias, fields=[field.name])
+            refresh_deferred(self, using=alias, fields=(field.attname,))
             if getattr(self, field.attname) != loaded[field.attname]:
                 raise ValidationError({field.name: "Implementation selection is create-only."})
 
@@ -908,12 +906,14 @@ class ImplDefaultsMixin(models.Model):
     def _refresh_impl_config_fields(self, *, using: str) -> None:
         """Load deferred config and implementation selectors on the chosen alias."""
 
-        needed = self.get_deferred_fields() & {
-            "config",
-            *(field.attname for field in self._meta.get_fields() if isinstance(field, ImplClassField)),
-        }
-        if needed:
-            self.refresh_from_db(using=using, fields=needed)
+        refresh_deferred(
+            self,
+            using=using,
+            fields={
+                "config",
+                *(field.attname for field in self._meta.get_fields() if isinstance(field, ImplClassField)),
+            },
+        )
 
     def set_impl_key(self, field_name: str, value: Any, *, default: str | None = None) -> bool:
         """Assign an impl key and return whether the stored key changed."""
@@ -937,8 +937,7 @@ class ImplDefaultsMixin(models.Model):
 
         alias = get_write_alias(type(self), using=using, instance=self)
         field = type(self).impl_field(field_name)
-        if field.attname in self.get_deferred_fields():
-            self.refresh_from_db(using=alias, fields=[field.name])
+        refresh_deferred(self, using=alias, fields=(field.attname,))
         key = getattr(self, field.attname, None)
         if not key:
             return set()

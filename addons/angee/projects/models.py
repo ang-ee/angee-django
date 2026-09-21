@@ -23,7 +23,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
@@ -382,8 +382,7 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         update_fields = kwargs.get("update_fields")
         folder_is_written = update_fields is None or bool({"folder", "folder_id"}.intersection(update_fields))
@@ -416,8 +415,7 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         return self._set_status(str(self.ProjectStatus.PAUSED), using=using)
 
@@ -426,8 +424,7 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         return self._set_status(str(self.ProjectStatus.OPEN), using=using)
 
@@ -436,8 +433,7 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         return self._set_status(str(self.ProjectStatus.DONE), using=using)
 
@@ -446,8 +442,7 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         return self._set_status(str(self.ProjectStatus.DROPPED), using=using)
 
@@ -626,8 +621,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
         for field_name in ("sort_order", "sub_sort_order"):
             field = cast(FractionalRankField, self._meta.get_field(field_name))
-            if field.attname in self.get_deferred_fields():
-                self.refresh_from_db(using=using, fields=[field.attname])
+            refresh_deferred(self, using=using, fields=(field.attname,))
             if getattr(self, field.attname) is None:
                 setattr(self, field.attname, field.get_append_rank_for_instance(self, using=using))
 
@@ -646,8 +640,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         self._normalize_insert_lifecycle()
         update_fields = kwargs.get("update_fields")
@@ -664,8 +657,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
             return self
@@ -681,8 +673,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         try:
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
@@ -702,8 +693,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if (
             self.status == self.TaskStatus.OPEN
@@ -724,8 +714,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         project_model = apps.get_model("projects", "Project")
         return project_model.objects.db_manager(using).from_task(self)
@@ -832,8 +821,7 @@ class TaskRelation(AuditMixin, AngeeDataModel):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         swapped = self._canonicalize_symmetric_pair()
         update_fields = kwargs.get("update_fields")
@@ -992,8 +980,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         kwargs["using"] = using
         self._state.db = using
         require_authorization_database(using, operation="Project relationship writes", error_class=ImproperlyConfigured)
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         target = self.target
         if target is None:
@@ -1039,8 +1026,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         kwargs["using"] = using
         self._state.db = using
         require_authorization_database(using, operation="Project relationship writes", error_class=ImproperlyConfigured)
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         target = self.target
         if target is None:
@@ -1113,8 +1099,7 @@ class ThreadActivityProjects(models.Model):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         task_model = apps.get_model("projects", "Task")
         return task_model.objects.db_manager(using).from_activity(self)

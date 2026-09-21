@@ -37,7 +37,7 @@ from rebac.models import active_relationship_model
 from rebac.types import RelationshipFilter, SubjectRef
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
@@ -156,8 +156,7 @@ class ImmutableFieldsMixin(models.Model):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         allowed = set(getattr(self, "_proposals_allowed_immutable_fields", set()))
         try:
@@ -313,8 +312,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
 
         using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         self._validate_target()
         if self.task_id is not None:
@@ -335,8 +333,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         self._validate_target()
         self._validate_dates()
@@ -362,8 +359,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.status != RoundStatus.COLLECTING or self.outcome is not None:
             return "Only a collecting round can be deleted."
@@ -384,8 +380,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         error = self.deletion_error()
         if error:
@@ -400,8 +395,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         require_authorization_database(
             using, operation="Proposal relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None:
             raise ValidationError("A saved round is required.")
@@ -451,8 +445,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         require_authorization_database(
             using, operation="Proposal relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None:
             raise ValidationError("A saved round is required.")
@@ -525,8 +518,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None:
             raise ValidationError("A saved round is required.")
@@ -558,8 +550,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         require_authorization_database(
             using, operation="Proposal relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None or user.pk is None:
             raise ValidationError("A saved round and user are required.")
@@ -876,8 +867,7 @@ class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         self.key = str(self.key or "").strip().lower()
         if not self.key:
@@ -1320,8 +1310,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         require_authorization_database(
             using, operation="Proposal relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if not self._state.adding:
             super().save(*args, **kwargs)
@@ -1346,8 +1335,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.state != ProposalState.DRAFT or self.submitted_at is not None or self.decided_at is not None:
             return "Only an untouched draft proposal can be deleted."
@@ -1392,8 +1380,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         error = self.deletion_error()
         if error:
@@ -1408,8 +1395,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         require_authorization_database(
             using, operation="Proposal relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None:
             raise ValidationError("A saved proposal is required.")
@@ -1449,8 +1435,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         require_authorization_database(
             using, operation="Proposal relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None:
             raise ValidationError("A saved proposal is required.")
@@ -1489,8 +1474,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         require_authorization_database(
             using, operation="Proposal relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None or party.pk is None:
             raise ValidationError("A saved proposal and party are required.")
@@ -1529,8 +1513,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         require_authorization_database(
             using, operation="Proposal relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None:
             raise ValidationError("A saved proposal is required.")
@@ -1584,8 +1567,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         require_authorization_database(
             using, operation="Proposal relationship writes", error_class=ImproperlyConfigured
         )
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         if self.pk is None:
             raise ValidationError("A saved proposal is required.")
@@ -1871,8 +1853,7 @@ class TaskProposalAccess(models.Model):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
-        if deferred := self.get_deferred_fields():
-            self.refresh_from_db(using=using, fields=deferred)
+        refresh_deferred(self, using=using)
 
         try:
             queue_field = self._meta.get_field("queue")

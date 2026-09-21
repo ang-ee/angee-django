@@ -70,7 +70,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.db.models.query_utils import DeferredAttribute
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, refresh_deferred
 from angee.base.fields import StateField, enum_member_for
 from angee.base.scoping import system_queryset
 
@@ -271,8 +271,7 @@ class StateTransitions:
         using = get_write_alias(type(instance), using=kwargs.get("using"), instance=instance)
         if "using" in kwargs:
             kwargs["using"] = using
-        if self.field.attname in instance.get_deferred_fields():
-            instance.refresh_from_db(using=using, fields=[self.field.attname])
+        refresh_deferred(instance, using=using, fields=(self.field.attname,))
         source = self.field.to_python(getattr(instance, self.field.attname))
         target = self.field.to_python(spec.target)
         source_key = self._state_key(source)
@@ -315,8 +314,7 @@ class StateTransitions:
         if not str(reason).strip():
             raise ValueError("StateTransitions.force_state() requires a reason.")
         using = get_write_alias(type(instance), using=using, instance=instance)
-        if self.field.attname in instance.get_deferred_fields():
-            instance.refresh_from_db(using=using, fields=[self.field.attname])
+        refresh_deferred(instance, using=using, fields=(self.field.attname,))
         source = self.field.to_python(getattr(instance, self.field.attname))
         target_value = self.field.to_python(target)
         self._write_target(instance, target_value)

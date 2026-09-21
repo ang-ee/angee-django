@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import TypeVar
 
 from django.db import models, router
@@ -67,6 +67,28 @@ def _bound_alias(
     return None
 
 
+def refresh_deferred(
+    instance: _ModelT,
+    *,
+    using: str,
+    fields: Iterable[str] | None = None,
+) -> _ModelT:
+    """Load deferred columns before a write reads them on its pinned alias.
+
+    ``fields`` optionally limits the refresh to concrete field attnames. Loaded
+    values, including unsaved assignments, remain untouched. Django owns the
+    refresh, cache invalidation and instance database affinity; an empty set
+    performs no query. Return the same instance.
+    """
+
+    deferred = instance.get_deferred_fields()
+    if fields is not None:
+        deferred.intersection_update(fields)
+    if deferred:
+        instance.refresh_from_db(using=using, fields=sorted(deferred))
+    return instance
+
+
 def related_on(
     instance: models.Model,
     field_name: str,
@@ -94,8 +116,7 @@ def related_on(
     field = instance._meta.get_field(field_name)
     if not isinstance(field, models.ForeignKey):
         raise TypeError(f"{instance._meta.label}.{field_name} is not a forward foreign key.")
-    if field.attname in instance.get_deferred_fields():
-        instance.refresh_from_db(using=using, fields=[field.attname])
+    refresh_deferred(instance, using=using, fields=(field.attname,))
     related_id = getattr(instance, field.attname)
     if related_id is None:
         return None

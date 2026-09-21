@@ -44,7 +44,7 @@ from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
 from sqids import Sqids
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, refresh_deferred
 from angee.base.scoping import system_queryset
 
 
@@ -309,9 +309,7 @@ class FractionalRankField(models.FloatField):
         model = type(instance)
         database = get_write_alias(model, using=using, instance=instance)
         context_fields = self._unique_context_fields(model)
-        deferred = instance.get_deferred_fields() & {field.attname for field in context_fields}
-        if deferred:
-            instance.refresh_from_db(using=database, fields=deferred)
+        refresh_deferred(instance, using=database, fields=(field.attname for field in context_fields))
         context = {
             context_field.attname: getattr(instance, context_field.attname)
             for context_field in context_fields
