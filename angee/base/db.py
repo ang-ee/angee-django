@@ -1,7 +1,8 @@
-"""Database selection for an operation owned by a Django write path."""
+"""Explicit database selection and relation reloads for Django operations."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TypeVar
 
 from django.db import models, router
@@ -32,3 +33,43 @@ def get_write_alias(
     if instance is not None and not instance._state.adding and instance._state.db is not None:
         return instance._state.db
     return router.db_for_write(model, instance=instance)
+
+
+def related_on(
+    instance: models.Model,
+    field_name: str,
+    *,
+    using: str,
+    required: bool = True,
+    select_related: Sequence[str] = (),
+) -> models.Model | None:
+    """Reload a primary-key FK target on the operation's explicit alias.
+
+    The caller supplies the write alias, or a read alias it has already derived.
+
+    Resolve the field and its stored ID through Django's metadata, then query
+    its remote model's base manager. A null FK returns ``None`` without querying
+    the target; a missing non-null target raises its native ``DoesNotExist``
+    unless ``required=False``. ``select_related`` names native eager joins.
+    A deferred FK ID is first refreshed on the same alias, including Django's
+    native cache invalidation and repointing of ``instance._state.db``.
+
+    Never reuse or populate the FK result cache: callers retain cache policy.
+    In particular, instance affinity alone cannot pin a forward-FK descriptor,
+    which otherwise consults Django's read router with an instance hint.
+    """
+
+    field = instance._meta.get_field(field_name)
+    if not isinstance(field, models.ForeignKey):
+        raise TypeError(f"{instance._meta.label}.{field_name} is not a forward foreign key.")
+    if field.attname in instance.get_deferred_fields():
+        instance.refresh_from_db(using=using, fields=[field.attname])
+    related_id = getattr(instance, field.attname)
+    if related_id is None:
+        return None
+    queryset = field.remote_field.model._base_manager.db_manager(using).all()
+    if select_related:
+        queryset = queryset.select_related(*select_related)
+    if required:
+        return queryset.get(pk=related_id)
+    return queryset.filter(pk=related_id).first()

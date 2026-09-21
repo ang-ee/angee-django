@@ -10,7 +10,7 @@ from typing import Any, ClassVar
 from django.db import models
 from django.utils import timezone
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.integrate.oauth.client import OAuthClientProtocol
 
 
@@ -131,12 +131,7 @@ class OAuthCredentialHandler(CredentialKindHandler):
         """Return whether a refresh-capable provider and a stored refresh token exist."""
 
         using = get_write_alias(type(credential), using=using, instance=credential)
-        oauth_client = (
-            credential._meta.get_field("oauth_client")
-            .remote_field.model._base_manager.db_manager(using)
-            .filter(pk=credential.oauth_client_id)
-            .first()
-        )
+        oauth_client = related_on(credential, "oauth_client", using=using, required=False)
         if oauth_client is None or not getattr(oauth_client, "supports_refresh", False):
             return False
         return bool(self.reveal(credential).get("refresh_token"))
@@ -159,12 +154,7 @@ class OAuthCredentialHandler(CredentialKindHandler):
         credential._state.db = using
         material = self.reveal(credential)
         refresh_value = str(material.get("refresh_token") or "")
-        oauth_client = (
-            credential._meta.get_field("oauth_client")
-            .remote_field.model._base_manager.db_manager(using)
-            .filter(pk=credential.oauth_client_id)
-            .first()
-        )
+        oauth_client = related_on(credential, "oauth_client", using=using, required=False)
         if oauth_client is None or not refresh_value:
             raise ValueError("OAuth credential has no refresh token to renew from.")
         tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
@@ -174,20 +164,11 @@ class OAuthCredentialHandler(CredentialKindHandler):
         renewed_material = dict(tokens)
         renewed_material.setdefault("refresh_token", refresh_value)
         type(credential).objects.db_manager(using).upsert_for_user(
-            credential._meta.get_field("user")
-            .remote_field.model._base_manager.db_manager(using)
-            .get(pk=credential.user_id),
+            related_on(credential, "user", using=using),
             oauth_client,
             self.kind,
             renewed_material,
-            external_account=(
-                credential._meta.get_field("external_account")
-                .remote_field.model._base_manager.db_manager(using)
-                .filter(pk=credential.external_account_id)
-                .first()
-                if credential.external_account_id is not None
-                else None
-            ),
+            external_account=related_on(credential, "external_account", using=using, required=False),
         )
         credential.refresh_from_db(using=using)
 

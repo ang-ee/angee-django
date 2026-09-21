@@ -143,6 +143,10 @@ Use these owners instead of maintaining another contract in an addon:
   reverse related managers, `refresh_from_db`, ContentType lookups, and
   `@transaction.atomic` decorators on instance methods can silently choose the
   default or read alias; bind them explicitly to the operation's write alias.
+  Reload forward FK targets through [`related_on`](../../angee/base/db.py) on
+  the operation's explicit alias (write, or read where the caller derived a read
+  alias), leaving result caching to the caller; its native deferred-FK refresh
+  invalidates the relation cache and repoints `instance._state.db`.
   The invariant is **never silently misroute**: use the native alias-bound form,
   or fail closed at the operation's entry owner for a non-default alias when
   Django or the upstream library cannot honour it; do not rebuild that library.

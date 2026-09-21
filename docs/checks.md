@@ -40,6 +40,11 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python types | `uv run --locked python -m mypy angee addons` |
 | Dead-code review | `uv run --locked python -m vulture` |
 
+[`tests/test_layering.py`](../tests/test_layering.py) also guards bare single-row
+FK reload expressions in production core/addon source; its AST check points to
+`related_on` and documents the excluded scoped, locking, bulk, and historical
+queries that retain their native owners.
+
 PostgreSQL concurrency behavior also needs the database-backed lane in
 [reusable checks](../.github/workflows/reusable-checks.yml). SQLite results do not
 substitute for that coverage; report database-dependent skips explicitly.

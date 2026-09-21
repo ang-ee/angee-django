@@ -30,7 +30,7 @@ from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus, SessionStatus
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.identity import public_subject_ref
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -522,12 +522,7 @@ class InferenceProviderCreateMutation:
             ),
         }
         if data.account is strawberry.UNSET and (credential := attrs.get("credential")) is not None:
-            account_model = credential._meta.get_field("external_account").remote_field.model
-            attrs["account"] = (
-                account_model._base_manager.using(using).get(pk=credential.external_account_id)
-                if credential.external_account_id is not None
-                else None
-            )
+            attrs["account"] = related_on(credential, "external_account", using=using)
         if data.name:
             attrs["name"] = data.name
         if data.base_url:

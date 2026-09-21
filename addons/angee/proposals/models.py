@@ -37,6 +37,7 @@ from rebac.models import active_relationship_model
 from rebac.types import RelationshipFilter, SubjectRef
 
 from angee.base.actors import actor_user_id
+from angee.base.db import get_write_alias, related_on
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
@@ -106,12 +107,6 @@ def _receipt_user_id(fallback: Any | None = None) -> Any | None:
     """Return the ambient actor's attribution user, or one explicit fallback."""
 
     return actor_user_id(current_actor()) or fallback
-
-
-def _user(user_id: Any) -> models.Model:
-    """Resolve one attribution/user id through Django's configured user model."""
-
-    return apps.get_model(settings.AUTH_USER_MODEL)._base_manager.get(pk=user_id)
 
 
 def _relationship(resource: models.Model, relation: str, user: models.Model) -> RelationshipTuple:
@@ -480,8 +475,8 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
 
         if self.pk is None or user.pk is None:
             raise ValidationError("A saved round and user are required.")
+        using = get_write_alias(type(self), instance=self)
         proposal_model = apps.get_model("proposals", "Proposal")
-        project_model = apps.get_model("projects", "Project")
         with transaction.atomic():
             locked = type(self).objects.sudo(reason="proposals.round.transfer").lock_if_supported().get(pk=self.pk)
             proposals = list(
@@ -495,14 +490,14 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
             old_id = locked.facilitator_id
             if old_id == user.pk:
                 return self
-            old_user = _user(old_id)
+            old_user: Any = related_on(locked, "facilitator", using=using)
             locked.facilitator = user
             locked.allow_immutable_save("facilitator_id")
             locked.save(update_fields=("facilitator", "updated_at"))
             for proposal in proposals:
                 if proposal.track_id is None:
                     continue
-                track = project_model._base_manager.get(pk=proposal.track_id)
+                track: Any = related_on(proposal, "track", using=using)
                 if proposal.responder_id != old_id:
                     delete_relationship(_relationship(track, "editor", old_user))
                 write_relationships([_relationship(track, "editor", user)])
@@ -1002,7 +997,8 @@ class ProposalManager(AngeeManager):
 
         if message.sender_id is None:
             return None
-        handle = apps.get_model("parties", "Handle")._base_manager.get(pk=message.sender_id)
+        using = get_write_alias(type(message), instance=message)
+        handle: Any = related_on(message, "sender", using=using)
         if handle.party_id is None:
             apps.get_model("parties", "PartyHandle").objects.suggest_for(handle)
             handle.refresh_from_db(fields=("party",))
@@ -1348,6 +1344,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
 
         if self.pk is None:
             raise ValidationError("A saved proposal is required.")
+        using = get_write_alias(type(self), instance=self)
         actor = current_actor()
         project_model = apps.get_model("projects", "Project")
         with transaction.atomic():
@@ -1365,7 +1362,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 .get()
             )
             if locked.track_id is not None:
-                track = project_model._base_manager.get(pk=locked.track_id)
+                track: Any = related_on(locked, "track", using=using)
             else:
                 track = project_model(
                     title=f"{locked_round.name} — proposal track",
@@ -1375,9 +1372,9 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 bind_actor(track, _TRACK_SYSTEM_ACTOR)
                 with system_context(reason="proposals.proposal.create_track.project"):
                     track.sudo(reason="proposals.proposal.create_track.project").save()
-                users = [_user(locked_round.facilitator_id)]
+                users: list[Any] = [related_on(locked_round, "facilitator", using=using)]
                 if locked.responder_id is not None and locked.responder_id != locked_round.facilitator_id:
-                    users.append(_user(locked.responder_id))
+                    users.append(related_on(locked, "responder", using=using))
                 write_relationships([_relationship(track, "editor", user) for user in users])
                 locked.track = track
                 locked.allow_immutable_save("track_id")
@@ -1488,13 +1485,17 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         # neither edge becomes visible without the other.
         self._mark_submitted(fallback_user_id)
         if self.responder_id is not None:
-            delete_relationship(_relationship(self, "editor", _user(self.responder_id)))
+            using = get_write_alias(type(self), instance=self)
+            responder: Any = related_on(self, "responder", using=using)
+            delete_relationship(_relationship(self, "editor", responder))
 
     def _assert_submitted_postcondition(self) -> None:
         if self.submitted_at is None or self.submitted_by_id is None or self.decided_at is not None:
             raise ValidationError("Submitted proposal receipts do not match the requested postcondition.")
         if self.responder_id is not None:
-            editor = _relationship(self, "editor", _user(self.responder_id))
+            using = get_write_alias(type(self), instance=self)
+            responder: Any = related_on(self, "responder", using=using)
+            editor = _relationship(self, "editor", responder)
             key = _relationship_key(editor)
             rows = active_relationship_model().objects.filter(
                 resource_type=key[0],
@@ -1510,7 +1511,8 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     def _reconcile_shell_access(self) -> None:
         if self.pk is None or self.responder_id is None:
             return
-        responder = _user(self.responder_id)
+        using = get_write_alias(type(self), instance=self)
+        responder: Any = related_on(self, "responder", using=using)
         editor = _relationship(self, "editor", responder)
         if self.state == ProposalState.DRAFT:
             write_relationships([editor])
@@ -1520,8 +1522,8 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     def _publish_track_locked(self, proposals: list[models.Model]) -> models.Model:
         if self.track_id is None:
             raise ValidationError({"track": "Create the proposal track before publishing it."})
-        project_model = apps.get_model("projects", "Project")
-        track = project_model._base_manager.get(pk=self.track_id)
+        using = get_write_alias(type(self), instance=self)
+        track: Any = related_on(self, "track", using=using)
         self._validate_track_task_queues(track)
         recipients = self.round._responder_users(
             proposals,
@@ -1566,9 +1568,18 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     def _allowed_track_queue_ids(self, queue_model: type[models.Model]) -> set[Any]:
         """Return facilitator/responder personal queues allowed while sealed."""
 
+        using = get_write_alias(type(self), instance=self)
+        round_row = self.round
+        sources = {
+            round_row.facilitator_id: (round_row, "facilitator"),
+            self.responder_id: (self, "responder"),
+        }
         allowed_queue_ids: set[Any] = set()
-        for user_id in {self.round.facilitator_id, self.responder_id} - {None}:
-            queue = queue_model.objects.personal_for(_user(user_id), provision=False)
+        for user_id, (source, field_name) in sources.items():
+            if user_id is None:
+                continue
+            user: Any = related_on(source, field_name, using=using)
+            queue = queue_model.objects.personal_for(user, provision=False)
             if queue is not None:
                 allowed_queue_ids.add(queue.pk)
         return allowed_queue_ids

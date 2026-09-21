@@ -41,7 +41,7 @@ from phonenumbers import (
 from rebac import PermissionDenied, actor_context, current_actor
 from rebac.mixins import RebacModelBase
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
@@ -202,6 +202,7 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         party = self
         while party.merged_into_id is not None and party.merged_into_id not in seen:
             seen.add(party.merged_into_id)
+            # Keep inherited calls bound to Person/Organization's concrete table.
             party = type(self)._base_manager.db_manager(using, hints={"instance": party}).get(pk=party.merged_into_id)
         return party
 
@@ -737,8 +738,7 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
     def _resolve_link(self, *, using: str) -> None:
         """Re-materialise :attr:`Handle.party` from this handle's surviving links."""
 
-        handle_model = self._meta.get_field("handle").remote_field.model
-        handle = handle_model._base_manager.using(using).get(pk=self.handle_id)
+        handle = related_on(self, "handle", using=using)
         type(self).objects.db_manager(using).resolve(handle)
 
 
@@ -1332,9 +1332,8 @@ class Relationship(SqidMixin, AuditMixin, AngeeModel):
         update_fields = kwargs.get("update_fields")
         end_fields = {"party", "party_id", "other_party", "other_party_id", "kind", "kind_id"}
         if self.kind_id is not None and (update_fields is None or end_fields.intersection(update_fields)):
-            kind_model = self._meta.get_field("kind").remote_field.model
             party_model = self._meta.get_field("party").remote_field.model
-            kind = kind_model._base_manager.using(alias).get(pk=self.kind_id)
+            kind: Any = related_on(self, "kind", using=alias)
             ends = party_model._base_manager.using(alias).in_bulk([self.party_id, self.other_party_id])
             kind.validate_ends(ends.get(self.party_id), ends.get(self.other_party_id), using=alias)
         super().save(*args, **kwargs)

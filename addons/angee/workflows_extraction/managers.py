@@ -12,7 +12,7 @@ from jsonschema import Draft202012Validator
 from rebac import system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import record_ref_for
@@ -915,10 +915,7 @@ class ExtractionManager(EvidenceManager):
                             lineage = lineage_model(key=values["lineage_key"])
                             lineage.allocate(using=alias)
                         lineage = lineage_model._base_manager.using(alias).lock_if_supported().get(pk=lineage.pk)
-                        previous = (
-                            self.model._base_manager.using(alias).get(pk=lineage.head_id)
-                            if lineage.head_id is not None else None
-                        )
+                        previous: Any = related_on(lineage, "head", using=alias)
                         existing = self.db_manager(alias).filter(reuse_key=values["reuse_key"]).first()
                         unresolved_failure = (
                             values.get("status") == "failed"

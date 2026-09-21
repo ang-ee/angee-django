@@ -36,7 +36,7 @@ from django.dispatch import receiver
 from django.utils import timezone
 from rebac import resolve_subjects, system_context
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref
 from angee.base.impl import ImplClassField, ImplDefaultsMixin, resolve_all_impl_classes
@@ -174,8 +174,7 @@ def _workflow_child_create(instance: Any, *, using: str) -> Iterator[None]:
         return
     assert actor is not None
     with DefinitionQuerySet.caller_context(instance):
-        workflow_model = instance._meta.get_field("workflow").remote_field.model
-        workflow = workflow_model._base_manager.using(using).get(pk=instance.workflow_id)
+        workflow = related_on(instance, "workflow", using=using)
         verified_actor = type(instance)._default_manager.db_manager(using).check_create(
             {"workflow": (workflow,)}
         )
@@ -370,15 +369,15 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         self.key = (self.key or "").lower()
         routed = self._state.db not in (None, DEFAULT_DB_ALIAS)
         if self.published_from_id is not None:
-            lineage = (
-                type(self)._base_manager.using(self._state.db).get(pk=self.published_from_id)
+            lineage: Any = (
+                related_on(self, "published_from", using=cast(str, self._state.db))
                 if routed else self.published_from
             )
             if self.key != lineage.key:
                 raise ValidationError({"key": "Published workflow versions must share their lineage stable key."})
         if self.error_workflow_id is not None:
-            error_workflow = (
-                type(self)._base_manager.using(self._state.db).get(pk=self.error_workflow_id)
+            error_workflow: Any = (
+                related_on(self, "error_workflow", using=cast(str, self._state.db))
                 if routed else self.error_workflow
             )
             if error_workflow.published_from_id is not None:
@@ -1181,11 +1180,10 @@ class Trigger(AuditMixin, AngeeDataModel):
         """Validate lineage ownership and trigger declaration shape."""
 
         super().clean()
-        workflow = None
+        workflow: Any = None
         if self.workflow_id is not None:
-            workflow_model = self._meta.get_field("workflow").remote_field.model
             workflow = (
-                workflow_model._base_manager.using(self._state.db).get(pk=self.workflow_id)
+                related_on(self, "workflow", using=cast(str, self._state.db))
                 if self._state.db not in (None, DEFAULT_DB_ALIAS) else self.workflow
             )
         if workflow is not None and workflow.published_from_id is not None:
@@ -2009,10 +2007,8 @@ class WorkflowTestFixture(AuditMixin, AngeeDataModel):
         super().clean()
         if self.run_id is not None and self.step_id is not None:
             if self._state.db not in (None, DEFAULT_DB_ALIAS):
-                run_model = self._meta.get_field("run").remote_field.model
-                step_model = self._meta.get_field("step").remote_field.model
-                run = run_model._base_manager.using(self._state.db).get(pk=self.run_id)
-                step = step_model._base_manager.using(self._state.db).get(pk=self.step_id)
+                run: Any = related_on(self, "run", using=cast(str, self._state.db))
+                step: Any = related_on(self, "step", using=cast(str, self._state.db))
             else:
                 run, step = self.run, self.step
             if run.origin != RunOrigin.TEST or step.workflow_id != run.workflow_id:

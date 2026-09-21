@@ -18,7 +18,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.impl import ImplBase
 from angee.integrate.connect import enabled_oauth_client_from_hint
 
@@ -102,8 +102,7 @@ class InferenceBackend(ImplBase):
         """
 
         using = get_write_alias(type(self.provider), using=using, instance=self.provider)
-        vendor_model = self.provider._meta.get_field("vendor").remote_field.model
-        vendor = vendor_model._base_manager.using(using).filter(pk=self.provider.vendor_id).first()
+        vendor = related_on(self.provider, "vendor", using=using, required=False)
         vendor_slug = str(getattr(vendor, "slug", "") or "")
         return enabled_oauth_client_from_hint(
             self.oauth_client,

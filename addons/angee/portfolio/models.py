@@ -27,6 +27,7 @@ from rebac import (
     write_relationships,
 )
 
+from angee.base.db import get_write_alias, related_on
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, HierarchyMixin
 from angee.base.models import (
@@ -371,9 +372,9 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
 
         if self.initiative_id is None or self.project_id is None:
             return
+        using = get_write_alias(type(self), instance=self)
         with system_context(reason="portfolio.initiative_project.validate_ancestry"):
-            initiative_model = self._meta.get_field("initiative").related_model
-            initiative = initiative_model.objects.filter(pk=self.initiative_id).first()
+            initiative: Any = related_on(self, "initiative", using=using, required=False)
             if initiative is None:
                 return
             placements = type(self).objects.filter(project_id=self.project_id).exclude(pk=self.pk)

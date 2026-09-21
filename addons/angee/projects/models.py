@@ -23,6 +23,7 @@ from rebac import (
     write_relationships,
 )
 
+from angee.base.db import get_write_alias, related_on
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
@@ -367,11 +368,14 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Require target authority before a folder edit can widen project access."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         update_fields = kwargs.get("update_fields")
         folder_is_written = update_fields is None or bool({"folder", "folder_id"}.intersection(update_fields))
+        previous: Any = None
         previous_folder_id = None
         if not self._state.adding and folder_is_written:
-            previous_folder_id = type(self)._base_manager.filter(pk=self.pk).values_list("folder_id", flat=True).first()
+            previous = type(self)._base_manager.db_manager(using).filter(pk=self.pk).only("folder").first()
+            previous_folder_id = previous.folder_id if previous is not None else None
             self._projects_previous_folder_id = previous_folder_id
         else:
             self.__dict__.pop("_projects_previous_folder_id", None)
@@ -382,9 +386,8 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
             if self._state.adding and self.folder_id is not None:
                 require_target_binding_access(self.folder)
             elif not self._state.adding:
-                folder_model = apps.get_model("storage", "Folder")
                 if previous_folder_id is not None:
-                    previous_folder = folder_model._base_manager.get(pk=previous_folder_id)
+                    previous_folder: Any = related_on(previous, "folder", using=using)
                     require_binding_access(project=self, target=previous_folder)
                 if self.folder_id is not None:
                     require_binding_access(project=self, target=self.folder)

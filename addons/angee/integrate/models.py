@@ -48,7 +48,7 @@ from rebac.mixins import RebacModelBase
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.fields import EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
@@ -1008,12 +1008,7 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
-        oauth_client = (
-            self._meta.get_field("oauth_client")
-            .remote_field.model._base_manager.db_manager(using)
-            .filter(pk=self.oauth_client_id)
-            .first()
-        )
+        oauth_client = related_on(self, "oauth_client", using=using, required=False)
         if oauth_client is None or not getattr(oauth_client, "revoke_endpoint", ""):
             return
         token = str(self.reveal().get("access_token") or "")
@@ -1839,11 +1834,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         self._state.db = using
 
         resolved_account = (
-            type(credential)
-            ._meta.get_field("external_account")
-            .remote_field.model._base_manager.db_manager(using)
-            .filter(pk=credential.external_account_id)
-            .first()
+            related_on(credential, "external_account", using=using, required=False)
             if account is _UNSET
             else account
         )

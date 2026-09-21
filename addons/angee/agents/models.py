@@ -42,7 +42,7 @@ from angee.agents.backends import InferenceBackend
 from angee.agents.deployments import InferenceDeploymentIdentity
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
@@ -381,8 +381,7 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         """Bind this catalogue model's native adapter and own its client lifetime."""
 
         using = get_write_alias(type(self), using=using, instance=self)
-        provider_model = self._meta.get_field("provider").remote_field.model
-        provider = provider_model._base_manager.using(using).get(pk=self.provider_id)
+        provider: Any = related_on(self, "provider", using=using)
         backend = provider.backend
         backend.using = using
         return backend.model(self.provider_model_name, credential=credential)
@@ -413,8 +412,7 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         """Make one native request using this catalogue model's provider handle."""
 
         using = get_write_alias(type(self), using=using, instance=self)
-        provider_model = self._meta.get_field("provider").remote_field.model
-        provider = provider_model._base_manager.using(using).get(pk=self.provider_id)
+        provider: Any = related_on(self, "provider", using=using)
         return provider.chat(
             model=self.provider_model_name,
             messages=messages,
@@ -465,11 +463,8 @@ class SkillManager(AngeeManager):
         """Walk the source for ``SKILL.md`` and upsert/prune :class:`Skill` rows."""
 
         using = get_write_alias(self.model, using=using, bound=self, instance=source)
-        repository_model = source._meta.get_field("repository").remote_field.model
-        repository = (
-            repository_model._base_manager.using(using)
-            .select_related("vcs_bridge__credential__oauth_client")
-            .get(pk=source.repository_id)
+        repository: Any = related_on(
+            source, "repository", using=using, select_related=("vcs_bridge__credential__oauth_client",)
         )
         source._meta.get_field("repository").set_cached_value(source, repository)
         vcs_bridge = repository.vcs_bridge
@@ -742,7 +737,7 @@ class AgentManager(AngeeManager):
         }
         with system_context(reason="agents.service_user.sync"), transaction.atomic(using=using):
             if agent.user_id:
-                user = user_model._base_manager.db_manager(using).get(pk=agent.user_id)
+                user: Any = related_on(agent, "user", using=using)
                 changed: set[str] = set()
                 for field, value in {"username": username, **defaults}.items():
                     if getattr(user, field) != value:
@@ -925,7 +920,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         using = get_write_alias(type(self), using=using, instance=self)
         if self.user_id is None:
             raise ValueError("Agent has no service user and cannot act.")
-        user = get_user_model()._base_manager.using(using).get(pk=self.user_id)
+        user: Any = related_on(self, "user", using=using)
         return to_subject_ref(user)
 
     @property
@@ -1142,12 +1137,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         self._state.db = using
         structured: dict[str, str] = {}
         runtime = self.runtime_backend
-        model_class = self._meta.get_field("model").remote_field.model
-        model = (
-            model_class._base_manager.using(using).select_related("provider").get(pk=self.model_id)
-            if self.model_id is not None
-            else None
-        )
+        model: Any = related_on(self, "model", using=using, select_related=("provider",))
         if model is not None:
             structured["model"] = runtime.model_handle(model)
         # Advertise auth only when the runtime renders a service and there is a usable secret
@@ -1334,8 +1324,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         credential = self.inference_credential_for_runtime()
         runtime = self.runtime_backend
         if credential is None:
-            model_class = self._meta.get_field("model").remote_field.model
-            model = model_class._base_manager.using(using).select_related("provider").get(pk=self.model_id)
+            model: Any = related_on(self, "model", using=using, select_related=("provider",))
             return not model.provider.backend.requires_credential and not runtime.renders_service
         if not self.inference_secret():
             return False
@@ -1348,8 +1337,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         self._state.db = using
         if self.model_id is None:
             raise ValueError("An in-process agent requires an inference model.")
-        model_class = self._meta.get_field("model").remote_field.model
-        model = model_class._base_manager.using(using).get(pk=self.model_id)
+        model: Any = related_on(self, "model", using=using)
         return model.bind(credential=self.inference_credential_for_runtime())
 
     def inference_credential_for_runtime(self, *, using: str | None = None) -> Any:
@@ -1363,20 +1351,10 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         using = get_write_alias(type(self), using=using, instance=self)
         if self.inference_credential_id is not None:
-            credential_model = self._meta.get_field("inference_credential").remote_field.model
-            return (
-                credential_model._base_manager.using(using)
-                .select_related("oauth_client")
-                .get(pk=self.inference_credential_id)
-            )
+            return related_on(self, "inference_credential", using=using, select_related=("oauth_client",))
         if self.model_id is None:
             return None
-        model_class = self._meta.get_field("model").remote_field.model
-        model = (
-            model_class._base_manager.using(using)
-            .select_related("provider__credential__oauth_client")
-            .get(pk=self.model_id)
-        )
+        model: Any = related_on(self, "model", using=using, select_related=("provider__credential__oauth_client",))
         return model.credential
 
 

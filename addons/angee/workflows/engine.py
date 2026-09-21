@@ -30,7 +30,7 @@ from rebac import PermissionDenied, SubjectRef, current_actor, system_context
 from rebac.actors import to_subject_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.identity import canonical_subject_ref
 from angee.base.refs import CanonicalRecordTarget, canonical_record_target
 from angee.workflows.attempts import (
@@ -213,11 +213,7 @@ def subscribe_external(step_run: Any, resources: Iterable[Any], *, using: str | 
 
     alias = get_write_alias(apps.get_model("workflows", "StepAttempt"), using=using, instance=step_run)
 
-    attempt = (
-        apps.get_model("workflows", "StepAttempt")._base_manager.db_manager(alias).get(pk=step_run.current_attempt_id)
-        if step_run.current_attempt_id is not None
-        else None
-    )
+    attempt: Any = related_on(step_run, "current_attempt", using=alias)
     lease_token = attempt.lease_token if attempt is not None else None
     if step_run.current_attempt_id is None or not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("External subscription requires a retained invocation lease.")
@@ -439,6 +435,9 @@ def schedule_run_cancel(step_run: Any, run: Any, *, actor: Any, using: str | Non
     """Retain one cross-run cancellation from this fenced database command."""
 
     alias = get_write_alias(apps.get_model("workflows", "WorkflowDispatch"), using=using, instance=step_run)
+    attempt: Any = related_on(step_run, "current_attempt", using=alias)
+    if attempt is None:
+        raise apps.get_model("workflows", "StepAttempt").DoesNotExist("StepRun has no current attempt.")
 
     return (
         apps.get_model("workflows", "WorkflowDispatch")
@@ -447,10 +446,7 @@ def schedule_run_cancel(step_run: Any, run: Any, *, actor: Any, using: str | Non
             step_run.pk,
             run,
             actor=actor,
-            lease_token=apps.get_model("workflows", "StepAttempt")
-            ._base_manager.db_manager(alias)
-            .get(pk=step_run.current_attempt_id)
-            .lease_token,
+            lease_token=attempt.lease_token,
         )
     )
 
@@ -544,13 +540,11 @@ def external_operation_request(step_run: Any, *, using: str | None = None) -> Ex
 
     alias = get_write_alias(apps.get_model("workflows", "StepAttempt"), using=using, instance=step_run)
 
-    attempt = (
-        apps.get_model("workflows", "StepAttempt")
-        ._base_manager.db_manager(alias)
-        .select_related("recovery_source_attempt", "step_run__run")
-        .get(pk=step_run.current_attempt_id)
-        if step_run.current_attempt_id is not None
-        else None
+    attempt: Any = related_on(
+        step_run,
+        "current_attempt",
+        using=alias,
+        select_related=("recovery_source_attempt", "step_run__run"),
     )
     if attempt is None or attempt.started_at is None:
         raise RuntimeError("External operations require a started retained attempt.")
@@ -689,12 +683,7 @@ def execute_dispatch(
             )
             dispatch_model.objects.db_manager(alias).schedule_decision(kind, decision)
         if finalization.recorded and finalization.applied and finalization.retry_intent is None:
-            projected = (
-                apps.get_model("workflows", "StepRun")
-                .objects.db_manager(alias)
-                .select_related("run")
-                .get(pk=attempt.step_run_id)
-            )
+            projected: Any = related_on(attempt, "step_run", using=alias, select_related=("run",))
             dispatch_model.objects.db_manager(alias).schedule_advance(projected.run, available_at=timezone.now())
             if projected.status == StepRunStatus.WAITING and projected.wait_until is not None:
                 dispatch_model.objects.db_manager(alias).schedule_advance(
@@ -1285,7 +1274,11 @@ def _complete_retained_map_step_if_ready(
     expansion_id = expansion_attempt_id or step_run.current_attempt_id
     if expansion_id is None:
         raise ValidationError({"attempt": "Retained Map controller has no current expansion."})
-    expansion = apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).get(pk=expansion_id)
+    expansion: Any = (
+        apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).get(pk=expansion_attempt_id)
+        if expansion_attempt_id
+        else related_on(step_run, "current_attempt", using=alias)
+    )
     checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
     map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
     if isinstance(map_state, dict):
@@ -1639,12 +1632,7 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
         )
 
     if step_run.status == StepRunStatus.WAITING and step_run.current_attempt_id is not None:
-        previous = (
-            apps.get_model("workflows", "StepAttempt")
-            .objects.db_manager(alias)
-            .select_related("test_fixture")
-            .get(pk=step_run.current_attempt_id)
-        )
+        previous: Any = related_on(step_run, "current_attempt", using=alias, select_related=("test_fixture",))
         map_item = (
             MapItemSource(
                 previous.map_expansion_id,

@@ -8,6 +8,7 @@ from django.apps import apps
 from django.db.models.signals import class_prepared, post_delete, post_save, pre_save
 from rebac import to_object_ref
 
+from angee.base.db import related_on
 from angee.base.refs import CanonicalRecordTarget, canonical_record_target
 from angee.projects.access import reconcile_on_commit
 from angee.projects.models import Project, ProjectBinding
@@ -94,7 +95,7 @@ def _reconcile_project_folder(
                 using=using,
             )
     if instance.folder_id is not None:
-        folder = folder_model._base_manager.using(using).get(pk=instance.folder_id)
+        folder: Any = related_on(instance, "folder", using=using)
         reconcile_on_commit(
             project_pk=instance.pk,
             project_ref=project_ref,

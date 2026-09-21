@@ -10,6 +10,7 @@ from django.utils.module_loading import import_string
 from pydantic_ai.models import Model
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
+from angee.base.db import related_on
 from angee.integrate.credentials import CredentialKind
 
 
@@ -90,12 +91,7 @@ class SDKInferenceBackend(InferenceBackend):
             if self.using is None:
                 credential = getattr(self.provider, "credential", None)
             elif self.provider.credential_id is not None:
-                credential_model = self.provider._meta.get_field("credential").remote_field.model
-                credential = (
-                    credential_model._base_manager.using(self.using)
-                    .select_related("oauth_client")
-                    .get(pk=self.provider.credential_id)
-                )
+                credential = related_on(self.provider, "credential", using=self.using, select_related=("oauth_client",))
         if credential is None:
             if not self.requires_credential:
                 return {"api_key": "not-required"}

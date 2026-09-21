@@ -15,6 +15,7 @@ bookkeeping that must land even when the triggering write ran under a bare actor
 from __future__ import annotations
 
 import logging
+from copy import copy
 from typing import Any
 
 from django.apps import apps
@@ -22,6 +23,7 @@ from django.db import transaction
 from django.db.models.signals import class_prepared, post_delete
 from rebac import system_context
 
+from angee.base.db import related_on
 from angee.parties.models import Handle, PartyHandle
 
 _DISPATCH_PREFIX = "parties.counters"
@@ -61,13 +63,14 @@ def _resolve_from_link(sender: Any, instance: Any, *, using: str, **kwargs: Any)
     """Re-resolve a handle's owner after one of its links was saved or deleted."""
 
     del kwargs
-    handle_model = sender._meta.get_field("handle").remote_field.model
     handle_id = instance.handle_id
+    # A caller may mutate the deleted instance before this transaction commits.
+    snapshot = copy(instance)
 
     def repair() -> None:
         try:
             with system_context(reason="parties.counters.resolve"):
-                handle = handle_model._base_manager.using(using).filter(pk=handle_id).first()
+                handle = related_on(snapshot, "handle", using=using, required=False)
                 if handle is None:
                     return
                 sender.objects.db_manager(using).resolve(handle)
@@ -84,13 +87,13 @@ def _recount_handle_party(sender: Any, instance: Any, *, using: str, **kwargs: A
     if instance.party_id is None:
         return
     party_handle_model = apps.get_model("parties", "PartyHandle")
-    party_model = apps.get_model("parties", "Party")
     party_id = instance.party_id
+    snapshot = copy(instance)
 
     def repair() -> None:
         try:
             with system_context(reason="parties.counters.recount"):
-                party = party_model._base_manager.using(using).filter(pk=party_id).first()
+                party = related_on(snapshot, "party", using=using, required=False)
                 if party is None:
                     return
                 party_handle_model.objects.db_manager(using).recount(party)

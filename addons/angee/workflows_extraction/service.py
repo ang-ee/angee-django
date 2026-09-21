@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -18,7 +18,7 @@ from rebac import current_actor, system_context
 
 from angee.agents.deployments import validate_approved_deployment
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.impl import resolve_impl_class
 from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset
@@ -175,10 +175,10 @@ def prepare_pages(
     for page in acquired.pages:
         source = sources[page.source_position]
         drive_id = (
-            str(source.file._meta.get_field("drive").remote_field.model._base_manager.using(alias).get(pk=source.file.drive_id).sqid)
+            str(cast(Any, related_on(source.file, "drive", using=alias)).sqid)
             if source.file is not None
             else (
-                str(authorized_target._meta.get_field("drive").remote_field.model._base_manager.using(alias).get(pk=authorized_target.drive_id).sqid)
+                str(cast(Any, related_on(authorized_target, "drive", using=alias)).sqid)
                 if authorized_target._meta.label_lower == "storage.file"
                 else (str(authorized_target.sqid) if authorized_target._meta.label_lower == "storage.drive" else "")
             )
@@ -1844,8 +1844,7 @@ def _lineage_key(*, source_facts: Sequence[Mapping[str, Any]], target_ref: Recor
 def _model_fingerprint(model: Any | None, *, using: str) -> dict[str, Any] | None:
     if model is None:
         return None
-    provider_model = model._meta.get_field("provider").remote_field.model
-    provider = provider_model._base_manager.using(using).get(pk=model.provider_id)
+    provider: Any = related_on(model, "provider", using=using)
     return {
         "id": str(model.sqid),
         "name": str(model.name),

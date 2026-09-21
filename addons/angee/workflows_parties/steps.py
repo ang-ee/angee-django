@@ -21,7 +21,7 @@ from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, RootModel
 from rebac import system_context
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.identity import canonical_subject_ref
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import (
@@ -140,9 +140,10 @@ class DedupeScanStepImpl(StepImpl):
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Emit the proposed pair rows, routing ``found`` or ``empty``."""
         alias = get_write_alias(type(step_run), instance=step_run)
-        step_run.step = (
-            step_run._meta.get_field("step").remote_field.model._base_manager.using(alias).get(pk=step_run.step_id)
-        )
+        step = related_on(step_run, "step", using=alias)
+        if step is None:
+            raise apps.get_model("workflows", "Step").DoesNotExist("StepRun has no step.")
+        step_run.step = step
 
         del now
         limit = positive_int(step_run.step.config.get("limit", 50), "Dedupe scan limit")
@@ -262,9 +263,10 @@ class DedupeExecuteStepImpl(DecisionApplyStep):
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Prepare the confirmed verb list or apply one pair verb."""
         alias = get_write_alias(type(step_run), instance=step_run)
-        step_run.step = (
-            step_run._meta.get_field("step").remote_field.model._base_manager.using(alias).get(pk=step_run.step_id)
-        )
+        step = related_on(step_run, "step", using=alias)
+        if step is None:
+            raise apps.get_model("workflows", "Step").DoesNotExist("StepRun has no step.")
+        step_run.step = step
 
         mode = str(step_run.step.config.get("mode") or "")
         if mode == "prepare":
@@ -315,10 +317,11 @@ class IdentityReviewStepImpl(GateStep):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         alias = get_write_alias(type(step_run), instance=step_run)
-        step_run.step = (
-            step_run._meta.get_field("step").remote_field.model._base_manager.using(alias).get(pk=step_run.step_id)
-        )
-        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(alias).get(pk=step_run.run_id)
+        step = related_on(step_run, "step", using=alias)
+        if step is None:
+            raise apps.get_model("workflows", "Step").DoesNotExist("StepRun has no step.")
+        step_run.step = step
+        run: Any = related_on(step_run, "run", using=alias)
         del now
         proposal = _identity_input(step_run.input)
         from angee.workflows import engine  # Runtime edge after operation registry loading.
@@ -424,7 +427,7 @@ class IdentityApplyStepImpl(DecisionApplyStep):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         alias = get_write_alias(type(step_run), instance=step_run)
-        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(alias).get(pk=step_run.run_id)
+        run: Any = related_on(step_run, "run", using=alias)
         value = _identity_apply_input(step_run.input)
         passthrough = _unchanged_identity_input(value)
         if passthrough is not None:

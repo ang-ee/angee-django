@@ -1,14 +1,15 @@
-"""Write-alias precedence uses Django bindings without consulting read routing."""
+"""Write-alias selection and FK reloads never consult read routing."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, nullcontext
 
 import pytest
-from django.db import DEFAULT_DB_ALIAS, models, router
-from django.test.utils import isolate_apps
+from django.db import DEFAULT_DB_ALIAS, connection, connections, models, router
+from django.test.utils import CaptureQueriesContext, isolate_apps
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 
 
 @pytest.fixture
@@ -143,3 +144,173 @@ def test_unrouted_model_keeps_django_default(write_model: type[models.Model], mo
     monkeypatch.setattr(router, "routers", [])
 
     assert get_write_alias(write_model) == DEFAULT_DB_ALIAS
+
+
+@pytest.fixture
+def related_base_manager() -> str | None:
+    """Use Django's implicit base manager unless a test names the scoped one."""
+
+    return None
+
+
+@pytest.fixture(params=[DEFAULT_DB_ALIAS, "related_writer"])
+def related_models(
+    request: pytest.FixtureRequest,
+    database_alias: Callable[[str], AbstractContextManager[str]],
+    related_base_manager: str | None,
+) -> Iterator[tuple[type[models.Model], type[models.Model], str]]:
+    """Provide native FK tables on default and explicitly bound writer aliases."""
+
+    with isolate_apps():
+
+        class VisibleManager(models.Manager):
+            def get_queryset(self) -> models.QuerySet:
+                return super().get_queryset().exclude(label="hidden")
+
+        class RelatedTarget(models.Model):
+            label = models.CharField(max_length=20)
+            parent = models.ForeignKey("self", null=True, on_delete=models.CASCADE)
+            objects = VisibleManager()
+            all_objects = models.Manager()
+
+            class Meta:
+                app_label = "tests"
+                base_manager_name = related_base_manager
+
+        class RelatedRecord(models.Model):
+            target = models.ForeignKey(RelatedTarget, null=True, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = "tests"
+
+        with connection.schema_editor() as editor:
+            editor.create_model(RelatedTarget)
+            editor.create_model(RelatedRecord)
+        try:
+            alias_context = (
+                nullcontext(DEFAULT_DB_ALIAS)
+                if request.param == DEFAULT_DB_ALIAS
+                else database_alias(request.param)
+            )
+            with alias_context as using:
+                yield RelatedTarget, RelatedRecord, using
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(RelatedRecord)
+                editor.delete_model(RelatedTarget)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("required", [True, False])
+def test_related_on_binds_base_manager_and_eager_joins_without_replacing_cache(
+    related_models: tuple[type[models.Model], type[models.Model], str],
+    write_router: WriteRouter,
+    required: bool,
+) -> None:
+    """Conflicting affinity/cache and a filtered default manager cannot reroute a reload."""
+
+    target_model, record_model, using = related_models
+    parent = target_model._base_manager.db_manager(using).create(label="parent")
+    target = target_model._base_manager.db_manager(using).create(label="hidden", parent_id=parent.pk)
+    assert not target_model._default_manager.db_manager(using).filter(pk=target.pk).exists()
+    instance = record_model(target_id=target.pk)
+    instance._state.db = "conflicting_affinity"
+    field = instance._meta.get_field("target")
+    stale = target_model(pk=target.pk, label="stale")
+    field.set_cached_value(instance, stale)
+
+    with CaptureQueriesContext(connections[using]) as queries:
+        result = related_on(instance, "target", using=using, required=required, select_related=("parent",))
+        assert result is not None
+        assert result.label == "hidden"
+        assert result.parent.pk == parent.pk
+        assert result.parent._state.db == using
+    assert len(queries) == 1
+    assert result._state.db == using
+    assert instance._state.db == "conflicting_affinity"
+    assert field.get_cached_value(instance) is stale
+    assert write_router.calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("related_base_manager", ["objects"])
+def test_related_on_respects_a_declared_scoped_base_manager(
+    related_models: tuple[type[models.Model], type[models.Model], str], write_router: WriteRouter
+) -> None:
+    """A base_manager_name='objects' policy remains authoritative on both aliases."""
+
+    target_model, record_model, using = related_models
+    target = target_model.all_objects.db_manager(using).create(label="hidden")
+    assert target_model._meta.base_manager_name == "objects"
+    instance = record_model(target_id=target.pk)
+    instance._state.db = "conflicting_affinity"
+    with pytest.raises(target_model.DoesNotExist):
+        related_on(instance, "target", using=using)
+    assert related_on(instance, "target", using=using, required=False) is None
+    assert not instance._meta.get_field("target").is_cached(instance)
+    assert write_router.calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("required", [True, False])
+def test_related_on_null_fk_does_not_query(
+    related_models: tuple[type[models.Model], type[models.Model], str],
+    write_router: WriteRouter,
+    required: bool,
+) -> None:
+    """Nullability is independent of whether a non-null target must exist."""
+
+    _, record_model, using = related_models
+    instance = record_model(target_id=None)
+    with CaptureQueriesContext(connections[using]) as queries:
+        assert related_on(instance, "target", using=using, required=required) is None
+    assert len(queries) == 0
+    assert not instance._meta.get_field("target").is_cached(instance)
+    assert write_router.calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_related_on_missing_target_preserves_native_required_policy(
+    related_models: tuple[type[models.Model], type[models.Model], str], write_router: WriteRouter
+) -> None:
+    """Missing rows use native DoesNotExist or optional None without read routing."""
+
+    target_model, record_model, using = related_models
+    instance = record_model(target_id=-1)
+    with pytest.raises(target_model.DoesNotExist):
+        related_on(instance, "target", using=using)
+    assert related_on(instance, "target", using=using, required=False) is None
+    assert not instance._meta.get_field("target").is_cached(instance)
+    assert write_router.calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_related_on_refreshes_deferred_fk_id_on_the_selected_alias(
+    related_models: tuple[type[models.Model], type[models.Model], str], write_router: WriteRouter
+) -> None:
+    """Fetching a deferred attname must not invoke its read-routed descriptor."""
+
+    target_model, record_model, using = related_models
+    target = target_model._base_manager.db_manager(using).create(label="target")
+    record = record_model._base_manager.db_manager(using).create(target_id=target.pk)
+    instance = record_model._base_manager.db_manager(using).only("pk").get(pk=record.pk)
+    instance._state.db = "conflicting_affinity"
+    field = instance._meta.get_field("target")
+    field.set_cached_value(instance, target_model(pk=target.pk, label="stale"))
+    with CaptureQueriesContext(connections[using]) as queries:
+        result = related_on(instance, "target", using=using)
+    assert len(queries) == 2
+    assert result is not None
+    assert result.pk == target.pk
+    assert result._state.db == using
+    assert instance._state.db == using
+    assert not field.is_cached(instance)
+    assert write_router.calls == []
+
+
+def test_related_on_rejects_non_fk_fields(write_model: type[models.Model], write_router: WriteRouter) -> None:
+    """Fail at the metadata boundary when the caller names a scalar field."""
+
+    with pytest.raises(TypeError, match="not a forward foreign key"):
+        related_on(write_model(), "id", using="writer")
+    assert write_router.calls == []

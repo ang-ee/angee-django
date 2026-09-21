@@ -39,7 +39,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import close_old_connections, connections, models, transaction
+from django.db import close_old_connections, connections, models, router, transaction
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.utils.text import capfirst
@@ -52,7 +52,7 @@ from rebac import (
 )
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
@@ -2320,7 +2320,10 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         field = self._meta.get_field("thread")
         thread = field.get_cached_value(self, default=None)
         if thread is None:
-            thread = field.related_model._base_manager.db_manager(self._state.db).get(pk=self.thread_id)
+            using = self._state.db
+            if using is None:
+                using = router.db_for_read(field.related_model)
+            thread = related_on(self, "thread", using=using)
         return not thread.is_record_attached(using=self._state.db)
 
 

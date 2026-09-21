@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from rebac import actor_context
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.impl import resolve_impl_class
 from angee.base.refs import canonical_record_target
 from angee.base.serialization import canonical_json_sha256
@@ -114,7 +114,7 @@ class PreparePagesStepImpl(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         alias = get_write_alias(type(step_run), instance=step_run)
-        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(alias).get(pk=step_run.run_id)
+        run: Any = related_on(step_run, "run", using=alias)
         del now
         value = self.validate_input(step_run.input)
         options = value.engine_config
@@ -228,7 +228,7 @@ class RecognizePageStepImpl(StepImpl):
         return self._recognize(step_run, using=alias)
 
     def _recognize(self, step_run: Any, *, using: str) -> StepResult:
-        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(using).get(pk=step_run.run_id)
+        run: Any = related_on(step_run, "run", using=using)
         request = external_operation_request(step_run, using=using)
         value = self.validate_input(request.input)
         if value.config_digest != canonical_json_sha256(value.engine_config):
@@ -319,7 +319,7 @@ class CollectCarriersStepImpl(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         alias = get_write_alias(type(step_run), instance=step_run)
-        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(alias).get(pk=step_run.run_id)
+        run: Any = related_on(step_run, "run", using=alias)
         del now
         value = self.validate_input(step_run.input)
         options = value.engine_config
@@ -385,7 +385,7 @@ class ProcessEvidenceStepImpl(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         alias = get_write_alias(type(step_run), instance=step_run)
-        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(alias).get(pk=step_run.run_id)
+        run: Any = related_on(step_run, "run", using=alias)
         del now
         value = self.validate_input(step_run.input)
         actor = run.admission_actor()
@@ -497,7 +497,7 @@ class InferEvidenceStepImpl(StepImpl):
         return self._infer(step_run, using=alias)
 
     def _infer(self, step_run: Any, *, using: str) -> StepResult:
-        run = step_run._meta.get_field("run").remote_field.model._base_manager.using(using).get(pk=step_run.run_id)
+        run: Any = related_on(step_run, "run", using=using)
         request = external_operation_request(step_run, using=using)
         value = self.validate_input(request.input)
         actor = run.admission_actor()

@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Literal
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.impl import ImplBase
 from angee.integrate.connect import enabled_oauth_client_from_hint
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
@@ -41,12 +41,7 @@ class IntegrationImpl(ImplBase):
 
         using = get_write_alias(type(self.integration), using=using, instance=self.integration)
         self.integration._state.db = using
-        vendor = (
-            self.integration._meta.get_field("vendor")
-            .remote_field.model._base_manager.db_manager(using)
-            .filter(pk=self.integration.vendor_id)
-            .first()
-        )
+        vendor = related_on(self.integration, "vendor", using=using, required=False)
         vendor_slug = str(getattr(vendor, "slug", "") or "")
         hint = str(self.oauth_client or "")
         return enabled_oauth_client_from_hint(

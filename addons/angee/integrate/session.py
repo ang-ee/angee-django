@@ -23,7 +23,7 @@ from typing import Any, Literal, NoReturn, overload
 import qrcode
 from django.utils import timezone
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.integrate.live import (
     AWAITING_PASSWORD_WAKE_SECONDS,
     STOP_JOIN_SECONDS,
@@ -418,16 +418,10 @@ class LiveSession:
         return True
 
     def _fresh_credential(self) -> Any | None:
-        """Reload and return the bridge credential, replacing Django's FK cache."""
+        """Refresh the bridge credential FK, clear its cache, and return the related row."""
 
         self.bridge.refresh_from_db(using=self.using, fields=["credential"])
-        return (
-            type(self.bridge)
-            ._meta.get_field("credential")
-            .remote_field.model._base_manager.db_manager(self.using)
-            .filter(pk=self.bridge.credential_id)
-            .first()
-        )
+        return related_on(self.bridge, "credential", using=self.using, required=False)
 
     def _terminal_password_failure(self, error: Exception) -> bool:
         """Report a safe runtime failure and end this session without raising."""

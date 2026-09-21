@@ -13,7 +13,7 @@ from django.apps import apps
 from django.conf import settings
 from django.utils.html import strip_tags
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.messaging.backends import ChannelBackend, ParsedMessage
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         sender_field = message._meta.get_field("sender")
         sender = sender_field.get_cached_value(message, default=None)
         if message.sender_id is not None and (sender is None or sender._state.db != using):
-            sender = sender_field.remote_field.model._base_manager.using(using).get(pk=message.sender_id)
+            sender = related_on(message, "sender", using=using)
             sender_field.set_cached_value(message, sender)
         sender = self._sender(message, participants)
         recipients = self._recipients(message, participants)

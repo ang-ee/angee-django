@@ -46,7 +46,7 @@ from django.core.exceptions import (
 )
 from django.core.files.base import ContentFile
 from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, connections, models, transaction
+from django.db import IntegrityError, connections, models, router, transaction
 from django.db.models import Q
 from django.db.models.signals import post_save
 from django.urls import reverse
@@ -65,7 +65,7 @@ from rebac.backends import backend as rebac_backend
 from rebac.managers import RebacManager
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
@@ -255,7 +255,10 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
             field = self._meta.get_field("backend")
             backend = field.get_cached_value(self, default=None)
             if backend is None:
-                backend = field.related_model._base_manager.using(self._state.db).get(pk=self.backend_id)
+                using = self._state.db
+                if using is None:
+                    using = router.db_for_read(field.related_model)
+                backend = related_on(self, "backend", using=using)
             return backend.storage
 
     def object_key(self, content_hash: str, filename: str) -> str:
@@ -1277,9 +1280,11 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         from the per-``(row, config)`` backend cache.
         """
 
-        drive_model = type(self)._meta.get_field("drive").related_model
         with system_context(reason="storage.file.storage"):
-            drive = drive_model._base_manager.using(self._state.db).select_related("backend").get(pk=self.drive_id)
+            using = self._state.db
+            if using is None:
+                using = router.db_for_read(type(self)._meta.get_field("drive").related_model)
+            drive: Any = related_on(self, "drive", using=using, select_related=("backend",))
             return drive.storage
 
     def local_path(self) -> Path | None:
@@ -1496,8 +1501,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
             raise exceptions.UploadDenied("an authenticated user is required")
         if str(self.created_by_id or "") == str(user_id):
             return
-        drive_model = type(self)._meta.get_field("drive").related_model
-        drive = drive_model._base_manager.using(using).get(pk=self.drive_id)
+        drive = related_on(self, "drive", using=using)
         allowed = rebac_backend().check_access(subject=actor, action="write", resource=to_object_ref(drive))
         if not allowed.allowed:
             raise exceptions.UploadDenied("only the uploader may push bytes")

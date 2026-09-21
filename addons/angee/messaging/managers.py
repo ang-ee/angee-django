@@ -35,13 +35,13 @@ from zoneinfo import ZoneInfo
 from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.core.exceptions import ImproperlyConfigured
-from django.db import IntegrityError, connections, models, transaction
+from django.db import IntegrityError, connections, models, router, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
 from rebac import PermissionDenied, current_actor, system_context
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import canonical_record_target
@@ -1328,12 +1328,10 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         )
         if follower is None:
             return False
-        if not follower.is_subscribed_to(
-            message._meta.get_field("subtype")
-            .related_model._base_manager.db_manager(self._db)
-            .filter(pk=message.subtype_id)
-            .first()
-        ):
+        subtype_using = self._db
+        if subtype_using is None:
+            subtype_using = router.db_for_read(message._meta.get_field("subtype").related_model)
+        if not follower.is_subscribed_to(related_on(message, "subtype", using=subtype_using, required=False)):
             return False
         if follower.last_read_message is None:
             return True
@@ -1560,17 +1558,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
         # default/internal flags, so email delivery honors the same subscription the
         # unread scan does (an empty selection = the default subscription, not "every
         # subtype").
-        message_subtype = (
-            (
-                self.model._meta.get_field("message")
-                .related_model._meta.get_field("subtype")
-                .related_model._base_manager.db_manager(using)
-                .filter(pk=message.subtype_id)
-                .first()
-            )
-            if message.subtype_id is not None
-            else None
-        )
+        message_subtype = related_on(message, "subtype", using=using, required=False)
         for follower in followers.select_related("attachment"):
             if _is_author(follower.user_id):
                 continue
@@ -1770,12 +1758,7 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             body = activity.completion_message()
             if feedback:
                 body = f"{body}\n\n{feedback}"
-            attachment = (
-                activity._meta.get_field("attachment")
-                .related_model._base_manager.db_manager(using)
-                .select_related("content_type", "thread")
-                .get(pk=activity.attachment_id)
-            )
+            attachment: Any = related_on(activity, "attachment", using=using, select_related=("content_type", "thread"))
             model_class = attachment.content_type.model_class()
             message_model = apps.get_model("messaging", "Message")
             message_model.objects.db_manager(using).post_to_thread(
@@ -1887,12 +1870,7 @@ def _normalise_user_ids(user_ids: tuple[Any, ...]) -> tuple[Any, ...]:
 def _file_mime_type(file: Any, *, using: str) -> str:
     """Return the MIME type string for a storage file part."""
 
-    mime = (
-        file._meta.get_field("mime_type")
-        .related_model._base_manager.db_manager(using)
-        .filter(pk=file.mime_type_id)
-        .first()
-    )
+    mime = related_on(file, "mime_type", using=using, required=False)
     value = getattr(mime, "mime_type", "")
     return value or "application/octet-stream"
 

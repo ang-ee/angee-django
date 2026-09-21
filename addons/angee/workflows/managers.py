@@ -44,7 +44,7 @@ from rebac.relationships import delete_relationship
 from rebac.resources import to_object_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.identity import (
     canonical_subject_ref,
     instance_from_public_id,
@@ -2221,11 +2221,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         )
         object_id = None if subject is None else subject.pk
         run_dedup_key = dedup_key or self._trigger_dedup_key(trigger, content_type, object_id)
-        owner_id = self._owner_id(actor, trigger, version, using=using)
+        admitted_actor = self._owner(actor, trigger, version, using=using)
+        owner_id = None if admitted_actor is None else admitted_actor.pk
         admitted_actor_ref = ""
         if owner_id is not None:
             owner_id = self.model._meta.get_field("created_by").target_field.get_prep_value(owner_id)
-            admitted_actor = get_user_model()._base_manager.using(using).get(pk=owner_id)
             admitted_actor_ref = str(to_subject_ref(admitted_actor))
         resolved_origin = origin or (
             RunOrigin.TRIGGER
@@ -2495,27 +2495,29 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         return f"trigger:{trigger.pk}:subject:{subject}"
 
     @staticmethod
-    def _owner_id(actor: Any, trigger: Any, workflow: Any, *, using: str) -> Any | None:
+    def _owner(actor: Any, trigger: Any, workflow: Any, *, using: str) -> Any | None:
+        """Resolve the admission user from the trigger, actor, or workflow lineage."""
+
         if trigger is not None and trigger.execution_actor_id is not None:
-            return trigger.execution_actor_id
+            return related_on(trigger, "execution_actor", using=using)
         if actor is not None:
             try:
                 user_id = actor_user_id(to_subject_ref(actor))
             except NoActorResolvedError:
                 user_id = None
             if user_id is not None:
-                return user_id
+                return get_user_model()._base_manager.db_manager(using).get(pk=user_id)
         if trigger is not None and trigger.created_by_id is not None:
-            return trigger.created_by_id
+            return related_on(trigger, "created_by", using=using)
         lineage = (
             system_queryset(type(workflow), using=using, lock=None).get(pk=workflow.published_from_id)
             if workflow.published_from_id is not None
             else None
         )
         return (
-            lineage.created_by_id
+            related_on(lineage, "created_by", using=using)
             if lineage is not None and lineage.created_by_id is not None
-            else workflow.created_by_id
+            else related_on(workflow, "created_by", using=using)
         )
 
 

@@ -38,7 +38,7 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 from rebac import system_context
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_write_alias, related_on
 from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.impl import ImplBase, ImplChoice
 from angee.base.scoping import read_scoped_queryset, system_queryset
@@ -491,7 +491,7 @@ class StepImpl(ImplBase):
         if step_run.current_attempt_id is not None:
             attempt_model = apps.get_model("workflows", "StepAttempt")
             with system_context(reason="workflows.step.heartbeat.load"):
-                attempt = attempt_model.objects.using(alias).get(pk=step_run.current_attempt_id)
+                attempt: Any = related_on(step_run, "current_attempt", using=alias)
             attempt_model.objects.db_manager(alias).heartbeat(attempt.pk, lease_token=attempt.lease_token, at=timestamp)
             return
         step_run.heartbeat_at = timestamp
