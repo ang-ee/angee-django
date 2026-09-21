@@ -42,6 +42,7 @@ from angee.base.identity import canonical_subject_ref
 from angee.base.impl import ImplClassField, ImplDefaultsMixin, resolve_all_impl_classes
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel
+from angee.base.permissions import require_authorization_database
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
 from angee.base.transitions import (
@@ -586,6 +587,15 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             instance=self,
         )
         manager = type(self).objects.db_manager(alias)
+        if session is None:
+            stored = _definition_rows(type(self), alias).filter(pk=self.pk).first()
+            if stored is not None and not stored.is_immutable:
+                with DefinitionQuerySet.caller_context(self):
+                    current = manager.current_published_for(stored)
+                # A positive copied revision proves the stored signature unchanged;
+                # legacy rows initialized at zero still need the signature check.
+                if current is not None and 0 < stored.draft_revision == current.draft_revision:
+                    return None
         with manager._definition_write((self.pk,), using=alias, session=session) as session:
             draft = cast(
                 Self,
@@ -813,6 +823,8 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
 
         if not self._state.adding and update_fields is not None and "config" not in update_fields:
             return
+        alias = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
+        self._refresh_impl_config_fields(using=alias)
         if not isinstance(self.config, Mapping):
             raise ValidationError({"config": "Step config must be an object."})
         impl = cast(type[StepImpl], self.resolve_impl("step_class"))
@@ -851,7 +863,12 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
             with DefinitionQuerySet.caller_context(self):
                 self.full_clean_for_write(using=alias)
             update_fields = kwargs.get("update_fields")
-            self.validate_impl_configs(update_fields=update_fields)
+            original_alias = self._state.db
+            self._state.db = alias
+            try:
+                self.validate_impl_configs(update_fields=update_fields)
+            finally:
+                self._state.db = original_alias
             fields = {
                 "workflow_id",
                 "key",
@@ -1603,23 +1620,15 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             return canonical_subject_ref(self.admitted_actor_ref)
         return None
 
-    @staticmethod
-    def _require_admission_database(using: str) -> None:
-        """Reject subject resolution that upstream cannot bind to this database."""
-
-        if using != DEFAULT_DB_ALIAS:
-            raise ValidationError(
-                {
-                    "using": "Workflow admission actor resolution requires the default database: "
-                    f"django-zed-rebac resolve_subjects() cannot bind database alias {using!r}."
-                }
-            )
-
     def admission_actor(self, *, using: str | None = None) -> Any | None:
         """Resolve the retained principal, failing closed on unsupported databases."""
 
         alias = get_write_alias(type(self), using=using, instance=self)
-        self._require_admission_database(alias)
+        require_authorization_database(
+            alias,
+            operation="Workflow admission actor resolution through django-zed-rebac resolve_subjects()",
+            error_field="using",
+        )
         subject = self.admission_actor_subject()
         return None if subject is None else resolve_subjects((subject,)).get(subject)
 
@@ -1627,7 +1636,11 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         """Resolve the immutable actor admitted by this recovery lineage root."""
 
         alias = get_write_alias(type(self), using=using, instance=self)
-        self._require_admission_database(alias)
+        require_authorization_database(
+            alias,
+            operation="Workflow admission actor resolution through django-zed-rebac resolve_subjects()",
+            error_field="using",
+        )
         target = self.delivery_target(using=alias)
         target._state.db = alias
         actor = target.admission_actor()

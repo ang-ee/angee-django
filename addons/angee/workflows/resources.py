@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import functools
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import DEFAULT_DB_ALIAS, connections
+from django.db import connections
 from django.db.models.fields import NOT_PROVIDED
 from import_export import fields
 from import_export.results import RowResult
 
 from angee.base.db import get_write_alias
+from angee.base.permissions import require_authorization_database
 from angee.base.scoping import system_queryset
+from angee.resources.entries import resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.loader import AngeeResource
 from angee.resources.widgets import XrefForeignKeyWidget, split_xref
@@ -74,8 +77,12 @@ class WorkflowDefinitionResource(AngeeResource):
         return field
 
     def after_init_instance(self, instance: Any, new: bool, row: Mapping[str, Any], **kwargs: Any) -> None:
+        xref = row["_xref"]
+        if xref in self._seen_xrefs:
+            raise ResourceLoadError(f"duplicate _xref {xref!r} in workflow definition facet")
+        self._seen_xrefs.add(xref)
         super().after_init_instance(instance, new, row, **kwargs)
-        self._instances[row["_xref"]] = instance
+        self._instances[xref] = instance
 
     @property
     def workflow_model(self) -> type[Any]:
@@ -108,8 +115,9 @@ class WorkflowDefinitionResource(AngeeResource):
             return
         model = facets[0][1].workflow_model
         alias = get_write_alias(model, using=using)
-        if alias != DEFAULT_DB_ALIAS or not connections[alias].in_atomic_block:
-            raise ResourceLoadError("Workflow resource locks require the default resource transaction.")
+        require_authorization_database(alias, operation="Workflow resource locks", error_class=ResourceLoadError)
+        if not connections[alias].in_atomic_block:
+            raise ResourceLoadError("Workflow resource locks require an active resource transaction.")
         ids = cls._lock_targets(facets, using=alias)
         locked = list(system_queryset(model, using=alias, lock=("self",)).filter(pk__in=ids).order_by("pk"))
         if {row.pk for row in locked} != ids or cls._lock_targets(facets, using=alias) - ids:
@@ -117,21 +125,83 @@ class WorkflowDefinitionResource(AngeeResource):
 
     @classmethod
     def _lock_targets(cls, facets: Sequence[tuple[Any, WorkflowDefinitionResource]], *, using: str) -> set[int]:
+        # Rebuild on each pass: the post-lock read must see concurrent parent moves.
+        ledgers: dict[tuple[str, str], Any] = {}
+        owned: list[tuple[Any, Any]] = []
+        references: list[tuple[tuple[str, str], type[Any]]] = []
+        missing: dict[str, set[str]] = defaultdict(set)
+        for group, resource in facets:
+            resource._instances.clear()
+            resource._prime_existing_ledgers(group.dataset)
+            ledgers.update(
+                ((group.entry.addon.name, xref), ledger) for xref, ledger in resource._existing_ledgers.items()
+            )
+            # Retained omitted targets are affected even without current xrefs.
+            for ledger in resource.ledger_model._default_manager.using(using).filter(
+                source_addon=group.entry.addon.name,
+                source_path=group.entry.source,
+                target_model=group.model._meta.label,
+            ):
+                ledgers[(ledger.source_addon, ledger.xref)] = ledger
+                owned.append((group.model, ledger))
+            for row in group.dataset.dict:
+                for name in ("workflow", "error_workflow", "source", "target"):
+                    value = row.get(name)
+                    field = resource.fields.get(name)
+                    if (
+                        not isinstance(value, str) or not value or field is None
+                        or not isinstance(field.widget, XrefForeignKeyWidget)
+                    ):
+                        continue
+                    try:
+                        key = split_xref(value, resource.addon_aliases)
+                    except ValueError:
+                        continue
+                    references.append((key, field.widget.model))
+        for key, _model in references:
+            if key not in ledgers:
+                missing[key[0]].add(key[1])
+        ledger_model = facets[0][1].ledger_model
+        for addon, xrefs in missing.items():
+            for ledger in ledger_model._default_manager.using(using).filter(source_addon=addon, xref__in=xrefs):
+                ledgers[(addon, ledger.xref)] = ledger
+
+        model = facets[0][1].workflow_model
+        graph_models = (
+            model, model._meta.get_field("steps").related_model, model._meta.get_field("edges").related_model,
+        )
+        target_pks: dict[type[Any], dict[tuple[str, str], int | None]] = defaultdict(dict)
+        for key, ledger in ledgers.items():
+            if ledger is None or not ledger.target_id:
+                continue
+            try:
+                target_model = resolve_model(ledger.target_model)
+                if issubclass(target_model, graph_models):
+                    field = target_model._meta.get_field("sqid")
+                    target_pks[target_model][key] = field.public_id_to_value(ledger.target_id)
+            except (ImproperlyConfigured, TypeError, ValueError):
+                # Invalid ledger identities remain native row diagnostics.
+                continue
+        targets: dict[tuple[str, str], Any] = {}
+        for target_model, pks in target_pks.items():
+            rows = target_model._default_manager.using(using).in_bulk({pk for pk in pks.values() if pk is not None})
+            targets.update((key, rows.get(pk)) for key, pk in pks.items())
+
         ids: set[int] = set()
         declared_heads: dict[tuple[str, str], Any] = {}
         # Any facet may adopt an existing target without a ledger yet. Keep
         # declared heads available to references elsewhere in the batch too.
         for group, resource in facets:
             is_head = group.model is resource.workflow_model
-            resource._instances.clear()
-            resource._existing_ledgers.clear()
             for row in group.dataset.dict:
                 row = {name: value for name, value in row.items() if value is not NOT_PROVIDED}
                 try:
-                    instance = resource.instance_for_xref(row["_xref"])
+                    resource._check_ledger_target(row["_xref"], resource._existing_ledgers.get(row["_xref"]))
                 except ResourceLoadError:
                     # Ledger collisions belong to the native row diagnostic.
                     continue
+                instance = targets.get((group.entry.addon.name, row["_xref"]))
+                resource._instances[row["_xref"]] = instance
                 if instance is not None:
                     ids.add(instance.pk if is_head else instance.workflow_id)
                 try:
@@ -144,41 +214,22 @@ class WorkflowDefinitionResource(AngeeResource):
                     ids.add(adopted.pk if is_head else adopted.workflow_id)
                 if is_head:
                     declared_heads[(group.entry.addon.name, row["_xref"])] = adopted or instance
-        for group, resource in facets:
-            model = resource.workflow_model
-            ledgers = resource.ledger_model._default_manager.using(using).filter(
-                source_addon=group.entry.addon.name,
-                source_path=group.entry.source,
-                target_model=group.model._meta.label,
-            )
-            # Retained omitted targets are affected even without current xrefs.
-            for ledger in ledgers:
-                target = ledger.target_instance()
-                if target is not None:
-                    ids.add(target.pk if group.model is model else target.workflow_id)
-            for row in group.dataset.dict:
-                for name in ("workflow", "error_workflow", "source", "target"):
-                    value = row.get(name)
-                    field = resource.fields.get(name)
-                    if (
-                        not isinstance(value, str) or not value or field is None
-                        or not isinstance(field.widget, XrefForeignKeyWidget)
-                    ):
-                        continue
-                    try:
-                        target = field.widget.resolve_field_target(value)
-                    except ValueError:
-                        try:
-                            target = declared_heads.get(split_xref(value, resource.addon_aliases))
-                        except ValueError:
-                            target = None
-                    if target is not None:
-                        ids.add(target.pk if isinstance(target, model) else target.workflow_id)
+        for target_model, ledger in owned:
+            target = targets.get((ledger.source_addon, ledger.xref))
+            if target is not None:
+                ids.add(target.pk if target_model is model else target.workflow_id)
+        for key, expected_model in references:
+            target = targets.get(key)
+            if not isinstance(target, expected_model):
+                target = declared_heads.get(key)
+            if target is not None:
+                ids.add(target.pk if isinstance(target, model) else target.workflow_id)
         return ids
 
     def before_import(self, dataset: Any, **kwargs: Any) -> None:
         self._instances.clear()
         self._row_hashes.clear()
+        self._seen_xrefs: set[str] = set()
         self._pending: dict[str, tuple[Mapping[str, Any], dict[str, Any]]] = {}
         super().before_import(dataset, **kwargs)
         headers = set(dataset.headers or ())
@@ -221,6 +272,7 @@ class WorkflowDefinitionResource(AngeeResource):
         if result.has_errors() or result.has_validation_errors():
             return
         alias = self.get_db_connection_name()
+        # Positional row/instance pairing relies on report_skipped, store_instance, skip_diff, use_bulk=False.
         declarations = {
             xref: row_result.instance
             for xref, row_result in zip(dataset["_xref"], result.rows, strict=True)

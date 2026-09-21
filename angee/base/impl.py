@@ -746,6 +746,10 @@ class ImplDefaultsMixin(models.Model):
     form (API, resource seed) still gets the chosen impl's defaults — for the fields
     the caller did not supply. Form-created rows pass their (possibly edited) values,
     so the impl never overrides them, even when a value equals the model default.
+
+    Validation hooks accept optional keyword-only ``using`` for direct callers.
+    ``save()`` pins ``_state.db`` to its selected alias and invokes hooks without
+    that keyword, preserving narrower overrides. Hooks otherwise use the pin.
     """
 
     class Meta:
@@ -812,8 +816,13 @@ class ImplDefaultsMixin(models.Model):
                 if isinstance(impl, type) and issubclass(impl, ImplBase):
                     impl.materialize(self, provided=provided, using=alias)
         update_fields = kwargs.get("update_fields")
-        self.validate_impl_keys(update_fields=update_fields, using=alias)
-        self.validate_impl_configs(update_fields=update_fields, using=alias)
+        original_alias = self._state.db
+        self._state.db = alias
+        try:
+            self.validate_impl_keys(update_fields=update_fields)
+            self.validate_impl_configs(update_fields=update_fields)
+        finally:
+            self._state.db = original_alias
         super().save(*args, **kwargs)
         loaded = dict(getattr(self, "_loaded_impl_keys", {}))
         updated = None if update_fields is None else set(update_fields)
@@ -829,7 +838,7 @@ class ImplDefaultsMixin(models.Model):
 
         if self._state.adding and self.pk is None:
             return
-        alias = get_write_alias(type(self), using=using, instance=self)
+        alias = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
         updated = None if update_fields is None else set(update_fields)
         loaded = getattr(self, "_loaded_impl_keys", {})
         for field in self._meta.get_fields():
@@ -881,16 +890,10 @@ class ImplDefaultsMixin(models.Model):
 
         if not self._state.adding and update_fields is not None and "config" not in update_fields:
             return
-        deferred = self.get_deferred_fields()
-        if "config" not in deferred and not hasattr(self, "config"):
+        if "config" not in self.get_deferred_fields() and not hasattr(self, "config"):
             return
-        alias = get_write_alias(type(self), using=using, instance=self)
-        needed = deferred & {
-            "config",
-            *(field.attname for field in self._meta.get_fields() if isinstance(field, ImplClassField)),
-        }
-        if needed:
-            self.refresh_from_db(using=alias, fields=needed)
+        alias = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
+        self._refresh_impl_config_fields(using=alias)
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField):
                 continue
@@ -901,6 +904,16 @@ class ImplDefaultsMixin(models.Model):
             if isinstance(impl, type) and issubclass(impl, ImplBase) and impl.config_model is not None:
                 normalized = impl.normalize_config(self.config)
                 setattr(self, "config", normalized)
+
+    def _refresh_impl_config_fields(self, *, using: str) -> None:
+        """Load deferred config and implementation selectors on the chosen alias."""
+
+        needed = self.get_deferred_fields() & {
+            "config",
+            *(field.attname for field in self._meta.get_fields() if isinstance(field, ImplClassField)),
+        }
+        if needed:
+            self.refresh_from_db(using=using, fields=needed)
 
     def set_impl_key(self, field_name: str, value: Any, *, default: str | None = None) -> bool:
         """Assign an impl key and return whether the stored key changed."""

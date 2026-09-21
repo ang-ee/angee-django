@@ -8,13 +8,14 @@ from typing import Any
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import DEFAULT_DB_ALIAS, IntegrityError, models, router, transaction
+from django.db import IntegrityError, models, router, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 from rebac.models import active_relationship_model
 
 from angee.base.db import get_write_alias
 from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
+from angee.base.permissions import require_authorization_database
 from angee.resources.entries import (
     GRANT_KIND,
     EntryGraph,
@@ -159,9 +160,11 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             *(router.db_for_read(model) for model in {*write_models, *related_models}),
             *(resource.get_db_connection_name() for _group, resource in loaded_groups),
         }
-        if aliases != {DEFAULT_DB_ALIAS}:
-            raise ResourceLoadError(
-                "Resource rows, ledger and grants must use the default database to share the resource load transaction."
+        for alias in aliases:
+            require_authorization_database(
+                alias,
+                operation="Resource rows, ledger and grants sharing the resource load transaction",
+                error_class=ResourceLoadError,
             )
         rows_by_entry: dict[EntryKey, list[tuple[ResourceGroup, Any]]] = defaultdict(list)
         for group, resource in loaded_groups:

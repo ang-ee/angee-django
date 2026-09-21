@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import tablib
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import DEFAULT_DB_ALIAS, models
+from django.db import models
 from django.db.models.fields import NOT_PROVIDED
 from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
@@ -20,6 +20,7 @@ from angee.base.db import get_write_alias
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplDefaultsMixin
 from angee.base.models import AngeeModel
+from angee.base.permissions import require_authorization_database
 from angee.base.serialization import json_safe
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -323,7 +324,7 @@ class AngeeResource(resources.ModelResource):
 
         if ledger is None or not ledger.target_id:
             return None
-        instance = ledger.target_instance()
+        instance = ledger.target_instance(using=self.get_db_connection_name())
         if instance is None:
             return None
         expected = self._meta.model._meta.concrete_model
@@ -692,8 +693,7 @@ def build_resource(
     """
 
     alias = get_write_alias(model, using=using)
-    if alias != DEFAULT_DB_ALIAS:
-        raise ResourceLoadError("Resource loading requires the default database.")
+    require_authorization_database(alias, operation="Resource loading", error_class=ResourceLoadError)
     resource_class = getattr(model, "resource_class", AngeeResource)
     if not isinstance(resource_class, type) or not issubclass(resource_class, AngeeResource):
         raise ImproperlyConfigured(f"{model._meta.label}.resource_class must subclass AngeeResource")

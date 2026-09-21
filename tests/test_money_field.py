@@ -21,7 +21,6 @@ from django.db.migrations.state import ModelState, ProjectState
 from strawberry import auto
 
 import angee.base.fields as base_fields
-import angee.money.fields as money_fields
 from angee.base.fields import SqidField
 from angee.data.field_classification import model_field_scalar, money_currency_field, resource_field_widget
 from angee.data.metadata import (
@@ -75,10 +74,9 @@ def test_moneyfield_is_owned_by_money_fields_module() -> None:
     assert not hasattr(base_fields, "MoneyField")
 
 
-def test_money_currency_metadata_key_reexports_the_core_contract() -> None:
-    """Existing addon imports and field declarations share the core metadata key."""
+def test_money_currency_declaration_uses_the_core_metadata_key() -> None:
+    """MoneyField declares its currency path through the core metadata contract."""
 
-    assert money_fields.MONEY_CURRENCY_FIELD_METADATA_KEY is MONEY_CURRENCY_FIELD_METADATA_KEY
     assert getattr(MoneyField(currency_field="order.currency"), MONEY_CURRENCY_FIELD_METADATA_KEY) == "order.currency"
 
 

@@ -1,14 +1,35 @@
-"""Disk-resolved REBAC declarations shared by runtime framework layers."""
+"""REBAC declarations and authorization boundaries shared by framework layers."""
 
 from __future__ import annotations
 
 from functools import lru_cache
 
 from django.apps import apps
-from django.db import models
+from django.core.exceptions import ValidationError
+from django.db import DEFAULT_DB_ALIAS, models
 from rebac.resources import model_resource_type
 from rebac.schema import Definition, Schema, resolve_schema_path
 from rebac.schema.parser import parse_zed
+
+
+def require_authorization_database(
+    alias: str,
+    *,
+    operation: str = "This operation",
+    error_class: type[Exception] = ValidationError,
+    error_field: str | None = None,
+) -> None:
+    """Reject authorization operations outside the single supported database.
+
+    REBAC tuple APIs have no database-alias contract. Call this before database
+    work when an operation must keep model persistence and tuple changes together.
+    The caller supplies operation context and its existing exception contract;
+    this boundary owns the default-only rule and diagnostic.
+    """
+
+    if alias != DEFAULT_DB_ALIAS:
+        message = f"{operation}: the default authorization database is required (received {alias!r})."
+        raise error_class({error_field: message} if error_field is not None else message)
 
 
 def effective_rebac_definition(model: type[models.Model]) -> Definition | None:

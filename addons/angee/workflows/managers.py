@@ -19,7 +19,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.core.validators import validate_slug
 from django.db import (
-    DEFAULT_DB_ALIAS,
     IntegrityError,
     OperationalError,
     connections,
@@ -53,6 +52,7 @@ from angee.base.identity import (
 )
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.permissions import require_authorization_database
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.workflows.attempts import (
@@ -5813,13 +5813,6 @@ class DecisionQuerySet(AngeeQuerySet[Any]):
 class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ignore[misc]
     """Create actionable decisions and their authorization tuples atomically."""
 
-    @staticmethod
-    def _require_atomic_database(using: str) -> None:
-        """Reject aliases unsupported by atomic Decision operations."""
-
-        if using != DEFAULT_DB_ALIAS:
-            raise ValidationError({"using": "Atomic Decision operations currently require the default database."})
-
     def predecessor_decision(self, step_run: Any, gate_step_class: type[Any]) -> Any:
         """Load the settled predecessor slot, including an exact FRESH source.
 
@@ -5907,7 +5900,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         """
 
         alias = get_write_alias(self.model, bound=self)
-        self._require_atomic_database(alias)
+        require_authorization_database(alias, operation="Atomic Decision operations", error_field="using")
         step_model = self.model._meta.get_field("step_run").remote_field.model
         attempt_model = self.model._meta.get_field("suspension_attempt").remote_field.model
         run_model = step_model._meta.get_field("run").remote_field.model
@@ -6151,7 +6144,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         if verdict not in {Verdict.COMPLETED, Verdict.REJECTED, Verdict.ESCALATED}:
             raise ValidationError({"verdict": "Human Decisions cannot expire a review."})
         alias = get_write_alias(self.model, bound=self)
-        self._require_atomic_database(alias)
+        require_authorization_database(alias, operation="Atomic Decision operations", error_field="using")
         with transaction.atomic(using=alias), system_context(reason="workflows.decision.decide"):
             decision = self._lock_retained_resolution(decision_id, using=alias, require_current=False)
             if decision is None:
@@ -6443,10 +6436,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         remote backends require a durable relationship-intent contract before
         this unused API can enter the production execution cutover.
         """
-        if using != DEFAULT_DB_ALIAS:
-            raise ValidationError(
-                {"using": "Atomic decision relationship creation currently requires the default database."}
-            )
+        require_authorization_database(using, operation="Atomic Decision relationship creation", error_field="using")
         if not isinstance(rebac_backend(), LocalBackend):
             raise ValidationError(
                 {"rebac": "Decision-scoped review access requires the transactional local REBAC adapter."}

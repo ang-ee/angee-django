@@ -11,7 +11,7 @@ import pytest
 import tablib
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
-from django.db import router, transaction
+from django.db import models, router, transaction
 from django.db.models.fields import NOT_PROVIDED
 from import_export.results import RowResult
 from rebac import system_context
@@ -351,6 +351,25 @@ def test_native_diagnostics_keep_source_row_and_full_transaction_rollback(tmp_pa
     assert not WorkflowResourceLedger.objects.exists()
 
 
+@pytest.mark.parametrize("facet", [0, 1, 2])
+def test_duplicate_new_xref_has_native_row_diagnostic_and_rolls_back(tmp_path: Path, facet: int) -> None:
+    groups = _groups(_addon(tmp_path))
+    group = groups[facet][0]
+    duplicate = dict(group.dataset.dict[0])
+    if "key" in duplicate:
+        duplicate["key"] = "another-new-row"
+    group.dataset.append([duplicate[name] for name in group.dataset.headers])
+    group.source_rows.append(42)
+
+    with pytest.raises(ResourceLoadError, match=r"yaml: 42:.*duplicate _xref"):
+        _load(groups)
+
+    assert not Workflow.objects.exists()
+    assert not Step.objects.exists()
+    assert not Edge.objects.exists()
+    assert not WorkflowResourceLedger.objects.exists()
+
+
 def test_dry_run_rolls_back_native_rows_ledgers_and_revisions(tmp_path: Path) -> None:
     addon = _addon(tmp_path)
     result = _load(_groups(addon), dry_run=True)
@@ -490,6 +509,58 @@ def test_workflow_scalar_change_bumps_revision_once_and_retains_children(tmp_pat
     assert head.edges.count() == 4
 
 
+def test_changed_scalar_step_and_edge_facets_each_advance_the_head_cas_revision(tmp_path: Path) -> None:
+    addon = _addon(tmp_path)
+    _install(addon)
+    head = Workflow.objects.get(key="resource-install-probe")
+    revision = head.draft_revision
+    groups = _groups(addon, entry_name="Updated entry", route_source="beta", route_target="alpha")
+    groups[0][0].dataset.append_col(["Updated description"], header="description")
+
+    assert _load(groups) == LoadResult(created=0, updated=3, skipped=6)
+    head.refresh_from_db()
+    assert head.draft_revision == revision + 3
+
+    assert _load(groups) == LoadResult(created=0, updated=0, skipped=9)
+    head.refresh_from_db()
+    assert head.draft_revision == revision + 3
+
+
+def test_unchanged_publication_skips_the_definition_write_lock(tmp_path: Path, monkeypatch: Any) -> None:
+    addon = _addon(tmp_path)
+    _install(addon)
+    head = Workflow.objects.get(key="resource-install-probe")
+    with system_context(reason="publication lock regression"):
+        published = head.publish_if_changed()
+    assert published is not None
+    _install(addon)
+
+    def unexpected_lock(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Unchanged publication must not take a definition write lock.")
+
+    monkeypatch.setattr(type(Workflow.objects), "_definition_write", unexpected_lock)
+    with system_context(reason="publication lock regression"):
+        assert head.publish_if_changed() is None
+
+
+def test_legacy_zero_revisions_still_compare_publication_content(tmp_path: Path) -> None:
+    addon = _addon(tmp_path)
+    _install(addon)
+    with system_context(reason="legacy publication regression"):
+        head = Workflow.objects.get(key="resource-install-probe")
+        first = head.publish_if_changed()
+        assert first is not None
+        _install(addon, entry_name="Changed legacy entry")
+        # Reproduce existing rows receiving the revision field's migration default.
+        models.QuerySet(model=Workflow, using="default").filter(pk__in=(head.pk, first.pk)).update(draft_revision=0)
+
+        second = head.publish_if_changed()
+
+        assert second is not None
+        assert second.steps.get(key="entry").name == "Changed legacy entry"
+        assert first.steps.get(key="entry").name == "Entry"
+
+
 def test_failed_graph_edit_rolls_back_earlier_scalar_and_ledger_updates(tmp_path: Path) -> None:
     addon = _addon(tmp_path)
     _install(addon)
@@ -625,7 +696,7 @@ def test_resource_load_rejects_split_read_routing_before_any_write(tmp_path: Pat
     monkeypatch.setattr(
         router, "db_for_read", lambda model, **hints: "replica" if model is Step else read(model, **hints),
     )
-    with pytest.raises(ResourceLoadError, match="default database"):
+    with pytest.raises(ResourceLoadError, match="default authorization database"):
         _install(addon)
     assert not WorkflowResourceLedger.objects.exists()
     assert not Workflow._base_manager.exists()
@@ -638,9 +709,9 @@ def test_resource_entry_owners_reject_explicit_and_bound_non_default_aliases(tmp
         WorkflowResourceLedger.objects, "_groups_for",
         lambda *args, **kwargs: (tuple(group.entry for group, _ in groups), tuple(group for group, _ in groups), ()),
     )
-    with pytest.raises(ResourceLoadError, match="default database"):
+    with pytest.raises(ResourceLoadError, match="default authorization database"):
         WorkflowResourceLedger.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL], using="other")
-    with pytest.raises(ResourceLoadError, match="default database"):
+    with pytest.raises(ResourceLoadError, match="default authorization database"):
         WorkflowResourceLedger.objects.db_manager("other").validate_addons((addon,), tiers=[Resource.Tier.INSTALL])
     assert not WorkflowResourceLedger.objects.exists()
 
@@ -664,13 +735,16 @@ def test_invalid_explicit_config_rolls_back_complete_native_install(tmp_path: Pa
     assert not WorkflowResourceLedger.objects.exists()
 
 
-def test_lock_planning_leaves_ledger_collisions_to_native_source_row_diagnostics(tmp_path: Path) -> None:
+@pytest.mark.parametrize("target_model", [Step._meta.label, "missing.Model"])
+def test_lock_planning_leaves_ledger_collisions_to_native_source_row_diagnostics(
+    tmp_path: Path, target_model: str,
+) -> None:
     addon = _addon(tmp_path)
     groups = _groups(addon)
     groups[0][0].source_rows = [9]
     collision = WorkflowResourceLedger.objects.create(
         source_addon=addon.name, source_path="resources/install/other.yaml", xref="lineage",
-        tier=Resource.Tier.INSTALL, target_model=Step._meta.label, target_id="", content_hash="",
+        tier=Resource.Tier.INSTALL, target_model=target_model, target_id="invalid", content_hash="",
     )
     with pytest.raises(ResourceLoadError, match=r"100_workflows.workflow.yaml: 9:.*xref collision"):
         _load(groups)
@@ -700,3 +774,24 @@ def test_step_composite_adoption_keeps_native_update_and_original_target(tmp_pat
     assert result == LoadResult(created=0, updated=1, skipped=8)
     assert WorkflowResourceLedger.objects.get(xref="alpha").target_id == public_id_of(alpha)
     assert Step.objects.get(key="alpha").pk == alpha.pk
+
+
+@pytest.mark.parametrize("extra_steps", [0, 10])
+def test_lock_planning_batches_ledgers_and_targets_independently_of_row_count(
+    tmp_path: Path, django_assert_num_queries: Any, extra_steps: int,
+) -> None:
+    addon = _addon(tmp_path)
+    groups = list(_groups(addon))
+    step_group = groups[1][0]
+    rows = step_group.dataset.dict
+    rows.extend(
+        {**rows[1], "_xref": f"extra_{index}", "key": f"extra_{index}"}
+        for index in range(extra_steps)
+    )
+    groups[1] = _group(addon, Step, step_group.entry.source, tuple(rows))
+    _load(tuple(groups))
+    head = Workflow.objects.get(key="resource-install-probe")
+
+    # Each facet primes its declared and owned ledgers; each target model is read once.
+    with system_context(reason="batched workflow lock planning"), django_assert_num_queries(9):
+        assert WorkflowDefinitionResource._lock_targets(groups, using="default") == {head.pk}

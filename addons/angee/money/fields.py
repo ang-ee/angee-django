@@ -10,10 +10,7 @@ from django.core import checks
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
-from angee.data.metadata import MONEY_CURRENCY_FIELD_METADATA_KEY
 from angee.graphql.field_types import register_field_type
-
-__all__ = ("MONEY_CURRENCY_FIELD_METADATA_KEY", "MoneyField")
 
 
 class MoneyField(models.DecimalField):

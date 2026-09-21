@@ -228,7 +228,7 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
                 "db_for_write",
                 lambda model, **hints: "other" if model is PipelineItem else route(model, **hints),
             )
-            with pytest.raises(ResourceLoadError, match="default database"):
+            with pytest.raises(ResourceLoadError, match="default authorization database"):
                 PipelineLedger.objects.load_addons((owner,), tiers=["master"])
         assert PipelineItem._base_manager.get().model == "v2"
     finally:

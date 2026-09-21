@@ -133,6 +133,31 @@ def test_model_clean_relation_queries_and_trigger_writes_keep_explicit_alias(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("selection", ["explicit", "pinned"])
+def test_step_config_hook_reads_deferred_fields_on_its_selected_alias(
+    definition_writer: str, monkeypatch: pytest.MonkeyPatch, selection: str,
+) -> None:
+    """The override honors both direct using and dispatcher-pinned context."""
+
+    with system_context(reason="step deferred config alias setup"):
+        workflow = Workflow.objects.create(name="Deferred config")
+        step = Step.objects.create(
+            workflow=workflow, key="entry", name="Entry", step_class="fixture", config={"retained": 3},
+        )
+        deferred = Step.objects.only("pk").get(pk=step.pk)
+    assert {"config", "step_class"} <= deferred.get_deferred_fields()
+    deferred._state.db = "default" if selection == "explicit" else definition_writer
+    monkeypatch.setattr(router, "routers", [DefinitionRouter("default")])
+
+    def reject_default_query(*args: Any) -> None:
+        raise AssertionError("Step config validation lost its selected alias.")
+
+    with connection.execute_wrapper(reject_default_query), system_context(reason="step deferred config validation"):
+        deferred.validate_impl_configs(**({"using": definition_writer} if selection == "explicit" else {}))
+        assert deferred.config == {"retained": 3}
+
+
+@pytest.mark.django_db(transaction=True)
 def test_edge_save_rejects_stale_cached_endpoint_ancestry_on_default(workflow_tables: None) -> None:
     """Moving a previously cached endpoint cannot bypass the persisted ancestry proof."""
 

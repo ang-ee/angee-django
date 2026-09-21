@@ -8,7 +8,7 @@ from typing import Any, ClassVar, Self, TypeVar, cast
 import reversion
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, models, transaction
+from django.db import models, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
 from rebac import (
@@ -26,6 +26,7 @@ from angee.base.actors import actor_user_id
 from angee.base.db import get_write_alias
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
+from angee.base.permissions import require_authorization_database
 from angee.base.scoping import system_queryset
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -131,8 +132,7 @@ class ConditionalSharedReaderMixin(models.Model):
         """Persist and reconcile when this write can change reader eligibility."""
 
         alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
-        if alias != DEFAULT_DB_ALIAS:
-            raise ValidationError("Conditional shared-reader writes require the default authorization database.")
+        require_authorization_database(alias, operation="Conditional shared-reader writes")
         kwargs["using"] = alias
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
@@ -157,10 +157,7 @@ class ConditionalSharedReaderMixin(models.Model):
         """Reconcile only this owner's wildcard tuple from persisted row facts."""
 
         alias = get_write_alias(type(self), using=using, instance=self)
-        if alias != DEFAULT_DB_ALIAS:
-            raise ValidationError(
-                "Conditional shared-reader reconciliation requires the default authorization database."
-            )
+        require_authorization_database(alias, operation="Conditional shared-reader reconciliation")
         if self.pk is None:
             raise ValidationError("A shared reader requires a saved row.")
         with transaction.atomic(using=alias):

@@ -9,10 +9,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, transaction
+from django.db import transaction
 
 from angee.base.db import get_write_alias
 from angee.base.identity import public_id_of
+from angee.base.permissions import require_authorization_database
 from angee.base.scoping import system_queryset
 from angee.workflows.attempts import json_values_equal
 from angee.workflows.graph import (
@@ -238,11 +239,15 @@ class WorkflowDefinitionManagerMixin:
         This owner composes snapshots and checked edits, including omission.
         Incident edges must be explicitly removed by their own facet before a
         step can be omitted; a facet never cascades another source's declaration.
+
+        The head's draft_revision is a compare-and-swap counter, not a load
+        number. Each changed facet advances it through its own definition edit;
+        one load changing workflow scalars, steps and edges advances it three
+        times. Callers compare or carry the returned revision, never its delta.
         """
 
         alias = get_write_alias(self.model, bound=self, using=using)
-        if alias != DEFAULT_DB_ALIAS:
-            raise ValidationError("Resource definition installation requires the default database.")
+        require_authorization_database(alias, operation="Resource definition installation")
         steps = self.model._meta.get_field("steps").related_model
         edges = self.model._meta.get_field("edges").related_model
         if model not in {self.model, steps, edges}:
@@ -252,7 +257,7 @@ class WorkflowDefinitionManagerMixin:
                 source_addon=source_addon, source_path=source_path, target_model=model._meta.label,
             )
             omitted = list(owned.exclude(xref__in=declarations))
-            removed = {row.pk: row for ledger in omitted if (row := ledger.target_instance()) is not None}
+            removed = {row.pk: row for ledger in omitted if (row := ledger.target_instance(using=alias)) is not None}
             candidates = list(declarations.values())
             if any(not isinstance(row, model) for row in candidates):
                 raise ValidationError("A workflow declaration must contain its native cleaned instance.")
