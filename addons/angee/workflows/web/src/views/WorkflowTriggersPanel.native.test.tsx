@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { testDataResource, testQueryField } from "@angee/metadata/testing";
-import { Refine, type DataProvider } from "@angee/refine";
 import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets } from "@angee/ui";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
@@ -146,6 +146,7 @@ vi.mock("../documents.console", () => ({
 
 import { TriggerWorkflowContext, workflowTriggerForm, workflowTriggerReadOnlyForm } from "./WorkflowTriggersPanel";
 
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://workflows" });
 afterEach(() => { authored.conditionPending = false; });
 
 const field = (name: string, scalar = "String") => ({
@@ -179,31 +180,27 @@ const resource = testDataResource("workflows.Trigger", {
   },
 });
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); clearClients(); });
 
 test("Back to triggers uses the native dirty leave guard", async () => {
   const close = vi.fn();
   const provider = {
-    getApiUrl: () => "test://workflows",
-    getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+    getList: vi.fn(async () => ({ data: [], total: 0 })),
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const Component = workflowTriggerForm.Component;
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Provider resources={[resource]} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <TriggerWorkflowContext.Provider value={{ currentVersion: 1, close }}>
-              <Component resource="workflows.Trigger" id={null} defaultValues={{
-                workflow: "workflow-1", kind: "schedule", enabled: false, config: {},
-              }} />
-            </TriggerWorkflowContext.Provider>
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <TriggerWorkflowContext.Provider value={{ currentVersion: 1, close }}>
+            <Component resource="workflows.Trigger" id={null} defaultValues={{
+              workflow: "workflow-1", kind: "schedule", enabled: false, config: {},
+            }} />
+          </TriggerWorkflowContext.Provider>
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 
   fireEvent.click(await screen.findByRole("button", { name: "Interval" }));
@@ -220,24 +217,21 @@ test("Back to triggers uses the native dirty leave guard", async () => {
 test("create mode presents the canonical lowercase trigger kind without enabling it", async () => {
   const create = vi.fn(async ({ variables }: { variables?: unknown }) => ({ data: { id: "trigger-1", ...(variables as object) } }));
   const provider = {
-    getApiUrl: () => "test://workflows",
-    getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create, update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+    getList: vi.fn(async () => ({ data: [], total: 0 })),
+    create,
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const Component = workflowTriggerForm.Component;
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Provider resources={[resource]} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <Component resource="workflows.Trigger" id={null} defaultValues={{
-              workflow: "workflow-1", kind: "schedule", enabled: false, config: {},
-            }} />
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <Component resource="workflows.Trigger" id={null} defaultValues={{
+            workflow: "workflow-1", kind: "schedule", enabled: false, config: {},
+          }} />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 
   const kind = await screen.findByLabelText("Kind") as HTMLSelectElement;
@@ -277,7 +271,6 @@ test("schedule mode changes preserve opaque rule JSON and submit one cadence", a
     data: { id: "trigger-1", ...(variables ?? {}) },
   }));
   const provider = {
-    getApiUrl: () => "test://workflows",
     getOne: vi.fn(async () => ({
       data: {
         id: "trigger-1",
@@ -292,29 +285,21 @@ test("schedule mode changes preserve opaque rule JSON and submit one cadence", a
       },
     })),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(),
     update,
-    deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+  } satisfies RefineTestDataProvider;
   const Component = workflowTriggerForm.Component;
   const router = createRouter({
     routeTree: createRootRoute(),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   render(
-    <Refine
-      resources={[...refineResourcesFromDataResources([resource])]}
-      dataProvider={{ default: provider, console: provider }}
-      options={{ disableTelemetry: true }}
-    >
+    <Provider resources={[resource]} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <Component resource="workflows.Trigger" id="trigger-1" />
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <Component resource="workflows.Trigger" id="trigger-1" />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 
   const enable = await screen.findByRole("button", { name: "Enable" });
@@ -363,26 +348,22 @@ test("activation reports business failures without reloading and reflects pendin
     },
   }));
   const provider = {
-    getApiUrl: () => "test://workflows",
     getOne,
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+  } satisfies RefineTestDataProvider;
   const router = createRouter({
     routeTree: createRootRoute(),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   const Component = workflowTriggerForm.Component;
   const view = render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Provider resources={[resource]} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <Component resource="workflows.Trigger" id="trigger-1" />
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <Component resource="workflows.Trigger" id="trigger-1" />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 
   const enable = await screen.findByRole("button", { name: "Enable" });
@@ -395,15 +376,13 @@ test("activation reports business failures without reloading and reflects pendin
 
   authored.fetching = true;
   view.rerender(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Provider resources={[resource]} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <Component resource="workflows.Trigger" id="trigger-1" />
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <Component resource="workflows.Trigger" id="trigger-1" />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
   expect((await screen.findByRole("button", { name: "Enable" }) as HTMLButtonElement).disabled).toBe(true);
   authored.fetching = false;
@@ -415,7 +394,6 @@ test("disabling remains available with dirty rule edits and preserves them acros
     ok: true, message: "Disabled",
   });
   const provider = {
-    getApiUrl: () => "test://workflows",
     getOne: vi.fn(async () => ({
       data: {
         id: "trigger-1",
@@ -430,8 +408,7 @@ test("disabling remains available with dirty rule edits and preserves them acros
       },
     })),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+  } satisfies RefineTestDataProvider;
   // The first read represents the enabled record; reload returns the disabled fact.
   provider.getOne = vi.fn()
     .mockResolvedValueOnce({ data: {
@@ -447,15 +424,13 @@ test("disabling remains available with dirty rule edits and preserves them acros
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const Component = workflowTriggerForm.Component;
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Provider resources={[resource]} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <Component resource="workflows.Trigger" id="trigger-1" />
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <Component resource="workflows.Trigger" id="trigger-1" />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 
   const interval = await screen.findByLabelText(/Interval Seconds/i) as HTMLInputElement;
@@ -483,23 +458,19 @@ test("historical trigger forms expose no executable lifecycle or save actions", 
     next_fire_at: null,
   };
   const provider = {
-    getApiUrl: () => "test://workflows",
     getOne: vi.fn(async () => ({ data: record })),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const Component = workflowTriggerReadOnlyForm.Component;
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Provider resources={[resource]} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <Component resource="workflows.Trigger" id="trigger-1" />
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <Component resource="workflows.Trigger" id="trigger-1" />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 
   expect((await screen.findAllByText("Every 60 seconds")).length).toBeGreaterThan(0);
@@ -518,7 +489,6 @@ test("event condition edits stay in the trigger form and preserve opaque lookups
     data: { id: "trigger-event", ...(variables ?? {}) },
   }));
   const provider = {
-    getApiUrl: () => "test://workflows",
     getOne: vi.fn(async () => ({ data: {
       id: "trigger-event",
       workflow: "workflow-1",
@@ -534,27 +504,21 @@ test("event condition edits stay in the trigger form and preserve opaque lookups
       next_fire_at: null,
     } })),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(), update, deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+    update,
+  } satisfies RefineTestDataProvider;
   const router = createRouter({
     routeTree: createRootRoute(),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   const Component = workflowTriggerForm.Component;
   render(
-    <Refine
-      resources={[...refineResourcesFromDataResources([resource])]}
-      dataProvider={{ default: provider, console: provider }}
-      options={{ disableTelemetry: true }}
-    >
+    <Provider resources={[resource]} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <Component resource="workflows.Trigger" id="trigger-event" />
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <Component resource="workflows.Trigger" id="trigger-event" />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 
   expect(await screen.findByText("Additional unsupported conditions are preserved in Rule JSON.")).toBeTruthy();
@@ -625,37 +589,27 @@ test("event create validates its composed condition before transport", async () 
   authored.conditionRequests.length = 0;
   const create = vi.fn();
   const provider = {
-    getApiUrl: () => "test://workflows",
-    getOne: vi.fn(),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
     create,
-    update: vi.fn(),
-    deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+  } satisfies RefineTestDataProvider;
   const router = createRouter({
     routeTree: createRootRoute(),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   const Component = workflowTriggerForm.Component;
   render(
-    <Refine
-      resources={[...refineResourcesFromDataResources([resource])]}
-      dataProvider={{ default: provider, console: provider }}
-      options={{ disableTelemetry: true }}
-    >
+    <Provider resources={[resource]} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <Component resource="workflows.Trigger" id={null} defaultValues={{
-              workflow: "workflow-1",
-              kind: "event",
-              enabled: false,
-              config: { model: "tests.TriggerSubject" },
-            }} />
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <Component resource="workflows.Trigger" id={null} defaultValues={{
+            workflow: "workflow-1",
+            kind: "event",
+            enabled: false,
+            config: { model: "tests.TriggerSubject" },
+          }} />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 
   await screen.findByRole("button", { name: "Add condition" });
@@ -688,7 +642,6 @@ test("event create validates its composed condition before transport", async () 
 test("event edit rejects an explicitly malformed saved condition", async () => {
   const update = vi.fn();
   const provider = {
-    getApiUrl: () => "test://workflows",
     getOne: vi.fn(async () => ({ data: {
       id: "trigger-invalid-event",
       workflow: "workflow-1",
@@ -701,29 +654,21 @@ test("event edit rejects an explicitly malformed saved condition", async () => {
       next_fire_at: null,
     } })),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(),
     update,
-    deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+  } satisfies RefineTestDataProvider;
   const router = createRouter({
     routeTree: createRootRoute(),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   const Component = workflowTriggerForm.Component;
   render(
-    <Refine
-      resources={[...refineResourcesFromDataResources([resource])]}
-      dataProvider={{ default: provider, console: provider }}
-      options={{ disableTelemetry: true }}
-    >
+    <Provider resources={[resource]} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <Component resource="workflows.Trigger" id="trigger-invalid-event" />
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <Component resource="workflows.Trigger" id="trigger-invalid-event" />
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 
   expect((await screen.findAllByText("Condition must be a JSON object.")).length).toBeGreaterThan(0);

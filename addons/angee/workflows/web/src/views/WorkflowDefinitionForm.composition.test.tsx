@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { createUiTestProviders } from "@angee/ui/testing";
+import { refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { Refine, type DataProvider } from "@angee/refine";
 import { AppRuntimeProvider, ModalsHost, ToastProvider, createRouteHref, defaultWidgets, type RecordPanelContext } from "@angee/ui";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...await importOriginal<typeof import("@tanstack/react-router")>(),
@@ -93,6 +93,14 @@ function SurfaceProbe({ context }: { context: RecordPanelContext; }) {
     context.form.form.setValue("definition.edges", Object.fromEntries(Object.entries(edges).filter(([, edge]) => edge.source !== "node_1" && edge.target !== "node_1")) as never, { shouldDirty: true });
   })}>Delete fixture node</button></>;
 }
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://workflows",
+  metadata: schemaFieldMetadataFromDataResources(resources),
+  refineResources: [...refineResourcesFromDataResources([resource])],
+  dataProvider: { getList: vi.fn(async () => ({ data: [], total: 0 })) },
+});
+afterEach(() => { cleanup(); clearClients(); });
+
 beforeEach(() => { cleanup(); surface = null; state.publish.mockReset(); state.test.mockReset(); state.refetch.mockReset(); });
 
 test("test launch shows business failures and reserves retries only for ambiguous transport", async () => {
@@ -101,13 +109,12 @@ test("test launch shows business failures and reserves retries only for ambiguou
     .mockResolvedValueOnce({ start_workflow_test: { ok: false, message: "Test workflow failed.", validation_errors: { __all__: ["Resolve the saved graph issue."], subject: ["Choose an accessible record."] } } })
     .mockResolvedValueOnce({})
     .mockResolvedValueOnce({ start_workflow_test: { ok: false, message: "Still unavailable" } });
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
-    <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+  render(<Provider>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" />
-    </AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider>
-  </Refine>);
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>);
 
   fireEvent.click(await screen.findByRole("button", { name: "Test…" }));
   const start = await screen.findByRole("button", { name: "Start test" });
@@ -140,13 +147,12 @@ test("Save and test launches the acknowledged revision after reconciliation and 
   });
   state.test.mockRejectedValueOnce(new Error("Delivery unknown")).mockResolvedValueOnce({ start_workflow_test: { ok: true, message: "Started", id: "run_1" } });
   const onSaved = vi.fn();
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
-    <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets, routeHref: createRouteHref([{ name: "workflows.run", path: "/runs/$id" }]) }}>
+  render(<Provider>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets, routeHref: createRouteHref([{ name: "workflows.run", path: "/runs/$id" }]) }}>
       <WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" onSaved={onSaved} defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} />
-    </AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider>
-  </Refine>);
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>);
   fireEvent.click(await screen.findByRole("button", { name: "Set complex binding" }));
   fireEvent.click(screen.getByRole("button", { name: "Test…" }));
   const start = await screen.findByRole("button", { name: "Save and test" });
@@ -180,13 +186,12 @@ test("a failed prelaunch Save releases its test request and blocks a second test
     save_workflow_definition: { status: "SUCCESS", revision: 5, current_revision: 5, nodes: [], edges: [], diagnostics: [] },
   });
   state.test.mockResolvedValue({ start_workflow_test: { ok: true, message: "Started", id: "run-2" } });
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
-    <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+  render(<Provider>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} />
-    </AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider>
-  </Refine>);
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>);
   fireEvent.click(await screen.findByRole("button", { name: "Set complex binding" }));
   fireEvent.click(screen.getByRole("button", { name: "Test…" }));
   fireEvent.click(await screen.findByRole("button", { name: "Save and test" }));
@@ -207,13 +212,12 @@ test("the registered form exposes parsed settings and saves through the definiti
   state.snapshot.readiness = [{ code: "kept", message: "Kept readiness", kind: "NODE", id: "node_1", client_key: null, requested_id: null, field: "config" }];
   state.save.mockReset();
   state.save.mockResolvedValue({ save_workflow_definition: { status: "SUCCESS", revision: 5, current_revision: 5, nodes: [], edges: [], diagnostics: [] } });
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
-    <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+  render(<Provider>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} />
-    </AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider>
-  </Refine>);
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>);
   const name = await screen.findByRole("textbox", { name: "Name" });
   expect(screen.getByText("Definition")).toBeTruthy();
   expect(screen.getByLabelText(/Max steps/i)).toBeTruthy();
@@ -273,13 +277,12 @@ test("a save acknowledgement rebases a later complex binding edit without losing
   state.save
     .mockImplementationOnce(() => firstSave.promise)
     .mockResolvedValueOnce({ save_workflow_definition: { status: "SUCCESS", revision: 6, current_revision: 6, nodes: [], edges: [], diagnostics: [] } });
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
-    <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+  render(<Provider>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} />
-    </AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider>
-  </Refine>);
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>);
 
   await screen.findByRole("button", { name: "Set complex binding" });
   fireEvent.click(screen.getByRole("button", { name: "Set complex binding" }));
@@ -305,9 +308,8 @@ test("a save acknowledgement rebases a later complex binding edit without losing
 test("the registered create branch uses the native resource create mutation", async () => {
   state.save.mockReset();
   const create = vi.fn(async ({ variables }: { variables: Record<string, unknown>; }) => ({ data: { id: "workflow_new", ...variables } }));
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create, update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id={null} defaultValues={{ status: "DRAFT" }} /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>);
+  render(<Provider dataProvider={{ create }}><RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id={null} defaultValues={{ status: "DRAFT" }} /></AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider></Provider>);
   fireEvent.change(await screen.findByRole("textbox", { name: "Name" }), { target: { value: "Created workflow" } });
   fireEvent.click(screen.getByRole("button", { name: "Create" }));
   await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
@@ -322,10 +324,9 @@ test("a saved subject type reopens the Test setup with the native record picker"
   state.save.mockResolvedValue({ save_workflow_definition: {
     status: "SUCCESS", revision: 2, current_revision: 2, nodes: [], edges: [], diagnostics: [],
   } });
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const registered = refineResourcesFromDataResources([resource, subjectResource]).map((entry) => entry.meta.modelLabel === "notes.Note" ? { ...entry, meta: { ...entry.meta, label: "Notes" } } : entry);
-  render(<Refine resources={[...registered]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>);
+  render(<Provider refineResources={[...registered]}><RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" /></AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider></Provider>);
 
   fireEvent.click(await screen.findByRole("combobox", { name: "Works with" }));
   const noteOption = await screen.findByRole("option", { name: "Notes" });
@@ -345,9 +346,8 @@ test("a saved subject type reopens the Test setup with the native record picker"
 
 test("subject types use canonical model labels and qualify duplicate names by app", async () => {
   state.snapshot = workflowSnapshot(1, "Subject labels");
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>);
+  render(<Provider><RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" /></AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider></Provider>);
   fireEvent.click(await screen.findByRole("combobox", { name: "Works with" }));
   expect(screen.getByRole("option", { name: "Note" })).toBeTruthy();
   expect(screen.getByRole("option", { name: "Folder · documents" })).toBeTruthy();
@@ -361,9 +361,8 @@ test("real Form keeps stale defaults until reviewed discard adopts the fetched d
   state.refetch.mockReset();
   state.refetch.mockImplementation(async () => ({ data: { workflow_definition: workflowSnapshot(3, "Remote", "Remote node") } }));
   state.refetch.mockRejectedValueOnce(new Error("Offline"));
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>);
+  render(<Provider><RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} /></AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider></Provider>);
   fireEvent.change(await screen.findByRole("textbox", { name: "Name" }), { target: { value: "Local" } });
   surface!.form.setValue("definition.nodes.node_1.name", "Local node" as never, { shouldDirty: true });
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
@@ -395,9 +394,8 @@ test("publishing never admits a newer draft revision over edits made while the r
   state.publish.mockImplementation(() => new Promise((resolve) => { finishPublish = resolve; }));
   state.save.mockReset();
   state.save.mockResolvedValue({ save_workflow_definition: { status: "STALE", revision: null, current_revision: 4, nodes: [], edges: [], diagnostics: [] } });
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  const element = <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>;
+  const element = <Provider><RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} /></AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider></Provider>;
   const view = render(element);
   state.refetch.mockImplementation(async () => { view.rerender(element); return { data: { workflow_definition: state.snapshot } }; });
   fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
@@ -423,9 +421,8 @@ test("undo during a pending deletion rekeys the restored node and edge after ack
   let acknowledge!: (value: unknown) => void;
   state.save.mockReset();
   state.save.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; })).mockResolvedValueOnce({ save_workflow_definition: { status: "SUCCESS", revision: 4, current_revision: 4, nodes: [], edges: [], diagnostics: [] } });
-  const provider = { getApiUrl: () => "test://workflows", getOne: vi.fn(), getList: vi.fn(async () => ({ data: [], total: 0 })), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}><RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} /></AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider></Refine>);
+  render(<Provider><RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" defaultRecordTab="editor" recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, render: (context) => <SurfaceProbe context={context} /> }]} /></AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider></Provider>);
   fireEvent.click(await screen.findByRole("button", { name: "Delete fixture node" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));

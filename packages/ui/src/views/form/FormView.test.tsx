@@ -24,20 +24,13 @@ import {
   createRouter,
   } from "@tanstack/react-router";
 import {
-  QueryClient,
-} from "@tanstack/react-query";
-import {
   AppRuntimeProvider,
   type AppRuntime,
   type FormOverrideMap,
   } from "../../runtime";
-import {
-  ModelMetadataProvider,
-  refineResourcesFromDataResources,
-  modelLabelSegment,
-} from "@angee/metadata";
+import { modelLabelSegment } from "@angee/metadata";
 import { testDataResource, testResourceQuery, withTestResourceInventory } from "@angee/metadata/testing";
-import { Refine, type DataProvider, type GetOneParams, type NotificationProvider } from "@refinedev/core";
+import type { GetOneParams, NotificationProvider } from "@refinedev/core";
 import type {
   Row,
 } from "@angee/metadata";
@@ -51,6 +44,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
+import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec } from "./form-spec";
 import { Form } from "./Form";
@@ -118,8 +112,7 @@ const fields = [
 describe("FormView", () => {
   afterEach(() => {
     cleanup();
-    clients.forEach((client) => client.clear());
-    clients.length = 0;
+    clearClients();
   });
 
   beforeEach(() => {
@@ -2996,23 +2989,24 @@ function renderWithProviders(
   );
 }
 
-const clients: QueryClient[] = [];
-const dataProvider = {
-  getApiUrl: () => "test://forms",
-  getOne: sdkMocks.getOne,
-  getList: sdkMocks.getList,
-  create: async ({ variables }: { variables: Row }) => {
-    const data = await sdkMocks.mutate({ data: variables });
-    sdkMocks.record = data;
-    return { data };
+const { Provider, dataProvider, clients, clearClients } = createUiTestProviders({
+  apiUrl: "test://forms",
+  queryClientConfig: { defaultOptions: { mutations: { retry: false }, queries: { retry: false } } },
+  dataProvider: {
+    getOne: sdkMocks.getOne,
+    getList: sdkMocks.getList,
+    create: async ({ variables }: { variables: Row }) => {
+      const data = await sdkMocks.mutate({ data: variables });
+      sdkMocks.record = data;
+      return { data };
+    },
+    update: vi.fn(async ({ id, variables }: { id: string; variables: Row }) => {
+      const data = await sdkMocks.mutate({ data: { ...variables, id } });
+      sdkMocks.record = data;
+      return { data };
+    }),
   },
-  update: vi.fn(async ({ id, variables }: { id: string; variables: Row }) => {
-    const data = await sdkMocks.mutate({ data: { ...variables, id } });
-    sdkMocks.record = data;
-    return { data };
-  }),
-  deleteOne: vi.fn(),
-} as DataProvider;
+});
 
 const notificationProvider = {
   open: vi.fn(),
@@ -3025,31 +3019,20 @@ function TestProviders({ children, metadata, forms, runtime }: {
   forms?: FormOverrideMap;
   runtime?: Partial<AppRuntime>;
 }): ReactElement {
-  const [queryClient] = useState(() => {
-    const client = new QueryClient({
-      defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
-    });
-    clients.push(client);
-    return client;
-  });
   const schema = useMemo(() => withDefaultResourceMetadata(metadata), [metadata]);
   return (
-    <Refine
-      resources={[...refineResourcesFromDataResources(schema.resources)]}
-      dataProvider={{ default: dataProvider, console: dataProvider }}
+    <Provider
+      metadata={schema}
       notificationProvider={notificationProvider}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: queryClient } }}
     >
       <ModalsHost>
         <ToastProvider>
-          <ModelMetadataProvider metadata={schema}>
-            <AppRuntimeProvider runtime={{ widgets: defaultWidgets, ...(forms ? { forms } : {}), ...runtime }}>
-              {children}
-            </AppRuntimeProvider>
-          </ModelMetadataProvider>
+          <AppRuntimeProvider runtime={{ widgets: defaultWidgets, ...(forms ? { forms } : {}), ...runtime }}>
+            {children}
+          </AppRuntimeProvider>
         </ToastProvider>
       </ModalsHost>
-    </Refine>
+    </Provider>
   );
 }
 

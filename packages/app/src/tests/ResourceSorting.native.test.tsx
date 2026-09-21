@@ -1,18 +1,19 @@
 // @vitest-environment happy-dom
+import { createUiTestProviders } from "@angee/ui/testing";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
 import { flexRender } from "@tanstack/react-table";
 import { createAngeeHasuraDataProvider } from "@angee/refine";
-import { refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
 import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 import { ResourceViewProvider, useResourceView } from "@angee/ui/views/resource-view-context";
 import { useResourceViewSurface, type ResourceViewSurface } from "@angee/ui/views/resource-view-surface";
 import { ToastProvider } from "@angee/ui/feedback/index";
 import { afterEach, expect, test, vi } from "vitest";
 
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+const { Provider, clearClients } = createUiTestProviders({
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 async function fixture(initialSort = "thread.title.text") {
   const resource = testDataResource("messaging.Message", {
     roots: { aggregate: "messages_aggregate" }, typeNames: { filter: "messages_bool_exp", order: "messages_order_by" },
@@ -31,8 +32,6 @@ async function fixture(initialSort = "thread.title.text") {
     return new Response(JSON.stringify({ data: { messages: [{ id: "message-1", sent_at: "2026-09-05", thread: { title: { text: "Thread" } }, sender: { party: { display_name: "Sender" } } }], messages_aggregate: { aggregate: { count: 1 } } } }), { headers: { "content-type": "application/json" } });
   });
   const provider = createAngeeHasuraDataProvider({ url: "https://fixture.invalid/graphql", fetch, auth: (nativeFetch) => nativeFetch });
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
   let surface!: ResourceViewSurface;
   function Probe() {
     const view = useResourceView();
@@ -42,7 +41,7 @@ async function fixture(initialSort = "thread.title.text") {
     ] });
     return <>{surface.table.getHeaderGroups()[0]!.headers.map((header) => <div key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</div>)}<output>{surface.list.error?.message}</output></>;
   }
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}><ToastProvider><ResourceViewProvider scope="local" initialState={{ sorting: [{ id: initialSort, desc: true }] }}><Probe /></ResourceViewProvider></ToastProvider></Refine>);
+  render(<Provider resources={[resource]} dataProvider={provider}><ToastProvider><ResourceViewProvider scope="local" initialState={{ sorting: [{ id: initialSort, desc: true }] }}><Probe /></ResourceViewProvider></ToastProvider></Provider>);
   await waitFor(() => expect(bodies.length > 0 || surface.list.error != null).toBe(true));
   return { bodies, surface: () => surface };
 }

@@ -1,12 +1,11 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { createAngeeChangeLiveProvider } from "../provider";
 import { invalidateAuthoredQueries } from "../query-invalidation";
+import { createRefineTestProviders } from "../testing";
 import { useAngeeGroupByBatch, type GroupByBatchScope } from "./hooks";
 
 const TARGET = { dataProviderName: "console", root: "messages_groups", modelLabel: "messaging.Message" };
@@ -14,8 +13,10 @@ const DOCUMENT = "query Groups { messages_groups { key { channel_id } aggregate 
 const SCOPES: readonly GroupByBatchScope[] = [{ key: "channels", query: {
   dimensions: [{ input: "CHANNEL", key: "channel_id" }], page: 1, pageSize: 50,
 } }];
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.splice(0).forEach((client) => client.clear()); });
+const { Provider, createClient, clearClients } = createRefineTestProviders({
+  apiUrl: "test://group-live", providerNames: ["console"],
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 function response(count: number) {
   return { data: { messages_groups: Array.from({ length: count }, (_, index) => ({
@@ -23,8 +24,7 @@ function response(count: number) {
   })), totalCount: count } };
 }
 function fixture(custom = vi.fn(async () => response(1))) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const sinks: { next: (value: unknown) => void }[] = [];
   const disposers: ReturnType<typeof vi.fn>[] = [];
   const subscribe = vi.fn((_request: unknown, sink: { next: (value: unknown) => void }) => {
@@ -36,11 +36,9 @@ function fixture(custom = vi.fn(async () => response(1))) {
   const liveProvider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn(() => () => undefined) } as never,
     [{ schemaName: "console", modelLabel: "messaging.Message", roots: { list: "messages", changes: "messageChanged" } }],
     { queryClient: client });
-  const provider = { getApiUrl: () => "test://group-live", custom, getList: vi.fn(), getOne: vi.fn(),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
+  const provider = { custom };
   function wrapper({ children }: { children: ReactNode }) {
-    return <Refine dataProvider={{ default: provider, console: provider }} liveProvider={liveProvider}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>{children}</Refine>;
+    return <Provider dataProvider={provider} liveProvider={liveProvider} queryClient={client}>{children}</Provider>;
   }
   const change = () => sinks.at(-1)!.next({ data: { messageChanged: {
     model: "messaging.Message", id: "message-a", action: "create",

@@ -2,12 +2,11 @@
 
 import * as React from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
+import type { GetListParams } from "@refinedev/core";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
@@ -38,10 +37,12 @@ const trigger = testDataResource("workflows.Trigger", {
   createFields: ["kind", "enabled", "workflow"], updateFields: ["kind", "enabled"],
 });
 const resources = [workflow, trigger];
-const metadata = schemaFieldMetadataFromDataResources(resources);
-const clients: QueryClient[] = [];
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://resource-list-scope",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
 
-afterEach(() => { cleanup(); clients.splice(0).forEach((client) => client.clear()); });
+afterEach(() => { cleanup(); clearClients(); });
 
 test("a native controlled child list isolates queries and record UI from its parent collection", async () => {
   const getList = vi.fn(async (params: GetListParams) => ({
@@ -51,10 +52,6 @@ test("a native controlled child list isolates queries and record UI from its par
   const getOne = vi.fn(async () => ({ data: {
     id: "trigger-1", kind: "Schedule", enabled: true, workflow: "workflow-1",
   } }));
-  const provider = { getApiUrl: () => "test://resource-list-scope", getList, getOne,
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
   const router = createRouter({
     routeTree: createRootRoute(),
     history: createMemoryHistory({ initialEntries: ["/"] }),
@@ -78,18 +75,14 @@ test("a native controlled child list isolates queries and record UI from its par
   function Parent() { parent = useResourceView(); return <TriggerCollection />; }
 
   render(
-    <RouterContextProvider router={router}><Refine resources={[...refineResourcesFromDataResources(resources)]}
-      dataProvider={{ default: provider, console: provider }}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-      <ModelMetadataProvider metadata={metadata}>
-        <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ModalsHost><ToastProvider>
-          <ResourceViewProvider resource={workflow.modelLabel} scope="local" initialState={{
-            pageSize: 50, groupStack: [{ field: "status" }],
-            sorting: [{ id: "name", desc: false }, { id: "version", desc: true }],
-          }}><Parent /></ResourceViewProvider>
-        </ToastProvider></ModalsHost></AppRuntimeProvider>
-      </ModelMetadataProvider>
-    </Refine></RouterContextProvider>,
+    <RouterContextProvider router={router}><Provider resources={resources} dataProvider={{ getList, getOne }}>
+      <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ModalsHost><ToastProvider>
+        <ResourceViewProvider resource={workflow.modelLabel} scope="local" initialState={{
+          pageSize: 50, groupStack: [{ field: "status" }],
+          sorting: [{ id: "name", desc: false }, { id: "version", desc: true }],
+        }}><Parent /></ResourceViewProvider>
+      </ToastProvider></ModalsHost></AppRuntimeProvider>
+    </Provider></RouterContextProvider>,
   );
 
   expect(await screen.findByRole("button", { name: "Open Schedule" })).toBeTruthy();

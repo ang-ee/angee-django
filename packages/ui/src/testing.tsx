@@ -1,4 +1,16 @@
 import * as React from "react";
+import {
+  createRefineTestProviders,
+  type RefineTestDataProvider,
+  type RefineTestProviderOptions,
+} from "@angee/refine/testing";
+import {
+  ModelMetadataProvider,
+  refineResourcesFromDataResources,
+  schemaFieldMetadataFromDataResources,
+  type DataResourceMetadata,
+  type SchemaFieldMetadata,
+} from "@angee/metadata";
 
 import type {
   MutationDialogProps,
@@ -7,6 +19,50 @@ import type {
 
 type UiModule = typeof import("./index");
 export type UiTestDoubles = Partial<Record<keyof UiModule, unknown>>;
+
+export interface UiTestProviderOptions<T extends RefineTestDataProvider = RefineTestDataProvider>
+  extends Omit<RefineTestProviderOptions<T>, "resources"> {
+  metadata?: SchemaFieldMetadata;
+  resources?: readonly DataResourceMetadata[];
+  /** Override the projected registry when a case exercises explicit routes or no registration. */
+  refineResources?: RefineTestProviderOptions["resources"];
+}
+
+/** Add resource projection and metadata context to the native Refine test harness. */
+export function createUiTestProviders<T extends RefineTestDataProvider = Pick<RefineTestDataProvider, never>>(
+  defaults: UiTestProviderOptions<T> = {},
+) {
+  const {
+    metadata: initialMetadata,
+    resources: initialResources,
+    refineResources: initialRefineResources,
+    ...refineDefaults
+  } = defaults;
+  const refine = createRefineTestProviders(refineDefaults);
+
+  function Provider({
+    children,
+    metadata = initialMetadata,
+    resources = initialResources ?? metadata?.resources,
+    refineResources = initialRefineResources,
+    providerNames = defaults.providerNames,
+    ...refineOptions
+  }: UiTestProviderOptions & { children?: React.ReactNode }) {
+    const schema = React.useMemo(
+      () => metadata ?? (resources && schemaFieldMetadataFromDataResources(resources)),
+      [metadata, resources],
+    );
+    return <refine.Provider
+      {...refineOptions}
+      resources={refineResources ?? [...refineResourcesFromDataResources(resources ?? [])]}
+      providerNames={providerNames ?? ["console", ...(resources ?? []).map((resource) => resource.schemaName)]}
+    >
+      {schema ? <ModelMetadataProvider metadata={schema}>{children}</ModelMetadataProvider> : children}
+    </refine.Provider>;
+  }
+
+  return { ...refine, Provider };
+}
 
 export interface UiRouteTestDoubleOptions {
   routeHref?: (route: string, parameters?: Record<string, unknown>) => string;

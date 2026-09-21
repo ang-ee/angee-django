@@ -1,17 +1,17 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useFieldArray, type Control } from "react-hook-form";
 import type { ComponentProps } from "react";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider, type ResourceSaveVariables } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
+import { createUiTestProviders } from "../../testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { defaultWidgets } from "../../widgets";
 import { FormView } from "./FormView";
 import { useFormViewSave, type FormSubmit, type FormViewSaveSurface } from "./use-form-view-save";
@@ -46,8 +46,11 @@ const initialLines: readonly Row[] = [
   { id: "b", label: "Bravo", quantity: 20, position: 1 },
   { id: "c", label: "Charlie", quantity: 30, position: 2 },
 ];
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://lines",
+  queryClientConfig: { defaultOptions: { queries: { retry: false }, mutations: { retry: false } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 async function fixture(options: {
   submit?: FormSubmit;
@@ -78,12 +81,10 @@ async function fixture(options: {
     return { data: { [root]: record } };
   });
   const provider = {
-    getApiUrl: () => "test://lines", getOne,
+    getOne,
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(options.create), update, custom, deleteOne: vi.fn(),
-  } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  clients.push(client);
+    create: vi.fn(options.create), update, custom,
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   let surface!: FormViewSaveSurface;
   let remove!: (index: number) => void;
@@ -112,25 +113,23 @@ async function fixture(options: {
       </div>)}
     </>;
   }
-  render(<Refine resources={[...refineResourcesFromDataResources([activeResource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
+  render(<Provider resources={[activeResource]} dataProvider={provider}>
     <RouterContextProvider router={router}><ModalsHost><ToastProvider>
       {options.publicView ? (
         <OperationDocumentsProvider documents={{ [activeResource.schemaName]: { saves: { [activeResource.modelLabel]: saveDocument } } }}>
-          <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([activeResource])}>
-            <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-              <FormView
-                resource={activeResource.modelLabel}
-                id={options.isCreate ? null : "doc-1"}
-                fields={[{ name: "title", label: "Title", title: true }]}
-                formExtras={(context) => { surface = context.form; return null; }}
-                recordExtras={options.recordExtras}
-              />
-            </AppRuntimeProvider>
-          </ModelMetadataProvider>
+          <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+            <FormView
+              resource={activeResource.modelLabel}
+              id={options.isCreate ? null : "doc-1"}
+              fields={[{ name: "title", label: "Title", title: true }]}
+              formExtras={(context) => { surface = context.form; return null; }}
+              recordExtras={options.recordExtras}
+            />
+          </AppRuntimeProvider>
         </OperationDocumentsProvider>
       ) : <Probe />}
     </ToastProvider></ModalsHost></RouterContextProvider>
-  </Refine>);
+  </Provider>);
   if (!options.isCreate) {
     if (options.publicView) await screen.findByDisplayValue("Charlie");
     else await screen.findByLabelText("c.label");

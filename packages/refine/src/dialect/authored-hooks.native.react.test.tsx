@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider, type LiveProvider } from "@refinedev/core";
-import { QueryClient, keepPreviousData } from "@tanstack/react-query";
+import type { LiveProvider } from "@refinedev/core";
+import { keepPreviousData } from "@tanstack/react-query";
 import { parse } from "graphql";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -9,13 +9,16 @@ import { afterEach, expect, test, vi } from "vitest";
 import { authoredQueryKey, authoredQueryOptions, useAuthoredQuery, useAuthoredQueryBatch } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { invalidateAuthoredQueries } from "../query-invalidation";
+import { createRefineTestProviders } from "../testing";
 
 type Data = { notes: { id: string }[] };
 type Variables = { id: string };
 const DOCUMENT = parse("query Notes($id: ID!) { notes(id: $id) { id } }") as TypedDocumentNode<Data, Variables>;
 const OTHER = parse("query ArchivedNotes($id: ID!) { notes(id: $id, archived: true) { id } }") as TypedDocumentNode<Data, Variables>;
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+const { Provider, dataProvider, createClient, clearClients } = createRefineTestProviders({
+  apiUrl: "test://query", providerNames: ["alternate"],
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -24,16 +27,15 @@ function deferred<T>() {
 }
 
 function fixture(custom = vi.fn(async () => ({ data: { notes: [{ id: "one" }] } })), liveProvider?: LiveProvider) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, placeholderData: keepPreviousData } } });
-  clients.push(client);
-  const provider = { getApiUrl: () => "test://query", getList: vi.fn(), getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(), custom } as unknown as DataProvider;
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, placeholderData: keepPreviousData } } });
+  const provider = { custom };
   const onError = vi.fn(async () => ({}));
   const notify = vi.fn();
   function Providers({ children }: { children: ReactNode }) {
-    return <Refine dataProvider={{ default: provider, alternate: provider }}
+    return <Provider dataProvider={provider} queryClient={client}
       authProvider={{ login: async () => ({ success: true }), logout: async () => ({ success: true }), check: async () => ({ authenticated: true }), onError }}
       notificationProvider={{ open: notify, close: vi.fn() }} liveProvider={liveProvider}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>{children}</Refine>;
+    >{children}</Provider>;
   }
   return { client, custom, onError, notify, wrapper: Providers };
 }
@@ -164,7 +166,7 @@ test("auth error policy covers data-only consumers and imperative refreshes", as
   renderHook(() => useAuthoredQuery(DOCUMENT, { id: "a" }).data, { wrapper: f.wrapper });
   await waitFor(() => expect(f.onError).toHaveBeenCalledTimes(1));
   expect(f.notify).toHaveBeenCalledTimes(1);
-  const provider = { custom: f.custom } as unknown as DataProvider;
+  const { dataProvider: provider } = createRefineTestProviders({ dataProvider: { custom: f.custom } });
   await act(async () => {
     await f.client.fetchQuery(authoredQueryOptions(f.client, () => provider, "default", DOCUMENT, { id: "a" })).catch(() => undefined);
   });
@@ -173,9 +175,10 @@ test("auth error policy covers data-only consumers and imperative refreshes", as
 });
 
 test("imperative authored refresh preserves all cache-registered model interests", async () => {
-  const client = new QueryClient();
-  clients.push(client);
-  const provider = { custom: async () => ({ data: { notes: [{ id: "a" }] } }) } as unknown as DataProvider;
+  const client = createClient();
+  const { dataProvider: provider } = createRefineTestProviders({
+    dataProvider: { custom: async () => ({ data: { notes: [{ id: "a" }] } }) },
+  });
   await client.fetchQuery(authoredQueryOptions(client, () => provider, "default", DOCUMENT, { id: "a" }, ["notes.Note"]));
   await client.fetchQuery(authoredQueryOptions(client, () => provider, "default", DOCUMENT, { id: "a" }, ["iam.User"]));
   const options = authoredQueryOptions(client, () => provider, "default", DOCUMENT, { id: "a" });
@@ -184,9 +187,8 @@ test("imperative authored refresh preserves all cache-registered model interests
 });
 
 test("a broad observer wins over an exact-record observer sharing one authored query", () => {
-  const client = new QueryClient();
-  clients.push(client);
-  const provider = {} as DataProvider;
+  const client = createClient();
+  const provider = dataProvider;
   const exact = authoredQueryOptions(
     client, () => provider, "default", DOCUMENT, { id: "a" },
     ["notes.Note"], [{ model: "notes.Note", id: "note-a" }],
@@ -198,9 +200,8 @@ test("a broad observer wins over an exact-record observer sharing one authored q
 });
 
 test("a related-only model with no direct rows does not become model-wide", () => {
-  const client = new QueryClient();
-  clients.push(client);
-  const provider = {} as DataProvider;
+  const client = createClient();
+  const provider = dataProvider;
   const options = authoredQueryOptions(
     client, () => provider, "default", DOCUMENT, { id: "a" },
     ["workflows.StepRun"], [], ["workflows.StepRun"],
@@ -224,9 +225,8 @@ test("native custom hashing keeps one query and still reports data-only consumer
 
 test("shared host default metadata is not mutated or reused between authored cache entries", () => {
   const meta = { host: "test", angeeModels: ["common.Model"] };
-  const client = new QueryClient({ defaultOptions: { queries: { meta } } });
-  clients.push(client);
-  const provider = {} as DataProvider;
+  const client = createClient({ defaultOptions: { queries: { meta } } });
+  const provider = dataProvider;
   const first = authoredQueryOptions(client, () => provider, "default", DOCUMENT, { id: "a" }, ["notes.Note"]);
   const second = authoredQueryOptions(client, () => provider, "default", DOCUMENT, { id: "b" }, ["iam.User"]);
   expect(first.meta?.angeeModels).toEqual(["common.Model", "notes.Note"]);

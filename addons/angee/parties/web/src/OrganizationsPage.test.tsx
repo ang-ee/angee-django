@@ -1,10 +1,9 @@
 // @vitest-environment happy-dom
 
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import type { ComponentProps, ReactElement } from "react";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { Refine, type DataProvider } from "@angee/refine";
-import { QueryClient } from "@tanstack/react-query";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -36,12 +35,11 @@ const resources = forms.map(({ resource }) => testDataResource(resource, {
     creatable: true, updatable: true, requiredOnCreate: false,
   })),
 }));
-const clients: QueryClient[] = [];
 
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://parties" });
 afterEach(() => {
   cleanup();
-  clients.forEach((client) => client.clear());
-  clients.length = 0;
+  clearClients();
 });
 
 function renderPartyForm(
@@ -49,24 +47,18 @@ function renderPartyForm(
   slots: ComponentProps<typeof AppRuntimeProvider>["runtime"]["slots"] = [],
 ) {
   const provider = {
-    getApiUrl: () => "test://parties",
     getOne: vi.fn(async () => ({ data: { id: "party-1", display_name: "Saved party" } })),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  clients.push(client);
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   return render(
-    <Refine resources={[...refineResourcesFromDataResources(resources)]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
+    <Provider resources={resources} dataProvider={provider} queryClientConfig={{ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(resources)}>
-          <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets, icons: baseIcons, slots }}>
-            {form}
-          </AppRuntimeProvider></ToastProvider></ModalsHost>
-        </ModelMetadataProvider>
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets, icons: baseIcons, slots }}>
+          {form}
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 }
 

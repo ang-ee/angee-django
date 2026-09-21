@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { ModelMetadataProvider, ResourceQuery, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { ResourceQuery } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
-import { Refine, type DataProvider } from "@angee/refine";
 import { AppRuntimeProvider, IMPLEMENTATION_DETAIL_SLOT, ImplementationDetails, ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/ui";
 
 vi.mock("@angee/refine", async (importOriginal) => ({
@@ -43,7 +44,8 @@ const resource = testDataResource("workflows.Step", {
   } }).contract,
 });
 
-afterEach(cleanup);
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://workflows" });
+afterEach(() => { cleanup(); clearClients(); });
 
 describe("WorkflowImplementationDetails", () => {
   test("shows declared contracts and scopes configured usage to the implementation key", async () => {
@@ -53,25 +55,21 @@ describe("WorkflowImplementationDetails", () => {
       { id: "step-call", name: "Send dispatch", key: "send-dispatch", step_class: "call", workflow },
     ];
     const provider = {
-      getApiUrl: () => "test://workflows",
       getList: vi.fn(async () => ({ data: rows, total: rows.length })),
-      getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-    } as DataProvider;
+    } satisfies RefineTestDataProvider;
     const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory() });
     render(
-      <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
+      <Provider resources={[resource]} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
         <RouterContextProvider router={router}>
-          <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-            <ModalsHost><ToastProvider>
-              <AppRuntimeProvider runtime={{ widgets: defaultWidgets, icons: baseIcons, slots: [
-                { slot: IMPLEMENTATION_DETAIL_SLOT, model: "workflows.Step", id: "usage", content: <WorkflowImplementationDetails /> },
-              ] }}>
-                <ImplementationDetails value={{ model: "workflows.Step", field: "step_class", choice: { key: "wait", category: "Flow", defaults: {}, config_schema: null } }} />
-              </AppRuntimeProvider>
-            </ToastProvider></ModalsHost>
-          </ModelMetadataProvider>
+          <ModalsHost><ToastProvider>
+            <AppRuntimeProvider runtime={{ widgets: defaultWidgets, icons: baseIcons, slots: [
+              { slot: IMPLEMENTATION_DETAIL_SLOT, model: "workflows.Step", id: "usage", content: <WorkflowImplementationDetails /> },
+            ] }}>
+              <ImplementationDetails value={{ model: "workflows.Step", field: "step_class", choice: { key: "wait", category: "Flow", defaults: {}, config_schema: null } }} />
+            </AppRuntimeProvider>
+          </ToastProvider></ModalsHost>
         </RouterContextProvider>
-      </Refine>,
+      </Provider>,
     );
 
     expect(screen.getByRole("heading", { name: "Data contracts" })).toBeTruthy();

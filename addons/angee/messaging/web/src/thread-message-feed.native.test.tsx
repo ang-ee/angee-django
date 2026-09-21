@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
+import { createUiTestProviders } from "@angee/ui/testing";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider, type LiveProvider } from "@refinedev/core";
-import { QueryClient, keepPreviousData } from "@tanstack/react-query";
+import type { LiveProvider } from "@refinedev/core";
+import { keepPreviousData } from "@tanstack/react-query";
 import { authoredQueryReadsAnyModel, createAngeeChangeLiveProvider } from "@angee/refine";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -16,9 +17,9 @@ import { ThreadTranscriptDocument, ThreadTranscriptRevalidateDocument } from "./
 import { messageFeedRows } from "./message-feed";
 import { useThreadMessageFeed } from "./thread-message-feed";
 
-const clients: QueryClient[] = [];
+const { Provider, createClient, clearClients } = createUiTestProviders({ apiUrl: "test://messages", providerNames: [] });
 beforeEach(() => { auth.actor = "actor-a"; });
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+afterEach(() => { cleanup(); clearClients(); });
 
 const row = (id: number) => ({ id: `message-${id}`, feed_order_key: `v1:000${id}`, preview: `Message ${id}` });
 const page = (messages = [row(3), row(2)], more = true) => ({
@@ -27,8 +28,7 @@ const page = (messages = [row(3), row(2)], more = true) => ({
 });
 
 function fixture(nativeLive = false) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, placeholderData: keepPreviousData } } });
-  clients.push(client);
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, placeholderData: keepPreviousData } } });
   let refreshed = false;
   let denied = false;
   const custom = vi.fn(async ({ meta }: { meta: { gqlQuery: unknown; gqlVariables: Record<string, unknown>; signal: AbortSignal } }) => {
@@ -47,7 +47,6 @@ function fixture(nativeLive = false) {
       : page(refreshed ? [row(4), row(3)] : undefined),
     } };
   });
-  const provider = { getApiUrl: () => "test://messages", getList: vi.fn(), getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(), custom } as unknown as DataProvider;
   const subscribe = vi.fn<LiveProvider["subscribe"]>(() => "messages");
   const unsubscribe = vi.fn();
   const roots = [
@@ -65,11 +64,12 @@ function fixture(nativeLive = false) {
   } as never, roots.map(([modelLabel, changes]) => ({ schemaName: "console", modelLabel, roots: { changes } })), { queryClient: client });
   const onError = vi.fn(async () => ({}));
   const notify = vi.fn();
+  const dataProvider = { custom };
   function Providers({ children }: { children: ReactNode }) {
-    return <Refine dataProvider={provider} liveProvider={nativeLive ? nativeProvider : { subscribe, unsubscribe }}
+    return <Provider dataProvider={dataProvider} queryClient={client} liveProvider={nativeLive ? nativeProvider : { subscribe, unsubscribe }}
       authProvider={{ login: async () => ({ success: true }), logout: async () => ({ success: true }), check: async () => ({ authenticated: true }), onError }}
       notificationProvider={{ open: notify, close: vi.fn() }}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>{children}</Refine>;
+    >{children}</Provider>;
   }
   return { client, custom, subscribe, unsubscribe, onError, notify, wrapper: Providers,
     refresh: () => { refreshed = true; }, deny: () => { denied = true; },

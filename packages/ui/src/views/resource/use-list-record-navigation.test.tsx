@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import * as React from "react";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type DataResourceMetadata, type Row } from "@angee/metadata";
+import type { GetListParams } from "@refinedev/core";
+import type { DataResourceMetadata, Row } from "@angee/metadata";
 import { testDataResource, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 import type { ResourceListSnapshot, ListViewNavigationScope } from "./resource-view-surface";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
 import { useListRecordNavigation } from "./use-list-record-navigation";
@@ -23,18 +23,17 @@ const resource = testDataResource("notes.Note", {
   } }),
 });
 const scope: ListViewNavigationScope = { filter: { AND: [{ title: { iContains: "needle" } }, { status: { exact: "active" } }] }, order: { updated_at: "DESC" }, page: 1, pageSize: 2 };
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+const { Provider, createClient, clearClients } = createUiTestProviders({ apiUrl: "test://notes" });
+afterEach(() => { cleanup(); clearClients(); });
 function fixture({ initialScope = scope, initialId = "b", total = 4, getPage, dataResource = resource }: { dataResource?: DataResourceMetadata; initialScope?: ListViewNavigationScope | null; initialId?: string | null; total?: number | (() => number); getPage?: (page: number) => Promise<Row[]> } = {}) {
   const getList = vi.fn(async (params: GetListParams) => {
     const currentTotal = typeof total === "function" ? total() : total;
     return { data: await (getPage?.(params.pagination!.currentPage!) ?? Promise.resolve(params.pagination?.currentPage === 2 ? [{ id: "c" }, { id: "d" }] : [{ id: "a" }, { id: "b" }])), ...(currentTotal >= 0 ? { total: currentTotal } : {}) };
   });
-  const provider = { getApiUrl: () => "test://notes", getList, getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const onSelect = vi.fn();
-  const wrapper = ({ children }: { children: React.ReactNode }) => <Refine resources={[...refineResourcesFromDataResources([dataResource, testDataResource("notes.Other")])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([dataResource, testDataResource("notes.Other")])}>{children}</ModelMetadataProvider></Refine>;
+  const dataProvider = { getList };
+  const wrapper = ({ children }: { children: React.ReactNode }) => <Provider resources={[dataResource, testDataResource("notes.Other")]} dataProvider={dataProvider} queryClient={client}>{children}</Provider>;
   const hook = renderHook(() => {
     const [id, setId] = React.useState(initialId);
     const [context, setContext] = React.useState(initialScope);

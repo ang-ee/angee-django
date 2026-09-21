@@ -1,8 +1,6 @@
 // @vitest-environment happy-dom
 
 import {
-  ModelMetadataProvider,
-  refineResourcesFromDataResources,
   schemaFieldMetadataFromDataResources,
   type Row,
   type SchemaFieldMetadata,
@@ -15,12 +13,11 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { Refine, type DataProvider } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
+import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec, type FormSpecFieldDescriptor } from "./form-spec";
 import { LabeledDescriptorField } from "./MutationDialog";
@@ -49,8 +46,7 @@ const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
 describe("rows widget", () => {
   afterEach(() => {
     cleanup();
-    clients.forEach((client) => client.clear());
-    clients.length = 0;
+    clearClients();
   });
 
   test("renders a deserialized array-of-objects schema through the real registry", async () => {
@@ -245,35 +241,23 @@ function rowsField(
   };
 }
 
-const clients: QueryClient[] = [];
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://channels",
+  metadata,
+  queryClientConfig: { defaultOptions: { queries: { retry: false } } },
+});
 
 function renderRows(children: ReactElement) {
   const getOne = vi.fn(async ({ id }: { id: string }) => ({
     data: channelRows.find((row) => row.id === id),
   }));
   const getList = vi.fn(async () => ({ data: channelRows, total: channelRows.length }));
-  const provider = {
-    getApiUrl: () => "test://channels",
-    getOne,
-    getList,
-    create: vi.fn(),
-    update: vi.fn(),
-    deleteOne: vi.fn(),
-  } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  clients.push(client);
   const view = render(
-    <Refine
-      resources={[...refineResourcesFromDataResources(metadata.resources)]}
-      dataProvider={{ default: provider, console: provider }}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}
-    >
-      <ModelMetadataProvider metadata={metadata}>
-        <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-          {children}
-        </AppRuntimeProvider>
-      </ModelMetadataProvider>
-    </Refine>,
+    <Provider dataProvider={{ getOne, getList }}>
+      <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        {children}
+      </AppRuntimeProvider>
+    </Provider>,
   );
   return { ...view, getOne, getList };
 }

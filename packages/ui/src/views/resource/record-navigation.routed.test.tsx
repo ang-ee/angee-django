@@ -1,11 +1,10 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
+import type { GetListParams } from "@refinedev/core";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 import { routeSearchString } from "../../runtime/route-href";
 import { RoutedRecordController } from "./resource-routing";
 import { useListRecordNavigation } from "./use-list-record-navigation";
@@ -25,13 +24,13 @@ const resource = testDataResource("notes.Note", {
   } }),
 });
 const scope: ListViewNavigationScope = { filter: { title: { iContains: "draft" }, updated_at: { gte: "2026-09-01", lt: "2026-10-01" } }, order: { updated_at: "DESC" }, page: 1, pageSize: 2 };
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+const { Provider, clients, clearClients } = createUiTestProviders({
+  apiUrl: "test://notes",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 async function fixture(initialPath = "/notes?group=updated_at%3Amonth&page=3&keep=external") {
   const getList = vi.fn(async (params: GetListParams) => ({ data: params.pagination?.currentPage === 2 ? [{ id: "c" }] : [{ id: "a" }, { id: "b" }], total: 3 }));
-  const provider = { getApiUrl: () => "test://notes", getList, getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
   function Body({ controller }: { controller: ResourceRecordController }) {
     const navigation = useListRecordNavigation({ resource: "notes.Note", recordId: controller.recordId, navigationScope: controller.navigationScope, onSelect: controller.onSelect });
     return <>
@@ -41,14 +40,15 @@ async function fixture(initialPath = "/notes?group=updated_at%3Amonth&page=3&kee
       {navigation.navigation ? <RecordPager navigation={navigation.navigation} /> : null}
     </>;
   }
-  const root = createRootRoute({ component: () => <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><RoutedRecordController resource="notes.Note" newRecordId="new">{(controller) => <Body controller={controller} />}</RoutedRecordController></ModelMetadataProvider></Refine> });
+  const dataProvider = { getList };
+  const root = createRootRoute({ component: () => <Provider resources={[resource]} dataProvider={dataProvider}><RoutedRecordController resource="notes.Note" newRecordId="new">{(controller) => <Body controller={controller} />}</RoutedRecordController></Provider> });
   const collection = createRoute({ getParentRoute: () => root, path: "notes" });
   const record = createRoute({ getParentRoute: () => collection, path: "$id" });
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createRouter({ routeTree: root.addChildren([collection.addChildren([record])]), history, parseSearch: (value) => Object.fromEntries(new URLSearchParams(value)), stringifySearch: (value) => { const query = routeSearchString(value); return query ? `?${query}` : ""; } });
   render(<RouterProvider router={router} />);
   await screen.findByText("Open second");
-  return { router, getList, client };
+  return { router, getList, client: clients.at(-1)! };
 }
 
 test("copied record links restore native query navigation, page edges preserve the parent, close removes only context", async () => {

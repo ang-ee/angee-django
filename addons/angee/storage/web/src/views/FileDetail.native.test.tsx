@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider } from "@refinedev/core";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
+import type { Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { AppRuntimeProvider, ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/ui";
 import { afterEach, expect, test, vi } from "vitest";
@@ -19,8 +20,8 @@ const resource = testDataResource("storage.File", {
     updatable: name === "title", requiredOnCreate: false,
   })),
 });
-const metadata = schemaFieldMetadataFromDataResources([resource]);
-afterEach(cleanup);
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://files" });
+afterEach(() => { cleanup(); clearClients(); });
 
 test("route identity starts the native form read without a preview and resets values while the next file loads", async () => {
   const pending = new Map<string, (value: { data: Row }) => void>();
@@ -29,22 +30,20 @@ test("route identity starts the native form read without a preview and resets va
   }));
   const update = vi.fn(async () => ({ data: {} }));
   const provider = {
-    getApiUrl: () => "test://files", getOne, update, create: vi.fn(), deleteOne: vi.fn(),
+    getOne, update,
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-  } as DataProvider;
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const onChanged = vi.fn();
   function Tree({ id, filename }: { id: string; filename?: string }) {
     return (
-      <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
+      <Provider resources={[resource]} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
         <RouterContextProvider router={router}>
-          <ModelMetadataProvider metadata={metadata}>
-            <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets }}>
-              <ModalsHost><ToastProvider><FileDetail id={id} filename={filename} onChanged={onChanged} /></ToastProvider></ModalsHost>
-            </AppRuntimeProvider>
-          </ModelMetadataProvider>
+          <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets }}>
+            <ModalsHost><ToastProvider><FileDetail id={id} filename={filename} onChanged={onChanged} /></ToastProvider></ModalsHost>
+          </AppRuntimeProvider>
         </RouterContextProvider>
-      </Refine>
+      </Provider>
     );
   }
   const view = render(<Tree id="file-a" />);

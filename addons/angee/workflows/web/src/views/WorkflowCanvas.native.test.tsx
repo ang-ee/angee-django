@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import * as React from "react";
 import { testDataResource } from "@angee/metadata/testing";
-import { Refine, type DataProvider } from "@angee/refine";
 import { AppRuntimeProvider, Field, Form, ModalsHost, ToastProvider, defaultWidgets, type GraphViewGeometry, type RecordPanelContext } from "@angee/ui";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
-import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WorkflowInputPreviewProvider } from "./workflow-input-preview";
 import { decisionContextWidgets } from "./DecisionContextWidgets";
 
@@ -193,6 +193,9 @@ beforeAll(() => {
   Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: ResizeObserverStub });
 });
 
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://workflows" });
+afterEach(() => { cleanup(); clearClients(); });
+
 beforeEach(() => {
   cleanup();
   canvasSurface = null;
@@ -261,59 +264,56 @@ function renderCanvas(initial?: { nodes?: Record<string, Record<string, unknown>
   const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => null });
   const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute]), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const provider = {
-    getApiUrl: () => "test://workflows",
     getOne: vi.fn(async () => ({ data: mocks.record })),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
     create: vi.fn(async () => ({ data: mocks.record })),
     update: vi.fn(async () => ({ data: mocks.record })),
     deleteOne: vi.fn(async () => ({ data: mocks.record })),
-  } as DataProvider;
+  } satisfies RefineTestDataProvider;
   const dataResources = [workflowResource, stepResource, edgeResource];
   const node = { ...mocks.record, position: { x: 0, y: 0 }, clientKey: undefined };
   const initialNodes: Record<string, Record<string, unknown>> = initial?.nodes ?? { step_1: node };
   const initialEdges = initial?.edges ?? {};
   render(
-    <Refine resources={[...refineResourcesFromDataResources(dataResources)]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
+    <Provider resources={dataResources} dataProvider={provider}>
       <RouterContextProvider router={router}>
-        <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources(dataResources)}>
-          <ModalsHost>
-            <ToastProvider>
-              <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...decisionContextWidgets } }}>
-                <Form
-                  resource="workflows.Workflow"
-                  id="workflow_1"
-                  readOnly={mocks.workflowStatus !== "DRAFT"}
-                  acknowledgedSource={{
-                    record: { id: "workflow_1", name: "Workflow" },
-                    values: {
-                      id: "workflow_1", name: "Workflow", status: mocks.workflowStatus, version: 1,
-                      definition: { revision: 1, nodes: initialNodes, edges: initialEdges, readiness: initial?.readiness ?? [] },
+        <ModalsHost>
+          <ToastProvider>
+            <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...decisionContextWidgets } }}>
+              <Form
+                resource="workflows.Workflow"
+                id="workflow_1"
+                readOnly={mocks.workflowStatus !== "DRAFT"}
+                acknowledgedSource={{
+                  record: { id: "workflow_1", name: "Workflow" },
+                  values: {
+                    id: "workflow_1", name: "Workflow", status: mocks.workflowStatus, version: 1,
+                    definition: { revision: 1, nodes: initialNodes, edges: initialEdges, readiness: initial?.readiness ?? [] },
+                  },
+                }}
+                recordTabs={[{ id: "editor", label: "Editor", render: (context) => {
+                  canvasSurface = context.form;
+                  const canvas = initial?.history
+                    ? <CanvasHistoryHarness context={context} />
+                    : <WorkflowCanvas context={context} />;
+                  return <WorkflowInputPreviewProvider value={{
+                    prepare: (identity) => {
+                      const target = initialNodes[identity];
+                      return target?.id
+                        ? { workflow: "workflow_1", expectedRevision: 1, edit: {}, target: { id: String(target.id) } }
+                        : null;
                     },
-                  }}
-                  recordTabs={[{ id: "editor", label: "Editor", render: (context) => {
-                    canvasSurface = context.form;
-                    const canvas = initial?.history
-                      ? <CanvasHistoryHarness context={context} />
-                      : <WorkflowCanvas context={context} />;
-                    return <WorkflowInputPreviewProvider value={{
-                      prepare: (identity) => {
-                        const target = initialNodes[identity];
-                        return target?.id
-                          ? { workflow: "workflow_1", expectedRevision: 1, edit: {}, target: { id: String(target.id) } }
-                          : null;
-                      },
-                      stale: vi.fn(),
-                    }}>{canvas}</WorkflowInputPreviewProvider>;
-                  }, keepMounted: true }]}
-                  defaultRecordTab="editor"
-                  overviewTab={{ label: "Settings", position: "last" }}
-                >{initial?.settings ? <Field name="name" /> : null}</Form>
-              </AppRuntimeProvider>
-            </ToastProvider>
-          </ModalsHost>
-        </ModelMetadataProvider>
+                    stale: vi.fn(),
+                  }}>{canvas}</WorkflowInputPreviewProvider>;
+                }, keepMounted: true }]}
+                defaultRecordTab="editor"
+                overviewTab={{ label: "Settings", position: "last" }}
+              >{initial?.settings ? <Field name="name" /> : null}</Form>
+            </AppRuntimeProvider>
+          </ToastProvider>
+        </ModalsHost>
       </RouterContextProvider>
-    </Refine>,
+    </Provider>,
   );
 }
 

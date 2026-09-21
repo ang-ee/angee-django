@@ -427,7 +427,7 @@ function addonRepositoryRoots(): string[] {
 }
 
 function importViolations(packages: readonly PackageRoot[]): string[] {
-  const violations: string[] = [];
+  const violations = publishedVitestViolations(packages);
   for (const pkg of packages) {
     const dependencies = packageDependencies(pkg.root);
     for (const file of sourceFiles(pkg.root)) {
@@ -474,6 +474,96 @@ function importViolations(packages: readonly PackageRoot[]): string[] {
     }
   }
   return violations;
+}
+
+function publishedVitestViolations(packages: readonly PackageRoot[]): string[] {
+  const extensions = [...SOURCE_EXTENSIONS, ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+  const isSourceTarget = (target: string): boolean =>
+    extensions.some((extension) => target.endsWith(extension)) && existsSync(target);
+  const owners = packages.filter((pkg) => pkg.name.startsWith("@angee/")).map((pkg) => {
+    const manifest: {
+      exports?: Record<string, unknown>;
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    } = JSON.parse(readFileSync(join(pkg.root, "package.json"), "utf8"));
+    return {
+      ...pkg,
+      exports: manifest.exports ?? {},
+      optionalVitest: Boolean(manifest.peerDependencies?.vitest)
+        && manifest.peerDependenciesMeta?.vitest?.optional === true,
+    };
+  });
+  const entries = owners.flatMap((owner) => Object.entries(owner.exports).map(([key, value]) => ({
+    owner,
+    key,
+    specifier: owner.name + (key === "." ? "" : key.slice(1)),
+    targets: [...new Set(exportTargets(value))].map((target) => resolve(owner.root, target)),
+  })));
+  const options: ts.CompilerOptions = {
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    allowJs: true,
+    paths: Object.fromEntries(entries.map((entry) => [entry.specifier, entry.targets])),
+  };
+  const graph = new Map<string, { importsVitest: boolean; targets: string[] }>();
+  const violations = new Set<string>();
+  const reachesVitest = (file: string, visited: Set<string>): boolean => {
+    if (visited.has(file)) return false;
+    visited.add(file);
+    let node = graph.get(file);
+    if (!node) {
+      const imports = importSpecifiers(file);
+      node = {
+        importsVitest: imports.some((specifier) => specifier === "vitest" || specifier.startsWith("vitest/")),
+        targets: imports.flatMap((specifier) => {
+          if (!specifier.startsWith(".") && !owners.some((owner) => owner.name === angeePackageName(specifier))) {
+            return [];
+          }
+          const exported = entries.find((entry) => entry.specifier === specifier);
+          if (exported) {
+            return exported.targets.filter(isSourceTarget);
+          }
+          // Keep explicit JS sources visible when a neighboring declaration exists.
+          const explicit = resolve(dirname(file), specifier);
+          if (specifier.startsWith(".") && isSourceTarget(explicit)) {
+            return [explicit];
+          }
+          const target = ts.resolveModuleName(specifier, file, options, ts.sys).resolvedModule?.resolvedFileName;
+          return target ? [target] : [];
+        }),
+      };
+      graph.set(file, node);
+      if (node.importsVitest) {
+        const owner = owners.find((pkg) => !relativeImportEscapes(pkg.root, file, "./"));
+        if (owner && !owner.optionalVitest) {
+          violations.add(`${workspaceRelative(file)} imports vitest without an optional peer in ${owner.name}`);
+        }
+      }
+    }
+    // Visit all dependencies so every direct runner owner gets its peer checked.
+    const children = node.targets.map((target) => reachesVitest(target, visited));
+    return node.importsVitest || children.some(Boolean);
+  };
+  for (const entry of entries) {
+    const files = entry.targets.flatMap((target) => target.includes("*")
+      // Wildcard source exports also match tests that the package build excludes.
+      ? ts.sys.readDirectory(entry.owner.root, extensions, undefined, [target])
+        .filter((file) => !isTestFile(file))
+      : isSourceTarget(target) ? [target] : []);
+    const importsVitest = files.map((file) => reachesVitest(file, new Set())).some(Boolean);
+    // The app's config entry is test tooling, just like public testing helpers.
+    const testing = entry.key === "./testing" || entry.key.startsWith("./testing/")
+      || entry.specifier === "@angee/app/vitest";
+    if (importsVitest && !testing) {
+      violations.add(`${entry.specifier} is a non-testing published entry that reaches vitest`);
+    }
+  }
+  return [...violations].sort();
+}
+
+function exportTargets(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(exportTargets);
+  return isRecord(value) ? Object.values(value).flatMap(exportTargets) : [];
 }
 
 function isRepositoryPackage(pkg: PackageRoot): boolean {
@@ -551,27 +641,25 @@ function importSpecifiers(file: string): string[] {
     text,
     ts.ScriptTarget.Latest,
     true,
-    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
   const specifiers: string[] = [];
   const visit = (node: ts.Node): void => {
-    const dynamicImportArgument = ts.isCallExpression(node)
-      ? node.arguments[0]
-      : undefined;
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
-      && node.moduleSpecifier
-      && ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      specifiers.push(node.moduleSpecifier.text);
+    let specifier: ts.Node | undefined;
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      specifier = node.moduleSpecifier;
+    } else if (ts.isExternalModuleReference(node)) {
+      specifier = node.expression;
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      specifier = node.argument.literal;
     } else if (
       ts.isCallExpression(node)
-      && node.expression.kind === ts.SyntaxKind.ImportKeyword
-      && node.arguments.length === 1
-      && dynamicImportArgument !== undefined
-      && ts.isStringLiteral(dynamicImportArgument)
+      && (node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(node.expression) && node.expression.text === "require"))
     ) {
-      specifiers.push(dynamicImportArgument.text);
+      specifier = node.arguments[0];
+    }
+    if (specifier && ts.isStringLiteralLike(specifier)) {
+      specifiers.push(specifier.text);
     }
     ts.forEachChild(node, visit);
   };

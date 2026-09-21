@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
+import { createUiTestProviders } from "@angee/ui/testing";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
 import { authoredQueryReadsAnyModel, createAngeeChangeLiveProvider } from "@angee/refine";
 import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -14,14 +13,13 @@ vi.mock("@angee/app", async (original) => ({
 import { NexusTimeline, NexusTimelineRevalidate } from "./documents";
 import { TimelinePane } from "./TimelinePane";
 
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+const { Provider, createClient, clearClients } = createUiTestProviders({ apiUrl: "test://timeline", providerNames: [] });
+afterEach(() => { cleanup(); clearClients(); });
 
 const row = (id: number) => ({ id: `message-${id}`, feed_order_key: `v1:000${id}`, preview: `Message ${id}`, sender: null, thread: null });
 
 function fixture() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   let refreshed = false;
   let denied = false;
   let missing = false;
@@ -47,7 +45,6 @@ function fixture() {
       has_older_than_through: !variables.beforeCursor,
     } } };
   });
-  const provider = { getApiUrl: () => "test://timeline", getList: vi.fn(), getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(), custom } as unknown as DataProvider;
   const onError = vi.fn(async () => ({}));
   const roots = [
     ["messaging.Message", "messageChanged"], ["messaging.Thread", "threadChanged"],
@@ -62,10 +59,11 @@ function fixture() {
       return () => { sinks.delete(root); };
     }, on: () => () => undefined,
   } as never, roots.map(([modelLabel, changes]) => ({ schemaName: "console", modelLabel, roots: { changes } })), { queryClient: client });
+  const dataProvider = { custom };
   function Providers({ children }: { children: ReactNode }) {
-    return <Refine dataProvider={provider} liveProvider={liveProvider}
+    return <Provider dataProvider={dataProvider} queryClient={client} liveProvider={liveProvider}
       authProvider={{ login: async () => ({ success: true }), logout: async () => ({ success: true }), check: async () => ({ authenticated: true }), onError }}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>{children}</Refine>;
+    >{children}</Provider>;
   }
   return { client, custom, wrapper: Providers, refresh: () => { refreshed = true; }, deny: () => { denied = true; }, missing: () => { missing = true; }, empty: () => { emptied = true; },
     emit: (model: string) => {

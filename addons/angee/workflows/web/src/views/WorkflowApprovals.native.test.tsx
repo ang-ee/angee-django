@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
-import { Refine, type DataProvider } from "@angee/refine";
 import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets } from "@angee/ui";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
@@ -76,8 +76,10 @@ const resource = testDataResource("workflows.Decision", {
   } }),
 });
 
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://workflows", resources: [resource], providerNames: ["public"] });
 afterEach(() => {
   cleanup();
+  clearClients();
   exactVariables.length = 0;
   authoredMode.current = "success";
   authoredVerdict.current = "PENDING";
@@ -86,20 +88,18 @@ afterEach(() => {
 test("the native scoped collection opens only the selected Run decision task", async () => {
   const row = { id: "decision-1", action: "review", verdict: "PENDING", priority: 1, updated_at: "2026-09-09T00:00:00Z" };
   const provider = {
-    getApiUrl: () => "test://workflows",
     getList: vi.fn(async () => ({ data: [row], total: 1 })),
     getOne: vi.fn(async () => ({ data: row })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
-      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+    <Provider dataProvider={provider}>
+      <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
           <WorkflowApprovals runId="run-1" />
         </AppRuntimeProvider></ToastProvider></ModalsHost>
-      </ModelMetadataProvider></RouterContextProvider>
-    </Refine>,
+      </RouterContextProvider>
+    </Provider>,
   );
 
   await waitFor(() => expect(provider.getList).toHaveBeenCalledWith(expect.objectContaining({
@@ -119,20 +119,18 @@ test("the native scoped collection opens only the selected Run decision task", a
 test("the global inbox uses native paging and an exact historical decision read", async () => {
   const row = { id: "decision-1", action: "review", verdict: "PENDING", priority: 1, updated_at: "2026-09-09T00:00:00Z" };
   const provider = {
-    getApiUrl: () => "test://workflows",
     getList: vi.fn(async () => ({ data: [row], total: 41 })),
     getOne: vi.fn(async () => ({ data: row })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
-      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+    <Provider dataProvider={provider}>
+      <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
           <WorkflowApprovals />
         </AppRuntimeProvider></ToastProvider></ModalsHost>
-      </ModelMetadataProvider></RouterContextProvider>
-    </Refine>,
+      </RouterContextProvider>
+    </Provider>,
   );
 
   await waitFor(() => expect(provider.getList).toHaveBeenCalledWith(expect.objectContaining({ pagination: expect.objectContaining({ pageSize: 20 }) })));
@@ -143,18 +141,17 @@ test("the global inbox uses native paging and an exact historical decision read"
 
 test("a record overlay renders one exact target task without mounting a nested Decision collection", async () => {
   const provider = {
-    getApiUrl: () => "test://workflows",
-    getList: vi.fn(), getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+    getList: vi.fn(),
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
-      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+    <Provider dataProvider={provider}>
+      <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
           <WorkflowApprovals target={{ model: "parties.Party", id: "party-7", tab: "accounting" }} decisionId="decision-1" selectedTaskOnly />
         </AppRuntimeProvider></ToastProvider></ModalsHost>
-      </ModelMetadataProvider></RouterContextProvider>
-    </Refine>,
+      </RouterContextProvider>
+    </Provider>,
   );
 
   expect(await screen.findByText("Approve tool")).toBeTruthy();
@@ -167,18 +164,17 @@ test("a run history link renders one completed Decision outside the pending coll
   authoredVerdict.current = "COMPLETED";
   const onDecisionChange = vi.fn();
   const provider = {
-    getApiUrl: () => "test://workflows",
-    getList: vi.fn(), getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+    getList: vi.fn(),
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
-      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+    <Provider dataProvider={provider}>
+      <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
           <WorkflowApprovals runId="run-1" decisionId="decision-1" selectedTaskOnly onDecisionChange={onDecisionChange} />
         </AppRuntimeProvider></ToastProvider></ModalsHost>
-      </ModelMetadataProvider></RouterContextProvider>
-    </Refine>,
+      </RouterContextProvider>
+    </Provider>,
   );
 
   expect(await screen.findByText("This approval is no longer pending.")).toBeTruthy();
@@ -191,19 +187,18 @@ test("a run history link renders one completed Decision outside the pending coll
 test("a selected target distinguishes query failure from a permission-masked unavailable result", async () => {
   const onDecisionChange = vi.fn();
   const provider = {
-    getApiUrl: () => "test://workflows",
-    getList: vi.fn(), getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+    getList: vi.fn(),
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const view = (mode: "success" | "error" | "empty", decisionId = "decision-1") => {
     authoredMode.current = mode;
-    return <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
-      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+    return <Provider dataProvider={provider}>
+      <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
           <WorkflowApprovals target={{ model: "parties.Party", id: "party-7", tab: "accounting" }} decisionId={decisionId} selectedTaskOnly onDecisionChange={onDecisionChange} />
         </AppRuntimeProvider></ToastProvider></ModalsHost>
-      </ModelMetadataProvider></RouterContextProvider>
-    </Refine>;
+      </RouterContextProvider>
+    </Provider>;
   };
 
   const rendered = render(view("success"));
@@ -228,18 +223,16 @@ test("dirty approval values use the shared leave guard before changing selection
     { id: "decision-2", action: "approve", verdict: "PENDING", priority: 2, updated_at: "2026-09-09T00:01:00Z" },
   ];
   const provider = {
-    getApiUrl: () => "test://workflows",
     getList: vi.fn(async () => ({ data: rows, total: 2 })),
     getOne: vi.fn(async ({ id }: { id: string }) => ({ data: rows.find((row) => row.id === id)! })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, public: provider }} options={{ disableTelemetry: true }}>
-      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+    <Provider dataProvider={provider}>
+      <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowApprovals /></AppRuntimeProvider></ToastProvider></ModalsHost>
-      </ModelMetadataProvider></RouterContextProvider>
-    </Refine>,
+      </RouterContextProvider>
+    </Provider>,
   );
   fireEvent.click(await screen.findByText("review"));
   fireEvent.click(await screen.findByRole("tab", { name: "Your decision" }));

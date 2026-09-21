@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider } from "@angee/refine";
+import { createUiTestProviders } from "@angee/ui/testing";
 import { AppRuntimeProvider, defaultWidgets } from "@angee/ui";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -22,26 +22,25 @@ import { WorkflowInputBindingEditor } from "./WorkflowInputBindingEditor";
 import { inputPreviewRequest, WorkflowInputPreviewProvider } from "./workflow-input-preview";
 import type { WorkflowDefinitionValues } from "./workflow-definition-state";
 
-afterEach(cleanup);
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
 
-function QueryProviders({ children }: { children: React.ReactNode; }) {
-  const provider = React.useMemo(() => ({
-    getApiUrl: () => "test://workflow-input",
-    getList: vi.fn(), getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
+const { Provider: QueryProviders, clearClients } = createUiTestProviders({
+  apiUrl: "test://workflow-input",
+  dataProvider: {
     custom: vi.fn(async ({ meta }: { meta?: { gqlVariables?: unknown; }; }) => {
       if (query.transport) return { data: await query.transport(meta?.gqlVariables) };
       if (query.current.error) throw query.current.error;
       return { data: query.current.data };
     }),
-  } as unknown as DataProvider), []);
-  return <Refine dataProvider={provider} options={{ disableTelemetry: true, reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false } } } } }}>{children}</Refine>;
-}
+  },
+  providerNames: [],
+  options: { reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false } } } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 function renderEditor(value: Record<string, unknown> | null, onStructuralChange = vi.fn()) {
   render(<QueryProviders><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><WorkflowInputPreviewProvider value={{ prepare: () => ({ workflow: "workflow_1", expectedRevision: 1, edit: {}, target: { id: "target" } }), stale: vi.fn() }}><WorkflowInputBindingEditor
