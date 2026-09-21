@@ -79,7 +79,12 @@ def database_alias(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], AbstractC
     def copied_connection(alias: str) -> Iterator[str]:
         if alias in settings.DATABASES:
             raise ValueError(f"Database alias {alias!r} is already configured.")
+        # Enforce the test's database access before opening a dynamic connection.
+        connection.ensure_connection()
         copied = connection.copy(alias=alias)
+        # Django permits dynamically created connections. Open before registering
+        # the alias, which must then be visible to ORM connection enumeration.
+        copied.ensure_connection()
         with monkeypatch.context() as patch:
             patch.setitem(settings.DATABASES, alias, copied.settings_dict)
             connections[alias] = copied

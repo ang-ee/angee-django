@@ -100,7 +100,8 @@ def inference_request_parameters(
 ) -> ModelRequestParameters:
     """Build the one native request-parameter envelope used by direct inference.
 
-    A JSON-schema mapping requests one structured result. A sequence retains
+    A JSON-schema mapping supplies both native output shapes so the model's
+    profile can select JSON-schema or output-tool mode. A sequence retains
     pydantic-ai's native :class:`ToolDefinition` values as callable function tools;
     direct inference returns those calls without executing a tool loop.
     """
@@ -108,13 +109,22 @@ def inference_request_parameters(
     if output_schema is None:
         return ModelRequestParameters()
     if isinstance(output_schema, Mapping):
+        output = OutputObjectDefinition(
+            json_schema=dict(output_schema),
+            name=INFERENCE_OUTPUT_TOOL,
+            description="A structured result matching the declared JSON schema.",
+        )
         return ModelRequestParameters(
             output_mode="auto",
-            output_object=OutputObjectDefinition(
-                json_schema=dict(output_schema),
-                name=INFERENCE_OUTPUT_TOOL,
-                description="A structured result matching the declared JSON schema.",
-            ),
+            output_object=output,
+            output_tools=[
+                ToolDefinition(
+                    name=INFERENCE_OUTPUT_TOOL,
+                    parameters_json_schema=output.json_schema,
+                    description=output.description,
+                    kind="output",
+                )
+            ],
         )
     function_tools = list(output_schema)
     if not all(isinstance(tool, ToolDefinition) for tool in function_tools):

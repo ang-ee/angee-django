@@ -17,7 +17,7 @@ import os
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection, models
+from django.db import connection, models, transaction
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
@@ -101,7 +101,7 @@ def test_direct_path_update_cannot_bypass_the_saved_row_owner() -> None:
         with pytest.raises(ValidationError, match="saved-row owner"):
             queryset.all().update(path="/forged/")
         node.path = "/forged/"
-        with pytest.raises(ValidationError, match="saved-row owner"):
+        with pytest.raises(ValidationError, match="saved-row owner"), transaction.atomic():
             queryset.bulk_update([node], ["path"])
         node.refresh_from_db()
     assert node.path != "/forged/"
@@ -318,7 +318,7 @@ def test_bulk_parent_updates_cannot_bypass_the_saved_row_owner() -> None:
         with pytest.raises(ValidationError, match="saved-row owner"):
             queryset.update(parent_id=home.pk)
         node.parent = home
-        with pytest.raises(ValidationError, match="saved-row owner"):
+        with pytest.raises(ValidationError, match="saved-row owner"), transaction.atomic():
             queryset.bulk_update([node], ["parent"])
         node.refresh_from_db()
         assert (node.parent_id, node.path) == (old_parent, old_path)

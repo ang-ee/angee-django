@@ -55,8 +55,12 @@ def test_markdown_edits_read_and_dispatch_on_selected_alias(
         return body
 
     monkeypatch.setattr(MarkdownPageManager, "write_body", legacy_write)
-    with database_alias("content_writer") as using, system_context(reason="test.content.alias"):
-        monkeypatch.setattr(router, "routers", [TransitionRouter("wrong_writer")])
+    with (
+        monkeypatch.context() as patch,
+        database_alias("content_writer") as using,
+        system_context(reason="test.content.alias"),
+    ):
+        patch.setattr(router, "routers", [TransitionRouter("wrong_writer")])
         page._state.db = "wrong_instance"
         edited = getattr(MarkdownPage.objects, method)(
             page, *args, expected_hash=markdown.body_hash, using=using
@@ -118,6 +122,7 @@ def test_group_nondefault_visibility_fails_before_transaction(monkeypatch: pytes
     atomic.assert_not_called()
 
 
+@pytest.mark.django_db
 @pytest.mark.parametrize("stale", [False, True])
 def test_dashboard_archive_cas_uses_explicit_write_alias(monkeypatch: pytest.MonkeyPatch, stale: bool) -> None:
     """The model owns archive permission, the alias-bound row lock, CAS, and save."""

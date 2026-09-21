@@ -2082,12 +2082,12 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         return None
 
     def _has_tracking_values(self, *, using: str) -> bool:
-        """Return whether this message carries tracking values, reusing any prefetch."""
+        """Return whether tracking exists, reusing prefetch only on the same alias."""
 
-        cache = getattr(self, "_prefetched_objects_cache", None)
-        if cache is not None and "tracking_values" in cache:
-            return bool(self.tracking_values.all())
-        return self.tracking_values.using(using).exists()
+        tracking_values = self.tracking_values.db_manager(using).all()
+        if get_read_alias(tracking_values.model, bound=tracking_values, instance=self) != using:
+            tracking_values = tracking_values.using(using)
+        return tracking_values.exists()
 
     def can_edit(self, *, post_access: bool) -> bool:
         """Return whether a post-authorised actor may edit this message's body.

@@ -11,14 +11,14 @@ from unittest.mock import Mock
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.db import router, transaction
+from django.db import models, router, transaction
 from rebac import system_context
 
 from angee.graphql.publishing import mute_changes
 from angee.messaging import delivery
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.email import AnymailEmailChannelBackend
-from tests.messaging_models import Fragment, Message, Part, Thread, ThreadFollower, ThreadNotification
+from tests.messaging_models import Fragment, Message, Part, Thread, ThreadFollower, ThreadNotification, TrackingValue
 from tests.test_messaging import MessageEdge, MessageStar
 from tests.test_messaging import channel as channel
 from tests.test_messaging import messaging_tables as messaging_tables
@@ -146,6 +146,71 @@ def test_ingest_preserves_alias_through_resolve_replay_rebuild_and_quote_edges(
         assert Part.objects.using(messaging_alias).filter(message_id=row.pk).count() == 3
         assert MessageEdge.objects.using(messaging_alias).count() == 1
         assert Fragment.objects.using(messaging_alias).filter(text="Edited body").exists()
+    assert routing.writes == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("tracked", [False, True])
+def test_content_edit_validation_reads_tracking_on_selected_alias(
+    messaging_alias: str, monkeypatch: pytest.MonkeyPatch, tracked: bool
+) -> None:
+    """The write guard must inspect tracking rows on the operation's database."""
+
+    with system_context(reason="messaging edit validation routing setup"), mute_changes():
+        message = Message.objects.db_manager(messaging_alias).create(
+            direction=Message.Direction.INTERNAL,
+            message_type=Message.MessageKind.COMMENT,
+        )
+        if tracked:
+            TrackingValue.objects.db_manager(messaging_alias).create(
+                message_id=message.pk, field_name="status", field_label="Status"
+            )
+    routing = TransitionRouter("incorrect_writer")
+    message._state.db = "incorrect_instance"
+    with monkeypatch.context() as patch, system_context(reason="messaging edit validation routing"):
+        patch.setattr(router, "routers", [routing])
+        assert message.content_edit_error(using=messaging_alias) == (
+            "Messages with tracking values cannot be edited." if tracked else None
+        )
+    assert routing.writes == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("prefetched_alias", ["selected", "default"])
+def test_content_edit_validation_reuses_only_selected_alias_prefetch(
+    messaging_alias: str,
+    monkeypatch: pytest.MonkeyPatch,
+    django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
+    prefetched_alias: str,
+) -> None:
+    """A foreign prefetch must not hide tracking rows from the selected writer."""
+
+    same_alias = prefetched_alias == "selected"
+    with system_context(reason="messaging prefetched tracking setup"), mute_changes():
+        message = Message.objects.db_manager(messaging_alias).create(
+            direction=Message.Direction.INTERNAL,
+            message_type=Message.MessageKind.COMMENT,
+        )
+        message = (
+            Message.objects.using(messaging_alias)
+            .prefetch_related(
+                models.Prefetch(
+                    "tracking_values",
+                    queryset=TrackingValue.objects.using(messaging_alias if same_alias else "default"),
+                )
+            )
+            .get(pk=message.pk)
+        )
+        TrackingValue.objects.db_manager(messaging_alias).create(
+            message_id=message.pk, field_name="status", field_label="Status"
+        )
+    routing = TransitionRouter("incorrect_writer")
+    with monkeypatch.context() as patch, system_context(reason="messaging prefetched tracking validation"):
+        patch.setattr(router, "routers", [routing])
+        with django_assert_num_queries(0 if same_alias else 1, using=messaging_alias):
+            assert message.content_edit_error(using=messaging_alias) == (
+                None if same_alias else "Messages with tracking values cannot be edited."
+            )
     assert routing.writes == []
 
 

@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import httpx2
 import pytest
 from anthropic.types import Message, TextBlock, Usage
 from django.core.management import call_command
@@ -914,14 +915,15 @@ def inference_http(monkeypatch, request):
     clients = []
 
     async def respond(self, request):
+        transport_http = httpx2 if isinstance(request, httpx2.Request) else httpx
         content = b"".join([chunk async for chunk in request.stream])
-        requests.append(httpx.Request(request.method, request.url, headers=request.headers, content=content))
+        requests.append(transport_http.Request(request.method, request.url, headers=request.headers, content=content))
         if isinstance(scenario, int):
-            return httpx.Response(
+            return transport_http.Response(
                 scenario, json={"error": {"message": "provider rejected request", "type": "test"}}, request=request
             )
         if scenario == "tool":
-            return httpx.Response(
+            return transport_http.Response(
                 200,
                 json={
                     "id": "call-response",
@@ -954,7 +956,7 @@ def inference_http(monkeypatch, request):
             if request.url.path.endswith("/messages")
             else _FakeOpenAICompletions(None).create()
         )
-        return httpx.Response(200, json=response.model_dump(mode="json"), request=request)
+        return transport_http.Response(200, json=response.model_dump(mode="json"), request=request)
 
     def client_class(path):
         cls = import_string(path)
@@ -971,6 +973,7 @@ def inference_http(monkeypatch, request):
         return build
 
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", respond)
+    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", respond)
     monkeypatch.setattr("angee.agents.sdk_backends.import_string", client_class)
     return requests, clients
 
@@ -1008,34 +1011,44 @@ def test_direct_native_request_returns_tool_calls_without_executing_a_loop(agent
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("backend_class", ["openai", "ollama"])
 def test_direct_inference_builds_one_structured_multimodal_envelope(
     agents_tables,
     inference_http,
+    backend_class,
 ):
     provider = _provider(
-        "openai-structured-image",
-        backend_class="openai",
+        f"{backend_class}-structured-image",
+        backend_class=backend_class,
         material={"api_key": "api-key"},
     )
     with system_context(reason="test structured multimodal inference"):
         model = InferenceModel.objects.create(provider=provider, name="gpt-4.1")
 
+    output_schema = {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+        "additionalProperties": False,
+    }
     response, usage = model.infer(
         [ModelRequest(parts=[UserPromptPart("Read the image")])],
-        output_schema={
-            "type": "object",
-            "properties": {"text": {"type": "string"}},
-            "required": ["text"],
-            "additionalProperties": False,
-        },
+        output_schema=output_schema,
         images=(BinaryContent(b"image", media_type="image/jpeg"),),
         settings={"max_tokens": 16},
     )
 
     requests, clients = inference_http
     payload = json.loads(requests[-1].content)
-    assert payload["response_format"]["type"] == "json_schema"
-    assert payload["response_format"]["json_schema"]["name"] == "inference_output"
+    if backend_class == "ollama":
+        assert payload["response_format"]["type"] == "json_schema"
+        assert payload["response_format"]["json_schema"]["name"] == "inference_output"
+        assert payload["response_format"]["json_schema"]["schema"] == output_schema
+    else:
+        assert payload["tools"][0]["type"] == "function"
+        assert payload["tools"][0]["function"]["name"] == "inference_output"
+        assert payload["tools"][0]["function"]["parameters"] == output_schema
+        assert payload["tool_choice"] == "required"
     assert "data:image/jpeg;base64,aW1hZ2U=" in json.dumps(payload["messages"])
     assert response.text == "pong"
     assert usage == {"input_tokens": 3, "output_tokens": 1, "tokens": 4, "requests": 1}

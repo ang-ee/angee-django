@@ -25,7 +25,11 @@ def test_task_ordering_allocation_retains_explicit_ranks_and_selected_alias(
                 abstract = False
                 app_label = "tests"
 
-        task = RankTask(sort_order=12.5)
+        # The isolated registry omits the unrelated nullable relation targets.
+        task = RankTask(
+            sort_order=12.5,
+            **{field.attname: None for field in RankTask._meta.fields if field.many_to_one},
+        )
         task._state.db = "selected" if selection == "pinned" else "other"
         routing = TransitionRouter("unavailable-writer")
         monkeypatch.setattr(router, "routers", [routing])

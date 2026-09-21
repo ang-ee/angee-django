@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from typing import Any
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import connection, connections, models, router
+from django.db import connection, models, router
 from django.utils import timezone
 
 from angee.base.stages import Stage, StagedModelMixin
@@ -62,20 +63,17 @@ class RoutingSnoozeRecord(models.Model):
 
 
 @pytest.fixture
-def productivity_writer() -> Iterator[str]:
-    """Reuse the fixture database through a separate native connection alias."""
+def productivity_writer(database_alias: Callable[[str], AbstractContextManager[str]]) -> Iterator[str]:
+    """Expose the productivity schema through the shared connection factory."""
 
     test_models = (RoutingStageContainer, RoutingPipelineStage, RoutingStageRecord, RoutingSnoozeRecord)
     with connection.schema_editor() as editor:
         for model in test_models:
             editor.create_model(model)
-    alias = "productivity_writer"
-    connections[alias] = connection.copy(alias=alias)
     try:
-        yield alias
+        with database_alias("productivity_writer") as alias:
+            yield alias
     finally:
-        connections[alias].close()
-        del connections[alias]
         with connection.schema_editor() as editor:
             for model in reversed(test_models):
                 editor.delete_model(model)

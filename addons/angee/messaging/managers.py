@@ -3063,7 +3063,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             for field, value in defaults.items():
                 setattr(message, field, value)
             message.save(using=using)
-        message.parts.using(using).all().delete()
+        message.parts.db_manager(using).all().delete()
         position = self._write_envelope_parts(message, parsed, owner_id=owner_id, using=using)
         if parsed.body is not None:
             self._build_parts(message, parsed.body, parent=None, position=position, owner_id=owner_id, using=using)

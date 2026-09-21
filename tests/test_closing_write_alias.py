@@ -77,12 +77,12 @@ def test_explicit_rank_allocation_avoids_presave_alias_blindness(
     row = ClosingRankedRow(lane="one")
     field = ClosingRankedRow._meta.get_field("rank")
     routing = ClosingRouter("wrong_writer")
-    monkeypatch.setattr(router, "routers", [routing])
 
     def reject_default(*args: Any) -> None:
         raise AssertionError("An explicitly allocated rank touched the default connection.")
 
-    with connection.execute_wrapper(reject_default):
+    with monkeypatch.context() as patch, connection.execute_wrapper(reject_default):
+        patch.setattr(router, "routers", [routing])
         row.rank = field.get_append_rank_for_instance(row, using=closing_writer)
         row.save(using=closing_writer)
         second = ClosingRankedRow(lane="one")
@@ -100,7 +100,6 @@ def test_delete_preview_and_confirmation_share_the_writer(
 
     row = ClosingRankedRow.objects.using(closing_writer).create(lane="one", rank=1024.0)
     routing = ClosingRouter(closing_writer if entry == "router" else "wrong_writer")
-    monkeypatch.setattr(router, "routers", [routing])
     committed: list[str] = []
     kwargs = {}
     if entry == "queryset":
@@ -117,7 +116,8 @@ def test_delete_preview_and_confirmation_share_the_writer(
     def reject_default(*args: Any) -> None:
         raise AssertionError("Deletion touched the default connection.")
 
-    with connection.execute_wrapper(reject_default):
+    with monkeypatch.context() as patch, connection.execute_wrapper(reject_default):
+        patch.setattr(router, "routers", [routing])
         result = delete_by_public_id(
             ClosingRankedRow, str(row.pk), confirm=True, before_delete=before_delete, **kwargs,
         )

@@ -8,6 +8,8 @@ import pytest
 import reversion
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.sessions.base_session import AbstractBaseSession
+from django.test.utils import isolate_apps
 from rebac import (
     MissingActorError,
     PermissionDenied,
@@ -28,7 +30,7 @@ from angee.knowledge.models import (
     parse_wikilinks,
 )
 from angee.mcp.graphql import execute_under_actor
-from tests.conftest import Link, MarkdownPage, Page, SchemaAddon, Vault, create_user, vault_for
+from tests.conftest import Link, MarkdownPage, Page, RecordBinding, SchemaAddon, Vault, create_user, vault_for
 
 
 def test_create_for_sets_owner_and_audit_stamps(knowledge_tables: None) -> None:
@@ -504,26 +506,17 @@ def _rename(vault: Any, name: str) -> None:
 
 
 @pytest.mark.django_db
-def test_binding_teardown_ignores_string_pk_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+@isolate_apps()
+def test_binding_teardown_ignores_string_pk_rows() -> None:
     """A record whose canonical pk is not an integer is a no-op, not an error.
 
     The global pre_delete receiver runs for every model — django Session's
     string key crashed logout by coercing into the integer object_id filter.
     """
 
-    from types import SimpleNamespace
+    class Session(AbstractBaseSession):
+        class Meta:
+            app_label = "tests"
 
-    from django.apps import apps as django_apps
-    from django.contrib.contenttypes.models import ContentType
-
-    from angee.knowledge import models as knowledge_models
-
-    binding_model = django_apps.get_model("knowledge", "RecordBinding")
-    content_type = ContentType.objects.get_for_model(binding_model)
-    monkeypatch.setattr(
-        knowledge_models,
-        "canonical_record_target",
-        lambda record: (content_type, "5nak4kkrccy3b268oc6zt7hbcui3ru1l"),
-    )
-    probe = SimpleNamespace(pk=1)
-    binding_model.objects.teardown_for_record(probe)
+    probe = Session(session_key="5nak4kkrccy3b268oc6zt7hbcui3ru1l")
+    RecordBinding.objects.teardown_for_record(probe)

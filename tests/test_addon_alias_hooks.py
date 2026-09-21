@@ -49,10 +49,15 @@ def test_live_backend_legacy_hooks_follow_committed_desire(
             row = Channel._base_manager.using(using).get(pk=self.bridge.pk)
             observed.append((using, row.subscription_state["desired"]))
 
-    with database_alias("legacy_live_writer") as using, system_context(reason="test.alias.legacy_live"), mute_changes():
+    with (
+        database_alias("legacy_live_writer") as using,
+        system_context(reason="test.alias.legacy_live"),
+        mute_changes(),
+        monkeypatch.context() as patch,
+    ):
         channel = _live_channel("legacy-live-hooks")
-        monkeypatch.setattr(Channel, "backend", property(LegacyBackend))
-        monkeypatch.setattr(router, "routers", [TransitionRouter("wrong_writer")])
+        patch.setattr(Channel, "backend", property(LegacyBackend))
+        patch.setattr(router, "routers", [TransitionRouter("wrong_writer")])
         channel._state.db = "wrong_instance"
         channel.stop_live(using=using)
         channel.start_live(using=using)
@@ -66,7 +71,7 @@ def test_agent_render_dispatches_legacy_hooks_on_selected_alias(
 ) -> None:
     """The render owner pins affinity before all four old-signature hooks run."""
 
-    owner = get_user_model().objects.create_user(username="legacy-render-owner")
+    owner = get_user_model().objects.create_user(username="legacy-render-agent-owner")
     agent = _provisionable_agent(owner, "Legacy render", slug="legacy-render")
     observed: list[str] = []
 
@@ -83,8 +88,12 @@ def test_agent_render_dispatches_legacy_hooks_on_selected_alias(
     for method in ("provision_workspace_inputs", "provision_service_inputs", "mcp_secrets"):
         monkeypatch.setattr(Agent, method, inputs)
     monkeypatch.setattr(Agent, "provision_inference_secret", secret)
-    with database_alias("legacy_agent_writer") as using, system_context(reason="test.alias.legacy_render"):
-        monkeypatch.setattr(router, "routers", [TransitionRouter("wrong_writer")])
+    with (
+        database_alias("legacy_agent_writer") as using,
+        system_context(reason="test.alias.legacy_render"),
+        monkeypatch.context() as patch,
+    ):
+        patch.setattr(router, "routers", [TransitionRouter("wrong_writer")])
         agent._state.db = "wrong_instance"
         plan = _render_plan(agent, using=using)
         assert plan.workspace_inputs == plan.service_inputs == plan.mcp_secrets == {}
@@ -106,8 +115,8 @@ def test_inference_connect_dispatches_legacy_backend_hook(
             return get_write_alias(type(self.provider), instance=self.provider)
 
     monkeypatch.setattr(type(provider), "backend", property(LegacyBackend))
-    with database_alias("legacy_provider_writer") as using:
-        monkeypatch.setattr(router, "routers", [TransitionRouter("wrong_writer")])
+    with database_alias("legacy_provider_writer") as using, monkeypatch.context() as patch:
+        patch.setattr(router, "routers", [TransitionRouter("wrong_writer")])
         provider._state.db = "wrong_instance"
         assert agents_schema._provider_oauth_client(provider, using=using) == using
 

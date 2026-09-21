@@ -113,7 +113,7 @@ def test_provisioning_keeps_alias_through_external_work_callbacks_and_final_stat
 ) -> None:
     """Callbacks and completion persist on the admitted alias despite another writer router."""
 
-    owner = get_user_model().objects.create_user(username="routed-provision-owner")
+    owner = get_user_model().objects.create_user(username="routed-provision-agent-owner")
     agent = _provisionable_agent(owner, "Routed provision", slug="routed-provision")
     observed: list[tuple[str, str]] = []
 
@@ -219,7 +219,7 @@ def test_direct_provision_inputs_and_readiness_bind_uncached_relations(
     """Direct model entrypoints work without the GraphQL admission's eager relations."""
 
     provider = _provider("routed-inputs", backend_class="ollama")
-    owner = get_user_model().objects.create_user(username="routed-inputs-owner")
+    owner = get_user_model().objects.create_user(username="routed-inputs-agent-owner")
     with system_context(reason="test.agents.alias.inputs.seed"):
         if not has_credential:
             provider.credential = None

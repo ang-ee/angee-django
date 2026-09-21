@@ -17,7 +17,7 @@ import pytest
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import DatabaseError, connection
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from hatch_angee import AddonManifest
 from rebac import system_context
 
@@ -26,6 +26,7 @@ from angee.addons import addon_manifest, available_addons, resolve_app_config, r
 from angee.compose.appgraph import AppGraph
 from angee.compose.dependencies import AddonDependencyGroup
 from angee.platform import models as platform_models
+from angee.resources.models import Resource as AbstractResource
 from tests.conftest import make_addon
 from tests.test_platform_install import platform_tables as platform_tables
 
@@ -306,106 +307,109 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
 ) -> None:
     """Direct dependencies survive every state; live counts and admission follow Django."""
 
-    del platform_tables
-    addon = apps.get_model("platform", "Addon")
-    line = apps.get_model("linesdemo", "SaleLine")
-    loaded = make_addon(name="example.loaded", path=tmp_path / "loaded", depends_on=("django.contrib.auth",))
-    loaded.apps = apps
-    loaded.models = {"saleline": line}
-    loaded.angee_addon_root = True
-    loaded.angee_forced = False
-    installed_manifest = addon_module.parse_manifest(disabled_app / "addon.toml")
-    local_manifest = AddonManifest(name="example.unavailable", depends_on=("arp.base",))
-    available = {
-        loaded.name: (addon_manifest(loaded), Path(loaded.path)),
-        "arp.base": (installed_manifest, EntryPoint(name="arp.base", value="arp.base", group="angee.addons")),
-        local_manifest.name: (local_manifest, tmp_path / "unavailable"),
-    }
-    count_aliases = []
+    with monkeypatch.context() as patch:
+        del platform_tables
+        addon = apps.get_model("platform", "Addon")
+        line = apps.get_model("linesdemo", "SaleLine")
+        loaded = make_addon(name="example.loaded", path=tmp_path / "loaded", depends_on=("django.contrib.auth",))
+        loaded.apps = apps
+        loaded.models = {"saleline": line}
+        loaded.angee_addon_root = True
+        loaded.angee_forced = False
+        installed_manifest = addon_module.parse_manifest(disabled_app / "addon.toml")
+        local_manifest = AddonManifest(name="example.unavailable", depends_on=("arp.base",))
+        available = {
+            loaded.name: (addon_manifest(loaded), Path(loaded.path)),
+            "arp.base": (installed_manifest, EntryPoint(name="arp.base", value="arp.base", group="angee.addons")),
+            local_manifest.name: (local_manifest, tmp_path / "unavailable"),
+        }
+        count_aliases = []
 
-    def resource_counts(*, using):
-        count_aliases.append(using)
-        return {loaded.name: 7, "arp.base": 99}
+        def resource_counts(*, using):
+            count_aliases.append(using)
+            return {loaded.name: 7, "arp.base": 99}
 
-    monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: available)
-    monkeypatch.setattr(platform_models.composed, "addons", lambda: [loaded])
-    monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
-    monkeypatch.setattr(platform_models.composed, "resource_counts", resource_counts)
-    with system_context(reason="test.platform.reconcile-native-facts"):
-        addon.objects.create(
-            name="arp.base",
-            state=addon.State.ENABLED,
-            forced=True,
-            pending=True,
-            model_count=9,
-            field_count=9,
-            resource_count=9,
-            model_labels=["stale.Model"],
-        )
-        historical = addon.objects.create(
-            name="example.gone",
-            source=addon.Source.LOCAL,
-            state=addon.State.ENABLED,
-            depends_on=["example.historical_dependency"],
-            forced=True,
-            pending=True,
-            model_count=9,
-        )
-        remote = addon.objects.create(
-            name="example.remote",
-            source=addon.Source.REMOTE,
-            depends_on=["example.remote_dependency"],
-            vcs_path="addons/remote",
-        )
-        materialised = addon.objects.create(
-            name=local_manifest.name,
-            source=addon.Source.REMOTE,
-            vcs_path="addons/unavailable",
-        )
+        patch.setattr(platform_models, "available_addons", lambda _dirs: available)
+        patch.setattr(platform_models.composed, "addons", lambda: [loaded])
+        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
+        patch.setattr(platform_models.composed, "resource_counts", resource_counts)
+        with system_context(reason="test.platform.reconcile-native-facts"):
+            addon.objects.create(
+                name="arp.base",
+                state=addon.State.ENABLED,
+                forced=True,
+                pending=True,
+                model_count=9,
+                field_count=9,
+                resource_count=9,
+                model_labels=["stale.Model"],
+            )
+            historical = addon.objects.create(
+                name="example.gone",
+                source=addon.Source.LOCAL,
+                state=addon.State.ENABLED,
+                depends_on=["example.historical_dependency"],
+                forced=True,
+                pending=True,
+                model_count=9,
+            )
+            remote = addon.objects.create(
+                name="example.remote",
+                source=addon.Source.REMOTE,
+                depends_on=["example.remote_dependency"],
+                vcs_path="addons/remote",
+            )
+            materialised = addon.objects.create(
+                name=local_manifest.name,
+                source=addon.Source.REMOTE,
+                vcs_path="addons/unavailable",
+            )
 
-        addon.objects.reconcile_from_registry("default", desired=frozenset({loaded.name}))
+            addon.objects.reconcile_from_registry("default", desired=frozenset({loaded.name}))
 
-        enabled = addon.objects.get(name=loaded.name)
-        disabled = addon.objects.get(name="arp.base")
-        historical.refresh_from_db()
-        remote.refresh_from_db()
-        materialised.refresh_from_db()
-    assert count_aliases == ["default"]
-    assert (enabled.state, enabled.source, enabled.kind) == (
-        addon.State.ENABLED,
-        addon.Source.LOCAL,
-        addon.Kind.CONSUMER,
-    )
-    assert enabled.depends_on == ["django.contrib.auth"]
-    assert enabled.depended_by == ["arp.base"]
-    assert enabled.forced is False
-    assert enabled.pending is False
-    assert (enabled.model_count, enabled.resource_count) == (1, 7)
-    assert enabled.field_count == len(line._meta.fields) + len(line._meta.many_to_many)
-    assert enabled.model_labels == [line._meta.label_lower]
-    assert (disabled.state, disabled.source, disabled.label) == (addon.State.DISABLED, addon.Source.INSTALLED, "arp")
-    assert disabled.depends_on == [loaded.name]
-    assert disabled.depended_by == [local_manifest.name]
-    assert (disabled.model_count, disabled.field_count, disabled.resource_count) == (0, 0, 0)
-    assert disabled.model_labels == []
-    assert (disabled.forced, disabled.pending) == (False, False)
-    assert historical.state == addon.State.REMOVED
-    assert historical.depends_on == ["example.historical_dependency"]
-    assert (historical.forced, historical.pending, historical.model_count) == (False, False, 0)
-    assert (remote.source, remote.state, remote.depends_on, remote.vcs_path) == (
-        addon.Source.REMOTE,
-        addon.State.DISABLED,
-        ["example.remote_dependency"],
-        "addons/remote",
-    )
-    assert (materialised.source, materialised.state, materialised.label) == (
-        addon.Source.LOCAL,
-        addon.State.DISABLED,
-        "",
-    )
-    assert materialised.depends_on == ["arp.base"]
-    assert materialised.vcs_path == "addons/unavailable"
-    assert str(materialised) == local_manifest.name
+            enabled = addon.objects.get(name=loaded.name)
+            disabled = addon.objects.get(name="arp.base")
+            historical.refresh_from_db()
+            remote.refresh_from_db()
+            materialised.refresh_from_db()
+        assert count_aliases == ["default"]
+        assert (enabled.state, enabled.source, enabled.kind) == (
+            addon.State.ENABLED,
+            addon.Source.LOCAL,
+            addon.Kind.CONSUMER,
+        )
+        assert enabled.depends_on == ["django.contrib.auth"]
+        assert enabled.depended_by == ["arp.base"]
+        assert enabled.forced is False
+        assert enabled.pending is False
+        assert (enabled.model_count, enabled.resource_count) == (1, 7)
+        assert enabled.field_count == len(line._meta.fields) + len(line._meta.many_to_many)
+        assert enabled.model_labels == [line._meta.label_lower]
+        assert (disabled.state, disabled.source, disabled.label) == (
+            addon.State.DISABLED, addon.Source.INSTALLED, "arp"
+        )
+        assert disabled.depends_on == [loaded.name]
+        assert disabled.depended_by == [local_manifest.name]
+        assert (disabled.model_count, disabled.field_count, disabled.resource_count) == (0, 0, 0)
+        assert disabled.model_labels == []
+        assert (disabled.forced, disabled.pending) == (False, False)
+        assert historical.state == addon.State.REMOVED
+        assert historical.depends_on == ["example.historical_dependency"]
+        assert (historical.forced, historical.pending, historical.model_count) == (False, False, 0)
+        assert (remote.source, remote.state, remote.depends_on, remote.vcs_path) == (
+            addon.Source.REMOTE,
+            addon.State.DISABLED,
+            ["example.remote_dependency"],
+            "addons/remote",
+        )
+        assert (materialised.source, materialised.state, materialised.label) == (
+            addon.Source.LOCAL,
+            addon.State.DISABLED,
+            "",
+        )
+        assert materialised.depends_on == ["arp.base"]
+        assert materialised.vcs_path == "addons/unavailable"
+        assert str(materialised) == local_manifest.name
 
 
 @pytest.mark.parametrize(
@@ -417,37 +421,40 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
 ) -> None:
     """Exact desired roots preserve native config selection without enabling the app."""
 
-    del platform_tables
-    addon = apps.get_model("platform", "Addon")
-    manifest = addon_module.parse_manifest(disabled_app / "addon.toml")
-    monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: {manifest.name: (manifest, disabled_app)})
-    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
-    monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
-    monkeypatch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
-    settings.BASE_DIR = tmp_path
-    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
-    (tmp_path / "settings.yaml").write_text(f"INSTALLED_APPS:\n  - {declaration}\n")
-    before = tuple(apps.get_app_configs())
+    with monkeypatch.context() as patch:
+        del platform_tables
+        addon = apps.get_model("platform", "Addon")
+        manifest = addon_module.parse_manifest(disabled_app / "addon.toml")
+        patch.setattr(
+            platform_models, "available_addons", lambda _dirs: {manifest.name: (manifest, disabled_app)}
+        )
+        patch.setattr(platform_models.composed, "addons", lambda: [])
+        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
+        patch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
+        settings.BASE_DIR = tmp_path
+        settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
+        (tmp_path / "settings.yaml").write_text(f"INSTALLED_APPS:\n  - {declaration}\n")
+        before = tuple(apps.get_app_configs())
 
-    with system_context(reason="test.platform.disabled-native-config"):
-        addon.objects.reconcile_from_registry("default", desired=frozenset({declaration}))
-        row = addon.objects.get(name=manifest.name)
-        preview = addon.objects.change_preview(manifest.name, "install")
+        with system_context(reason="test.platform.disabled-native-config"):
+            addon.objects.reconcile_from_registry("default", desired=frozenset({declaration}))
+            row = addon.objects.get(name=manifest.name)
+            preview = addon.objects.change_preview(manifest.name, "install")
 
-    assert (row.state, row.label, row.pending) == (addon.State.DISABLED, label, True)
-    assert row.depends_on == list(manifest.depends_on)
-    assert preview.can_apply is True
-    assert preview.roots_after == preview.roots_before == (declaration,)
-    assert [(impact.name, impact.label, impact.root) for impact in preview.addons_to_enable] == [
-        (manifest.name, label, True)
-    ]
-    assert "arp.base.models" not in sys.modules
-    assert tuple(apps.get_app_configs()) == before
+        assert (row.state, row.label, row.pending) == (addon.State.DISABLED, label, True)
+        assert row.depends_on == list(manifest.depends_on)
+        assert preview.can_apply is True
+        assert preview.roots_after == preview.roots_before == (declaration,)
+        assert [(impact.name, impact.label, impact.root) for impact in preview.addons_to_enable] == [
+            (manifest.name, label, True)
+        ]
+        assert "arp.base.models" not in sys.modules
+        assert tuple(apps.get_app_configs()) == before
 
-    with system_context(reason="test.platform.unknown-desired-preserves-pending"):
-        addon.objects.reconcile_from_registry("default", desired=None)
-        row.refresh_from_db()
-    assert row.pending is True
+        with system_context(reason="test.platform.unknown-desired-preserves-pending"):
+            addon.objects.reconcile_from_registry("default", desired=None)
+            row.refresh_from_db()
+        assert row.pending is True
 
 
 def test_install_preview_keeps_unresolvable_identity_unknown(tmp_path, settings, monkeypatch) -> None:
@@ -468,8 +475,23 @@ def test_install_preview_keeps_unresolvable_identity_unknown(tmp_path, settings,
     assert (impact.name, impact.label, impact.depends_on) == (manifest.name, "", manifest.depends_on)
 
 
-def test_resource_counts_forward_the_requested_database_alias(monkeypatch) -> None:
-    resource = apps.get_model("resources", "Resource")
+@pytest.fixture
+def resource_model(monkeypatch):
+    """Compose the source ledger in an isolated native registry for projection tests."""
+
+    with isolate_apps("angee.resources") as registry:
+
+        class Resource(AbstractResource):
+            class Meta(AbstractResource.Meta):
+                app_label = "resources"
+                abstract = False
+
+        monkeypatch.setattr(platform_models.composed, "apps", registry)
+        yield Resource
+
+
+def test_resource_counts_forward_the_requested_database_alias(monkeypatch, resource_model) -> None:
+    resource = resource_model
     queryset_type = type(resource.objects.all())
     aliases = []
     routing = []
@@ -491,8 +513,8 @@ def test_resource_counts_forward_the_requested_database_alias(monkeypatch) -> No
 
 
 @pytest.mark.parametrize("routed_here", [False, True])
-def test_resource_counts_tolerate_routed_away_or_uncreated_ledger(monkeypatch, routed_here) -> None:
-    resource = apps.get_model("resources", "Resource")
+def test_resource_counts_tolerate_routed_away_or_uncreated_ledger(monkeypatch, resource_model, routed_here) -> None:
+    resource = resource_model
     queryset_type = type(resource.objects.all())
     queried = []
 
@@ -509,25 +531,27 @@ def test_resource_counts_tolerate_routed_away_or_uncreated_ledger(monkeypatch, r
 
 @pytest.mark.parametrize("addon_count", [1, 3])
 def test_unknown_desired_reads_pending_flags_once(platform_tables, tmp_path, monkeypatch, addon_count) -> None:
-    del platform_tables
-    addon = apps.get_model("platform", "Addon")
-    pending = {f"pending_fixture.addon_{index}": bool(index % 2) for index in range(addon_count)}
-    available = {name: (AddonManifest(name=name), tmp_path / name) for name in pending}
-    monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: available)
-    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
-    monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
-    monkeypatch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
+    with monkeypatch.context() as patch:
+        del platform_tables
+        addon = apps.get_model("platform", "Addon")
+        pending = {f"pending_fixture.addon_{index}": bool(index % 2) for index in range(addon_count)}
+        available = {name: (AddonManifest(name=name), tmp_path / name) for name in pending}
+        patch.setattr(platform_models, "available_addons", lambda _dirs: available)
+        patch.setattr(platform_models.composed, "addons", lambda: [])
+        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
+        patch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
 
-    with system_context(reason="test.platform.pending-query-count"):
-        for name, value in pending.items():
-            addon.objects.create(name=name, pending=value)
-        pending_sql = str(addon.objects.using("default").values_list("name", "pending").query)
+        with system_context(reason="test.platform.pending-query-count"):
+            addon.objects.all().delete()
+            for name, value in pending.items():
+                addon.objects.create(name=name, pending=value)
+            pending_sql = str(addon.objects.using("default").values_list("name", "pending").query)
 
-        with CaptureQueriesContext(connection) as queries:
-            addon.objects.reconcile_from_registry("default", desired=None)
+            with CaptureQueriesContext(connection) as queries:
+                addon.objects.reconcile_from_registry("default", desired=None)
 
-        assert sum(query["sql"] == pending_sql for query in queries) == 1
-        assert dict(addon.objects.values_list("name", "pending")) == pending
+            assert sum(query["sql"] == pending_sql for query in queries) == 1
+            assert dict(addon.objects.values_list("name", "pending")) == pending
 
 
 def test_pending_changes_is_unknown_when_project_yaml_is_not_effective(settings, monkeypatch) -> None:
@@ -571,39 +595,40 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
 ) -> None:
     """Only roots queue a disable; stale persisted flags cannot override the live graph."""
 
-    del platform_tables
-    addon = apps.get_model("platform", "Addon")
-    root = make_addon(name="example.root", path=tmp_path / "root", depends_on=("example.dep",))
-    dependency = make_addon(name="example.dep", path=tmp_path / "dep")
-    configs = AppGraph().resolve((root, dependency), declared_roots=(root,))
-    for config in configs:
-        config.apps = apps
-        config.models = {}
-    monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: {})
-    monkeypatch.setattr(platform_models.composed, "addons", lambda: list(configs))
-    monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
-    monkeypatch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
-    settings.BASE_DIR = tmp_path
-    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
-    (tmp_path / "settings.yaml").write_text(f"INSTALLED_APPS:\n  - {root.name}\n")
+    with monkeypatch.context() as patch:
+        del platform_tables
+        addon = apps.get_model("platform", "Addon")
+        root = make_addon(name="example.root", path=tmp_path / "root", depends_on=("example.dep",))
+        dependency = make_addon(name="example.dep", path=tmp_path / "dep")
+        configs = AppGraph().resolve((root, dependency), declared_roots=(root,))
+        for config in configs:
+            config.apps = apps
+            config.models = {}
+        patch.setattr(platform_models, "available_addons", lambda _dirs: {})
+        patch.setattr(platform_models.composed, "addons", lambda: list(configs))
+        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
+        patch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
+        settings.BASE_DIR = tmp_path
+        settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
+        (tmp_path / "settings.yaml").write_text(f"INSTALLED_APPS:\n  - {root.name}\n")
 
-    with system_context(reason="test.platform.loaded-root-pending"):
-        addon.objects.reconcile_from_registry("default", desired=frozenset())
-        root_row = addon.objects.get(name=root.name)
-        dependency_row = addon.objects.get(name=dependency.name)
-        assert root_row.pending is True
-        assert dependency_row.pending is False
-        assert dependency_row.forced is True
-        addon.objects.filter(name=dependency.name).update(forced=False, depended_by=[])
-        addon.objects.filter(name=root.name).update(forced=True, depended_by=[dependency.name])
-        refused = addon.objects.change_preview(dependency.name, "disable")
-        assert refused.can_apply is False
-        assert "required" in refused.refusal
-        assert addon.objects.change_preview(root.name, "disable").can_apply is True
+        with system_context(reason="test.platform.loaded-root-pending"):
+            addon.objects.reconcile_from_registry("default", desired=frozenset())
+            root_row = addon.objects.get(name=root.name)
+            dependency_row = addon.objects.get(name=dependency.name)
+            assert root_row.pending is True
+            assert dependency_row.pending is False
+            assert dependency_row.forced is True
+            addon.objects.filter(name=dependency.name).update(forced=False, depended_by=[])
+            addon.objects.filter(name=root.name).update(forced=True, depended_by=[dependency.name])
+            refused = addon.objects.change_preview(dependency.name, "disable")
+            assert refused.can_apply is False
+            assert "required" in refused.refusal
+            assert addon.objects.change_preview(root.name, "disable").can_apply is True
 
-        addon.objects.reconcile_from_registry("default", desired=frozenset({root.name}))
-        root_row.refresh_from_db()
-        assert root_row.pending is False
+            addon.objects.reconcile_from_registry("default", desired=frozenset({root.name}))
+            root_row.refresh_from_db()
+            assert root_row.pending is False
 
 
 def test_failed_refresh_cannot_leave_a_previous_manifest_available(tmp_path) -> None:
