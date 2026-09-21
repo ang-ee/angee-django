@@ -134,7 +134,7 @@ export const WidgetSpecSchema = v.pipe(v.strictObject({
     for (const issue of columns.issues) {
       addIssue({
         input: issue.input,
-        expected: issue.expected,
+        expected: issue.expected ?? undefined,
         received: issue.received,
         message: issue.message,
         path: [...optionsPath, ...(issue.path ?? [])],

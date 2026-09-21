@@ -29,7 +29,7 @@ import {
   type FormOverrideMap,
   } from "../../runtime";
 import { modelLabelSegment } from "@angee/metadata";
-import { testDataResource, testResourceQuery, withTestResourceInventory } from "@angee/metadata/testing";
+import { testDataResource, withTestResourceInventory } from "@angee/metadata/testing";
 import type { GetOneParams, NotificationProvider } from "@refinedev/core";
 import type {
   Row,
