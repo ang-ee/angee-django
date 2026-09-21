@@ -5816,8 +5816,12 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
     """Create actionable decisions and their authorization tuples atomically."""
 
     def predecessor_decision(self, step_run: Any, gate_step_class: type[Any]) -> Any:
-        """Load the settled predecessor slot, including an exact FRESH source.
+        """Load the nearest declared gate's settled slot on retained ancestry.
 
+        Count matching executed gates at the first depth containing any, following
+        the same ancestry as application validation, including an exact FRESH
+        source. Skipped and unexecuted rows cannot supply a Decision; an executed
+        gate without settlement still blocks fallback to deeper gates.
         This reads selection evidence only. Application callers keep the returned
         identity and enter ``locked_resolution`` before changing domain rows.
         """
@@ -5826,43 +5830,38 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
 
         step_run_model = self.model._meta.get_field("step_run").remote_field.model
         with system_context(reason="workflows.decision.predecessor"):
-            cursor = (
-                system_queryset(step_run_model, using=alias, lock=None)
-                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
-                .get(pk=step_run.pk)
+            step_runs = system_queryset(step_run_model, using=alias, lock=None).select_related(
+                "step", "run__workflow", "run__recovery_source_attempt", "current_attempt", "current_map_expansion"
             )
+            cursor = step_runs.get(pk=step_run.pk)
             seen: set[int] = set()
-            while True:
-                candidates = list(
-                    system_queryset(step_run_model, using=alias, lock=None)
-                    .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
-                    .filter(next_step_runs=cursor)
-                )
-                if candidates or cursor.run.origin != RunOrigin.RECOVERY:
-                    break
+            while cursor.run.origin == RunOrigin.RECOVERY and not step_runs.filter(next_step_runs=cursor).exists():
                 cursor.run.execution_lineage_root_id(using=alias)
-                source = (
-                    system_queryset(step_run_model, using=alias, lock=None)
-                    .select_related("step", "run__workflow", "current_attempt", "current_map_expansion", "run")
-                    .get(
-                        pk=system_queryset(
-                            self.model._meta.get_field("suspension_attempt").remote_field.model,
-                            using=alias,
-                            lock=None,
-                        )
-                        .values_list("step_run_id", flat=True)
-                        .get(pk=cursor.run.recovery_source_attempt_id)
+                source = step_runs.get(
+                    pk=system_queryset(
+                        self.model._meta.get_field("suspension_attempt").remote_field.model,
+                        using=alias,
+                        lock=None,
                     )
+                    .values_list("step_run_id", flat=True)
+                    .get(pk=cursor.run.recovery_source_attempt_id)
                 )
                 if cursor.pk in seen or (source.step_id, source.map_index) != (cursor.step_id, cursor.map_index):
                     raise ValidationError({"gate": "Decision apply recovery requires its exact retained source."})
                 seen.add(cursor.pk)
                 cursor = source
-            gates = [
-                row
-                for row in candidates
-                if row.step is not None and issubclass(row.step.resolve_impl("step_class"), gate_step_class)
-            ]
+            gates = []
+            for candidates in self._iter_predecessor_levels(cursor, alias=alias):
+                gates = [
+                    row
+                    for row in candidates
+                    if row.current_attempt is not None
+                    and row.status != StepRunStatus.SKIPPED
+                    and row.step is not None
+                    and issubclass(row.step.resolve_impl("step_class"), gate_step_class)
+                ]
+                if gates:
+                    break
             if len(gates) != 1 or gates[0].current_attempt is None:
                 raise ValidationError({"gate": "Decision apply requires one declared predecessor gate."})
             gate = gates[0]
@@ -6011,37 +6010,62 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             yield decision
 
     def _has_predecessor_gate(self, consumer: Any, *, alias: str, gate: Any, runs: dict[int, Any]) -> bool:
-        """Follow retained previous, Map, child-run, and recovery ancestry to one gate."""
+        """Check the gate against retained ancestry inside the locked run set."""
+
+        return any(
+            row.pk == gate.pk
+            for rows in self._iter_predecessor_levels(consumer, alias=alias, runs=runs)
+            for row in rows
+        )
+
+    def _iter_predecessor_levels(
+        self, consumer: Any, *, alias: str, runs: dict[int, Any] | None = None
+    ) -> Iterator[list[Any]]:
+        """Merge previous, parent, recovery, and Map links into breadth-first levels.
+
+        Yield each retained row once at its nearest depth, excluding the consumer.
+        All link kinds share one frontier per depth, with no precedence between
+        them; matching gate candidates tied at that depth are counted together.
+        Application validation supplies locked runs; selection reads the same
+        relations on its bound alias without acquiring application locks.
+        """
 
         step_model = type(consumer)
-        seen: set[int] = set()
+        seen = {consumer.pk}
         pending = {consumer.pk}
+        rows = [consumer]
         while pending:
-            if gate.pk in pending:
-                return True
-            seen.update(pending)
-            rows = list(
-                system_queryset(step_model, using=alias, lock=None)
-                .filter(pk__in=pending)
-                .values("run_id", "current_map_expansion__step_run_id")
-            )
             previous = set(
                 system_queryset(step_model, using=alias, lock=None)
                 .filter(next_step_runs__pk__in=pending)
                 .values_list("pk", flat=True)
             )
             for row in rows:
-                run = runs.get(row["run_id"])
+                run = row.run if runs is None else runs.get(row.run_id)
                 if run is None:
-                    return False
+                    return
                 if run.parent_step_run_id is not None:
                     previous.add(run.parent_step_run_id)
                 if run.origin == RunOrigin.RECOVERY:
                     previous.add(run.recovery_source_attempt.step_run_id)
-                if row["current_map_expansion__step_run_id"] is not None:
-                    previous.add(row["current_map_expansion__step_run_id"])
+                if row.current_map_expansion_id is not None:
+                    previous.add(row.current_map_expansion.step_run_id)
             pending = previous - seen
-        return False
+            seen.update(pending)
+            if pending:
+                rows = list(
+                    system_queryset(step_model, using=alias, lock=None)
+                    .select_related(
+                        "step",
+                        "run__workflow",
+                        "run__recovery_source_attempt",
+                        "current_attempt",
+                        "current_map_expansion",
+                    )
+                    .filter(pk__in=pending)
+                    .order_by("pk")
+                )
+                yield rows
 
     def ensure_sequential_turn(self, decision: Any) -> None:
         """Enforce system-owned priority after the public action check.

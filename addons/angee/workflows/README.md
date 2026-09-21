@@ -183,8 +183,11 @@ authorized Decisions; journal references retain independent read checks.
 A consumer pairs the gate with a `DecisionApplyStep` subclass. Declare
 `input_model`, `output_model`, `outcomes`, `effect`, `execution_mode`, and
 `idempotent`, plus a narrower `gate_step_class` when needed. The base loads the
-predecessor Decision and calls `invoke_command(step_run, *, decision_id, actor,
-now)`. Actorless expiry and timer resolutions pass `actor=None`; a command must explicitly accept
+nearest matching executed predecessor gate's Decision through retained execution
+ancestry, excluding skipped rows, requiring one gate at that depth, and calls
+`invoke_command(step_run, *, decision_id, actor, now)`.
+The nearest gate wins, with no fallback to a deeper gate, by deliberate contract.
+Actorless expiry and timer resolutions pass `actor=None`; a command must explicitly accept
 its expected terminal verdict. Clean gates have no Decision, and multi-slot
 applications must choose their own domain operation over the retained collection.
 

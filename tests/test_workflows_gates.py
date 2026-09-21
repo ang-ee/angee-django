@@ -34,7 +34,7 @@ from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import decision_actions, engine
 from angee.workflows import models as workflow_models
-from angee.workflows.attempts import AttemptResultKind, DecisionResolution, JsonPresence
+from angee.workflows.attempts import AttemptResultKind, DecisionResolution, JsonPresence, RecoveryMode
 from angee.workflows.configs import GateBinding
 from angee.workflows.decision_actions import (
     ReviewAction,
@@ -69,6 +69,7 @@ from tests.workflows import (
     admit_workflow_actor,
     advance_once,
     execute_started,
+    run_to_terminal,
     start_run,
     step_for,
     workflow_table_setup,
@@ -392,14 +393,45 @@ def test_decision_apply_dispatches_identity_and_preserves_wait(
     assert calls == [{"decision_id": 42, "actor": actor, "now": now}]
 
 
+@pytest.mark.parametrize("through_prepare", (False, True))
 def test_predecessor_lookup_loads_the_declared_settled_gate_decision(
     workflow_gate_tables: None,
     no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    through_prepare: bool,
 ) -> None:
-    """Apply adapters find one direct gate predecessor without reimplementing graph queries."""
+    """The apply dispatcher selects and validates direct and prepared gate routes."""
 
     del workflow_gate_tables, no_workflow_queue
     assignee = User.objects.create_user(username="predecessor-gate-assignee")
+    applied: list[int] = []
+
+    class Apply(DecisionApplyStep):
+        input_model = _ApplyInput
+        output_model = _ApplyOutput
+        outcomes = (StepOutcome("applied", "Applied"),)
+        effect = StepEffect.WRITE
+        execution_mode = StepExecutionMode.DATABASE_COMMAND
+        idempotent = True
+
+        def invoke_command(self, step_run: Any, *, decision_id: int, actor: Any, now: Any) -> StepResult:
+            del self, now
+            with Decision.objects.locked_resolution(
+                decision_id,
+                actor=actor,
+                consumer_step_run_id=step_run.pk,
+            ) as retained:
+                applied.append(retained.pk)
+            return StepResult.done({"applied": True}, outcome="applied")
+
+    fixture_run = FixtureStep.run
+
+    def dispatch(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
+        if step_run.step.key == "apply":
+            return Apply().run(step_run, now=now)
+        return fixture_run(self, step_run, now=now)
+
+    monkeypatch.setattr(FixtureStep, "run", dispatch)
     workflow = workflow_with_steps(
         name="Predecessor lookup",
         steps=(
@@ -411,20 +443,313 @@ def test_predecessor_lookup_loads_the_declared_settled_gate_decision(
                     "slots": [{"assignees": [str(to_subject_ref(assignee))]}],
                 },
             },
+            *(({"key": "prepare", "step_class": "fixture", "config": {}},) if through_prepare else ()),
             {"key": "apply", "step_class": "fixture", "config": {}},
         ),
-        edges=(("gate", "apply", "completed"),),
+        edges=(
+            (("gate", "prepare", "completed"), ("prepare", "apply", "done"))
+            if through_prepare
+            else (("gate", "apply", "completed"),)
+        ),
     )
     run = start_run(workflow, actor=assignee)
     advance_once(run)
     execute_started(run)
     decision = _decision_for(run, "gate")
     assert engine.decide(decision, "complete", actor=assignee).validation_error is None
+    run_to_terminal(run)
+
+    assert applied == [decision.pk]
+    assert _step_run(run, "apply").output == {"applied": True}
+
+
+@pytest.mark.parametrize("first_route", ("farther", "same_depth", "unselected"))
+def test_predecessor_lookup_uses_nearest_gate_on_retained_routes(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    first_route: str,
+) -> None:
+    """Distance and ambiguity use retained engine routes, not definition edges."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="predecessor-nearest-assignee")
+    workflow = workflow_with_steps(
+        name="Nearest retained predecessor",
+        steps=(
+            {"key": "entry", "config": {}},
+            {"key": "first_gate", "step_class": "gate", "config": _gate_config([assignee], None, [])},
+            {
+                "key": "second_gate",
+                "step_class": "gate",
+                "config": _gate_config([assignee], None, []),
+            },
+            {"key": "first_prepare", "config": {}},
+            *(({"key": "first_route", "config": {}},) if first_route == "farther" else ()),
+            {"key": "second_prepare", "config": {}},
+            {"key": "apply", "config": {}},
+        ),
+        edges=(
+            ("entry", "first_gate", "done"),
+            ("entry", "second_gate", "done"),
+            ("first_gate", "first_prepare", "rejected" if first_route == "unselected" else "completed"),
+            *(
+                (("first_prepare", "first_route", "done"), ("first_route", "apply", "done"))
+                if first_route == "farther"
+                else (("first_prepare", "apply", "done"),)
+            ),
+            ("second_gate", "second_prepare", "completed"),
+            ("second_prepare", "apply", "done"),
+        ),
+    )
+    run = start_run(workflow, actor=assignee)
     advance_once(run)
+    execute_started(run)
+    advance_once(run)
+    execute_started(run)
+    for key in ("first_gate", "second_gate"):
+        assert engine.decide(_decision_for(run, key), "complete", actor=assignee).validation_error is None
+    run_to_terminal(run, stop_key="apply")
+    consumer = _step_run(run, "apply")
 
-    loaded = Decision.objects.predecessor_decision(_step_run(run, "apply"), GateStep)
+    if first_route == "same_depth":
+        with pytest.raises(ValidationError, match="one declared predecessor gate"):
+            Decision.objects.predecessor_decision(consumer, GateStep)
+    else:
+        selected = Decision.objects.predecessor_decision(consumer, GateStep)
+        assert selected.pk == _decision_for(run, "second_gate").pk
+    if first_route == "unselected":
+        assert _step_run(run, "first_prepare").status == workflow_models.StepRunStatus.SKIPPED
+        with system_context(reason="test retained predecessor route"):
+            assert list(consumer.previous.values_list("step__key", flat=True)) == ["second_prepare"]
 
-    assert loaded.pk == decision.pk
+
+def test_predecessor_lookup_ignores_skipped_gate_retained_by_unconditional_join(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """An all_done join retains skipped rows without making them gate candidates."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="predecessor-skipped-assignee")
+    workflow = workflow_with_steps(
+        name="Skipped gate in retained join ancestry",
+        steps=(
+            {"key": "entry", "config": {"outcome": "active"}},
+            {"key": "gate", "step_class": "gate", "config": _gate_config([assignee], None, [])},
+            {"key": "skipped_gate", "step_class": "gate", "config": _gate_config([assignee], None, [])},
+            {"key": "prepare", "config": {}, "join_rule": workflow_models.JoinRule.ALL_DONE},
+            {"key": "apply", "config": {}},
+        ),
+        edges=(
+            ("entry", "gate", "active"),
+            ("entry", "skipped_gate", "inactive"),
+            ("gate", "prepare", ""),
+            ("skipped_gate", "prepare", ""),
+            ("prepare", "apply", "done"),
+        ),
+    )
+    run = start_run(workflow, actor=assignee)
+    advance_once(run)
+    execute_started(run)
+    advance_once(run)
+    execute_started(run)
+    decision = _decision_for(run, "gate")
+    assert engine.decide(decision, "complete", actor=assignee).validation_error is None
+    run_to_terminal(run, stop_key="apply")
+    gate = _step_run(run, "gate")
+    skipped_gate = _step_run(run, "skipped_gate")
+    prepare = _step_run(run, "prepare")
+    consumer = _step_run(run, "apply")
+
+    assert gate.status == workflow_models.StepRunStatus.SUCCEEDED
+    assert skipped_gate.status == workflow_models.StepRunStatus.SKIPPED
+    assert skipped_gate.current_attempt_id is None
+    with system_context(reason="test unconditional join retains skipped gate"):
+        assert set(prepare.previous.values_list("pk", flat=True)) == {gate.pk, skipped_gate.pk}
+        assert list(consumer.previous.values_list("pk", flat=True)) == [prepare.pk]
+    assert Decision.objects.predecessor_decision(consumer, GateStep).pk == decision.pk
+
+
+def test_predecessor_lookup_rejects_route_without_a_gate(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Exhausted retained ancestry preserves the missing-gate validation error."""
+
+    del workflow_gate_tables, no_workflow_queue
+    workflow = workflow_with_steps(
+        name="No retained gate",
+        steps=({"key": "prepare", "config": {}}, {"key": "apply", "config": {}}),
+        edges=(("prepare", "apply", "done"),),
+    )
+    run = start_run(workflow)
+    run_to_terminal(run, stop_key="apply")
+
+    with pytest.raises(ValidationError, match="one declared predecessor gate"):
+        Decision.objects.predecessor_decision(_step_run(run, "apply"), GateStep)
+
+
+def test_predecessor_lookup_does_not_fall_back_past_a_clean_nearest_gate(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """A nearer clean gate cannot borrow an older gate's settled approval."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="predecessor-clean-assignee")
+    workflow = workflow_with_steps(
+        name="Nearest gate requires its own settlement",
+        steps=(
+            {"key": "gate", "step_class": "gate", "config": _gate_config([assignee], None, [])},
+            {
+                "key": "clean_gate",
+                "step_class": "gate",
+                "config": {**_gate_config([assignee], None, []), "clean": True},
+            },
+            {"key": "prepare", "config": {}},
+            {"key": "apply", "config": {}},
+        ),
+        edges=(
+            ("gate", "clean_gate", "completed"),
+            ("clean_gate", "prepare", "completed"),
+            ("prepare", "apply", "done"),
+        ),
+    )
+    run = start_run(workflow, actor=assignee)
+    advance_once(run)
+    execute_started(run)
+    assert engine.decide(_decision_for(run, "gate"), "complete", actor=assignee).validation_error is None
+    run_to_terminal(run, stop_key="apply")
+
+    with pytest.raises(ValidationError, match="retained predecessor settlement"):
+        Decision.objects.predecessor_decision(_step_run(run, "apply"), GateStep)
+
+
+@pytest.mark.parametrize("ancestry", ("map", "child"))
+def test_predecessor_lookup_crosses_map_and_child_ancestry(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    ancestry: str,
+) -> None:
+    """Engine-created Map members and owned children share retained gate authority."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="predecessor-nested-assignee")
+    if ancestry == "child":
+        child_workflow = workflow_with_steps(
+            name="Child gate consumer",
+            steps=({"key": "apply", "config": {}},),
+            edges=(),
+        )
+        admit_workflow_actor(child_workflow, assignee)
+        nested = {
+            "key": "nested",
+            "step_class": "call_workflow",
+            "config": {"publication": str(child_workflow.sqid)},
+        }
+    else:
+        nested = {"key": "nested", "step_class": "map", "config": {"target_step": "apply", "items": [1]}}
+    workflow = workflow_with_steps(
+        name="Nested retained predecessor",
+        steps=(
+            {"key": "gate", "step_class": "gate", "config": _gate_config([assignee], None, [])},
+            {"key": "prepare", "config": {}},
+            nested,
+            *(({"key": "apply", "config": {}},) if ancestry == "map" else ()),
+        ),
+        edges=(("gate", "prepare", "completed"), ("prepare", "nested", "done")),
+    )
+    run = start_run(workflow, actor=assignee)
+    advance_once(run)
+    execute_started(run)
+    decision = _decision_for(run, "gate")
+    assert engine.decide(decision, "complete", actor=assignee).validation_error is None
+    applied: list[int] = []
+    fixture_run = FixtureStep.run
+
+    def apply(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
+        if step_run.step.key != "apply":
+            return fixture_run(self, step_run, now=now)
+        selected = Decision.objects.predecessor_decision(step_run, GateStep)
+        with Decision.objects.locked_resolution(
+            selected.pk,
+            actor=assignee,
+            consumer_step_run_id=step_run.pk,
+        ) as retained:
+            applied.append(retained.pk)
+        return StepResult.done(outcome="done")
+
+    monkeypatch.setattr(FixtureStep, "run", apply)
+    run_to_terminal(run)
+
+    assert applied == [decision.pk]
+
+
+@pytest.mark.parametrize("recovery_source", ("apply", "map", "prepare"))
+def test_predecessor_lookup_recovers_the_exact_transitive_gate_source(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    recovery_source: str,
+) -> None:
+    """A FRESH redirect retains prepared and mapped source ancestry for application."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = _platform_admin("predecessor-recovery-assignee")
+    mapped = recovery_source == "map"
+    failed_key = "prepare" if recovery_source == "prepare" else "apply"
+    workflow = workflow_with_steps(
+        name="Recover transitive gate consumer",
+        steps=(
+            {"key": "gate", "step_class": "gate", "config": _gate_config([assignee], None, [])},
+            {"key": "prepare", "config": {}},
+            *(
+                ({"key": "map", "step_class": "map", "config": {"target_step": "apply", "items": [1]}},)
+                if mapped
+                else ()
+            ),
+            {"key": "apply", "config": {}},
+        ),
+        edges=(("gate", "prepare", "completed"), ("prepare", "map" if mapped else "apply", "done")),
+    )
+    run = start_run(workflow, actor=assignee)
+    advance_once(run)
+    execute_started(run)
+    decision = _decision_for(run, "gate")
+    assert engine.decide(decision, "complete", actor=assignee).validation_error is None
+    applied: list[int] = []
+    fixture_run = FixtureStep.run
+
+    def apply(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
+        if step_run.step.key == failed_key and step_run.run.origin != workflow_models.RunOrigin.RECOVERY:
+            raise RuntimeError("Recover this gate application from its retained source.")
+        if step_run.step.key != "apply":
+            return fixture_run(self, step_run, now=now)
+        with monkeypatch.context() as read_router:
+            read_router.setattr("django.db.router.db_for_read", lambda model, **hints: "missing-read-replica")
+            selected = Decision.objects.db_manager("default").predecessor_decision(step_run, GateStep)
+        with Decision.objects.locked_resolution(
+            selected.pk,
+            actor=assignee,
+            consumer_step_run_id=step_run.pk,
+        ) as retained:
+            applied.append(retained.pk)
+        return StepResult.done(outcome="done")
+
+    monkeypatch.setattr(FixtureStep, "run", apply)
+    monkeypatch.setattr(FixtureStep, "execution_mode", StepExecutionMode.DATABASE_COMMAND)
+    monkeypatch.setattr(FixtureStep, "replay_mode", RecoveryMode.FRESH)
+    run_to_terminal(run, allow_failed={run.pk})
+    source_step = _step_run(run, failed_key)
+    with system_context(reason="test predecessor recovery source"):
+        source = source_step.current_attempt
+    recovery = WorkflowRun.objects.start_recovery(source, request_key="transitive-gate-retry", actor=assignee)
+    run_to_terminal(recovery)
+
+    assert applied == [decision.pk]
+    recovered = _step_run(recovery, failed_key)
+    assert (recovered.step_id, recovered.map_index) == (source_step.step_id, source_step.map_index)
 
 
 @pytest.fixture()
@@ -902,7 +1227,10 @@ def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
     workflow_gate_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
-    policy: str, outcome: str, retained_count: int, legacy_settlement: bool,
+    policy: str,
+    outcome: str,
+    retained_count: int,
+    legacy_settlement: bool,
 ) -> None:
     """Bulk expiry preserves all rows and the exact policy-owned settlement."""
 
@@ -919,9 +1247,11 @@ def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
         name="Force expiry one_done predecessor",
         steps=(
             {
-                "key": "gate", "step_class": "gate",
+                "key": "gate",
+                "step_class": "gate",
                 "config": {
-                    "action": "verify-expiring-review", "policy": policy,
+                    "action": "verify-expiring-review",
+                    "policy": policy,
                     "slots": [
                         {"assignees": [str(to_subject_ref(assignee))], "priority": 0},
                         {"assignees": [str(to_subject_ref(requester))], "priority": 1},
@@ -929,7 +1259,9 @@ def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
                 },
             },
             {
-                "key": "consumer", "step_class": "fixture", "config": {},
+                "key": "consumer",
+                "step_class": "fixture",
+                "config": {},
                 "input_binding": {"kind": "step_output", "step_key": "gate", "path": []},
             },
         ),
@@ -943,7 +1275,8 @@ def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
     with monkeypatch.context() as historical_writer:
         if legacy_settlement:
             historical_writer.setattr(
-                type(_step_run(run, "gate").decision_gate), "settled_decisions",
+                type(_step_run(run, "gate").decision_gate),
+                "settled_decisions",
                 lambda self, rows: tuple(row for row in rows if row.verdict in workflow_models.Verdict.TERMINAL),
             )
         assert engine.expire_pending_decisions(run, resolved_by="test/expiry") == 2
@@ -952,7 +1285,8 @@ def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
     gate = _step_run(run, "gate")
     consumer = _step_run(run, "consumer")
     assert gate.current_attempt.decision_settlement == {
-        "decision_ids": [row.pk for row in decisions[:retained_count]], "outcome": outcome,
+        "decision_ids": [row.pk for row in decisions[:retained_count]],
+        "outcome": outcome,
     }
     assert [item["decision_id"] for item in consumer.output["resolutions"]] == [
         row.sqid for row in decisions[:retained_count]
@@ -1455,20 +1789,16 @@ def test_decision_relation_permission_defaults_to_write_and_allows_declared_read
     )
     assert (
         decision_actions._relation_error(
-            {"resource": "demo.Company", "permission": "read"},
-            "company-1",
-            object(),
-         using="default")
+            {"resource": "demo.Company", "permission": "read"}, "company-1", object(), using="default"
+        )
         is None
     )
     assert actions == ["write", "read"]
 
     assert (
         decision_actions._relation_error(
-            {"resource": "demo.Company", "permission": "read;delete"},
-            "company-1",
-            object(),
-         using="default")
+            {"resource": "demo.Company", "permission": "read;delete"}, "company-1", object(), using="default"
+        )
         == "Relation value must reference a permitted record."
     )
     assert actions == ["write", "read"]
