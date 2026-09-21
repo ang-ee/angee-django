@@ -1,4 +1,9 @@
 {
+  "criticalExports": [
+    { "name": "AGENT_CHAT_SLOT", "ownerFile": "src/chat-slot.ts" },
+    { "name": "useAgentChatContext", "ownerFile": "src/chat-slot.ts" },
+    { "name": "AgentChatContent", "ownerFile": "src/views/AgentChat.tsx" }
+  ],
   "dynamicI18nKeyFamilies": [
     {
       "namespace": "agents",

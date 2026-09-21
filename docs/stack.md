@@ -154,6 +154,9 @@ GPL code is incompatible with a framework composed into commercial consumers.
 Chat-UI library choice: `@assistant-ui/react` owns the chat-UX surface (composed
 over ACP); CopilotKit and `@headlessui/react` were evaluated and rejected, and
 TanStack AI is a watch item.
+The agents fragment owns shared chat presentation and ACP transport; the optional
+`workflows_agents` fragment binds the same presentation to its persisted-session
+operations through the agents implementation slot.
 
 ## Hasura Dialect Rule
 

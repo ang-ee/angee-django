@@ -12,11 +12,14 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.0.0",
     "@angee/agents": "workspace:*",
     "@angee/app": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
-    "@angee/workflows": "workspace:*"
+    "@angee/workflows": "workspace:*",
+    "@assistant-ui/react": "0.14.26",
+    "valibot": "^1.4.0"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

@@ -77,8 +77,8 @@ INSTALLED_APPS:
   - angee.knowledge
   - angee.posts
   - angee.workflows
-  # Agent-session workflow steps + the start_agent_session / post_agent_message
-  # mutations the angee.agents web console calls (depends on workflows + agents,
+  # Agent-session workflow steps, persisted-chat web fragment, and its mutations
+  # (depends on workflows + agents,
   # both already composed; model-less, so no migrations).
   - angee.workflows_agents
   # Contact-dedupe governance workflow (scan -> review Decision -> apply) over

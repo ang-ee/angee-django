@@ -16,6 +16,13 @@ describe("agents addon manifest", () => {
     expect(agents.chatter?.[0]?.id).toBe("agents");
   });
 
+  test("contributes chat only for its own container runtimes", () => {
+    expect(agents.slots?.map(({ model, impl }) => ({ model, impl }))).toEqual([
+      { model: "agents.Agent", impl: "claude_code" },
+      { model: "agents.Agent", impl: "opencode" },
+    ]);
+  });
+
   test("owns separate Agents and AI menu roots without changing inference routes", () => {
     const [agentsRoot, aiRoot] = (agents.menus ?? []) as readonly BaseMenuItem[];
 

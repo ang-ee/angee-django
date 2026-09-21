@@ -3,24 +3,30 @@
 import * as React from "react";
 import { useExternalStoreRuntime, type AppendMessage } from "@assistant-ui/react";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
+import {
+  convertMessage,
+  foldIntoLog,
+  emptySession,
+  foldIntoSession,
+  RenderAgentPrompt,
+  agentChatViewInput,
+  type ChatMessage,
+  type AgentChatView,
+  type AcpRuntime,
+  type AcpStatus,
+} from "@angee/agents/chat";
 import type { DocumentType } from "@angee/gql/console";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import { errorMessage } from "@angee/ui";
 import * as v from "valibot";
 
-import { convertMessage, foldIntoLog, type ChatMessage } from "./acp-log";
-import { emptySession, foldIntoSession } from "./acp-session";
 import {
   AgentSessionTurns,
   LatestAgentSession,
   PostAgentMessage,
-  RenderAgentPrompt,
   StartAgentSession,
-  agentChatViewInput,
-  type AgentChatView,
 } from "./documents";
-import type { AcpRuntime, AcpStatus } from "./useAcpRuntime";
-import { useAgentsT } from "./i18n";
+import { useWorkflowsAgentsT } from "./i18n";
 
 const SESSION_MODELS = ["agents.AgentSession", "agents.AgentTurn"] as const;
 const EMPTY_MCP_SERVERS = Object.freeze({});
@@ -67,7 +73,7 @@ export function useSessionRuntime(
   view: AgentChatView,
   initialSessionId?: string,
 ): AcpRuntime {
-  const t = useAgentsT();
+  const t = useWorkflowsAgentsT();
   const [startedSessionId, setStartedSessionId] = React.useState<string | null>(null);
   const [posting, setPosting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);

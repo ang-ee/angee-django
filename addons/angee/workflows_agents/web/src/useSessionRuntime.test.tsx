@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 const hookMocks = vi.hoisted(() => ({
   externalConfigs: [] as Array<Record<string, unknown>>,
   latestData: undefined as unknown,
+  latestIsFetching: false,
   turnsData: undefined as unknown,
   queryCalls: [] as Array<{ operation: string; variables: Record<string, string> }>,
   latestRefetch: vi.fn(),
@@ -36,6 +37,7 @@ const VIEW = { kind: "record", type: "notes/note", sqid: "nte_1" } as const;
 beforeEach(() => {
   hookMocks.externalConfigs = [];
   hookMocks.latestData = undefined;
+  hookMocks.latestIsFetching = false;
   hookMocks.turnsData = undefined;
   hookMocks.queryCalls = [];
   hookMocks.latestRefetch.mockReset();
@@ -69,7 +71,7 @@ beforeEach(() => {
       if (operation === "LatestAgentSession") {
         return {
           data: hookMocks.latestData,
-          fetching: false,
+          isFetching: hookMocks.latestIsFetching,
           error: null,
           refetch: hookMocks.latestRefetch,
         };
@@ -77,7 +79,7 @@ beforeEach(() => {
       if (operation === "AgentSessionTurns") {
         return {
           data: hookMocks.turnsData,
-          fetching: false,
+          isFetching: false,
           error: null,
           refetch: hookMocks.turnsRefetch,
         };
@@ -90,6 +92,26 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("useSessionRuntime", () => {
+  test.each([false, true])("waits for the latest-session read before deciding to start (existing session: %s)", async (hasSession) => {
+    hookMocks.latestIsFetching = true;
+    hookMocks.startSession.mockResolvedValue({ start_agent_session: { id: "ase_new" } });
+    const rendered = renderHook(() => useSessionRuntime("agt_1", VIEW));
+
+    expect(hookMocks.startSession).not.toHaveBeenCalled();
+    expect(rendered.result.current.status).toBe("connecting");
+
+    hookMocks.latestData = {
+      agent_sessions: hasSession ? [{ id: "ase_existing", status: "IDLE" }] : [],
+    };
+    hookMocks.latestIsFetching = false;
+    rendered.rerender();
+
+    await waitFor(() => expect(hookMocks.startSession).toHaveBeenCalledTimes(hasSession ? 0 : 1));
+    if (!hasSession) {
+      expect(hookMocks.startSession).toHaveBeenCalledWith({ agent: "agt_1", context: VIEW });
+    }
+  });
+
   test("keeps completed-turn message identities stable across refetch and only refolds the streaming turn", () => {
     hookMocks.latestData = { agent_sessions: [{ id: "ase_1", status: "IDLE" }] };
     hookMocks.turnsData = sessionTurns([

@@ -6,7 +6,9 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.tsx"
+    ".": "./src/index.tsx",
+    "./chat": "./src/chat.ts",
+    "./chat/view": "./src/views/AgentChat.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

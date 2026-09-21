@@ -506,6 +506,11 @@ Hard-won traps — the wise learn from others' mistakes
   [Checks](../checks.md) owns the command order and working directories. Addon
   fragments resolve the composed stack's generated documents first. The
   repository-local `.angee/runtime` fallback may be stale in a workspace slot.
+- **Optional operations travel with their owning addon.** Keep documents and their
+  transport UI in the addon contributing the schema fields; a base fragment must
+  codegen without optional dependents. Runtime-specific agent chat composes the
+  [agents chat slot](../../addons/angee/agents/web/src/chat-slot.ts) from the
+  [workflow session fragment](../../addons/angee/workflows_agents/web/src/index.tsx).
 - **Relation widgets follow the SDL field kind** — a nested object FK
   (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
   node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Alert, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, InfoRow, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, statusTone, textRoleVariants } from "@angee/ui";
+import { Alert, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, EmptyState, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, SlotOutlet, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, optionToken, statusTone, textRoleVariants, useModelSlot } from "@angee/ui";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -17,16 +17,15 @@ import { code } from "@streamdown/code";
 import { Streamdown } from "streamdown";
 
 import { useAcpRuntime, type AcpRuntime } from "../useAcpRuntime";
-import { useSessionRuntime } from "../useSessionRuntime";
+import { AGENT_CHAT_SLOT, AgentChatProvider, useAgentChatContext, type AgentChatProps } from "../chat-slot";
 import { useAgentsT } from "../i18n";
 import { AgentChooser } from "./AgentChooser";
 import { SlashCommandComposer } from "./slash-commands";
-import type { AgentChatView, McpServerConfig, AgentRosterItem } from "../documents";
+import type { AgentChatView, McpServerConfig } from "../documents";
 import { AgentSessionContributions } from "../session-contributions";
 
 /**
- * Chat with a running agent over ACP. The session is minted per `agentId`; the browser
- * speaks ACP to the agent's routed WebSocket through the operator's central Caddy. The
+ * Chat with a running agent through its addon's contributed transport. The
  * surface is the `@angee/ui` chat primitives: a dense top bar (an agent chooser + a single
  * ⋯ overflow holding Settings/Reconnect/Clear), streamed markdown replies, reasoning frames,
  * and tool-call cards. `modelHandle` (when known) labels the agent's model in the bar + the
@@ -39,38 +38,55 @@ import { AgentSessionContributions } from "../session-contributions";
  * static agent label. `fallbackName`/`modelHandle` label the chooser before the `AgentRoster`
  * loads or for a default agent not yet in the list.
  */
-interface AgentChatProps {
-  agentId: string;
-  view: AgentChatView;
-  modelHandle?: string;
-  agents?: readonly AgentRosterItem[];
-  selectedAgentId?: string;
-  onSelectAgent?: (id: string) => void;
-  fallbackName?: string;
-  runtimeClass?: string;
-  sessionId?: string;
-}
-
 export function AgentChat(props: AgentChatProps): React.ReactElement {
+  const t = useAgentsT();
+  const target = React.useMemo(() => ({
+    slot: AGENT_CHAT_SLOT,
+    model: "agents.Agent",
+    impl: optionToken(props.runtimeClass),
+  }), [props.runtimeClass]);
+  const entries = useModelSlot(target);
   if (props.runtimeClass === undefined) {
     return <div className="h-full min-h-[28rem] bg-sheet" aria-busy="true" />;
   }
-  return props.runtimeClass === "PYDANTIC"
-    ? <SessionAgentChat {...props} />
-    : <AcpAgentChat {...props} />;
+  if (entries.length === 0) {
+    return (
+      <div className="flex h-full min-h-[28rem] flex-col bg-sheet">
+        {props.agents && props.onSelectAgent ? (
+          <ChatBar start={
+            <AgentChooser
+              agents={props.agents}
+              value={props.selectedAgentId ?? props.agentId}
+              onSelect={props.onSelectAgent}
+              status="error"
+              statusLabel={t("chat.unavailable")}
+              fallbackName={props.fallbackName}
+              fallbackHandle={props.modelHandle}
+            />
+          } />
+        ) : null}
+        <EmptyState title={t("chat.unavailable")} icon="agent" fill />
+      </div>
+    );
+  }
+  return (
+    <AgentChatProvider value={props}>
+      <LazyBoundary pending={<div className="h-full min-h-[28rem] bg-sheet" aria-busy="true" />}>
+        <SlotOutlet entries={entries} />
+      </LazyBoundary>
+    </AgentChatProvider>
+  );
 }
 
-function AcpAgentChat(props: AgentChatProps): React.ReactElement {
+/** Container-backed chat contributed for the agents addon's ACP runtimes. */
+export function AcpAgentChat(): React.ReactElement {
+  const props = useAgentChatContext();
   const runtimeState = useAcpRuntime(props.agentId, props.view);
   return <AgentChatContent {...props} runtimeState={runtimeState} />;
 }
 
-function SessionAgentChat(props: AgentChatProps): React.ReactElement {
-  const runtimeState = useSessionRuntime(props.agentId, props.view, props.sessionId);
-  return <AgentChatContent {...props} runtimeState={runtimeState} />;
-}
-
-function AgentChatContent({
+/** Shared chat chrome and transcript for a contributed transport. */
+export function AgentChatContent({
   agentId,
   view,
   modelHandle,
