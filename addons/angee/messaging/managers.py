@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Callable, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -55,7 +56,7 @@ from angee.storage.uploads import attachment_extension, fallback_attachment_name
 
 if TYPE_CHECKING:
     from angee.messaging.backends import ParsedMessage, ParsedPart, ParsedThread
-    from angee.messaging.models import Message
+    from angee.messaging.models import Message, Part
 
 # A fragment quoted by more than this many messages is boilerplate (a disclaimer or
 # repeated signature); quote-linking it would join the whole corpus, so skip it.
@@ -2401,7 +2402,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     "parts__fragment", queryset=apps.get_model("messaging", "Fragment")._base_manager.using(self._db)
                 ),
                 models.Prefetch(
-                    "parts__file", queryset=apps.get_model("storage", "File")._base_manager.using(self._db)
+                    "parts__file",
+                    queryset=apps.get_model("storage", "File")
+                    ._base_manager.using(self._db)
+                    .select_related("mime_type"),
                 ),
                 models.Prefetch(
                     "tracking_values", queryset=apps.get_model("messaging", "TrackingValue").objects.using(self._db)
@@ -3342,67 +3346,176 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
 
 class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[misc]
-    """Owns the recursive body-part rows; reads compose the ``PartQuerySet`` scopes."""
+    """Owns message-scoped navigation over the recursive body-part rows.
 
-    def reading_order_for_message(self, message: Any) -> list[Any]:
+    Tree reads use the base manager: callers must authorize the parent Message
+    on the selected alias, including record-scoped chatter projections. Each
+    operation loads that message's parts once, with fragment/file/MIME joins,
+    or reuses its native ``parts`` prefetch when the message and fully loaded
+    parts/related rows match the selected alias. Incomplete or foreign caches
+    fall back to that single joined read. Prefetch the complete relation with
+    those joins for repeated queries without SQL; no separate tree cache is kept.
+    """
+
+    def reading_order_for_message(self, message: Message, *, using: str | None = None) -> list[Part]:
         """Return ``message`` parts flattened in depth-first reading order.
 
-        ``Part.position`` is per parent, so the model's flat ordering is correct for
-        the structural resource table but not for transcript rendering. The message
-        projection needs the MIME tree order: roots by position, then each node's
-        children by position recursively. The parent message read is the gate; this
-        child walk uses the base manager so record-scoped chatter parts stay reachable
-        through the already-authorized ``record_thread`` projection.
+        Roots and siblings sort by ``(position, str(sqid))``. Unreachable
+        orphan/cycle components follow in ``(parent_id, position, str(sqid))``
+        order, visiting each row once. See the manager's read/cache contract.
         """
 
-        cache = getattr(message, "_prefetched_objects_cache", None)
-        if (
-            cache is not None
-            and "parts" in cache
-            and (
-                self._db is None
-                or (message._state.db == self._db and all(part._state.db == self._db for part in cache["parts"]))
-            )
-        ):
-            parts = list(message.parts.all())
-        else:
-            parts = list(
-                self.model._base_manager.db_manager(self._db)
-                .filter(message=message)
-                .select_related("fragment", "file", "file__mime_type")
-                .order_by("parent_id", "position", "sqid")
-            )
-        siblings: dict[Any | None, list[Any]] = {}
-        for part in parts:
-            siblings.setdefault(part.parent_id, []).append(part)
-        for rows in siblings.values():
-            rows.sort(key=lambda part: (part.position, str(part.sqid)))
-
-        ordered: list[Any] = []
-        seen: set[Any] = set()
-
-        def visit(parent_id: Any | None) -> None:
-            for part in siblings.get(parent_id, []):
-                if part.pk in seen:
-                    continue
-                seen.add(part.pk)
-                ordered.append(part)
-                visit(part.pk)
-
-        visit(None)
-        for part in sorted(
-            parts,
+        using = get_read_alias(self.model, using=using, bound=self, instance=message)
+        by_id, siblings = self._parts_for_message(message, using=using)
+        roots = sorted(
+            by_id.values(),
             key=lambda part: (
                 -1 if part.parent_id is None else part.parent_id,
                 part.position,
                 str(part.sqid),
             ),
-        ):
-            if part.pk in seen:
-                continue
+        )
+        return self._walk_parts(roots, siblings, seen=set())
+
+    def children_for_message(
+        self, message: Message, parent_id: Any | None, *, using: str | None = None
+    ) -> list[Part]:
+        """Return direct children in sibling order; ``parent_id=None`` selects roots.
+
+        IDs are Part primary keys within ``message``; an unknown or foreign
+        parent returns an empty list. See the manager's read/cache contract.
+        """
+
+        using = get_read_alias(self.model, using=using, bound=self, instance=message)
+        by_id, siblings = self._parts_for_message(message, using=using)
+        if parent_id is not None and parent_id not in by_id:
+            return []
+        return siblings.get(parent_id, [])
+
+    def ancestors_for_message(
+        self,
+        message: Message,
+        part_id: Any,
+        *,
+        stop_at: Callable[[Part], bool] | None = None,
+        using: str | None = None,
+    ) -> list[Part]:
+        """Return strict ancestors of a Part primary key, nearest parent first.
+
+        Stay within ``message``; unknown IDs return an empty list and missing
+        parents or cycles end the walk without returning the starting part.
+        A row matching ``stop_at`` is included, but its ancestors are skipped.
+        Callers apply kind, content, or membership predicates to the returned
+        rows. See the manager's read/cache contract.
+        """
+
+        using = get_read_alias(self.model, using=using, bound=self, instance=message)
+        by_id, _siblings = self._parts_for_message(message, using=using)
+        part = by_id.get(part_id)
+        ancestors: list[Part] = []
+        seen = {part_id}
+        while part is not None:
+            part = by_id.get(part.parent_id)
+            if part is None or part.pk in seen:
+                break
             seen.add(part.pk)
-            ordered.append(part)
-            visit(part.pk)
+            ancestors.append(part)
+            if stop_at is not None and stop_at(part):
+                break
+        return ancestors
+
+    def descendants_for_message(
+        self,
+        message: Message,
+        part_id: Any,
+        *,
+        stop_at: Callable[[Part], bool] | None = None,
+        using: str | None = None,
+    ) -> list[Part]:
+        """Return strict descendants of a Part primary key in depth-first reading order.
+
+        Stay within ``message``; unknown IDs return an empty list. Visit each
+        row once and exclude the starting part, including in cycles. A row
+        matching ``stop_at`` is included, but its descendants are skipped;
+        the starting part is not tested. Callers apply content/existence
+        predicates to these rows. See the manager's read/cache contract.
+        """
+
+        using = get_read_alias(self.model, using=using, bound=self, instance=message)
+        by_id, siblings = self._parts_for_message(message, using=using)
+        if part_id not in by_id:
+            return []
+        return self._walk_parts(siblings.get(part_id, []), siblings, seen={part_id}, stop_at=stop_at)
+
+    def _parts_for_message(
+        self, message: Message, *, using: str
+    ) -> tuple[dict[Any, Part], dict[Any | None, list[Part]]]:
+        """Index one alias-bound message read by primary key and ordered siblings.
+
+        Foreign parents remain absent from the index, so navigation never
+        follows a forward FK descriptor onto another message or database.
+        """
+
+        parts: list[Part] | None = None
+        cache = getattr(message, "_prefetched_objects_cache", None)
+        if cache is not None and "parts" in cache and message._state.db == using:
+            parts = list(cache["parts"])
+            fragment_field = self.model._meta.get_field("fragment")
+            file_field = self.model._meta.get_field("file")
+            mime_field = file_field.remote_field.model._meta.get_field("mime_type")
+            for part in parts:
+                fragment = fragment_field.get_cached_value(part, default=None)
+                file = file_field.get_cached_value(part, default=None)
+                mime_type = mime_field.get_cached_value(file, default=None) if file is not None else None
+                if (
+                    any(
+                        row._state.db != using or row.get_deferred_fields()
+                        for row in (part, fragment, file, mime_type)
+                        if row is not None
+                    )
+                    or (part.fragment_id is not None and fragment is None)
+                    or (part.file_id is not None and file is None)
+                    or (file is not None and file.mime_type_id is not None and mime_type is None)
+                ):
+                    parts = None
+                    break
+        if parts is None:
+            parts = list(
+                self.model._base_manager.db_manager(using)
+                .filter(message=message)
+                .select_related("fragment", "file", "file__mime_type")
+                .order_by("parent_id", "position", "sqid")
+            )
+        by_id: dict[Any, Part] = {}
+        siblings: dict[Any | None, list[Part]] = {}
+        for part in parts:
+            by_id[part.pk] = part
+            siblings.setdefault(part.parent_id, []).append(part)
+        for rows in siblings.values():
+            rows.sort(key=lambda part: (part.position, str(part.sqid)))
+        return by_id, siblings
+
+    @staticmethod
+    def _walk_parts(
+        roots: Sequence[Part],
+        siblings: dict[Any | None, list[Part]],
+        *,
+        seen: set[Any],
+        stop_at: Callable[[Part], bool] | None = None,
+    ) -> list[Part]:
+        """Flatten ordered branches once, pruning below caller-selected boundaries."""
+
+        ordered: list[Part] = []
+        for root in roots:
+            pending = [root]
+            while pending:
+                part = pending.pop()
+                if part.pk in seen:
+                    continue
+                seen.add(part.pk)
+                ordered.append(part)
+                if stop_at is None or not stop_at(part):
+                    pending.extend(reversed(siblings.get(part.pk, [])))
         return ordered
 
 
