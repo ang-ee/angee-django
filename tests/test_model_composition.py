@@ -360,6 +360,55 @@ class Child(ResourceLoadMixin):
     assert "after_resource_load" not in render_models(composition, config.label)
 
 
+@isolate_apps()
+def test_native_history_excludes_generated_fields_from_final_model(modules):
+    create, emit = modules
+    config, module = create("native_generated_history")
+
+    class BooleanGeneratedField(models.GeneratedField):
+        pass
+
+    source(
+        module,
+        "Tracked",
+        config.label,
+        bases=(HistoryMixin, models.Model),
+        runtime=True,
+        value=models.IntegerField(),
+        doubled=models.GeneratedField(
+            expression=models.F("value") * 2,
+            output_field=models.IntegerField(),
+            db_persist=True,
+        ),
+    )
+    source(
+        module,
+        "TrackedExtension",
+        config.label,
+        extends=f"{config.label}.Tracked",
+        positive=BooleanGeneratedField(
+            expression=models.Q(value__gt=0),
+            output_field=models.BooleanField(),
+            db_persist=True,
+        ),
+    )
+    generated = emit(ModelComposition.discover((config,)))[config.label]
+    Tracked = generated.Tracked
+    history = Tracked.history.model
+
+    assert generated.HistoricalTracked is history
+    assert not history._meta.abstract
+    assert {
+        field.name for field in Tracked._meta.local_fields if isinstance(field, models.GeneratedField)
+    } == {"doubled", "positive"}
+    assert isinstance(Tracked._meta.get_field("positive"), BooleanGeneratedField)
+    historical_fields = {field.name for field in history._meta.local_fields}
+    assert {"id", "value"} <= historical_fields
+    assert {"doubled", "positive"}.isdisjoint(historical_fields)
+    assert not any(isinstance(field, models.GeneratedField) for field in history._meta.local_fields)
+    assert {field.name for field in history.tracked_fields} == {"id", "value"}
+
+
 @pytest.mark.django_db(transaction=True)
 def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modules):
     create, emit = modules

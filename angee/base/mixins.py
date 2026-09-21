@@ -442,10 +442,13 @@ class ModelHistory(HistoricalRecords):
         return options
 
     def fields_included(self, model: type[models.Model]) -> list[models.Field]:
+        """Keep snapshot fields, excluding virtual and row-derived generated columns."""
+
         return [
             field
             for field in super().fields_included(model)
-            if field.concrete or field.is_relation or field.auto_created
+            if (field.concrete or field.is_relation or field.auto_created)
+            and not isinstance(field, models.GeneratedField)
         ]
 
 
