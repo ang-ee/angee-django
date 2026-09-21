@@ -321,11 +321,45 @@ class WorkflowGraph:
             sources.append(
                 GraphInputSource(
                     "map_item",
-                    model_data_contract(None, mode="serialization"),
+                    self._map_item_contract(owners[0]),
                     label="Current Map item",
                 )
             )
         return tuple(sources)
+
+    def _map_item_contract(self, owner: GraphNode) -> DataContract:
+        """Project a Map's input binding and items path through declared source catalogues."""
+
+        unknown = model_data_contract(None, mode="serialization")
+        path = owner.impl.map_input_path(owner.config) if owner.impl else None
+        if path is None or owner.input_binding is None:
+            return unknown
+        try:
+            binding = parse_binding(owner.input_binding)
+        except PydanticValidationError:
+            return unknown
+        sources = self.input_sources(owner.identity)
+        for visit in binding.visits():
+            reference = visit.binding.source_reference()
+            if reference is None or tuple(path[:len(visit.target_path)]) != visit.target_path:
+                continue
+            source = next(
+                (
+                    source for source in sources
+                    if source.kind == reference.kind and source.step_key == reference.step_key
+                ),
+                None,
+            )
+            if source is None:
+                continue
+            contract = source.contract.catalogue.at_path(reference.path)
+            if contract is None:
+                continue
+            relative_path = contract.resolve_path(path[len(visit.target_path):])
+            array = None if relative_path is None else contract.at_path(relative_path)
+            if array is not None and array.kind == "array" and array.item is not None:
+                return DataContract(raw_schema=None, catalogue=array.item.contract)
+        return unknown
 
     def map_body_candidates(
         self,

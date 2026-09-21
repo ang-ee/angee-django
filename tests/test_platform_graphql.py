@@ -249,7 +249,7 @@ def test_model_only_explorer_selection_skips_catalogue_and_edges(monkeypatch: An
     row = composed.PlatformModelRow.from_model(config, model)
     monkeypatch.setattr(platform_schema, "platform_can_read", lambda: True)
     monkeypatch.setattr(composed, "model_rows", lambda: [row])
-    monkeypatch.setattr(platform_schema._Addon.objects, "all", _unexpected)
+    monkeypatch.setattr(type(platform_schema._Addon.objects), "all", _unexpected)
     monkeypatch.setattr(composed, "resource_counts", _unexpected)
     monkeypatch.setattr(platform_schema, "_edge_rows", _unexpected)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib
 import os
 from collections.abc import Mapping, MutableMapping
@@ -54,7 +55,7 @@ class AutoConfig:
                 raise ImproperlyConfigured(f"{app_config.name}.autoconfig must not define {name}")
             if ":" not in key and "." not in key and name in self.namespace:
                 continue
-            attributes[key] = value
+            attributes[key] = copy.deepcopy(value)
         env_attributes = {
             name: os.environ[name]
             for name in sorted(declared_names)

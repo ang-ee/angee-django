@@ -3459,11 +3459,14 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
         parts: list[Part] | None = None
         cache = getattr(message, "_prefetched_objects_cache", None)
         if cache is not None and "parts" in cache and message._state.db == using:
-            parts = list(cache["parts"])
+            # Native prefetch already materialized these rows under the caller's
+            # authorization. Re-evaluating its queryset would re-enter REBAC
+            # before this owner can reject incomplete or foreign-alias rows.
+            parts = cache["parts"]._result_cache
             fragment_field = self.model._meta.get_field("fragment")
             file_field = self.model._meta.get_field("file")
             mime_field = file_field.remote_field.model._meta.get_field("mime_type")
-            for part in parts:
+            for part in parts if parts is not None else ():
                 fragment = fragment_field.get_cached_value(part, default=None)
                 file = file_field.get_cached_value(part, default=None)
                 mime_type = mime_field.get_cached_value(file, default=None) if file is not None else None

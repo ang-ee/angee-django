@@ -709,6 +709,12 @@ and current contracts before applying a historical example to a new deployment.
 - **Run every changed test module standalone.** A full suite's file order can
   leak concrete test models into the shared registry and mask a missing
   registration; a broad run does not replace the direct module run.
+- **Patch inherited Django manager methods on the manager class.** Pytest's
+  `monkeypatch` can restore an instance patch as a bound instance attribute;
+  Django's `db_manager()` copies then retain the original manager and lose their
+  selected alias. Patch `type(manager)` and accept the manager argument in the
+  spy. Verify alias-sensitive consumers after the spy-owning module, as in the
+  [messaging routing tests](../../tests/test_messaging_write_alias.py).
 - **A relocated virtualenv can retain stale launcher shebangs.** Diagnose the
   interpreter and environment owner when a console script cannot spawn; do not
   assume an application failure. [Checks](../checks.md) owns the supported

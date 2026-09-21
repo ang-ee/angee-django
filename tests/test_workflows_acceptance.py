@@ -175,29 +175,11 @@ def _workflow_for_acceptance(assignee_ref: str) -> Workflow:
                 "policy": "one_done",
                 "action": "review-output",
                 "slots": [{"assignee": assignee_ref}],
-                "decision_schema": {
-                    "type": "object",
-                    "required": ["action", "approved"],
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "enum": ["complete"],
-                            "options": [{
-                                "value": "complete", "label": "Complete", "verdict": "COMPLETE",
-                            }],
-                        },
-                        "approved": {"type": "boolean"},
-                    },
-                    "oneOf": [{
-                        "type": "object",
-                        "required": ["action", "approved"],
-                        "properties": {
-                            "action": {"const": "complete"},
-                            "approved": {"type": "boolean"},
-                        },
-                        "additionalProperties": False,
-                    }],
-                },
+                "actions": [{
+                    "value": "complete", "label": "Complete", "verdict": "COMPLETE",
+                    "fields": ["approved"], "required": ["approved"],
+                }],
+                "properties": {"approved": {"type": "boolean"}},
             },
             join_rule=workflow_models.JoinRule.ALL_SUCCESS,
         )

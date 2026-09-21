@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from datetime import date
 from typing import Any
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import IntegrityError, connection, connections, models, router, transaction
+from django.db import IntegrityError, connection, models, router, transaction
 
 from angee.base.models import AngeeModel
 from tests.test_transitions import TransitionRouter
@@ -58,19 +59,16 @@ class ValidationChild(ValidationRecord):
 
 
 @pytest.fixture
-def validation_writer() -> Iterator[str]:
-    """Make native validation tables visible through a separate connection alias."""
+def validation_writer(database_alias: Callable[[str], AbstractContextManager[str]]) -> Iterator[str]:
+    """Expose native validation tables through the shared database alias factory."""
 
     with connection.schema_editor() as editor:
         editor.create_model(ValidationTarget)
         editor.create_model(ValidationRecord)
-    alias = "model_validation_writer"
-    connections[alias] = connection.copy(alias=alias)
     try:
-        yield alias
+        with database_alias("model_validation_writer") as alias:
+            yield alias
     finally:
-        connections[alias].close()
-        del connections[alias]
         with connection.schema_editor() as editor:
             editor.delete_model(ValidationRecord)
             editor.delete_model(ValidationTarget)

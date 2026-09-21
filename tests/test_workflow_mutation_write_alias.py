@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import AbstractContextManager
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from django.db import connection, connections, models, router
+from django.db import models, router
 from rebac import system_context
 
 from angee.graphql.ids import to_public_id
@@ -20,17 +21,14 @@ from tests.workflows import Step, WorkflowRun
 
 
 @pytest.fixture
-def mutation_writer(workflow_engine_tables: None) -> Iterator[str]:
-    """Reuse the transition tests' dynamic connection after workflow tables exist."""
+def mutation_writer(
+    workflow_engine_tables: None, database_alias: Callable[[str], AbstractContextManager[str]]
+) -> Iterator[str]:
+    """Expose workflow tables through the shared database alias factory."""
 
     del workflow_engine_tables
-    alias = "workflow_mutation_writer"
-    connections[alias] = connection.copy(alias=alias)
-    try:
+    with database_alias("workflow_mutation_writer") as alias:
         yield alias
-    finally:
-        connections[alias].close()
-        del connections[alias]
 
 
 class _OverrideRouter(TransitionRouter):

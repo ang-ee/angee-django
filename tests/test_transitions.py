@@ -424,11 +424,13 @@ def test_nested_transition_restores_outer_save_context(
 ) -> None:
     """Nested transitions and force-state saves restore the outer field and alias."""
 
-    task = TransitionTask.objects.using(transition_alias).create(state=TransitionTask.State.RUNNING)
+    seed = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
+    task = TransitionTask(pk=seed.pk, state=TransitionTask.State.RUNNING)
+    task.save(using=transition_alias)
     review_using = review_using or transition_alias
     if fail_nested:
         if force_review:
-            TransitionTask.objects.using(transition_alias).filter(pk=task.pk).update(
+            TransitionTask.objects.using(review_using).filter(pk=task.pk).update(
                 review_state=TransitionTask.State.DONE
             )
         else:
@@ -465,9 +467,13 @@ def test_nested_transition_restores_outer_save_context(
         assert not hasattr(task, "nested_error")
     stored = TransitionTask.objects.using(transition_alias).get(pk=task.pk)
     assert stored.state == TransitionTask.State.DONE
-    assert stored.review_state == (
+    reviewed = TransitionTask.objects.using(review_using).get(pk=task.pk)
+    assert reviewed.review_state == (
         TransitionTask.State.RUNNING if fail_nested and not force_review else TransitionTask.State.DONE
     )
+    if review_using != transition_alias and connection.vendor == "sqlite":
+        assert stored.review_state == TransitionTask.State.RUNNING
+        assert reviewed.state == TransitionTask.State.RUNNING
 
 
 def test_unsaved_force_state_has_no_save_context() -> None:

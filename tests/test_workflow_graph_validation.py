@@ -558,6 +558,47 @@ def test_map_binding_sources_are_owned_by_the_map_role() -> None:
     )
 
 
+@pytest.mark.parametrize("constructed_input", [False, True])
+def test_map_item_paths_follow_the_declared_input_source(constructed_input: bool) -> None:
+    class CollectionOutput(BaseModel):
+        items: list[DeclaredInput]
+
+    class CollectionStep(LegacyOutcomeStep):
+        key = "collection"
+        output_model = CollectionOutput
+
+    selected: dict[str, Any] = {"kind": "step_output", "step_key": "before", "path": []}
+    if constructed_input:
+        selected = {
+            "kind": "object",
+            "fields": {"items": {**selected, "path": ["items"]}},
+        }
+    value = graph(
+        [
+            node("before", CollectionStep, entry=True),
+            node("map", MapStep, {"target_step": "body", "items": "input.items"}, binding=selected),
+            node(
+                "body", TargetStep,
+                binding={
+                    "kind": "object",
+                    "fields": {
+                        "title": {"kind": "map_item", "path": ["title"]},
+                        "invalid": {"kind": "map_item", "path": ["undeclared"]},
+                    },
+                },
+            ),
+        ],
+        [edge("before", "map")],
+    )
+    sources = value.input_sources(GraphIdentity(client_key="node-body"))
+    contract = next(source.contract for source in sources if source.kind == "map_item")
+    assert contract.matches_path(("title",))
+    assert not contract.matches_path(("undeclared",))
+    diagnostics = [item for item in value.diagnostics() if item.location.field == "input_binding"]
+    assert len(diagnostics) == 1
+    assert diagnostics[0].location.detail_path == ("fields", "invalid", "path")
+
+
 def test_source_catalogue_never_selects_self_or_collapses_duplicate_keys() -> None:
     cycle = graph(
         [node("left", SourceStep, entry=True), node("target", TargetStep)],

@@ -1638,6 +1638,25 @@ def test_autoconfig_reuses_native_module_and_preserves_incremental_values(tmp_pa
     assert namespace["_YAMLCONF_ATTRIBUTES"]
 
 
+def test_autoconfig_nested_contributions_do_not_mutate_addon_defaults(tmp_path, monkeypatch):
+    """A composed registry belongs to its host; imported declarations remain reusable."""
+
+    from angee.compose.autoconfig import AutoConfig
+
+    _write_addon(tmp_path, "registry_owner", autoconfig="SETTINGS = {'REGISTRY': {'core': 'core.Impl'}}\n")
+    _write_addon(tmp_path, "registry_extension", autoconfig="SETTINGS = {'REGISTRY.extension': 'extra.Impl'}\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    first = {}
+    composer = AutoConfig(first, reserved_settings=frozenset())
+    composer.update_app(AppConfig.create("registry_owner"))
+    composer.update_app(AppConfig.create("registry_extension"))
+    second = {}
+    AutoConfig(second, reserved_settings=frozenset()).update_app(AppConfig.create("registry_owner"))
+
+    assert first["REGISTRY"] == {"core": "core.Impl", "extension": "extra.Impl"}
+    assert second["REGISTRY"] == {"core": "core.Impl"}
+
+
 @pytest.mark.parametrize("include_messaging", [False, True])
 def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, include_messaging):
     """Provider defaults are addon-owned; explicit project values still win."""

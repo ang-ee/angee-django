@@ -6,12 +6,13 @@ the selected writer, including native model validation.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from typing import Any
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection, connections, models, router
+from django.db import connection, models, router
 from rebac import system_context
 
 from angee.workflows.definitions import (
@@ -29,7 +30,7 @@ from tests.workflows import Edge, Step, Trigger, Workflow, reject_default_domain
 
 
 class DefinitionRouter(TransitionRouter):
-    """Allow relations between two aliases of the same physical test database."""
+    """Allow fixture objects to reference the selected database's seeded rows."""
 
     def allow_relation(self, obj1: models.Model, obj2: models.Model, **hints: Any) -> bool:
         del obj1, obj2, hints
@@ -37,17 +38,14 @@ class DefinitionRouter(TransitionRouter):
 
 
 @pytest.fixture
-def definition_writer(workflow_tables: None) -> Iterator[str]:
-    """Expose the existing workflow tables through a separate native alias."""
+def definition_writer(
+    workflow_tables: None, database_alias: Callable[[str], AbstractContextManager[str]]
+) -> Iterator[str]:
+    """Expose workflow tables through the shared database alias factory."""
 
     del workflow_tables
-    alias = "workflow_definition_writer"
-    connections[alias] = connection.copy(alias=alias)
-    try:
+    with database_alias("workflow_definition_writer") as alias:
         yield alias
-    finally:
-        connections[alias].close()
-        del connections[alias]
 
 
 @pytest.mark.django_db(transaction=True)

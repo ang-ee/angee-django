@@ -61,6 +61,7 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.actors import is_sudo
 from rebac.backends import backend as rebac_backend
 from rebac.managers import RebacManager
 
@@ -251,7 +252,7 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
         read access to the backend row itself.
         """
 
-        with system_context(reason="storage.drive.storage"):
+        with contextlib.nullcontext() if is_sudo() else system_context(reason="storage.drive.storage"):
             field = self._meta.get_field("backend")
             backend = field.get_cached_value(self, default=None)
             if backend is None:
@@ -1278,7 +1279,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         from the per-``(row, config)`` backend cache.
         """
 
-        with system_context(reason="storage.file.storage"):
+        with contextlib.nullcontext() if is_sudo() else system_context(reason="storage.file.storage"):
             using = get_read_alias(type(self)._meta.get_field("drive").related_model, instance=self)
             drive: Any = related_on(self, "drive", using=using, select_related=("backend",))
             return drive.storage

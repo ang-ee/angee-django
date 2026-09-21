@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from datetime import timedelta
 from typing import Any
 
 import pytest
-from django.db import connection, connections, router, transaction
+from django.db import connections, router, transaction
 from django.utils import timezone
 from rebac import system_context
 
@@ -38,17 +39,13 @@ def engine_writer(
     workflow_engine_tables: None,
     workflow_authorization_frontier: None,
     workflow_audit_frontier: list[dict[str, Any]],
+    database_alias: Callable[[str], AbstractContextManager[str]],
 ) -> Iterator[str]:
-    """Use the native secondary-connection pattern from transition routing tests."""
+    """Expose workflow tables through the shared database alias factory."""
 
     del workflow_engine_tables
-    alias = "workflow_engine_writer"
-    connections[alias] = connection.copy(alias=alias)
-    try:
+    with database_alias("workflow_engine_writer") as alias:
         yield alias
-    finally:
-        connections[alias].close()
-        del connections[alias]
 
 
 @pytest.mark.django_db(transaction=True)

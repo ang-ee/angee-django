@@ -407,6 +407,13 @@ class StepImpl(ImplBase):
         return None
 
     @classmethod
+    def map_input_path(cls, config: Any) -> tuple[str, ...] | None:
+        """Return the input path supplying this operation's Map items, when declared."""
+
+        del config
+        return None
+
+    @classmethod
     def operation(cls, *, key: str) -> StepOperation:
         """Return this registered implementation's workflow-owned authoring contract."""
 
@@ -1138,6 +1145,19 @@ class MapStep(StepImpl):
             return None
         target = config.get("target_step")
         return str(target) if isinstance(target, str) and target else None
+
+    @classmethod
+    def map_input_path(cls, config: Any) -> tuple[str, ...] | None:
+        """Expose the native items expression's input path for graph contract projection."""
+
+        expression = config.get("items") if isinstance(config, Mapping) else None
+        if not isinstance(expression, str):
+            return None
+        try:
+            root, path = map_items_expression_path(expression)
+        except ValueError:
+            return None
+        return path if root == "input" else None
 
     @classmethod
     def engine_expanded_filter(cls) -> dict[str, Any]:

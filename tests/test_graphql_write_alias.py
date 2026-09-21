@@ -11,6 +11,7 @@ import pytest
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections, router, transaction
+from graphql import GraphQLError
 from rebac import SubjectRef
 
 import angee.graphql.data.hasura as hasura_module
@@ -87,7 +88,7 @@ def test_elevated_target_preserves_bound_queryset_and_related_alias(
         related = instance_for_write(ContentType, str(target.content_type_id), using=target._state.db)
         assert target._state.db == target.content_type._state.db == related._state.db == action_writer
         assert routing.writes == []
-        with pytest.raises(ValueError, match="was not found"):
+        with pytest.raises(GraphQLError, match="was not found"):
             resolve_action_target(
                 Permission,
                 str(permission.pk),
@@ -106,7 +107,7 @@ def test_write_queryset_keeps_native_rebac_scope_when_bound(
     source = SaleDoc.objects.with_actor(actor).with_action("write").filter(title="visible")
     if scope == "system":
         source = source.system_context(reason="tests.write_alias.scope")
-    monkeypatch.setattr(SaleDoc._default_manager, "get_queryset", lambda: source)
+    monkeypatch.setattr(type(SaleDoc._default_manager), "get_queryset", lambda manager: source)
     routing = TransitionRouter("writer")
     monkeypatch.setattr(router, "routers", [routing])
     selected = write_scoped_queryset(SaleDoc)

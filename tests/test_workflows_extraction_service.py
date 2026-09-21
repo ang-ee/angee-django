@@ -23,6 +23,7 @@ from django.core.management import call_command
 from django.db import IntegrityError, models
 from django.test import SimpleTestCase, override_settings
 from django.utils import timezone
+from PIL import Image
 from rebac import (
     MissingActorError,
     PermissionDenied,
@@ -77,7 +78,7 @@ from angee.workflows_extraction.service import (
     process,
     require_approved_model_deployment,
 )
-from angee.workflows_extraction.steps import InferEvidenceStepImpl
+from angee.workflows_extraction.steps import InferEvidenceStepImpl, PreparePagesStepImpl, _restore_prepared
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
 from tests.extraction_models import EXTRACTION_MODELS, Extraction, ExtractionPage, ExtractionSource
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
@@ -1018,6 +1019,56 @@ class ExtractionServiceTests(TestCase):
             write_relationships(
                 [RelationshipTuple(to_object_ref(file), "viewer", to_subject_ref(self.owner)) for file in self.files]
             )
+
+    def test_restore_prepared_preserves_nonempty_recognition_subset_and_rejects_changes(self) -> None:
+        with system_context(reason="recognition image MIME types"):
+            for mime_type in ("image/png", "image/jpeg"):
+                apps.get_model("storage", "MimeType").objects.get_or_create(
+                    mime_type=mime_type,
+                    defaults={"category": "image", "label": mime_type},
+                )
+        image_bytes = io.BytesIO()
+        Image.new("RGB", (10, 10), "white").save(image_bytes, format="PNG")
+        with actor_context(self.owner):
+            image_file = apps.get_model("storage", "File").objects.ingest_bytes(
+                image_bytes.getvalue(),
+                filename="scanned.png",
+                owner_id=self.owner.pk,
+                drive_id=str(self.drive.sqid),
+            )
+        step_run = SimpleNamespace(
+            _state=SimpleNamespace(adding=False, db="default"),
+            input={
+                "files": [str(image_file.sqid), str(self.files[0].sqid)],
+                "recognition_model": str(self.model.sqid),
+                "target_model": self.drive._meta.label,
+                "target_id": str(self.drive.sqid),
+            },
+        )
+        with patch(
+            "angee.workflows_extraction.steps.related_on",
+            return_value=SimpleNamespace(admission_actor=lambda: self.owner),
+        ):
+            result = PreparePagesStepImpl().run(step_run, now=timezone.now())
+
+        with actor_context(self.owner):
+            prepared, manifest = _restore_prepared(result.output, {}, using="default")
+            self.assertEqual(len(prepared.pages), 2)
+            [page] = prepared.recognition_pages
+            [recognition] = manifest.recognition_pages
+            carrier, _ = page.recognition_carrier()
+            self.assertEqual(carrier.upload_state, "ready")
+            self.assertEqual(recognition.image_file_id, str(carrier.sqid))
+            self.assertEqual(recognition.image_digest, carrier.content_hash)
+            self.assertEqual(recognition.model_id, str(self.model.sqid))
+
+            changed = deepcopy(result.output)
+            changed["recognition_pages"][0]["image_digest"] = "0" * 64
+            with self.assertRaises(ValidationError) as error:
+                _restore_prepared(changed, {}, using="default")
+            self.assertEqual(error.exception.message_dict, {
+                "pages": ["The recognition subset changed after preparation."],
+            })
 
     def _extract(self, *, config: dict[str, Any]) -> Any:
         with actor_context(self.owner):

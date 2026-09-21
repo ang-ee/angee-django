@@ -97,11 +97,12 @@ def test_noop_refresh_preserves_authored_work_state_and_loaded_queue() -> None:
 def test_stage_default_and_validation_use_selected_alias_with_legacy_hooks(
     productivity_writer: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    container = RoutingStageContainer.objects.using(productivity_writer).create()
-    stage = RoutingPipelineStage.objects.using(productivity_writer).create(container_id=container.pk, name="Ready")
-    RoutingStageContainer.objects.using(productivity_writer).filter(pk=container.pk).update(default_stage_id=stage.pk)
-    record = RoutingStageRecord.objects.using(productivity_writer).create(container_id=container.pk, stage_id=stage.pk)
+    container = RoutingStageContainer.objects.create()
+    stage = RoutingPipelineStage.objects.create(container_id=container.pk, name="Ready")
+    RoutingStageContainer.objects.filter(pk=container.pk).update(default_stage_id=stage.pk)
+    record = RoutingStageRecord.objects.create(container_id=container.pk, stage_id=stage.pk)
     record = RoutingStageRecord.objects.using("default").only("pk").get(pk=record.pk)
+    assert RoutingStageRecord.objects.using(productivity_writer).filter(pk=record.pk).exists()
     routing = TransitionRouter("unavailable-writer")
     monkeypatch.setattr(router, "routers", [routing])
     original_default = RoutingPipelineStage.resolve_default

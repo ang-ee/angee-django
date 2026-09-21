@@ -535,13 +535,14 @@ def test_event_failed_admission_rolls_back_counters_and_remains_retryable(
     TriggerSubject.objects.filter(pk=subject.pk).update(state="ready")
     subject.refresh_from_db()
     ContentType.objects.get_for_model(subject, for_concrete_model=False)
-    original = WorkflowRun.objects._start_locked
+    manager_type = type(WorkflowRun.objects)
+    original = manager_type._start_locked
 
     def fail_start(*args: Any, **kwargs: Any) -> Any:
         del args, kwargs
         raise RuntimeError("admission failed")
 
-    monkeypatch.setattr(WorkflowRun.objects, "_start_locked", fail_start)
+    monkeypatch.setattr(manager_type, "_start_locked", fail_start)
     with pytest.raises(RuntimeError, match="admission failed"):
         Trigger.objects.start_event(
             trigger.pk,
@@ -552,7 +553,7 @@ def test_event_failed_admission_rolls_back_counters_and_remains_retryable(
     trigger.refresh_from_db()
     assert trigger.hourly_fire_count == 0
     assert trigger.last_fire_at is None
-    monkeypatch.setattr(WorkflowRun.objects, "_start_locked", original)
+    monkeypatch.setattr(manager_type, "_start_locked", original)
 
     admitted = Trigger.objects.start_event(
         trigger.pk,
@@ -625,7 +626,7 @@ def test_event_trigger_start_error_is_logged_and_does_not_break_save(
         del args, kwargs
         raise RuntimeError("start failed")
 
-    monkeypatch.setattr(Trigger.objects, "start_event", fail_start)
+    monkeypatch.setattr(type(Trigger.objects), "start_event", fail_start)
 
     TriggerSubject.objects.create(name="start-error", state="ready")
 

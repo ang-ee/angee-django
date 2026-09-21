@@ -1124,8 +1124,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             locked_handle = handles[handle.pk]
             locked_party = parties[party.pk]
             _, created = manager.get_or_create(
-                party=locked_party,
-                handle=locked_handle,
+                party_id=locked_party.pk,
+                handle_id=locked_handle.pk,
                 defaults={
                     "confidence": confidence,
                     "source": LinkSource.RULE,
@@ -1655,10 +1655,9 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             raise ValidationError({"name": "A replacement Party name must not be empty."})
         with transaction.atomic(using=alias), actor_context(actor):
             locked = (
-                self.model._base_manager.using(alias)
-                .lock_if_supported()
-                .get(pk=party.pk)
+                self.db_manager(alias)
                 .with_actor(actor)
+                .locked_get(pk=party.pk)
             )
             if locked.display_name != expected:
                 raise ValidationError({"name": "The Party name changed during review."})

@@ -708,8 +708,10 @@ def test_resource_entry_owners_reject_explicit_and_bound_non_default_aliases(tmp
     addon = _addon(tmp_path)
     groups = _groups(addon)
     monkeypatch.setattr(
-        WorkflowResourceLedger.objects, "_groups_for",
-        lambda *args, **kwargs: (tuple(group.entry for group, _ in groups), tuple(group for group, _ in groups), ()),
+        type(WorkflowResourceLedger.objects), "_groups_for",
+        lambda _manager, *args, **kwargs: (
+            tuple(group.entry for group, _ in groups), tuple(group for group, _ in groups), (),
+        ),
     )
     with pytest.raises(ResourceLoadError, match="default authorization database"):
         WorkflowResourceLedger.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL], using="other")

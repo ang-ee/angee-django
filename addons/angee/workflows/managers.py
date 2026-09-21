@@ -547,6 +547,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         if actor is None:
             raise PermissionDenied("An actor is required to cancel a workflow run.")
         alias = get_write_alias(self.model, bound=self, instance=run if isinstance(run, self.model) else None)
+        require_authorization_database(alias, operation="Workflow cancellation admission", error_field="using")
         run_id = run.pk if isinstance(run, self.model) else int(run)
         with transaction.atomic(using=alias):
             locked = self.db_manager(alias).lock_execution_ancestry((run_id,))[run_id]
@@ -5463,10 +5464,10 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         """Allocate one automatic successor without charging the logical run again."""
 
         successor = self.model(
-            step_run=step_run,
+            step_run_id=step_run.pk,
             ordinal=step_run.attempt + 1,
             cause=str(AttemptCause.AUTOMATIC_RETRY),
-            retry_of=retry_of,
+            retry_of_id=retry_of.pk,
             retry_index=retry_index,
             available_at=available_at,
             lease_token=uuid.uuid4(),
@@ -6461,9 +6462,21 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         ORM and relationship rows share rollback on the current host's default
         database with REBAC's transactional local backend. Other aliases and
         remote backends require a durable relationship-intent contract before
-        this unused API can enter the production execution cutover.
+        retained Decision creation can support them.
         """
         require_authorization_database(using, operation="Atomic Decision relationship creation", error_field="using")
+        if attempt.step_run_id != step_run.pk:
+            raise ValidationError({"attempt": "The suspension attempt must belong to this step run."})
+        if (
+            step_run.current_attempt_id != attempt.pk
+            or step_run.status != StepRunStatus.STARTED
+            or step_run.run.is_terminal
+            or attempt.started_at is None
+            or attempt.lease_revoked_at is not None
+            or attempt.result_kind != str(AttemptResultKind.SUSPEND)
+            or attempt.result_recorded_at is None
+        ):
+            raise ValidationError({"attempt": "Decisions require the current applicable suspension attempt."})
         if not isinstance(rebac_backend(), LocalBackend):
             raise ValidationError(
                 {"rebac": "Decision-scoped review access requires the transactional local REBAC adapter."}
@@ -6490,19 +6503,6 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 )
             )
         prepared = tuple(prepared_rows)
-        if attempt.step_run_id != step_run.pk:
-            raise ValidationError({"attempt": "The suspension attempt must belong to this step run."})
-        if (
-            step_run.current_attempt_id != attempt.pk
-            or step_run.status != StepRunStatus.STARTED
-            or step_run.run.is_terminal
-            or attempt.started_at is None
-            or attempt.lease_revoked_at is not None
-            or attempt.result_kind != str(AttemptResultKind.SUSPEND)
-            or attempt.result_recorded_at is None
-        ):
-            raise ValidationError({"attempt": "Decisions require the current applicable suspension attempt."})
-
         decisions: list[Any] = []
         timer_intents: list[DecisionTimerIntent] = []
         with transaction.atomic(using=using):
@@ -6861,7 +6861,7 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
         run_model = self.model._meta.get_field("run").remote_field.model
         with transaction.atomic(using=alias), system_context(reason="workflows.dispatch.schedule_advance"):
             locked = run_model.objects.db_manager(alias).lock_execution_ancestry((run.pk,))[run.pk]
-            dispatch = self.model(kind=WorkflowDispatchKind.ADVANCE, run=locked, available_at=available_at)
+            dispatch = self.model(kind=WorkflowDispatchKind.ADVANCE, run_id=locked.pk, available_at=available_at)
             dispatch.persist_delivery(using=alias)
             return dispatch
 
@@ -6908,7 +6908,7 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
                 return existing, False
             dispatch = self.model(
                 kind=WorkflowDispatchKind.CHILD_CANCEL,
-                run=retained,
+                run_id=retained.pk,
                 available_at=available_at or timezone.now(),
             )
             dispatch.persist_delivery(using=alias)
@@ -6927,6 +6927,7 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
         """Retain one cross-run cancellation from an exact database command."""
 
         alias = get_write_alias(self.model, bound=self)
+        require_authorization_database(alias, operation="Workflow cancellation admission", error_field="using")
         run_model = self.model._meta.get_field("run").remote_field.model
         attempt_model = run_model._meta.apps.get_model("workflows", "StepAttempt")
         with transaction.atomic(using=alias), system_context(reason="workflows.dispatch.run_cancel"):
@@ -6959,7 +6960,7 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
                 return existing, False
             dispatch = self.model(
                 kind=WorkflowDispatchKind.RUN_CANCEL,
-                run=retained,
+                run_id=retained.pk,
                 available_at=available_at or timezone.now(),
             )
             try:
@@ -7024,7 +7025,7 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
                 raise ValidationError({"attempt": "Execution dispatch requires a claimed availability time."})
             dispatch = self.model(
                 kind=WorkflowDispatchKind.EXECUTE,
-                step_attempt=locked,
+                step_attempt_id=locked.pk,
                 available_at=available_at,
             )
             dispatch.persist_delivery(using=alias)
@@ -7086,7 +7087,7 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
                 raise ValidationError({"decision": "Decision timer dispatch requires its applied suspension."})
             dispatch = self.model(
                 kind=kind,
-                decision=locked,
+                decision_id=locked.pk,
                 generation=locked.attempts,
                 available_at=available_at,
             )

@@ -70,15 +70,41 @@ def test_cancel_requires_an_actor_and_reuses_the_terminal_result(cancelable_run:
     assert delivery_count == 1
 
 
-def test_cancel_uses_the_write_router_for_the_complete_operation(cancelable_run: tuple[Any, Any]) -> None:
+def test_cancel_uses_the_write_router_for_the_complete_operation(
+    cancelable_run: tuple[Any, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
     run, owner = cancelable_run
+    native_check_access = WorkflowRun.check_access
+    checked: list[tuple[str | None, str]] = []
+
+    def check_access(target: WorkflowRun, action: str, **kwargs: Any) -> Any:
+        checked.append((target._state.db, action))
+        # The documented REBAC frontier has no alias API. Preserve real actor
+        # authorization on its default store while probing every Angee read.
+        with override_settings(DATABASE_ROUTERS=[]):
+            return native_check_access(target, action, **kwargs)
+
+    monkeypatch.setattr(WorkflowRun, "check_access", check_access)
 
     with override_settings(DATABASE_ROUTERS=[_WriteSplitRouter()]):
         engine.cancel(run, actor=owner)
 
+    assert checked == [("default", "write")]
     with system_context(reason="write router cancellation assertion"):
         run.refresh_from_db(using="default")
     assert run.status == RunStatus.CANCELED
+
+
+def test_cancel_rejects_nondefault_authorization_before_database_work(cancelable_run: tuple[Any, Any]) -> None:
+    run, owner = cancelable_run
+
+    with pytest.raises(ValidationError, match="default authorization database"):
+        engine.cancel(run, actor=owner, using="unregistered-writer")
+
+    with system_context(reason="inspect rejected nondefault cancellation"):
+        run.refresh_from_db()
+        assert not WorkflowDispatch.objects.filter(run=run).exists()
+    assert run.status == RunStatus.RUNNING
 
 
 def test_child_cancel_requires_its_persisted_parent_to_be_terminal(cancelable_run: tuple[Any, Any]) -> None:

@@ -58,8 +58,15 @@ rows:
         - outcome: processed
           producer: process_evidence
           when_outcome: processed
-          binding: {kind: step_output, step_key: process_evidence, path: []}
+          binding: &evidence_result
+            kind: object
+            fields:
+              extraction_id: {kind: step_output, step_key: process_evidence, path: [extraction_id]}
+              revision: {kind: step_output, step_key: process_evidence, path: [revision]}
+              status: {kind: step_output, step_key: process_evidence, path: [status]}
+              error_code: {kind: step_output, step_key: process_evidence, path: [error_code]}
+              unresolved_reasons: {kind: step_output, step_key: process_evidence, path: [unresolved_reasons]}
         - outcome: source_hold
           producer: process_evidence
           when_outcome: source_hold
-          binding: {kind: step_output, step_key: process_evidence, path: []}
+          binding: *evidence_result

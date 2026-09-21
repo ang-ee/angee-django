@@ -18,6 +18,7 @@ from django.test import override_settings
 from django.utils import timezone
 from rebac import PermissionDenied, system_context
 
+from angee.base.refs import canonical_record_target
 from angee.base.serialization import canonical_json_sha256
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
@@ -208,10 +209,12 @@ def test_party_handle_review_delivers_exact_nonterminal_artifact_runs(
     with system_context(reason="inspect retained handle delivery intent"):
         delivery = WorkflowDispatch.objects.get(
             kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
+            artifact_content_type=canonical_record_target(link).content_type,
             artifact_object_id=link.pk,
         )
         handle_delivery = WorkflowDispatch.objects.get(
             kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
+            artifact_content_type=canonical_record_target(handle).content_type,
             artifact_object_id=handle.pk,
         )
     assert delivery.consumed_at is None
@@ -250,9 +253,9 @@ def test_party_handle_delete_notifies_stable_handle_after_resolution(
         )
     delivered: list[tuple[str, int | None, int | None]] = []
 
-    def record_delivery(resource: Any) -> None:
+    def record_delivery(resource: Any, *, using: str | None = None) -> None:
         if isinstance(resource, Handle):
-            resource.refresh_from_db()
+            resource.refresh_from_db(using=using)
             delivered.append((resource._meta.label, resource.pk, resource.party_id))
         else:
             delivered.append((resource._meta.label, resource.pk, None))
@@ -358,14 +361,11 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
             "handle": {},
         },
     }
-    unchanged_review = IdentityReviewStepImpl().run(
-        SimpleNamespace(input=unchanged_proposal, run=run, step=SimpleNamespace(config={})),
-        now=timezone.now(),
-    )
-    unchanged_apply = IdentityApplyStepImpl().run(
-        SimpleNamespace(input={"review": unchanged_review.output}, run=run),
-        now=timezone.now(),
-    )
+    reviewed = step_run_for(run, "review")
+    reviewed.input = unchanged_proposal
+    unchanged_review = IdentityReviewStepImpl().run(reviewed, now=timezone.now())
+    applied.input = {"review": unchanged_review.output}
+    unchanged_apply = IdentityApplyStepImpl().run(applied, now=timezone.now())
     assert unchanged_review.outcome == "unchanged"
     assert unchanged_apply.output == {
         "party_id": str(party.sqid),
@@ -387,15 +387,8 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
             "handle": {},
         },
     }
-    assert (
-        IdentityReviewStepImpl()
-        .run(
-            SimpleNamespace(input=equivalent_country, run=run, step=SimpleNamespace(config={})),
-            now=timezone.now(),
-        )
-        .outcome
-        == "unchanged"
-    )
+    reviewed.input = equivalent_country
+    assert IdentityReviewStepImpl().run(reviewed, now=timezone.now()).outcome == "unchanged"
 
     changed_country = {
         **proposal,
@@ -409,15 +402,8 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
             "handle": {},
         },
     }
-    assert (
-        IdentityReviewStepImpl()
-        .run(
-            SimpleNamespace(input=changed_country, run=run, step=SimpleNamespace(config={})),
-            now=timezone.now(),
-        )
-        .kind
-        == "suspend"
-    )
+    reviewed.input = changed_country
+    assert IdentityReviewStepImpl().run(reviewed, now=timezone.now()).kind == "suspend"
 
 
 def _duplicate_pair(owner: Any, *, named: str, digits: str, spaced: str) -> tuple[Any, Any]:

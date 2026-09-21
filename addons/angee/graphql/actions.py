@@ -20,6 +20,7 @@ from angee.base.scoping import read_scoped_queryset
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
 from angee.graphql.writes import instance_for_write
+from graphql import GraphQLError
 
 _ActionTarget = TypeVar("_ActionTarget", bound=models.Model)
 _RebacActionTarget = TypeVar("_RebacActionTarget", bound=RebacMixin)
@@ -235,7 +236,7 @@ def resolve_action_target(
     This helper owns the repeated action-write lookup shape: build the requested
     queryset, enter ``system_context`` for the row read, and raise a stable
     not-found error instead of leaking ``None`` into the action body. A missing
-    row raises ``ValueError`` — a GraphQL error, matching the role-gated surface.
+    row raises a ``BAD_USER_INPUT`` GraphQL error, matching the role-gated surface.
 
     For a domain verb authorized by the row itself (the ceremony
     session gate → actor-scoped lookup → per-row check, returning in-band
@@ -253,7 +254,10 @@ def resolve_action_target(
     with system_context(reason=reason):
         instance = instance_for_id(model, id, queryset=active_queryset)
     if instance is None:
-        raise ValueError(f"{model._meta.object_name} {public_id_value(id)!r} was not found.")
+        raise GraphQLError(
+            f"{model._meta.object_name} {public_id_value(id)!r} was not found.",
+            extensions={"code": "BAD_USER_INPUT"},
+        )
     return cast(_ActionTarget, instance)
 
 

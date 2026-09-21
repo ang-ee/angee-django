@@ -26,7 +26,7 @@ rows:
         actions:
           - {value: approve, label: Publish note, verdict: COMPLETE, variant: primary}
           - {value: reject, label: Reject publication, verdict: REJECT, variant: destructive}
-          - {value: escalate, label: Escalate review, verdict: ESCALATE, confirm: Escalate this review?}
+          - {value: escalate, label: Escalate review, verdict: ESCALATE, confirm: "Escalate this review?"}
       join_rule: all_success
       is_entry: false
       position:

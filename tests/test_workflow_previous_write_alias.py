@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from typing import Any
 
 import pytest
@@ -31,17 +32,13 @@ def previous_writer(
     workflow_engine_tables: None,
     workflow_authorization_frontier: None,
     workflow_audit_frontier: list[dict[str, Any]],
+    database_alias: Callable[[str], AbstractContextManager[str]],
 ) -> Iterator[str]:
-    """Give the fixture database a separate connection for SQL-routing assertions."""
+    """Expose workflow tables through the shared database alias factory."""
 
     del workflow_engine_tables
-    alias = "workflow_previous_writer"
-    connections[alias] = connection.copy(alias=alias)
-    try:
+    with database_alias("workflow_previous_writer") as alias:
         yield alias
-    finally:
-        connections[alias].close()
-        del connections[alias]
 
 
 @pytest.mark.django_db(transaction=True)

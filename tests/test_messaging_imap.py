@@ -1656,7 +1656,7 @@ def test_failed_run_never_persists_the_cursor(
     def explode(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("ingest died")
 
-    monkeypatch.setattr(Message.objects, "ingest", explode)
+    monkeypatch.setattr(type(Message.objects), "ingest", explode)
     with system_context(reason="test imap failed sync"), pytest.raises(RuntimeError):
         channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
 
@@ -1689,17 +1689,18 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(
     )
     _wire_fake(monkeypatch, account)
     channel = _imap_channel(batch_size=2)
-    original_ingest = Message.objects.ingest
+    manager_type = type(Message.objects)
+    original_ingest = manager_type.ingest
     calls = 0
 
-    def fail_second_batch(*args: Any, **kwargs: Any) -> Any:
+    def fail_second_batch(manager: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise RuntimeError("second batch died")
-        return original_ingest(*args, **kwargs)
+        return original_ingest(manager, *args, **kwargs)
 
-    monkeypatch.setattr(Message.objects, "ingest", fail_second_batch)
+    monkeypatch.setattr(manager_type, "ingest", fail_second_batch)
     with system_context(reason="test imap partial sync"), pytest.raises(RuntimeError):
         channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
 

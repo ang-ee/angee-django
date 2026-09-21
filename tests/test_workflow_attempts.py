@@ -1436,7 +1436,7 @@ def test_unexpected_retry_allocation_failure_rolls_back_physical_result(
         del args, kwargs
         raise RuntimeError("storage failed")
 
-    monkeypatch.setattr(StepAttempt.objects, "_allocate_retry_locked", fail_allocation)
+    monkeypatch.setattr(type(StepAttempt.objects), "_allocate_retry_locked", fail_allocation)
     with pytest.raises(RuntimeError, match="storage failed"):
         StepAttempt.objects.finalize(
             attempt.pk,

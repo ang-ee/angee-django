@@ -12,6 +12,7 @@ from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory
+from graphql import GraphQLError
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -206,12 +207,13 @@ def test_resolve_action_target_elevates_lookup(
 def test_resolve_action_target_raises_clear_not_found() -> None:
     """Missing action targets fail with the model name and public id."""
 
-    with pytest.raises(ValueError, match="Group 'missing' was not found."):
+    with pytest.raises(GraphQLError, match="Group 'missing' was not found.") as caught:
         resolve_action_target(
             Group,
             "missing",
             reason="tests.action.missing",
         )
+    assert caught.value.extensions == {"code": "BAD_USER_INPUT"}
 
 
 @pytest.mark.django_db

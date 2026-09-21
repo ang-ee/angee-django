@@ -73,7 +73,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         message._state.db = using
         part_model = apps.get_model("messaging", "Part")
         parts = part_model.objects.db_manager(using).reading_order_for_message(message)
-        participants = list(message.participants.using(using).select_related("handle").order_by("role", "pk"))
+        participants = list(message.participants.db_manager(using).select_related("handle").order_by("role", "pk"))
         sender_field = message._meta.get_field("sender")
         sender = sender_field.get_cached_value(message, default=None)
         if message.sender_id is not None and (sender is None or sender._state.db != using):

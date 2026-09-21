@@ -89,10 +89,25 @@ class PreparePagesInput(ExtractionEngineConfigInput, ExtractionSourceInput):
     recognition_model: str | None = None
 
 
+class RecognitionPageInput(BaseModel):
+    """Retained page carrier and frozen policy passed through the Map boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+    source_position: int = Field(ge=0)
+    page_position: int = Field(ge=0)
+    image_file_id: str
+    image_digest: str
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    dpi: int = Field(gt=0)
+    model_id: str
+    config_digest: str
+
+
 class PreparePagesOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     manifest: dict[str, Any]
-    recognition_pages: list[dict[str, Any]]
+    recognition_pages: list[RecognitionPageInput]
     recognition_model_id: str
     mapping_model_id: str
     recognition_config_digest: str
@@ -145,17 +160,7 @@ class PreparePagesStepImpl(StepImpl):
         }, outcome="prepared")
 
 
-class RecognizePageInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    source_position: int = Field(ge=0)
-    page_position: int = Field(ge=0)
-    image_file_id: str
-    image_digest: str
-    width: int = Field(gt=0)
-    height: int = Field(gt=0)
-    dpi: int = Field(gt=0)
-    model_id: str
-    config_digest: str
+class RecognizePageInput(RecognitionPageInput):
     engine: str = Field(default="inference", min_length=1)
     engine_config: EngineConfig = Field(default_factory=dict)
     timeout: int = Field(default=60, gt=0, description="Provider timeout in whole seconds.")
@@ -739,9 +744,11 @@ def _restore_prepared(
         using=using,
     )
     if [
-        page.recognition_input(
-            model_id=manifest.recognition_model_id,
-            config_digest=manifest.recognition_config_digest,
+        RecognitionPageInput.model_validate(
+            page.recognition_input(
+                model_id=manifest.recognition_model_id,
+                config_digest=manifest.recognition_config_digest,
+            )
         )
         for page in prepared.recognition_pages
     ] != manifest.recognition_pages:

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,22 +22,34 @@ from graphql import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _stack_runtime_schema(name: str) -> Path:
-    """The composed host's generated SDL — a stack is the host, so the schema
-    lives at the stack root's runtime/ (this repo is a slot beneath it)."""
+def _composed_notes_sdl(tmp_path: Path) -> str:
+    """Render the reference addon's schema through the isolated composed host."""
 
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "angee.yaml").exists():
-            return parent / "runtime" / "schemas" / name
-    # Bare clone with no rendered stack above: nonexistent → the case skips.
-    return ROOT / "runtime" / "schemas" / name
+    report = tmp_path / "schemas.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tests" / "composed_host.py"),
+            "--runtime-dir", str(tmp_path / "runtime"),
+            "--app", "example.notes",
+            "--action", "schemas",
+            "--output", str(report),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, f"fresh schema composition failed:\n{result.stdout}\n{result.stderr}"
+    return json.loads(report.read_text())["public"]
 
 
 @dataclass(frozen=True)
 class GroupContractCase:
     """One grouped root emitted by a Hasura-compatible backend."""
 
-    sdl_path: Path
+    sdl_path: Path | None
     root_field: str
     group_type: str
     where_type: str
@@ -44,7 +59,7 @@ class GroupContractCase:
 
 GROUP_CONTRACT_CASES = (
     GroupContractCase(
-        sdl_path=_stack_runtime_schema("public.graphql"),
+        sdl_path=None,
         root_field="notes_groups",
         group_type="notes_group",
         where_type="notes_bool_exp",
@@ -63,20 +78,14 @@ GROUP_CONTRACT_CASES = (
 
 
 @pytest.mark.parametrize("case", GROUP_CONTRACT_CASES, ids=lambda case: case.root_field)
-def test_grouped_resource_roots_share_hasura_ndc_contract(case: GroupContractCase) -> None:
+def test_grouped_resource_roots_share_hasura_ndc_contract(case: GroupContractCase, tmp_path: Path) -> None:
     """Django and operator grouped roots expose the same typed-key DDN/NDC shape."""
 
-    if not case.sdl_path.exists():
-        pytest.skip(f"composed SDL {case.sdl_path} absent — run `manage.py angee build` at the stack root")
-
-    schema = build_schema(case.sdl_path.read_text(encoding="utf-8"))
+    sdl = case.sdl_path.read_text(encoding="utf-8") if case.sdl_path is not None else _composed_notes_sdl(tmp_path)
+    schema = build_schema(sdl)
 
     query = schema.get_type("Query")
     assert isinstance(query, GraphQLObjectType)
-    if case.root_field not in query.fields:
-        pytest.skip(
-            f"composed host does not install the fixture resource exposing {case.root_field}"
-        )
     root = query.fields[case.root_field]
 
     assert str(root.type) == f"[{case.group_type}!]!"

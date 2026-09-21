@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from typing import Any
 
 import pytest
-from django.db import connection, connections, router, transaction
+from django.db import router, transaction
 from rebac import system_context
 
 from angee.graphql import publishing
@@ -15,23 +16,22 @@ from tests.test_workflows_triggers import (
     TriggerSubject,
     _event_trigger,
     executable_fixture,  # noqa: F401
-    workflow_trigger_tables,  # noqa: F401
+)
+from tests.test_workflows_triggers import (
+    workflow_trigger_tables as workflow_trigger_tables,
 )
 from tests.workflows import StepRun, Trigger, WorkflowDispatch, WorkflowRun
 
 
 @pytest.fixture
-def change_writer(workflow_trigger_tables: None) -> Iterator[str]:  # noqa: F811 - imported pytest fixture
-    """Reuse the native secondary-connection pattern from transition tests."""
+def change_writer(
+    workflow_trigger_tables: None, database_alias: Callable[[str], AbstractContextManager[str]]
+) -> Iterator[str]:
+    """Expose the source and workflow schema through the shared alias factory."""
 
     del workflow_trigger_tables
-    alias = "change_publication_writer"
-    connections[alias] = connection.copy(alias=alias)
-    try:
+    with database_alias("change_publication_writer") as alias:
         yield alias
-    finally:
-        connections[alias].close()
-        del connections[alias]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -47,8 +47,9 @@ def test_source_change_admits_only_after_its_selected_writer_commits(
     """Commit delivers the selected alias through the real trigger admission owner."""
 
     del no_workflow_queue
-    subject = TriggerSubject.objects.using(change_writer).create(name="source", state="ready")
+    subject = TriggerSubject.objects.create(name="source", state="ready")
     trigger = _event_trigger(condition={"state": "ready"})
+    subject = TriggerSubject.objects.using(change_writer).get(pk=subject.pk)
     routing = TransitionRouter(change_writer)
     monkeypatch.setattr(router, "routers", [routing])
     admissions: list[tuple[str | None, str | None, str | None]] = []

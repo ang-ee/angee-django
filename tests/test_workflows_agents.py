@@ -27,6 +27,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.toolsets.function import FunctionToolset
 from pydantic_ai.usage import RequestUsage
 from rebac import actor_context, current_actor, system_context, to_subject_ref
@@ -942,7 +943,7 @@ def _stub_model_backend(
     monkeypatch: pytest.MonkeyPatch,
     respond: Any,
 ) -> list[tuple[str, Any | None]]:
-    """Stub only the backend binding while retaining the catalogue inference owner."""
+    """Bind a native-JSON provider stub while retaining the catalogue inference owner."""
 
     bindings: list[tuple[str, Any | None]] = []
 
@@ -954,7 +955,14 @@ def _stub_model_backend(
     ) -> FunctionModel:
         del backend
         bindings.append((handle, credential))
-        return FunctionModel(respond, model_name=handle)
+        return FunctionModel(
+            respond,
+            model_name=handle,
+            profile=ModelProfile(
+                supports_json_schema_output=True,
+                default_structured_output_mode="native",
+            ),
+        )
 
     monkeypatch.setattr(StubInferenceBackend, "model", model)
     return bindings

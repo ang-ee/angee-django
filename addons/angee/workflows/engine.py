@@ -1050,7 +1050,7 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any, using: str 
                     step_run.pk, at=timezone.now()
                 )
         override = step_run_model.objects.db_manager(alias).create(
-            run=locked,
+            run_id=locked.pk,
             step=None,
             system_kind="override",
             status=StepRunStatus.SUCCEEDED,
@@ -1063,7 +1063,7 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any, using: str 
             row = step_run_model.objects.db_manager(alias).filter(run=locked, step_id=step_id, map_index=-1).first()
             if row is None:
                 row = step_run_model.objects.db_manager(alias).create(
-                    run=locked,
+                    run_id=locked.pk,
                     step_id=step_id,
                     map_index=-1,
                     status=StepRunStatus.SCHEDULED,
@@ -1315,8 +1315,8 @@ def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[An
     step_run_model = apps.get_model("workflows", "StepRun")
     for index, item in enumerate(items):
         child, _ = step_run_model.objects.db_manager(alias).get_or_create(
-            run=run,
-            step=target,
+            run_id=run.pk,
+            step_id=target.pk,
             map_index=index,
             defaults={
                 "status": StepRunStatus.SCHEDULED,
@@ -1327,7 +1327,10 @@ def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[An
 
 
 def _route_success(run: Any, step_run: Any, *, alias: str) -> None:
-    outgoing = list(step_run.step.outgoing_edges.db_manager(alias).select_related("target").order_by("pk"))
+    outgoing = list(
+        apps.get_model("workflows", "Edge").objects.db_manager(alias)
+        .filter(source_id=step_run.step_id).select_related("target").order_by("pk")
+    )
     by_target: dict[int, tuple[Any, list[Any]]] = {}
     for edge in outgoing:
         target, edges = by_target.setdefault(edge.target_id, (edge.target, []))
@@ -1342,7 +1345,10 @@ def _route_success(run: Any, step_run: Any, *, alias: str) -> None:
 
 
 def _route_skip(run: Any, step_run: Any, *, alias: str) -> None:
-    outgoing = list(step_run.step.outgoing_edges.db_manager(alias).select_related("target").order_by("pk"))
+    outgoing = list(
+        apps.get_model("workflows", "Edge").objects.db_manager(alias)
+        .filter(source_id=step_run.step_id).select_related("target").order_by("pk")
+    )
     by_target: dict[int, tuple[Any, list[Any]]] = {}
     for edge in outgoing:
         target, edges = by_target.setdefault(edge.target_id, (edge.target, []))
@@ -1358,7 +1364,10 @@ def _route_skip(run: Any, step_run: Any, *, alias: str) -> None:
 
 
 def _route_done(run: Any, step_run: Any, *, alias: str) -> None:
-    for edge in step_run.step.outgoing_edges.db_manager(alias).select_related("target").order_by("pk"):
+    for edge in (
+        apps.get_model("workflows", "Edge").objects.db_manager(alias)
+        .filter(source_id=step_run.step_id).select_related("target").order_by("pk")
+    ):
         if edge.condition and edge.condition != step_run.outcome:
             continue
         _maybe_schedule_target(run, edge.target, routed_row=step_run, alias=alias)
@@ -1378,8 +1387,8 @@ def _maybe_schedule_target(run: Any, target: Any, *, routed_row: Any | None = No
     if decision != "run":
         return None
     step_run = step_run_model.objects.db_manager(alias).create(
-        run=run,
-        step=target,
+        run_id=run.pk,
+        step_id=target.pk,
         map_index=-1,
         status=StepRunStatus.SCHEDULED,
         input=_input_from_previous(previous),
@@ -1395,8 +1404,8 @@ def _ensure_skipped(run: Any, step: Any, *, previous: list[Any], alias: str) -> 
     )
     if step_run is None:
         step_run = step_run_model.objects.db_manager(alias).create(
-            run=run,
-            step=step,
+            run_id=run.pk,
+            step_id=step.pk,
             map_index=-1,
             status=StepRunStatus.SKIPPED,
             input=_input_from_previous(previous),
@@ -1425,7 +1434,10 @@ def _upstream_join_state(
 
     step_run_model = apps.get_model("workflows", "StepRun")
     by_source: dict[int, list[Any]] = {}
-    for edge in target.incoming_edges.db_manager(alias).select_related("source").order_by("pk"):
+    for edge in (
+        apps.get_model("workflows", "Edge").objects.db_manager(alias)
+        .filter(target_id=target.pk).select_related("source").order_by("pk")
+    ):
         by_source.setdefault(edge.source_id, []).append(edge)
     previous: list[Any] = []
     statuses: list[Any | None] = []

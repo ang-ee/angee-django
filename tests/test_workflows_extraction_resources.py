@@ -11,6 +11,7 @@ from rebac import system_context
 
 from angee.resources.models import Resource
 from angee.workflows.graph import WorkflowGraph
+from angee.workflows.models import WorkflowStatus
 from tests.test_workflows_resources import WorkflowResourceLedger
 from tests.test_workflows_resources import workflow_resource_tables as _workflow_resource_tables  # noqa: F401
 from tests.workflows import Workflow
@@ -36,7 +37,7 @@ def test_install_resources_publish_valid_generic_extraction_child() -> None:
 
     assert result.created == 11
     with system_context(reason="inspect installed extraction child"):
-        draft = Workflow.objects.get(key="document_extraction")
+        draft = Workflow.objects.get(key="document_extraction", status=WorkflowStatus.DRAFT)
         published = Workflow.objects.current_published_for(draft)
         assert published is not None
         graph = WorkflowGraph.from_rows(

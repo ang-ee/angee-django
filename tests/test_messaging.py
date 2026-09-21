@@ -1728,14 +1728,15 @@ def test_agent_activity_completion_posts_system_message_with_service_user(
         activity = ticket.activity_schedule(user=owner, summary="Close the loop", due_date=_AT.date())
 
     post_context: dict[str, Any] = {}
-    original_post_to_thread = Message.objects.post_to_thread
+    manager_type = type(Message.objects)
+    original_post_to_thread = manager_type.post_to_thread
 
-    def spy_post_to_thread(*args: Any, **kwargs: Any) -> Any:
+    def spy_post_to_thread(manager: Any, *args: Any, **kwargs: Any) -> Any:
         post_context["is_sudo"] = is_sudo()
         post_context["reason"] = current_sudo_reason()
-        return original_post_to_thread(*args, **kwargs)
+        return original_post_to_thread(manager, *args, **kwargs)
 
-    monkeypatch.setattr(Message.objects, "post_to_thread", spy_post_to_thread)
+    monkeypatch.setattr(manager_type, "post_to_thread", spy_post_to_thread)
 
     with actor_context(agent.principal_subject()):
         ticket.activity_feedback(activity, feedback="Handled by agent.")
@@ -2342,9 +2343,9 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
         lambda callback, *, using: callbacks.append((callback, using)),
     )
     monkeypatch.setattr(
-        PartyHandle.objects,
+        type(PartyHandle.objects),
         "suggest_for",
-        lambda handle: suggested.append(handle.pk),
+        lambda manager, handle: suggested.append(handle.pk),
     )
     shared = ParsedHandle(platform="email", value="shared@example.com")
     messages = [
@@ -2380,12 +2381,13 @@ def test_ingest_contains_suggestion_failures_and_continues_batch(
 
     attempted: list[str] = []
 
-    def suggest(handle: Handle) -> None:
+    def suggest(manager: Any, handle: Handle) -> None:
+        del manager
         attempted.append(handle.value)
         if handle.value == "fail@example.com":
             raise RuntimeError("directory unavailable")
 
-    monkeypatch.setattr(PartyHandle.objects, "suggest_for", suggest)
+    monkeypatch.setattr(type(PartyHandle.objects), "suggest_for", suggest)
     messages = [
         ParsedMessage(
             external_id=f"suggest-failure-{index}",

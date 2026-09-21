@@ -72,8 +72,16 @@ pytest_plugins = ("tests.workflows",)
 
 
 @pytest.fixture
-def database_alias(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], AbstractContextManager[str]]:
-    """Expose the test database under a configured alias for a bounded context."""
+def database_alias(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Callable[[str], AbstractContextManager[str]]:
+    """Expose an alias, snapshotting SQLite's seeded database on first use.
+
+    SQLite aliases need independent files: an alias transaction and an upstream
+    default-only REBAC audit write cannot concurrently write the same SQLite
+    database. Defer the snapshot until the first statement so ordinary fixture
+    setup can seed default after this context opens. Later writes are isolated.
+    """
 
     @contextmanager
     def copied_connection(alias: str) -> Iterator[str]:
@@ -82,14 +90,28 @@ def database_alias(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], AbstractC
         # Enforce the test's database access before opening a dynamic connection.
         connection.ensure_connection()
         copied = connection.copy(alias=alias)
+        if copied.vendor == "sqlite":
+            copied.settings_dict["NAME"] = str(tmp_path / f"{alias}.sqlite3")
         # Django permits dynamically created connections. Open before registering
         # the alias, which must then be visible to ORM connection enumeration.
         copied.ensure_connection()
         with monkeypatch.context() as patch:
             patch.setitem(settings.DATABASES, alias, copied.settings_dict)
             connections[alias] = copied
+            seeded = False
+
+            def seed_sqlite(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+                nonlocal seeded
+                if copied.vendor == "sqlite" and not seeded:
+                    if connection.in_atomic_block:
+                        raise RuntimeError("Seed the database alias before opening a default transaction.")
+                    connection.connection.backup(copied.connection)
+                    seeded = True
+                return execute(sql, params, many, context)
+
             try:
-                yield alias
+                with copied.execute_wrapper(seed_sqlite):
+                    yield alias
             finally:
                 copied.close()
                 del connections[alias]

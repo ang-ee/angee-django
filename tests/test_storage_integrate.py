@@ -613,15 +613,15 @@ def test_reference_entry_data_error_is_contained_and_counted(
     mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Data error")
     del queued_mounts
 
-    manager = File.objects
-    original_index_external = manager.index_external
+    manager_type = type(File.objects)
+    original_index_external = manager_type.index_external
 
-    def index_external(**kwargs: Any) -> Any:
+    def index_external(manager: Any, **kwargs: Any) -> Any:
         if kwargs["filename"] == long_name:
             raise DataError("value too long for storage filename")
-        return original_index_external(**kwargs)
+        return original_index_external(manager, **kwargs)
 
-    monkeypatch.setattr(manager, "index_external", index_external)
+    monkeypatch.setattr(manager_type, "index_external", index_external)
     assert _run_sync(mount) == 1
     assert mount.last_sync_status == "ok"
     assert _details(mount)["errors"] == 1
