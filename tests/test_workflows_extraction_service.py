@@ -83,19 +83,8 @@ from tests.extraction_models import EXTRACTION_MODELS, Extraction, ExtractionPag
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
 from tests.test_integrate_vcs import VCS_TEST_MODELS
 from tests.test_messaging import MESSAGING_TEST_MODELS
-from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowRun
-
-
-class ExtractionWriteRouter:
-    """Expose accidental read routing during extraction mutation tests."""
-
-    def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
-        del model, hints
-        return "missing-read-replica"
-
-    def db_for_write(self, model: type[models.Model], **hints: Any) -> str:
-        del model, hints
-        return "default"
+from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowRun, WorkflowWriteRouter
+from tests.workflows import workflow_authorization_frontier as workflow_authorization_frontier
 
 
 def test_json_pointer_value_resolves_rfc6901_tokens_and_rejects_missing() -> None:
@@ -137,7 +126,7 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review() -> N
         ("agents", "InferenceModel"): inference_model,
     }
     step_run = SimpleNamespace(
-        run=SimpleNamespace(admission_actor=lambda: actor),
+        run=SimpleNamespace(admission_actor=lambda: actor, debit_budget=MagicMock()),
     )
     request = SimpleNamespace(input={
         "base_extraction_id": "ext_base",
@@ -154,16 +143,12 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review() -> N
             return True
 
     step_run._state = SimpleNamespace(adding=False, db="default")
-    step_run.run_id = 1
-    step_run._meta = MagicMock()
-    step_run._meta.get_field.return_value.remote_field.model._base_manager.using.return_value.get.return_value = (
-        step_run.run
-    )
     for model_fixture in models.values():
         manager = model_fixture.objects
         manager.db_manager = lambda alias, manager=manager: manager
 
     with (
+        patch("angee.workflows_extraction.steps.related_on", return_value=step_run.run) as related_run,
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
         patch(
             "angee.workflows_extraction.steps.apps.get_model",
@@ -184,6 +169,8 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review() -> N
     ):
         result = InferEvidenceStepImpl().run(step_run, now=None)
 
+    related_run.assert_called_once_with(step_run, "run", using="default")
+    step_run.run.debit_budget.assert_called_once_with({}, using="default")
     assert result.kind == "done"
     assert result.outcome == "inference_failed"
     assert result.output["extraction_id"] == "ext_base"
@@ -267,16 +254,12 @@ def test_inference_step_retry_reuses_failed_successor_without_second_debit() -> 
             return True
 
     step_run._state = SimpleNamespace(adding=False, db="default")
-    step_run.run_id = 1
-    step_run._meta = MagicMock()
-    step_run._meta.get_field.return_value.remote_field.model._base_manager.using.return_value.get.return_value = (
-        step_run.run
-    )
     for model_fixture in models.values():
         manager = model_fixture.objects
         manager.db_manager = lambda alias, manager=manager: manager
 
     with (
+        patch("angee.workflows_extraction.steps.related_on", return_value=step_run.run) as related_run,
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
         patch(
             "angee.workflows_extraction.steps.apps.get_model",
@@ -302,6 +285,7 @@ def test_inference_step_retry_reuses_failed_successor_without_second_debit() -> 
         current = failed
         retry = InferEvidenceStepImpl().run(step_run, now=None)
 
+    related_run.assert_called_with(step_run, "run", using="default")
     assert first.outcome == retry.outcome == "inference_failed"
     assert first.output["extraction_id"] == retry.output["extraction_id"] == "ext_failed"
     assert debits == [{"tokens": 7}, {}]
@@ -394,23 +378,19 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         "retired_identities": {},
     })
 
-    step_run = SimpleNamespace(run=SimpleNamespace(admission_actor=lambda: actor))
+    step_run = SimpleNamespace(run=SimpleNamespace(admission_actor=lambda: actor, debit_budget=MagicMock()))
 
     class Profile:
         def inference_required(self, _result, _reasons):
             return True
 
     step_run._state = SimpleNamespace(adding=False, db="default")
-    step_run.run_id = 1
-    step_run._meta = MagicMock()
-    step_run._meta.get_field.return_value.remote_field.model._base_manager.using.return_value.get.return_value = (
-        step_run.run
-    )
     for model_fixture in models.values():
         manager = model_fixture.objects
         manager.db_manager = lambda alias, manager=manager: manager
 
     with (
+        patch("angee.workflows_extraction.steps.related_on", return_value=step_run.run) as related_run,
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
         patch(
             "angee.workflows_extraction.steps.apps.get_model",
@@ -429,6 +409,8 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
             now=None,
         )
 
+    related_run.assert_called_once_with(step_run, "run", using="default")
+    step_run.run.debit_budget.assert_called_once_with({}, using="default")
     assert result.outcome == "source_unavailable"
     assert result.output["extraction_id"] == "ext_hold"
     assert result.output["inference_failure"]["code"] == RETAINED_CARRIER_UNAVAILABLE
@@ -442,6 +424,7 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
     request.input["base_extraction_id"] = "ext_authority"
     request.input["base_revision"] = 2
     with (
+        patch("angee.workflows_extraction.steps.related_on", return_value=step_run.run) as related_run,
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
         patch(
             "angee.workflows_extraction.steps.apps.get_model",
@@ -460,6 +443,7 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
             now=None,
         )
 
+    related_run.assert_called_once_with(step_run, "run", using="default")
     assert ordinary.outcome == "inference_failed"
     assert [(artifact.target, artifact.label) for artifact in ordinary.artifacts] == [
         (authority, "Source evidence requiring manual review"),
@@ -525,16 +509,12 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
     )
 
     step_run._state = SimpleNamespace(adding=False, db="default")
-    step_run.run_id = 1
-    step_run._meta = MagicMock()
-    step_run._meta.get_field.return_value.remote_field.model._base_manager.using.return_value.get.return_value = (
-        step_run.run
-    )
     for model_fixture in models.values():
         manager = model_fixture.objects
         manager.db_manager = lambda alias, manager=manager: manager
 
     with (
+        patch("angee.workflows_extraction.steps.related_on", return_value=step_run.run) as related_run,
         patch(
             "angee.workflows_extraction.steps.external_operation_request",
             return_value=request,
@@ -572,6 +552,7 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
         current = empty_successor
         empty_correspondence = InferEvidenceStepImpl().run(step_run, now=None)
 
+    related_run.assert_called_with(step_run, "run", using="default")
     assert result.kind == "done"
     assert result.outcome == "unchanged"
     assert result.output == {
@@ -2738,11 +2719,12 @@ class ExtractionServiceTests(TestCase):
             )
         self.assertEqual(Extraction._base_manager.count(), 1)
 
+    @pytest.mark.usefixtures("workflow_authorization_frontier")
     def test_revise_and_revision_retention_route_to_write_database(self) -> None:
         original = self._extract(config={"result": {"number": "OLD", "rows": []}})
         decision = self._decision(original)
 
-        with override_settings(DATABASE_ROUTERS=[ExtractionWriteRouter()]):
+        with override_settings(DATABASE_ROUTERS=[WorkflowWriteRouter("default")]):
             corrected = Extraction.objects.revise_from_decision(
                 decision.pk,
                 actor=self.owner,

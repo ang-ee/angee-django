@@ -862,7 +862,7 @@ def infer(
     )
     if not parts:
         raise ValidationError({"inference": "The base has no complete retained carriers."})
-    if any(row.result.get("status") == "held" for row in base.pages.using(alias).order_by("position")):
+    if any(row.result.get("status") == "held" for row in base.pages.db_manager(alias).order_by("position")):
         raise ValidationError({"inference": "Incomplete page carriers cannot be inferred."})
     authority_base = preliminary_authority or extraction_model.objects.db_manager(alias).inference_authority_base(
         base, actor=actor,
@@ -1281,11 +1281,11 @@ def _retained_evidence(
 
     with system_context(reason="workflows_extraction.retained_evidence"):
         source_rows = list(
-            base.sources.using(using)
+            base.sources.db_manager(using)
             .select_related("file__mime_type", "message_part__fragment", "message_part__message")
             .order_by("position")
         )
-        part_rows = list(base.parts.using(using).select_related("source").order_by("position"))
+        part_rows = list(base.parts.db_manager(using).select_related("source").order_by("position"))
     files = tuple(row.file for row in source_rows if row.file_id is not None)
     message_parts = tuple(row.message_part for row in source_rows if row.message_part_id is not None)
     _authorize(files, message_parts, authorized_target, actor=actor)

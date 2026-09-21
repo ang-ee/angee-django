@@ -60,12 +60,12 @@ def test_advance_error_is_visible_until_the_exact_durable_intent_retries(run: Wo
     route = engine._route_completed_steps
     failed = False
 
-    def fail_once(active_run: WorkflowRun) -> None:
+    def fail_once(active_run: WorkflowRun, *, alias: str) -> None:
         nonlocal failed
         if not failed:
             failed = True
             raise ValidationError("Map evidence is structurally invalid.")
-        route(active_run)
+        route(active_run, alias=alias)
 
     with patch.object(engine, "_route_completed_steps", side_effect=fail_once):
         with pytest.raises(ValidationError, match="Map evidence is structurally invalid"):
@@ -272,7 +272,7 @@ def test_decision_timer_uses_locked_native_deadline_and_generation(run: Workflow
     assert dispatch.generation == 2
     assert dispatch.available_at == decision.expires_at
     with system_context(reason="resolve dispatch decision"):
-        decision.mark_expired()
+        assert decision.expire(at=decision.expires_at, generation=decision.attempts, due=True)
     after_resolution, created_after_resolution = WorkflowDispatch.objects.schedule_decision(
         WorkflowDispatchKind.DECISION_EXPIRE, decision
     )
@@ -486,5 +486,6 @@ def test_dispatch_conditional_consumption_checks_rowcount(run: WorkflowRun) -> N
         )
         with pytest.raises(RuntimeError, match="already consumed"):
             WorkflowDispatch.objects._consume_locked(dispatch.pk, envelope=preflight.envelope, at=now, alias="default")
-    dispatch.refresh_from_db()
+    with system_context(reason="verify consumed dispatch row count"):
+        dispatch.refresh_from_db()
     assert dispatch.consumed_at == now

@@ -36,7 +36,7 @@ from django.dispatch import receiver
 from django.utils import timezone
 from rebac import resolve_subjects, system_context
 
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref
 from angee.base.impl import ImplClassField, ImplDefaultsMixin, resolve_all_impl_classes
@@ -510,11 +510,11 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         with manager._definition_write((self.pk,), using=alias, session=session) as session:
             persisted = cast(Self, _definition_rows(type(self), alias).get(pk=self.pk))
             self._raise_if_immutable_save(persisted)
-            if persisted.published_versions.using(alias).exists():
+            if persisted.published_versions.db_manager(alias).exists():
                 raise ValidationError("A workflow with publication history cannot be deleted.")
             # Collector skips child instance delete methods. Own the full cascade here.
-            edges = persisted.edges.using(alias).all().bound_to(self).all().delete(session=session)
-            steps = persisted.steps.using(alias).all().bound_to(self).all().delete(session=session)
+            edges = persisted.edges.db_manager(alias).all().bound_to(self).all().delete(session=session)
+            steps = persisted.steps.db_manager(alias).all().bound_to(self).all().delete(session=session)
             with DefinitionQuerySet.caller_context(self):
                 workflow = super().delete(*args, **kwargs)
             return _combined_delete_results(edges, steps, workflow)
@@ -634,7 +634,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             step_model = self.steps.model
             edge_model = self.edges.model
             step_map: dict[int, Any] = {}
-            for step in self.steps.using(session.alias).order_by("pk"):
+            for step in self.steps.db_manager(session.alias).order_by("pk"):
                 copied = step_model(
                     workflow=published,
                     key=step.key,
@@ -649,7 +649,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 DefinitionQuerySet.bind_instance(copied, published)
                 copied.save(using=session.alias, session=target_session)
                 step_map[step.pk] = copied
-            for edge in self.edges.using(session.alias).select_related("source", "target").order_by("pk"):
+            for edge in self.edges.db_manager(session.alias).select_related("source", "target").order_by("pk"):
                 copied_edge = edge_model(
                     workflow=published,
                     source=step_map[edge.source_id],
@@ -686,7 +686,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                     "is_entry": step.is_entry,
                     "position": copy.deepcopy(step.position),
                 }
-                for step in self.steps.using(using).order_by("key", "pk")
+                for step in self.steps.db_manager(using).order_by("key", "pk")
             ],
             "edges": [
                 {
@@ -694,7 +694,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                     "target": edge.target.key,
                     "condition": edge.condition,
                 }
-                for edge in self.edges.using(using).select_related("source", "target").order_by(
+                for edge in self.edges.db_manager(using).select_related("source", "target").order_by(
                     "source__key",
                     "target__key",
                     "condition",
@@ -1781,7 +1781,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         """Return whether this run has an unresolved workflow decision."""
 
         alias = get_write_alias(type(self), using=using, instance=self)
-        return self.step_runs.using(alias).filter(decisions__verdict=Verdict.PENDING).exists()
+        return self.step_runs.db_manager(alias).filter(decisions__verdict=Verdict.PENDING).exists()
 
     @transition(status, source=RunStatus.PENDING, target=RunStatus.RUNNING, on_success=save_state)
     def mark_running(self, *, using: str | None = None) -> None:
@@ -2215,7 +2215,7 @@ class StepRun(AuditMixin, AngeeDataModel):
             self.effect_key is not None
             or self.current_attempt_id is not None
             or self.current_map_expansion_id is not None
-            or self.attempts.using(self._state.db).exists()
+            or self.attempts.db_manager(self._state.db).exists()
         )
 
     @property
@@ -2292,6 +2292,11 @@ class StepRun(AuditMixin, AngeeDataModel):
             raise TypeError("The attempt operation can persist only StepRun projection fields.")
         alias = get_write_alias(type(self), using=using, instance=self)
         attnames = {type(self)._meta.get_field(name).attname for name in fields - {"updated_at"}}
+        refresh_deferred(
+            self,
+            using=alias,
+            fields={"run_id", "step_id", "map_index", "current_attempt_id", *attnames},
+        )
         loaded = (
             system_queryset(type(self), using=alias, lock=None)
             .values(
@@ -2368,7 +2373,7 @@ class StepRun(AuditMixin, AngeeDataModel):
             self.resume_state = resume_state
         self._transition_fields = {"wait_until", "resume_state", "waiting_kind"}
 
-    def wake(self, *, at: datetime) -> None:
+    def wake(self, *, at: datetime, using: str | None = None) -> None:
         """Make this waiting journal row due without changing its state.
 
         Event delivery changes only the durable due time. The engine owns the
@@ -2376,10 +2381,13 @@ class StepRun(AuditMixin, AngeeDataModel):
         scheduler of implementation work.
         """
 
+        alias = get_write_alias(type(self), using=using, instance=self)
+        refresh_deferred(self, using=alias, fields=("status",))
         if self.status != StepRunStatus.WAITING:
             raise TransitionNotAllowed(f"StepRun.wake requires status={StepRunStatus.WAITING}; found {self.status}.")
         self.wait_until = at
-        self.project_from_attempt(self.current_attempt, fields={"wait_until", "resume_state", "updated_at"})
+        attempt = related_on(self, "current_attempt", using=alias)
+        self.project_from_attempt(attempt, fields={"wait_until", "resume_state", "updated_at"}, using=alias)
 
     @transition(
         status,

@@ -17,22 +17,28 @@ from angee.workflows.attempts import RecoveryMode
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepExecutionMode, StepResult, TransientStepError
-from tests.test_transitions import TransitionRouter
 from tests.workflows import (
     FixtureStep,
     StepAttempt,
     StepRun,
     WorkflowDispatch,
     WorkflowRun,
+    WorkflowWriteRouter,
     advance_once,
     execute_started,
     start_run,
     workflow_with_steps,
 )
+from tests.workflows import workflow_audit_frontier as workflow_audit_frontier
+from tests.workflows import workflow_authorization_frontier as workflow_authorization_frontier
 
 
 @pytest.fixture
-def engine_writer(workflow_engine_tables: None) -> Iterator[str]:
+def engine_writer(
+    workflow_engine_tables: None,
+    workflow_authorization_frontier: None,
+    workflow_audit_frontier: list[dict[str, Any]],
+) -> Iterator[str]:
     """Use the native secondary-connection pattern from transition routing tests."""
 
     del workflow_engine_tables
@@ -66,7 +72,7 @@ def test_advance_routes_and_claims_after_admission_on_selected_writer(
         execute_started(run)
     with system_context(reason="writer regression pulse setup"):
         pulse = WorkflowDispatch.objects.schedule_advance(run, available_at=timezone.now())
-    routing = TransitionRouter(engine_writer)
+    routing = WorkflowWriteRouter(engine_writer)
     monkeypatch.setattr(router, "routers", [routing])
     publications: list[str] = []
     monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda **kwargs: publications.append(kwargs["using"]))
@@ -154,7 +160,7 @@ def test_execute_reloads_invokes_and_schedules_result_on_selected_writer(
 
     monkeypatch.setattr(FixtureStep, "run", invoke)
     monkeypatch.setattr(FixtureStep, "execution_mode", mode)
-    monkeypatch.setattr(router, "routers", [TransitionRouter("default")])
+    monkeypatch.setattr(router, "routers", [WorkflowWriteRouter("default")])
     publications: list[str] = []
     monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda **kwargs: publications.append(kwargs["using"]))
 
@@ -227,7 +233,7 @@ def test_recovery_hook_inherits_explicit_writer_without_signature_change(
         return StepResult.done(outcome="done")
 
     monkeypatch.setattr(FixtureStep, "run_recovery", recover)
-    monkeypatch.setattr(router, "routers", [TransitionRouter("default")])
+    monkeypatch.setattr(router, "routers", [WorkflowWriteRouter("default")])
 
     assert engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token, using=engine_writer) == {"executed": 1}
     assert invocations == [(engine_writer, engine_writer, source.pk, RecoveryMode.FRESH)]

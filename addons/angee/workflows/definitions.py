@@ -301,8 +301,9 @@ class WorkflowDefinitionManagerMixin:
                         persisted[xref] = self.using(alias).get(pk=row.pk)
                     for row in removed.values():
                         if (
-                            row.steps.using(alias).exists() or row.edges.using(alias).exists()
-                            or row.triggers.using(alias).exists() or row.error_for_workflows.using(alias).exists()
+                            row.steps.db_manager(alias).exists() or row.edges.db_manager(alias).exists()
+                            or row.triggers.db_manager(alias).exists()
+                            or row.error_for_workflows.db_manager(alias).exists()
                         ):
                             raise ValidationError("Omitted workflow still has contributions; remove its facets first.")
                         row.delete(using=alias)
@@ -576,8 +577,8 @@ class WorkflowDefinitionManagerMixin:
                 _validate_version_source(draft, locked_source)
                 if draft.draft_revision != expected_revision:
                     raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
-                draft.edges.using(alias).all().delete(session=session)
-                draft.steps.using(alias).all().delete(session=session)
+                draft.edges.db_manager(alias).all().delete(session=session)
+                draft.steps.db_manager(alias).all().delete(session=session)
                 for field_name in self._WORKFLOW_FIELDS:
                     if field_name == "error_workflow":
                         draft.error_workflow_id = locked_source.error_workflow_id
@@ -587,8 +588,8 @@ class WorkflowDefinitionManagerMixin:
                 locked_source._copy_definition_to(draft, session=session)
                 projected_revision = session.revision(draft.pk, draft.draft_revision)
                 draft.draft_revision = projected_revision
-                nodes = tuple(draft.steps.using(alias).order_by("key", "pk"))
-                edges = tuple(draft.edges.using(alias).select_related("source", "target").order_by("pk"))
+                nodes = tuple(draft.steps.db_manager(alias).order_by("key", "pk"))
+                edges = tuple(draft.edges.db_manager(alias).select_related("source", "target").order_by("pk"))
                 snapshot = DefinitionSnapshot(
                     projected_revision,
                     draft,
@@ -642,10 +643,12 @@ class _DefinitionState:
         self.step_model = workflow.steps.model
         self.edge_model = workflow.edges.model
         self.workflow_fields = dict(edit.workflow)
-        self.nodes = {row.pk: row for row in workflow.steps.using(alias).with_action(action).order_by("pk")}
+        self.nodes = {row.pk: row for row in workflow.steps.db_manager(alias).with_action(action).order_by("pk")}
         self.edges = {
             row.pk: row
-            for row in workflow.edges.using(alias).with_action(action).select_related("source", "target").order_by("pk")
+            for row in (
+                workflow.edges.db_manager(alias).with_action(action).select_related("source", "target").order_by("pk")
+            )
         }
         self.original_nodes = dict(self.nodes)
         self.original_edges = dict(self.edges)

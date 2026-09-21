@@ -12,7 +12,7 @@ from django.core.validators import validate_slug
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from angee.workflows.attempts import DecisionRecordAccess
-from angee.workflows.bindings import BindingNode, parse_binding
+from angee.workflows.bindings import BindingNode, is_binding, parse_binding
 from angee.workflows.data_contracts import JsonPath, JsonSchemaDict, schema_data_contract
 from angee.workflows.decision_actions import ReviewAction, build_decision_action
 
@@ -209,6 +209,22 @@ class GateConfig(WorkflowStepConfig):
     record_access: BindingNode | _GateRecordAccess = Field(default_factory=list, json_schema_extra={"widget": "json"})
     clean: BindingNode | bool = Field(default=False, json_schema_extra={"widget": "json"})
     resume: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_literal_bindings(cls, value: Any) -> Any:
+        """Validate literal producer values at their declared field paths."""
+
+        if isinstance(value, Mapping):
+            literals = {
+                name: item
+                for name, item in value.items()
+                if name in GateBinding.model_fields
+                and not is_binding(item)
+                and not (isinstance(item, Mapping) and "kind" in item)
+            }
+            GateBinding.model_validate(literals)
+        return value
 
     @field_validator(
         "slots",

@@ -574,7 +574,7 @@ def test_delivery_generation_closes_the_post_between_park_and_waiting_race(
     from angee.workflows_agents.steps import AgentSessionStepImpl
 
     owner, agent = _ready_session_agent("lost-wakeup")
-    _session_workflow()
+    admit_workflow_actor(_session_workflow(), owner)
     session = sessions.start_session(agent, owner=owner, context={})
     with system_context(reason="test lost wakeup run"):
         run = sessions.run_for(session)
@@ -775,7 +775,7 @@ def test_post_message_on_terminal_run_closes_session_and_refuses(
     del workflows_agents_tables, no_workflow_queue
 
     owner, agent = _ready_session_agent("terminal-run")
-    _session_workflow()
+    admit_workflow_actor(_session_workflow(), owner)
     session = sessions.start_session(agent, owner=owner, context={})
     with system_context(reason="test terminal run seed"):
         run = sessions.run_for(session)
@@ -804,7 +804,7 @@ def test_transient_exhaustion_fails_turn_and_parks_session(
     from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
 
     owner, agent = _ready_session_agent("retry-exhaustion")
-    _session_workflow()
+    admit_workflow_actor(_session_workflow(), owner)
     session = sessions.start_session(agent, owner=owner, context={})
     sessions.post_message(session, "hi")
     with system_context(reason="test exhaustion run"):
@@ -847,7 +847,7 @@ def test_in_process_provision_and_teardown_leave_no_orphaned_waiting_run(
     owner = User.objects.create_user(username="provision-in-process-owner")
     with system_context(reason="test in-process provision seed"):
         agent = Agent.objects.create(name="In-process", owner=owner, runtime_class="pydantic")
-    _session_workflow()
+    admit_workflow_actor(_session_workflow(), owner)
 
     def operator_must_not_be_called() -> Any:
         raise AssertionError("in-process provisioning must not call the operator")

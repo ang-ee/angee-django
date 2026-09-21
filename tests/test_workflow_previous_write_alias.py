@@ -6,27 +6,32 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from django.db import connection, connections, models, router, transaction
+from django.db import connection, connections, router, transaction
 from django.db.models.signals import m2m_changed
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from angee.workflows import engine
 from angee.workflows.models import RunStatus, StepRunStatus
-from tests.test_transitions import TransitionRouter
-from tests.workflows import Step, StepRun, WorkflowRun, workflow_actor, workflow_with_steps
-
-
-class PreviousRouter(TransitionRouter):
-    """Permit relations across aliases of the same physical fixture database."""
-
-    def allow_relation(self, obj1: models.Model, obj2: models.Model, **hints: Any) -> bool:
-        del obj1, obj2, hints
-        return True
+from tests.workflows import (
+    Step,
+    StepRun,
+    WorkflowRun,
+    WorkflowWriteRouter,
+    reject_default_domain_query,
+    workflow_actor,
+    workflow_with_steps,
+)
+from tests.workflows import workflow_audit_frontier as workflow_audit_frontier
+from tests.workflows import workflow_authorization_frontier as workflow_authorization_frontier
 
 
 @pytest.fixture
-def previous_writer(workflow_engine_tables: None) -> Iterator[str]:
+def previous_writer(
+    workflow_engine_tables: None,
+    workflow_authorization_frontier: None,
+    workflow_audit_frontier: list[dict[str, Any]],
+) -> Iterator[str]:
     """Give the fixture database a separate connection for SQL-routing assertions."""
 
     del workflow_engine_tables
@@ -44,8 +49,8 @@ def test_previous_add_and_set_use_explicit_writer_with_native_signals(
     previous_writer: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workflow = workflow_with_steps(
-        steps=tuple({"key": key, "is_entry": True} for key in ("a", "b", "c", "target")),
-        edges=(),
+        steps=tuple({"key": key} for key in ("a", "b", "c", "target")),
+        edges=(("a", "b", "done"), ("b", "c", "done"), ("c", "target", "done")),
     )
     with system_context(reason="previous edge semantics setup"):
         run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
@@ -72,12 +77,12 @@ def test_previous_add_and_set_use_explicit_writer_with_native_signals(
         assert connections[previous_writer].in_atomic_block
         observed.append((action, set(pk_set)))
 
-    routing = PreviousRouter("default")
+    routing = WorkflowWriteRouter("default")
     monkeypatch.setattr(router, "routers", [routing])
     # Odoo contributes a senderless receiver, so exercise that registration form.
     m2m_changed.connect(observe)
     try:
-        with system_context(reason="previous edge semantics"), CaptureQueriesContext(connection) as default_sql:
+        with system_context(reason="previous edge semantics"), connection.execute_wrapper(reject_default_domain_query):
             with transaction.atomic(using=previous_writer):
                 owner = StepRun.objects.db_manager("default")
                 owner.update_previous(target, [b, c, c], using=previous_writer)
@@ -97,7 +102,6 @@ def test_previous_add_and_set_use_explicit_writer_with_native_signals(
     finally:
         m2m_changed.disconnect(observe)
 
-    assert list(default_sql) == []
     assert routing.writes == []
     assert observed == [
         ("pre_add", {c.pk}),
@@ -131,10 +135,10 @@ def test_engine_previous_writers_ignore_conflicting_write_router(
         run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
         source, target = (Step.objects.get(workflow=workflow, key=key) for key in ("entry", "target"))
         previous = StepRun.objects.create(run=run, step=source, status=StepRunStatus.SUCCEEDED, outcome="done")
-    routing = PreviousRouter("default")
+    routing = WorkflowWriteRouter("default")
     monkeypatch.setattr(router, "routers", [routing])
 
-    with system_context(reason="previous writer callsite"), CaptureQueriesContext(connection) as default_sql:
+    with system_context(reason="previous writer callsite"), connection.execute_wrapper(reject_default_domain_query):
         with CaptureQueriesContext(connections[previous_writer]) as writer_sql:
             with transaction.atomic(using=previous_writer):
                 if operation == "schedule":
@@ -151,7 +155,6 @@ def test_engine_previous_writers_ignore_conflicting_write_router(
                     from_steprun_id=child.pk, to_steprun_id=previous.pk
                 ).count() == 1
 
-    assert list(default_sql) == []
     assert any(
         query["sql"].startswith("INSERT") and through._meta.db_table in query["sql"] for query in writer_sql
     )
@@ -166,10 +169,10 @@ def test_previous_edge_write_rolls_back_with_selected_transaction(
         run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
         previous = StepRun.objects.create(run=run, system_kind="previous")
         target = StepRun.objects.create(run=run, system_kind="target")
-    routing = PreviousRouter("default")
+    routing = WorkflowWriteRouter("default")
     monkeypatch.setattr(router, "routers", [routing])
 
-    with system_context(reason="previous rollback"), CaptureQueriesContext(connection) as default_sql:
+    with system_context(reason="previous rollback"), connection.execute_wrapper(reject_default_domain_query):
         with pytest.raises(RuntimeError, match="Abort previous edges"), transaction.atomic(using=previous_writer):
             StepRun.objects.update_previous(target, [previous], using=previous_writer)
             raise RuntimeError("Abort previous edges")
@@ -177,7 +180,6 @@ def test_previous_edge_write_rolls_back_with_selected_transaction(
             from_steprun_id=target.pk
         ).exists()
 
-    assert list(default_sql) == []
     assert routing.writes == []
 
 
@@ -195,7 +197,7 @@ def test_previous_replacement_rolls_back_when_receiver_fails_without_outer_trans
         StepRun.objects.update_previous(target, [previous], using="default")
         through = StepRun.previous.through
         original_pk = through._base_manager.get(from_steprun_id=target.pk).pk
-    routing = PreviousRouter("default")
+    routing = WorkflowWriteRouter("default")
     monkeypatch.setattr(router, "routers", [routing])
     failures: list[str] = []
 
@@ -217,7 +219,10 @@ def test_previous_replacement_rolls_back_when_receiver_fails_without_outer_trans
 
     m2m_changed.connect(reject_change, sender=through)
     try:
-        with system_context(reason="previous receiver rollback"), CaptureQueriesContext(connection) as default_sql:
+        with (
+            system_context(reason="previous receiver rollback"),
+            connection.execute_wrapper(reject_default_domain_query),
+        ):
             assert not connections[previous_writer].in_atomic_block
             with pytest.raises(RuntimeError, match="Reject previous edge change"):
                 StepRun.objects.update_previous(target, [replacement], replace=True, using=previous_writer)
@@ -231,5 +236,4 @@ def test_previous_replacement_rolls_back_when_receiver_fails_without_outer_trans
         m2m_changed.disconnect(reject_change, sender=through)
 
     assert failures == [failure_action]
-    assert list(default_sql) == []
     assert routing.writes == []

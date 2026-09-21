@@ -557,7 +557,7 @@ class ExtractionManager(EvidenceManager):
                 readable = read_scoped_queryset(type(record), actor)
                 if readable is None or not readable.using(alias).filter(pk=record.pk).exists():
                     raise PermissionDenied("Correction evidence, revision parent, and target must remain readable.")
-            retained_sources = tuple(original.sources.using(alias).lock_if_supported().order_by("position"))
+            retained_sources = tuple(original.sources.db_manager(alias).lock_if_supported().order_by("position"))
             file_model = registry.get_model("storage", "File")
             part_model = registry.get_model("messaging", "Part")
             fragment_model = registry.get_model("messaging", "Fragment")
@@ -1054,7 +1054,7 @@ class ExtractionManager(EvidenceManager):
 
     def _same_fresh_evidence(self, existing: Any, evidence: Any, *, using: str | None) -> bool:
         sources, pages, page_results, parts = evidence
-        retained = list(existing.sources.using(using).order_by("position"))
+        retained = list(existing.sources.db_manager(using).order_by("position"))
         if len(retained) != len(sources):
             return False
         if any(
@@ -1064,7 +1064,7 @@ class ExtractionManager(EvidenceManager):
             for row, source in zip(retained, sources)
         ):
             return False
-        retained_pages = list(existing.pages.using(using).select_related("source").order_by("position"))
+        retained_pages = list(existing.pages.db_manager(using).select_related("source").order_by("position"))
         if len(retained_pages) != len(pages) or len(pages) != len(page_results):
             return False
         if any(
@@ -1076,7 +1076,7 @@ class ExtractionManager(EvidenceManager):
             for position, (row, page, result) in enumerate(zip(retained_pages, pages, page_results))
         ):
             return False
-        retained_parts = list(existing.parts.using(using).select_related("source").order_by("position"))
+        retained_parts = list(existing.parts.db_manager(using).select_related("source").order_by("position"))
         return len(retained_parts) == len(parts) and all(
             row.position == position and row.source.position == part.source_position
             and row.source_page == part.source_page and row.mime_type == part.mime_type

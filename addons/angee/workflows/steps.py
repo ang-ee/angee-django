@@ -1018,7 +1018,7 @@ class GateStep(StepImpl):
         for name in ("slots", "payload", "decision_schema", "targets", "record_access"):
             if name in resolved:
                 resolved[name] = cls._bound_value(step_run, resolved[name], field=name)
-        return cls.normalize_config(resolved)
+        return GateStep.normalize_config(resolved)
 
     @staticmethod
     def _bound_value(step_run: Any, value: Any, *, field: str) -> Any:

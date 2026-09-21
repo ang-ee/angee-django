@@ -681,6 +681,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         if dedup_key is not None and len(dedup_key) > self.model._meta.get_field("dedup_key").max_length:
             raise ValidationError({"dedup_key": "Workflow run dedup key is too long."})
         alias = get_write_alias(self.model, bound=self, instance=workflow)
+        require_authorization_database(alias, operation="Workflow actor admission", error_field="using")
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
         head_id = workflow.pk if workflow.published_from_id is None else workflow.published_from_id
         with system_context(reason="workflows.runs.start"), transaction.atomic(using=alias):
@@ -1030,6 +1031,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         """Start or recover one idempotent whole-workflow test request."""
 
         alias = get_write_alias(self.model, bound=self, instance=workflow)
+        require_authorization_database(alias, operation="Workflow test admission", error_field="using")
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
         workflow_model.objects.db_manager(alias)._validate_expected_revision(workflow, expected_revision)
         input = validate_json_presence(input, label="workflow run input")
@@ -1136,7 +1138,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 snapshot = requested
             copied_test_step = None
             if selected_key is not None:
-                copied_test_step = snapshot.steps.using(alias).get(key=selected_key)
+                copied_test_step = snapshot.steps.db_manager(alias).get(key=selected_key)
 
             graph = WorkflowGraph.from_workflow(snapshot, using=alias)
             fixture_rows = self._resolve_test_fixture_rows(
@@ -1187,6 +1189,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         if not isinstance(request_key, str) or not request_key.strip():
             raise ValidationError({"request_key": "Recovery request keys must be non-empty strings."})
         alias = get_write_alias(self.model, bound=self, instance=source_attempt)
+        require_authorization_database(alias, operation="Workflow recovery admission", error_field="using")
         attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
         step_run_model = self.model._meta.apps.get_model("workflows", "StepRun")
         source_run_id = (
@@ -1330,7 +1333,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             def downstream_merge_sibling_ids(entry_step: Any) -> set[int]:
                 """Find external predecessors of merges reachable from this recovery entry."""
 
-                edges = list(source_run.workflow.edges.using(alias).select_related("source", "target").order_by("pk"))
+                edges = list(
+                    source_run.workflow.edges.db_manager(alias).select_related("source", "target").order_by("pk")
+                )
                 outgoing: dict[int, set[int]] = {}
                 incoming: dict[int, set[int]] = {}
                 steps: dict[int, Any] = {entry_step.pk: entry_step}
@@ -1470,7 +1475,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     )
                 elif source_run.origin == RunOrigin.RECOVERY:
                     evidence = (
-                        source_run.recovery_evidence.using(alias)
+                        source_run.recovery_evidence.db_manager(alias)
                         .filter(
                             step_id=map_controller.step_id,
                             map_index=-1,
@@ -1520,7 +1525,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                         break
                     seen_route.add(continuation_row.step_id)
                     routed_targets = list(
-                        continuation_row.step.outgoing_edges.using(alias)
+                        continuation_row.step.outgoing_edges.db_manager(alias)
                         .select_related("target")
                         .filter(models.Q(condition="") | models.Q(condition=continuation_row.outcome))
                         .order_by("target_id")
@@ -1540,7 +1545,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     set()
                     if target is None or continuation_row is None
                     else set(
-                        target.incoming_edges.using(alias)
+                        target.incoming_edges.db_manager(alias)
                         .exclude(source_id=continuation_row.step_id)
                         .values_list("source_id", flat=True)
                     )
@@ -1597,7 +1602,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 existing_map_basis_id = None
                 if map_controller is not None:
                     existing_map_basis_id = (
-                        existing.recovery_evidence.using(alias)
+                        existing.recovery_evidence.db_manager(alias)
                         .filter(
                             step_id=map_controller.step_id,
                             map_index=-1,
@@ -1608,7 +1613,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 existing_continuation_id = None
                 if continuation_attempt is not None:
                     existing_continuation_id = (
-                        existing.recovery_evidence.using(alias)
+                        existing.recovery_evidence.db_manager(alias)
                         .filter(
                             step_id=continuation_attempt.step_run.step_id,
                             map_index=-1,
@@ -1617,7 +1622,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                         .first()
                     )
                 existing_skipped_ids = set(
-                    existing.step_runs.using(alias)
+                    existing.step_runs.db_manager(alias)
                     .filter(status=StepRunStatus.SKIPPED)
                     .values_list("step_id", flat=True)
                 )
@@ -1762,6 +1767,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             raise ValidationError({"selected_step": "Node test plans require exactly one selected step."})
         input = validate_json_presence(input, label="workflow run input")
         alias = get_write_alias(self.model, bound=self, instance=workflow)
+        require_authorization_database(alias, operation="Workflow test planning", error_field="using")
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
         authorized = read_scoped_queryset(workflow_model, actor, action="write")
         if authorized is None or not authorized.using(alias).filter(pk=workflow.pk).exists():
@@ -1848,13 +1854,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 if previous_head_id != head.pk:
                     raise ValidationError({"previous_run": "Previous test evidence belongs to another lineage."})
                 previous_fixture_rows = (
-                    list(locked_previous.test_fixtures.using(alias).select_related("step", "captured_attempt"))
+                    list(locked_previous.test_fixtures.db_manager(alias).select_related("step", "captured_attempt"))
                     if locked_previous.origin == RunOrigin.TEST
                     else []
                 )
                 previous_graph = WorkflowGraph.from_workflow(locked_previous.workflow, using=alias)
                 previous_selected = (
-                    locked_previous.workflow.steps.using(alias).filter(key=locked_selected.key).first()
+                    locked_previous.workflow.steps.db_manager(alias).filter(key=locked_selected.key).first()
                     if locked_selected is not None
                     else None
                 )
@@ -2165,7 +2171,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         """Compare immutable fixture facts with exact JSON type semantics."""
 
         actual = list(
-            run.test_fixtures.using(alias)
+            run.test_fixtures.db_manager(alias)
             .select_related("step", "captured_attempt")
             .order_by("step_id", "role", "item_index")
         )
@@ -2363,7 +2369,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         elif run.origin == RunOrigin.RECOVERY:
             entries = [recovery_step] if recovery_step is not None else []
         else:
-            entries = list(version.steps.using(using).filter(is_entry=True).order_by("pk"))
+            entries = list(version.steps.db_manager(using).filter(is_entry=True).order_by("pk"))
         if len(entries) != 1:
             raise ValidationError({"workflow": "Workflow version must have exactly one initial step."})
         step_run_model = self.model._meta.apps.get_model("workflows", "StepRun")
@@ -2414,7 +2420,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         fixture_model = self.model._meta.apps.get_model("workflows", "WorkflowTestFixture")
         attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
         graph = graph or WorkflowGraph.from_workflow(snapshot, using=alias)
-        step_by_key = {step.key: step for step in snapshot.steps.using(alias).order_by("pk")}
+        step_by_key = {step.key: step for step in snapshot.steps.db_manager(alias).order_by("pk")}
         allowed_outputs = set(step_by_key)
         allows_map_item = False
         if scope == WorkflowScope.NODE:
@@ -3110,11 +3116,7 @@ def decision_gate_output(decisions: Collection[Any], *, outcome: str) -> dict[st
 def retained_gate_output(attempt: Any, decisions: Collection[Any]) -> dict[str, Any] | None:
     """Derive one historical gate value from its immutable suspension declaration."""
 
-    if (
-        attempt.result_kind != str(AttemptResultKind.SUSPEND)
-        or not attempt.checkpoint_present
-        or not isinstance(attempt.checkpoint, dict)
-    ):
+    if attempt.result_kind != str(AttemptResultKind.SUSPEND):
         return None
     settlement = attempt.decision_settlement
     if not isinstance(settlement, dict) or set(settlement) != {"decision_ids", "outcome"}:
@@ -4066,21 +4068,16 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 raise ValidationError({"step_run": "Map expansion requires a scheduled current generation."})
             plan = self._map_expansion_plan(locked, alias=alias)
             step_run_model = self.model._meta.get_field("step_run").remote_field.model
-            run_rows = (
-                system_queryset(step_run_model, using=alias, lock=None)
-                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
-                .filter(run_id=run.pk)
-            )
+            run_rows = system_queryset(step_run_model, using=alias, lock=None).filter(run_id=run.pk)
             admitted = run_rows.filter(status=StepRunStatus.SCHEDULED).count()
             existing_rows = (
-                {
-                    row.map_index: row.status
-                    for row in run_rows.filter(
+                dict(
+                    run_rows.filter(
                         step_id=plan.target_id,
                         map_index__gte=0,
                         map_index__lt=len(plan.items),
-                    ).only("map_index", "status")
-                }
+                    ).values_list("map_index", "status")
+                )
                 if plan.target_id is not None
                 else {}
             )
@@ -5514,7 +5511,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             and (
                 not result.artifacts_present
                 or tuple(
-                    attempt.artifacts.using(using)
+                    attempt.artifacts.db_manager(using)
                     .order_by("declaration_index")
                     .values_list("target_content_type_id", "target_object_id", "label")
                 )
@@ -6817,7 +6814,7 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
         )
         if dispatch.envelope != envelope:
             raise RuntimeError("Dispatch identity does not match the admitted delivery.")
-        if self.get_queryset().using(alias)._consume(envelope, at=at) != 1:
+        if system_queryset(self.model, using=alias, lock=None)._consume(envelope, at=at) != 1:
             raise RuntimeError("Dispatch was already consumed or its admission changed.")
         if dispatch.kind == WorkflowDispatchKind.ADVANCE and not fenced:
             run_model = self.model._meta.get_field("run").remote_field.model

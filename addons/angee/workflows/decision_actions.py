@@ -13,7 +13,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from jsonschema import Draft202012Validator, FormatChecker, validators
 from jsonschema.exceptions import ValidationError as SchemaValidationError
-from pydantic import BaseModel, ConfigDict, JsonValue, StrictInt, StrictStr, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, StrictInt, StrictStr, TypeAdapter, field_validator
 from pydantic import ValidationError as PydanticValidationError
 from rebac.resources import model_resource_type
 from referencing import Registry
@@ -58,6 +58,13 @@ class ReviewAction(BaseModel):
     required: tuple[StrictStr, ...] = ()
     variant: Literal["primary", "secondary", "destructive", "ghost"] | None = None
     confirm: StrictStr | None = None
+
+    @field_validator("fields", "required", mode="before")
+    @classmethod
+    def restore_json_arrays(cls, value: Any) -> Any:
+        """Restore serialized arrays while keeping tuple elements strictly typed."""
+
+        return tuple(value) if isinstance(value, list) else value
 
     def model_post_init(self, __context: Any) -> None:
         """Reject ambiguous or incomplete action declarations at authoring time."""
@@ -429,6 +436,7 @@ def validate_decision_resolution(
     resolution_schema["properties"] = {name: field for name, field in properties.items() if name not in context_fields}
     if "required" in schema:
         resolution_schema["required"] = [name for name in schema["required"] if name not in context_fields]
+    selected_branch_index = None
     if contract is not None:
         selected = resolution.get("action")
         branch = contract.branches.get(selected) if isinstance(selected, str) else None
@@ -441,6 +449,7 @@ def validate_decision_resolution(
             )
         if contract.verdict_for(selected) != str(verdict):
             raise ValidationError({"verdict": "The selected action maps to a different native verdict."})
+        selected_branch_index = schema["oneOf"].index(branch)
     errors: dict[str, list[str]] = {}
     try:
         failures = sorted(
@@ -455,9 +464,33 @@ def validate_decision_resolution(
         raise ValidationError(
             {"decision_schema": "Decision references must resolve inside the retained schema."}
         ) from error
+    if selected_branch_index is not None:
+        # Project the selected branch's native errors without changing schema
+        # locations that retained local references may address.
+        projected = []
+        for failure in failures:
+            if (
+                failure.validator == "oneOf"
+                and failure.schema is resolution_schema
+                and tuple(failure.absolute_schema_path) == ("oneOf",)
+            ):
+                projected.extend(
+                    child for child in failure.context if child.schema_path[0] == selected_branch_index
+                )
+            else:
+                projected.append(failure)
+        failures = projected
     for failure in failures:
-        field = ".".join(str(part) for part in failure.path) or "payload"
-        errors.setdefault(field, []).append(failure.message)
+        if failure.validator == "required":
+            for name in failure.validator_value:
+                if name not in failure.instance:
+                    field = ".".join(str(part) for part in (*failure.absolute_path, name))
+                    errors.setdefault(field, ["This field is required."])
+            continue
+        field = ".".join(str(part) for part in failure.absolute_path) or "payload"
+        messages = errors.setdefault(field, [])
+        if failure.message not in messages:
+            messages.append(failure.message)
     if errors:
         raise ValidationError(errors)
     _validate_relation_fields(resolution_schema, resolution, actor, using=using)

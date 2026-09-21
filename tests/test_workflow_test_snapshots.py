@@ -1252,7 +1252,8 @@ def test_output_fixture_is_immutable_nonphysical_retained_evidence(
         with pytest.raises(TypeError, match="immutable"):
             WorkflowTestFixture.objects.bulk_update([fixture], ["outcome"])
         queryset = WorkflowTestFixture.objects.filter(pk=fixture.pk)
-        assert queryset.update(created_by=None, updated_by=None) == 1
+        with pytest.raises(TypeError, match="immutable"):
+            queryset.update(created_by=None, updated_by=None)
         with pytest.raises(TypeError, match="retained admission facts"):
             queryset.delete()
         with pytest.raises(TypeError, match="retained admission facts"):
@@ -1799,7 +1800,7 @@ def test_fixture_slot_uniqueness_rejects_signal_reentry(
 
     post_save.connect(reenter, sender=WorkflowTestFixture, weak=False)
     try:
-        with pytest.raises(ValidationError, match="constraint|Constraint"):
+        with pytest.raises(ValidationError) as error:
             WorkflowRun.objects.start_test(
                 workflow,
                 expected_revision=workflow.draft_revision,
@@ -1814,6 +1815,7 @@ def test_fixture_slot_uniqueness_rejects_signal_reentry(
                     ),
                 ),
             )
+        assert error.value.error_dict["__all__"][0].code == "unique_together"
     finally:
         post_save.disconnect(reenter, sender=WorkflowTestFixture)
     with system_context(reason="verify fixture signal rollback"):
@@ -1844,7 +1846,7 @@ def test_node_snapshot_reuse_revalidates_whole_readiness(
         selected_step=selected,
     )
     assert node.workflow.status == WorkflowStatus.TEST
-    with pytest.raises(ValidationError, match="cannot be executed"):
+    with pytest.raises(ValidationError) as error:
         WorkflowRun.objects.start_test(
             workflow,
             expected_revision=workflow.draft_revision,
@@ -1852,6 +1854,8 @@ def test_node_snapshot_reuse_revalidates_whole_readiness(
             subject=None,
             actor=actor,
         )
+    incomplete = Step.system_queryset().get(workflow=node.workflow, key="incomplete")
+    assert error.value.message_dict == {f"node.{incomplete.pk}.key": ["Step is not reachable from the entry step."]}
 
 
 @pytest.mark.parametrize("item", [None, "raw", {"item": "mapping"}])

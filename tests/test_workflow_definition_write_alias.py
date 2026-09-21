@@ -25,7 +25,7 @@ from angee.workflows.definitions import (
 )
 from angee.workflows.states import TriggerKind
 from tests.test_transitions import TransitionRouter
-from tests.workflows import Edge, Step, Trigger, Workflow
+from tests.workflows import Edge, Step, Trigger, Workflow, reject_default_domain_query
 
 
 class DefinitionRouter(TransitionRouter):
@@ -73,10 +73,7 @@ def test_definition_edit_publish_and_restore_keep_the_selected_alias(
         draft._state.db = "unavailable-instance"
         manager = manager.db_manager(definition_writer)
 
-    def reject_default_query(*args: Any) -> None:
-        raise AssertionError("Definition mutation must not query the router's conflicting default alias.")
-
-    with connection.execute_wrapper(reject_default_query), system_context(reason="definition alias mutation"):
+    with connection.execute_wrapper(reject_default_domain_query), system_context(reason="definition alias mutation"):
         changed = manager.apply_definition(
             draft,
             expected_revision=draft.draft_revision,
@@ -111,15 +108,15 @@ def test_model_clean_relation_queries_and_trigger_writes_keep_explicit_alias(
     with system_context(reason="definition validation setup"):
         draft = Workflow.objects.create(name="Validation writer")
         entry = Step.objects.create(workflow=draft, key="entry", name="Entry", step_class="fixture", is_entry=True)
-        tail = Step.objects.create(workflow=draft, key="tail", name="Tail", step_class="fixture")
         draft.publish()
+        tail = Step.objects.create(workflow=draft, key="tail", name="Tail", step_class="fixture")
         trigger = Trigger.objects.create(workflow=draft, kind=TriggerKind.MANUAL)
     monkeypatch.setattr(router, "routers", [DefinitionRouter("default")])
 
-    def reject_default_query(*args: Any) -> None:
-        raise AssertionError("A clean() relation query lost the explicitly selected alias.")
-
-    with connection.execute_wrapper(reject_default_query), system_context(reason="definition validation mutation"):
+    with (
+        connection.execute_wrapper(reject_default_domain_query),
+        system_context(reason="definition validation mutation"),
+    ):
         linked = Workflow(name="Linked", published_from_id=draft.pk, error_workflow_id=draft.pk, key=draft.key)
         linked.full_clean_for_write(using=definition_writer, validate_unique=False, validate_constraints=False)
         edge = Edge(workflow_id=draft.pk, source_id=entry.pk, target_id=tail.pk)
@@ -150,10 +147,10 @@ def test_step_config_hook_reads_deferred_fields_on_its_selected_alias(
     deferred._state.db = "default" if selection == "explicit" else definition_writer
     monkeypatch.setattr(router, "routers", [DefinitionRouter("default")])
 
-    def reject_default_query(*args: Any) -> None:
-        raise AssertionError("Step config validation lost its selected alias.")
-
-    with connection.execute_wrapper(reject_default_query), system_context(reason="step deferred config validation"):
+    with (
+        connection.execute_wrapper(reject_default_domain_query),
+        system_context(reason="step deferred config validation"),
+    ):
         deferred.validate_impl_configs(**({"using": definition_writer} if selection == "explicit" else {}))
         assert deferred.config == {"retained": 3}
 

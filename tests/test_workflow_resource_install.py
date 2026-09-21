@@ -174,16 +174,17 @@ def _capture_edits(
     *,
     passthrough: bool,
 ) -> list[DefinitionEdit]:
-    native_apply = Workflow.objects.apply_definition
+    manager_type = type(Workflow.objects)
+    native_apply = manager_type.apply_definition
     edits: list[DefinitionEdit] = []
 
-    def capture(workflow: Workflow, *, expected_revision: int, edit: DefinitionEdit) -> DefinitionResult:
+    def capture(manager: Any, workflow: Workflow, *, expected_revision: int, edit: DefinitionEdit) -> DefinitionResult:
         edits.append(edit)
         if passthrough:
-            return native_apply(workflow, expected_revision=expected_revision, edit=edit)
+            return native_apply(manager, workflow, expected_revision=expected_revision, edit=edit)
         return DefinitionResult(expected_revision, (), (), ())
 
-    monkeypatch.setattr(Workflow.objects, "apply_definition", capture)
+    monkeypatch.setattr(manager_type, "apply_definition", capture)
     return edits
 
 
@@ -195,7 +196,7 @@ def test_installer_ignores_reordered_json_object_keys(
 
     addon = _addon(tmp_path)
     _install(addon, entry_config={"policy": {"first": 1, "second": 2}})
-    workflow = Workflow.objects.get(key="resource-install-probe")
+    workflow = Workflow.system_queryset().get(key="resource-install-probe")
     revision = workflow.draft_revision
     edits = _capture_edits(monkeypatch, passthrough=False)
 
@@ -213,9 +214,9 @@ def test_installer_distinguishes_empty_object_false_and_null(tmp_path: Path) -> 
     _install(addon, entry_binding={})
     with pytest.raises(ResourceLoadError, match=r"101_workflows.step.yaml: 1:.*input_binding"):
         _install(addon, entry_binding=False)
-    assert Step.objects.get(key="entry").input_binding == {}
+    assert Step.system_queryset().get(key="entry").input_binding == {}
     _install(addon, entry_binding=None)
-    assert Step.objects.get(key="entry").input_binding is None
+    assert Step.system_queryset().get(key="entry").input_binding is None
 
 
 def test_installer_retains_omitted_same_impl_config_and_patches_only_changed_field(
@@ -227,7 +228,7 @@ def test_installer_retains_omitted_same_impl_config_and_patches_only_changed_fie
     addon = _addon(tmp_path)
     config = {"operator_policy": {"first": 1, "second": 2}}
     _install(addon, entry_config=config)
-    entry = Step.objects.get(key="entry")
+    entry = Step.system_queryset().get(key="entry")
     edits = _capture_edits(monkeypatch, passthrough=True)
 
     _install(addon, entry_name="Renamed entry")
@@ -245,9 +246,9 @@ def test_installer_emits_refs_for_edge_endpoint_change(
 
     addon = _addon(tmp_path)
     _install(addon)
-    edge = Edge.objects.get(source__key="entry", target__key="alpha")
-    alpha = Step.objects.get(key="alpha")
-    beta = Step.objects.get(key="beta")
+    edge = Edge.system_queryset().get(source__key="entry", target__key="alpha")
+    alpha = Step.system_queryset().get(key="alpha")
+    beta = Step.system_queryset().get(key="beta")
     edits = _capture_edits(monkeypatch, passthrough=True)
 
     _install(addon, route_source="beta", route_target="alpha")
@@ -318,7 +319,7 @@ def test_native_loader_calls_each_dataset_once_and_preserves_skipped_rows(tmp_pa
 
     monkeypatch.setattr(WorkflowDefinitionResource, "import_data", import_data)
     first = _install(addon)
-    workflow = Workflow.objects.get(key="resource-install-probe")
+    workflow = Workflow.system_queryset().get(key="resource-install-probe")
     revision = workflow.draft_revision
     assert first.created == 9
     assert calls == [Workflow, Step, Edge]
@@ -328,8 +329,8 @@ def test_native_loader_calls_each_dataset_once_and_preserves_skipped_rows(tmp_pa
     assert calls == [Workflow, Step, Edge]
     workflow.refresh_from_db()
     assert workflow.draft_revision == revision
-    assert Step.objects.count() == 4
-    assert Edge.objects.count() == 4
+    assert Step.system_queryset().count() == 4
+    assert Edge.system_queryset().count() == 4
 
 
 def test_native_diagnostics_keep_source_row_and_full_transaction_rollback(tmp_path: Path) -> None:
@@ -346,8 +347,8 @@ def test_native_diagnostics_keep_source_row_and_full_transaction_rollback(tmp_pa
     step_group.source_rows = [2, 7, 8, 12]
     with pytest.raises(ResourceLoadError, match=r"101_workflows.step.yaml: 7:"):
         _load(groups)
-    assert not Workflow.objects.exists()
-    assert not Step.objects.exists()
+    assert not Workflow.system_queryset().exists()
+    assert not Step.system_queryset().exists()
     assert not WorkflowResourceLedger.objects.exists()
 
 
@@ -364,9 +365,9 @@ def test_duplicate_new_xref_has_native_row_diagnostic_and_rolls_back(tmp_path: P
     with pytest.raises(ResourceLoadError, match=r"yaml: 42:.*duplicate _xref"):
         _load(groups)
 
-    assert not Workflow.objects.exists()
-    assert not Step.objects.exists()
-    assert not Edge.objects.exists()
+    assert not Workflow.system_queryset().exists()
+    assert not Step.system_queryset().exists()
+    assert not Edge.system_queryset().exists()
     assert not WorkflowResourceLedger.objects.exists()
 
 
@@ -374,17 +375,17 @@ def test_dry_run_rolls_back_native_rows_ledgers_and_revisions(tmp_path: Path) ->
     addon = _addon(tmp_path)
     result = _load(_groups(addon), dry_run=True)
     assert result.created == 9
-    assert not Workflow.objects.exists()
+    assert not Workflow.system_queryset().exists()
     assert not WorkflowResourceLedger.objects.exists()
     _install(addon)
-    head = Workflow.objects.get(key="resource-install-probe")
+    head = Workflow.system_queryset().get(key="resource-install-probe")
     revision = head.draft_revision
     ledgers = list(WorkflowResourceLedger.objects.values_list("pk", "content_hash", "target_id"))
     result = _load(_groups(addon, entry_name="Dry rename"), dry_run=True)
     assert result.updated == 1
     head.refresh_from_db()
     assert head.draft_revision == revision
-    assert Step.objects.get(key="entry").name == "Entry"
+    assert Step.system_queryset().get(key="entry").name == "Entry"
     assert list(WorkflowResourceLedger.objects.values_list("pk", "content_hash", "target_id")) == ledgers
 
 
@@ -392,9 +393,9 @@ def test_omitted_step_config_preserves_operator_value_but_class_change_resets_it
     addon = _addon(tmp_path)
     _install(addon, entry_config={"operator": True})
     _install(addon, entry_name="Renamed")
-    assert Step.objects.get(key="entry").config == {"operator": True}
+    assert Step.system_queryset().get(key="entry").config == {"operator": True}
     _install(addon, entry_config={})
-    assert Step.objects.get(key="entry").config == {}
+    assert Step.system_queryset().get(key="entry").config == {}
     _install(addon, entry_config={"operator": True})
     groups = _groups(addon)
     steps = groups[1][0].dataset
@@ -403,7 +404,7 @@ def test_omitted_step_config_preserves_operator_value_but_class_change_resets_it
     del steps["step_class"]
     steps.append_col(values, header="step_class")
     _load(groups)
-    changed = Step.objects.get(key="entry")
+    changed = Step.system_queryset().get(key="entry")
     assert changed.step_class == "agent_session"
     assert changed.config == {}
 
@@ -428,12 +429,12 @@ def test_cross_addon_and_path_omissions_delete_only_exact_source_rows(tmp_path: 
         "source": f"{base.label}.entry", "target": f"{extra.label}.extra-b",
     },))
     _load((*_groups(base), *additions, extra_edge))
-    assert Step.objects.count() == 6
-    assert Edge.objects.filter(source__key="entry", target__key="extra-b").exists()
+    assert Step.system_queryset().count() == 6
+    assert Edge.system_queryset().filter(source__key="entry", target__key="extra-b").exists()
     _load((*_groups(base), _group(extra, Step, path_a, ())))
-    assert not Step.objects.filter(key="extra-a").exists()
-    assert Step.objects.filter(key="extra-b").exists()
-    assert Step.objects.filter(key="entry").exists()
+    assert not Step.system_queryset().filter(key="extra-a").exists()
+    assert Step.system_queryset().filter(key="extra-b").exists()
+    assert Step.system_queryset().filter(key="entry").exists()
     assert not WorkflowResourceLedger.objects.filter(source_addon=extra.name, xref="extra-a").exists()
     assert WorkflowResourceLedger.objects.filter(source_addon=extra.name, xref="extra-b").exists()
 
@@ -447,8 +448,8 @@ def test_step_omission_rejects_incident_edges_without_deleting_contributions(tmp
     before = list(WorkflowResourceLedger.objects.values_list("pk", "content_hash", "target_id"))
     with pytest.raises(ResourceLoadError, match="incident edges"):
         _load(groups)
-    assert Step.objects.count() == 4
-    assert Edge.objects.count() == 4
+    assert Step.system_queryset().count() == 4
+    assert Edge.system_queryset().count() == 4
     assert list(WorkflowResourceLedger.objects.values_list("pk", "content_hash", "target_id")) == before
 
 
@@ -465,9 +466,9 @@ def test_edge_omission_removes_its_ledger_and_then_allows_step_omission(tmp_path
     del groups[1][0].dataset[1]
     groups[1][0].source_rows.pop(1)
     _load(groups)
-    assert not Step.objects.filter(key="alpha").exists()
+    assert not Step.system_queryset().filter(key="alpha").exists()
     assert not WorkflowResourceLedger.objects.filter(xref="alpha").exists()
-    assert Edge.objects.count() == 2
+    assert Edge.system_queryset().count() == 2
 
 
 def test_same_dataset_references_to_earlier_new_heads_use_native_instances(tmp_path: Path) -> None:
@@ -478,7 +479,8 @@ def test_same_dataset_references_to_earlier_new_heads_use_native_instances(tmp_p
     ))
     result = _load((group,))
     assert result.created == 2
-    assert Workflow.objects.get(key="main").error_workflow == Workflow.objects.get(key="error")
+    main = Workflow.system_queryset().get(key="main")
+    assert main.error_workflow_id == Workflow.system_queryset().get(key="error").pk
 
 
 def test_unresolved_forward_reference_has_native_row_diagnostic_and_rolls_back(tmp_path: Path) -> None:
@@ -489,14 +491,14 @@ def test_unresolved_forward_reference_has_native_row_diagnostic_and_rolls_back(t
     ))
     with pytest.raises(ResourceLoadError, match=r"heads.yaml: 1:.*unresolved xref"):
         _load((group,))
-    assert not Workflow.objects.exists()
+    assert not Workflow.system_queryset().exists()
     assert not WorkflowResourceLedger.objects.exists()
 
 
 def test_workflow_scalar_change_bumps_revision_once_and_retains_children(tmp_path: Path) -> None:
     addon = _addon(tmp_path)
     _install(addon)
-    head = Workflow.objects.get(key="resource-install-probe")
+    head = Workflow.system_queryset().get(key="resource-install-probe")
     revision = head.draft_revision
     groups = _groups(addon)
     groups[0][0].dataset.append_col(["Updated description"], header="description")
@@ -505,14 +507,14 @@ def test_workflow_scalar_change_bumps_revision_once_and_retains_children(tmp_pat
     assert result.updated == 1
     assert head.description == "Updated description"
     assert head.draft_revision == revision + 1
-    assert head.steps.count() == 4
-    assert head.edges.count() == 4
+    assert Step.system_queryset().filter(workflow=head).count() == 4
+    assert Edge.system_queryset().filter(workflow=head).count() == 4
 
 
 def test_changed_scalar_step_and_edge_facets_each_advance_the_head_cas_revision(tmp_path: Path) -> None:
     addon = _addon(tmp_path)
     _install(addon)
-    head = Workflow.objects.get(key="resource-install-probe")
+    head = Workflow.system_queryset().get(key="resource-install-probe")
     revision = head.draft_revision
     groups = _groups(addon, entry_name="Updated entry", route_source="beta", route_target="alpha")
     groups[0][0].dataset.append_col(["Updated description"], header="description")
@@ -529,7 +531,7 @@ def test_changed_scalar_step_and_edge_facets_each_advance_the_head_cas_revision(
 def test_unchanged_publication_skips_the_definition_write_lock(tmp_path: Path, monkeypatch: Any) -> None:
     addon = _addon(tmp_path)
     _install(addon)
-    head = Workflow.objects.get(key="resource-install-probe")
+    head = Workflow.system_queryset().get(key="resource-install-probe")
     with system_context(reason="publication lock regression"):
         published = head.publish_if_changed()
     assert published is not None
@@ -547,7 +549,7 @@ def test_legacy_zero_revisions_still_compare_publication_content(tmp_path: Path)
     addon = _addon(tmp_path)
     _install(addon)
     with system_context(reason="legacy publication regression"):
-        head = Workflow.objects.get(key="resource-install-probe")
+        head = Workflow.system_queryset().get(key="resource-install-probe")
         first = head.publish_if_changed()
         assert first is not None
         _install(addon, entry_name="Changed legacy entry")
@@ -564,7 +566,7 @@ def test_legacy_zero_revisions_still_compare_publication_content(tmp_path: Path)
 def test_failed_graph_edit_rolls_back_earlier_scalar_and_ledger_updates(tmp_path: Path) -> None:
     addon = _addon(tmp_path)
     _install(addon)
-    head = Workflow.objects.get(key="resource-install-probe")
+    head = Workflow.system_queryset().get(key="resource-install-probe")
     revision = head.draft_revision
     groups = _groups(addon, route_source="entry", route_target="beta")  # duplicates a retained edge
     groups[0][0].dataset.append_col(["Must roll back"], header="description")
@@ -625,23 +627,23 @@ def test_publication_observes_complete_facets_and_grants_and_failure_rolls_back(
 
     load(dry_run=True)
     assert publications == []
-    assert not Workflow.objects.exists()
+    assert not Workflow.system_queryset().exists()
     assert not WorkflowResourceLedger.objects.exists()
     assert relationship_model._default_manager.count() == before
     with pytest.raises(ResourceLoadError, match="publication failed"):
         load()
-    assert not Workflow.objects.exists()
-    assert not Step.objects.exists()
-    assert not Edge.objects.exists()
+    assert not Workflow.system_queryset().exists()
+    assert not Step.system_queryset().exists()
+    assert not Edge.system_queryset().exists()
     assert not WorkflowResourceLedger.objects.exists()
-    assert not get_user_model().objects.filter(username="workflow-resource-viewer").exists()
+    assert not get_user_model().system_queryset().filter(username="workflow-resource-viewer").exists()
     assert relationship_model._default_manager.count() == before
     fail = False
     load()
-    head = Workflow.objects.get(key="resource-install-probe", published_from__isnull=True)
-    assert head.published_versions.count() == 1
+    head = Workflow.system_queryset().get(key="resource-install-probe", published_from__isnull=True)
+    assert Workflow.system_queryset().filter(published_from=head).count() == 1
     load()
-    assert head.published_versions.count() == 1
+    assert Workflow.system_queryset().filter(published_from=head).count() == 1
     assert publications[-1] is None
 
 
@@ -721,7 +723,7 @@ def test_empty_workflow_facet_removes_unreferenced_head_and_ledger(tmp_path: Pat
     source = "resources/install/heads.yaml"
     _load((_group(addon, Workflow, source, ({"_xref": "empty-head", "name": "Empty head"},)),))
     _load((_group(addon, Workflow, source, ()),))
-    assert not Workflow.objects.exists()
+    assert not Workflow.system_queryset().exists()
     assert not WorkflowResourceLedger.objects.exists()
 
 
@@ -729,9 +731,9 @@ def test_invalid_explicit_config_rolls_back_complete_native_install(tmp_path: Pa
     addon = _addon(tmp_path)
     with pytest.raises(ResourceLoadError, match=r"101_workflows.step.yaml: 1:.*config"):
         _install(addon, entry_config=[])
-    assert not Workflow.objects.exists()
-    assert not Step.objects.exists()
-    assert not Edge.objects.exists()
+    assert not Workflow.system_queryset().exists()
+    assert not Step.system_queryset().exists()
+    assert not Edge.system_queryset().exists()
     assert not WorkflowResourceLedger.objects.exists()
 
 
@@ -748,7 +750,7 @@ def test_lock_planning_leaves_ledger_collisions_to_native_source_row_diagnostics
     )
     with pytest.raises(ResourceLoadError, match=r"100_workflows.workflow.yaml: 9:.*xref collision"):
         _load(groups)
-    assert not Workflow.objects.exists()
+    assert not Workflow.system_queryset().exists()
     assert list(WorkflowResourceLedger.objects.values_list("pk", flat=True)) == [collision.pk]
 
 
@@ -759,21 +761,21 @@ def test_lock_planning_leaves_invalid_adoption_to_native_source_row_diagnostics(
     groups[0][0].source_rows = [6]
     with pytest.raises(ResourceLoadError, match=r"100_workflows.workflow.yaml: 6:.*adopt"):
         _load(groups)
-    assert not Workflow.objects.exists()
+    assert not Workflow.system_queryset().exists()
     assert not WorkflowResourceLedger.objects.exists()
 
 
 def test_step_composite_adoption_keeps_native_update_and_original_target(tmp_path: Path) -> None:
     addon = _addon(tmp_path)
     _install(addon)
-    alpha = Step.objects.get(key="alpha")
+    alpha = Step.system_queryset().get(key="alpha")
     WorkflowResourceLedger.objects.get(xref="alpha").delete()
     groups = _groups(addon)
     groups[1][0].entry.adopt = ("workflow", "key")
     result = _load(groups)
     assert result == LoadResult(created=0, updated=1, skipped=8)
     assert WorkflowResourceLedger.objects.get(xref="alpha").target_id == public_id_of(alpha)
-    assert Step.objects.get(key="alpha").pk == alpha.pk
+    assert Step.system_queryset().get(key="alpha").pk == alpha.pk
 
 
 @pytest.mark.parametrize("extra_steps", [0, 10])
@@ -790,7 +792,7 @@ def test_lock_planning_batches_ledgers_and_targets_independently_of_row_count(
     )
     groups[1] = _group(addon, Step, step_group.entry.source, tuple(rows))
     _load(tuple(groups))
-    head = Workflow.objects.get(key="resource-install-probe")
+    head = Workflow.system_queryset().get(key="resource-install-probe")
 
     # Each facet primes its declared and owned ledgers; each target model is read once.
     with system_context(reason="batched workflow lock planning"), django_assert_num_queries(9):

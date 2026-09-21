@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection
 from django.db.models.deletion import ProtectedError
 from django.test import RequestFactory
@@ -20,7 +20,6 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 from rebac import (
-    PermissionDenied,
     app_settings,
     system_context,
     to_subject_ref,
@@ -387,7 +386,7 @@ def test_decision_apply_dispatches_identity_and_preserves_wait(
 
     monkeypatch.setattr(type(Decision.objects), "predecessor_decision", lambda *args: predecessor)
     now = timezone.now()
-    result = Apply().run(SimpleNamespace(), now=now)
+    result = Apply().run(StepRun(), now=now)
     assert result.kind == "wait"
     assert result.resume_state == {"manager": "retained"}
     assert calls == [{"decision_id": 42, "actor": actor, "now": now}]
@@ -507,7 +506,9 @@ def test_predecessor_lookup_uses_nearest_gate_on_retained_routes(
     advance_once(run)
     execute_started(run)
     for key in ("first_gate", "second_gate"):
-        assert engine.decide(_decision_for(run, key), "complete", actor=assignee).validation_error is None
+        assert engine.decide(
+            _decision_for(run, key), "complete", payload={"action": "complete"}, actor=assignee,
+        ).validation_error is None
     run_to_terminal(run, stop_key="apply")
     consumer = _step_run(run, "apply")
 
@@ -554,7 +555,7 @@ def test_predecessor_lookup_ignores_skipped_gate_retained_by_unconditional_join(
     advance_once(run)
     execute_started(run)
     decision = _decision_for(run, "gate")
-    assert engine.decide(decision, "complete", actor=assignee).validation_error is None
+    assert engine.decide(decision, "complete", payload={"action": "complete"}, actor=assignee).validation_error is None
     run_to_terminal(run, stop_key="apply")
     gate = _step_run(run, "gate")
     skipped_gate = _step_run(run, "skipped_gate")
@@ -618,7 +619,9 @@ def test_predecessor_lookup_does_not_fall_back_past_a_clean_nearest_gate(
     run = start_run(workflow, actor=assignee)
     advance_once(run)
     execute_started(run)
-    assert engine.decide(_decision_for(run, "gate"), "complete", actor=assignee).validation_error is None
+    assert engine.decide(
+        _decision_for(run, "gate"), "complete", payload={"action": "complete"}, actor=assignee,
+    ).validation_error is None
     run_to_terminal(run, stop_key="apply")
 
     with pytest.raises(ValidationError, match="retained predecessor settlement"):
@@ -647,6 +650,7 @@ def test_predecessor_lookup_crosses_map_and_child_ancestry(
             "key": "nested",
             "step_class": "call_workflow",
             "config": {"publication": str(child_workflow.sqid)},
+            "input_binding": {"kind": "constant", "value": {}},
         }
     else:
         nested = {"key": "nested", "step_class": "map", "config": {"target_step": "apply", "items": [1]}}
@@ -664,7 +668,7 @@ def test_predecessor_lookup_crosses_map_and_child_ancestry(
     advance_once(run)
     execute_started(run)
     decision = _decision_for(run, "gate")
-    assert engine.decide(decision, "complete", actor=assignee).validation_error is None
+    assert engine.decide(decision, "complete", payload={"action": "complete"}, actor=assignee).validation_error is None
     applied: list[int] = []
     fixture_run = FixtureStep.run
 
@@ -717,7 +721,7 @@ def test_predecessor_lookup_recovers_the_exact_transitive_gate_source(
     advance_once(run)
     execute_started(run)
     decision = _decision_for(run, "gate")
-    assert engine.decide(decision, "complete", actor=assignee).validation_error is None
+    assert engine.decide(decision, "complete", payload={"action": "complete"}, actor=assignee).validation_error is None
     applied: list[int] = []
     fixture_run = FixtureStep.run
 
@@ -1506,6 +1510,7 @@ def test_invalid_resolution_reopens_then_fails_at_max_attempts(
             {
                 "key": "gate",
                 "step_class": "gate",
+                "input_binding": {"kind": "workflow_input", "path": []},
                 "config": _gate_config(
                     [assignee],
                     None,
@@ -1585,6 +1590,7 @@ def test_nested_decision_schema_validates_objects_and_array_rows_before_round_tr
             {
                 "key": "gate",
                 "step_class": "gate",
+                "input_binding": {"kind": "workflow_input", "path": []},
                 "config": _gate_config([assignee], None, [], decision_schema=decision_schema),
             },
         ),
@@ -1644,6 +1650,7 @@ def test_decision_schema_enforces_resolution_conditional_requirements(
             {
                 "key": "gate",
                 "step_class": "gate",
+                "input_binding": {"kind": "workflow_input", "path": []},
                 "config": _gate_config([assignee], None, [], decision_schema=schema),
             },
         ),
@@ -1674,7 +1681,7 @@ def test_decision_json_schema_preserves_types_and_authored_constraints(
     monkeypatch.setattr(
         decision_actions,
         "_validate_relation_fields",
-        lambda _schema, resolution, _actor: relation_checks.append(resolution),
+        lambda _schema, resolution, _actor, *, using: relation_checks.append(resolution),
     )
     schema = _action_schema(
         actions=("apply",),
@@ -1780,7 +1787,7 @@ def test_decision_relation_permission_defaults_to_write_and_allows_declared_read
     monkeypatch.setattr(
         decision_actions,
         "read_scoped_queryset",
-        lambda _model, _actor, *, action: actions.append(action) or object(),
+        lambda _model, _actor, *, action: actions.append(action) or StepRun.objects.none(),
     )
     monkeypatch.setattr(decision_actions, "instance_from_public_id", lambda _model, _value, *, queryset: object())
 
@@ -2221,6 +2228,7 @@ def test_decision_schema_is_exposed_narrowly_on_public_and_console_decisions(
             {
                 "key": "gate",
                 "step_class": "gate",
+                "input_binding": {"kind": "workflow_input", "path": []},
                 "config": _gate_config([assignee], None, [], decision_schema=decision_schema),
             },
         ),
@@ -2233,6 +2241,7 @@ def test_decision_schema_is_exposed_narrowly_on_public_and_console_decisions(
             {
                 "key": "gate",
                 "step_class": "gate",
+                "input_binding": {"kind": "workflow_input", "path": []},
                 "config": _gate_config([assignee], None, [], decision_schema={}),
             },
         ),
@@ -2349,6 +2358,7 @@ def test_decision_context_and_schema_query_count_stays_flat_for_three_rows(
                 {
                     "key": "gate",
                     "step_class": "gate",
+                    "input_binding": {"kind": "workflow_input", "path": []},
                     "config": _gate_config(
                         [assignee] * count,
                         None,
@@ -2751,6 +2761,7 @@ def test_public_decide_returns_dotted_field_errors_and_reopens_the_decision(
             {
                 "key": "gate",
                 "step_class": "gate",
+                "input_binding": {"kind": "workflow_input", "path": []},
                 "config": _gate_config([assignee], None, [], decision_schema=decision_schema),
             },
         ),
@@ -2810,6 +2821,7 @@ def test_public_decide_checks_act_permission_before_resolution_shape(
             {
                 "key": "gate",
                 "step_class": "gate",
+                "input_binding": {"kind": "workflow_input", "path": []},
                 "config": _gate_config([assignee], None, [], decision_schema=decision_schema),
             },
         ),
@@ -2875,7 +2887,16 @@ def test_decide_hides_unreachable_and_missing_decisions_alike(
     assert missing.errors is not None
     assert existing.data is None
     assert missing.data is None
-    assert [error.formatted for error in existing.errors] == [error.formatted for error in missing.errors]
+    for result, supplied_id in ((existing, decision_id), (missing, missing_id)):
+        message = f"Decision '{supplied_id}' was not found."
+        assert [error.formatted for error in result.errors] == [{
+            "message": str({"__all__": [message]}),
+            "locations": [{"line": 3, "column": 11}],
+            "path": ["decide"],
+            "extensions": {
+                "code": "VALIDATION", "validationErrors": {}, "formErrors": [message],
+            },
+        }]
 
 
 def test_retained_decision_rejects_every_public_and_collector_delete(
@@ -3113,25 +3134,85 @@ def _validate_json_resolution(schema: dict[str, Any], payload: Any) -> dict[str,
     )
 
 
+def test_tagged_action_reports_each_missing_nested_field_once() -> None:
+    """Selected action constraints preserve precise paths without union summaries."""
+
+    schema = _action_schema(
+        actions=("reject", "complete"),
+        required=("review",),
+        properties={
+            "review": {
+                "type": "object",
+                "required": ["approved", "note"],
+                "properties": {"approved": {"type": "boolean"}, "note": {"type": "string"}},
+            },
+        },
+    )
+    with pytest.raises(ValidationError) as error:
+        _validate_json_resolution(schema, {"action": "complete", "review": {}})
+    assert error.value.message_dict == {
+        "review.approved": ["This field is required."],
+        "review.note": ["This field is required."],
+    }
+
+
+def test_tagged_action_preserves_local_references_into_its_branch() -> None:
+    """Diagnostic projection keeps the retained document's reference targets intact."""
+
+    schema = _action_schema(properties={"note": {"$ref": "#/oneOf/0/properties/note"}})
+    schema["oneOf"][0]["properties"]["note"] = {"type": "string"}
+    submitted = {"action": "complete", "note": "Reviewed"}
+    assert _validate_json_resolution(schema, submitted) == submitted
+    with pytest.raises(ValidationError) as error:
+        _validate_json_resolution(schema, {"action": "complete", "note": 1})
+    assert error.value.message_dict == {"note": ["1 is not of type 'string'"]}
+
+
+def test_tagged_action_retains_referenced_union_constraints() -> None:
+    """A referenced oneOf belongs to its own schema, independent of action indexes."""
+
+    schema = _action_schema(
+        actions=("reject", "escalate", "complete"), properties={"note": {"type": "string"}},
+    )
+    schema["$defs"] = {"extra": {"oneOf": [
+        {"properties": {"note": {"const": "yes"}}},
+        {"properties": {"note": {"const": "approved"}}},
+    ]}}
+    schema["$ref"] = "#/$defs/extra"
+    submitted = {"action": "complete", "note": "yes"}
+    assert _validate_json_resolution(schema, submitted) == submitted
+    invalid = {"action": "complete", "note": "no"}
+    with pytest.raises(ValidationError) as error:
+        _validate_json_resolution(schema, invalid)
+    assert error.value.message_dict == {
+        "payload": [f"{invalid!r} is not valid under any of the given schemas"],
+    }
+
+
 @pytest.mark.parametrize("value", ["7", True, None])
 def test_json_authored_integer_is_not_coerced(value: Any) -> None:
-    schema = {"type": "object", "properties": {"amount": {"type": "integer"}}, "required": ["amount"]}
+    schema = _action_schema(
+        actions=("apply",),
+        verdicts={"apply": "COMPLETE"},
+        properties={"amount": {"type": "integer"}},
+        required=("amount",),
+    )
     with pytest.raises(ValidationError):
-        _validate_json_resolution(schema, {"amount": value})
+        _validate_json_resolution(schema, {"action": "apply", "amount": value})
 
 
 def test_json_schema_keeps_nested_constraints_and_does_not_insert_defaults() -> None:
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "$defs": {"row": {"type": "integer", "minimum": 2}},
-        "properties": {
+    schema = _action_schema(
+        actions=("apply",),
+        verdicts={"apply": "COMPLETE"},
+        properties={
             "rows": {"type": "array", "items": {"$ref": "#/$defs/row"}, "minItems": 1},
             "optional": {"type": "string", "default": "suggestion"},
         },
-        "required": ["rows"],
-    }
-    assert _validate_json_resolution(schema, {"rows": [2]}) == {"rows": [2]}
+        required=("rows",),
+    )
+    schema["$defs"] = {"row": {"type": "integer", "minimum": 2}}
+    assert _validate_json_resolution(schema, {"action": "apply", "rows": [2]}) == {"action": "apply", "rows": [2]}
     for payload in ({"rows": []}, {"rows": [1]}, {"rows": ["2"]}, {"rows": [2], "unknown": True}):
         with pytest.raises(ValidationError):
-            _validate_json_resolution(schema, payload)
+            _validate_json_resolution(schema, {"action": "apply", **payload})

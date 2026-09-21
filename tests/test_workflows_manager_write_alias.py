@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import router
 from django.utils import timezone
 from rebac import system_context
@@ -15,7 +16,6 @@ from angee.workflows.attempts import AttemptInput, AttemptResult, AttemptResultK
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.states import RunOrigin, StepRunStatus
 from tests.test_workflow_test_snapshots import _draft, _ReconcilingTestStep
-from tests.test_workflows_engine import _WriteSplitRouter
 from tests.test_workflows_gates import _decision_for, _gate_config, _open_gate_run
 from tests.test_workflows_triggers import _schedule_trigger
 from tests.workflows import (
@@ -27,18 +27,41 @@ from tests.workflows import (
     Workflow,
     WorkflowDispatch,
     WorkflowRun,
+    WorkflowWriteRouter,
     admit_workflow_actor,
     workflow_with_steps,
 )
+from tests.workflows import workflow_authorization_frontier as workflow_authorization_frontier
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture(autouse=True)
-def quiet_manager_publication(monkeypatch: pytest.MonkeyPatch) -> None:
+def quiet_manager_publication(monkeypatch: pytest.MonkeyPatch, workflow_authorization_frontier: None) -> None:
     """Keep committed publication callbacks independent of transport availability."""
 
     monkeypatch.setattr(managers, "enqueue_dispatch_publisher", lambda **kwargs: None)
+
+
+@pytest.mark.parametrize("entry", ["start", "start_test", "start_recovery", "test_setup_plan"])
+def test_actor_admission_rejects_non_default_database_before_queries(entry: str, django_assert_num_queries) -> None:
+    """Native REBAC admission cannot participate in a routed workflow write."""
+
+    owner = WorkflowRun.objects.db_manager("unsupported-workflow-writer")
+    actor = get_user_model()(pk=1)
+    workflow = Workflow(pk=1)
+    arguments = {
+        "start": (workflow, {"subject": None, "actor": actor}),
+        "start_test": (workflow, {"expected_revision": 0, "request_key": "probe", "subject": None, "actor": actor}),
+        "start_recovery": (StepAttempt(pk=1), {"request_key": "probe", "actor": actor}),
+        "test_setup_plan": (workflow, {"expected_revision": 0, "actor": actor}),
+    }
+    target, kwargs = arguments[entry]
+    with (
+        django_assert_num_queries(0),
+        pytest.raises(ValidationError, match="default authorization database is required"),
+    ):
+        getattr(owner, entry)(target, **kwargs)
 
 
 @pytest.mark.parametrize("bound", [False, True])
@@ -61,7 +84,7 @@ def test_start_keeps_anchor_or_bound_alias_through_initial_step_and_dispatch(
     if bound:
         workflow._state.db = "wrong-anchor"
     with monkeypatch.context() as patch:
-        patch.setattr(router, "routers", [_WriteSplitRouter()])
+        patch.setattr(router, "routers", [WorkflowWriteRouter("default")])
         run = owner.start(workflow, subject=None, actor=actor, input=JsonPresence(True, {"frozen": True}))
 
     with system_context(reason="manager alias start assertions"):
@@ -94,7 +117,7 @@ def test_start_test_keeps_alias_through_snapshot_lookup_and_duplicate_request(
     if bound:
         workflow._state.db = "wrong-anchor"
     with monkeypatch.context() as patch:
-        patch.setattr(router, "routers", [_WriteSplitRouter()])
+        patch.setattr(router, "routers", [WorkflowWriteRouter("default")])
         run = owner.start_test(
             workflow,
             expected_revision=workflow.draft_revision,
@@ -136,7 +159,7 @@ def test_setup_plan_keeps_snapshot_node_and_draft_lookup_on_selected_alias(
     with system_context(reason="snapshot node fixture"):
         snapshot_step = Step.objects.using("default").get(workflow_id=snapshot.pk, key=source_step.key)
     with monkeypatch.context() as patch:
-        patch.setattr(router, "routers", [_WriteSplitRouter()])
+        patch.setattr(router, "routers", [WorkflowWriteRouter("default")])
         plan = WorkflowRun.objects.db_manager("default").test_setup_plan(
             snapshot,
             expected_revision=snapshot.draft_revision,
@@ -177,7 +200,7 @@ def test_start_recovery_keeps_alias_through_authorization_graph_and_durable_star
     if bound:
         source._state.db = "wrong-anchor"
     with monkeypatch.context() as patch:
-        patch.setattr(router, "routers", [_WriteSplitRouter()])
+        patch.setattr(router, "routers", [WorkflowWriteRouter("default")])
         recovery = owner.start_recovery(source, request_key="retry", actor=actor)
         repeated = owner.start_recovery(source, request_key="retry", actor=actor)
 
@@ -203,7 +226,7 @@ def test_schedule_maintenance_keeps_alias_through_priming_claim_and_start(
     claimed = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=now)
     started = _schedule_trigger(config={"interval_seconds": 60}, next_fire_at=now)
     with monkeypatch.context() as patch:
-        patch.setattr(router, "routers", [_WriteSplitRouter()])
+        patch.setattr(router, "routers", [WorkflowWriteRouter("default")])
         owner = Trigger.objects.db_manager("default")
         assert owner.prime_due_schedules(timestamp=now) == 1
         assert owner.claim_due_schedule(claimed.pk, timestamp=now) is not None
@@ -240,7 +263,7 @@ def test_raw_delete_rejects_actor_hidden_retained_decision_under_split_router(
     # The explicit raw-delete alias must also replace the pre-existing binding.
     hidden = hidden.using("wrong-binding")
     with monkeypatch.context() as patch:
-        patch.setattr(router, "routers", [_WriteSplitRouter()])
+        patch.setattr(router, "routers", [WorkflowWriteRouter("default")])
         with pytest.raises(TypeError, match="Retained workflow Decisions"):
             hidden._raw_delete(using="default")
 

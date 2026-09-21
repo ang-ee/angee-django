@@ -641,7 +641,7 @@ def test_workflow_step_config_query_projects_legacy_and_preserves_invalid_raw_va
         models.QuerySet.update(Step._base_manager.filter(pk=step.pk), config="invalid root")
     projected = result_data(execute_schema(_console_schema(), query, {"id": step.sqid}, user=admin))
     assert projected["workflow_steps_by_pk"]["config"] == "invalid root"
-    assert projected["workflow_steps_by_pk"]["config_errors"] == {"config": ["Step config must be a JSON object."]}
+    assert projected["workflow_steps_by_pk"]["config_errors"] == {"config": ["Gate config must be an object."]}
     step.refresh_from_db()
     assert step.config == "invalid root"
 
@@ -1048,5 +1048,5 @@ def test_triggers_attach_to_lineage_heads_and_default_disabled(workflow_tables: 
 
         assert trigger.enabled is False
 
-        with pytest.raises(ValidationError, match="lineage head"):
+        with pytest.raises(ValidationError, match="Published workflow versions are immutable"):
             Trigger.objects.create(workflow=published, kind=TriggerKind.SCHEDULE)

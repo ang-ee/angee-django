@@ -3,11 +3,44 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 from rebac import system_context
 
+from angee.workflows.bindings import parse_binding
+from angee.workflows.configs import GateConfig
+from angee.workflows.decision_actions import ReviewAction
 from tests.conftest import execute_schema, result_data
 from tests.test_workflows import _console_schema, _platform_admin
 from tests.workflows import Step, Workflow
+
+
+def test_review_action_round_trips_json_arrays_with_strict_ordered_fields() -> None:
+    """Saved action arrays preserve author order without accepting sets or scalar coercion."""
+
+    action = ReviewAction(
+        value="approve", label="Approve", verdict="COMPLETE", fields=("note",), required=("note",),
+    )
+    assert ReviewAction.model_validate(action.model_dump(mode="json")) == action
+    for invalid in ({"note"}, [1], "note"):
+        with pytest.raises(ValidationError):
+            ReviewAction(value="approve", label="Approve", verdict="COMPLETE", fields=invalid)
+
+
+def test_gate_config_accepts_parsed_bindings_in_each_dynamic_field() -> None:
+    """Python producers and persisted mappings use the same binding grammar."""
+
+    fields = {
+        "slots": [{"assignees": ["auth/user:1"]}],
+        "payload": {},
+        "decision_schema": {},
+        "targets": [],
+        "record_access": [],
+        "clean": False,
+    }
+    declared = {name: {"kind": "constant", "value": value} for name, value in fields.items()}
+    parsed = {name: parse_binding(value) for name, value in declared.items()}
+    assert GateConfig(action="review", **parsed) == GateConfig(action="review", **declared)
+
 
 SAVE = """
 mutation SaveDefinition($workflow: ID!, $revision: Int!, $edit: WorkflowDefinitionEditInput!) {
@@ -507,7 +540,7 @@ def test_definition_adapter_does_not_catch_unexpected_errors(
     def fail(*args: object, **kwargs: object) -> object:
         raise RuntimeError("unexpected-command-failure")
 
-    monkeypatch.setattr(Workflow.objects, "apply_definition", fail)
+    monkeypatch.setattr(type(Workflow.objects), "apply_definition", fail)
     result = execute_schema(
         schema,
         SAVE,

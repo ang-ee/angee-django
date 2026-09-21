@@ -40,25 +40,17 @@ from tests.workflows import (
     StepRun,
     WorkflowDispatch,
     WorkflowRun,
+    WorkflowWriteRouter,
     advance_once,
     execute_started,
     run_to_terminal,
     start_run,
     workflow_with_steps,
 )
+from tests.workflows import workflow_authorization_frontier as workflow_authorization_frontier
 
 User = get_user_model()
 workflow_gate_record_access_tables = gate_tests.workflow_gate_record_access_tables
-
-
-class _WriteSplitRouter:
-    def db_for_read(self, model: type[Any], **hints: Any) -> str:
-        del model, hints
-        return "missing-read-replica"
-
-    def db_for_write(self, model: type[Any], **hints: Any) -> str:
-        del model, hints
-        return "default"
 
 
 @pytest.fixture(autouse=True)
@@ -186,6 +178,7 @@ def test_manager_decide_accepts_positive_and_negative_collection_results(
 def test_decide_uses_write_router_without_falling_through_to_read_replica(
     workflow_gate_tables: None,
     no_workflow_queue: None,
+    workflow_authorization_frontier: None,
 ) -> None:
     del workflow_gate_tables, no_workflow_queue
     reviewer = User.objects.create_user(username="decision-write-router")
@@ -196,7 +189,7 @@ def test_decide_uses_write_router_without_falling_through_to_read_replica(
     )
     decision = _decision_for(_open_gate_run(workflow), "gate")
 
-    with override_settings(DATABASE_ROUTERS=[_WriteSplitRouter()]):
+    with override_settings(DATABASE_ROUTERS=[WorkflowWriteRouter("default")]):
         result = Decision.objects.decide(
             decision.pk,
             actor=reviewer,
@@ -438,9 +431,10 @@ def test_locked_resolution_follows_fresh_recovery_evidence_to_original_gate(
         "recovery_capability",
         classmethod(lambda cls, *, attempt: RecoveryCapability(RecoveryMode.FRESH)),
     )
-    run_to_terminal(run)
+    run_to_terminal(run, allow_failed={run.pk})
     with system_context(reason="decision recovery source"):
         source = StepRun.objects.get(run=run, step__key="apply").current_attempt
+    assert source.error == "Retry this application from retained evidence."
     recovery = WorkflowRun.objects.start_recovery(source, request_key="decision-apply-retry", actor=reviewer)
     run_to_terminal(recovery)
     assert applied == [decision.pk]

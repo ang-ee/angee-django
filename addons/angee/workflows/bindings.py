@@ -269,6 +269,12 @@ def parse_binding(value: JsonValue) -> BindingNode:
     return _binding_adapter.validate_python(value)
 
 
+def is_binding(value: Any) -> bool:
+    """Return whether a value is an already parsed workflow binding."""
+
+    return isinstance(value, _Binding)
+
+
 def binding_error_locations(value: JsonValue, error: PydanticValidationError) -> tuple[BindingPath, ...]:
     """Remove Pydantic union branch tags while preserving exact stored binding keys."""
 

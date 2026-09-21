@@ -314,7 +314,9 @@ class ResourceEntry:
             values = self._values_for(record)
             for name in values:
                 if name not in group.dataset.headers:
-                    group.dataset.append_col([NOT_PROVIDED] * len(group.dataset), header=name)
+                    # Tablib invokes a callable singleton column; generate the
+                    # sentinel without treating its callable class as a factory.
+                    group.dataset.append_col([lambda _row: NOT_PROVIDED], header=name)
             group.dataset.append([xref, *(values.get(name, NOT_PROVIDED) for name in group.dataset.headers[1:])])
             group.source_rows.append(index)
         self._groups = tuple(groups.values())

@@ -47,6 +47,7 @@ from tests.workflows import (
     StepAttempt,
     StepRun,
     WorkflowDispatch,
+    WorkflowWriteRouter,
     admit_workflow_actor,
     advance_once,
     execute_started,
@@ -55,21 +56,13 @@ from tests.workflows import (
     workflow_table_setup,
     workflow_with_steps,
 )
+from tests.workflows import workflow_authorization_frontier as workflow_authorization_frontier
 
 POSTGRES_IDENTITY = pytest.mark.skipif(
     connection.vendor != "postgresql",
     reason="PostgreSQL Party/Handle serialization contract",
 )
 
-
-class _WriteSplitRouter:
-    def db_for_read(self, model: type[Any], **hints: Any) -> str:
-        del model, hints
-        return "missing-read-replica"
-
-    def db_for_write(self, model: type[Any], **hints: Any) -> str:
-        del model, hints
-        return "default"
 
 User = get_user_model()
 
@@ -210,8 +203,7 @@ def test_party_handle_review_delivers_exact_nonterminal_artifact_runs(
 
     monkeypatch.setattr(engine, "deliver", fail_broad_deliver)
 
-    with system_context(reason="review retained handle"):
-        getattr(link, disposition)()
+    getattr(link.with_actor(operator), disposition)()
 
     with system_context(reason="inspect retained handle delivery intent"):
         delivery = WorkflowDispatch.objects.get(
@@ -736,6 +728,7 @@ def test_identity_owner_checks_basis_and_rolls_back_all_changes(
 @pytest.mark.django_db(transaction=True)
 def test_identity_apply_uses_the_write_router_for_its_complete_lock_set(
     workflows_parties_tables: None,
+    workflow_authorization_frontier: None,
 ) -> None:
     del workflows_parties_tables
     actor = User.objects.create_user(username="identity-write-router")
@@ -743,7 +736,7 @@ def test_identity_apply_uses_the_write_router_for_its_complete_lock_set(
         party = Party.objects.create(display_name="Original", created_by=actor)
     _, current = Party.objects.identity_snapshot(str(party.sqid), actor=actor)
 
-    with override_settings(DATABASE_ROUTERS=[_WriteSplitRouter()]):
+    with override_settings(DATABASE_ROUTERS=[WorkflowWriteRouter("default")]):
         outcome, results = Party.objects.apply_identity(
             party_id=str(party.sqid),
             expected_facts_hash=canonical_json_sha256(current),

@@ -324,10 +324,10 @@ class InferenceMappingEngine(ExtractionEngine):
 
         mapping_model = cast(Any, model)
         prompt = mapping_prompt(parts, schema, config)
-        self.validate_model(model, role="mapping")
-        settings = _inference_settings(config, timeout=timeout)
         started = time.monotonic()
         try:
+            self.validate_model(model, role="mapping")
+            settings = _inference_settings(config, timeout=timeout)
             response, usage = mapping_model.infer(
                 [
                     ModelRequest(

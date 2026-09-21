@@ -1134,7 +1134,7 @@ def _activate_run_if_needed(run: Any, *, timestamp: datetime, alias: str) -> Non
 
 def _has_due_wait(run: Any, *, timestamp: datetime, alias: str) -> bool:
     return (
-        run.step_runs.using(alias)
+        run.step_runs.db_manager(alias)
         .filter(
             status=StepRunStatus.WAITING,
             wait_until__isnull=False,
@@ -1160,7 +1160,7 @@ def _route_completed_steps(run: Any, *, alias: str) -> None:
 
 def _terminal_step_runs(run: Any, *, alias: str) -> Iterable[Any]:
     return (
-        run.step_runs.using(alias)
+        run.step_runs.db_manager(alias)
         .select_related("step")
         .filter(status__in=list(StepRunStatus.TERMINAL))
         .filter(map_index=-1)
@@ -1179,7 +1179,7 @@ def _process_recovery_map_aggregate(run: Any, *, timestamp: datetime, alias: str
     if source_step_run.map_index < 0 or source.map_expansion_id is None:
         return
     recovered = (
-        run.step_runs.using(alias)
+        run.step_runs.db_manager(alias)
         .filter(
             step_id=source_step_run.step_id,
             map_index=source_step_run.map_index,
@@ -1195,7 +1195,7 @@ def _process_recovery_map_aggregate(run: Any, *, timestamp: datetime, alias: str
 
 
 def _process_map_steps(run: Any, *, timestamp: datetime, alias: str) -> bool:
-    locked_rows = list(run.step_runs.using(alias).lock_if_supported().select_related("step").order_by("pk"))
+    locked_rows = list(run.step_runs.db_manager(alias).lock_if_supported().select_related("step").order_by("pk"))
     map_rows = [
         row
         for row in locked_rows
@@ -1207,7 +1207,7 @@ def _process_map_steps(run: Any, *, timestamp: datetime, alias: str) -> bool:
     for step_run in map_rows:
         if step_run.status == StepRunStatus.SCHEDULED:
             fixture = (
-                run.test_fixtures.using(alias)
+                run.test_fixtures.db_manager(alias)
                 .filter(
                     step_id=step_run.step_id,
                     role=FixtureRole.OUTPUT,
@@ -1327,7 +1327,7 @@ def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[An
 
 
 def _route_success(run: Any, step_run: Any, *, alias: str) -> None:
-    outgoing = list(step_run.step.outgoing_edges.using(alias).select_related("target").order_by("pk"))
+    outgoing = list(step_run.step.outgoing_edges.db_manager(alias).select_related("target").order_by("pk"))
     by_target: dict[int, tuple[Any, list[Any]]] = {}
     for edge in outgoing:
         target, edges = by_target.setdefault(edge.target_id, (edge.target, []))
@@ -1335,14 +1335,14 @@ def _route_success(run: Any, step_run: Any, *, alias: str) -> None:
     for target, edges in by_target.values():
         if any(not edge.condition or edge.condition == step_run.outcome for edge in edges):
             _maybe_schedule_target(run, target, alias=alias)
-        elif target.incoming_edges.using(alias).exclude(source_id=step_run.step_id).exists():
+        elif target.incoming_edges.db_manager(alias).exclude(source_id=step_run.step_id).exists():
             _maybe_schedule_target(run, target, alias=alias)
         else:
             _ensure_skipped(run, target, previous=[step_run], alias=alias)
 
 
 def _route_skip(run: Any, step_run: Any, *, alias: str) -> None:
-    outgoing = list(step_run.step.outgoing_edges.using(alias).select_related("target").order_by("pk"))
+    outgoing = list(step_run.step.outgoing_edges.db_manager(alias).select_related("target").order_by("pk"))
     by_target: dict[int, tuple[Any, list[Any]]] = {}
     for edge in outgoing:
         target, edges = by_target.setdefault(edge.target_id, (edge.target, []))
@@ -1350,7 +1350,7 @@ def _route_skip(run: Any, step_run: Any, *, alias: str) -> None:
     for target, edges in by_target.values():
         if (
             any(not edge.condition for edge in edges)
-            or target.incoming_edges.using(alias).exclude(source_id=step_run.step_id).exists()
+            or target.incoming_edges.db_manager(alias).exclude(source_id=step_run.step_id).exists()
         ):
             _maybe_schedule_target(run, target, alias=alias)
         else:
@@ -1358,7 +1358,7 @@ def _route_skip(run: Any, step_run: Any, *, alias: str) -> None:
 
 
 def _route_done(run: Any, step_run: Any, *, alias: str) -> None:
-    for edge in step_run.step.outgoing_edges.using(alias).select_related("target").order_by("pk"):
+    for edge in step_run.step.outgoing_edges.db_manager(alias).select_related("target").order_by("pk"):
         if edge.condition and edge.condition != step_run.outcome:
             continue
         _maybe_schedule_target(run, edge.target, routed_row=step_run, alias=alias)
@@ -1425,7 +1425,7 @@ def _upstream_join_state(
 
     step_run_model = apps.get_model("workflows", "StepRun")
     by_source: dict[int, list[Any]] = {}
-    for edge in target.incoming_edges.using(alias).select_related("source").order_by("pk"):
+    for edge in target.incoming_edges.db_manager(alias).select_related("source").order_by("pk"):
         by_source.setdefault(edge.source_id, []).append(edge)
     previous: list[Any] = []
     statuses: list[Any | None] = []
@@ -1500,7 +1500,7 @@ def _same_step_run(left: Any | None, right: Any | None) -> bool:
 
 def _claim_due_steps(run: Any, *, timestamp: datetime, alias: str) -> list[int]:
     locked_rows = list(
-        run.step_runs.using(alias)
+        run.step_runs.db_manager(alias)
         .lock_if_supported()
         .select_related("step", "current_attempt", "current_map_expansion")
         .order_by("pk")
@@ -1521,7 +1521,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, alias: str) -> list[int]:
     if run.origin == RunOrigin.TEST:
         fixture_by_slot = {
             (fixture.step_id, fixture.item_index): fixture
-            for fixture in run.test_fixtures.using(alias).filter(role=FixtureRole.OUTPUT)
+            for fixture in run.test_fixtures.db_manager(alias).filter(role=FixtureRole.OUTPUT)
         }
     substituted = [
         row for row in due if (row.step_id, None if row.map_index == -1 else row.map_index) in fixture_by_slot
@@ -1650,7 +1650,7 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
     fixture = None
     if run.origin == RunOrigin.TEST and step_run.map_index >= 0:
         fixture = (
-            run.test_fixtures.using(alias)
+            run.test_fixtures.db_manager(alias)
             .filter(
                 step_id=step_run.step_id,
                 role=FixtureRole.MAP_ITEM,
@@ -1715,10 +1715,10 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
     )
     sources: dict[str, Any] = {}
     if run.origin == RunOrigin.RECOVERY:
-        for evidence in run.recovery_evidence.using(alias).select_related("step", "source_attempt").order_by("pk"):
+        for evidence in run.recovery_evidence.db_manager(alias).select_related("step", "source_attempt").order_by("pk"):
             source_attempt = evidence.source_attempt
             gate_decisions = (
-                list(source_attempt.decisions.using(alias).order_by("priority", "pk"))
+                list(source_attempt.decisions.db_manager(alias).order_by("priority", "pk"))
                 if source_attempt.result_kind == str(AttemptResultKind.SUSPEND)
                 else []
             )
@@ -1757,7 +1757,7 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
         settled_decisions: list[Any] = []
         if valid_attempt and attempt.result_kind == str(AttemptResultKind.SUSPEND):
             settled_decisions = list(
-                source.decisions.using(alias).filter(suspension_attempt_id=attempt.pk).order_by("priority", "pk")
+                source.decisions.db_manager(alias).filter(suspension_attempt_id=attempt.pk).order_by("priority", "pk")
             )
         settled_output = retained_gate_output(attempt, settled_decisions) if settled_decisions else None
         valid_done = valid_attempt and attempt.result_kind == str(AttemptResultKind.DONE)
@@ -1938,7 +1938,7 @@ def _numeric_budget_value(value: Any) -> float | None:
 def _update_run_status(run: Any, *, timestamp: datetime, alias: str) -> None:
     if run.status in RunStatus.TERMINAL:
         return
-    rows = run.step_runs.using(alias).select_related("step").all()
+    rows = run.step_runs.db_manager(alias).select_related("step").all()
     if run.origin == RunOrigin.TEST and run.test_scope == WorkflowScope.NODE:
         rows = [row for row in rows if row.step_id is not None and run.allows_test_step(row.step, using=alias)]
         active_without_wait = any(row.status in {StepRunStatus.SCHEDULED, StepRunStatus.STARTED} for row in rows)
@@ -1976,7 +1976,7 @@ def _update_run_status(run: Any, *, timestamp: datetime, alias: str) -> None:
         return
 
     failed = (
-        run.step_runs.using(alias)
+        run.step_runs.db_manager(alias)
         .filter(status__in=[StepRunStatus.FAILED, StepRunStatus.CANCELED], map_index=-1)
         .order_by("-pk")
         .first()
@@ -1989,7 +1989,7 @@ def _update_run_status(run: Any, *, timestamp: datetime, alias: str) -> None:
     ):
         source_step_run = run.recovery_source_attempt.step_run
         failed = (
-            run.step_runs.using(alias)
+            run.step_runs.db_manager(alias)
             .filter(
                 step_id=source_step_run.step_id,
                 map_index=source_step_run.map_index,
@@ -2005,7 +2005,7 @@ def _update_run_status(run: Any, *, timestamp: datetime, alias: str) -> None:
         )
         return
 
-    if run.step_runs.using(alias).exists():
+    if run.step_runs.db_manager(alias).exists():
         if run.status == RunStatus.PENDING:
             run.mark_running(using=alias)
         _finish_run_result(run, alias=alias)
@@ -2021,7 +2021,7 @@ def _finish_run_result(run: Any, *, alias: str) -> None:
 
     rules = run.workflow.result_rules
     terminals = list(
-        run.step_runs.using(alias)
+        run.step_runs.db_manager(alias)
         .select_related("step")
         .filter(
             map_index=-1,
@@ -2030,7 +2030,7 @@ def _finish_run_result(run: Any, *, alias: str) -> None:
         )
         .order_by("pk")
     )
-    outgoing_routes = list(run.workflow.edges.using(alias).values_list("source_id", "condition"))
+    outgoing_routes = list(run.workflow.edges.db_manager(alias).values_list("source_id", "condition"))
     unhandled_calls = [
         row
         for row in terminals
