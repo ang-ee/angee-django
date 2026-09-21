@@ -7,21 +7,13 @@ from typing import Annotated, Any, Literal, Mapping, Sequence, TypeAlias, cast
 
 from django.core.exceptions import ValidationError
 from jsonschema import Draft202012Validator
-from pydantic import AfterValidator, BaseModel
+from pydantic import AfterValidator, BaseModel, Field
 
 SchemaMode: TypeAlias = Literal["validation", "serialization"]
 ConcretePath: TypeAlias = Sequence[str | int]
 JsonScalarType: TypeAlias = Literal["string", "integer", "number", "boolean", "null"]
 JsonNumber: TypeAlias = int | float
 NumericRange: TypeAlias = tuple[JsonNumber | None, bool, JsonNumber | None, bool]
-
-
-def _validate_json_path(value: tuple[str | int, ...]) -> tuple[str | int, ...]:
-    """Require one non-empty path with exact non-blank string/integer segments."""
-
-    if not value or any(type(part) not in {str, int} or (isinstance(part, str) and not part) for part in value):
-        raise ValueError("JSON paths require non-empty typed segments.")
-    return value
 
 
 def _check_json_schema(value: dict[str, Any]) -> dict[str, Any]:
@@ -34,8 +26,23 @@ def _check_json_schema(value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-JsonPath: TypeAlias = Annotated[tuple[str | int, ...], AfterValidator(_validate_json_path)]
+JsonPath: TypeAlias = Annotated[
+    tuple[Annotated[str, Field(min_length=1)], ...],
+    Field(min_length=1, description="Object keys and array indices encoded as decimal strings, such as '0'."),
+]
 JsonSchemaDict: TypeAlias = Annotated[dict[str, Any], AfterValidator(_check_json_schema)]
+
+
+def _array_index(segment: str | int) -> int | None:
+    """Decode a nonnegative integer or its canonical decimal string spelling."""
+
+    if isinstance(segment, str):
+        try:
+            index = int(segment)
+        except ValueError:
+            return None
+        return index if index >= 0 and str(index) == segment else None
+    return segment if type(segment) is int and segment >= 0 else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,21 +77,24 @@ class DataContractNode:
     def matches(self, path: ConcretePath) -> bool:
         """Return whether a concrete string/index path is declared below this node."""
 
+        return self.at_path(path) is not None
+
+    def resolve_path(self, path: Sequence[str]) -> tuple[str | int, ...] | None:
+        """Resolve config strings to typed segments, preserving object keys verbatim.
+
+        Array indices use canonical decimal strings (``"0"``, ``"1"``, ...).
+        Binding paths already carry typed indices and use ``at_path`` directly.
+        """
+
         current = self
+        resolved: list[str | int] = []
         for segment in path:
-            if current.kind == "object" and isinstance(segment, str):
-                edge = next((edge for edge in current.fields if edge.key == segment), None)
-                if edge is None:
-                    return False
-                current = edge.contract
-                continue
-            if current.kind == "array" and isinstance(segment, int) and not isinstance(segment, bool) and segment >= 0:
-                if current.item is None:
-                    return False
-                current = current.item.contract
-                continue
-            return False
-        return True
+            part = _array_index(segment) if current.kind == "array" else segment
+            if part is None or (child := current.at_path((part,))) is None:
+                return None
+            resolved.append(part)
+            current = child
+        return tuple(resolved)
 
     def at_path(self, path: ConcretePath) -> "DataContractNode | None":
         """Return the existing path catalogue node for bounded type checks."""
@@ -220,14 +230,18 @@ def schema_data_contract(schema: Mapping[str, Any]) -> DataContract:
 
 
 def json_value_at_path(value: Any, path: ConcretePath, *, field: str) -> Any:
-    """Select one JSON value by an exact typed path without fallback or coercion."""
+    """Select JSON by object keys and nonnegative array indices.
+
+    Config paths encode indices as canonical decimal strings (``"0"``, ``"1"``,
+    ...); integer indices are also accepted. Numeric object keys remain strings.
+    """
 
     current = value
     for part in path:
         if isinstance(part, str) and isinstance(current, dict) and part in current:
             current = current[part]
-        elif type(part) is int and isinstance(current, list) and 0 <= part < len(current):
-            current = current[part]
+        elif isinstance(current, list) and (index := _array_index(part)) is not None and index < len(current):
+            current = current[index]
         else:
             raise ValidationError({field: "The declared JSON path does not exist."})
     return current

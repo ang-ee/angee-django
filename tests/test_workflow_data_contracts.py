@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
+import pytest
+from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_serializer, model_serializer
 
-from angee.workflows.data_contracts import model_data_contract, schema_data_contract
+from angee.workflows.data_contracts import json_value_at_path, model_data_contract, schema_data_contract
 from angee.workflows.decision_actions import ReviewAction, build_decision_action
 
 
@@ -19,6 +21,51 @@ class Payload(BaseModel):
     values: list[int]
     aliased: str = Field(serialization_alias="wire.name", validation_alias="input.name")
     literal_brackets: str = Field(alias="[]")
+
+
+def test_config_paths_resolve_decimal_indices_without_changing_numeric_object_keys() -> None:
+    schema = {
+        "type": "object",
+        "required": ["0"],
+        "properties": {
+            "0": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "required": ["01"],
+                    "properties": {"01": {"type": "string"}},
+                },
+            },
+        },
+    }
+    contract = schema_data_contract(schema)
+    path = ("0", "0", "01")
+    resolved = contract.catalogue.resolve_path(path)
+    assert resolved == ("0", 0, "01")
+    assert contract.guarantees_path(resolved)
+    assert not contract.matches_path(path)  # Binding paths still require typed indices.
+    value = {"0": [{"01": "public-id"}]}
+    assert json_value_at_path(value, path, field="id_path") == "public-id"
+    assert json_value_at_path(value, resolved, field="id_path") == "public-id"
+    assert contract.catalogue.resolve_path(("missing",)) is None
+    assert contract.catalogue.resolve_path(("0", "0", "01", "missing")) is None
+    with pytest.raises(ValidationError, match="does not exist"):
+        json_value_at_path(value, ("0", "1", "01"), field="id_path")
+
+
+@pytest.mark.parametrize("segment", ["-1", "01", "+0", " 0", "0.0", "²", "٠", "", "missing"])
+def test_config_paths_reject_noncanonical_array_indices(segment: str) -> None:
+    contract = schema_data_contract({"type": "array", "items": {"type": "string"}})
+    assert contract.catalogue.resolve_path((segment,)) is None
+    with pytest.raises(ValidationError, match="does not exist"):
+        json_value_at_path(["public-id"], (segment,), field="id_path")
+
+
+@pytest.mark.parametrize("segment", [-1, True, False, 0.0])
+def test_runtime_paths_reject_negative_boolean_and_float_indices(segment: int | float) -> None:
+    with pytest.raises(ValidationError, match="does not exist"):
+        json_value_at_path(["public-id"], (segment,), field="id_path")
 
 
 def test_modes_preserve_pydantic_aliases_defs_nullable_arrays_and_literal_keys() -> None:

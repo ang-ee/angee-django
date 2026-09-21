@@ -746,12 +746,7 @@ class JoinContinuation(StepImpl):
         alias = get_write_alias(type(step_run), instance=step_run)
         config = type(self).normalize_config(step_run.step.config)
         actor = step_run.run.execution_admission_actor(using=alias)
-        child_id = step_run.input
-        for component in config["child_id_path"]:
-            try:
-                child_id = child_id[component]
-            except (KeyError, IndexError, TypeError) as error:
-                raise ValidationError({"child": "Continuation input does not identify a child."}) from error
+        child_id = json_value_at_path(step_run.input, config["child_id_path"], field="child")
         if not isinstance(child_id, str) or not child_id:
             raise ValidationError({"child": "Continuation child identity must be a public id."})
         child, completion = apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).join_continuation(

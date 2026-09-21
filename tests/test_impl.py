@@ -24,6 +24,7 @@ from angee.base.impl import (
     model_config_form_spec,
     resolve_all_impl_classes,
 )
+from angee.workflows.configs import EmitConfig, JoinContinuationConfig
 from tests.conftest import Integration, OAuthClient, VcsBridge
 from tests.test_transitions import TransitionRouter
 
@@ -653,6 +654,22 @@ def test_typed_config_projects_nested_arrays_nullable_and_enum_contracts() -> No
     }
 
 
+def test_workflow_id_paths_project_as_lists_of_strings() -> None:
+    """Emit artifacts and continuation joins use the native string-list form shape."""
+
+    emit_spec = model_config_form_spec(EmitConfig, owner="EmitStep")
+    join_spec = model_config_form_spec(JoinContinuationConfig, owner="JoinContinuation")
+
+    artifact_id_path = emit_spec["properties"]["artifacts"]["items"]["properties"]["id_path"]
+    child_id_path = join_spec["properties"]["child_id_path"]
+    for path_spec in (artifact_id_path, child_id_path):
+        assert path_spec["type"] == "array"
+        assert path_spec["widget"] == "list"
+        assert path_spec["minItems"] == 1
+        assert path_spec["items"] == {"type": "string", "minLength": 1}
+        assert path_spec["presenceRequired"] is True
+
+
 def test_typed_config_omits_default_factory_without_invoking_it() -> None:
     """Build-time metadata never executes a dynamic Pydantic default factory."""
 
@@ -683,14 +700,17 @@ def test_typed_config_omits_default_factory_without_invoking_it() -> None:
 
 
 @pytest.mark.parametrize(
-    ("annotation", "detail"),
+    ("annotation", "field_path", "detail"),
     [
-        (str | int, "union"),
-        (dict[str, str], "additionalProperties"),
-        (tuple[str, int], "prefixItems"),
+        (str | int, "config.payload", "union"),
+        (list[str | int], "config.payload[]", "union"),
+        (dict[str, str], "config.payload", "mapping/additionalProperties"),
+        (tuple[str, int], "config.payload", "keywords prefixItems"),
     ],
 )
-def test_typed_config_rejects_unsupported_shapes_with_exact_path(annotation: object, detail: str) -> None:
+def test_typed_config_rejects_unsupported_shapes_with_exact_path(
+    annotation: object, field_path: str, detail: str,
+) -> None:
     """A shape FormSpec cannot preserve fails at the declaring field path."""
 
     UnsupportedConfig = type(
@@ -702,8 +722,9 @@ def test_typed_config_rejects_unsupported_shapes_with_exact_path(annotation: obj
     class UnsupportedImpl(ImplBase):
         config_model = UnsupportedConfig
 
-    with pytest.raises(ImproperlyConfigured, match=rf"UnsupportedImpl.*config\.payload.*{detail}"):
+    with pytest.raises(ImproperlyConfigured) as caught:
         UnsupportedImpl.config_form_spec()
+    assert str(caught.value) == f"UnsupportedImpl.config_model field {field_path!r} uses unsupported schema: {detail}."
 
 
 def test_typed_config_rejects_recursive_models_and_preserves_string_aliases() -> None:

@@ -320,8 +320,9 @@ class EmitConfig(WorkflowStepConfig):
             raise ValueError("Emit outcome must be a valid slug.") from error
         contract = schema_data_contract(self.output_schema)
         for binding in self.artifacts:
-            node = contract.catalogue.at_path(binding.id_path)
-            if not contract.guarantees_path(binding.id_path) or node is None or node.json_type != "string":
+            path = contract.catalogue.resolve_path(binding.id_path)
+            node = contract.catalogue.at_path(path) if path is not None else None
+            if path is None or not contract.guarantees_path(path) or node is None or node.json_type != "string":
                 raise ValueError("Every artifact id_path must be a guaranteed string in output_schema.")
             try:
                 apps.get_model(binding.model)

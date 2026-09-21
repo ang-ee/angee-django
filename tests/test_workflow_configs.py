@@ -205,6 +205,32 @@ def test_emit_artifact_paths_must_be_guaranteed_public_id_strings() -> None:
         EmitStep.validate_config(invalid)
 
 
+def test_emit_artifact_decimal_indices_retain_schema_presence_checks() -> None:
+    config = {
+        "output_schema": {
+            "type": "object",
+            "required": ["0"],
+            "properties": {"0": {"type": "array", "minItems": 1, "items": {"type": "string"}}},
+        },
+        "artifacts": [{"model": "auth.User", "id_path": ["0", "0"], "label": "Accepted user"}],
+    }
+    assert normalized_twice(EmitStep, config)["artifacts"][0]["id_path"] == ["0", "0"]
+    config["output_schema"]["properties"]["0"]["minItems"] = 0
+    with pytest.raises(ValidationError, match="guaranteed string"):
+        EmitStep.validate_config(config)
+
+
+@pytest.mark.parametrize("path", [[], [""], ["children", 0], ["children", True]])
+def test_join_config_requires_nonempty_string_path_segments(path: list[object]) -> None:
+    with pytest.raises(ValidationError, match="child_id_path"):
+        JoinContinuation.validate_config({
+            "child_id_path": path,
+            "expected_starter_class": "start_continuation",
+            "expected_output_schema": {"type": "object"},
+            "expected_outcomes": ["completed"],
+        })
+
+
 def test_database_command_replay_requires_an_explicit_operation_declaration() -> None:
     class UndeclaredDatabaseCommand(StepImpl):
         execution_mode = StepExecutionMode.DATABASE_COMMAND

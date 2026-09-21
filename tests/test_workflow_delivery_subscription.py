@@ -52,8 +52,17 @@ from tests.workflows import (
 User = get_user_model()
 
 
+@pytest.mark.parametrize(
+    ("child_id_path", "step_input"),
+    [
+        (["continuation_id"], {"continuation_id": "child"}),
+        (["children", "0", "id"], {"children": [{"id": "child"}]}),
+    ],
+)
 def test_continuation_join_uses_exponential_bounded_reconciliation(
     monkeypatch: pytest.MonkeyPatch,
+    child_id_path: list[str],
+    step_input: dict[str, Any],
 ) -> None:
     publication = SimpleNamespace(
         output_schema={"type": "object"},
@@ -61,16 +70,23 @@ def test_continuation_join_uses_exponential_bounded_reconciliation(
         result_rules=[{"outcome": "completed"}],
     )
     child = SimpleNamespace(workflow=publication)
-    monkeypatch.setattr(type(StepAttempt.objects), "join_continuation", lambda *args, **kwargs: (child, None))
+    joined_child_ids: list[str] = []
+
+    def join_continuation(*args: Any, **kwargs: Any) -> tuple[SimpleNamespace, None]:
+        joined_child_ids.append(kwargs["child_id"])
+        return child, None
+
+    monkeypatch.setattr(type(StepAttempt.objects), "join_continuation", join_continuation)
     step_run = SimpleNamespace(
         pk=1,
+        _state=SimpleNamespace(adding=False, db="default"),
         current_attempt=SimpleNamespace(lease_token="join-lease"),
-        input={"continuation_id": "child"},
-        run=SimpleNamespace(execution_admission_actor=lambda: object()),
+        input=step_input,
+        run=SimpleNamespace(execution_admission_actor=lambda *, using: object()),
         resume_state={},
         step=SimpleNamespace(
             config={
-                "child_id_path": ["continuation_id"],
+                "child_id_path": child_id_path,
                 "expected_starter_class": "start_continuation",
                 "expected_output_schema": {"type": "object"},
                 "expected_subject": "",
@@ -87,6 +103,7 @@ def test_continuation_join_uses_exponential_bounded_reconciliation(
         assert result.until == now + timedelta(seconds=expected)
         assert result.resume_state == {"join_reconcile_after": expected}
         step_run.resume_state = result.resume_state
+    assert joined_child_ids == ["child"] * 4
 
 
 def test_terminal_failed_continuation_routes_child_failed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,9 +117,10 @@ def test_terminal_failed_continuation_routes_child_failed(monkeypatch: pytest.Mo
     monkeypatch.setattr(type(StepAttempt.objects), "join_continuation", lambda *args, **kwargs: (child, completion))
     step_run = SimpleNamespace(
         pk=1,
+        _state=SimpleNamespace(adding=False, db="default"),
         current_attempt=SimpleNamespace(lease_token="join-lease"),
         input={"continuation_id": "child"},
-        run=SimpleNamespace(execution_admission_actor=lambda: object()),
+        run=SimpleNamespace(execution_admission_actor=lambda *, using: object()),
         step=SimpleNamespace(
             config={
                 "child_id_path": ["continuation_id"],
