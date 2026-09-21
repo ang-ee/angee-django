@@ -44,7 +44,7 @@ from rebac.relationships import delete_relationship
 from rebac.resources import to_object_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_read_alias, get_write_alias, related_on
 from angee.base.identity import (
     canonical_subject_ref,
     instance_from_public_id,
@@ -437,10 +437,13 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
     def for_subject(self, subject: Any) -> Self:
         """Return runs whose generic subject is ``subject``."""
 
-        content_type = ContentType.objects.db_manager(self.db).get_for_model(subject, for_concrete_model=False)
+        alias = (
+            get_write_alias(self.model, bound=self) if self._for_write else get_read_alias(self.model, bound=self)
+        )
+        content_type = ContentType.objects.db_manager(alias).get_for_model(subject, for_concrete_model=False)
         return cast(
             Self,
-            self.filter(
+            self.using(alias).filter(
                 subject_content_type=content_type,
                 subject_object_id=subject.pk,
             ),

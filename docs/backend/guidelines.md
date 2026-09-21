@@ -139,7 +139,10 @@ Use these owners instead of maintaining another contract in an addon:
   instance's `_state.db`, then `router.db_for_write(model, instance=instance)`.
   Derive once at the operation's entry owner and pass the alias down through
   every nested read, lock, transaction, callback, refresh, relation and owner
-  call. Unqualified `atomic`/`on_commit`, `Model.objects` inside a write owner,
+  call. Pure reads that never feed a write use [`get_read_alias`](../../angee/base/db.py);
+  manager/queryset `.db` reads belong only inside that database owner. Any read
+  feeding a write uses the write owner's selected alias. Unqualified
+  `atomic`/`on_commit`, `Model.objects` inside a write owner,
   reverse related managers, `refresh_from_db`, ContentType lookups, and
   `@transaction.atomic` decorators on instance methods can silently choose the
   default or read alias; bind them explicitly to the operation's write alias.
@@ -170,14 +173,63 @@ Use these owners instead of maintaining another contract in an addon:
     model constraints still run. Unsupported validation without an alias-bound
     native form, including `unique_for_date`/`month`/`year`, fails closed on
     non-default aliases.
-  - django-zed-rebac `resolve_subjects`, grant/revoke, and `write_relationships`
-    have no alias contract. Workflow actor admission, Decision relationship
-    operations, and resource loading require the default database until the
-    upstream owners support the operation alias. Keep these guards at their
-    entry owners; instance pinning cannot make an unbound upstream query safe.
+  - django-zed-rebac `check_access`/`check_new`, `resolve_subjects`, grant/revoke,
+    and `write_relationships` have no alias contract. This includes modeled
+    resource reads: the local backend's direct/arrow field-backed checks call
+    `FieldBacking.queryset` without `using`, so these are not merely reads of an
+    independent authorization store. Workflow actor admission, Decision relationship
+    operations, resource loading, IAM memberships/roles and admin bootstrap,
+    spaces visibility, project binding mirrors, portfolio reader grants,
+    proposal relationships, work personal-queue/duplicate membership changes,
+    content/planning factories and actions that invoke those checks, authorized
+    GraphQL deletion, IMAP sampling admission, and OIDC/external-account ownership
+    require the default database until the upstream owners support the operation
+    alias. Keep these guards at their entry owners; instance pinning cannot make
+    an unbound upstream query safe. Native ORM membership writes are separately
+    alias-bound; a bound through-table manager does not route REBAC side effects.
+    The same upstream limitation applies to its pre-save/pre-delete permission
+    checks. Excluded [`storage write entries`](../../addons/angee/storage/models.py)
+    (`FolderManager.create_in_drive`, `FileManager.draft`, `File.finalize`,
+    `File._authorize_push`, and `File.delete`) still call these unbound checks;
+    their alias-aware persistence does not close authorization routing. They
+    require entry guards or upstream alias support in the next storage sweep.
+  - Django `Field.pre_save(instance, add)` receives no database alias, both from
+    `Model.save` and the insert compiler used by `bulk_create`. An explicit
+    `save(using=...)` can therefore disagree with the instance/write-router alias
+    seen by implicit fractional-rank allocation. The existing allocator is now
+    exposed as [`FractionalRankField.get_append_rank_for_instance`](../../angee/base/fields.py):
+    allocate on the operation alias and assign the rank before saving/bulk
+    insertion. `get_append_rank`/`get_rank_between` only perform arithmetic;
+    their callers bind neighbor queries. Explicit preallocation closes owned
+    task-creation paths without a model-save override. Rank-omitting Project
+    creation in [`ProjectManager.from_task`](../../addons/angee/projects/models.py)
+    and [`Proposal.create_track`](../../addons/angee/proposals/models.py) remains
+    affected when portfolio contributes `Project.sort_order`: these factories
+    are default-only for authorization, but implicit rank allocation can still
+    consult a conflicting write router. The declaring addon needs an explicit
+    preallocation seam before claiming that path is closed. Arbitrary rank-omitting
+    native saves with a conflicting explicit alias remain a Django hook frontier;
+    `pre_save` cannot detect that disagreement or enforce a non-default guard.
+  - django-reversion's **store alias** belongs to its `Revision` write router;
+    the versioned row's alias is the independent `Version.db`/`model_db` value.
+    [`RevisionMixin`](../../angee/base/mixins.py) binds version queries and revision
+    creation to that store and saves the model on its own selected alias. Native
+    post-save signals carry the model alias into snapshots. Separate databases
+    have separate transactions; this is not a cross-database atomicity guarantee.
   - The agent inference/provider and session owners still lack complete alias
     propagation. Their [`workflow step entries`](../../addons/angee/workflows_agents/steps.py)
     reject non-default execution until those owners complete that migration.
+    The direct [`session entries`](../../addons/angee/workflows_agents/sessions.py)
+    remain open debt: they need alias propagation and their own entry guards;
+    the workflow-step guard does not protect direct callers.
+  - [`Platform permission-schema cleanup`](../../addons/angee/platform/permissions.py)
+    still uses unbound schema queries and `PackageManagedRecord.target` generic
+    relations. It needs an upstream alias contract or a default-only entry guard
+    before claiming routed lifecycle support. This excluded lifecycle path and
+    the excluded agent-session transactions are the individually reasoned
+    exemptions in [`tests/test_layering.py`](../../tests/test_layering.py), not
+    evidence that their routing is complete. The guard rejects new violations
+    by default and fails on stale entries.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction

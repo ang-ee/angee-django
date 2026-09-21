@@ -708,7 +708,7 @@ def integration_create_attrs(
         "vendor": resolve_action_target(
             Vendor, data.vendor, reason=f"{reason}.vendor", queryset=Vendor.objects.using(using)
         ),
-        "owner": _user_from_public_id(data.owner),
+        "owner": _user_from_public_id(data.owner, using=using),
     }
     if hasattr(data, "display_name"):
         attrs["display_name"] = data.display_name
@@ -749,7 +749,7 @@ def apply_integration_patch_fields(
         )
         provided.add("vendor")
     if data.owner is not strawberry.UNSET:
-        target.owner = _user_from_public_id(data.owner)
+        target.owner = _user_from_public_id(data.owner, using=using)
         provided.add("owner")
     if data.credential is not strawberry.UNSET:
         target.credential = (
@@ -1165,7 +1165,7 @@ class IntegrateCredentialMutation:
 
         using = get_write_alias(Credential, using=None)
 
-        user = _session_user(info) if data.user is None else _user_from_public_id(data.user)
+        user = _session_user(info) if data.user is None else _user_from_public_id(data.user, using=using)
         credential = Credential.objects.db_manager(using).create_local_credential(
             user, kind=data.kind, name=data.name, material=_credential_material(data)
         )

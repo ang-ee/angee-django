@@ -78,9 +78,7 @@ def _reconcile_project_folder(
     """Schedule mirrors for both sides of a Project.folder edit."""
 
     del sender, kwargs
-    if raw or (
-        not created and update_fields is not None and not {"folder", "folder_id"}.intersection(update_fields)
-    ):
+    if raw or (not created and update_fields is not None and not {"folder", "folder_id"}.intersection(update_fields)):
         return
     project_ref = to_object_ref(instance)
     previous_id = getattr(instance, "_projects_previous_folder_id", _UNTRACKED)
@@ -91,7 +89,7 @@ def _reconcile_project_folder(
             reconcile_on_commit(
                 project_pk=instance.pk,
                 project_ref=project_ref,
-                target=canonical_record_target(previous),
+                target=canonical_record_target(previous, using=using),
                 using=using,
             )
     if instance.folder_id is not None:
@@ -99,7 +97,7 @@ def _reconcile_project_folder(
         reconcile_on_commit(
             project_pk=instance.pk,
             project_ref=project_ref,
-            target=canonical_record_target(folder),
+            target=canonical_record_target(folder, using=using),
             using=using,
         )
 

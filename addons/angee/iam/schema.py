@@ -28,7 +28,9 @@ from rebac.schema import Definition, Permission, Relation, Schema, render_allowe
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.db import get_write_alias
 from angee.base.identity import instance_from_public_id, public_subject_ref
+from angee.base.permissions import require_authorization_database
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
@@ -546,14 +548,14 @@ def _group_for_resource_id(value: str, queryset: QuerySet[Any]) -> Any:
     return instance
 
 
-def _delete_instance(instance: Any) -> Any | None:
+def _delete_instance(instance: Any, *, using: str) -> Any | None:
     """Delete ``instance`` in Hasura ``delete_<res>_by_pk`` form."""
 
     preview = DeletePreview.from_instance(instance)
     if preview.has_blockers:
         return None
     pk = instance.pk
-    instance.delete()
+    instance.delete(using=using)
     instance.pk = pk
     return instance
 
@@ -561,85 +563,96 @@ def _delete_instance(instance: Any) -> Any | None:
 def _delete_user_preview(value: str, *, confirm: bool) -> DeletePreview:
     """Return or apply the authored user cascade delete preview."""
 
-    with transaction.atomic():
-        instance = _user_for_resource_id(str(value), write_queryset(User))
+    using = get_write_alias(User)
+    with transaction.atomic(using=using):
+        instance = _user_for_resource_id(str(value), write_queryset(User, using=using))
         preview = DeletePreview.from_instance(instance)
         if confirm and not preview.has_blockers:
-            instance.delete()
+            instance.delete(using=using)
         return preview
 
 
 class IAMUserWriteBackend:
     """Admin write semantics for the Hasura ``users`` resource."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, using: str | None = None) -> Any:
         """Create one user through Django's password-hashing manager."""
 
         require_platform_admin(info)
         payload = dict(data)
         password = payload.pop("password")
-        with transaction.atomic():
-            return User.objects.create_user(password=password, **payload)
+        using = get_write_alias(User, using=using)
+        with transaction.atomic(using=using):
+            return User.objects.db_manager(using).create_user(password=password, **payload)
 
-    def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
+    def update(
+        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, using: str | None = None,
+    ) -> Any:
         """Patch one user, hashing ``password`` when supplied."""
 
         require_platform_admin(info)
         payload = dict(data)
         password = payload.pop("password", None)
-        with transaction.atomic():
-            user = _user_for_resource_id(pk, write_queryset(User))
+        using = get_write_alias(User, using=using)
+        with transaction.atomic(using=using):
+            user = _user_for_resource_id(pk, write_queryset(User, using=using))
             for field, value in payload.items():
                 setattr(user, field, value)
             update_fields = set(payload)
             if password:
                 user.set_password(password)
                 update_fields.add("password")
-            user.full_clean()
+            user.full_clean_for_write(using=using)
             if not update_fields:
                 return user
-            user.save(update_fields=update_fields)
+            user.save(using=using, update_fields=update_fields)
             return user
 
-    def delete(self, info: strawberry.Info, pk: str) -> Any | None:
+    def delete(self, info: strawberry.Info, pk: str, *, using: str | None = None) -> Any | None:
         """Delete one user by public id and return the deleted row."""
 
         require_platform_admin(info)
-        with transaction.atomic():
-            return _delete_instance(_user_for_resource_id(pk, write_queryset(User)))
+        using = get_write_alias(User, using=using)
+        with transaction.atomic(using=using):
+            return _delete_instance(_user_for_resource_id(pk, write_queryset(User, using=using)), using=using)
 
 
 class IAMGroupWriteBackend:
     """Admin write semantics for the Hasura ``groups`` resource."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, using: str | None = None) -> Any:
         """Create one IAM group."""
 
         require_platform_admin(info)
-        with transaction.atomic():
+        using = get_write_alias(Group, using=using)
+        with transaction.atomic(using=using):
             group = Group(**data)
-            group.full_clean()
-            group.save()
+            group.full_clean_for_write(using=using)
+            group.save(using=using)
             return group
 
-    def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
+    def update(
+        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, using: str | None = None,
+    ) -> Any:
         """Patch one IAM group."""
 
         require_platform_admin(info)
-        with transaction.atomic():
-            group = _group_for_resource_id(pk, write_queryset(Group))
+        using = get_write_alias(Group, using=using)
+        with transaction.atomic(using=using):
+            group = _group_for_resource_id(pk, write_queryset(Group, using=using))
             for field, value in data.items():
                 setattr(group, field, value)
-            group.full_clean()
-            group.save()
+            group.full_clean_for_write(using=using)
+            group.save(using=using)
             return group
 
-    def delete(self, info: strawberry.Info, pk: str) -> Any | None:
+    def delete(self, info: strawberry.Info, pk: str, *, using: str | None = None) -> Any | None:
         """Delete one IAM group by public id."""
 
         require_platform_admin(info)
-        with transaction.atomic():
-            return _delete_instance(_group_for_resource_id(pk, write_queryset(Group)))
+        using = get_write_alias(Group, using=using)
+        with transaction.atomic(using=using):
+            return _delete_instance(_group_for_resource_id(pk, write_queryset(Group, using=using)), using=using)
 
 
 def _admin_actor(info: strawberry.Info) -> bool:
@@ -907,10 +920,7 @@ class IAMPermissionHubMutation:
     ) -> bool:
         """Grant a declared role to one concrete IAM subject."""
 
-        with (
-            system_context(reason="iam.graphql.permission_hub.grant_role"),
-            transaction.atomic(),
-        ):
+        with system_context(reason="iam.graphql.permission_hub.grant_role"):
             _grant_role_owner(
                 subject=subject,
                 role=role,
@@ -923,10 +933,7 @@ class IAMPermissionHubMutation:
     def revoke_role(self, subject: str, role: str, caveat_name: str = "") -> bool:
         """Revoke the selected caveated or uncaveated role tuple."""
 
-        with (
-            system_context(reason="iam.graphql.permission_hub.revoke_role"),
-            transaction.atomic(),
-        ):
+        with system_context(reason="iam.graphql.permission_hub.revoke_role"):
             return _revoke_role_owner(subject=subject, role=role, caveat_name=caveat_name)
 
 
@@ -945,8 +952,10 @@ class IAMGroupMembershipMutation:
     ) -> bool:
         """Add one existing canonical user subject to an IAM group."""
 
-        group = _group_for_resource_id(str(group_id), _group_queryset(info).with_action("write"))
-        with transaction.atomic():
+        using = get_write_alias(Group)
+        require_authorization_database(using, operation="IAM group membership")
+        group = _group_for_resource_id(str(group_id), _group_queryset(info).using(using).with_action("write"))
+        with transaction.atomic(using=using):
             group.add_member(
                 subject,
                 caveat_name=caveat_name,
@@ -964,8 +973,10 @@ class IAMGroupMembershipMutation:
     ) -> bool:
         """Remove the exact membership tuple, including a stale user subject."""
 
-        group = _group_for_resource_id(str(group_id), _group_queryset(info).with_action("write"))
-        with transaction.atomic():
+        using = get_write_alias(Group)
+        require_authorization_database(using, operation="IAM group membership")
+        group = _group_for_resource_id(str(group_id), _group_queryset(info).using(using).with_action("write"))
+        with transaction.atomic(using=using):
             return group.remove_member(subject, caveat_name=caveat_name)
 
 

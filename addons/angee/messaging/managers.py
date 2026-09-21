@@ -35,13 +35,13 @@ from zoneinfo import ZoneInfo
 from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.core.exceptions import ImproperlyConfigured
-from django.db import IntegrityError, connections, models, router, transaction
+from django.db import IntegrityError, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
 from rebac import PermissionDenied, current_actor, system_context
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_read_alias, get_write_alias, related_on
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import canonical_record_target
@@ -1320,18 +1320,16 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
         if resolved_user_id is None:
             return False
+        using = get_read_alias(self.model, bound=self, instance=message)
         follower = (
-            self.model._base_manager.db_manager(self._db)
+            self.model._base_manager.db_manager(using)
             .filter(thread_id=message.thread_id, user_id=resolved_user_id)
             .select_related("last_read_message")
             .first()
         )
         if follower is None:
             return False
-        subtype_using = self._db
-        if subtype_using is None:
-            subtype_using = router.db_for_read(message._meta.get_field("subtype").related_model)
-        if not follower.is_subscribed_to(related_on(message, "subtype", using=subtype_using, required=False)):
+        if not follower.is_subscribed_to(related_on(message, "subtype", using=using, required=False)):
             return False
         if follower.last_read_message is None:
             return True

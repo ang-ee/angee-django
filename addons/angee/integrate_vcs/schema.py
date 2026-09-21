@@ -13,6 +13,7 @@ from rebac import system_context
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.db import get_write_alias
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
@@ -277,8 +278,9 @@ class VcsBridgeCreateMutation:
     def create_vcs_bridge(self, data: VcsBridgeInput) -> VcsBridgeType:
         """Create a VCS child row directly."""
 
+        using = get_write_alias(VcsBridge)
         attrs = {
-            **integration_create_attrs(data, reason="integrate.graphql.vcs_bridge.create"),
+            **integration_create_attrs(data, reason="integrate.graphql.vcs_bridge.create", using=using),
             "backend_class": VcsBridge.impl_key_for(
                 "backend_class",
                 None if data.backend_class is strawberry.UNSET else data.backend_class,
@@ -288,8 +290,8 @@ class VcsBridgeCreateMutation:
         }
         if data.config is not strawberry.UNSET:
             attrs["config"] = data.config
-        with system_context(reason="integrate.graphql.vcs_bridge.create"), transaction.atomic():
-            bridge = VcsBridge.objects.create(**attrs)
+        with system_context(reason="integrate.graphql.vcs_bridge.create"), transaction.atomic(using=using):
+            bridge = VcsBridge.objects.using(using).create(**attrs)
         return cast(VcsBridgeType, bridge)
 
 
@@ -301,13 +303,15 @@ class VcsBridgeUpdateMutation:
     def update_vcs_bridge(self, data: VcsBridgePatch) -> VcsBridgeType:
         """Update a VCS child row, merging supplied config keys."""
 
+        using = get_write_alias(VcsBridge)
         with (
             action_target(
                 VcsBridge,
                 data.id,
+                using=using,
                 reason="integrate.graphql.vcs_bridge.update",
             ) as bridge,
-            transaction.atomic(),
+            transaction.atomic(using=using),
         ):
             if data.backend_class is not strawberry.UNSET:
                 bridge.set_impl_key("backend_class", data.backend_class, default="local")

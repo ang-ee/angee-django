@@ -43,7 +43,12 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 [`tests/test_layering.py`](../tests/test_layering.py) also guards bare single-row
 FK reload expressions in production core/addon source; its AST check points to
 `related_on` and documents the excluded scoped, locking, bulk, and historical
-queries that retain their native owners.
+queries that retain their native owners. Its write-routing guard also detects
+direct Django router calls and manager/queryset `.db` reads outside the database
+owner, unbound transaction boundaries in syntactically identified write modules
+(including save/delete overrides), and addon write calls to
+`full_clean` instead of `full_clean_for_write`. The check documents its syntax
+limits and exact legacy exemptions; it does not prove complete alias dataflow.
 
 PostgreSQL concurrency behavior also needs the database-backed lane in
 [reusable checks](../.github/workflows/reusable-checks.yml). SQLite results do not

@@ -159,24 +159,30 @@ def test_direct_counter_draw_preserves_alias_precedence(
     assert routing.writes == []
 
 
-@pytest.mark.parametrize("bound", [False, True])
-def test_preview_keeps_the_sequence_read_alias(
-    sequence_tables: None, monkeypatch: pytest.MonkeyPatch, bound: bool
+@pytest.mark.parametrize("entry", ["router", "manager", "using"])
+def test_preview_keeps_the_sequence_write_alias(
+    sequence_tables: None, monkeypatch: pytest.MonkeyPatch, entry: str
 ) -> None:
-    """Advisory reads stay read-routed while their counter inherits that alias."""
+    """A preview reads the same writer as allocation, without reserving a number."""
 
     del sequence_tables
     _make_sequence(key="preview", name="Preview", template="{number}", preview_enabled=True)
     assert _draw("preview") == "1"
-    routing = _SequenceRouter(read_sequence=not bound)
-    manager = Sequence.objects.db_manager("default") if bound else Sequence.objects
+    routing = _SequenceRouter(write_sequence=entry == "router")
+    manager = Sequence.objects
+    kwargs = {}
+    if entry == "manager":
+        manager = manager.db_manager("default")
+    elif entry == "using":
+        manager = manager.db_manager("wrong_manager")
+        kwargs["using"] = "default"
 
     with monkeypatch.context() as patch:
         patch.setattr(router, "routers", [routing])
-        assert manager.preview_next("preview") == "2"
+        assert manager.preview_next("preview", **kwargs) == "2"
 
-    assert routing.reads == ([] if bound else [Sequence])
-    assert routing.writes == []
+    assert routing.reads == []
+    assert routing.writes == ([Sequence] if entry == "router" else [])
 
 
 def test_missing_key_fails_fast(sequence_tables: None) -> None:

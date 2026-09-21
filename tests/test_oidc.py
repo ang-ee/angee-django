@@ -731,6 +731,10 @@ def test_oidc_email_match_fails_loud_without_people_scope(monkeypatch: pytest.Mo
             return []
 
     class Manager:
+        def db_manager(self, using: str) -> Manager:
+            assert using == "default"
+            return self
+
         def all(self) -> QuerySet:
             return QuerySet()
 
@@ -741,7 +745,7 @@ def test_oidc_email_match_fails_loud_without_people_scope(monkeypatch: pytest.Mo
     resolver = object.__new__(identity.OidcIdentityResolver)
 
     with pytest.raises(AttributeError, match="people"):
-        resolver._find_by_email("someone@example.com")
+        resolver._find_by_email("someone@example.com", using="default")
 
 
 @pytest.mark.django_db(transaction=True)

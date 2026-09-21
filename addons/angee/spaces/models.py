@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.utils.text import slugify
 from rebac import (
@@ -30,9 +31,11 @@ from rebac import (
 )
 from rebac.types import RelationshipFilter
 
+from angee.base.db import get_write_alias
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
 from angee.base.models import AngeeModel
+from angee.base.permissions import require_authorization_database
 from angee.parties.mixins import ScoredLinkMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 
@@ -91,11 +94,18 @@ class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the group with a unique slug and reconcile its reader tuple."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        require_authorization_database(
+            using,
+            operation="Group visibility relationship writes",
+            error_class=ImproperlyConfigured,
+        )
+        kwargs["using"] = using
         adding = self._state.adding
         loaded_visibility = getattr(self, "_loaded_visibility", _NEVER_LOADED)
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             if not self.slug:
-                self.slug = self._available_slug()
+                self.slug = self._available_slug(using=using)
                 update_fields = kwargs.get("update_fields")
                 if update_fields is not None:
                     kwargs["update_fields"] = tuple(
@@ -110,14 +120,14 @@ class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
                 self._reconcile_public_reader()
         self._loaded_visibility = self.visibility
 
-    def _available_slug(self) -> str:
+    def _available_slug(self, *, using: str) -> str:
         """Return the first name-derived slug unused in the shared Group table."""
 
         slug_field = self._meta.get_field("slug")
         max_length = slug_field.max_length or 50
         base = slugify(self.name)[:max_length] or "group"
         owner_model = slug_field.model
-        candidates = owner_model.system_queryset(lock=())
+        candidates = owner_model.system_queryset(using=using, lock=())
         if self.pk is not None:
             candidates = candidates.exclude(pk=self.pk)
 

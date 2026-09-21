@@ -459,7 +459,14 @@ class HistoryMixin(models.Model):
 
 
 class RevisionMixin(models.Model):
-    """Mark a model as tracked by django-reversion snapshots."""
+    """Track snapshots in django-reversion's independently routed store.
+
+    The Revision write router owns the store alias for both Revision and Version
+    rows. It is distinct from the versioned model's alias (Version.db), passed
+    as model_db to native version queries and supplied by Django's post_save
+    signal when recording a snapshot. A separate store is not a distributed
+    transaction with the model database.
+    """
 
     revisioned_fields: ClassVar[tuple[str, ...]] = ()
     """Model field names registered with django-reversion."""
@@ -473,7 +480,8 @@ class RevisionMixin(models.Model):
     def revisions(self) -> Any:
         """Return this row's django-reversion versions newest-first."""
 
-        versions = reversion.models.Version.objects.get_for_object(
+        store_alias = get_write_alias(reversion.models.Revision)
+        versions = reversion.models.Version.objects.db_manager(store_alias).get_for_object(
             self, model_db=get_write_alias(type(self), instance=self)
         )
         return versions.select_related("revision")
@@ -495,7 +503,8 @@ class RevisionMixin(models.Model):
                 reverted.append(name)
         if not reverted:
             return
-        with reversion.create_revision(using=alias):
+        store_alias = get_write_alias(reversion.models.Revision)
+        with transaction.atomic(using=alias), reversion.create_revision(using=store_alias):
             self.save(using=alias, update_fields=update_fields_with_auto_now(self, reverted))
             reversion.set_comment(f"Reverted to revision {version.revision_id}.")
 

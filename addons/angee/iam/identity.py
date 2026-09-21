@@ -176,12 +176,12 @@ def user_principal(principal_id: str) -> Any:
     raise ValueError(f"User principal {principal_id!r} was not found.")
 
 
-def user_from_public_id(user_id: Any) -> Any:
+def user_from_public_id(user_id: Any, *, using: str | None = None) -> Any:
     """Return the user addressed by one GraphQL public id, or raise."""
 
     user_model = get_user_model()
     with system_context(reason="iam.identity.user.lookup"):
-        user = instance_from_public_id(user_model, str(user_id), queryset=user_model._default_manager.all())
+        user = instance_from_public_id(user_model, str(user_id), queryset=user_model._default_manager.using(using))
     if user is None:
         raise ValueError(f"User {user_id!s} was not found.")
     return user

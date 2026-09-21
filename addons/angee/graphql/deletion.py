@@ -17,7 +17,9 @@ from django.db.models.deletion import (
 from rebac import current_actor, system_context
 from rebac.resources import model_resource_type
 
+from angee.base.db import get_write_alias
 from angee.base.identity import public_id_of
+from angee.base.permissions import require_authorization_database
 from angee.base.scoping import read_scoped_queryset
 from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -150,14 +152,17 @@ class DeletePreview:
     """Deleted row returned internally to mutation envelopes, never exposed in SDL."""
 
     @classmethod
-    def from_instance(cls, instance: models.Model, actor: Any | None = None) -> DeletePreview:
+    def from_instance(
+        cls, instance: models.Model, actor: Any | None = None, *, using: str | None = None,
+    ) -> DeletePreview:
         """Return Django's cascade forecast for ``instance``.
 
         Callers should run previews inside the same transaction as the eventual
         delete so fast-delete counts and visible rows share one database snapshot.
         """
 
-        collector = Collector(using=instance._state.db or "default")
+        alias = get_write_alias(type(instance), using=using, instance=instance)
+        collector = Collector(using=alias)
         blocked: list[DeletePreviewGroup] = []
         try:
             collector.collect([instance])
@@ -287,6 +292,7 @@ def delete_by_public_id(
     queryset: models.QuerySet[models.Model] | None = None,
     before_delete: Callable[[models.Model], None] | None = None,
     reason: str | None = None,
+    using: str | None = None,
 ) -> DeletePreview:
     """Preview, then optionally delete, one public-id-addressed model row.
 
@@ -295,12 +301,15 @@ def delete_by_public_id(
     already gated the request actor.
     """
 
+    alias = get_write_alias(model, using=using, bound=queryset)
+    if confirm and reason is None and model_resource_type(model):
+        require_authorization_database(alias, operation="Authorized model deletion")
     context = system_context(reason=reason) if reason is not None else nullcontext()
-    with context, transaction.atomic():
+    with context, transaction.atomic(using=alias):
         instance = require_instance_for_id(
             model,
             public_id,
-            queryset=queryset if queryset is not None else model._default_manager.all(),
+            queryset=(queryset if queryset is not None else model._default_manager.all()).using(alias),
         )
         preview = DeletePreview.from_instance(instance)
         if confirm and not preview.has_blockers:
@@ -308,7 +317,7 @@ def delete_by_public_id(
                 before_delete(instance)
             deleted_pk = instance.pk
             try:
-                instance.delete()
+                instance.delete(using=alias)
             except (ProtectedError, RestrictedError):
                 preview = DeletePreview.from_instance(instance)
             else:
@@ -382,7 +391,7 @@ class _PreviewRows:
 
         groups: dict[type[models.Model], _PreviewRows] = {}
         for model, rows in collector.data.items():
-            preview = cls.from_collected(root, model, rows, actor)
+            preview = cls.from_collected(root, model, rows, actor, using=collector.using)
             if preview.total_count:
                 groups.setdefault(model, cls()).add(
                     total_count=preview.total_count,
@@ -390,7 +399,7 @@ class _PreviewRows:
                     visible_rows=preview.visible_rows,
                 )
         for queryset, total_count in fast_deletes:
-            preview = cls.from_fast_delete(queryset, total_count, actor)
+            preview = cls.from_fast_delete(queryset, total_count, actor, using=collector.using)
             if preview.total_count:
                 groups.setdefault(queryset.model, cls()).add(
                     total_count=preview.total_count,
@@ -406,18 +415,20 @@ class _PreviewRows:
         model: type[models.Model],
         rows: Iterable[models.Model],
         actor: Any | None,
+        *,
+        using: str,
     ) -> _PreviewRows:
         """Return access-scoped preview rows from collector-materialized rows."""
 
         collected = [row for row in rows if not _is_root(root, row)]
         if not collected:
             return cls()
-        scoped = _read_scoped_queryset(model, actor)
+        scoped = read_scoped_queryset(model, actor)
         if scoped is None:
             if _requires_read_scope(model):
                 return cls(total_count=len(collected), visible_count=0)
             return cls(total_count=len(collected), visible_count=len(collected), visible_rows=collected)
-        return cls._from_scoped_collected(collected, scoped)
+        return cls._from_scoped_collected(collected, scoped.using(using))
 
     @classmethod
     def _from_scoped_collected(
@@ -447,12 +458,14 @@ class _PreviewRows:
         queryset: models.QuerySet[models.Model],
         total_count: int,
         actor: Any | None,
+        *,
+        using: str,
     ) -> _PreviewRows:
         """Return access-scoped preview rows from one fast-delete queryset."""
 
         if total_count == 0:
             return cls()
-        scoped = _read_scoped_queryset(queryset.model, actor)
+        scoped = read_scoped_queryset(queryset.model, actor)
         if scoped is None:
             if _requires_read_scope(queryset.model):
                 return cls(total_count=total_count, visible_count=0)
@@ -461,7 +474,7 @@ class _PreviewRows:
                 visible_count=total_count,
                 visible_rows=list(_order_by_pk(queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
             )
-        visible_queryset = scoped.filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
+        visible_queryset = scoped.using(using).filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
         visible_count = visible_queryset.count()
         return cls(
             total_count=total_count,
@@ -515,15 +528,6 @@ def _chunks(values: list[Any], size: int) -> Iterable[list[Any]]:
 
     for index in range(0, len(values), size):
         yield values[index : index + size]
-
-
-def _read_scoped_queryset(
-    model: type[models.Model],
-    actor: Any | None,
-) -> models.QuerySet[models.Model] | None:
-    """Return a read-scoped queryset for a REBAC model, if one can be resolved."""
-
-    return read_scoped_queryset(model, actor)
 
 
 def _requires_read_scope(model: type[models.Model]) -> bool:

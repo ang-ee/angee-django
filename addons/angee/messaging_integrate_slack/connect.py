@@ -9,6 +9,7 @@ from django.db import transaction
 from rebac import system_context
 from slack_sdk.errors import SlackApiError
 
+from angee.base.db import get_write_alias
 from angee.integrate.credentials import CredentialKind
 from angee.messaging_integrate_slack.backend import SlackChannelBackend
 from angee.messaging_integrate_slack.identity import response_data
@@ -19,9 +20,10 @@ Credential = apps.get_model("integrate", "Credential")
 _CREDENTIAL_NAME_MAX_LENGTH = 255
 
 
-def create_slack_channel(user: Any, *, name: str, token: str) -> Any:
+def create_slack_channel(user: Any, *, name: str, token: str, using: str | None = None) -> Any:
     """Probe a Slack user token, then atomically persist its workspace channel."""
 
+    using = get_write_alias(Channel, using=using)
     clean_token = str(token).strip()
     if not clean_token:
         raise ValueError("A Slack User OAuth token is required.")
@@ -47,14 +49,14 @@ def create_slack_channel(user: Any, *, name: str, token: str) -> Any:
         raise ValueError("Slack auth.test returned no workspace or authenticated user id.")
 
     credential_name = _credential_name(requested_name or workspace_name, team_id)
-    with system_context(reason="messaging_integrate_slack.create"), transaction.atomic():
-        credential = Credential.objects.create_local_credential(
+    with system_context(reason="messaging_integrate_slack.create"), transaction.atomic(using=using):
+        credential = Credential.objects.db_manager(using).create_local_credential(
             user,
             kind=CredentialKind.STATIC_TOKEN,
             name=credential_name,
             material={"api_key": clean_token},
         )
-        channel = Channel.objects.create_disconnected(
+        channel = Channel.objects.db_manager(using).create_disconnected(
             user,
             name=workspace_name,
             backend_class=SlackChannelBackend.key,

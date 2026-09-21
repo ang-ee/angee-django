@@ -26,13 +26,45 @@ def get_write_alias(
     Derive at the write owner and pass the result to every nested database API.
     """
 
+    alias = _bound_alias(using=using, bound=bound, instance=instance)
+    return alias if alias is not None else router.db_for_write(model, instance=instance)
+
+
+def get_read_alias(
+    model: type[_ModelT],
+    *,
+    using: str | None = None,
+    bound: models.Manager[_ModelT] | models.QuerySet[_ModelT] | None = None,
+    instance: _ModelT | None = None,
+) -> str:
+    """Return one alias for a pure read, preserving explicit and persisted bindings.
+
+    Use the same precedence as ``get_write_alias``: explicit ``using``, a bound
+    manager/queryset, a persisted instance's database, then Django's read router
+    with the instance hint. Unsaved instance affinity is only a router hint.
+    Never use read routing for locking reads, a write, or a read feeding that
+    write: the write owner derives ``get_write_alias`` once and passes it down.
+    """
+
+    alias = _bound_alias(using=using, bound=bound, instance=instance)
+    return alias if alias is not None else router.db_for_read(model, instance=instance)
+
+
+def _bound_alias(
+    *,
+    using: str | None,
+    bound: models.Manager[_ModelT] | models.QuerySet[_ModelT] | None,
+    instance: _ModelT | None,
+) -> str | None:
+    """Resolve the shared bindings before either native routing policy runs."""
+
     if using is not None:
         return using
     if bound is not None and bound._db is not None:
         return bound._db
     if instance is not None and not instance._state.adding and instance._state.db is not None:
         return instance._state.db
-    return router.db_for_write(model, instance=instance)
+    return None
 
 
 def related_on(

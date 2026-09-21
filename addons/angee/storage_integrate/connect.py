@@ -12,6 +12,7 @@ from django.db import transaction
 from django.utils.text import slugify
 from rebac import system_context
 
+from angee.base.db import get_write_alias
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.queue import queue_bridge_sync
 from angee.storage_integrate.models import MountMode
@@ -26,6 +27,7 @@ def create_local_folder_mount(
     name: str,
     path: str,
     mode: MountMode | str,
+    using: str | None = None,
 ) -> Any:
     """Validate and provision one local-folder Mount."""
 
@@ -44,6 +46,7 @@ def create_local_folder_mount(
         already_mounted_message="This local folder is already mounted.",
         slug_default="folder",
         reason="storage_integrate.connect",
+        using=using,
     )
 
 
@@ -57,6 +60,7 @@ def provision_mount(
     already_mounted_message: str,
     slug_default: str,
     reason: str,
+    using: str | None = None,
 ) -> Any:
     """Provision and eagerly queue one pre-validated external-source Mount."""
 
@@ -71,6 +75,7 @@ def provision_mount(
     backend_model = apps.get_model("storage", "Backend")
     drive_model = apps.get_model("storage", "Drive")
     mount_model = apps.get_model("storage_integrate", "Mount")
+    using = get_write_alias(mount_model, using=using)
     mount_config = dict(root=str(root))
 
     storage_backend_spec: tuple[str, dict[str, Any]] | None = None
@@ -81,21 +86,22 @@ def provision_mount(
         ).backend
         storage_backend_spec = mount_backend.storage_backend_spec()
 
-    with system_context(reason=reason), transaction.atomic():
-        if mount_model.objects.filter(config__root=str(root)).exists():
+    with system_context(reason=reason), transaction.atomic(using=using):
+        if mount_model.objects.using(using).filter(config__root=str(root)).exists():
             raise ValidationError({"path": already_mounted_message})
         slug = _available_mount_slug(
             display_name,
             slug_default=slug_default,
             backend_model=backend_model,
             drive_model=drive_model,
+            using=using,
         )
         drive_slug = f"mount-{slug}"
         if mount_mode == MountMode.REFERENCE:
             if storage_backend_spec is None:
                 raise AssertionError("Reference Mount storage backend spec was not resolved.")
             storage_backend_key, storage_backend_config = storage_backend_spec
-            storage_backend = backend_model.objects.create(
+            storage_backend = backend_model.objects.using(using).create(
                 slug=drive_slug,
                 label=f"{display_name} (external)",
                 backend_class=storage_backend_key,
@@ -104,21 +110,21 @@ def provision_mount(
             )
             prefix = ""
         else:
-            storage_backend = _default_drive(drive_model).backend
+            storage_backend = _default_drive(drive_model, using=using).backend
             prefix = f"mounts/{slug}"
-        drive = drive_model.objects.create(
-            backend=storage_backend,
+        drive = drive_model.objects.using(using).create(
+            backend_id=storage_backend.pk,
             slug=drive_slug,
             name=display_name,
             prefix=prefix,
             created_by_id=user.pk,
         )
-        mount = mount_model.objects.create(
-            vendor=apps.get_model("integrate", "Vendor").objects.seeded(_LOCAL_VENDOR_SLUG),
-            owner=user,
+        mount = mount_model.objects.using(using).create(
+            vendor_id=apps.get_model("integrate", "Vendor").objects.db_manager(using).seeded(_LOCAL_VENDOR_SLUG).pk,
+            owner_id=user.pk,
             display_name=display_name,
             backend_class=backend_class,
-            drive=drive,
+            drive_id=drive.pk,
             mode=mount_mode,
             lifecycle=IntegrationLifecycle.DISCONNECTED,
             config=mount_config,
@@ -135,6 +141,7 @@ def _available_mount_slug(
     slug_default: str,
     backend_model: Any,
     drive_model: Any,
+    using: str,
 ) -> str:
     """Return a slug whose mount-prefixed backend and drive ids are unused."""
 
@@ -142,18 +149,20 @@ def _available_mount_slug(
     suffix = 1
     candidate = base
     while (
-        backend_model.objects.filter(slug=f"mount-{candidate}").exists()
-        or drive_model.objects.filter(slug=f"mount-{candidate}").exists()
+        backend_model.objects.using(using).filter(slug=f"mount-{candidate}").exists()
+        or drive_model.objects.using(using).filter(slug=f"mount-{candidate}").exists()
     ):
         suffix += 1
         candidate = f"{base}-{suffix}"
     return candidate
 
 
-def _default_drive(drive_model: Any) -> Any:
+def _default_drive(drive_model: Any, *, using: str) -> Any:
     """Return the configured managed drive, failing clearly on resource drift."""
 
     try:
-        return drive_model.objects.select_related("backend").get(slug=str(settings.ANGEE_STORAGE_DEFAULT_DRIVE))
+        return drive_model.objects.using(using).select_related("backend").get(
+            slug=str(settings.ANGEE_STORAGE_DEFAULT_DRIVE),
+        )
     except drive_model.DoesNotExist as error:
         raise ImproperlyConfigured("The configured default storage drive is missing.") from error

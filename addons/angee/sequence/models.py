@@ -76,7 +76,7 @@ class SequenceManager(AngeeManager):
             value = self._counter_model().objects.db_manager(db).draw(sequence, period)
             return sequence.format_number(value, draw_date)
 
-    def preview_next(self, key: str, *, on_date: date | None = None) -> str | None:
+    def preview_next(self, key: str, *, on_date: date | None = None, using: str | None = None) -> str | None:
         """Return the number ``next_value`` would draw, without reserving it.
 
         A non-locking, non-reserving peek for draft forms: returns ``None``
@@ -87,13 +87,14 @@ class SequenceManager(AngeeManager):
         the authoritative, fail-fast draw.
         """
 
+        alias = get_write_alias(self.model, using=using, bound=self)
         draw_date = on_date or timezone.localdate()
         with system_context(reason="sequence.preview_next"):
-            sequence = self.filter(key=key).first()
+            sequence = self.using(alias).filter(key=key).first()
             if sequence is None or not sequence.preview_enabled:
                 return None
             period = sequence.period_key(draw_date)
-            current = self._counter_model().objects.db_manager(sequence._state.db).peek(sequence, period)
+            current = self._counter_model().objects.db_manager(alias).peek(sequence, period)
             return sequence.format_number(current + 1, draw_date)
 
     def _counter_model(self) -> type[models.Model]:

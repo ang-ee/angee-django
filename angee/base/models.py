@@ -31,6 +31,7 @@ from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
+from angee.base.db import get_read_alias, get_write_alias
 from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 from angee.base.pagination import KeysetOrder, KeysetPage
@@ -132,9 +133,13 @@ class AngeeQuerySet(
 
         if after_cursor is not None and (before_cursor is not None or through_cursor is not None):
             raise ValueError("after_cursor cannot combine with before_cursor or through_cursor.")
+        alias = (
+            get_write_alias(self.model, bound=self) if self._for_write else get_read_alias(self.model, bound=self)
+        )
+        self = self.using(alias)
         limit = max(1, min(int(limit), 200))
         actor = self.actor() or current_actor()
-        namespace = json.dumps([self.db, self.model._meta.label_lower, *cursor_scope, str(actor)])
+        namespace = json.dumps([alias, self.model._meta.label_lower, *cursor_scope, str(actor)])
         fingerprint = hashlib.sha256(namespace.encode()).hexdigest()
         signer = signing.Signer(salt=f"{cursor_salt}.{fingerprint}")
         cursor = before_cursor if before_cursor is not None else after_cursor
@@ -191,7 +196,9 @@ class AngeeQuerySet(
     def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:
         """Apply a self-scoped row lock only on database backends that support it."""
 
-        features = connections[self.db].features
+        alias = get_write_alias(self.model, bound=self)
+        self = self.using(alias)
+        features = connections[alias].features
         if features.has_select_for_update:
             if of and features.has_select_for_update_of:
                 return cast(Self, self.select_for_update(of=of))

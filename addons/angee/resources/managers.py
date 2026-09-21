@@ -8,12 +8,12 @@ from typing import Any
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import IntegrityError, models, router, transaction
+from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 from rebac.models import active_relationship_model
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_read_alias, get_write_alias
 from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.base.permissions import require_authorization_database
 from angee.resources.entries import (
@@ -154,10 +154,12 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             for field in model._meta.fields
             if field.remote_field is not None
         }
+        # Probe unbound upstream read policies only to reject unsupported routes;
+        # every write below still uses the alias selected by the entry owner.
         aliases = {
             using,
-            *(router.db_for_write(model) for model in write_models),
-            *(router.db_for_read(model) for model in {*write_models, *related_models}),
+            *(get_write_alias(model) for model in write_models),
+            *(get_read_alias(model, bound=model._default_manager) for model in {*write_models, *related_models}),
             *(resource.get_db_connection_name() for _group, resource in loaded_groups),
         }
         for alias in aliases:

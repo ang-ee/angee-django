@@ -13,7 +13,6 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.exceptions import ValidationError
-from django.db import transaction
 from django.db.models import Q
 from rebac import PermissionDenied, system_context
 from strawberry import auto
@@ -378,17 +377,13 @@ class DashboardMutation:
         row = instance_from_public_id(Dashboard, str(id))
         if row is None or row.scope != "personal":
             return DashboardPayload(status="unavailable")
-        if not row.has_access("archive"):
-            return DashboardPayload(status="error", message="You cannot archive this dashboard.")
-        with transaction.atomic(), system_context(reason="dashboards.archive"):
-            locked = Dashboard.system_queryset(lock=("self",)).get(pk=row.pk)
-            if locked.revision != expected_revision:
-                return DashboardPayload(status="conflict", current_revision=locked.revision)
-            if locked.is_archived != archived:
-                locked.is_archived = archived
-                locked.revision += 1
-                locked.sudo(reason="dashboards.archive").save(update_fields=["is_archived", "revision"])
-        return _payload(locked.with_actor(row.actor()))
+        try:
+            locked = row.set_personal_archived(archived=archived, expected_revision=expected_revision)
+        except DashboardConflictError as error:
+            return DashboardPayload(status="conflict", current_revision=error.current_revision)
+        except PermissionDenied as error:
+            return DashboardPayload(status="error", message=str(error))
+        return _payload(locked)
 
     @strawberry.mutation
     def duplicate_dashboard(

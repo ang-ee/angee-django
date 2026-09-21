@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from angee.base.db import get_write_alias, related_on
 from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 
 HTTP_TIMEOUT_SECONDS = 15
@@ -156,7 +157,9 @@ class GitHubBackend(VCSBackend):
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "angee-integrate-github",
         }
-        headers.update(self.bridge.credential.auth_headers())
+        using = get_write_alias(type(self.bridge), instance=self.bridge)
+        credential: Any = related_on(self.bridge, "credential", using=using, select_related=("oauth_client",))
+        headers.update(credential.auth_headers())
         return headers
 
     def _get(self, path: str) -> Any:

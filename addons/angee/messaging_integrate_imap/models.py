@@ -10,6 +10,8 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import actor_context, system_context
 
+from angee.base.db import get_write_alias
+from angee.base.permissions import require_authorization_database
 from angee.integrate.locks import bridge_advisory_lock
 from angee.messaging_integrate_imap.backend import (
     ImapChannelBackend,
@@ -36,7 +38,7 @@ class ImapChannelSampling(models.Model):
         if not isinstance(self.backend, ImapChannelBackend):
             raise ValidationError("Mailbox positioning is available for IMAP channels.")
 
-    def prepare_imap_new_mail(self, *, actor: Any) -> tuple[int, bool]:
+    def prepare_imap_new_mail(self, *, actor: Any, using: str | None = None) -> tuple[int, bool]:
         """Atomically exclude the selected mailboxes' current contents from live sync.
 
         The transport snapshot happens under the bridge's normal sync lock but
@@ -44,17 +46,21 @@ class ImapChannelSampling(models.Model):
         fact used by that snapshot before it commits the complete cursor at once.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        require_authorization_database(using, operation="IMAP sample and mailbox access")
         channel_model = type(self)
         with actor_context(actor):
-            current = channel_model._base_manager.get(pk=self.pk)
+            current = channel_model._base_manager.using(using).select_related(
+                "credential__external_account", "credential__oauth_client",
+            ).get(pk=self.pk)
             current._require_paused_imap(actor)
             original_cursor = current.cursor if isinstance(current.cursor, dict) else {}
             with bridge_advisory_lock(current) as acquired:
                 if not acquired:
                     raise ValidationError("The channel is busy. Retry when its current operation finishes.")
                 cursor, changed = current.backend.prepare_new_mail_cursor(original_cursor)
-                with transaction.atomic():
-                    locked = channel_model._base_manager.select_for_update().get(pk=self.pk)
+                with transaction.atomic(using=using):
+                    locked = channel_model._base_manager.using(using).select_for_update().get(pk=self.pk)
                     locked._require_paused_imap(actor)
                     if locked.config != current.config or locked.credential_id != current.credential_id:
                         raise ValidationError("The channel configuration changed. Set the starting point again.")
@@ -63,20 +69,26 @@ class ImapChannelSampling(models.Model):
                         raise ValidationError("The channel cursor changed. Set the starting point again.")
                     if changed:
                         locked.cursor = cursor
-                        locked.save(update_fields=["cursor", "updated_at"])
+                        locked.save(using=using, update_fields=["cursor", "updated_at"])
             return len(cursor.get("mailboxes", {})), changed
 
     def preview_imap_sample(
         self, *, actor: Any, mailbox: str, since: date, before: date, limit: int = 20,
+        using: str | None = None,
     ) -> ImapSamplePreview:
         """Read a bounded header preview; leave the mailbox and normal cursor unchanged."""
 
-        current = type(self)._base_manager.get(pk=self.pk)
+        using = get_write_alias(type(self), using=using, instance=self)
+        require_authorization_database(using, operation="IMAP sample and mailbox access")
+        current = type(self)._base_manager.using(using).select_related(
+            "credential__external_account", "credential__oauth_client",
+        ).get(pk=self.pk)
         current._require_paused_imap(actor)
         return current.backend.preview_sample(mailbox=mailbox, since=since, before=before, limit=limit)
 
     def import_imap_sample(
         self, *, actor: Any, mailbox: str, uidvalidity: int, uids: list[int],
+        using: str | None = None,
     ) -> ImapSampleImport:
         """Land selected messages as historical records with native live events suppressed.
 
@@ -86,7 +98,11 @@ class ImapChannelSampling(models.Model):
         Neither this operation nor the backend writes the regular bridge cursor.
         """
 
-        current = type(self)._base_manager.get(pk=self.pk)
+        using = get_write_alias(type(self), using=using, instance=self)
+        require_authorization_database(using, operation="IMAP sample and mailbox access")
+        current = type(self)._base_manager.using(using).select_related(
+            "credential__external_account", "credential__oauth_client",
+        ).get(pk=self.pk)
         current._require_paused_imap(actor)
         with bridge_advisory_lock(current) as acquired:
             if not acquired:
@@ -94,13 +110,13 @@ class ImapChannelSampling(models.Model):
             parsed, imported_uids, flags_unchanged = current.backend.fetch_sample(
                 mailbox=mailbox, uidvalidity=uidvalidity, uids=uids,
             )
-            with transaction.atomic():
-                locked = type(self)._base_manager.select_for_update().get(pk=self.pk)
+            with transaction.atomic(using=using):
+                locked = type(self)._base_manager.using(using).select_for_update().get(pk=self.pk)
                 locked._require_paused_imap(actor)
                 if locked.config != current.config or locked.credential_id != current.credential_id:
                     raise ValidationError("The channel configuration changed. Preview the sample again.")
                 with system_context(reason="messaging_integrate_imap.historical_sample"):
-                    messages = apps.get_model("messaging", "Message").objects.ingest(
+                    messages = apps.get_model("messaging", "Message").objects.db_manager(using).ingest(
                         parsed, channel=locked, historical=True,
                     )
             return ImapSampleImport(
@@ -109,7 +125,7 @@ class ImapChannelSampling(models.Model):
                 missing_uids=sorted(set(uids) - set(imported_uids)), flags_unchanged=flags_unchanged,
             )
 
-    def expand_retained_imap_part(self, part: Any, *, actor: Any) -> tuple[Any, ...]:
+    def expand_retained_imap_part(self, part: Any, *, actor: Any, using: str | None = None) -> tuple[Any, ...]:
         """Append bounded evidence below this Channel's retained RFC 822 Part.
 
         Existing Message, Part and File identities remain unchanged. The IMAP
@@ -117,13 +133,15 @@ class ImapChannelSampling(models.Model):
         descendant write.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        require_authorization_database(using, operation="IMAP sample and mailbox access")
         with actor_context(actor):
-            current = type(self)._base_manager.get(pk=self.pk)
+            current = type(self)._base_manager.using(using).get(pk=self.pk)
             current._require_record_access("write")
             part_model = apps.get_model("messaging", "Part")
             if not isinstance(part, part_model) or part.pk is None:
                 raise ValidationError("Embedded expansion requires a retained Message Part.")
-            retained = part_model._base_manager.select_related("message", "file").get(pk=part.pk)
+            retained = part_model._base_manager.using(using).select_related("message", "file").get(pk=part.pk)
             if (retained.message.channel_id != current.pk or str(retained.type).lower() != "message/rfc822"
                     or retained.file_id is None):
                 raise ValidationError("Select an RFC 822 Part retained by this IMAP Channel.")
@@ -133,6 +151,6 @@ class ImapChannelSampling(models.Model):
             child = expand_embedded_message(raw)
             if child is None:
                 return ()
-            return apps.get_model("messaging", "Message").objects.expand_retained_part(
+            return apps.get_model("messaging", "Message").objects.db_manager(using).expand_retained_part(
                 retained, (child,),
             )

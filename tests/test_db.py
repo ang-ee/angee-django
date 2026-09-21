@@ -1,4 +1,4 @@
-"""Write-alias selection and FK reloads never consult read routing."""
+"""Native read/write alias selection and explicit FK reload contracts."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, router
 from django.test.utils import CaptureQueriesContext, isolate_apps
 
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_read_alias, get_write_alias, related_on
 
 
 @pytest.fixture
@@ -144,6 +144,89 @@ def test_unrouted_model_keeps_django_default(write_model: type[models.Model], mo
     monkeypatch.setattr(router, "routers", [])
 
     assert get_write_alias(write_model) == DEFAULT_DB_ALIAS
+
+
+class ReadRouter:
+    """Record read hints and reject accidental write routing in pure reads."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[type[models.Model], dict[str, object]]] = []
+
+    def db_for_read(self, model: type[models.Model], **hints: object) -> str:
+        self.calls.append((model, hints))
+        return "reader"
+
+    def db_for_write(self, model: type[models.Model], **hints: object) -> str:
+        raise AssertionError("Pure read alias selection must not consult the write router.")
+
+
+@pytest.fixture
+def read_router(monkeypatch: pytest.MonkeyPatch) -> ReadRouter:
+    """Install the pure-read routing double through Django's native collection."""
+
+    selected_router = ReadRouter()
+    monkeypatch.setattr(router, "routers", [selected_router])
+    return selected_router
+
+
+@pytest.mark.parametrize(("using", "expected"), [("explicit", "explicit"), (None, "bound")])
+def test_read_alias_preserves_explicit_and_bound_precedence(
+    write_model: type[models.Model],
+    read_router: ReadRouter,
+    bound_owner: models.Manager | models.QuerySet,
+    using: str | None,
+    expected: str,
+) -> None:
+    """A pure read honors caller and manager/queryset bindings before row affinity."""
+
+    instance = write_model(pk=1)
+    instance._state.adding = False
+    instance._state.db = "persisted"
+
+    assert get_read_alias(write_model, using=using, bound=bound_owner, instance=instance) == expected
+    assert read_router.calls == []
+
+
+def test_read_alias_honors_persisted_affinity_before_read_routing(
+    write_model: type[models.Model],
+    read_router: ReadRouter,
+    unbound_owner: models.Manager | models.QuerySet | None,
+) -> None:
+    """An unbound read keeps the database of a persisted source row."""
+
+    instance = write_model(pk=1)
+    instance._state.adding = False
+    instance._state.db = "persisted"
+
+    assert get_read_alias(write_model, bound=unbound_owner, instance=instance) == "persisted"
+    assert read_router.calls == []
+
+
+@pytest.mark.parametrize("instance_kind", ["none", "new", "new_with_affinity", "persisted_without_alias"])
+def test_read_alias_fallback_uses_native_read_router_with_instance_hint(
+    write_model: type[models.Model],
+    read_router: ReadRouter,
+    unbound_owner: models.Manager | models.QuerySet | None,
+    instance_kind: str,
+) -> None:
+    """Unsaved affinity is a hint; it cannot override the read router's decision."""
+
+    instance = None if instance_kind == "none" else write_model(pk=1)
+    if instance is not None:
+        instance._state.adding = instance_kind != "persisted_without_alias"
+        if instance_kind == "new_with_affinity":
+            instance._state.db = "unsaved_affinity"
+
+    assert get_read_alias(write_model, bound=unbound_owner, instance=instance) == "reader"
+    assert read_router.calls == [(write_model, {"instance": instance})]
+
+
+def test_unrouted_read_keeps_django_default(write_model: type[models.Model], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read selection retains Django's default when no native router claims it."""
+
+    monkeypatch.setattr(router, "routers", [])
+
+    assert get_read_alias(write_model) == DEFAULT_DB_ALIAS
 
 
 @pytest.fixture

@@ -46,7 +46,7 @@ from django.core.exceptions import (
 )
 from django.core.files.base import ContentFile
 from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, connections, models, router, transaction
+from django.db import IntegrityError, connections, models, transaction
 from django.db.models import Q
 from django.db.models.signals import post_save
 from django.urls import reverse
@@ -65,7 +65,7 @@ from rebac.backends import backend as rebac_backend
 from rebac.managers import RebacManager
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_read_alias, get_write_alias, related_on
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
@@ -255,9 +255,7 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
             field = self._meta.get_field("backend")
             backend = field.get_cached_value(self, default=None)
             if backend is None:
-                using = self._state.db
-                if using is None:
-                    using = router.db_for_read(field.related_model)
+                using = get_read_alias(field.related_model, instance=self)
                 backend = related_on(self, "backend", using=using)
             return backend.storage
 
@@ -316,7 +314,7 @@ class FolderManager(AngeeManager):
         )
         folder._state.db = using
         try:
-            folder.full_clean()
+            folder.full_clean_for_write(using=using)
         except ValidationError as error:
             raise exceptions.UploadError(f"invalid folder request: {error}") from error
         folder.sudo(reason="storage.folder.create")
@@ -703,7 +701,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         )
         row._state.db = using
         try:
-            row.full_clean()
+            row.full_clean_for_write(using=using)
         except ValidationError as error:
             raise exceptions.UploadError(f"invalid file request: {error}") from error
         # The insert rides per-instance sudo (the gate above already ran) while
@@ -890,7 +888,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                 )
                 row._state.db = using
                 try:
-                    row.full_clean()
+                    row.full_clean_for_write(using=using)
                 except ValidationError as error:
                     raise exceptions.UploadError(f"invalid external file: {error}") from error
                 try:
@@ -950,7 +948,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             if updates:
                 row._state.db = using
                 try:
-                    row.full_clean()
+                    row.full_clean_for_write(using=using)
                 except ValidationError as error:
                     raise exceptions.UploadError(f"invalid external file: {error}") from error
                 try:
@@ -1281,9 +1279,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         """
 
         with system_context(reason="storage.file.storage"):
-            using = self._state.db
-            if using is None:
-                using = router.db_for_read(type(self)._meta.get_field("drive").related_model)
+            using = get_read_alias(type(self)._meta.get_field("drive").related_model, instance=self)
             drive: Any = related_on(self, "drive", using=using, select_related=("backend",))
             return drive.storage
 

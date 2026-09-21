@@ -53,6 +53,7 @@ from angee.base.fields import EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.permissions import require_authorization_database
 from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
@@ -563,6 +564,8 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
         """Create or update one ``(oauth_client, external_id)`` external account."""
 
         using = get_write_alias(self.model, using=using, bound=self)
+        if owner is not None:
+            require_authorization_database(using, operation="External-account ownership")
         reason = "integrate.connections.link"
         update_values = _validated_manager_values(
             self.model,
@@ -588,12 +591,15 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
                 create_defaults=create_values,
             )
             if owner is not None and (created or self.db_manager(using).owner_for(instance) is None):
-                self.grant_owner(instance, owner)
+                instance._state.db = using
+                self.db_manager(using).grant_owner(instance, owner)
         return instance
 
-    def grant_owner(self, account: Any, owner: Any) -> None:
+    def grant_owner(self, account: Any, owner: Any, *, using: str | None = None) -> None:
         """Grant ``owner`` direct ownership of an external account."""
 
+        using = get_write_alias(self.model, using=using, bound=self, instance=account)
+        require_authorization_database(using, operation="External-account ownership")
         write_relationships(
             [
                 RelationshipTuple(
@@ -604,9 +610,11 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
             ]
         )
 
-    def revoke_owner(self, account: Any, owner: Any) -> None:
+    def revoke_owner(self, account: Any, owner: Any, *, using: str | None = None) -> None:
         """Revoke ``owner`` direct ownership of an external account."""
 
+        using = get_write_alias(self.model, using=using, bound=self, instance=account)
+        require_authorization_database(using, operation="External-account ownership")
         delete_relationship(
             RelationshipTuple(
                 resource=to_object_ref(account),

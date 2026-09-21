@@ -52,7 +52,7 @@ def _patch_command_owners(monkeypatch: Any, manager: "_Manager") -> None:
 
     _User._default_manager = manager
     monkeypatch.setattr(bootstrap_admin, "get_user_model", lambda: _User)
-    monkeypatch.setattr(bootstrap_admin.transaction, "atomic", nullcontext)
+    monkeypatch.setattr(bootstrap_admin.transaction, "atomic", lambda *, using: nullcontext())
     monkeypatch.setattr(bootstrap_admin, "system_context", lambda *, reason: nullcontext())
     monkeypatch.setattr(
         bootstrap_admin,
@@ -72,6 +72,12 @@ class _Manager:
         self.user = user
         self.system_reason: str | None = None
         self.granted_user: _User | None = None
+
+    def db_manager(self, using: str) -> "_Manager":
+        """Retain the selected command database on this manager stand-in."""
+
+        assert using == "default"
+        return self
 
     def system_context(self, *, reason: str) -> "_QuerySet":
         """Record the system-scope reason and return this manager."""
@@ -134,7 +140,8 @@ class _User:
 
         self.password = password
 
-    def save(self, *, update_fields: list[str]) -> None:
+    def save(self, *, update_fields: list[str], using: str) -> None:
         """Record the updated fields."""
 
+        assert using == "default"
         self.saved_update_fields = update_fields

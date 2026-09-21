@@ -13,6 +13,7 @@ from django.apps import apps
 from django.db import transaction
 from rebac import system_context
 
+from angee.base.db import get_write_alias, related_on
 from angee.integrate.credentials import CredentialKind
 
 Channel = apps.get_model("messaging", "Channel")
@@ -37,9 +38,11 @@ def connect_imap_channel(
     port: int | None = None,
     mailboxes: list[str] | None = None,
     own_addresses: list[str] | None = None,
+    using: str | None = None,
 ) -> Any:
     """Create a connected IMAP channel and a channel-scoped Basic-auth credential."""
 
+    using = get_write_alias(Channel, using=using)
     clean_host = str(host).strip()
     if not clean_host:
         raise ImapConnectError("An IMAP host is required.")
@@ -52,24 +55,24 @@ def connect_imap_channel(
         own_addresses=own_addresses,
     )
 
-    with system_context(reason="messaging_integrate_imap.connect"), transaction.atomic():
-        channel = Channel.objects.create_disconnected(
+    with system_context(reason="messaging_integrate_imap.connect"), transaction.atomic(using=using):
+        channel = Channel.objects.db_manager(using).create_disconnected(
             user,
             name=display_name,
             backend_class=_IMAP_VENDOR_SLUG,
             config=config,
         )
-        credential = Credential.objects.create_local_credential(
+        credential = Credential.objects.db_manager(using).create_local_credential(
             user,
             kind=CredentialKind.BASIC_AUTH,
             name=_credential_name(display_name, channel.sqid),
             material={"username": username, "password": password},
         )
-        channel.connect(credential=credential, account=getattr(credential, "external_account", None))
+        channel.connect(credential=credential, account=None)
     return channel
 
 
-def update_imap_channel_credential(channel: Any, *, username: str, password: str) -> None:
+def update_imap_channel_credential(channel: Any, *, username: str, password: str, using: str | None = None) -> None:
     """Re-enter the Basic-auth login of an existing IMAP channel in place.
 
     The operator's "the mailbox password changed" path. The channel keeps its
@@ -79,7 +82,8 @@ def update_imap_channel_credential(channel: Any, *, username: str, password: str
     update — connect it again instead.
     """
 
-    credential = channel.credential
+    using = get_write_alias(type(channel), using=using, instance=channel)
+    credential = related_on(channel, "credential", using=using)
     if credential is None:
         raise ImapConnectError("This channel has no credential; connect it again.")
     if credential.kind != CredentialKind.BASIC_AUTH:

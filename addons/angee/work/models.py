@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
@@ -36,9 +36,11 @@ from rebac.mixins import RebacModelBase
 from rebac.types import RelationshipFilter
 
 from angee.base.actors import actor_user_id
+from angee.base.db import get_write_alias, related_on
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager
+from angee.base.permissions import require_authorization_database
 from angee.base.refs import canonical_record_target
 from angee.base.stages import Stage as StagePrimitive
 from angee.base.stages import StagedModelMixin
@@ -78,22 +80,27 @@ class QueueManager(GroupManager):
             raise ValidationError("Personal queue keys support user PKs up to 11 decimal digits.")
         return f"{self.PERSONAL_KEY_PREFIX}{user_pk}"
 
-    def personal_for(self, user: models.Model, *, provision: bool = False) -> Any | None:
+    def personal_for(self, user: models.Model, *, provision: bool = False, using: str | None = None) -> Any | None:
         """Return ``user``'s personal queue, optionally provisioning it."""
 
+        using = get_write_alias(self.model, using=using, bound=self, instance=user)
+
         slug = self.personal_slug(user)
-        queue = self.sudo(reason="work.queue.personal.lookup").filter(slug=slug).first()
+        queue = self.db_manager(using).sudo(reason="work.queue.personal.lookup").filter(slug=slug).first()
         if queue is not None or not provision:
             return queue
-        return self.provision_personal(user)
+        return self.db_manager(using).provision_personal(user)
 
-    def provision_personal(self, user: models.Model) -> Any:
+    def provision_personal(self, user: models.Model, *, using: str | None = None) -> Any:
         """Idempotently create one private owner-rostered queue for ``user``."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=user)
+        require_authorization_database(using, operation="Work relationship writes", error_class=ImproperlyConfigured)
 
         slug = self.personal_slug(user)
         key = self.personal_key(user)
-        with system_context(reason="work.queue.personal.provision"), transaction.atomic():
-            queue = self.sudo(reason="work.queue.personal.provision.lookup").filter(slug=slug).first()
+        with system_context(reason="work.queue.personal.provision"), transaction.atomic(using=using):
+            queue = self.db_manager(using).sudo(reason="work.queue.personal.provision.lookup").filter(slug=slug).first()
             if queue is None:
                 label = str(user.get_full_name() or user.username)
                 queue = self.model(
@@ -109,25 +116,31 @@ class QueueManager(GroupManager):
                 )
                 queue.sudo(reason="work.queue.personal.provision.create")
                 try:
-                    with transaction.atomic():
-                        queue.save()
+                    with transaction.atomic(using=using):
+                        queue.save(using=using)
                 except IntegrityError:
-                    queue = self.sudo(
-                        reason="work.queue.personal.provision.concurrent_lookup"
-                    ).get(slug=slug)
-            self._ensure_personal_membership(queue, user)
+                    queue = (
+                        self.db_manager(using)
+                        .sudo(reason="work.queue.personal.provision.concurrent_lookup")
+                        .get(slug=slug)
+                    )
+            self._ensure_personal_membership(queue, user, using=using)
             return queue
 
-    def _ensure_personal_membership(self, queue: models.Model, user: models.Model) -> None:
+    def _ensure_personal_membership(self, queue: models.Model, user: models.Model, *, using: str) -> None:
         """Ensure the personal queue's inherited Group roster names its owner."""
 
         party_model = apps.get_model("parties", "Party")
         membership_model = apps.get_model("spaces", "Membership")
-        person = party_model.objects.for_user(user)
-        membership = membership_model._base_manager.filter(
-            group_id=queue.pk,
-            party_id=person.pk,
-        ).first()
+        person = party_model.objects.db_manager(using).for_user(user)
+        membership = (
+            membership_model._base_manager.db_manager(using)
+            .filter(
+                group_id=queue.pk,
+                party_id=person.pk,
+            )
+            .first()
+        )
         if membership is None:
             membership = membership_model(
                 group_id=queue.pk,
@@ -140,7 +153,7 @@ class QueueManager(GroupManager):
                 created_by_id=user.pk,
                 updated_by_id=user.pk,
             )
-            membership.save()
+            membership.save(using=using)
             return
         changed = False
         desired = {
@@ -155,7 +168,7 @@ class QueueManager(GroupManager):
                 setattr(membership, name, value)
                 changed = True
         if changed:
-            membership.save(update_fields=(*desired, "updated_at"))
+            membership.save(update_fields=(*desired, "updated_at"), using=using)
 
 
 class Queue(models.Model, metaclass=RebacModelBase):
@@ -249,32 +262,48 @@ class Queue(models.Model, metaclass=RebacModelBase):
     def clean(self) -> None:
         """Normalize the queue key and validate its explicit default stage."""
 
+        using = get_write_alias(type(self), using=self._state.db, instance=self)
+
         self.key = self.key.strip().upper()
         super().clean()
-        self._validate_default_stage()
+        self._validate_default_stage(using=using)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the queue and atomically provision its stage/numbering substrate."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        require_authorization_database(
+            using, operation="Queue visibility relationship writes", error_class=ImproperlyConfigured
+        )
+        kwargs["using"] = using
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         adding = self._state.adding
         self.key = self.key.strip().upper()
-        self._validate_default_stage()
-        with transaction.atomic():
+        self._validate_default_stage(using=using)
+        with transaction.atomic(using=using):
             super().save(*args, **kwargs)
             if adding:
-                self._provision_workflow()
+                self._provision_workflow(using=using)
 
     def task_sequence_key(self) -> str:
         """Return the stable sequence lookup key for this queue's task numbers."""
 
         return f"work.task/{self.sqid}"
 
-    def ensure_task_sequence(self) -> models.Model:
+    def ensure_task_sequence(self, *, using: str | None = None) -> models.Model:
         """Return this queue's task-number sequence, creating it if absent."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         sequence_model = apps.get_model("sequence", "Sequence")
         with system_context(reason="work.queue.ensure_task_sequence"):
-            sequence, _created = sequence_model.objects.get_or_create(
+            sequence, _created = sequence_model.objects.db_manager(using).get_or_create(
                 key=self.task_sequence_key(),
                 defaults={
                     "name": f"{self.key} task numbers",
@@ -286,21 +315,26 @@ class Queue(models.Model, metaclass=RebacModelBase):
             )
         return cast(models.Model, sequence)
 
-    def next_task_number(self) -> int:
+    def next_task_number(self, *, using: str | None = None) -> int:
         """Draw the next gapless task number inside the caller's transaction."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         self.ensure_task_sequence()
         sequence_model = apps.get_model("sequence", "Sequence")
-        return int(sequence_model.objects.next_value(self.task_sequence_key()))
+        return int(sequence_model.objects.db_manager(using).next_value(self.task_sequence_key()))
 
-    def _provision_workflow(self) -> None:
+    def _provision_workflow(self, *, using: str) -> None:
         """Provision the seven category stages and configure the default once."""
 
         stage_model = apps.get_model("work", "Stage")
         stages: dict[str, models.Model] = {}
         with system_context(reason="work.queue.provision_workflow"):
             for name, tone, position, category in self.PROVISIONED_STAGES:
-                stage, _created = stage_model.objects.get_or_create(
+                stage, _created = stage_model.objects.db_manager(using).get_or_create(
                     queue=self,
                     category=category,
                     defaults={"name": name, "tone": tone, "position": position},
@@ -309,14 +343,14 @@ class Queue(models.Model, metaclass=RebacModelBase):
             self.ensure_task_sequence()
             if self.default_stage_id is None:
                 self.default_stage = stages[stage_model.StageCategory.UNSTARTED]
-                super().save(update_fields=("default_stage", "updated_at"))
+                super().save(using=using, update_fields=("default_stage", "updated_at"))
 
-    def _validate_default_stage(self) -> None:
+    def _validate_default_stage(self, *, using: str) -> None:
         """Reject an explicit default stage owned by another queue."""
 
         if self.default_stage_id is None:
             return
-        default_queue_id = getattr(self.default_stage, "queue_id", None)
+        default_queue_id = getattr(related_on(self, "default_stage", using=using), "queue_id", None)
         if self.pk is None or default_queue_id != self.pk:
             raise ValidationError({"default_stage": "Default stage must belong to this queue."})
 
@@ -379,6 +413,12 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Prevent user creation or renaming of triage/duplicate system stages."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         if not ambient_is_sudo():
             loaded_category = getattr(self, "_loaded_category", None)
             if self.category in self.SYSTEM_CATEGORIES and (
@@ -400,6 +440,12 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Prevent users from deleting the two system-provisioned stages."""
+
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         if not ambient_is_sudo() and self.category in self.SYSTEM_CATEGORIES:
             raise ValidationError({"category": "System-provisioned stages cannot be deleted."})
@@ -434,6 +480,7 @@ class CycleManager(AngeeManager):
         as_of: date | None = None,
         window_end: date | None = None,
         completed_at: datetime | None = None,
+        using: str | None = None,
     ) -> tuple[Any, ...]:
         """Generate and close one queue's cadence, returning its ordered cycles.
 
@@ -451,19 +498,24 @@ class CycleManager(AngeeManager):
         over the same window exact no-ops.
         """
 
+        using = get_write_alias(self.model, using=using, bound=self, instance=queue)
+
         as_of = as_of or timezone.localdate()
         if window_end is not None and window_end < as_of:
             raise ValidationError({"window_end": "Cycle window end cannot precede its start."})
-        with system_context(reason="work.cycle.generate"), transaction.atomic():
+        with system_context(reason="work.cycle.generate"), transaction.atomic(using=using):
             queue = (
-                type(queue).objects.sudo(reason="work.cycle.generate.queue")
+                type(queue)
+                .objects.db_manager(using)
+                .sudo(reason="work.cycle.generate.queue")
                 .lock_if_supported()
                 .get(pk=queue.pk)
             )
             if not queue.cycles_enabled:
                 return ()
             cycles = list(
-                self.sudo(reason="work.cycle.generate.rows")
+                self.db_manager(using)
+                .sudo(reason="work.cycle.generate.rows")
                 .filter(queue=queue)
                 .order_by("starts_on", "number", "pk")
             )
@@ -475,7 +527,7 @@ class CycleManager(AngeeManager):
                     starts_on=starts_on,
                     ends_on=self._ends_on(starts_on, int(queue.cycle_weeks)),
                 )
-                cycle.sudo(reason="work.cycle.generate.first").save()
+                cycle.sudo(reason="work.cycle.generate.first").save(using=using)
                 cycles.append(cycle)
 
             while True:
@@ -487,10 +539,7 @@ class CycleManager(AngeeManager):
                     needs_next = next_starts_on <= window_end
                 else:
                     future_count = sum(cycle.starts_on > as_of for cycle in cycles)
-                    needs_next = (
-                        future_count < int(queue.upcoming_cycle_count)
-                        or cycles[-1].ends_on < as_of
-                    )
+                    needs_next = future_count < int(queue.upcoming_cycle_count) or cycles[-1].ends_on < as_of
                 if not needs_next:
                     break
                 cycle = self.model(
@@ -499,7 +548,7 @@ class CycleManager(AngeeManager):
                     starts_on=next_starts_on,
                     ends_on=self._ends_on(next_starts_on, int(queue.cycle_weeks)),
                 )
-                cycle.sudo(reason="work.cycle.generate.next").save()
+                cycle.sudo(reason="work.cycle.generate.next").save(using=using)
                 cycles.append(cycle)
 
             for index, cycle in enumerate(cycles[:-1]):
@@ -509,7 +558,8 @@ class CycleManager(AngeeManager):
                         completed_at=completed_at,
                     )
             return tuple(
-                self.sudo(reason="work.cycle.generate.result")
+                self.db_manager(using)
+                .sudo(reason="work.cycle.generate.result")
                 .filter(queue=queue)
                 .order_by("starts_on", "number", "pk")
             )
@@ -578,21 +628,33 @@ class Cycle(AuditMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist while keeping close timestamp and snapshot immutable."""
 
-        if (
-            self.starts_on is not None
-            and self.ends_on is not None
-            and self.ends_on < self.starts_on
-        ):
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
+        if self.starts_on is not None and self.ends_on is not None and self.ends_on < self.starts_on:
             raise ValidationError({"ends_on": "Cycle end must be on or after its start."})
         if self.pk is not None and not self._state.adding:
             with system_context(reason="work.cycle.immutable_close"):
-                persisted = type(self)._base_manager.filter(pk=self.pk).values(
-                    "completed_at",
-                    "uncompleted_upon_close",
-                ).first()
-            if persisted is not None and persisted["completed_at"] is not None and (
-                self.completed_at != persisted["completed_at"]
-                or self.uncompleted_upon_close != persisted["uncompleted_upon_close"]
+                persisted = (
+                    type(self)
+                    ._base_manager.db_manager(using)
+                    .filter(pk=self.pk)
+                    .values(
+                        "completed_at",
+                        "uncompleted_upon_close",
+                    )
+                    .first()
+                )
+            if (
+                persisted is not None
+                and persisted["completed_at"] is not None
+                and (
+                    self.completed_at != persisted["completed_at"]
+                    or self.uncompleted_upon_close != persisted["uncompleted_upon_close"]
+                )
             ):
                 raise ValidationError("A cycle's completed state and close snapshot are immutable.")
         super().save(*args, **kwargs)
@@ -602,6 +664,7 @@ class Cycle(AuditMixin, AngeeDataModel):
         *,
         next_cycle: Any | None = None,
         completed_at: datetime | None = None,
+        using: str | None = None,
     ) -> Cycle:
         """Snapshot open tasks and roll them into the next cycle atomically.
 
@@ -610,10 +673,15 @@ class Cycle(AuditMixin, AngeeDataModel):
         an exact no-op and cannot replace that evidence or move tasks again.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         if self.pk is None:
             raise ValidationError("A cycle must be saved before it can close.")
-        with system_context(reason="work.cycle.close"), transaction.atomic():
-            cycles = type(self).objects.sudo(reason="work.cycle.close.rows").lock_if_supported()
+        with system_context(reason="work.cycle.close"), transaction.atomic(using=using):
+            cycles = type(self).objects.db_manager(using).sudo(reason="work.cycle.close.rows").lock_if_supported()
             locked = cycles.get(pk=self.pk)
             if locked.completed_at is not None:
                 self.completed_at = locked.completed_at
@@ -630,17 +698,14 @@ class Cycle(AuditMixin, AngeeDataModel):
             if next_cycle is None:
                 raise ValidationError({"next_cycle": "Generate the next cycle before closing."})
             if next_cycle.queue_id != locked.queue_id:
-                raise ValidationError(
-                    {"next_cycle": "Rollover cycle must belong to the same queue."}
-                )
+                raise ValidationError({"next_cycle": "Rollover cycle must belong to the same queue."})
             if next_cycle.starts_on <= locked.ends_on:
-                raise ValidationError(
-                    {"next_cycle": "Rollover cycle must start after this cycle ends."}
-                )
+                raise ValidationError({"next_cycle": "Rollover cycle must start after this cycle ends."})
 
             task_model = apps.get_model("projects", "Task")
             tasks = list(
-                task_model.objects.sudo(reason="work.cycle.close.tasks")
+                task_model.objects.db_manager(using)
+                .sudo(reason="work.cycle.close.tasks")
                 .lock_if_supported()
                 .filter(cycle_id=locked.pk, status=task_model.TaskStatus.OPEN)
                 .order_by("pk")
@@ -648,16 +713,16 @@ class Cycle(AuditMixin, AngeeDataModel):
             snapshot = sorted(str(task.sqid) for task in tasks)
             closed_at = completed_at or timezone.now()
             if tasks:
-                task_model._base_manager.filter(pk__in=[task.pk for task in tasks]).update(
+                task_model._base_manager.db_manager(using).filter(pk__in=[task.pk for task in tasks]).update(
                     cycle_id=next_cycle.pk,
                     updated_at=closed_at,
                 )
             locked.completed_at = closed_at
             locked.uncompleted_upon_close = snapshot
             locked.sudo(reason="work.cycle.close.snapshot").save(
-                update_fields=("completed_at", "uncompleted_upon_close", "updated_at")
+                update_fields=("completed_at", "uncompleted_upon_close", "updated_at"), using=using
             )
-        self.refresh_from_db()
+        self.refresh_from_db(using=using)
         return self
 
 
@@ -805,22 +870,28 @@ class TaskWork(StagedModelMixin):
     def refresh_from_db(self, *args: Any, **kwargs: Any) -> None:
         """Refresh without misclassifying Django's field hydration as a direct write."""
 
+        fields = kwargs.get("fields", args[1] if len(args) > 1 else None)
+        status_assigned = getattr(self, "_work_status_assigned", False)
         object.__setattr__(self, "_work_track_status", False)
         try:
             super().refresh_from_db(*args, **kwargs)
         finally:
             object.__setattr__(self, "_work_track_status", True)
-            object.__setattr__(self, "_work_status_assigned", False)
-            self._work_snapshot_loaded_ids()
+            if fields is None or "status" in fields:
+                status_assigned = False
+            object.__setattr__(self, "_work_status_assigned", status_assigned)
+            self._work_snapshot_loaded_ids(fields=fields)
 
-    def _work_snapshot_loaded_ids(self) -> None:
+    def _work_snapshot_loaded_ids(self, *, fields: Sequence[str] | None = None) -> None:
         """Snapshot loaded queue/stage ids without touching deferred columns."""
 
         for attname in ("queue_id", "stage_id"):
+            if fields is not None and not {attname, attname.removesuffix("_id")}.intersection(fields):
+                continue
             value = self.__dict__.get(attname, _WORK_UNLOADED)
             object.__setattr__(self, f"_work_loaded_{attname}", value)
 
-    def _work_loaded_id(self, attname: str) -> Any:
+    def _work_loaded_id(self, attname: str, *, using: str) -> Any:
         """Return the as-loaded id, resolving a deferred column only on demand."""
 
         snapshot = getattr(self, f"_work_loaded_{attname}", _WORK_UNLOADED)
@@ -830,12 +901,13 @@ class TaskWork(StagedModelMixin):
             # Assigned after being loaded deferred: the loaded value is gone
             # from the instance, so ask the row itself.
             value = (
-                type(self)._base_manager.filter(pk=self.pk).values_list(attname, flat=True).first()
+                type(self)._base_manager.db_manager(using).filter(pk=self.pk).values_list(attname, flat=True).first()
             )
         else:
             # Still deferred means never assigned: the lazy load below IS the
             # loaded value (and no longer recurses, per _work_snapshot_loaded_ids).
-            value = getattr(self, attname)
+            self.refresh_from_db(using=using, fields=[attname])
+            value = self.__dict__[attname]
         object.__setattr__(self, f"_work_loaded_{attname}", value)
         return value
 
@@ -856,46 +928,55 @@ class TaskWork(StagedModelMixin):
         finally:
             object.__setattr__(self, "_work_track_status", tracking)
 
-    def apply_create_defaults(self) -> Mapping[str, Sequence[Any]]:
+    def apply_create_defaults(self, *, using: str | None = None) -> Mapping[str, Sequence[Any]]:
         """Default queue/stage from the actor and return their create relations."""
+
+        using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         relationships: dict[str, Sequence[Any]] = {}
         parent = getattr(super(), "apply_create_defaults", None)
         if callable(parent):
             relationships.update(parent())
-        self._apply_queue_and_stage_defaults(provision=True)
+        self._apply_queue_and_stage_defaults(provision=True, using=using)
         if self.queue_id is not None:
-            relationships["queue"] = (self.queue,)
+            relationships["queue"] = (related_on(self, "queue", using=using),)
         return relationships
 
     def clean(self) -> None:
         """Project a stage before base lifecycle validation and enforce scope."""
 
-        self._apply_queue_and_stage_defaults(provision=False)
-        self._reject_direct_system_stage_transition()
+        using = get_write_alias(type(self), using=self._state.db, instance=self)
+
+        self._apply_queue_and_stage_defaults(provision=False, using=using)
+        self._reject_direct_system_stage_transition(using=using)
         self._reject_direct_status_write()
-        self._project_stage_lifecycle()
+        self._project_stage_lifecycle(using=using)
         self.validate_cycle_scope()
         super().clean()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist stage projection and queue numbering in one transaction."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         self._reject_direct_status_write()
-        update_fields = (
-            set(kwargs["update_fields"])
-            if kwargs.get("update_fields") is not None
-            else None
-        )
-        with transaction.atomic():
-            defaulted = self._apply_queue_and_stage_defaults(provision=True)
-            self._reject_direct_system_stage_transition()
+        update_fields = set(kwargs["update_fields"]) if kwargs.get("update_fields") is not None else None
+        with transaction.atomic(using=using):
+            defaulted = self._apply_queue_and_stage_defaults(provision=True, using=using)
+            self._reject_direct_system_stage_transition(using=using)
             self.validate_stage_scope()
             self.validate_cycle_scope()
-            projected = self._project_stage_lifecycle()
+            projected = self._project_stage_lifecycle(using=using)
             allocated = False
             if self._state.adding and self.queue_id is not None and self.number is None:
-                self.number = self.queue.next_task_number()
+                self.number = related_on(self, "queue", using=using).next_task_number()
                 allocated = True
             if update_fields is not None:
                 update_fields.update(projected)
@@ -907,48 +988,64 @@ class TaskWork(StagedModelMixin):
         object.__setattr__(self, "_work_status_assigned", False)
         self._work_snapshot_loaded_ids()
 
-    def complete(self) -> Any:
+    def complete(self, *, using: str | None = None) -> Any:
         """Move to the first completed stage, or use the base verb without a queue."""
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         if self.queue_id is None:
-            return self._base_verb("complete")
-        self.stage = self._stage_for_category("completed")
-        self.save(update_fields=("stage", "updated_at"))
+            return self._base_verb("complete", using=using)
+        self.stage = self._stage_for_category("completed", using=using)
+        self.save(update_fields=("stage", "updated_at"), using=using)
         return self
 
-    def drop(self, reason: Any) -> Any:
+    def drop(self, reason: Any, *, using: str | None = None) -> Any:
         """Move to duplicate/canceled according to the base dropped reason."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         try:
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
         except ValueError as error:
             raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
         if self.queue_id is None:
-            return self._base_verb("drop", reason_member)
-        category = (
-            "duplicate"
-            if reason_member == self.TaskDroppedReason.DUPLICATE
-            else "canceled"
-        )
-        self.stage = self._stage_for_category(category)
+            return self._base_verb("drop", reason_member, using=using)
+        category = "duplicate" if reason_member == self.TaskDroppedReason.DUPLICATE else "canceled"
+        self.stage = self._stage_for_category(category, using=using)
         self.dropped_reason = reason_member
-        self.save(update_fields=("stage", "dropped_reason", "updated_at"))
+        self.save(update_fields=("stage", "dropped_reason", "updated_at"), using=using)
         return self
 
-    def reopen(self) -> Any:
+    def reopen(self, *, using: str | None = None) -> Any:
         """Move to the queue-owned default stage, or use the base verb without a queue."""
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         if self.queue_id is None:
-            return self._base_verb("reopen")
+            return self._base_verb("reopen", using=using)
         stage = self.resolve_default_stage()
         if stage is None:
             raise ValidationError({"stage": "Queue has no default stage."})
         self.stage = stage
-        self.save(update_fields=("stage", "updated_at"))
+        self.save(update_fields=("stage", "updated_at"), using=using)
         return self
 
-    def accept(self, stage: models.Model | None = None) -> Any:
+    def accept(self, stage: models.Model | None = None, *, using: str | None = None) -> Any:
         """Leave triage for a same-queue, non-system stage, idempotently."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         if self.queue_id is None:
             raise ValidationError({"queue": "A queued task is required for triage."})
@@ -967,16 +1064,24 @@ class TaskWork(StagedModelMixin):
                 and self.dropped_at is None
             ):
                 return self
-            self.save(update_fields=("stage", "updated_at"))
+            self.save(update_fields=("stage", "updated_at"), using=using)
             return self
-        if self.stage_id is None or self.stage.category != self.stage.StageCategory.TRIAGE:
+        if (
+            self.stage_id is None
+            or related_on(self, "stage", using=using).category != self.stage_model().StageCategory.TRIAGE
+        ):
             raise ValidationError({"stage": "Only a task in triage can be accepted."})
         self.stage = target
-        self.save(update_fields=("stage", "updated_at"))
+        self.save(update_fields=("stage", "updated_at"), using=using)
         return self
 
-    def decline(self, reason: Any) -> Any:
+    def decline(self, reason: Any, *, using: str | None = None) -> Any:
         """Leave triage for the canceled stage with a closed dropped reason."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         try:
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
@@ -989,7 +1094,7 @@ class TaskWork(StagedModelMixin):
             raise ValidationError({"reason": "Choose declined or obsolete."})
         if self.queue_id is None:
             raise ValidationError({"queue": "A queued task is required for triage."})
-        target = self._stage_for_category("canceled")
+        target = self._stage_for_category("canceled", using=using)
         if (
             self.stage_id == target.pk
             and self.status == self.TaskStatus.DROPPED
@@ -998,15 +1103,23 @@ class TaskWork(StagedModelMixin):
             and self.done_at is None
         ):
             return self
-        if self.stage_id is None or self.stage.category != self.stage.StageCategory.TRIAGE:
+        if (
+            self.stage_id is None
+            or related_on(self, "stage", using=using).category != self.stage_model().StageCategory.TRIAGE
+        ):
             raise ValidationError({"stage": "Only a task in triage can be declined."})
         self.stage = target
         self.dropped_reason = reason_member
-        self.save(update_fields=("stage", "dropped_reason", "updated_at"))
+        self.save(update_fields=("stage", "dropped_reason", "updated_at"), using=using)
         return self
 
-    def snooze(self, until: datetime) -> Any:
+    def snooze(self, until: datetime, *, using: str | None = None) -> Any:
         """Snooze a triage task until an inclusive instant or new chatter activity."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         if timezone.is_naive(until):
             raise ValidationError({"until": "Snooze time must include a timezone."})
@@ -1018,26 +1131,30 @@ class TaskWork(StagedModelMixin):
         if (
             self.queue_id is None
             or self.stage_id is None
-            or self.stage.category != self.stage.StageCategory.TRIAGE
+            or related_on(self, "stage", using=using).category != self.stage_model().StageCategory.TRIAGE
         ):
             raise ValidationError({"stage": "Only a task in triage can be snoozed."})
         if self.snoozed_until == until and str(self.snoozed_by_id) == str(user_id):
             return self
         self.snoozed_until = until
         self.snoozed_by_id = user_id
-        self.save(update_fields=("snoozed_until", "snoozed_by", "updated_at"))
+        self.save(update_fields=("snoozed_until", "snoozed_by", "updated_at"), using=using)
         return self
 
     @classmethod
-    def wake_due_snoozes(cls, *, now: datetime | None = None) -> int:
+    def wake_due_snoozes(cls, *, now: datetime | None = None, using: str | None = None) -> int:
         """Clear snoozes whose inclusive wake instant is at or before ``now``."""
+
+        using = get_write_alias(cls, using=using)
 
         now = now or timezone.now()
         return int(
-            cls._base_manager.filter(
+            cls._base_manager.db_manager(using)
+            .filter(
                 snoozed_until__isnull=False,
                 snoozed_until__lte=now,
-            ).update(
+            )
+            .update(
                 snoozed_until=None,
                 snoozed_by=None,
                 updated_at=now,
@@ -1045,19 +1162,25 @@ class TaskWork(StagedModelMixin):
         )
 
     @classmethod
-    def wake_from_chatter_thread(cls, thread_id: Any) -> int:
+    def wake_from_chatter_thread(cls, thread_id: Any, *, using: str | None = None) -> int:
         """Clear snooze state on the task whose chatter owns ``thread_id``."""
+
+        using = get_write_alias(cls, using=using)
 
         if thread_id is None:
             return 0
-        task_content_type = ContentType.objects.get_for_model(cls)
+        task_content_type = ContentType.objects.db_manager(using).get_for_model(cls)
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        task_ids = attachment_model._base_manager.filter(
-            content_type=task_content_type,
-            thread_id=thread_id,
-            role="chatter",
-        ).values("object_id")
-        snoozed_tasks = cls._base_manager.filter(
+        task_ids = (
+            attachment_model._base_manager.db_manager(using)
+            .filter(
+                content_type=task_content_type,
+                thread_id=thread_id,
+                role="chatter",
+            )
+            .values("object_id")
+        )
+        snoozed_tasks = cls._base_manager.db_manager(using).filter(
             pk__in=models.Subquery(task_ids),
             snoozed_until__isnull=False,
         )
@@ -1071,7 +1194,7 @@ class TaskWork(StagedModelMixin):
             )
         )
 
-    def mark_duplicate(self, canonical: models.Model) -> Any:
+    def mark_duplicate(self, canonical: models.Model, *, using: str | None = None) -> Any:
         """Merge this duplicate into ``canonical`` in one row-locked transaction.
 
         The atomic postcondition is one directional duplicate relation, this
@@ -1081,22 +1204,28 @@ class TaskWork(StagedModelMixin):
         failure rolls every one of those writes back.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        require_authorization_database(using, operation="Work relationship writes", error_class=ImproperlyConfigured)
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         if self.pk is None or canonical.pk is None:
             raise ValidationError("Both duplicate and canonical tasks must be saved.")
         if self.pk == canonical.pk:
             raise ValidationError({"canonical": "A task cannot duplicate itself."})
-        with system_context(reason="work.task.mark_duplicate"), transaction.atomic():
+        with system_context(reason="work.task.mark_duplicate"), transaction.atomic(using=using):
             rows = list(
-                type(self).objects.sudo(reason="work.task.mark_duplicate.rows")
+                type(self)
+                .objects.db_manager(using)
+                .sudo(reason="work.task.mark_duplicate.rows")
                 .lock_if_supported()
                 .filter(pk__in=(self.pk, canonical.pk))
                 .order_by("pk")
             )
             by_pk = {row.pk: row for row in rows}
             if self.pk not in by_pk or canonical.pk not in by_pk:
-                raise ValidationError(
-                    {"canonical": "Duplicate or canonical task no longer exists."}
-                )
+                raise ValidationError({"canonical": "Duplicate or canonical task no longer exists."})
             source = by_pk[self.pk]
             canonical = by_pk[canonical.pk]
             if source.queue_id is None:
@@ -1104,20 +1233,22 @@ class TaskWork(StagedModelMixin):
 
             relation_model = apps.get_model("projects", "TaskRelation")
             duplicate_kind = relation_model.TaskRelationKind.DUPLICATE
-            if relation_model.objects.sudo(
-                reason="work.task.mark_duplicate.reverse_relation_lookup"
-            ).filter(
-                task=canonical,
-                related_task=source,
-                kind=duplicate_kind,
-            ).exists():
-                raise ValidationError(
-                    {"canonical": "A task and its canonical cannot be mutual duplicates."}
+            if (
+                relation_model.objects.db_manager(using)
+                .sudo(reason="work.task.mark_duplicate.reverse_relation_lookup")
+                .filter(
+                    task=canonical,
+                    related_task=source,
+                    kind=duplicate_kind,
                 )
+                .exists()
+            ):
+                raise ValidationError({"canonical": "A task and its canonical cannot be mutual duplicates."})
             canonical_is_duplicate = (
                 canonical.stage_id is not None
-                and canonical.stage.category == canonical.stage.StageCategory.DUPLICATE
-            ) or relation_model.objects.sudo(
+                and related_on(canonical, "stage", using=using).category
+                == canonical.stage_model().StageCategory.DUPLICATE
+            ) or relation_model.objects.db_manager(using).sudo(
                 reason="work.task.mark_duplicate.canonical_relation_lookup"
             ).filter(
                 task=canonical,
@@ -1127,31 +1258,27 @@ class TaskWork(StagedModelMixin):
                 raise ValidationError(
                     {
                         "canonical": (
-                            "The canonical task is itself a duplicate; merge into the "
-                            "ultimate canonical instead."
+                            "The canonical task is itself a duplicate; merge into the ultimate canonical instead."
                         )
                     }
                 )
             existing = (
-                relation_model.objects.sudo(reason="work.task.mark_duplicate.relation_lookup")
+                relation_model.objects.db_manager(using)
+                .sudo(reason="work.task.mark_duplicate.relation_lookup")
                 .filter(task=source, kind=duplicate_kind)
                 .first()
             )
             if existing is not None and existing.related_task_id != canonical.pk:
-                raise ValidationError(
-                    {"canonical": "Task already names a different canonical task."}
-                )
-            relation, _created = relation_model.objects.get_or_create(
+                raise ValidationError({"canonical": "Task already names a different canonical task."})
+            relation, _created = relation_model.objects.db_manager(using).get_or_create(
                 task=source,
                 related_task=canonical,
                 defaults={"kind": duplicate_kind},
             )
             if relation.kind != duplicate_kind:
-                raise ValidationError(
-                    {"canonical": "Another relation already occupies this task pair."}
-                )
+                raise ValidationError({"canonical": "Another relation already occupies this task pair."})
 
-            duplicate_stage = source._stage_for_category("duplicate")
+            duplicate_stage = source._stage_for_category("duplicate", using=using)
             already_projected = (
                 source.stage_id == duplicate_stage.pk
                 and source.status == source.TaskStatus.DROPPED
@@ -1160,22 +1287,20 @@ class TaskWork(StagedModelMixin):
                 and source.done_at is None
             )
             if not already_projected:
-                if source.stage_id is None or source.stage.category not in {
-                    source.stage.StageCategory.TRIAGE,
-                    source.stage.StageCategory.DUPLICATE,
+                if source.stage_id is None or related_on(source, "stage", using=using).category not in {
+                    source.stage_model().StageCategory.TRIAGE,
+                    source.stage_model().StageCategory.DUPLICATE,
                 }:
-                    raise ValidationError(
-                        {"stage": "Only a task in triage can be marked duplicate."}
-                    )
+                    raise ValidationError({"stage": "Only a task in triage can be marked duplicate."})
                 source.stage = duplicate_stage
                 source.dropped_reason = source.TaskDroppedReason.DUPLICATE
                 with source._work_verb_write():
-                    source.save(update_fields=("stage", "dropped_reason", "updated_at"))
+                    source.save(update_fields=("stage", "dropped_reason", "updated_at"), using=using)
 
-            source._move_links_to(canonical)
-            source._move_followers_to(canonical)
+            source._move_links_to(canonical, using=using)
+            source._move_followers_to(canonical, using=using)
             run_task_merge_contributors(source, canonical)
-        self.refresh_from_db()
+        self.refresh_from_db(using=using)
         return self
 
     @property
@@ -1186,12 +1311,14 @@ class TaskWork(StagedModelMixin):
             return None
         return f"{self.queue.key}-{self.number}"
 
-    def validate_cycle_scope(self) -> None:
+    def validate_cycle_scope(self, *, using: str | None = None) -> None:
         """Reject a cycle outside the task's queue."""
+
+        using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
 
         if self.cycle_id is None:
             return
-        if self.queue_id is None or self.cycle.queue_id != self.queue_id:
+        if self.queue_id is None or related_on(self, "cycle", using=using).queue_id != self.queue_id:
             raise ValidationError({"cycle": "Cycle must belong to the task's queue."})
 
     def _reject_direct_status_write(self) -> None:
@@ -1206,10 +1333,10 @@ class TaskWork(StagedModelMixin):
                 {"status": "Set stage instead; status is projected by the work addon."}
             )
 
-    def _reject_direct_system_stage_transition(self) -> None:
+    def _reject_direct_system_stage_transition(self, *, using: str) -> None:
         """Reserve entry into triage and duplicate stages for their owning verbs."""
 
-        loaded_stage_id = self._work_loaded_id("stage_id")
+        loaded_stage_id = self._work_loaded_id("stage_id", using=using)
         if (
             self.stage_id is None
             or loaded_stage_id == self.stage_id
@@ -1219,39 +1346,35 @@ class TaskWork(StagedModelMixin):
             or ambient_is_sudo()
         ):
             return
-        category = str(self.stage.get_category())
-        if category not in self.stage.SYSTEM_CATEGORIES:
+        category = str(related_on(self, "stage", using=using).get_category())
+        if category not in self.stage_model().SYSTEM_CATEGORIES:
             return
-        verb = "capture" if category == self.stage.StageCategory.TRIAGE else "mark_duplicate"
-        raise ValidationError(
-            {"stage": f"Use {verb} to move a task into the system {category} stage."}
-        )
+        verb = "capture" if category == self.stage_model().StageCategory.TRIAGE else "mark_duplicate"
+        raise ValidationError({"stage": f"Use {verb} to move a task into the system {category} stage."})
 
-    def _apply_queue_and_stage_defaults(self, *, provision: bool) -> set[str]:
+    def _apply_queue_and_stage_defaults(self, *, provision: bool, using: str) -> set[str]:
         """Infer queue from cycle/stage, then personal queue and default stage."""
 
         changed: set[str] = set()
-        queue_cleared = self.queue_id is None and self._work_loaded_id("queue_id") is not None
-        stage_cleared = self.stage_id is None and self._work_loaded_id("stage_id") is not None
+        queue_cleared = self.queue_id is None and self._work_loaded_id("queue_id", using=using) is not None
+        stage_cleared = self.stage_id is None and self._work_loaded_id("stage_id", using=using) is not None
         if queue_cleared != stage_cleared or (queue_cleared and self.cycle_id is not None):
-            raise ValidationError(
-                "stage and cycle imply their queue — clear queue, stage, and cycle together"
-            )
+            raise ValidationError("stage and cycle imply their queue — clear queue, stage, and cycle together")
         if self.queue_id is None and self.cycle_id is not None:
-            self.queue_id = self.cycle.queue_id
+            self.queue_id = related_on(self, "cycle", using=using).queue_id
             changed.add("queue")
         if self.queue_id is None and self.stage_id is not None:
-            self.queue_id = self.stage.queue_id
+            self.queue_id = related_on(self, "stage", using=using).queue_id
             changed.add("queue")
         if self.queue_id is None and self._state.adding:
             user_id = actor_user_id(current_actor()) or getattr(self, "created_by_id", None)
             if user_id is not None:
                 user_model = apps.get_model(settings.AUTH_USER_MODEL)
                 with system_context(reason="work.task.personal_queue_user"):
-                    user = user_model._base_manager.filter(pk=user_id).first()
+                    user = user_model._base_manager.db_manager(using).filter(pk=user_id).first()
                 if user is not None:
                     queue_model = apps.get_model("work", "Queue")
-                    queue = queue_model.objects.personal_for(user, provision=provision)
+                    queue = queue_model.objects.db_manager(using).personal_for(user, provision=provision)
                     if queue is not None:
                         self.queue = queue
                         changed.add("queue")
@@ -1262,16 +1385,16 @@ class TaskWork(StagedModelMixin):
                 changed.add("stage")
         return changed
 
-    def _project_stage_lifecycle(self) -> set[str]:
+    def _project_stage_lifecycle(self, *, using: str) -> set[str]:
         """Project all seven stage categories onto coarse task lifecycle fields."""
 
         if self.stage_id is None:
             return set()
-        category = str(self.stage.get_category())
+        category = str(related_on(self, "stage", using=using).get_category())
         now = timezone.now()
-        loaded_stage_id = self._work_loaded_id("stage_id")
+        loaded_stage_id = self._work_loaded_id("stage_id", using=using)
         stage_changed = self._state.adding or loaded_stage_id != self.stage_id
-        old_category = self._stage_category(loaded_stage_id) if stage_changed else category
+        old_category = self._stage_category(loaded_stage_id, using=using) if stage_changed else category
 
         with self._work_verb_write():
             if category in {"triage", "backlog", "unstarted", "started"}:
@@ -1311,35 +1434,41 @@ class TaskWork(StagedModelMixin):
             fields.add("triaged_at")
         return fields
 
-    def _stage_category(self, stage_id: Any | None) -> str | None:
+    def _stage_category(self, stage_id: Any | None, *, using: str) -> str | None:
         """Return the category of a previously loaded stage id."""
 
         if stage_id is None:
             return None
         stage_model = self.stage_model()
-        queryset = stage_model._base_manager.all()
+        queryset = stage_model._base_manager.db_manager(using).all()
         sudo = getattr(queryset, "sudo", None)
         if callable(sudo):
             queryset = sudo(reason="work.task.loaded_stage_category")
         return cast(str | None, queryset.filter(pk=stage_id).values_list("category", flat=True).first())
 
-    def _stage_for_category(self, category: str) -> Stage:
+    def _stage_for_category(self, category: str, *, using: str) -> Stage:
         """Return the first ordered stage in this task's queue for ``category``."""
 
         stage_model = self.stage_model()
-        stage = stage_model.for_container(self.queue).filter(category=category).first()
+        stage = (
+            stage_model.for_container(related_on(self, "queue", using=using))
+            .using(using)
+            .filter(category=category)
+            .first()
+        )
         if stage is None:
             raise ValidationError({"stage": f"Queue has no {category} stage."})
         return cast(Stage, stage)
 
-    def _move_links_to(self, canonical: models.Model) -> None:
+    def _move_links_to(self, canonical: models.Model, *, using: str) -> None:
         """Re-key source links to ``canonical``, deleting URL collisions."""
 
         link_model = apps.get_model("projects", "Link")
-        source_target = canonical_record_target(self)
-        canonical_target = canonical_record_target(canonical)
+        source_target = canonical_record_target(self, using=using)
+        canonical_target = canonical_record_target(canonical, using=using)
         source_links = list(
-            link_model.objects.sudo(reason="work.task.mark_duplicate.links")
+            link_model.objects.db_manager(using)
+            .sudo(reason="work.task.mark_duplicate.links")
             .lock_if_supported()
             .filter(
                 content_type=source_target.content_type,
@@ -1350,16 +1479,18 @@ class TaskWork(StagedModelMixin):
         if not source_links:
             return
         canonical_urls = set(
-            link_model._base_manager.filter(
+            link_model._base_manager.db_manager(using)
+            .filter(
                 content_type=canonical_target.content_type,
                 object_id=canonical_target.object_id,
-            ).values_list("url", flat=True)
+            )
+            .values_list("url", flat=True)
         )
-        relation = link_model.objects.target_relation(canonical)
+        relation = link_model.objects.db_manager(using).target_relation(canonical)
         canonical_subject = SubjectRef(to_object_ref(canonical))
         for link in source_links:
             if link.url in canonical_urls:
-                link.delete()
+                link.delete(using=using)
                 continue
             resource = to_object_ref(link)
             delete_relationships(
@@ -1371,7 +1502,7 @@ class TaskWork(StagedModelMixin):
             )
             link.content_type = canonical_target.content_type
             link.object_id = canonical_target.object_id
-            link.save(update_fields=("content_type", "object_id", "updated_at"))
+            link.save(update_fields=("content_type", "object_id", "updated_at"), using=using)
             write_relationships(
                 [
                     RelationshipTuple(
@@ -1383,48 +1514,52 @@ class TaskWork(StagedModelMixin):
             )
             canonical_urls.add(link.url)
 
-    def _move_followers_to(self, canonical: models.Model) -> None:
+    def _move_followers_to(self, canonical: models.Model, *, using: str) -> None:
         """Move source chatter followers, preserving canonical collisions."""
 
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        source_attachment = attachment_model.objects.for_record(self)
+        source_attachment = attachment_model.objects.db_manager(using).for_record(self)
         if source_attachment is None:
             return
         source_followers = list(
-            follower_model.objects.sudo(reason="work.task.mark_duplicate.followers")
+            follower_model.objects.db_manager(using)
+            .sudo(reason="work.task.mark_duplicate.followers")
             .lock_if_supported()
             .filter(attachment=source_attachment)
             .order_by("pk")
         )
         if not source_followers:
             return
-        canonical_attachment = attachment_model.objects.ensure_for_record(
+        canonical_attachment = attachment_model.objects.db_manager(using).ensure_for_record(
             canonical,
             title=canonical.message_thread_title(),
         )
         canonical_user_ids = set(
-            follower_model._base_manager.filter(thread=canonical_attachment.thread).values_list(
+            follower_model._base_manager.db_manager(using)
+            .filter(thread=related_on(canonical_attachment, "thread", using=using))
+            .values_list(
                 "user_id",
                 flat=True,
             )
         )
         for follower in source_followers:
             if follower.user_id in canonical_user_ids:
-                follower.delete()
+                follower.delete(using=using)
                 continue
-            follower.thread = canonical_attachment.thread
+            follower.thread_id = canonical_attachment.thread_id
             follower.attachment = canonical_attachment
             # A receipt is positional within its old thread and cannot be moved.
             follower.last_read_message = None
-            follower.save(
-                update_fields=("thread", "attachment", "last_read_message", "updated_at")
-            )
+            follower.save(update_fields=("thread", "attachment", "last_read_message", "updated_at"), using=using)
             canonical_user_ids.add(follower.user_id)
 
-    def _base_verb(self, name: str, *args: Any) -> Any:
+    def _base_verb(self, name: str, *args: Any, using: str) -> Any:
         """Run a projects-only lifecycle verb for a legacy queue-less task."""
 
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
         with self._work_verb_write():
             return getattr(super(), name)(*args)
 
@@ -1453,6 +1588,6 @@ class UserWork(ResourceLoadMixin):
 
         queue_model = apps.get_model("work", "Queue")
         for user in sorted(instances, key=lambda instance: instance.pk or 0):
-            queue_model.objects.provision_personal(user)
+            queue_model.objects.db_manager(user._state.db).provision_personal(user)
 
         super().after_resource_load(instances, tier=tier, source=source, publish=publish)

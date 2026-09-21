@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
-from django.db import IntegrityError, router, transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
 from phonenumbers import (
@@ -37,7 +37,7 @@ from phonenumbers import (
 )
 from rebac import PermissionDenied, actor_context, current_actor, system_context
 
-from angee.base.db import get_write_alias
+from angee.base.db import get_read_alias, get_write_alias
 from angee.base.identity import public_id_for
 from angee.base.mixins import HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
@@ -1487,9 +1487,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
     def identity_snapshot(self, party_id: str, *, actor: Any, lock: bool = False) -> tuple[Any, dict[str, Any]]:
         """Read the actor-visible identity basis, optionally locking its entire row set."""
 
-        alias = self._db or (
-            get_write_alias(self.model, bound=self) if lock else router.db_for_read(self.model)
-        )
+        alias = get_write_alias(self.model, bound=self) if lock else get_read_alias(self.model, bound=self)
         parties = self.db_manager(alias).with_actor(actor)
         party = parties.from_public_id(party_id)
         if party is None:

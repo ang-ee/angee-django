@@ -9,7 +9,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
 from django.utils import timezone
@@ -27,9 +27,11 @@ from angee.base.db import get_write_alias, related_on
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.permissions import require_authorization_database
 from angee.base.refs import RecordRefMixin, canonical_record_model, canonical_record_target
 from angee.base.scoping import bind_actor
 from angee.messaging.models import ThreadedModelMixin
+from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.scheduling.fields import RecurrenceField
 
 
@@ -62,35 +64,39 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
             raise ValueError("Projects with folders must be saved individually so access is reconciled.")
         return super().bulk_create(objs, **kwargs)
 
-    def from_task(self, task: models.Model) -> models.Model:
+    def from_task(self, task: models.Model, *, using: str | None = None) -> models.Model:
         """Return the one project promoted from ``task``, creating it if needed."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=task)
+        require_authorization_database(using, operation="Project promotion preflight", error_class=ImproperlyConfigured)
 
         if task.pk is None:
             raise ValidationError("A task must be saved before it can be promoted.")
         actor = current_actor()
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             with system_context(reason="projects.project.promote_from_task.lookup"):
-                locked_task = type(task).objects.lock_if_supported().get(pk=task.pk)
-                existing = self.filter(converted_from_id=task.pk).first()
+                locked_task = type(task).objects.db_manager(using).lock_if_supported().get(pk=task.pk)
+                existing = self.db_manager(using).filter(converted_from_id=task.pk).first()
             if existing is not None:
                 bind_actor(existing, actor)
                 return existing
 
-            verified_actor = self.check_create()
+            verified_actor = self.db_manager(using).check_create()
             project = self.model(
                 title=locked_task.title,
                 body=locked_task.note,
                 lead_id=locked_task.assignee_id,
                 converted_from_id=locked_task.pk,
             )
-            project.full_clean(validate_unique=False, validate_constraints=False)
+            project._state.db = using
+            project.full_clean_for_write(validate_unique=False, validate_constraints=False, using=using)
             project.sudo(reason="projects.project.promote_from_task")
             try:
-                with transaction.atomic():
-                    project.save()
+                with transaction.atomic(using=using):
+                    project.save(using=using)
             except IntegrityError:
                 with system_context(reason="projects.project.promote_from_task.concurrent_lookup"):
-                    project = self.get(converted_from_id=task.pk)
+                    project = self.db_manager(using).get(converted_from_id=task.pk)
             bind_actor(project, verified_actor)
             return project
 
@@ -101,56 +107,55 @@ class TaskManager(AngeeManager):
     def check_create(
         self,
         relationships: Mapping[str, Sequence[Any]] | None = None,
+        *,
+        using: str | None = None,
     ) -> SubjectRef:
         """Require project write when a new task is attached to a project."""
 
+        using = get_write_alias(self.model, using=using, bound=self)
+        require_authorization_database(using, operation="Task creation preflight", error_class=ImproperlyConfigured)
         project_values = tuple((relationships or {}).get("project", ()))
         if any(not project.has_access("write") for project in project_values):
             raise PermissionDenied("Write access to the project is required to add a task.")
         return super().check_create(relationships)
 
-    def from_activity(self, activity: models.Model) -> models.Model:
+    def from_activity(self, activity: models.Model, *, using: str | None = None) -> models.Model:
         """Return the one task promoted from ``activity``, creating it if needed."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=activity)
+        require_authorization_database(using, operation="Task promotion preflight", error_class=ImproperlyConfigured)
 
         if activity.pk is None:
             raise ValidationError("An activity must be saved before it can be promoted.")
         actor = current_actor()
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             with system_context(reason="projects.task.promote_from_activity.lookup"):
-                locked_activity = type(activity).objects.lock_if_supported().get(pk=activity.pk)
-                existing = self.filter(converted_from_activity_id=activity.pk).first()
+                locked_activity = type(activity).objects.db_manager(using).lock_if_supported().get(pk=activity.pk)
+                existing = self.db_manager(using).filter(converted_from_activity_id=activity.pk).first()
             if existing is not None:
                 bind_actor(existing, actor)
                 return existing
 
-            verified_actor = self.check_create()
+            verified_actor = self.db_manager(using).check_create()
             task = self.model(
                 title=locked_activity.summary,
                 note=locked_activity.note,
                 assignee_id=locked_activity.user_id,
                 due_date=locked_activity.due_date,
                 converted_from_activity_id=locked_activity.pk,
-                sort_order=self._append_rank("sort_order", project=None),
-                sub_sort_order=self._append_rank("sub_sort_order", parent=None),
             )
-            task.full_clean(validate_unique=False, validate_constraints=False)
+            task._state.db = using
+            task.allocate_ordering_ranks()
+            task.full_clean_for_write(validate_unique=False, validate_constraints=False, using=using)
             task.sudo(reason="projects.task.promote_from_activity")
             try:
-                with transaction.atomic():
-                    task.save()
+                with transaction.atomic(using=using):
+                    task.save(using=using)
             except IntegrityError:
                 with system_context(reason="projects.task.promote_from_activity.concurrent_lookup"):
-                    task = self.get(converted_from_activity_id=activity.pk)
+                    task = self.db_manager(using).get(converted_from_activity_id=activity.pk)
             bind_actor(task, verified_actor)
             return task
-
-    def _append_rank(self, field_name: str, **context: Any) -> float:
-        """Return an append rank for one exact task ordering context."""
-
-        field = cast(FractionalRankField, self.model._meta.get_field(field_name))
-        with system_context(reason=f"projects.task.append_{field_name}"):
-            previous = self.filter(**context).order_by(f"-{field_name}").values_list(field_name, flat=True).first()
-        return field.get_append_rank(previous)
 
 
 class LinkManager(AngeeManager):
@@ -179,33 +184,42 @@ class LinkManager(AngeeManager):
         url: str,
         title: str = "",
         metadata: Mapping[str, Any] | None = None,
+        using: str | None = None,
         **fields: Any,
     ) -> models.Model:
         """Create or update one link per canonical target and URL."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=target)
+        require_authorization_database(using, operation="Project relationship writes", error_class=ImproperlyConfigured)
 
         relation = self.target_relation(target)
         if not target.has_access("write"):
             raise PermissionDenied("Write access to the target is required to create a link.")
         actor = current_actor()
-        canonical = canonical_record_target(target)
+        canonical = canonical_record_target(target, using=using)
         values = {"title": title, "metadata": dict(metadata or {}), **fields}
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             with system_context(reason="projects.link.upsert.lookup"):
-                link = self.filter(
-                    content_type=canonical.content_type,
-                    object_id=canonical.object_id,
-                    url=url,
-                ).first()
+                link = (
+                    self.db_manager(using)
+                    .filter(
+                        content_type=canonical.content_type,
+                        object_id=canonical.object_id,
+                        url=url,
+                    )
+                    .first()
+                )
             if link is None:
-                verified_actor = self.check_create({relation: (target,)})
+                verified_actor = self.db_manager(using).check_create({relation: (target,)})
                 link = self.model(target=target, url=url, **values)
-                link.full_clean(validate_unique=False, validate_constraints=False)
-                link.sudo(reason="projects.link.upsert.create").save()
+                link._state.db = using
+                link.full_clean_for_write(validate_unique=False, validate_constraints=False, using=using)
+                link.sudo(reason="projects.link.upsert.create").save(using=using)
                 bind_actor(link, verified_actor)
             else:
                 for name, value in values.items():
                     setattr(link, name, value)
-                link.sudo(reason="projects.link.upsert.update").save(update_fields=(*values, "updated_at"))
+                link.sudo(reason="projects.link.upsert.update").save(update_fields=(*values, "updated_at"), using=using)
                 bind_actor(link, actor)
             write_relationships(
                 [
@@ -266,18 +280,15 @@ class ProjectBindingQuerySet(AngeeQuerySet[Any]):
     def delete(self) -> tuple[int, dict[str, int]]:
         """Require canonical unbind authority for every explicit bulk deletion."""
 
-        from angee.projects.access import require_binding_access
-
-        project_model = apps.get_model("projects", "Project")
-        for binding in self.select_related("content_type"):
-            project = project_model.objects.filter(pk=binding.project_id).first()
-            if project is None:
-                raise PermissionDenied("Share access to the binding project is required for deletion.")
+        using = get_write_alias(self.model, bound=self)
+        require_authorization_database(using, operation="Project unbinding", error_class=ImproperlyConfigured)
+        for binding in self.using(using).select_related("content_type"):
+            project = related_on(binding, "project", using=using, required=True)
             target = binding.target
             if target is None:
                 raise ValidationError({"target": "A live project binding target is required for deletion."})
             require_binding_access(project=project, target=target)
-        return super().delete()
+        return super(ProjectBindingQuerySet, self.using(using)).delete()
 
 
 class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, AngeeDataModel):
@@ -369,6 +380,11 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
         """Require target authority before a folder edit can widen project access."""
 
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         update_fields = kwargs.get("update_fields")
         folder_is_written = update_fields is None or bool({"folder", "folder_id"}.intersection(update_fields))
         previous: Any = None
@@ -381,45 +397,67 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
             self.__dict__.pop("_projects_previous_folder_id", None)
         folder_changed = folder_is_written and (self._state.adding or previous_folder_id != self.folder_id)
         if folder_changed:
-            from angee.projects.access import require_binding_access, require_target_binding_access
-
+            if previous_folder_id is not None or self.folder_id is not None:
+                require_authorization_database(
+                    using, operation="Project folder access", error_class=ImproperlyConfigured
+                )
             if self._state.adding and self.folder_id is not None:
-                require_target_binding_access(self.folder)
+                require_target_binding_access(related_on(self, "folder", using=using))
             elif not self._state.adding:
                 if previous_folder_id is not None:
                     previous_folder: Any = related_on(previous, "folder", using=using)
                     require_binding_access(project=self, target=previous_folder)
                 if self.folder_id is not None:
-                    require_binding_access(project=self, target=self.folder)
+                    require_binding_access(project=self, target=related_on(self, "folder", using=using))
         super().save(*args, **kwargs)
 
-    def pause(self) -> Project:
+    def pause(self, *, using: str | None = None) -> Project:
         """Pause this project, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.PAUSED))
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
-    def resume(self) -> Project:
+        return self._set_status(str(self.ProjectStatus.PAUSED), using=using)
+
+    def resume(self, *, using: str | None = None) -> Project:
         """Return this project to open work, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.OPEN))
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
-    def complete(self) -> Project:
+        return self._set_status(str(self.ProjectStatus.OPEN), using=using)
+
+    def complete(self, *, using: str | None = None) -> Project:
         """Complete this project, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.DONE))
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
-    def drop(self) -> Project:
+        return self._set_status(str(self.ProjectStatus.DONE), using=using)
+
+    def drop(self, *, using: str | None = None) -> Project:
         """Drop this project, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.DROPPED))
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
-    def _set_status(self, status: str) -> Project:
+        return self._set_status(str(self.ProjectStatus.DROPPED), using=using)
+
+    def _set_status(self, status: str, *, using: str) -> Project:
         """Persist one lifecycle target while preserving exact replay no-ops."""
 
         if self.status == status:
             return self
         cast(Any, self).status = status
-        self.save(update_fields=("status", "updated_at"))
+        self.save(update_fields=("status", "updated_at"), using=using)
         return self
 
 
@@ -582,28 +620,52 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
         return self.title
 
+    def allocate_ordering_ranks(self, *, using: str | None = None) -> None:
+        """Fill omitted project and parent ordering ranks on the selected database."""
+
+        using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
+        for field_name in ("sort_order", "sub_sort_order"):
+            field = cast(FractionalRankField, self._meta.get_field(field_name))
+            if field.attname in self.get_deferred_fields():
+                self.refresh_from_db(using=using, fields=[field.attname])
+            if getattr(self, field.attname) is None:
+                setattr(self, field.attname, field.get_append_rank_for_instance(self, using=using))
+
     def clean(self) -> None:
         """Normalize insert lifecycle state and reject invalid task structure."""
 
+        using = get_write_alias(type(self), using=self._state.db, instance=self)
+
         super().clean()
         self._normalize_insert_lifecycle()
-        self._validate_structure(lock=False)
+        self._validate_structure(lock=False, using=using)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist after revalidating mutable project structure."""
+
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         self._normalize_insert_lifecycle()
         update_fields = kwargs.get("update_fields")
         structure_fields = {"project", "project_id", "milestone", "milestone_id", "parent", "parent_id"}
         if self._state.adding or update_fields is None or structure_fields.intersection(update_fields):
-            with transaction.atomic():
-                self._validate_structure(lock=True)
+            with transaction.atomic(using=using):
+                self._validate_structure(lock=True, using=using)
                 super().save(*args, **kwargs)
             return
         super().save(*args, **kwargs)
 
-    def complete(self) -> Task:
+    def complete(self, *, using: str | None = None) -> Task:
         """Mark this task done, idempotently preserving its first completion time."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
             return self
@@ -611,11 +673,16 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         self.done_at = self.done_at or timezone.now()
         cast(Any, self).dropped_reason = None
         self.dropped_at = None
-        self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
+        self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"), using=using)
         return self
 
-    def drop(self, reason: str | TaskDroppedReason) -> Task:
+    def drop(self, reason: str | TaskDroppedReason, *, using: str | None = None) -> Task:
         """Drop this task for ``reason``, idempotently preserving the drop time."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         try:
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
@@ -627,11 +694,16 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         cast(Any, self).dropped_reason = str(reason_member)
         self.dropped_at = self.dropped_at or timezone.now()
         self.done_at = None
-        self.save(update_fields=("status", "dropped_reason", "dropped_at", "done_at", "updated_at"))
+        self.save(update_fields=("status", "dropped_reason", "dropped_at", "done_at", "updated_at"), using=using)
         return self
 
-    def reopen(self) -> Task:
+    def reopen(self, *, using: str | None = None) -> Task:
         """Return a done or dropped task to the open state, idempotently."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         if (
             self.status == self.TaskStatus.OPEN
@@ -644,14 +716,19 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         self.done_at = None
         cast(Any, self).dropped_reason = None
         self.dropped_at = None
-        self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
+        self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"), using=using)
         return self
 
-    def promote_to_project(self) -> models.Model:
+    def promote_to_project(self, *, using: str | None = None) -> models.Model:
         """Return the one project matured from this task."""
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         project_model = apps.get_model("projects", "Project")
-        return project_model.objects.from_task(self)
+        return project_model.objects.db_manager(using).from_task(self)
 
     def _normalize_insert_lifecycle(self) -> None:
         """Stamp coherent close state while rejecting contradictory inserts."""
@@ -673,13 +750,12 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         if self.done_at is not None or self.dropped_at is not None or self.dropped_reason is not None:
             raise ValidationError({"status": "An open task cannot carry done or dropped state."})
 
-    def _validate_structure(self, *, lock: bool) -> None:
+    def _validate_structure(self, *, lock: bool, using: str) -> None:
         """Validate milestone scope and the complete parent chain."""
 
         with system_context(reason="projects.task.validate_structure"):
             if self.milestone_id is not None:
-                milestone_model = self._meta.get_field("milestone").related_model
-                milestone = milestone_model.objects.filter(pk=self.milestone_id).only("project_id").first()
+                milestone = related_on(self, "milestone", using=using, required=False)
                 if milestone is not None and milestone.project_id != self.project_id:
                     raise ValidationError({"milestone": "Milestone must belong to the task's project."})
 
@@ -689,7 +765,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
                 if ancestor_id == self.pk or ancestor_id in visited:
                     raise ValidationError({"parent": "Task parents cannot form a cycle."})
                 visited.add(ancestor_id)
-                ancestors = type(self).objects.filter(pk=ancestor_id)
+                ancestors = type(self).objects.db_manager(using).filter(pk=ancestor_id)
                 if lock:
                     ancestors = ancestors.lock_if_supported()
                 ancestor_id = ancestors.values_list("parent_id", flat=True).first()
@@ -752,6 +828,12 @@ class TaskRelation(AuditMixin, AngeeDataModel):
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist symmetric relations in deterministic endpoint order."""
+
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         swapped = self._canonicalize_symmetric_pair()
         update_fields = kwargs.get("update_fields")
@@ -875,8 +957,10 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         indexes = (models.Index(fields=("content_type", "object_id")),)
 
     @classmethod
-    def validate_target(cls, target: models.Model) -> None:
+    def validate_target(cls, target: models.Model, *, using: str | None = None) -> None:
         """Reject resources outside the single projects-owned binding declaration."""
+
+        using = get_write_alias(cls, using=using, instance=target)
 
         target_label = target._meta.label_lower
         for allowed_label in cls.allowed_target_models:
@@ -886,7 +970,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
                 return
             if (
                 target_label == canonical_model._meta.label_lower
-                and allowed_model._base_manager.filter(pk=target.pk).exists()
+                and allowed_model._base_manager.db_manager(using).filter(pk=target.pk).exists()
             ):
                 return
         raise ValidationError(
@@ -904,33 +988,46 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Canonicalize every persisted target through the projects binding owner."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        require_authorization_database(using, operation="Project relationship writes", error_class=ImproperlyConfigured)
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         target = self.target
         if target is None:
             raise ValidationError({"target": "A project binding target is required."})
+        target._state.db = using
         self.validate_target(target)
         key_fields = {"project", "project_id", "content_type", "content_type_id", "object_id"}
         update_fields = kwargs.get("update_fields")
         key_is_written = update_fields is None or bool(key_fields.intersection(update_fields))
-        canonical = canonical_record_target(target)
+        canonical = canonical_record_target(target, using=using)
         if key_is_written:
-            from angee.projects.access import require_binding_access
-
             if not self._state.adding:
-                previous = type(self)._base_manager.filter(pk=self.pk).values_list(
-                    "project_id", "content_type_id", "object_id"
-                ).first()
+                previous = (
+                    type(self)
+                    ._base_manager.db_manager(using)
+                    .filter(pk=self.pk)
+                    .values_list("project_id", "content_type_id", "object_id")
+                    .first()
+                )
                 current = (self.project_id, canonical.content_type.pk, canonical.object_id)
                 if previous is not None and previous != current:
                     previous_project_id, previous_content_type_id, previous_object_id = previous
-                    previous_project = apps.get_model("projects", "Project").objects.filter(
-                        pk=previous_project_id
-                    ).first()
+                    previous_project = (
+                        apps.get_model("projects", "Project")
+                        .objects.db_manager(using)
+                        .filter(pk=previous_project_id)
+                        .first()
+                    )
                     if previous_project is None:
                         raise PermissionDenied("Share access to the previous binding project is required.")
-                    previous_content_type = ContentType.objects.get_for_id(previous_content_type_id)
-                    previous_target = previous_content_type.get_object_for_this_type(pk=previous_object_id)
+                    previous_content_type = ContentType.objects.db_manager(using).get_for_id(previous_content_type_id)
+                    previous_target = previous_content_type.get_object_for_this_type(pk=previous_object_id, using=using)
                     require_binding_access(project=previous_project, target=previous_target)
-            require_binding_access(project=self.project, target=target)
+            require_binding_access(project=related_on(self, "project", using=using), target=target)
         self.content_type = canonical.content_type
         self.object_id = canonical.object_id
         super().save(*args, **kwargs)
@@ -938,12 +1035,17 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Require canonical unbind authority for direct instance deletion."""
 
-        from angee.projects.access import require_binding_access
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        require_authorization_database(using, operation="Project relationship writes", error_class=ImproperlyConfigured)
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
 
         target = self.target
         if target is None:
             raise ValidationError({"target": "A live project binding target is required for deletion."})
-        require_binding_access(project=self.project, target=target)
+        require_binding_access(project=related_on(self, "project", using=using), target=target)
         return super().delete(*args, **kwargs)
 
     def __str__(self) -> str:
@@ -1006,11 +1108,16 @@ class ThreadActivityProjects(models.Model):
 
         abstract = True
 
-    def promote_to_task(self) -> models.Model:
+    def promote_to_task(self, *, using: str | None = None) -> models.Model:
         """Return the one task matured from this thread activity."""
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         task_model = apps.get_model("projects", "Task")
-        return task_model.objects.from_activity(self)
+        return task_model.objects.db_manager(using).from_activity(self)
 
 
 class ProjectBindingsMixin(models.Model):

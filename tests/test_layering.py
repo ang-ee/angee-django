@@ -10,6 +10,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_SERVING_IMPORTS = (
     "angee.asgi",
@@ -207,8 +209,6 @@ _FK_RELOAD_EXEMPTIONS = {
         "Preserve Person/Organization's concrete subtype instead of the FK's Party target.",
     ("addons/angee/parties/connections.py", "_connection_person", "_base_manager", "person_model", "handle.party_id"):
         "Project a Party FK onto Person rather than returning the declared Party target.",
-    ("addons/angee/projects/models.py", "delete", "objects", "project_model", "binding.project_id"):
-        "The actor-scoped project lookup gates binding deletion with PermissionDenied.",
     ("addons/angee/integrate/connect.py", "_state_user", "objects", "user_model", "record.user_id"):
         "StateRecord is a frozen OAuth payload, not a Django model with a user FK.",
     (
@@ -247,3 +247,269 @@ def test_fk_reloads_use_related_on() -> None:
         "Bare FK reloads must use angee.base.db.related_on(instance, field_name, using=...):\n"
         + "\n".join(violations)
     )
+
+
+def _routing_drift(tree: ast.Module, *, addon: bool) -> Iterator[tuple[str, int, str]]:
+    """Find routing drift syntactically, without importing Django or addon models.
+
+    A write-owner module contains get_write_alias/full_clean_for_write, a Django
+    transaction boundary, or an ORM-shaped mutator call or definition: save/save_base/create,
+    get_or_create/update_or_create/update/delete/bulk_create/bulk_update (including
+    async forms). Defining a save/delete override establishes write ownership
+    even if its only call is full_clean. This identifies syntax, not receiver
+    types or interprocedural dataflow. Aliased Django imports are resolved; dynamic getattr,
+    re-exports and aliases assigned at runtime are outside the check.
+
+    Within that module, every Django atomic/on_commit must supply an explicit
+    non-None alias, positionally or by using; opaque **kwargs do not establish it.
+    Every addon .full_clean call is a candidate. The one syntactic exemption is
+    super().full_clean inside a full_clean override: it implements the native
+    validation hook called by full_clean_for_write, rather than initiating a write.
+    Form-only modules without write syntax are outside scope; a form validation
+    in a mixed write module needs an individually reasoned exemption below.
+
+    Manager/queryset .db reads are forbidden even in pure-read modules. Recognize
+    native manager attributes, their fluent calls, get_queryset/system_queryset,
+    self in Manager/QuerySet classes or mixins, conventional queryset/manager/qs
+    names, and annotated or locally assigned aliases of those expressions.
+    Native row/scalar-returning calls terminate that recognition. Other .db
+    attributes (instance._state.db, version.db, environment.db) are not ORM
+    collection expressions. This is not cross-module or dynamic type inference.
+    """
+
+    imports: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for name in node.names:
+                imports[name.asname or name.name] = f"{node.module}.{name.name}"
+        elif isinstance(node, ast.Import):
+            for name in node.names:
+                imports[name.asname or name.name.split(".")[0]] = name.name if name.asname else name.name.split(".")[0]
+
+    def name_of(node: ast.AST) -> str:
+        if isinstance(node, ast.Name):
+            return imports.get(node.id, node.id)
+        if isinstance(node, ast.Attribute):
+            return f"{name_of(node.value)}.{node.attr}"
+        return ""
+
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    boundaries = {"django.db.transaction.atomic", "django.db.transaction.on_commit"}
+    mutators = {
+        "save", "save_base", "create", "get_or_create", "update_or_create", "update", "delete",
+        "bulk_create", "bulk_update",
+    }
+    mutators |= {f"a{name}" for name in mutators}
+    owners = [
+        node for node in ast.walk(tree) if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    functions = [node for node in owners if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+    def scope_of(node: ast.AST) -> ast.AST:
+        return max(
+            (owner for owner in functions if owner.lineno <= node.lineno <= (owner.end_lineno or owner.lineno)),
+            key=lambda owner: owner.lineno,
+            default=tree,
+        )
+
+    def collection_type(node: ast.AST) -> bool:
+        return any(
+            isinstance(part, (ast.Name, ast.Attribute))
+            and (name_of(part).endswith("Manager") or "QuerySet" in name_of(part).rsplit(".", 1)[-1])
+            for part in ast.walk(node)
+        )
+
+    collection_names: dict[ast.AST, set[str]] = {scope: set() for scope in [tree, *functions]}
+    for function in functions:
+        for arg in [*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs]:
+            if arg.annotation is not None and collection_type(arg.annotation):
+                collection_names[function].add(arg.arg)
+
+    def collection_expression(node: ast.AST, scope: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            if node.id in {"queryset", "manager", "qs"} | collection_names[scope] | collection_names[tree]:
+                return True
+            if node.id == "self":
+                classes = [
+                    owner for owner in owners if isinstance(owner, ast.ClassDef)
+                    and owner.lineno <= node.lineno <= (owner.end_lineno or owner.lineno)
+                ]
+                owner = max(classes, key=lambda owner: owner.lineno, default=None)
+                return owner is not None and (
+                    owner.name.endswith("Manager") or "QuerySet" in owner.name
+                    or any(collection_type(base) for base in owner.bases)
+                )
+        elif isinstance(node, ast.Attribute):
+            return node.attr in {"objects", "_base_manager", "_default_manager", "queryset", "manager"}
+        elif isinstance(node, ast.Call):
+            if name_of(node.func) in {"typing.cast", "cast"} and len(node.args) == 2:
+                return collection_type(node.args[0]) or collection_expression(node.args[1], scope)
+            if isinstance(node.func, ast.Attribute):
+                method = node.func.attr
+                if method in {"get_queryset", "system_queryset"}:
+                    return True
+                terminals = {
+                    "get", "first", "last", "earliest", "latest", "create", "get_or_create", "update_or_create",
+                    "count", "exists", "aggregate", "update", "delete", "bulk_create", "bulk_update", "in_bulk",
+                }
+                terminals |= {f"a{name}" for name in terminals}
+                if method in terminals:
+                    return False
+                return collection_expression(node.func.value, scope)
+            return collection_type(node.func)
+        return False
+
+    assignments = [node for node in ast.walk(tree) if isinstance(node, (ast.Assign, ast.AnnAssign))]
+    changed = True
+    while changed:
+        changed = False
+        for assignment in assignments:
+            scope = scope_of(assignment)
+            annotated = isinstance(assignment, ast.AnnAssign) and collection_type(assignment.annotation)
+            if annotated or assignment.value is not None and collection_expression(assignment.value, scope):
+                targets = assignment.targets if isinstance(assignment, ast.Assign) else [assignment.target]
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id not in collection_names[scope]:
+                        collection_names[scope].add(target.id)
+                        changed = True
+
+    manager_db_reads = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "db" and isinstance(node.ctx, ast.Load)
+        and collection_expression(node.value, scope_of(node))
+    ]
+    bare_decorators = [
+        decorator for owner in owners for decorator in owner.decorator_list
+        if name_of(decorator) == "django.db.transaction.atomic"
+    ]
+    write_owner = bool(bare_decorators) or any(owner.name in mutators for owner in functions) or any(
+        name_of(call.func) in boundaries
+        or name_of(call.func) == "angee.base.db.get_write_alias"
+        or isinstance(call.func, ast.Attribute) and call.func.attr in {*mutators, "full_clean_for_write"}
+        for call in calls
+    )
+
+    for node in [*calls, *bare_decorators, *manager_db_reads]:
+        parents = sorted(
+            (owner for owner in owners if owner.lineno <= node.lineno <= (owner.end_lineno or owner.lineno)),
+            key=lambda owner: owner.lineno,
+        )
+        owner_name = ".".join(owner.name for owner in parents)
+        if not isinstance(node, ast.Call):
+            yield "manager_db" if node in manager_db_reads else "transaction", node.lineno, owner_name
+            continue
+        called = name_of(node.func)
+        if called in {"django.db.router.db_for_read", "django.db.router.db_for_write"}:
+            yield "router", node.lineno, owner_name
+        elif write_owner and called in boundaries:
+            alias = next((keyword.value for keyword in node.keywords if keyword.arg == "using"), None)
+            position = 0 if called.endswith(".atomic") else 1
+            if alias is None and len(node.args) > position:
+                alias = node.args[position]
+            if alias is None or isinstance(alias, ast.Constant) and alias.value is None:
+                yield "transaction", node.lineno, owner_name
+        elif addon and write_owner and isinstance(node.func, ast.Attribute) and node.func.attr == "full_clean":
+            receiver = node.func.value
+            native_override = (
+                parents and parents[-1].name == "full_clean"
+                and isinstance(receiver, ast.Call) and name_of(receiver.func) == "super"
+            )
+            if not native_override:
+                yield "full_clean", node.lineno, owner_name
+
+
+_ROUTING_EXEMPTIONS = {
+    ("addons/angee/platform/permissions.py", "transaction", "reconcile_permission_schema"):
+        "Excluded platform lifecycle debt: PackageManagedRecord.target/REBAC cleanup lack alias propagation.",
+    ("addons/angee/workflows_agents/sessions.py", "transaction", "start_session"):
+        "Excluded agent-session entry debt: agent/provider/session owners still need routing and an entry guard.",
+    ("addons/angee/workflows_agents/sessions.py", "transaction", "post_message"):
+        "Excluded agent-session entry debt: session/turn owner routing is incomplete.",
+    ("addons/angee/workflows_agents/sessions.py", "transaction", "close_session"):
+        "Excluded agent-session entry debt: closure/turn cancellation routing is incomplete.",
+    ("addons/angee/workflows_agents/steps.py", "transaction", "AgentSessionStepImpl.run"):
+        "The workflow entry rejects non-default execution until the excluded agent/session owners support aliases.",
+    ("addons/angee/workflows_agents/steps.py", "transaction", "_TurnUpdateSink.flush"):
+        "Private persistence callback under AgentSessionStepImpl.run's default-only admission.",
+    ("addons/angee/workflows_agents/steps.py", "transaction", "_persist_turn_outcome"):
+        "Private outcome persistence under AgentSessionStepImpl.run's default-only admission.",
+}
+
+
+def test_write_owners_keep_routing_at_the_database_owner() -> None:
+    """Guard production core/addons; preserve history, test probes and the router owner.
+
+    Migrations/runtime_migrations are released history, tests exercise routers
+    and native APIs deliberately, and base/db.py implements alias selection.
+    Those are the only path-wide exemptions. Remaining exceptions are exact
+    module/kind/owner entries above; unused entries fail to prevent exemption rot.
+    """
+
+    violations: list[str] = []
+    used: set[tuple[str, str, str]] = set()
+    for root in (PROJECT_ROOT / "angee", PROJECT_ROOT / "addons/angee"):
+        for path in sorted(root.rglob("*.py")):
+            relative = path.relative_to(PROJECT_ROOT).as_posix()
+            if (
+                {"migrations", "runtime_migrations", "tests"}.intersection(path.relative_to(root).parts)
+                or path.stem == "tests" or path.stem.startswith("test_")
+            ):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for kind, line, owner in _routing_drift(tree, addon=relative.startswith("addons/")):
+                if kind in {"router", "manager_db"} and relative == "angee/base/db.py":
+                    continue
+                key = (relative, kind, owner)
+                if key in _ROUTING_EXEMPTIONS:
+                    used.add(key)
+                else:
+                    violations.append(f"{relative}:{line} {owner}: {kind}")
+    assert not violations, (
+        "Use database alias owners, explicit transaction aliases and full_clean_for_write:\n" + "\n".join(violations)
+    )
+    assert used == _ROUTING_EXEMPTIONS.keys(), f"Remove stale routing exemptions: {_ROUTING_EXEMPTIONS.keys() - used}"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("from django.db import router\nrouter.db_for_write(Model)", ["router"]),
+        ("from django.db import router as r\nr.db_for_read(Model)", ["router"]),
+        ("from django.db import transaction as tx\nwith tx.atomic(): pass", ["transaction"]),
+        ("from django.db.transaction import on_commit as commit\ncommit(callback)", ["transaction"]),
+        ("from django.db import transaction\n@transaction.atomic\ndef write(): pass", ["transaction"]),
+        ("from django.db import transaction\nwith transaction.atomic(using=None): pass", ["transaction"]),
+        ("from django.db import transaction\nwith transaction.atomic(using=alias): pass", []),
+        ("from django.db import transaction\ntransaction.on_commit(callback, alias)", []),
+        ("row.full_clean()\nrow.save(using=alias)", ["full_clean"]),
+        ("row.full_clean_for_write(using=alias)\nrow.save(using=alias)", []),
+        ("form.full_clean()", []),
+        ("def full_clean(self, **kwargs):\n    super().full_clean(**kwargs)\nrow.save()", []),
+        ("def save(self):\n    super().full_clean()", ["full_clean"]),
+        ("class Record:\n    def delete(self):\n        self.full_clean()", ["full_clean"]),
+        ("class Record:\n    async def asave(self):\n        self.full_clean()", ["full_clean"]),
+        ("Model.objects.db", ["manager_db"]),
+        ("Model._base_manager.db", ["manager_db"]),
+        ("Model._default_manager.db", ["manager_db"]),
+        ("Model.objects.using(alias).filter(active=True).db", ["manager_db"]),
+        ("queryset.db", ["manager_db"]),
+        ("manager.db", ["manager_db"]),
+        ("qs.db", ["manager_db"]),
+        ("class Owner(models.QuerySet):\n    def read(self):\n        return self.db", ["manager_db"]),
+        ("class Owner(models.Manager):\n    def read(self):\n        return self.db", ["manager_db"]),
+        ("rows = Model.objects.all()\nselected = rows\nselected.db", ["manager_db"]),
+        ("def read(rows: models.QuerySet[Model]):\n    return rows.db", ["manager_db"]),
+        ("def read():\n    ledger = Model.objects\n    return ledger.db", ["manager_db"]),
+        ("cast(models.QuerySet[Model], value).db", ["manager_db"]),
+        ("model.system_queryset().db", ["manager_db"]),
+        ("self._state.db", []),
+        ("self.env.db", []),
+        ("version.db", []),
+        ("Version.objects.get(pk=1).db", []),
+        ("VersionManager().get(pk=1).db", []),
+    ],
+)
+def test_routing_drift_syntax(source: str, expected: list[str]) -> None:
+    """Exercise write definitions, routing aliases and ORM collection false positives."""
+
+    assert [kind for kind, _line, _owner in _routing_drift(ast.parse(source), addon=True)] == expected

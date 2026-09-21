@@ -15,7 +15,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import (
     PermissionDenied,
@@ -35,6 +35,7 @@ from angee.base.models import (
     AngeeManager,
     role_anchor,
 )
+from angee.base.permissions import require_authorization_database
 from angee.base.refs import RecordRefMixin, canonical_record_target
 from angee.base.scoping import bind_actor
 from angee.resources.mixins import ResourceLoadMixin
@@ -115,7 +116,16 @@ class WorkspaceVisibleMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row and idempotently reconcile its wildcard reader."""
 
-        with transaction.atomic():
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        require_authorization_database(
+            using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
+        )
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
+        with transaction.atomic(using=using):
             super().save(*args, **kwargs)
             write_relationships(
                 [
@@ -131,39 +141,45 @@ class WorkspaceVisibleMixin(models.Model):
 class ProductManager(AngeeManager):
     """Own the idempotent Project-to-Product maturation write."""
 
-    def from_project(self, project: models.Model) -> models.Model:
+    def from_project(self, project: models.Model, *, using: str | None = None) -> models.Model:
         """Return the one Product promoted from ``project`` with provenance.
 
         Promotion deliberately requires both Project write and ``portfolio_admin``:
         R11 strategy curation wins over owner prerogative at the Product rung.
         """
 
+        using = get_write_alias(self.model, using=using, bound=self, instance=project)
+        require_authorization_database(
+            using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
+        )
+
         if project.pk is None:
             raise ValidationError("A project must be saved before it can be promoted.")
         actor = current_actor()
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             with system_context(reason="portfolio.product.promote_from_project.lookup"):
-                locked_project = type(project).objects.lock_if_supported().get(pk=project.pk)
-                existing = self.filter(originated_from_id=project.pk).first()
+                locked_project = type(project).objects.db_manager(using).lock_if_supported().get(pk=project.pk)
+                existing = self.db_manager(using).filter(originated_from_id=project.pk).first()
             if existing is not None:
                 bind_actor(existing, actor)
                 return existing
 
-            verified_actor = self.check_create()
+            verified_actor = self.db_manager(using).check_create()
             product = self.model(
                 name=locked_project.title,
                 body=locked_project.body,
                 owner_id=locked_project.lead_id,
                 originated_from_id=locked_project.pk,
             )
-            product.full_clean(validate_unique=False, validate_constraints=False)
+            product._state.db = using
+            product.full_clean_for_write(validate_unique=False, validate_constraints=False, using=using)
             product.sudo(reason="portfolio.product.promote_from_project")
             try:
-                with transaction.atomic():
-                    product.save()
+                with transaction.atomic(using=using):
+                    product.save(using=using)
             except IntegrityError:
                 with system_context(reason="portfolio.product.promote_from_project.concurrent_lookup"):
-                    product = self.get(originated_from_id=project.pk)
+                    product = self.db_manager(using).get(originated_from_id=project.pk)
             bind_actor(product, verified_actor)
             return product
 
@@ -267,6 +283,15 @@ class Initiative(WorkspaceVisibleMixin, HierarchyMixin, AuditMixin, AngeeDataMod
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the Initiative, rejecting ancestry-unsafe subtree moves."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        require_authorization_database(
+            using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
+        )
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         parent_changed = False
         saved_parent_id = None
         saved_path = self.path
@@ -274,32 +299,33 @@ class Initiative(WorkspaceVisibleMixin, HierarchyMixin, AuditMixin, AngeeDataMod
             if hasattr(self, "_hierarchy_saved_parent_id"):
                 saved_parent_id = self._hierarchy_saved_parent_id
             else:
-                saved_parent_id = self._hierarchy_committed_parent_id()
+                saved_parent_id = self._hierarchy_committed_parent_id(using=using)
             parent_changed = saved_parent_id != self.parent_id
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             super().save(*args, **kwargs)
             if parent_changed:
                 try:
-                    self._validate_subtree_project_ancestry()
+                    self._validate_subtree_project_ancestry(using=using)
                 except ValidationError:
                     self.path = saved_path
                     self._hierarchy_saved_parent_id = saved_parent_id
                     raise
 
-    def _validate_subtree_project_ancestry(self) -> None:
+    def _validate_subtree_project_ancestry(self, *, using: str) -> None:
         """Reject a move that makes a subtree Project placement conflict."""
 
         link_model = apps.get_model("portfolio", "InitiativeProject")
         offenders: dict[Any, str] = {}
         with system_context(reason="portfolio.initiative.validate_subtree_project_ancestry"):
             links = (
-                link_model._base_manager.filter(initiative__path__startswith=self.path)
+                link_model._base_manager.db_manager(using)
+                .filter(initiative__path__startswith=self.path)
                 .select_related("initiative", "project")
                 .order_by("project_id", "pk")
             )
             for link in links:
                 try:
-                    link._validate_ancestry(lock=True)
+                    link._validate_ancestry(lock=True, using=using)
                 except ValidationError:
                     offenders[link.project_id] = str(link.project)
         if offenders:
@@ -357,30 +383,40 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
     def clean(self) -> None:
         """Reject a second Project placement on the same ancestry path."""
 
+        using = get_write_alias(type(self), using=self._state.db, instance=self)
+
         super().clean()
-        self._validate_ancestry(lock=False)
+        self._validate_ancestry(lock=False, using=using)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist only after serializing the ancestry-path validation."""
 
-        with transaction.atomic():
-            self._validate_ancestry(lock=True)
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        require_authorization_database(
+            using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
+        )
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
+        with transaction.atomic(using=using):
+            self._validate_ancestry(lock=True, using=using)
             super().save(*args, **kwargs)
 
-    def _validate_ancestry(self, *, lock: bool) -> None:
+    def _validate_ancestry(self, *, lock: bool, using: str) -> None:
         """Raise when this Project already sits on an ancestor or descendant."""
 
         if self.initiative_id is None or self.project_id is None:
             return
-        using = get_write_alias(type(self), instance=self)
         with system_context(reason="portfolio.initiative_project.validate_ancestry"):
             initiative: Any = related_on(self, "initiative", using=using, required=False)
             if initiative is None:
                 return
-            placements = type(self).objects.filter(project_id=self.project_id).exclude(pk=self.pk)
+            placements = type(self).objects.db_manager(using).filter(project_id=self.project_id).exclude(pk=self.pk)
             if lock:
                 project_model = self._meta.get_field("project").related_model
-                project_model.objects.lock_if_supported().filter(pk=self.project_id).exists()
+                project_model.objects.db_manager(using).lock_if_supported().filter(pk=self.project_id).exists()
                 placements = placements.lock_if_supported()
             conflict = placements.filter(
                 models.Q(initiative__path__startswith=initiative.path)
@@ -410,17 +446,31 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
 
         update_model = apps.get_model("portfolio", "Update")
         for placement in sorted(instances, key=lambda instance: instance.pk or 0):
+            using = get_write_alias(cls, instance=placement)
+            require_authorization_database(using, operation="Portfolio demo grants", error_class=ImproperlyConfigured)
             targets = (
-                (placement.initiative, "at_risk", "Scope is clear; delivery sequencing needs attention."),
-                (placement.project, "on_track", "The current push is progressing as planned."),
+                (
+                    related_on(placement, "initiative", using=using),
+                    "at_risk",
+                    "Scope is clear; delivery sequencing needs attention.",
+                ),
+                (
+                    related_on(placement, "project", using=using),
+                    "on_track",
+                    "The current push is progressing as planned.",
+                ),
             )
             for target, health, body in targets:
-                canonical = canonical_record_target(target)
-                if update_model._base_manager.filter(
-                    content_type=canonical.content_type,
-                    object_id=canonical.object_id,
-                    body=body,
-                ).exists():
+                canonical = canonical_record_target(target, using=using)
+                if (
+                    update_model._base_manager.db_manager(using)
+                    .filter(
+                        content_type=canonical.content_type,
+                        object_id=canonical.object_id,
+                        body=body,
+                    )
+                    .exists()
+                ):
                     continue
                 report = update_model(
                     target=target,
@@ -429,7 +479,7 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
                     created_by_id=placement.created_by_id,
                     updated_by_id=placement.updated_by_id,
                 )
-                report.sudo(reason="portfolio.demo.report").save()
+                report.sudo(reason="portfolio.demo.report").save(using=using)
 
 
 class UpdateManager(AngeeManager):
@@ -464,8 +514,14 @@ class UpdateManager(AngeeManager):
         target: models.Model,
         health: str | UpdateHealth,
         body: str = "",
+        using: str | None = None,
     ) -> models.Model:
         """Create one report on a writable Project or Initiative."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=target)
+        require_authorization_database(
+            using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
+        )
 
         if target.pk is None:
             raise ValidationError({"target": "A saved project or initiative is required."})
@@ -473,13 +529,14 @@ class UpdateManager(AngeeManager):
         if not target.has_access("write"):
             raise PermissionDenied("Write access to the update target is required.")
         actor = current_actor()
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             with system_context(reason="portfolio.update.report.target"):
-                locked_target = type(target).objects.lock_if_supported().get(pk=target.pk)
-            verified_actor = self.check_create({relation: (locked_target,)})
+                locked_target = type(target).objects.db_manager(using).lock_if_supported().get(pk=target.pk)
+            verified_actor = self.db_manager(using).check_create({relation: (locked_target,)})
             report = self.model(target=locked_target, health=health, body=body)
-            report.full_clean(validate_unique=False, validate_constraints=False)
-            report.sudo(reason="portfolio.update.report").save()
+            report._state.db = using
+            report.full_clean_for_write(validate_unique=False, validate_constraints=False, using=using)
+            report.sudo(reason="portfolio.update.report").save(using=using)
             bind_actor(report, verified_actor or actor)
             return report
 
@@ -519,6 +576,15 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the report, its target relation, and the latest-health denorm."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        require_authorization_database(
+            using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
+        )
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         if self.health in (None, ""):
             raise ValidationError({"health": "A portfolio update must assert health."})
         if self.target is None:
@@ -526,12 +592,18 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         relation = UpdateManager.target_relation(self.target)
         if self.pk is not None and not self._state.adding:
             with system_context(reason="portfolio.update.immutable_target"):
-                persisted = type(self)._base_manager.filter(pk=self.pk).values("content_type_id", "object_id").first()
+                persisted = (
+                    type(self)
+                    ._base_manager.db_manager(using)
+                    .filter(pk=self.pk)
+                    .values("content_type_id", "object_id")
+                    .first()
+                )
             if persisted is not None and (
                 persisted["content_type_id"] != self.content_type_id or persisted["object_id"] != self.object_id
             ):
                 raise ValidationError({"target": "An update's target is immutable."})
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             super().save(*args, **kwargs)
             write_relationships(
                 [
@@ -544,7 +616,7 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
             )
             # Django QuerySet.update() bypasses save-path re-denormalization by nature;
             # the API routes through instance saves, and internal bulk writers are on their honor.
-            type(self.target)._base_manager.filter(pk=self.target.pk).update(
+            type(self.target)._base_manager.db_manager(using).filter(pk=self.target.pk).update(
                 health=self.health,
                 health_updated_at=self.updated_at,
             )
@@ -554,20 +626,30 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Delete the report and restore its target's surviving latest health."""
 
+        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
+        self._state.db = using
+        require_authorization_database(
+            using, operation="Portfolio relationship writes", error_class=ImproperlyConfigured
+        )
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         target = self.target
         content_type_id = self.content_type_id
         object_id = self.object_id
-        with transaction.atomic():
+        with transaction.atomic(using=using):
             if target is not None:
                 with system_context(reason="portfolio.update.delete.target"):
-                    target = type(target).objects.lock_if_supported().get(pk=target.pk)
+                    target = type(target).objects.db_manager(using).lock_if_supported().get(pk=target.pk)
             result = super().delete(*args, **kwargs)
             if target is not None:
                 with system_context(reason="portfolio.update.delete.latest"):
                     latest = next(
                         iter(
                             type(self)
-                            ._base_manager.filter(content_type_id=content_type_id, object_id=object_id)
+                            ._base_manager.db_manager(using)
+                            .filter(content_type_id=content_type_id, object_id=object_id)
                             .order_by("-updated_at", "-created_at")
                             .values("health", "updated_at")[:1]
                         ),
@@ -575,7 +657,7 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
                     )
                 health = latest["health"] if latest is not None else None
                 health_updated_at = latest["updated_at"] if latest is not None else None
-                type(target)._base_manager.filter(pk=target.pk).update(
+                type(target)._base_manager.db_manager(using).filter(pk=target.pk).update(
                     health=health,
                     health_updated_at=health_updated_at,
                 )
@@ -683,11 +765,16 @@ class ProjectPortfolio(models.Model):
             ),
         )
 
-    def promote_to_product(self) -> models.Model:
+    def promote_to_product(self, *, using: str | None = None) -> models.Model:
         """Return the one Product matured from this Project."""
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if deferred := self.get_deferred_fields():
+            self.refresh_from_db(using=using, fields=deferred)
+
         product_model = apps.get_model("portfolio", "Product")
-        return product_model.objects.from_project(self)
+        return product_model.objects.db_manager(using).from_project(self)
 
 
 class TaskPortfolio(models.Model):

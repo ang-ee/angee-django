@@ -16,6 +16,7 @@ from django.db.models import Model
 from pydantic import BaseModel, PrivateAttr
 
 from angee.addons import is_angee_addon
+from angee.base.db import get_read_alias
 from angee.base.impl import ImplChoice, ImplClassField
 
 
@@ -292,8 +293,9 @@ def resource_counts(*, using: str | None = None) -> dict[str, int]:
         resource = apps.get_model("resources", "Resource")
     except LookupError:
         return {}
-    ledger = resource.objects.using(using)
-    if not router.allow_migrate_model(ledger.db, resource):
+    alias = get_read_alias(resource, using=using, bound=resource.objects)
+    ledger = resource.objects.using(alias)
+    if not router.allow_migrate_model(alias, resource):
         return {}
     try:
         return ledger.counts_by_addon()

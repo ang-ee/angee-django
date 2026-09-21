@@ -12,6 +12,9 @@ from django.db import transaction
 from rebac import ObjectRef, app_settings, system_context
 from rebac.memberships import grant as grant_membership
 
+from angee.base.db import get_write_alias
+from angee.base.permissions import require_authorization_database
+
 
 class Command(BaseCommand):
     """Ensure the configured first admin exists."""
@@ -51,11 +54,13 @@ class Command(BaseCommand):
         )
 
         User = get_user_model()
-        manager = User._default_manager
-        lookup_manager = _system_lookup_manager(User)
+        using = get_write_alias(User)
+        require_authorization_database(using, operation="IAM admin bootstrap", error_class=CommandError)
+        manager = User._default_manager.db_manager(using)
+        lookup_manager = _system_lookup_manager(User, using=using)
         username_field = User.USERNAME_FIELD
 
-        with system_context(reason="iam.bootstrap_admin"), transaction.atomic():
+        with system_context(reason="iam.bootstrap_admin"), transaction.atomic(using=using):
             try:
                 user = lookup_manager.get(**{username_field: username})
             except User.DoesNotExist:
@@ -70,7 +75,7 @@ class Command(BaseCommand):
                 created = False
                 update_fields = _promote_existing_admin(user, email=email, password=password)
                 if update_fields:
-                    user.save(update_fields=sorted(update_fields))
+                    user.save(using=using, update_fields=sorted(update_fields))
             role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
             if not role:
                 raise CommandError("bootstrap_admin requires REBAC_UNIVERSAL_ADMIN_ROLE.")
@@ -98,10 +103,10 @@ def _configured(
     return default
 
 
-def _system_lookup_manager(user_model: type[Any]) -> Any:
+def _system_lookup_manager(user_model: type[Any], *, using: str) -> Any:
     """Return a queryset/manager that can see users before an admin exists."""
 
-    manager = user_model._default_manager
+    manager = user_model._default_manager.db_manager(using)
     system_context = getattr(manager, "system_context", None)
     if system_context is None:
         return manager

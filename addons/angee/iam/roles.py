@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import QuerySet, Subquery
 from pydantic import BaseModel
 from rebac import (
@@ -36,7 +37,9 @@ from rebac.schema import (
     relation_is_writable,
 )
 
+from angee.base.db import get_write_alias
 from angee.base.identity import canonical_subject_ref, public_id_for, public_subject_ref
+from angee.base.permissions import require_authorization_database
 
 IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
@@ -373,28 +376,33 @@ def grant_role(
     role: str,
     caveat_name: str = "",
     caveat_context: dict[str, Any] | None = None,
+    using: str | None = None,
 ) -> None:
     """Grant one declared role to one existing supported IAM subject."""
 
-    grant_membership(
-        subject=validate_subject(subject),
-        container=validate_role(role, grantable=True),
-        caveat_name=caveat_name,
-        caveat_context=caveat_context,
-    )
+    using = get_write_alias(active_relationship_model(), using=using)
+    require_authorization_database(using, operation="IAM role grants")
+    with transaction.atomic(using=using):
+        grant_membership(
+            subject=validate_subject(subject),
+            container=validate_role(role, grantable=True),
+            caveat_name=caveat_name,
+            caveat_context=caveat_context,
+        )
 
-
-def revoke_role(*, subject: str, role: str, caveat_name: str = "") -> bool:
+def revoke_role(*, subject: str, role: str, caveat_name: str = "", using: str | None = None) -> bool:
     """Revoke an exact role tuple while allowing stale subject and role ids."""
 
-    return bool(
-        revoke_membership(
-            subject=validate_subject(subject, require_existing=False),
-            container=validate_role(role),
-            caveat_name=caveat_name,
+    using = get_write_alias(active_relationship_model(), using=using)
+    require_authorization_database(using, operation="IAM role grants")
+    with transaction.atomic(using=using):
+        return bool(
+            revoke_membership(
+                subject=validate_subject(subject, require_existing=False),
+                container=validate_role(role),
+                caveat_name=caveat_name,
+            )
         )
-    )
-
 
 def relationship_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[Any]:
     """Return active relationship rows in stable order."""

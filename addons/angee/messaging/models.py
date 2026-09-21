@@ -39,7 +39,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import close_old_connections, connections, models, router, transaction
+from django.db import close_old_connections, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.utils.text import capfirst
@@ -52,7 +52,7 @@ from rebac import (
 )
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_read_alias, get_write_alias, related_on
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
@@ -2318,13 +2318,11 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         if self.thread_id is None:
             return True
         field = self._meta.get_field("thread")
+        using = get_read_alias(field.related_model, instance=self)
         thread = field.get_cached_value(self, default=None)
         if thread is None:
-            using = self._state.db
-            if using is None:
-                using = router.db_for_read(field.related_model)
             thread = related_on(self, "thread", using=using)
-        return not thread.is_record_attached(using=self._state.db)
+        return not thread.is_record_attached(using=using)
 
 
 class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):

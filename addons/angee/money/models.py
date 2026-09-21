@@ -33,6 +33,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils import timezone
 
+from angee.base.db import get_read_alias, get_write_alias
 from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
@@ -230,14 +231,15 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
             raise ValidationError(
                 "Contextual currency conversion requires its explicit reference currency."
             )
+        alias = get_read_alias(self.model, bound=self)
         canonical_currency, canonical_reference = self._canonical_currencies(
             currency,
             reference_currency,
-            using=self.db,
+            using=alias,
         )
         context_ref = None
         if context is not None:
-            context_ref = self._canonical_context(context, using=self.db)
+            context_ref = self._canonical_context(context, using=alias)
         code = (
             reference_currency_code()
             if reference_currency is None
@@ -248,7 +250,7 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
         if canonical_currency.code == code:
             return Decimal(1)
         draw_date = on_date or timezone.localdate()
-        rates = self.filter(
+        rates = self.using(alias).filter(
             currency=canonical_currency,
             date__lte=draw_date,
             is_archived=False,
@@ -287,11 +289,12 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
 
         if context is None or reference_currency is None:
             raise ValidationError("Contextual currency conversion requires saved canonical owners.")
-        context_ref = self._canonical_context(context, using=self.db)
+        alias = get_read_alias(self.model, bound=self)
+        context_ref = self._canonical_context(context, using=alias)
         self._canonical_currencies(
             reference_currency,
             reference_currency,
-            using=self.db,
+            using=alias,
         )
         return context_ref
 
@@ -466,7 +469,7 @@ class CurrencyRate(
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Keep every rate slot identity immutable after its first persistence."""
 
-        alias = kwargs.get("using") or self._state.db or DEFAULT_DB_ALIAS
+        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         with transaction.atomic(using=alias):
             self.date = self._meta.get_field("date").to_python(self.date)
             rate_field = self._meta.get_field("rate")
