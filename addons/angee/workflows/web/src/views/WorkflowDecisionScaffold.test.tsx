@@ -12,13 +12,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
 vi.mock("../i18n", () => ({ useWorkflowsT: () => (key: string) => key }));
 
 import type { WorkflowDecisionContentProps } from "./ApprovalTask";
-import {
-  WorkflowDecisionScaffold,
-  presentRows,
-  reasonLabel,
-  textValue,
-  unique,
-} from "./WorkflowDecisionScaffold";
+import { WorkflowDecisionScaffold } from "./WorkflowDecisionScaffold";
 
 const ContextSchema = v.object({ title: v.string(), warning: v.string(), recordId: v.string() });
 
@@ -57,15 +51,6 @@ test("invalid retained context keeps the framework action picker available", () 
   expect(screen.getByText("inbox.contextUnavailableTitle")).toBeTruthy();
   expect(screen.getByText("Decision picker")).toBeTruthy();
   expect(screen.queryByText("Domain content")).toBeNull();
-});
-
-test("shared retained-value helpers preserve intent without private copies", () => {
-  expect(presentRows([["kept", 0], ["empty", ""]] as const)).toEqual([["kept", 0]]);
-  expect(textValue("  value  ")).toBe("value");
-  expect(textValue(12)).toBe("12");
-  expect(reasonLabel((key) => key === "decision.reasonCode.match" ? "Matched" : key, "match"))
-    .toBe("Matched");
-  expect(unique(["a", "", "a", "b"])).toEqual(["a", "b"]);
 });
 
 function decisionProps(reviewContext: unknown): WorkflowDecisionContentProps {

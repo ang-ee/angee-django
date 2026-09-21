@@ -1,7 +1,7 @@
 import type { DataResourceLinesMetadata, Row } from "@angee/metadata";
 import type { LineInput } from "@angee/refine";
 
-import { relationValueId } from "../../widgets/types";
+import { relationIdList, relationValueId } from "../../widgets/types";
 
 /** RHF's stable field-array key, retained on unsaved form rows for save correlation. */
 export const CLIENT_LINE_KEY = "__angeeClientLineKey";
@@ -292,12 +292,6 @@ function lineFieldValue(row: Row, name: string, config: LineDiffConfig): unknown
   if (config.relationFields.has(name)) return relationValueId(row[name]);
   if (config.enumFields.has(name)) return enumModelValue(row[name]);
   return row[name];
-}
-
-/** Normalize related records or scalar ids to de-duplicated, non-empty public ids. */
-export function relationIdList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map(relationValueId))].filter(Boolean);
 }
 
 /**

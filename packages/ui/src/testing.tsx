@@ -24,15 +24,6 @@ export async function createUiTestModule(
   return Object.assign({}, original, ...groups) as UiModule;
 }
 
-/** Reproduce composed namespace lookup, including the interpolation tests rely on. */
-export function createNamespaceTTestDouble(): UiModule["createNamespaceT"] {
-  return (_namespace, messages) => () => (key, values) => Object.entries(values ?? {})
-    .reduce(
-      (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
-      messages[key] ?? key,
-    );
-}
-
 /** Group the route/runtime hooks most addon view tests replace together. */
 export function createUiRouteTestDoubles({
   routeHref = (route, parameters) => parameters?.id ? `/${route}/${String(parameters.id)}` : `/${route}`,

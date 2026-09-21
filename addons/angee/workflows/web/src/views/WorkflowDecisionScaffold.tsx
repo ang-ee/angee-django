@@ -3,9 +3,7 @@ import * as v from "valibot";
 import {
   Alert,
   SectionEyebrow,
-  optionalTranslation,
   type RecordPeekReference,
-  type UiTranslate,
 } from "@angee/ui";
 
 import { useWorkflowsT } from "../i18n";
@@ -118,28 +116,7 @@ export function WorkflowDecisionScaffold<Context>({
   </section>;
 }
 
-/** Drop rows whose retained value is absent while preserving renderable values. */
-export function presentRows<T extends readonly [React.ReactNode, React.ReactNode]>(
-  rows: readonly T[],
-): T[] {
-  return rows.filter(([, value]) => value !== "" && value !== null && value !== undefined);
-}
-
 /** Normalize retained scalar text without interpreting domain-specific objects. */
 export function textValue(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
-}
-
-/** Resolve a namespaced reason when translated, retaining its stable code otherwise. */
-export function reasonLabel(
-  t: UiTranslate,
-  value: string | null | undefined,
-  prefix = "decision.reasonCode",
-): string {
-  return value ? optionalTranslation(t, `${prefix}.${value}`) ?? value : "";
-}
-
-/** Return non-empty strings once, retaining declaration order. */
-export function unique(values: readonly string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
 }

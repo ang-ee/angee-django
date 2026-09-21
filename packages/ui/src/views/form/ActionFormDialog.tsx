@@ -9,8 +9,7 @@ import { Button } from "../../ui/button";
 import { FieldDescription, FieldLabel, FieldRoot } from "../../ui/field";
 import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
-import { relationValueId } from "../../widgets/types";
-import { relationIdList } from "./editable-lines";
+import { relationIdList, relationValueId } from "../../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import {
   emptyDialogValue,

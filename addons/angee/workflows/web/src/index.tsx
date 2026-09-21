@@ -158,10 +158,7 @@ export type { ApprovalTaskProps, ApprovalVerdict, WorkflowDecisionContentCompone
 export {
   DecisionContextUnavailable,
   WorkflowDecisionScaffold,
-  presentRows,
-  reasonLabel,
   textValue,
-  unique,
 } from "./views/WorkflowDecisionScaffold";
 export type {
   WorkflowDecisionHeader,

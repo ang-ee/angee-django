@@ -14,16 +14,17 @@ function choose(option: HTMLElement) {
 
 describe("many2manyWidget", () => {
 
-  test("renders nested relation records by their option labels", () => {
+  test("renders mixed relation records and scalar ids once by their option labels", () => {
     const Read = many2manyWidget.read;
 
     render(
       <Read
-        value={[{ id: "skill-1" }, { id: "skill-2" }]}
+        value={[{ id: "skill-1" }, "skill-1", { id: "skill-2" }, { id: 7 }, 7, null, ""]}
         field={{
           options: [
             { value: "skill-1", label: "Planning" },
             { value: "skill-2", label: "Review" },
+            { value: "7", label: "Numeric skill" },
           ],
         }}
       />,
@@ -31,6 +32,7 @@ describe("many2manyWidget", () => {
 
     expect(screen.getByText("Planning")).toBeTruthy();
     expect(screen.getByText("Review")).toBeTruthy();
+    expect(screen.getByText("Numeric skill")).toBeTruthy();
   });
 });
 
@@ -71,7 +73,7 @@ test("a read-only multiple relation has no picker", () => {
 test("full forms retain individually removable chips, including unloaded selections", () => {
   const Edit = many2manyWidget.edit;
   const onChange = vi.fn();
-  render(<Edit value={["known", "unloaded"]} field={{ options: [{ value: "known", label: "Known" }] }} onChange={onChange} />);
+  render(<Edit value={[{ id: "known" }, "known", { id: "unloaded" }, null, ""]} field={{ options: [{ value: "known", label: "Known" }] }} onChange={onChange} />);
   fireEvent.click(screen.getByRole("button", { name: /unloaded/ }));
   expect(onChange).toHaveBeenLastCalledWith(["known"]);
   expect(screen.queryByText("+1")).toBeNull();

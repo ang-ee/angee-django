@@ -5,9 +5,8 @@ import type { WorkflowDecisionContentProps } from "@angee/workflows";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("@angee/ui", async (importOriginal) => {
-  const { createNamespaceTTestDouble, createUiRouteTestDoubles, createUiTestModule } = await import("@angee/ui/testing");
+  const { createUiRouteTestDoubles, createUiTestModule } = await import("@angee/ui/testing");
   return createUiTestModule(importOriginal,
-    { createNamespaceT: createNamespaceTTestDouble() },
     createUiRouteTestDoubles(),
   );
 });

@@ -30,9 +30,8 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   extractActionOutcome: (data: Record<string, unknown>, root: string) => data[root],
 }));
 vi.mock("@angee/ui", async (importOriginal) => {
-  const { createMutationDialogTestDouble, createNamespaceTTestDouble, createUiTestModule } = await import("@angee/ui/testing");
+  const { createMutationDialogTestDouble, createUiTestModule } = await import("@angee/ui/testing");
   return createUiTestModule(importOriginal, {
-    createNamespaceT: createNamespaceTTestDouble(),
     useRecordChromeContext: () => mocks.chrome,
     useActionResultRun: () => mocks.settle,
     Button: ({ children, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => <button type="button" {...props}>{children}</button>,

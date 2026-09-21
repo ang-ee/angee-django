@@ -21,6 +21,12 @@ export function relationValueId(value: unknown): string {
   return typeof id === "string" || typeof id === "number" ? String(id) : "";
 }
 
+/** Normalize related records or scalar ids to de-duplicated, non-empty public ids. */
+export function relationIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(relationValueId))].filter(Boolean);
+}
+
 /**
  * The label for an option `value`: the matching option's `label`, else the raw
  * value, else "". The one owner of the

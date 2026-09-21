@@ -2,6 +2,7 @@
 
 import {
   ModelMetadataProvider,
+  refineResourcesFromDataResources,
   schemaFieldMetadataFromDataResources,
   type Row,
   type SchemaFieldMetadata,
@@ -14,30 +15,16 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { Refine, type DataProvider } from "@refinedev/core";
+import { QueryClient } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec, type FormSpecFieldDescriptor } from "./form-spec";
 import { LabeledDescriptorField } from "./MutationDialog";
 import type { RowsValue } from "./RowsField";
-
-Element.prototype.scrollIntoView = vi.fn();
-
-const refineMocks = vi.hoisted(() => ({
-  useList: vi.fn(),
-  useOne: vi.fn(),
-}));
-
-vi.mock("@refinedev/core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@refinedev/core")>();
-  return {
-    ...actual,
-    useList: refineMocks.useList,
-    useOne: refineMocks.useOne,
-  };
-});
 
 const channelRows: Row[] = [
   { id: "chn-general", name: "General" },
@@ -60,43 +47,10 @@ const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
 ]);
 
 describe("rows widget", () => {
-  afterEach(cleanup);
-
-  beforeEach(() => {
-    refineMocks.useList.mockReset();
-    refineMocks.useOne.mockReset();
-    refineMocks.useOne.mockImplementation(
-      (options?: { id?: string; queryOptions?: { enabled?: boolean } }) => ({
-        result:
-          options?.queryOptions?.enabled !== false
-            ? channelRows.find((row) => row.id === options?.id)
-            : undefined,
-        query: {
-          isFetching: false,
-          error: null,
-          refetch: vi.fn(),
-        },
-      }),
-    );
-    refineMocks.useList.mockImplementation(
-      (options?: {
-        resource?: string;
-        queryOptions?: { enabled?: boolean };
-      }) => {
-        const enabled = options?.queryOptions?.enabled !== false;
-        const rows = enabled && options?.resource === "channels"
-          ? channelRows
-          : [];
-        return {
-          result: { data: rows, total: rows.length },
-          query: {
-            isFetching: false,
-            error: null,
-            refetch: vi.fn(),
-          },
-        };
-      },
-    );
+  afterEach(() => {
+    cleanup();
+    clients.forEach((client) => client.clear());
+    clients.length = 0;
   });
 
   test("renders a deserialized array-of-objects schema through the real registry", async () => {
@@ -179,7 +133,7 @@ describe("rows widget", () => {
     const filters = [
       { field: "status", operator: "eq" as const, value: "active" },
     ];
-    renderRows(
+    const { getOne, getList } = renderRows(
       <LabeledDescriptorField
         field={rowsField([
           {
@@ -203,29 +157,15 @@ describe("rows widget", () => {
       name: "Target: General",
     });
     expect(screen.queryByPlaceholderText("Search…")).toBeNull();
-    expect(refineMocks.useOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resource: "channels",
-        id: "chn-general",
-        queryOptions: expect.objectContaining({ enabled: true }),
-      }),
+    expect(getOne).toHaveBeenCalledWith(
+      expect.objectContaining({ resource: "channels", id: "chn-general" }),
     );
-    expect(refineMocks.useList).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resource: "channels",
-        filters,
-        queryOptions: expect.objectContaining({ enabled: false }),
-      }),
-    );
+    expect(getList).not.toHaveBeenCalled();
 
     fireEvent.click(trigger);
     await waitFor(() =>
-      expect(refineMocks.useList).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          resource: "channels",
-          filters,
-          queryOptions: expect.objectContaining({ enabled: true }),
-        }),
+      expect(getList).toHaveBeenCalledWith(
+        expect.objectContaining({ resource: "channels", filters }),
       ),
     );
     const search = await screen.findByPlaceholderText("Search…");
@@ -305,12 +245,35 @@ function rowsField(
   };
 }
 
-function renderRows(children: ReactElement): ReturnType<typeof render> {
-  return render(
-    <ModelMetadataProvider metadata={metadata}>
-      <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-        {children}
-      </AppRuntimeProvider>
-    </ModelMetadataProvider>,
+const clients: QueryClient[] = [];
+
+function renderRows(children: ReactElement) {
+  const getOne = vi.fn(async ({ id }: { id: string }) => ({
+    data: channelRows.find((row) => row.id === id),
+  }));
+  const getList = vi.fn(async () => ({ data: channelRows, total: channelRows.length }));
+  const provider = {
+    getApiUrl: () => "test://channels",
+    getOne,
+    getList,
+    create: vi.fn(),
+    update: vi.fn(),
+    deleteOne: vi.fn(),
+  } as DataProvider;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  clients.push(client);
+  const view = render(
+    <Refine
+      resources={[...refineResourcesFromDataResources(metadata.resources)]}
+      dataProvider={{ default: provider, console: provider }}
+      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}
+    >
+      <ModelMetadataProvider metadata={metadata}>
+        <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          {children}
+        </AppRuntimeProvider>
+      </ModelMetadataProvider>
+    </Refine>,
   );
+  return { ...view, getOne, getList };
 }
