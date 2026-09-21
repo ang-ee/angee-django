@@ -1,15 +1,15 @@
-"""Typed configuration contracts for built-in workflow operations."""
+"""Typed configuration and producer contracts for built-in workflow operations."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypeAlias
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_slug
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from angee.workflows.attempts import DecisionRecordAccess
 from angee.workflows.bindings import BindingNode, parse_binding
@@ -141,46 +141,74 @@ class GateTargetConfig(BaseModel):
 GateSlotConfig.model_rebuild()
 
 
+def _default_slot_priorities(value: Any) -> Any:
+    """Use declared seat order when a slot omits its priority."""
+
+    if not isinstance(value, list):
+        return value
+    return [
+        {**slot, "priority": index} if isinstance(slot, dict) and "priority" not in slot else slot
+        for index, slot in enumerate(value)
+    ]
+
+
+def _empty_dynamic_object(value: Any) -> Any:
+    """Normalize a null dynamic object to the gate's empty mapping."""
+
+    return {} if value is None else value
+
+
+_GateSlots: TypeAlias = Annotated[list[GateSlotConfig], BeforeValidator(_default_slot_priorities)]
+_GateObject: TypeAlias = Annotated[dict[str, Any], BeforeValidator(_empty_dynamic_object)]
+_GateTargets: TypeAlias = list[GateTargetConfig]
+_GateRecordAccess: TypeAlias = list[DecisionRecordAccess]
+
+
+class GateBinding(BaseModel):
+    """Resolved producer output for the six dynamic fields of a native gate.
+
+    A producer declares ``output_model = GateBinding`` and returns
+    ``binding.model_dump(mode="json")`` as its step output. Bind that output into
+    the gate's ``input_binding``, then bind each field in ``GateConfig`` through
+    ``{"kind": "workflow_input", "path": [field_name]}``.
+
+    These values contain no binding expressions. ``GateBinding(clean=True)``
+    permits empty slots: the native gate completes before admitting Decisions.
+    Otherwise, the gate requires at least one slot when it admits the result.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    slots: _GateSlots = Field(default_factory=list)
+    payload: _GateObject = Field(default_factory=dict)
+    decision_schema: _GateObject = Field(default_factory=dict)
+    targets: _GateTargets = Field(default_factory=list)
+    record_access: _GateRecordAccess = Field(default_factory=list)
+    clean: bool = False
+
+
 class GateConfig(WorkflowStepConfig):
     """Approval-gate configuration, including explicitly dynamic decision data."""
 
     policy: Literal["one_done", "all_success", "all_done", "majority", "sequential"] = "one_done"
     action: NonBlankString
-    slots: BindingNode | list[GateSlotConfig] = Field(json_schema_extra={"widget": "json"})
-    payload: BindingNode | dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
+    slots: BindingNode | _GateSlots = Field(json_schema_extra={"widget": "json"})
+    payload: BindingNode | _GateObject = Field(default_factory=dict, json_schema_extra={"widget": "json"})
     requester: str = ""
     escalation: list[str] = Field(default_factory=list)
     max_attempts: int | None = Field(default=None, ge=1)
     expires_at: datetime | None = None
     escalate_at: datetime | None = None
-    decision_schema: BindingNode | dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
+    decision_schema: BindingNode | _GateObject = Field(default_factory=dict, json_schema_extra={"widget": "json"})
     actions: list[ReviewAction] = Field(default_factory=list)
     properties: dict[NonBlankString, dict[str, Any]] = Field(
         default_factory=dict,
         json_schema_extra={"widget": "json"},
     )
-    targets: BindingNode | list[GateTargetConfig] = Field(default_factory=list, json_schema_extra={"widget": "json"})
-    record_access: BindingNode | list[DecisionRecordAccess] = Field(
-        default_factory=list, json_schema_extra={"widget": "json"}
-    )
+    targets: BindingNode | _GateTargets = Field(default_factory=list, json_schema_extra={"widget": "json"})
+    record_access: BindingNode | _GateRecordAccess = Field(default_factory=list, json_schema_extra={"widget": "json"})
     clean: BindingNode | bool = Field(default=False, json_schema_extra={"widget": "json"})
     resume: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def default_slot_priorities(cls, value: Any) -> Any:
-        """Use declared seat order when a slot omits its priority."""
-
-        if not isinstance(value, dict):
-            return value
-        normalized = dict(value)
-        slots = normalized.get("slots")
-        if isinstance(slots, list):
-            normalized["slots"] = [
-                {**slot, "priority": index} if isinstance(slot, dict) and "priority" not in slot else slot
-                for index, slot in enumerate(slots)
-            ]
-        return normalized
 
     @field_validator(
         "slots",
@@ -201,7 +229,7 @@ class GateConfig(WorkflowStepConfig):
 
     @field_validator("slots")
     @classmethod
-    def non_empty_static_slots(cls, value: BindingNode | list[GateSlotConfig]) -> BindingNode | list[GateSlotConfig]:
+    def non_empty_static_slots(cls, value: BindingNode | _GateSlots) -> BindingNode | _GateSlots:
         """Require at least one statically declared slot; bound lists check at runtime."""
 
         if isinstance(value, list) and not value:
@@ -212,11 +240,6 @@ class GateConfig(WorkflowStepConfig):
     @classmethod
     def empty_policy_uses_default(cls, value: Any) -> Any:
         return "one_done" if value in (None, "") else value
-
-    @field_validator("payload", "decision_schema", mode="before")
-    @classmethod
-    def empty_dynamic_object(cls, value: Any) -> Any:
-        return {} if value is None else value
 
     @field_validator("max_attempts", mode="before")
     @classmethod

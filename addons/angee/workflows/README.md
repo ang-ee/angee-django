@@ -238,10 +238,12 @@ The exact resource shape for a bound gate and apply pair is:
     is_entry: false
 ```
 
-`prepare_review` returns the six bound fields above. It builds `payload` and
-`decision_schema` with `build_decision_action()`; each target is
-`{model, id, tab?}`, and each record
-access item is the native `DecisionRecordAccess` JSON shape. The apply class is
+`prepare_review` imports [`GateBinding`](configs.py) from
+`angee.workflows.configs` and declares `output_model = GateBinding`. It returns
+the model's `model_dump(mode="json")` through `StepResult.done`; the gate binds
+its six resolved fields as shown above. The producer builds `payload` and
+`decision_schema` with `build_decision_action()`, or returns
+`GateBinding(clean=True)` when no review is needed. The apply class is
 a registered `DecisionApplyStep`; the graph connects `review.completed` to
 `apply_review`. If `clean` can be true on that edge, the apply subclass must
 recognize the canonical empty gate output before calling the base and return a

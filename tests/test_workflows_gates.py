@@ -35,6 +35,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import decision_actions, engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import AttemptResultKind, DecisionResolution, JsonPresence
+from angee.workflows.configs import GateBinding
 from angee.workflows.decision_actions import (
     ReviewAction,
     ReviewFact,
@@ -183,6 +184,100 @@ def test_gate_resolves_bound_dynamic_slots_context_and_clean_predicate() -> None
     clean = GateStep().run(step_run, now=timezone.now())
     assert clean.kind == "done" and clean.outcome == "completed"
     assert clean.output == {"resolutions": [], "outcome": "completed"}
+
+
+@pytest.mark.parametrize("clean", (False, True))
+def test_producer_gate_binding_round_trips_into_native_gate(
+    workflow_gate_record_access_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    clean: bool,
+) -> None:
+    """A declared producer output retains all six values through native gate admission."""
+
+    del workflow_gate_record_access_tables, no_workflow_queue
+    actor = _platform_admin("wdc-binding-admin")
+    assignee = User.objects.create_user(username="wdc-binding-reviewer")
+    with system_context(reason="test gate binding review record"):
+        target = Party.objects.create(display_name="Binding review target")
+    record = {"model": target._meta.label, "id": str(target.sqid)}
+    authored = build_decision_action(
+        actions=(ReviewAction(value="approve", label="Approve", verdict="COMPLETE"),),
+        payload={"batch": "batch-1"},
+    )
+    assignee_ref = str(to_subject_ref(assignee))
+    binding = (
+        GateBinding(clean=True)
+        if clean
+        else GateBinding.model_validate(
+            {
+                "slots": [{"assignees": [assignee_ref]}],
+                "payload": authored.payload,
+                "decision_schema": authored.decision_schema,
+                "targets": [{**record, "tab": "details"}],
+                "record_access": [record],
+                "clean": False,
+            }
+        )
+    )
+    output = binding.model_dump(mode="json")
+
+    def produce(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, step_run, now
+        return StepResult.done(output=output, outcome="done")
+
+    monkeypatch.setattr(FixtureStep, "output_model", GateBinding)
+    monkeypatch.setattr(FixtureStep, "run", produce)
+    workflow = workflow_with_steps(
+        name="Producer gate binding",
+        steps=(
+            {"key": "producer", "step_class": "fixture"},
+            {
+                "key": "gate",
+                "step_class": "gate",
+                "input_binding": {"kind": "step_output", "step_key": "producer", "path": []},
+                "config": {
+                    "action": "review-binding",
+                    **{
+                        name: {"kind": "workflow_input", "path": [name]}
+                        for name in ("slots", "payload", "decision_schema", "targets", "record_access", "clean")
+                    },
+                },
+            },
+        ),
+        edges=(("producer", "gate", "done"),),
+    )
+    run = start_run(workflow, actor=actor)
+    advance_once(run)
+    execute_started(run)
+    advance_once(run)
+    execute_started(run)
+
+    producer = _step_run(run, "producer")
+    gate = _step_run(run, "gate")
+    assert producer.output == gate.input == gate.current_attempt.input == output
+    assert GateBinding.model_validate(gate.input) == binding
+    if clean:
+        assert gate.status == workflow_models.StepRunStatus.SUCCEEDED
+        assert gate.outcome == "completed"
+        assert gate.output == {"resolutions": [], "outcome": "completed"}
+        assert _decisions_for(run, "gate") == []
+        return
+
+    assert gate.status == workflow_models.StepRunStatus.WAITING
+    assert len(_decisions_for(run, "gate")) == 1
+    assert len(gate.current_attempt.result_decisions) == 1
+    retained = gate.current_attempt.result_decisions[0]
+    assert retained["assignees"] == [assignee_ref]
+    assert retained["priority"] == 0
+    assert retained["payload"] == authored.payload
+    assert retained["decision_schema"] == authored.decision_schema
+    assert (retained["target_model"], retained["target_id"], retained["target_tab"]) == (
+        record["model"],
+        record["id"],
+        "details",
+    )
+    assert retained["record_access"] == [record]
 
 
 def test_gate_resumption_returns_retained_state_and_runtime_slot_results() -> None:
