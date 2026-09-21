@@ -3354,7 +3354,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                 raise ValidationError({"outcome": "Decision outcome must be derived from the full policy."})
             if attempt.decision_settlement:
                 raise ValidationError({"decisions": "This suspension was already settled."})
-            settled = [decision for decision in decisions if decision.verdict in Verdict.TERMINAL]
+            settled = step_run.decision_gate.settled_decisions(decisions)
             attempt.decision_settlement = {
                 "decision_ids": [decision.pk for decision in settled],
                 "outcome": outcome,
@@ -5872,11 +5872,21 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 raise ValidationError({"gate": "Decision apply requires one declared predecessor gate."})
             gate = gates[0]
             ids = gate.current_attempt.decision_settlement.get("decision_ids")
-            if not isinstance(ids, list) or len(ids) != 1 or type(ids[0]) is not int:
-                raise ValidationError({"gate": "Decision apply requires one settled predecessor slot."})
-            return system_queryset(self.model, using=alias, lock=None).get(
-                pk=ids[0], step_run=gate, suspension_attempt=gate.current_attempt
+            if not isinstance(ids, list) or not ids or any(type(value) is not int for value in ids):
+                raise ValidationError({"gate": "Decision apply requires retained predecessor settlement."})
+            retained = list(
+                system_queryset(self.model, using=alias, lock=None)
+                .filter(pk__in=ids, step_run=gate, suspension_attempt=gate.current_attempt)
+                .order_by("priority", "pk")
             )
+            if len(retained) != len(ids) or any(row.verdict not in Verdict.TERMINAL for row in retained):
+                raise ValidationError({"gate": "Decision apply predecessor settlement is incomplete."})
+            # Older one_done expiry settlements retained every expired seat.
+            # Ask the same policy owner without rewriting immutable history.
+            settled = gate.decision_gate.settled_decisions(retained)
+            if len(settled) != 1:
+                raise ValidationError({"gate": "Decision apply requires one settled predecessor slot."})
+            return settled[0]
 
     @contextmanager
     def locked_resolution(

@@ -799,6 +799,77 @@ def test_force_expiry_wakes_retained_decision_continuation(
     assert row.wait_until is not None
 
 
+@pytest.mark.parametrize(
+    ("policy", "outcome", "retained_count", "legacy_settlement"),
+    (("one_done", "expired", 1, False), ("one_done", "expired", 2, True), ("all_done", "completed", 2, False)),
+)
+def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    policy: str, outcome: str, retained_count: int, legacy_settlement: bool,
+) -> None:
+    """Bulk expiry preserves all rows and the exact policy-owned settlement."""
+
+    del workflow_gate_tables, no_workflow_queue
+    requester = User.objects.create_user(username="wdc-expiry-requester")
+    assignee = User.objects.create_user(username="wdc-expiry-verifier")
+
+    def consume(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, now
+        return StepResult.done(output=step_run.input)
+
+    monkeypatch.setattr(FixtureStep, "run", consume)
+    workflow = workflow_with_steps(
+        name="Force expiry one_done predecessor",
+        steps=(
+            {
+                "key": "gate", "step_class": "gate",
+                "config": {
+                    "action": "verify-expiring-review", "policy": policy,
+                    "slots": [
+                        {"assignees": [str(to_subject_ref(assignee))], "priority": 0},
+                        {"assignees": [str(to_subject_ref(requester))], "priority": 1},
+                    ],
+                },
+            },
+            {
+                "key": "consumer", "step_class": "fixture", "config": {},
+                "input_binding": {"kind": "step_output", "step_key": "gate", "path": []},
+            },
+        ),
+        edges=(("gate", "consumer", outcome),),
+    )
+    run = engine.start(workflow, None, actor=admit_workflow_actor(workflow, requester))
+    advance_once(run)
+    execute_started(run)
+    decisions = _decisions_for(run, "gate")
+    assert len(decisions) == 2
+    with monkeypatch.context() as historical_writer:
+        if legacy_settlement:
+            historical_writer.setattr(
+                type(_step_run(run, "gate").decision_gate), "settled_decisions",
+                lambda self, rows: tuple(row for row in rows if row.verdict in workflow_models.Verdict.TERMINAL),
+            )
+        assert engine.expire_pending_decisions(run, resolved_by="test/expiry") == 2
+    advance_once(run)
+    execute_started(run)
+    gate = _step_run(run, "gate")
+    consumer = _step_run(run, "consumer")
+    assert gate.current_attempt.decision_settlement == {
+        "decision_ids": [row.pk for row in decisions[:retained_count]], "outcome": outcome,
+    }
+    assert [item["decision_id"] for item in consumer.output["resolutions"]] == [
+        row.sqid for row in decisions[:retained_count]
+    ]
+    if policy == "one_done":
+        assert Decision.objects.predecessor_decision(consumer, GateStep).pk == decisions[0].pk
+    else:
+        with pytest.raises(ValidationError, match="one settled predecessor slot"):
+            Decision.objects.predecessor_decision(consumer, GateStep)
+    assert all(row.verdict == workflow_models.Verdict.EXPIRED for row in _decisions_for(run, "gate"))
+
+
 def test_delivery_expires_departed_suspension_before_failed_rerun(
     workflow_gate_tables: None,
     no_workflow_queue: None,

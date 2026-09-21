@@ -123,10 +123,22 @@ class DecisionGate:
     def is_sequential(self) -> bool:
         return self.policy == "sequential"
 
+    def settled_decisions(self, decisions: Collection[Any]) -> tuple[Any, ...]:
+        """Select the exact terminal evidence used by this ordered gate policy.
+
+        Callers pass decisions in seat order, ``(priority, pk)``; a one_done
+        gate retains the first terminal seat in that order even when a
+        lifecycle command expires several seats together. Other policies need
+        the full terminal collection to derive their outcome.
+        """
+
+        terminal = tuple(decision for decision in decisions if decision.verdict in Verdict.TERMINAL)
+        return terminal[:1] if self.policy == "one_done" else terminal
+
     def outcome(self, decisions: Collection[Any]) -> str | None:
         """Derive the authoritative result from a complete declared decision set."""
 
-        terminal = [decision for decision in decisions if decision.verdict in Verdict.TERMINAL]
+        terminal = self.settled_decisions(decisions)
         if not decisions or not terminal:
             return None
         if self.policy == "one_done":
