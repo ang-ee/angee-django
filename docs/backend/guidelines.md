@@ -127,6 +127,9 @@ Use these owners instead of maintaining another contract in an addon:
 - Manager/QuerySet canon: chainable read scopes live on a `*QuerySet` exposed
   through `Manager.from_queryset(...)`. Factories and mutations stay on the
   manager that owns the write.
+- **Do not add a write API without a consumer.** Delete uncalled write commands;
+  keep required writes on their owning manager/queryset, as
+  [`DecisionManager.decide`](../../addons/angee/workflows/managers.py) does.
 - Model methods own instance invariants, state transitions, validation, and
   side-effect boundaries tied to one row. Managers own factories, upserts,
   reconcile/load flows, and writes that begin from a model class. QuerySets own
@@ -798,6 +801,10 @@ and current contracts before applying a historical example to a new deployment.
   explicit historical-digest mechanism and verification of both old and new
   histories; they are not permission to rewrite copies. Keep formatter exclusions
   for `**/runtime_migrations` because formatting also changes the pinned digest.
+- **The `feature/arp-ap` branch-history reset was explicitly authorized on
+  2026-09-20.** Follow the [composer's disposable-history reset
+  procedure](../composer.md#addon-owned-runtime-migrations); this branch-specific
+  authorization is not a template for other resets.
 - **A restricted `makemigrations` invocation must cover every changed concrete
   app.** Derive labels from the composed model registry instead of copying an
   old example's label list. Missing a changed app's migrations can leave its
@@ -1291,6 +1298,11 @@ and current contracts before applying a historical example to a new deployment.
   command accepting the Decision identity, as extraction does. Keep this whole
   database command in one transaction, with workflow ancestry before Decision
   before domain rows. Return the domain outcome through the declared `StepResult`.
+- **Decisions bind record references and the resolver, never domain snapshots.**
+  Use [`DecisionApplyStep`](../../addons/angee/workflows/steps.py) and
+  [`DecisionManager.locked_resolution`](../../addons/angee/workflows/managers.py);
+  readers may decode `Decision.payload` into read-only projections but must not
+  persist those projections.
 - **Workflow persistence uses Django owners.** Manager verbs complete aggregate
   operations; model methods own narrow transitions and keep generic protected
   writes closed. Conditional updates on retained leases, generations, deadlines
@@ -1352,6 +1364,11 @@ and current contracts before applying a historical example to a new deployment.
   [workflow operation contract](../../addons/angee/workflows/README.md).
 - **Workflow joins count rows, not broker messages.** `join_rule` is evaluated
   over sibling `StepRun` rows.
+- **Steps with multiple mutually exclusive predecessors declare `join_rule: one_success`.**
+  The default `ALL_SUCCESS` can stall waiting for a missing predecessor in
+  [`_join_decision`](../../addons/angee/workflows/engine.py);
+  [`Workflow.graph_diagnostics`](../../addons/angee/workflows/models.py) does not
+  detect this stall.
 - **Never trust a workflow step to self-limit.** The engine owns `max_steps` and
   budget enforcement.
 - **Invalid decision resolution re-opens the decision.** It increments the

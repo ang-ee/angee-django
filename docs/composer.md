@@ -328,6 +328,13 @@ from the unchanged hatch-angee manifest, and keep implementation with its owner.
 Shared import utilities in `angee.addons` handle references and optional modules;
 they do not maintain a second contract or infer capability values.
 
+Resource relocation with renamed workflow keys requires an explicitly authorized
+reset deployment: renamed workflow keys cannot adopt old definitions through
+[`AngeeResource._adopt_for_row`](../addons/angee/resources/loader.py) with
+`adopt = "key"`. Removing a resource manifest declaration does not retire its rows or
+ledgers; [`WorkflowDefinitionManagerMixin.install_definition`](../addons/angee/workflows/definitions.py)
+reconciles only loaded facets, with no relocation prune/alias path.
+
 ## Serving
 
 `angee.urls` and `angee.asgi` are stable framework entrypoints. They are not
@@ -387,5 +394,10 @@ explicit `None` disabling migrations for an emitted label, fail clearly.
 - `addon.toml` owns addon declarations; native AppConfig owns Django identity and lifecycle.
 - Capability conventions are defaults, with explicit manifest declarations taking precedence.
 - Generated `runtime/` is output; edit addon source, not emitted files.
+- Workflow graphs live in source: addon [step YAML](../addons/angee/workflows_parties/resources/install/101_workflows.step.yaml)
+  and [edge YAML](../addons/angee/workflows_parties/resources/install/102_workflows.edge.yaml)
+  are the executable inventory consumed by
+  [`WorkflowDefinitionResource`](../addons/angee/workflows/resources.py); never
+  hand-edit the emitted graph.
 - Runtime cleanup may delete only the configured generated runtime directory,
   only after verifying Angee's generated sentinel, and must preserve migrations.
