@@ -284,6 +284,8 @@ manifest dependencies. An arbitrary external AppConfig class path cannot identif
 its addon without importing Python; such roots require their dependencies to be
 installed before normal Django composition.
 
+### Runtime cleanup
+
 `ComposeConfig.import_models()` is the Django app-loading hook. In population
 phase 2 it discovers sources, calls `configure_migration_modules()`, repairs output
 with `emit_if_stale()`, and imports generated models. Final transition metadata is
@@ -291,13 +293,29 @@ validated against those concrete classes.
 
 - `emit_if_stale()` is write-only and idempotent. It repairs missing or stale
   generated sources file by file before import, and it never resets, cleans, or
-  materializes addon migrations.
-- When explicit build needs a reset, it verifies the generated sentinel and
-  configured root before clearing output. This removes orphaned labels and other
-  generated files, including SDL/codegen, while preserving every migration subtree.
-- `angee clean` uses the same guarded cleanup without discovering or rendering
-  sources in its handler. Django setup still precedes management-command dispatch,
-  so normal boot repair also precedes `angee clean` and `angee build --check`.
+  materializes addon migrations. A nonempty runtime must already carry the
+  generated sentinel before boot writes; boot cannot mark a foreign tree as safe
+  for later cleanup. Missing or empty runtime directories can be initialized.
+- On runtime-source drift, explicit `angee build` verifies the generated sentinel
+  and configured root before clearing output and emitting the current source map.
+  Orphaned generated files, empty label directories, and bytecode left under
+  retired labels count as drift. Cleanup covers the whole runtime, including
+  SDL/codegen and labels no longer composed; it is not limited to paths in the
+  current source map.
+- `angee clean` uses the same guarded whole-tree cleanup without discovering or
+  rendering sources in its handler; an empty source map does not restrict cleanup.
+  Django setup still precedes management-command dispatch, so normal boot repair
+  also precedes `angee clean` and `angee build --check`.
+
+Both cleanup operations preserve and report every `migrations/` subtree, including
+history for labels no longer composed. Those labels may retain directories solely
+to hold their history. An absent addon does not establish that its migrations are
+disposable: the [migration policy](backend/guidelines.md#migrations-and-runtime)
+requires preserving files and investigating the recorded graph before an
+explicitly authorized reset. [`Runtime`](../angee/compose/runtime.py) removes
+obsolete generated migration-module bindings while preserving project-owned
+bindings; Django loads migrations for installed apps, so retained histories for
+uninstalled labels are not imported during build.
 
 ## Addon Declarations
 

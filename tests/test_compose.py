@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -29,6 +30,7 @@ from angee.compose.model_composition import ModelComposition
 from angee.compose.rendering import render_models
 from angee.compose.runtime import Runtime
 from angee.compose.web import WebRuntime
+from angee.fs import GENERATED_SENTINEL
 from tests.conftest import make_addon
 
 
@@ -360,11 +362,20 @@ def test_runtime_configures_migrations_for_runtime_labels(tmp_path: Path, settin
     """Runtime owns migration redirects for labels it materializes."""
 
     runtime = runtime_for(tmp_path)
-    settings.MIGRATION_MODULES = {"custom": "custom.migrations"}
+    settings.MIGRATION_MODULES = {
+        "custom": "custom.migrations",
+        "disabled": None,
+        "removed": "runtime.removed.migrations",
+        "foreign": "other_runtime.foreign.migrations",
+    }
 
     runtime.configure_migration_modules()
-    assert settings.MIGRATION_MODULES["custom"] == "custom.migrations"
-    assert settings.MIGRATION_MODULES["resources"] == "runtime.resources.migrations"
+    assert settings.MIGRATION_MODULES == {
+        "custom": "custom.migrations",
+        "disabled": None,
+        "foreign": "other_runtime.foreign.migrations",
+        "resources": "runtime.resources.migrations",
+    }
 
 
 def test_runtime_migration_module_conflicts_fail_fast(tmp_path: Path, settings: Any) -> None:
@@ -810,10 +821,12 @@ def test_runtime_extensions_follow_app_graph_order_not_class_names(tmp_path: Pat
     assert "class TargetRuntime(TargetRuntimeExtension1, TargetRuntimeExtension2, AbstractTargetRuntime):" in source
 
 
-def test_runtime_clean_requires_generated_sentinel(tmp_path: Path) -> None:
-    """Clean refuses to delete a non-generated configured runtime dir."""
+@pytest.mark.parametrize("operation", ["clean", "clean_configured", "build", "emit_if_stale"])
+def test_runtime_writes_require_generated_sentinel(tmp_path: Path, settings: Any, operation: str) -> None:
+    """Boot repair cannot authorize a foreign directory by writing its sentinel."""
 
     runtime = runtime_for(tmp_path)
+    settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
     runtime.runtime_dir.mkdir()
     (runtime.runtime_dir / "handwritten.py").write_text(
         "# keep\n",
@@ -821,7 +834,27 @@ def test_runtime_clean_requires_generated_sentinel(tmp_path: Path) -> None:
     )
 
     with pytest.raises(RuntimeError, match="not an Angee runtime directory"):
-        runtime.clean()
+        getattr(runtime, operation)()
+
+    assert (runtime.runtime_dir / "handwritten.py").read_text(encoding="utf-8") == "# keep\n"
+    assert not (runtime.runtime_dir / "__init__.py").exists()
+
+
+@pytest.mark.parametrize("operation", ["clean", "reset", "build", "emit_if_stale"])
+def test_runtime_writes_require_configured_directory(tmp_path: Path, settings: Any, operation: str) -> None:
+    """A generated sentinel never authorizes writes outside the configured root."""
+
+    runtime = runtime_for(tmp_path)
+    runtime.emit()
+    stale = runtime.runtime_dir / "stale.py"
+    stale.write_text("# keep\n", encoding="utf-8")
+    settings.ANGEE_RUNTIME_DIR = tmp_path / "other_runtime"
+
+    with pytest.raises(RuntimeError, match="not the configured runtime dir"):
+        getattr(runtime, operation)()
+
+    assert stale.read_text(encoding="utf-8") == "# keep\n"
+    assert (runtime.runtime_dir / "resources" / "models.py").exists()
 
 
 def test_clean_then_emit_is_idempotent(tmp_path: Path, settings: Any) -> None:
@@ -935,8 +968,9 @@ def test_build_command_delegates_the_complete_write_lifecycle(
     assert calls == ["build"]
 
 
-def test_runtime_build_emits_stale_sources_once_before_materializing(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_build_emits_stale_sources_once_before_materializing(tmp_path: Path, monkeypatch, settings) -> None:
     runtime = runtime_for(tmp_path)
+    settings.MIGRATION_MODULES = {}
     calls: list[str] = []
     original_render = runtime.render_sources
 
@@ -958,11 +992,19 @@ def test_runtime_build_emits_stale_sources_once_before_materializing(tmp_path: P
     assert calls == ["render", "materialize"]
 
 
-def test_runtime_build_materializes_without_rewriting_current_sources(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_build_materializes_without_rewriting_current_sources(tmp_path: Path, monkeypatch, settings) -> None:
     runtime = runtime_for(tmp_path)
+    settings.MIGRATION_MODULES = {}
     runtime.emit()
     path = runtime.runtime_dir / "resources" / "models.py"
     modified = path.stat().st_mtime_ns
+    caches = (
+        runtime.runtime_dir / "__pycache__" / "__init__.cpython-314.pyc",
+        runtime.runtime_dir / "resources" / "__pycache__" / "models.cpython-314.pyc",
+    )
+    for cache in caches:
+        cache.parent.mkdir()
+        cache.write_bytes(b"\x00bytecode")
     calls: list[str] = []
 
     class FakeMigrations:
@@ -976,6 +1018,85 @@ def test_runtime_build_materializes_without_rewriting_current_sources(tmp_path: 
     assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
     assert calls == ["materialize"]
     assert path.stat().st_mtime_ns == modified
+    assert all(cache.exists() for cache in caches)
+    assert runtime.is_current()
+
+
+@pytest.mark.parametrize("contents", ["empty", "models", "bytecode"])
+def test_runtime_build_prunes_removed_labels_before_materializing(
+    tmp_path: Path, monkeypatch, settings, contents,
+) -> None:
+    """Removed packages count as drift with sources, bytecode, or empty directories."""
+
+    runtime = runtime_for(tmp_path)
+    settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
+    settings.MIGRATION_MODULES = {}
+    runtime.emit()
+    removed = runtime.runtime_dir / "removed"
+    removed.mkdir()
+    if contents == "models":
+        (removed / "__init__.py").write_text("", encoding="utf-8")
+        (removed / "models.py").write_text("import deleted_addon\n", encoding="utf-8")
+    elif contents == "bytecode":
+        (removed / "__pycache__").mkdir()
+        (removed / "__pycache__" / "models.cpython-314.pyc").write_bytes(b"\x00bytecode")
+    else:
+        (removed / "nested").mkdir()
+
+    class FakeMigrations:
+        def materialize(self, *, apps) -> tuple[Path, ...]:
+            assert not removed.exists()
+            return ()
+
+    monkeypatch.setattr(runtime, "runtime_migrations", lambda: FakeMigrations())
+
+    assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
+    assert not removed.exists()
+    assert runtime.is_current()
+
+
+def test_runtime_build_never_imports_preserved_migrations_for_uncomposed_label(
+    tmp_path: Path, monkeypatch, settings, caplog,
+) -> None:
+    """An installed addon without runtime models falls back to its native migrations."""
+
+    module_name = f"runtime_{tmp_path.name}"
+    runtime = Runtime.discover(
+        (apps.get_app_config("resources"), apps.get_app_config("compose")),
+        runtime_dir=tmp_path / module_name,
+        runtime_module=module_name,
+    )
+    settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
+    settings.MIGRATION_MODULES = {
+        config.label: None for config in apps.get_app_configs() if config.label != "resources"
+    }
+    settings.MIGRATION_MODULES["compose"] = f"{module_name}.compose.migrations"
+    monkeypatch.syspath_prepend(str(tmp_path))
+    runtime.emit()
+    removed = runtime.runtime_dir / "compose"
+    migrations = removed / "migrations"
+    migrations.mkdir(parents=True)
+    (removed / "__init__.py").write_text("", encoding="utf-8")
+    (removed / "models.py").write_text("# old runtime model\n", encoding="utf-8")
+    (migrations / "__init__.py").write_text("", encoding="utf-8")
+    migration = migrations / "0001_stale.py"
+    source = "import deleted_addon_from_previous_branch\n"
+    migration.write_text(source, encoding="utf-8")
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="angee.fs"):
+            assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
+
+        assert "compose" not in settings.MIGRATION_MODULES
+        assert migration.read_text(encoding="utf-8") == source
+        assert not (removed / "models.py").exists()
+        assert not any(name.startswith(f"{module_name}.compose") for name in sys.modules)
+        assert str(migrations) in caplog.text
+        assert runtime.is_current()
+    finally:
+        for imported in tuple(sys.modules):
+            if imported == module_name or imported.startswith(f"{module_name}."):
+                del sys.modules[imported]
 
 
 def test_runtime_check_validates_migrations_after_source_drift_is_clean(tmp_path: Path, monkeypatch) -> None:
@@ -1669,25 +1790,61 @@ def test_runtime_from_django_does_not_bind_migrations_or_write_sources(
     assert not runtime.runtime_dir.exists()
 
 
+def test_configured_cleanup_removes_all_generated_packages(tmp_path: Path, settings: Any) -> None:
+    """An empty source map still cleans every package under the guarded runtime."""
+
+    runtime_dir = tmp_path / "runtime"
+    settings.ANGEE_RUNTIME_DIR = runtime_dir
+    runtime_dir.mkdir()
+    (runtime_dir / "__init__.py").write_text(f"{GENERATED_SENTINEL}\n", encoding="utf-8")
+    for label in ("integrate_odoo", "accounting_integrate_odoo", "workflows_ocr", "arp"):
+        package = runtime_dir / label
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "models.py").write_text("# obsolete generated models\n", encoding="utf-8")
+    for relative in ("gql/client.ts", "schemas/default.graphql", "web/deleted-artifact.js"):
+        artifact = runtime_dir / relative
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("obsolete", encoding="utf-8")
+    (runtime_dir / "empty" / "nested").mkdir(parents=True)
+    outside = tmp_path / "keep.py"
+    outside.write_text("# outside runtime\n", encoding="utf-8")
+
+    Runtime.clean_configured()
+
+    assert not any(runtime_dir.iterdir())
+    assert outside.read_text(encoding="utf-8") == "# outside runtime\n"
+
+
 def test_configured_cleanup_requires_no_discovery_or_rendering(
     tmp_path: Path,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     settings.ANGEE_RUNTIME_DIR = tmp_path / "runtime"
     runtime = runtime_for(tmp_path)
     runtime.emit()
     migration = runtime.runtime_dir / "resources" / "migrations" / "0001_saved.py"
     migration.write_text("# preserved migration\n")
+    removed_migration = runtime.runtime_dir / "removed" / "migrations" / "0001_stale.py"
+    removed_migration.parent.mkdir(parents=True)
+    removed_migration.write_text("import deleted_addon\n", encoding="utf-8")
+    (removed_migration.parent.parent / "models.py").write_text("# old generated models\n", encoding="utf-8")
 
     def forbidden(*args, **kwargs):
         pytest.fail("cleanup must not discover or render source models")
 
     monkeypatch.setattr(ModelComposition, "discover", forbidden)
     monkeypatch.setattr(Runtime, "render_sources", forbidden)
-    Runtime.clean_configured()
+    with caplog.at_level(logging.WARNING, logger="angee.fs"):
+        Runtime.clean_configured()
     assert migration.read_text() == "# preserved migration\n"
+    assert removed_migration.read_text(encoding="utf-8") == "import deleted_addon\n"
+    assert str(removed_migration.parent) in caplog.text
+    assert str(migration.parent) in caplog.text
     assert not (runtime.runtime_dir / "resources" / "models.py").exists()
+    assert not (removed_migration.parent.parent / "models.py").exists()
     runtime.reset()
     runtime.clean()
     assert migration.exists()

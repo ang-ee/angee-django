@@ -8,11 +8,14 @@ atomic-write behaviour lives once.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+
+logger = logging.getLogger(__name__)
 
 GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
 """Marker every Angee-generated file carries; the gate before destructive cleanup.
@@ -84,15 +87,20 @@ class GeneratedTree:
     def reconcile(self, *, prune: bool) -> bool:
         """Repair artifacts, optionally pruning owned orphans.
 
-        Surgical pruning trusts ``owns`` alone — the sentinel/``clean_root``
-        gates guard only the wholesale ``clean``/``reset`` path, so a
-        consumer's ``owns`` predicate is its whole safety boundary here.
+        Validate a configured guard before writing, so boot repair cannot turn
+        a foreign directory into generated output by writing its sentinel.
+        Consumers without a guard rely on ``owns`` to scope surgical pruning.
         """
 
+        self._validate_root()
         changed, orphans = self._changes()
         if prune:
-            for relative_path in sorted(orphans):
-                (self.root / relative_path).unlink()
+            for relative_path in sorted(orphans, reverse=True):
+                path = self.root / relative_path
+                if path.is_dir() and not path.is_symlink():
+                    path.rmdir()
+                else:
+                    path.unlink()
         for relative_path in sorted(changed):
             write_atomic(self.root / relative_path, self.artifacts[relative_path])
         return bool(changed or (prune and orphans))
@@ -104,7 +112,59 @@ class GeneratedTree:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def clean(self) -> None:
-        """Delete generated output subject to the configured cleanup policy."""
+        """Scan the guarded root, independent of artifacts, and report kept history."""
+
+        self._validate_root()
+        paths = sorted(self.root.rglob("*"), reverse=True)
+        preserved = sorted({
+            Path(*relative_path.parts[:relative_path.parts.index("migrations") + 1])
+            for path in paths
+            if self._is_preserved(relative_path := path.relative_to(self.root))
+        })
+        for path in paths:
+            relative_path = path.relative_to(self.root)
+            if self._is_preserved(relative_path) or (
+                preserved and self.sentinel is not None and relative_path == self.sentinel[0]
+            ):
+                continue
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.is_dir():
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
+        if preserved:
+            logger.warning(
+                "Preserved migration directories during cleanup: %s. "
+                "Review their database history before an explicitly authorized removal.",
+                ", ".join(str(self.root / path) for path in preserved),
+            )
+
+    def _changes(self) -> tuple[set[Path], set[Path]]:
+        expected = set(self.artifacts)
+        expected.update(parent for path in self.artifacts for parent in path.parents)
+        changed = {
+            relative_path
+            for relative_path, text in self.artifacts.items()
+            if not (path := self.root / relative_path).is_file() or path.read_text(encoding="utf-8") != text
+        }
+        orphans: set[Path] = set()
+        for path in sorted(self.root.rglob("*"), reverse=True):
+            relative_path = path.relative_to(self.root)
+            if relative_path in expected or not self.owns(relative_path) or self._is_preserved(relative_path):
+                continue
+            if path.is_symlink() or path.is_file() or (
+                path.is_dir() and all(child.relative_to(self.root) in orphans for child in path.iterdir())
+            ):
+                orphans.add(relative_path)
+        return changed, orphans
+
+    def _is_preserved(self, path: Path) -> bool:
+        return self.preserve_migrations and "migrations" in path.parts
+
+    def _validate_root(self) -> None:
+        """Verify the configured root and existing marker before any mutation."""
 
         if self.clean_root is not None and self.root.resolve() != self.clean_root.resolve():
             raise RuntimeError(f"{self.root} is not the configured runtime dir")
@@ -115,36 +175,3 @@ class GeneratedTree:
             sentinel_path = self.root / sentinel_path
             if not sentinel_path.is_file() or marker not in sentinel_path.read_text(encoding="utf-8"):
                 raise RuntimeError(f"{self.root} is not an Angee runtime directory")
-        keep_sentinel = any(self._is_preserved(path.relative_to(self.root)) for path in self.root.rglob("*"))
-        for path in sorted(self.root.rglob("*"), reverse=True):
-            relative_path = path.relative_to(self.root)
-            if self._is_preserved(relative_path) or (
-                keep_sentinel and self.sentinel is not None and relative_path == self.sentinel[0]
-            ):
-                continue
-            if path.is_file():
-                path.unlink()
-            elif path.is_dir():
-                try:
-                    path.rmdir()
-                except OSError:
-                    pass
-
-    def _changes(self) -> tuple[set[Path], set[Path]]:
-        changed = {
-            relative_path
-            for relative_path, text in self.artifacts.items()
-            if not (path := self.root / relative_path).is_file() or path.read_text(encoding="utf-8") != text
-        }
-        orphans = {
-            relative_path
-            for path in self.root.rglob("*")
-            if path.is_file()
-            and self.owns(relative_path := path.relative_to(self.root))
-            and relative_path not in self.artifacts
-            and not self._is_preserved(relative_path)
-        }
-        return changed, orphans
-
-    def _is_preserved(self, path: Path) -> bool:
-        return self.preserve_migrations and "migrations" in path.parts

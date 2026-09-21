@@ -25,17 +25,6 @@ _COMPOSER_WEB_SOURCES = {
 }
 
 
-def _is_runtime_source(path: Path) -> bool:
-    """Scope drift/pruning; explicit cleanup preserves only migrations."""
-
-    root = path.parts[0] if path.parts else ""
-    return (
-        root not in {"gql", "schemas"}
-        and (root != "web" or path in _COMPOSER_WEB_SOURCES)
-        and "__pycache__" not in path.parts
-    )
-
-
 def _runtime_directory() -> Path:
     """Read the single runtime-directory setting without discovering models."""
 
@@ -49,13 +38,25 @@ def _runtime_directory() -> Path:
 
 
 def _generated_tree(runtime_dir: Path, sources: Mapping[Path, str]) -> GeneratedTree:
-    """Apply one runtime policy to rendered sources or discovery-free cleanup."""
+    """Guard the whole runtime tree; sources never limit explicit cleanup."""
+
+    source_roots = {path.parts[0] for path in sources}
+
+    def owns(path: Path) -> bool:
+        root = path.parts[0]
+        return (
+            root not in {"gql", "schemas"}
+            and (root != "web" or path in _COMPOSER_WEB_SOURCES)
+            # Current packages accumulate bytecode on import; retired ones must
+            # still be pruned when only their bytecode remains.
+            and ("__pycache__" not in path.parts or root not in source_roots | {"__pycache__"})
+        )
 
     configured = getattr(settings, "ANGEE_RUNTIME_DIR", None)
     return GeneratedTree(
         runtime_dir,
         sources,
-        owns=_is_runtime_source,
+        owns=owns,
         sentinel=(Path("__init__.py"), GENERATED_SENTINEL),
         clean_root=Path(configured) if configured is not None else None,
     )
@@ -118,7 +119,7 @@ class Runtime:
 
     @classmethod
     def clean_configured(cls) -> None:
-        """Clean the configured tree without importing or rendering addon sources."""
+        """Clean all generated packages without discovery; retain and report history."""
 
         _generated_tree(_runtime_directory(), {}).clean()
 
@@ -181,6 +182,7 @@ class Runtime:
         if tree.drift():
             self._emit(tree)
         dependency_result = self.addon_dependency_group.write()
+        self.configure_migration_modules()
         self.runtime_migrations().materialize(apps=apps)
         return dependency_result
 
@@ -208,13 +210,19 @@ class Runtime:
         return changed
 
     def configure_migration_modules(self) -> None:
-        """Bind generated migrations explicitly during Django population phase 2.
+        """Bind current generated migrations during population and explicit build.
 
         Explicit None disables Django migrations and therefore conflicts with an
         emitted app's composer-owned migration module, just like another path.
+        Retired runtime labels lose only their composer-owned redirect, allowing
+        still-installed source apps to return to Django's native migration lookup.
         """
 
-        migration_modules = dict(getattr(settings, "MIGRATION_MODULES", {}))
+        migration_modules = {
+            label: module
+            for label, module in getattr(settings, "MIGRATION_MODULES", {}).items()
+            if label in self.labels or module != f"{self.runtime_module}.{label}.migrations"
+        }
         for label in self.labels:
             module = f"{self.runtime_module}.{label}.migrations"
             if label in migration_modules and migration_modules[label] != module:
