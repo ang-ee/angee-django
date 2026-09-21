@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 from django.db import connection, connections, models, router, transaction
 from rebac import system_context
+from rebac.models import PermissionAuditEvent
 
 from angee.sequence.models import Sequence as AbstractSequence
 from angee.sequence.models import SequenceCounter as AbstractSequenceCounter
@@ -87,6 +88,7 @@ class _SequenceRouter:
         self.write_sequence = write_sequence
         self.reads: list[type[models.Model]] = []
         self.writes: list[type[models.Model]] = []
+        self.audit_writes: list[type[models.Model]] = []
 
     def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
         """Route an allowed entry read and fail on any unbound nested read."""
@@ -98,6 +100,10 @@ class _SequenceRouter:
     def db_for_write(self, model: type[models.Model], **hints: Any) -> str:
         """Route an allowed entry write and fail on any unbound nested write."""
 
+        # The documented REBAC audit frontier has its own default store.
+        if model is PermissionAuditEvent:
+            self.audit_writes.append(model)
+            return "default"
         self.writes.append(model)
         assert self.write_sequence and model is Sequence, f"Unexpected routed write: {model._meta.label}"
         return "default"
@@ -130,6 +136,7 @@ def test_draw_keeps_one_alias_through_first_and_existing_counter(
 
     assert routing.reads == []
     assert routing.writes == ([Sequence, Sequence] if entry == "router" else [])
+    assert routing.audit_writes == [PermissionAuditEvent] * 3
 
 
 @pytest.mark.parametrize("entry", ["instance", "manager", "using"])
@@ -157,6 +164,7 @@ def test_direct_counter_draw_preserves_alias_precedence(
 
     assert routing.reads == []
     assert routing.writes == []
+    assert routing.audit_writes == [PermissionAuditEvent]
 
 
 @pytest.mark.parametrize("entry", ["router", "manager", "using"])
@@ -183,6 +191,7 @@ def test_preview_keeps_the_sequence_write_alias(
 
     assert routing.reads == []
     assert routing.writes == ([Sequence] if entry == "router" else [])
+    assert routing.audit_writes == [PermissionAuditEvent]
 
 
 def test_missing_key_fails_fast(sequence_tables: None) -> None:

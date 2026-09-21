@@ -477,7 +477,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         with system_context(reason="parties.party_handle.lock_identity_rows"):
             handles = {
                 row.pk: row
-                for row in handle_model._base_manager.using(using)
+                for row in handle_model.objects.using(using)
                 .filter(pk__in=ordered_handle_ids)
                 .order_by("pk")
                 .lock_if_supported()
@@ -486,20 +486,20 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 set(ordered_party_ids)
                 .union(row.party_id for row in handles.values() if row.party_id is not None)
                 .union(
-                    self.model._base_manager.using(using)
+                    self.using(using)
                     .filter(handle_id__in=ordered_handle_ids)
                     .values_list("party_id", flat=True)
                 )
             )
             parties = {
                 row.pk: row
-                for row in party_model._base_manager.using(using)
+                for row in party_model.objects.using(using)
                 .filter(pk__in=ordered_party_ids)
                 .order_by("pk")
                 .lock_if_supported()
             }
             list(
-                self.model._base_manager.using(using)
+                self.using(using)
                 .filter(party_id__in=ordered_party_ids, handle_id__in=ordered_handle_ids)
                 .order_by("pk")
                 .lock_if_supported()
@@ -1708,8 +1708,8 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         """
 
         alias = get_write_alias(self.model, bound=self, instance=user)
-
-        person, _created = self.db_manager(alias).get_or_create(
+        person_model = apps.get_model("parties", "Person")
+        person, _created = person_model.objects.db_manager(alias).get_or_create(
             user=user,
             defaults={"display_name": _user_display_name(user), "created_by_id": user.pk},
         )

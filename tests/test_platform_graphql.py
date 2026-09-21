@@ -120,6 +120,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(platform_table
     tag_field = next(field for field in line_row.fields() if field.name == "tags")
     addon = apps.get_model("platform", "Addon")
     with system_context(reason="test.platform.explorer.seed"):
+        addon.objects.all().delete()
         addon.objects.create(
             name=config.name,
             label=config.label,
@@ -133,39 +134,40 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(platform_table
             model_labels=[line_row.label, tag_row.label],
         )
         addon.objects.create(name="example.remote", source=addon.Source.REMOTE)
-    monkeypatch.setattr(platform_schema, "platform_can_read", lambda: True)
-    monkeypatch.setattr(composed, "model_rows", lambda: [line_row, tag_row])
-    monkeypatch.setattr(composed, "field_rows", lambda: [tag_field])
-    monkeypatch.setattr(composed, "resource_counts", _unexpected)
+    with monkeypatch.context() as patch:
+        patch.setattr(platform_schema, "platform_can_read", lambda: True)
+        patch.setattr(composed, "model_rows", lambda: [line_row, tag_row])
+        patch.setattr(composed, "field_rows", lambda: [tag_field])
+        patch.setattr(composed, "resource_counts", _unexpected)
 
-    data = _data(
-        execute_schema(
-            _schema(),
-            """
-            query {
-              platform_explorer {
-                addons { id label model_labels resource_count depends_on }
-                models { label fields { name relation_target } }
-                edges { id source target kind field_name }
-              }
-              platform_models_by_pk(id: "linesdemo.saleline") {
-                id
-                label
-                field_count
-                relation_count
-              }
-              platform_fields_by_pk(id: "linesdemo.saleline.tags") {
-                id
-                name
-                model
-                addon
-                relation_target
-              }
-            }
-            """,
-            user=admin,
+        data = _data(
+            execute_schema(
+                _schema(),
+                """
+                query {
+                  platform_explorer {
+                    addons { id label model_labels resource_count depends_on }
+                    models { label fields { name relation_target } }
+                    edges { id source target kind field_name }
+                  }
+                  platform_models_by_pk(id: "linesdemo.saleline") {
+                    id
+                    label
+                    field_count
+                    relation_count
+                  }
+                  platform_fields_by_pk(id: "linesdemo.saleline.tags") {
+                    id
+                    name
+                    model
+                    addon
+                    relation_target
+                  }
+                }
+                """,
+                user=admin,
+            )
         )
-    )
 
     explorer = data["platform_explorer"]
     assert explorer["addons"] == [

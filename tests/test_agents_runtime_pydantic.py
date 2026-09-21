@@ -11,7 +11,7 @@ import httpx
 import pytest
 from anthropic import AsyncAnthropic
 from asgiref.sync import async_to_sync
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
@@ -138,19 +138,15 @@ def test_backend_binds_ollama_without_a_credential(monkeypatch: Any) -> None:
     """The declared OpenAI protocol builds Ollama with its no-auth endpoint defaults."""
 
     captured: list[dict[str, Any]] = []
+    clients: list[AsyncOpenAI] = []
 
-    class FakeAsyncOpenAI:
-        def __init__(self, **kwargs: Any) -> None:
-            captured.append(kwargs)
-            self.base_url = kwargs["base_url"]
+    def client_class(**kwargs: Any) -> AsyncOpenAI:
+        captured.append(kwargs)
+        client = AsyncOpenAI(**kwargs)
+        clients.append(client)
+        return client
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-    monkeypatch.setattr("angee.agents.sdk_backends.import_string", lambda path: FakeAsyncOpenAI)
+    monkeypatch.setattr(OllamaInferenceBackend, "_async_client_class", lambda self: client_class)
     provider = SimpleNamespace(credential=None, base_url="", config={})
     provider.backend = OllamaInferenceBackend(provider)
 
@@ -160,6 +156,13 @@ def test_backend_binds_ollama_without_a_credential(monkeypatch: Any) -> None:
 
     async_to_sync(inspect_model)()
 
+    assert len(captured) == 1
+    http_client = captured[0].pop("http_client")
+    assert isinstance(http_client, DefaultAsyncHttpxClient)
+    assert http_client.trust_env is False
+    assert http_client.follow_redirects is False
+    assert http_client.is_closed
+    assert clients[0].is_closed()
     assert captured == [
         {
             "api_key": "not-required",

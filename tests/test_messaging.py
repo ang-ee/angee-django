@@ -2281,7 +2281,7 @@ def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> Non
     )
     dismissed = PartyHandle._base_manager.filter(handle=sender, party=alice).first()
     assert dismissed is not None
-    with system_context(reason="test ingest dismiss sender suggestion"):
+    with actor_context(owner):
         dismissed.dismiss()
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
@@ -2334,9 +2334,13 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
 ) -> None:
     """One post-commit pass deduplicates unresolved handles across the ingest batch."""
 
-    callbacks: list[Any] = []
+    callbacks: list[tuple[Any, str]] = []
     suggested: list[Any] = []
-    monkeypatch.setattr(messaging_managers.transaction, "on_commit", callbacks.append)
+    monkeypatch.setattr(
+        messaging_managers.transaction,
+        "on_commit",
+        lambda callback, *, using: callbacks.append((callback, using)),
+    )
     monkeypatch.setattr(
         PartyHandle.objects,
         "suggest_for",
@@ -2360,7 +2364,9 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
     assert len(landed) == 2
     assert suggested == []
     assert len(callbacks) == 1
-    callbacks[0]()
+    callback, using = callbacks[0]
+    assert using == channel._state.db
+    callback()
     assert suggested == [Handle._base_manager.get(value="shared@example.com").pk]
 
 

@@ -10,6 +10,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models, router, transaction
 from django.test import override_settings
+from rebac.models import PermissionAuditEvent
 
 from angee.base import transitions
 from angee.base.fields import StateField
@@ -219,11 +220,16 @@ class TransitionRouter:
     def __init__(self, alias: str) -> None:
         self.alias = alias
         self.writes: list[models.Model | None] = []
+        self.audit_writes: list[type[models.Model]] = []
 
     def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
         raise AssertionError("Transition reads must carry the write alias.")
 
     def db_for_write(self, model: type[models.Model], **hints: Any) -> str:
+        # The documented REBAC audit frontier has its own default store.
+        if model is PermissionAuditEvent:
+            self.audit_writes.append(model)
+            return "default"
         self.writes.append(hints.get("instance"))
         return self.alias
 

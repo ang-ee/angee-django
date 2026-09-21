@@ -23,6 +23,7 @@ from django.db.utils import OperationalError
 from rebac import actor_context, system_context
 from rebac.actors import to_subject_ref
 from rebac.errors import PermissionDenied
+from rebac.models import PermissionAuditEvent
 from rebac.roles import grant
 
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
@@ -1370,6 +1371,7 @@ def test_ingest_dedup_restores_and_merges_metadata_on_bound_alias(
     assert stored.is_trashed is False
     assert stored.metadata == {"source": {"indexed": True}}
     assert routing.writes == []
+    assert routing.audit_writes == [PermissionAuditEvent]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1446,3 +1448,4 @@ def test_attachment_lock_and_create_keep_alias_after_canonical_admission(
     assert stored.object_id == target.pk
     assert stored.content_type_id == canonical.content_type.pk
     assert routing.writes == []
+    assert routing.audit_writes == [PermissionAuditEvent]

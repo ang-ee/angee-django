@@ -1610,7 +1610,7 @@ def test_resource_adoption_rejects_ambiguous_conditional_key_matches(tmp_path: P
                 )
             )
 
-        with pytest.raises(ImproperlyConfigured, match="adopt field 'key' matched multiple rows"):
+        with pytest.raises(ResourceLoadError, match="adopt field 'key' matched multiple rows"):
             AmbiguousConditionalKeyLedger.objects.load_addons(
                 (owner,),
                 tiers=[Resource.Tier.INSTALL],
@@ -1669,7 +1669,7 @@ def test_resource_adoption_rejects_an_uncovered_string_field(tmp_path: Path) -> 
         for model in models_to_create:
             schema_editor.create_model(model)
     try:
-        with pytest.raises(ImproperlyConfigured, match="adopt field 'key' must be a unique model field"):
+        with pytest.raises(ResourceLoadError, match="adopt field 'key' must be a unique model field"):
             UncoveredAdoptLedger.objects.load_addons(
                 (owner,),
                 tiers=[Resource.Tier.INSTALL],
@@ -1858,7 +1858,7 @@ def test_resource_adoption_rejects_ambiguous_unique_fields(
                 email="alice@example.test",
             )
 
-        with pytest.raises(ImproperlyConfigured, match="multiple unique"):
+        with pytest.raises(ResourceLoadError, match="multiple unique"):
             AmbiguousAdoptLedger.objects.load_addons(
                 (owner,),
                 tiers=[Resource.Tier.INSTALL],

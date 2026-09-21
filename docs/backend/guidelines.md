@@ -197,6 +197,7 @@ Use these owners instead of maintaining another contract in an addon:
     `File._authorize_push`, and `File.delete`) still call these unbound checks;
     their alias-aware persistence does not close authorization routing. They
     require entry guards or upstream alias support in the next storage sweep.
+    REBAC audit-event writes (`PermissionAuditEvent`) share this D34 fail-closed frontier: the upstream library has no alias contract.
   - Django `Field.pre_save(instance, add)` receives no database alias, both from
     `Model.save` and the insert compiler used by `bulk_create`. An explicit
     `save(using=...)` can therefore disagree with the instance/write-router alias

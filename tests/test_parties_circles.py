@@ -392,7 +392,7 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
 
         # Dismissing the winner demotes the handle to the next candidate and
         # recounts BOTH parties (the demoted owner must not keep a stale count).
-        strong.dismiss()
+        strong.with_actor(owner).dismiss()
         handle.refresh_from_db()
         alice.refresh_from_db()
         alicia.refresh_from_db()
@@ -415,7 +415,7 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
 
         # A human confirm outranks any score and clears the dismissal.
         strong.refresh_from_db()
-        strong.confirm()
+        strong.with_actor(owner).confirm()
         handle.refresh_from_db()
         strong.refresh_from_db()
         assert handle.party_id == alice.pk
@@ -451,13 +451,14 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_person_for_user_is_the_one_person_per_user_owner(parties_tables: None) -> None:
-    """PersonManager.for_user get-or-creates keyed on the Person.user O2O — never two rows."""
+@pytest.mark.parametrize("model", [Party, Person])
+def test_person_for_user_is_the_one_person_per_user_owner(parties_tables: None, model: type[Any]) -> None:
+    """The inherited manager always keys the Person.user O2O — never two rows."""
 
     del parties_tables
     with system_context(reason="test for_user"):
         user = User.objects.create_user(username="mona", email="mona@example.com", password="x")
-        first = Person.objects.for_user(user)
+        first = model.objects.for_user(user)
         again = Person.objects.for_user(user)
 
     assert first.pk == again.pk
@@ -645,6 +646,7 @@ def test_suggest_for_resolved_handle_returns_without_competing_links(parties_tab
             created_by_id=owner.pk,
         )
 
+        resolved.refresh_from_db()
         result = PartyHandle.objects.suggest_for(resolved)
 
     assert result is None
@@ -679,7 +681,7 @@ def test_suggest_for_keeps_dismissed_link_dismissed(parties_tables: None) -> Non
         )
         dismissed = PartyHandle.objects.suggest_for(unknown)
         assert dismissed is not None
-        dismissed.dismiss()
+        dismissed.with_actor(owner).dismiss()
 
         repeated = PartyHandle.objects.suggest_for(unknown)
 

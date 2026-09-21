@@ -262,8 +262,8 @@ def test_each_part_query_selects_one_read_alias_and_rejects_foreign_cache(
     if prefetched:
         with system_context(reason="messaging routed part prefetch"):
             message = Message._base_manager.prefetch_related("parts").get(pk=message.pk)
-        for part in message.parts.all():
-            part.type = "stale/cache"
+            for part in message.parts.all():
+                part.type = "stale/cache"
     manager = Part.objects
     kwargs: dict[str, Any] = {}
     if selection == "explicit":
@@ -310,13 +310,13 @@ def test_one_mismatched_cached_part_forces_a_complete_reload(
     """Message affinity cannot validate a prefetch containing foreign-alias rows."""
 
     message, parts = part_tree
-    with system_context(reason="messaging mixed alias prefetch"):
+    with system_context(reason="messaging mixed alias part read"):
         message = Message._base_manager.prefetch_related("parts").get(pk=message.pk)
-    cached = list(message.parts.all())
-    cached[0]._state.db = "incorrect_part_alias"
-    cached[-1].type = "stale/cache"
-    with CaptureQueriesContext(connection) as queries:
-        ordered = Part.objects.reading_order_for_message(message)
+        cached = list(message.parts.all())
+        cached[0]._state.db = "incorrect_part_alias"
+        cached[-1].type = "stale/cache"
+        with CaptureQueriesContext(connection) as queries:
+            ordered = Part.objects.reading_order_for_message(message)
     assert ordered == list(parts.values())
     assert all(part._state.db == "default" and part.type != "stale/cache" for part in ordered)
     assert len(queries) == 1

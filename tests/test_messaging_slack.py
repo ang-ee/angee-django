@@ -510,7 +510,7 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
     session.landed = 0
     session.pairing = PairingState.PAIRED
 
-    assert session._ingest([(ParsedMessage(external_id="live", platform="test"), None)]) is True
+    assert session._ingest([(ParsedMessage(external_id="live", platform="test"), None)], using="default") is True
     assert calls[0]["quote_edges"] is True
     assert "message_kind" not in calls[0]
 

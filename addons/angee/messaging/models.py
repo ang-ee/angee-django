@@ -694,7 +694,6 @@ class ThreadedModelMixin(models.Model):
             raise PermissionDenied(
                 f"Reading message recipients on {self._meta.label} requires {self.thread_read_access!r} access."
             )
-        user_model = apps.get_model(settings.AUTH_USER_MODEL)
         attachment = self.message_thread_attachment(create=False, using=using)
         thread = attachment.thread if attachment is not None else None
         follower_ids = {
@@ -707,21 +706,20 @@ class ThreadedModelMixin(models.Model):
         suggestions: list[dict[str, Any]] = []
         seen: set[str] = set()
 
-        def add(candidate: Any, *, reason: str, source: str) -> None:
-            resolved = _message_suggestion_user(user_model, candidate, using=using)
-            if resolved is None:
+        def add(candidate: models.Model | None, *, reason: str, source: str) -> None:
+            if candidate is None:
                 return
-            key = str(resolved.pk)
+            key = str(candidate.pk)
             if key in seen or key in follower_ids or key == str(current_user_id):
                 return
-            if getattr(resolved, "is_active", True) is False:
+            if getattr(candidate, "is_active", True) is False:
                 return
             seen.add(key)
-            suggestions.append({"user": resolved, "reason": reason, "source": source})
+            suggestions.append({"user": candidate, "reason": reason, "source": source})
 
         for field in self._message_suggested_recipient_model_fields():
             add(
-                field.value_from_object(self),
+                related_on(self, field.name, using=using),
                 reason=capfirst(str(field.verbose_name or field.name)),
                 source=field.name,
             )
@@ -742,7 +740,11 @@ class ThreadedModelMixin(models.Model):
                 .first()
             )
             if latest is not None:
-                add(latest.created_by_id, reason="Recent message author", source="recent_message_author")
+                add(
+                    related_on(latest, "created_by", using=using),
+                    reason="Recent message author",
+                    source="recent_message_author",
+                )
                 for notification in (
                     notification_model._base_manager.db_manager(using)
                     .filter(message=latest)
@@ -2885,19 +2887,3 @@ class MessageStar(SqidMixin, AuditMixin, AngeeModel):
         """Return a readable message star label."""
 
         return f"{self.user_id} starred {self.message_id}"
-
-
-def _message_suggestion_user(
-    user_model: type[models.Model], candidate: Any, *, using: str | None = None
-) -> models.Model | None:
-    """Return a user row from a candidate object/id for recipient suggestions."""
-
-    if candidate is None:
-        return None
-    if isinstance(candidate, user_model):
-        return candidate
-    if isinstance(candidate, models.Model):
-        candidate = candidate.pk
-    if candidate in (None, ""):
-        return None
-    return user_model._default_manager.db_manager(using).filter(pk=candidate).first()

@@ -419,15 +419,10 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
         page = expected[:size] if surface == "messages" else expected[-size:]
         assert rows == page
         assert visited == [row["id"] for row in page]
-        # Count owning-table reads, excluding chatter's separate attachment COUNT
-        # and references to MIME tables inside another query's joins/subqueries.
+        # Data loads project the owning table first. The first FROM can instead
+        # belong to Message's title subquery, so it cannot identify the outer read.
         mime_queries = tuple(
-            sum(
-                item["sql"].startswith("SELECT ")
-                and not item["sql"].startswith("SELECT COUNT(")
-                and item["sql"].partition(" FROM ")[2].startswith(f"{table} ")
-                for item in captured
-            )
+            sum(item["sql"].startswith(f"SELECT {table}.") for item in captured)
             for table in tables
         )
         assert mime_queries == expected_mime_queries, captured.captured_queries
