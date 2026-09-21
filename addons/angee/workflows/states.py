@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from django.db import models
@@ -25,7 +26,7 @@ class WorkflowPurpose(models.TextChoices):
     AGENT_SESSION = "agent_session", "Agent session"
 
 
-class RunOrigin(models.TextChoices):
+class RunOrigin(models.TextChoices, StrEnum):
     """Caller that created a workflow run."""
 
     UNKNOWN = "unknown", "Unknown"
@@ -97,7 +98,7 @@ class StepRunStatus(models.TextChoices):
     SKIPPED = "skipped", "Skipped"
 
 
-class Verdict(models.TextChoices):
+class Verdict(models.TextChoices, StrEnum):
     """Resolution lifecycle for one awaited decision slot."""
 
     PENDING = "pending", "Pending"

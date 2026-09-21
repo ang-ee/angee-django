@@ -886,9 +886,9 @@ class WorkflowGraph:
                 continue
             sources = self.input_sources(node.identity)
             by_step_key: dict[str | None, list[GraphInputSource]] = defaultdict(list)
-            for source in sources:
-                if source.kind == "step_output":
-                    by_step_key[source.step_key].append(source)
+            for input_source in sources:
+                if input_source.kind == "step_output":
+                    by_step_key[input_source.step_key].append(input_source)
             by_kind = {source.kind: source for source in sources if source.kind != "step_output"}
             for visit in binding.visits():
                 reference = visit.binding.source_reference()
@@ -1148,7 +1148,7 @@ class WorkflowGraph:
         for edge in self.edges:
             outgoing[edge.source_identity].append(edge)
         paths: dict[GraphIdentity, list[dict[GraphIdentity, str]]] = defaultdict(list)
-        pending = [(entries[0].identity, {})]
+        pending: list[tuple[GraphIdentity, dict[GraphIdentity, str]]] = [(entries[0].identity, {})]
         while pending:
             identity, choices = pending.pop()
             paths[identity].append(choices)

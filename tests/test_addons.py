@@ -327,7 +327,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         count_aliases.append(using)
         return {loaded.name: 7, "arp.base": 99}
 
-    monkeypatch.setattr(platform_models, "available_addons", lambda dirs: available)
+    monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: available)
     monkeypatch.setattr(platform_models.composed, "addons", lambda: [loaded])
     monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
     monkeypatch.setattr(platform_models.composed, "resource_counts", resource_counts)
@@ -420,7 +420,7 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
     del platform_tables
     addon = apps.get_model("platform", "Addon")
     manifest = addon_module.parse_manifest(disabled_app / "addon.toml")
-    monkeypatch.setattr(platform_models, "available_addons", lambda dirs: {manifest.name: (manifest, disabled_app)})
+    monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: {manifest.name: (manifest, disabled_app)})
     monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
     monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
     monkeypatch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
@@ -452,7 +452,7 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
 
 def test_install_preview_keeps_unresolvable_identity_unknown(tmp_path, settings, monkeypatch) -> None:
     manifest = AddonManifest(name="unavailable_package.addon", depends_on=("unavailable_package.dependency",))
-    monkeypatch.setattr(platform_models, "available_addons", lambda dirs: {manifest.name: (manifest, tmp_path)})
+    monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: {manifest.name: (manifest, tmp_path)})
     monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
     monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
     settings.BASE_DIR = tmp_path
@@ -513,7 +513,7 @@ def test_unknown_desired_reads_pending_flags_once(platform_tables, tmp_path, mon
     addon = apps.get_model("platform", "Addon")
     pending = {f"pending_fixture.addon_{index}": bool(index % 2) for index in range(addon_count)}
     available = {name: (AddonManifest(name=name), tmp_path / name) for name in pending}
-    monkeypatch.setattr(platform_models, "available_addons", lambda dirs: available)
+    monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: available)
     monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
     monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
     monkeypatch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
@@ -579,7 +579,7 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
     for config in configs:
         config.apps = apps
         config.models = {}
-    monkeypatch.setattr(platform_models, "available_addons", lambda dirs: {})
+    monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: {})
     monkeypatch.setattr(platform_models.composed, "addons", lambda: list(configs))
     monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
     monkeypatch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})

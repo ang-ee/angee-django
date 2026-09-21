@@ -448,10 +448,11 @@ class Need(AuditMixin, AngeeDataModel):
             return
         if getattr(self, "_intake_project_assigned", False):
             raise ValidationError({"project": "Choose either a task or a project, not both."})
-        task_project_id = related_on(self, "task", using=using).project_id
+        task = related_on(self, "task", using=using)
+        assert task is not None
         object.__setattr__(self, "_intake_internal_target", True)
         try:
-            self.project_id = task_project_id
+            self.project_id = task.project_id
             self.targets_project = False
         finally:
             object.__setattr__(self, "_intake_internal_target", False)

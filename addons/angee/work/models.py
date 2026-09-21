@@ -967,7 +967,9 @@ class TaskWork(StagedModelMixin):
             projected = self._project_stage_lifecycle(using=using)
             allocated = False
             if self._state.adding and self.queue_id is not None and self.number is None:
-                self.number = related_on(self, "queue", using=using).next_task_number()
+                queue = related_on(self, "queue", using=using)
+                assert queue is not None
+                self.number = queue.next_task_number()
                 allocated = True
             if update_fields is not None:
                 update_fields.update(projected)
@@ -1053,10 +1055,8 @@ class TaskWork(StagedModelMixin):
                 return self
             self.save(update_fields=("stage", "updated_at"), using=using)
             return self
-        if (
-            self.stage_id is None
-            or related_on(self, "stage", using=using).category != self.stage_model().StageCategory.TRIAGE
-        ):
+        current_stage = related_on(self, "stage", using=using)
+        if current_stage is None or current_stage.category != self.stage_model().StageCategory.TRIAGE:
             raise ValidationError({"stage": "Only a task in triage can be accepted."})
         self.stage = target
         self.save(update_fields=("stage", "updated_at"), using=using)
@@ -1089,10 +1089,8 @@ class TaskWork(StagedModelMixin):
             and self.done_at is None
         ):
             return self
-        if (
-            self.stage_id is None
-            or related_on(self, "stage", using=using).category != self.stage_model().StageCategory.TRIAGE
-        ):
+        current_stage = related_on(self, "stage", using=using)
+        if current_stage is None or current_stage.category != self.stage_model().StageCategory.TRIAGE:
             raise ValidationError({"stage": "Only a task in triage can be declined."})
         self.stage = target
         self.dropped_reason = reason_member
@@ -1113,11 +1111,8 @@ class TaskWork(StagedModelMixin):
         user_id = actor_user_id(current_actor())
         if user_id is None:
             raise ValidationError({"snoozed_by": "Snoozing requires a user-backed actor."})
-        if (
-            self.queue_id is None
-            or self.stage_id is None
-            or related_on(self, "stage", using=using).category != self.stage_model().StageCategory.TRIAGE
-        ):
+        stage = related_on(self, "stage", using=using) if self.queue_id is not None else None
+        if stage is None or stage.category != self.stage_model().StageCategory.TRIAGE:
             raise ValidationError({"stage": "Only a task in triage can be snoozed."})
         if self.snoozed_until == until and str(self.snoozed_by_id) == str(user_id):
             return self
@@ -1228,10 +1223,10 @@ class TaskWork(StagedModelMixin):
                 .exists()
             ):
                 raise ValidationError({"canonical": "A task and its canonical cannot be mutual duplicates."})
+            canonical_stage = related_on(canonical, "stage", using=using)
             canonical_is_duplicate = (
-                canonical.stage_id is not None
-                and related_on(canonical, "stage", using=using).category
-                == canonical.stage_model().StageCategory.DUPLICATE
+                canonical_stage is not None
+                and canonical_stage.category == canonical.stage_model().StageCategory.DUPLICATE
             ) or relation_model.objects.db_manager(using).sudo(
                 reason="work.task.mark_duplicate.canonical_relation_lookup"
             ).filter(
@@ -1271,7 +1266,8 @@ class TaskWork(StagedModelMixin):
                 and source.done_at is None
             )
             if not already_projected:
-                if source.stage_id is None or related_on(source, "stage", using=using).category not in {
+                source_stage = related_on(source, "stage", using=using)
+                if source_stage is None or source_stage.category not in {
                     source.stage_model().StageCategory.TRIAGE,
                     source.stage_model().StageCategory.DUPLICATE,
                 }:
@@ -1302,7 +1298,8 @@ class TaskWork(StagedModelMixin):
 
         if self.cycle_id is None:
             return
-        if self.queue_id is None or related_on(self, "cycle", using=using).queue_id != self.queue_id:
+        cycle = related_on(self, "cycle", using=using) if self.queue_id is not None else None
+        if cycle is None or cycle.queue_id != self.queue_id:
             raise ValidationError({"cycle": "Cycle must belong to the task's queue."})
 
     def _reject_direct_status_write(self) -> None:
@@ -1330,7 +1327,9 @@ class TaskWork(StagedModelMixin):
             or ambient_is_sudo()
         ):
             return
-        category = str(related_on(self, "stage", using=using).get_category())
+        stage = related_on(self, "stage", using=using)
+        assert stage is not None
+        category = str(stage.get_category())
         if category not in self.stage_model().SYSTEM_CATEGORIES:
             return
         verb = "capture" if category == self.stage_model().StageCategory.TRIAGE else "mark_duplicate"
@@ -1345,10 +1344,14 @@ class TaskWork(StagedModelMixin):
         if queue_cleared != stage_cleared or (queue_cleared and self.cycle_id is not None):
             raise ValidationError("stage and cycle imply their queue — clear queue, stage, and cycle together")
         if self.queue_id is None and self.cycle_id is not None:
-            self.queue_id = related_on(self, "cycle", using=using).queue_id
+            cycle = related_on(self, "cycle", using=using)
+            assert cycle is not None
+            self.queue_id = cycle.queue_id
             changed.add("queue")
         if self.queue_id is None and self.stage_id is not None:
-            self.queue_id = related_on(self, "stage", using=using).queue_id
+            stage = related_on(self, "stage", using=using)
+            assert stage is not None
+            self.queue_id = stage.queue_id
             changed.add("queue")
         if self.queue_id is None and self._state.adding:
             user_id = actor_user_id(current_actor()) or getattr(self, "created_by_id", None)
@@ -1372,9 +1375,10 @@ class TaskWork(StagedModelMixin):
     def _project_stage_lifecycle(self, *, using: str) -> set[str]:
         """Project all seven stage categories onto coarse task lifecycle fields."""
 
-        if self.stage_id is None:
+        stage = related_on(self, "stage", using=using)
+        if stage is None:
             return set()
-        category = str(related_on(self, "stage", using=using).get_category())
+        category = str(stage.get_category())
         now = timezone.now()
         loaded_stage_id = self._work_loaded_id("stage_id", using=using)
         stage_changed = self._state.adding or loaded_stage_id != self.stage_id

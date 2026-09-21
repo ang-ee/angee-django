@@ -16,7 +16,7 @@ from jsonschema.exceptions import ValidationError as SchemaValidationError
 from pydantic import BaseModel, ConfigDict, JsonValue, StrictInt, StrictStr, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac.resources import model_resource_type
-from referencing import Registry, Resource
+from referencing import Registry
 from referencing.exceptions import Unresolvable
 from referencing.jsonschema import DRAFT202012
 
@@ -334,7 +334,8 @@ def compile_decision_action_schema(schema: Any) -> DecisionActionContract | None
         label = option.get("label")
         verdict = option.get("verdict")
         if (
-            value not in values
+            not isinstance(value, str)
+            or value not in values
             or value in verdicts
             or not isinstance(label, str)
             or not label
@@ -373,7 +374,7 @@ def compile_decision_action_schema(schema: Any) -> DecisionActionContract | None
             raise ValidationError({"decision_schema": "Each action branch must be a closed required-action object."})
         const = branch["properties"].get("action")
         value = const.get("const") if isinstance(const, dict) else None
-        if value not in values or value in checked:
+        if not isinstance(value, str) or value not in values or value in checked:
             raise ValidationError({"decision_schema": "Action branches need distinct enum const values."})
         admitted = set(branch["properties"])
         if admitted - set(properties) or admitted & set(context_fields) or set(branch["required"]) - admitted:
@@ -454,9 +455,9 @@ def validate_decision_resolution(
         raise ValidationError(
             {"decision_schema": "Decision references must resolve inside the retained schema."}
         ) from error
-    for error in failures:
-        field = ".".join(str(part) for part in error.path) or "payload"
-        errors.setdefault(field, []).append(error.message)
+    for failure in failures:
+        field = ".".join(str(part) for part in failure.path) or "payload"
+        errors.setdefault(field, []).append(failure.message)
     if errors:
         raise ValidationError(errors)
     _validate_relation_fields(resolution_schema, resolution, actor, using=using)
@@ -473,7 +474,7 @@ def _decision_validation_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """
 
     retained = copy.deepcopy(schema)
-    pending = [Resource(contents=retained, specification=DRAFT202012)]
+    pending = [DRAFT202012.create_resource(retained)]
     dialect = Draft202012Validator.META_SCHEMA["$id"].rstrip("#")
     while pending:
         resource = pending.pop()
@@ -530,11 +531,11 @@ def _validate_relation_fields(schema: dict[str, Any], resolution: dict[str, Any]
             {"decision_schema": "Decision references must resolve inside the retained schema."}
         ) from error
     for failure in failures:
-        for error in relation_errors(failure):
-            path = ".".join(str(part) for part in error.absolute_path) or "payload"
+        for relation_failure in relation_errors(failure):
+            path = ".".join(str(part) for part in relation_failure.absolute_path) or "payload"
             messages = errors.setdefault(path, [])
-            if error.message not in messages:
-                messages.append(error.message)
+            if relation_failure.message not in messages:
+                messages.append(relation_failure.message)
     if errors:
         raise ValidationError(errors)
 

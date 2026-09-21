@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
+from typing import Any, TypedDict
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -481,7 +481,15 @@ class IdentityApplyStepImpl(DecisionApplyStep):
 
 
 _ADDRESS_FIELDS = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
-_IDENTITY_ACTIONS = {
+
+
+class _IdentityAction(TypedDict):
+    label: str
+    description: str
+    choices: dict[str, str]
+
+
+_IDENTITY_ACTIONS: dict[str, _IdentityAction] = {
     "name_action": {
         "label": "Supplier name",
         "description": "Keep the current canonical name or use the proposed name from this source.",

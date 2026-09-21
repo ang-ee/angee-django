@@ -6,7 +6,7 @@ import copy
 from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -201,15 +201,16 @@ class WorkflowDefinitionManagerMixin:
     if TYPE_CHECKING:
         model: type[Any]
 
+        def db_manager(self, using: str | None = None, hints: dict[str, object] | None = None) -> Self: ...
         def using(self, alias: str) -> "WorkflowQuerySet": ...
         def current_published_for(self, workflow: Any) -> Any | None: ...
         def _definition_caller(self, workflow: Any) -> AbstractContextManager[None]: ...
-        def _definition_read(self, workflow_id: int, *, using: str | None = None) -> AbstractContextManager[Any]: ...
+        def _definition_read(self, workflow_id: int, *, using: str) -> AbstractContextManager[Any]: ...
         def _definition_write(
             self,
             workflow_ids: Iterable[int],
             *,
-            using: str | None = None,
+            using: str,
             session: DefinitionWriteSession | None = None,
             _allow_status_transition: bool = False,
         ) -> AbstractContextManager[DefinitionWriteSession]: ...

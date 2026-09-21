@@ -888,9 +888,9 @@ class GateStep(StepImpl):
         )
     )
     effect = StepEffect.NONE
-    output_model = DecisionGateOutput
+    output_model: ClassVar[type[BaseModel] | None] = DecisionGateOutput
     effect_description = "Creates workflow decision journals without changing the workflow subject."
-    config_model = GateConfig
+    config_model: ClassVar[type[BaseModel] | None] = GateConfig
 
     @classmethod
     def validate_config(cls, config: Any) -> None:
@@ -1108,7 +1108,9 @@ class DecisionApplyStep(StepImpl):
             if result.outcome not in {outcome.key for outcome in type(self).outcomes}:
                 raise ValidationError({"outcome": "Decision apply returned an undeclared outcome."})
             if result.output_present:
-                type(self).output_model.model_validate(result.output)
+                output_model = type(self).output_model
+                assert output_model is not None
+                output_model.model_validate(result.output)
         return result
 
 

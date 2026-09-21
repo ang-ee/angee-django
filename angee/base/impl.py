@@ -519,7 +519,7 @@ def impl_registry(registry_setting: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in mapping.items()}
 
 
-def resolve_impl_class(registry_setting: str, key: str, base_class: type) -> type:
+def resolve_impl_class[T](registry_setting: str, key: str, base_class: type[T]) -> type[T]:
     """Return the impl class ``registry_setting`` binds to ``key``.
 
     The dotted path comes from composed, trusted settings and is checked against
@@ -541,12 +541,12 @@ def resolve_impl_class(registry_setting: str, key: str, base_class: type) -> typ
     return impl
 
 
-def resolve_all_impl_classes(
+def resolve_all_impl_classes[T](
     registry_setting: str,
-    base_class: type,
+    base_class: type[T],
     *,
     on_error: Callable[[str, Exception], None] | None = None,
-) -> tuple[type, ...]:
+) -> tuple[type[T], ...]:
     """Resolve and validate every configured impl in deterministic key order.
 
     A class registry is a declaration, not merely an import list: each class's
@@ -555,7 +555,7 @@ def resolve_all_impl_classes(
     ordinary callers retain fail-fast resolution.
     """
 
-    classes: list[type] = []
+    classes: list[type[T]] = []
     for key in sorted(impl_registry(registry_setting)):
         try:
             impl = resolve_impl_class(registry_setting, key, base_class)

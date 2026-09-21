@@ -21,6 +21,7 @@ class PreviousRouter(TransitionRouter):
     """Permit relations across aliases of the same physical fixture database."""
 
     def allow_relation(self, obj1: models.Model, obj2: models.Model, **hints: Any) -> bool:
+        del obj1, obj2, hints
         return True
 
 

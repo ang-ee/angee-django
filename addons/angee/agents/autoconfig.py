@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-SETTINGS = {
+SETTINGS: dict[str, object] = {
     # Inference providers select their backend with a provider-owned
     # ``backend_class`` field. ``manual`` lists no models; its catalogue is
     # hand-curated.

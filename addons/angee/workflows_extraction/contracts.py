@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Literal
 
 from django.db.models import TextChoices
@@ -83,7 +84,7 @@ class CorrectionBinding:
         }
 
 
-class ExtractionPartKind(TextChoices):
+class ExtractionPartKind(TextChoices, StrEnum):
     """Closed carrier kind retained for one extraction part."""
 
     STRUCTURED = "structured", "Structured"

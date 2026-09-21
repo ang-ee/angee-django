@@ -1710,7 +1710,9 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
             raise ValidationError({"track": "Create the proposal track before publishing it."})
         track: Any = related_on(self, "track", using=using)
         self._validate_track_task_queues(track, using=using)
-        recipients = related_on(self, "round", using=using)._responder_users(
+        round_row = related_on(self, "round", using=using)
+        assert round_row is not None
+        recipients = round_row._responder_users(
             proposals, states=self._track_recipient_states(), using=using
         )
         if recipients:
@@ -1733,7 +1735,9 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
 
         if self.track_id is None:
             return False
-        recipients = related_on(self, "round", using=using)._responder_users(
+        round_row = related_on(self, "round", using=using)
+        assert round_row is not None
+        recipients = round_row._responder_users(
             proposals, states=self._track_recipient_states(), using=using
         )
         subject_ids = {to_subject_ref(user).subject_id for user in recipients}
@@ -1757,6 +1761,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         """Return facilitator/responder personal queues allowed while sealed."""
 
         round_row = related_on(self, "round", using=using)
+        assert round_row is not None
         sources = {
             round_row.facilitator_id: (round_row, "facilitator"),
             self.responder_id: (self, "responder"),

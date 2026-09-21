@@ -889,7 +889,7 @@ class ExtractionManager(EvidenceManager):
             raise TypeError("Provide either fresh evidence or one retained extraction.")
         if original is None and revision_parent is not None:
             raise TypeError("Fresh evidence cannot name a retained revision parent.")
-        alias = using
+        alias = get_write_alias(self.model, using=using, bound=self, instance=original)
         revision_parent = revision_parent or original
         expected_base_id = values.pop("expected_base_id", None)
         expected_head_id = values.pop("expected_head_id", expected_base_id)

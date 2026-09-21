@@ -1041,6 +1041,7 @@ class LinkManager(AngeeManager):
 
         using = get_write_alias(self.model, using=using, bound=self, instance=markdown)
         page = related_on(markdown, "page", using=using)
+        assert page is not None
         wanted = parse_wikilinks(markdown.body)
         pages = type(page)._base_manager.db_manager(using)
         links = self.model._base_manager.db_manager(using)

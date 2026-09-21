@@ -131,17 +131,7 @@ class PreparePagesStepImpl(StepImpl):
         recognition_options = dict(options.get("recognition_config") or {})
         config_digest = canonical_json_sha256(recognition_options)
         recognition_pages = [
-            {
-                "source_position": page.source_position,
-                "page_position": page.page_position,
-                "image_file_id": str(page.recognition_file.sqid),
-                "image_digest": str(page.recognition_file.content_hash),
-                "width": page.recognition_image.width,
-                "height": page.recognition_image.height,
-                "dpi": page.recognition_image.dpi,
-                "model_id": model_id,
-                "config_digest": config_digest,
-            }
+            page.recognition_input(model_id=model_id, config_digest=config_digest)
             for page in prepared.recognition_pages
         ]
         return StepResult.done(output={
@@ -749,12 +739,10 @@ def _restore_prepared(
         using=using,
     )
     if [
-        {"source_position": page.source_position, "page_position": page.page_position,
-         "image_file_id": str(page.recognition_file.sqid),
-         "image_digest": str(page.recognition_file.content_hash),
-         "width": page.recognition_image.width, "height": page.recognition_image.height,
-         "dpi": page.recognition_image.dpi, "model_id": manifest.recognition_model_id,
-         "config_digest": manifest.recognition_config_digest}
+        page.recognition_input(
+            model_id=manifest.recognition_model_id,
+            config_digest=manifest.recognition_config_digest,
+        )
         for page in prepared.recognition_pages
     ] != manifest.recognition_pages:
         raise ValidationError({"pages": "The recognition subset changed after preparation."})

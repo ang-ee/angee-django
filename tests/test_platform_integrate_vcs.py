@@ -80,7 +80,7 @@ def test_remote_catalogue_reconciles_metadata_and_retains_removed_declarations(
     """Remote rows retain their declaration and provenance after disappearing."""
 
     source, marker = catalog_source
-    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda dirs: {})
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda _dirs: {})
 
     assert source.refresh() == 1
     with system_context(reason="test catalogue read"):
@@ -130,7 +130,7 @@ def test_available_catalogue_updates_provenance_and_clears_runtime_facts_when_it
         else EntryPoint(name=manifest.name, value=manifest.name, group="angee.addons")
     )
     available = {manifest.name: (manifest, origin)}
-    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda dirs: available)
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda _dirs: available)
     with system_context(reason="test catalogue setup"):
         row = Addon.objects.create(
             name=manifest.name,
@@ -196,7 +196,7 @@ def test_remote_catalogue_keeps_unknown_identity_without_importing_the_remote_na
         '    label = "remote_identity"\n'
     )
     monkeypatch.syspath_prepend(str(tmp_path / "python"))
-    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda dirs: {})
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda _dirs: {})
     assert "catalog_remote_identity" not in sys.modules
 
     assert source.refresh() == 1

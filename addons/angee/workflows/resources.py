@@ -38,7 +38,7 @@ class _WorkflowReferenceWidget(XrefForeignKeyWidget):
     resource: WorkflowDefinitionResource
 
     def resolve_field_target(self, ref: str) -> Any:
-        addon, xref = split_xref(ref, self.addon_aliases)
+        addon, xref = split_xref(ref, self.resource.addon_aliases)
         if self.model is self.resource._meta.model and addon == self.resource.entry.addon.name:
             instance = self.resource.instance_for_xref(xref)
             if instance is not None:
@@ -262,6 +262,7 @@ class WorkflowDefinitionResource(AngeeResource):
     def save_instance(self, instance: Any, is_create: bool, row: Mapping[str, Any], **kwargs: Any) -> None:
         """Retain the native cleaned instance; manager persistence follows the dataset."""
 
+        del is_create
         self.before_save_instance(instance, row, **kwargs)
         self._pending[row["_xref"]] = (row, kwargs)
 

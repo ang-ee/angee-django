@@ -1538,7 +1538,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 )
                 sibling_ids = (
                     set()
-                    if target is None
+                    if target is None or continuation_row is None
                     else set(
                         target.incoming_edges.using(alias)
                         .exclude(source_id=continuation_row.step_id)
@@ -1561,6 +1561,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     or any(row.status not in StepRunStatus.TERMINAL for row in prior_rows)
                     or any(row.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED} for row in prior_rows)
                     or recovered is None
+                    or continuation_row is None
                     or continuation_attempt is None
                     or continuation_attempt.step_run_id != continuation_row.pk
                     or continuation_attempt.result_kind != str(AttemptResultKind.DONE)

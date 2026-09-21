@@ -821,9 +821,11 @@ def _validated_record_search_fields(
     by_name = {field.name: field for field in fields}
     for name in projected:
         field = by_name.get(name)
-        filter_spec = query.fields.get(name).filter if name in query.fields else None
+        query_field = query.fields.get(name)
+        filter_spec = query_field.filter if query_field is not None else None
         if (
-            not _is_display_scalar(field)
+            field is None
+            or not _is_display_scalar(field)
             or not field.readable
             or filter_spec is None
             or "iContains" not in filter_spec.operators

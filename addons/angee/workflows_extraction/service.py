@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -46,6 +46,9 @@ from angee.workflows_extraction.pointers import (
 )
 from angee.workflows_extraction.routing import acquire_native_parts
 
+if TYPE_CHECKING:
+    from angee.storage.models import File
+
 
 @dataclass(frozen=True, slots=True)
 class PreparedPage:
@@ -56,7 +59,30 @@ class PreparedPage:
     native_parts: tuple[DocumentPart, ...]
     carrier_files: tuple[Any, ...]
     recognition_image: PageImage | None = None
-    recognition_file: Any | None = None
+    recognition_file: File | None = None
+
+    def recognition_carrier(self) -> tuple[File, PageImage]:
+        """Return the paired File and raster required by recognition consumers."""
+
+        if self.recognition_file is None or self.recognition_image is None:
+            raise ValidationError({"pages": "Recognition requires both its retained File and raster."})
+        return self.recognition_file, self.recognition_image
+
+    def recognition_input(self, *, model_id: str, config_digest: str) -> dict[str, Any]:
+        """Project the retained carrier and frozen model policy into a page request."""
+
+        image_file, image = self.recognition_carrier()
+        return {
+            "source_position": self.source_position,
+            "page_position": self.page_position,
+            "image_file_id": str(image_file.sqid),
+            "image_digest": str(image_file.content_hash),
+            "width": image.width,
+            "height": image.height,
+            "dpi": image.dpi,
+            "model_id": model_id,
+            "config_digest": config_digest,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +120,7 @@ class PreparedDocument:
                 {
                     "source_position": page.source_position,
                     "page_position": page.page_position,
-                    "image_file_id": str(page.recognition_file.sqid),
+                    "image_file_id": str(page.recognition_carrier()[0].sqid),
                 }
                 for page in self.recognition_pages
             ],
@@ -260,11 +286,11 @@ def collect_carriers(
     if len(map_results) > len(requested):
         raise ValidationError({"recognition": "Map added unrequested page results."})
     by_index: dict[int, Mapping[str, Any]] = {}
-    for item in map_results:
-        index = item.get("map_index")
+    for map_result in map_results:
+        index = map_result.get("map_index")
         if type(index) is not int or index < 0 or index >= len(requested) or index in by_index:
             raise ValidationError({"recognition": "Map returned duplicate or invalid page positions."})
-        by_index[index] = item
+        by_index[index] = map_result
     if list(by_index) != sorted(by_index):
         raise ValidationError({"recognition": "Map page results are not in requested order."})
     recognized: dict[tuple[int, int], DocumentPart] = {}
@@ -286,12 +312,13 @@ def collect_carriers(
         if item.get("output_present") is not True or not isinstance(item.get("output"), Mapping):
             holds.append(f"recognition_page_{page.source_position}_{page.page_position}_missing")
             continue
+        image_file, image = page.recognition_carrier()
         output = item["output"]
         if (
             type(output.get("source_position")) is not int
             or type(output.get("page_position")) is not int
             or (output["source_position"], output["page_position"]) != (page.source_position, page.page_position)
-            or str(output.get("image_file_id")) != str(page.recognition_file.sqid)
+            or str(output.get("image_file_id")) != str(image_file.sqid)
         ):
             raise ValidationError({"recognition": "A recognition result names a different page carrier."})
         text_file_id = output.get("text_file_id")
@@ -306,9 +333,10 @@ def collect_carriers(
             raise ValidationError({"recognition": "A recognition result used different model/configuration facts."})
         file_model = apps.get_model("storage", "File")
         actor = current_actor()
-        if actor is None:
+        readable = read_scoped_queryset(file_model, actor)
+        if readable is None:
             raise PermissionDenied("Read access to the recognized carrier File is required.")
-        text_file = read_scoped_queryset(file_model, actor).using(using).filter(sqid=text_file_id).first()
+        text_file = readable.using(using).filter(sqid=text_file_id).first()
         if text_file is None or not text_file.with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to the recognized carrier File is required.")
         if str(text_file.upload_state) != "ready":
@@ -322,8 +350,8 @@ def collect_carriers(
             (text_file.metadata or {}).get("workflows_extraction", {}).get("recognitions", {}).get(request_key)
         )
         expected_facts = {
-            "image_file_id": str(page.recognition_file.sqid),
-            "image_digest": str(page.recognition_file.content_hash),
+            "image_file_id": str(image_file.sqid),
+            "image_digest": str(image_file.content_hash),
             "text_digest": str(text_file.content_hash),
             "model_id": recognition_model_id,
             "config_digest": recognition_config_digest,
@@ -344,13 +372,13 @@ def collect_carriers(
             text,
             str(output.get("method") or "text_recognition"),
             str(text_file.content_hash),
-            page.recognition_image.width,
-            page.recognition_image.height,
-            page.recognition_image.dpi,
+            image.width,
+            image.height,
+            image.dpi,
             int(output.get("duration_ms") or 0),
             {
                 "carrier_files": [str(text_file.sqid)],
-                "image_file": str(page.recognition_file.sqid),
+                "image_file": str(image_file.sqid),
                 "request_key": request_key,
             },
         )
@@ -801,7 +829,7 @@ def infer(
         inference_facts = existing.stage_provenance.get("inference", {})
         expected_identity_base_id = (
             preliminary_authority.pk
-            if preliminary_correspondence
+            if preliminary_authority is not None
             and existing.status == "failed"
             and existing.error_code
             == "source_hold:identity_correspondence_required"

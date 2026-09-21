@@ -32,6 +32,7 @@ class DefinitionRouter(TransitionRouter):
     """Allow relations between two aliases of the same physical test database."""
 
     def allow_relation(self, obj1: models.Model, obj2: models.Model, **hints: Any) -> bool:
+        del obj1, obj2, hints
         return True
 
 
