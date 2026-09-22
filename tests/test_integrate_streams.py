@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import timedelta
-from threading import Barrier
+from threading import Barrier, Lock
 from typing import Any
 
 import pytest
@@ -15,7 +15,14 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.integrate.models import merge_json_state
-from angee.integrate.records import DiscrepancyKind, LinkStatus, StreamDirection, StreamKind, StreamPhase
+from angee.integrate.records import (
+    DiscrepancyKind,
+    DiscrepancyStatus,
+    LinkStatus,
+    StreamDirection,
+    StreamKind,
+    StreamPhase,
+)
 from angee.integrate.streams import (
     ApplyResult,
     ChangeKind,
@@ -29,7 +36,9 @@ from angee.integrate.streams import (
     advance_stream,
     begin_stream_cycle,
     classify_change,
+    push_stream,
     reconcile_stream,
+    sync_bridge,
 )
 from tests.conftest import _create_missing_tables, make_integration
 from tests.integrate_models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
@@ -69,9 +78,11 @@ class MemoryAdapter:
     semantic_key: str = ""
     infrastructure_key: str = ""
     inventory: tuple[str, ...] = ()
+    candidates: tuple[LocalChange, ...] = ()
     applied: list[str] = field(default_factory=list)
     written: list[tuple[str, Any, str]] = field(default_factory=list)
     extracted: int = 0
+    closed: int = 0
     sync_parallelism: int | None = 1
     sync_deadline: float | None = None
 
@@ -115,7 +126,8 @@ class MemoryAdapter:
         assert connections[using].in_atomic_block
 
     def local_changes(self, stream: Any, *, using: str | None = None) -> Iterable[LocalChange]:
-        return ()
+        assert not connections[using].in_atomic_block
+        return self.candidates
 
     def write_back(
         self,
@@ -130,7 +142,20 @@ class MemoryAdapter:
         return WriteBackResult("v2", "changed", projection)
 
     def close(self) -> None:
-        pass
+        self.closed += 1
+
+
+@dataclass
+class ReadKeysAdapter(MemoryAdapter):
+    """Optional identity transport; the base adapter deliberately omits it."""
+
+    remote: dict[str, RecordChange] = field(default_factory=dict)
+    reads: list[tuple[str, ...]] = field(default_factory=list)
+
+    def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
+        assert not connections[using].in_atomic_block
+        self.reads.append(tuple(keys))
+        return tuple(self.remote[key] for key in sorted(keys))
 
 
 @pytest.mark.parametrize(
@@ -261,6 +286,257 @@ def test_semantic_failure_quarantines_one_row_and_continues_page(stream_bridge: 
     assert (discrepancy.kind, discrepancy.code) == (DiscrepancyKind.SEMANTIC, "invalid_name")
 
 
+@pytest.mark.parametrize("status", [DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY])
+@pytest.mark.parametrize("tombstone", [False, True])
+def test_identity_rescan_resolves_current_remote_state_without_advancing_stream(
+    stream_bridge: Channel, status: str, tombstone: bool
+) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    adapter = ReadKeysAdapter(
+        pages=[
+            StreamPage(
+                (
+                    RecordChange("person:1", {"name": "base"}, "base"),
+                    RecordChange("healthy", {"name": "healthy"}, "healthy"),
+                ),
+                {"page": 1},
+            )
+        ]
+    )
+    advance_stream(stream, adapter)
+    adapter.semantic_key = "person:1"
+    adapter.pages = [
+        StreamPage((RecordChange("person:1", {"name": "invalid"}, "invalid", "base"),), {"page": 2})
+    ]
+    failure = advance_stream(stream, adapter)
+    discrepancy = SyncDiscrepancy.objects.get(pk=failure.discrepancy_ids[0])
+    SyncDiscrepancy.objects.filter(pk=discrepancy.pk).update(status=status, retry_at=timezone.now())
+    future = RecordLink.objects.observe(stream, "future")
+    SyncDiscrepancy.objects.record(
+        stream,
+        link=future,
+        kind=DiscrepancyKind.SEMANTIC,
+        code="invalid_name",
+        source_hash="future",
+        retry_at=timezone.now() + timedelta(hours=1),
+    )
+    SyncStream.objects.filter(pk=stream.pk).update(
+        cursor_expires_at=timezone.now() + timedelta(days=1),
+        last_reconciled_at=timezone.now() - timedelta(hours=1),
+    )
+    before = SyncStream.objects.filter(pk=stream.pk).values().get()
+    adapter.applied.clear()
+    adapter.semantic_key = ""
+    payload = {} if tombstone else {"name": "corrected"}
+    adapter.remote = {
+        "person:1": RecordChange(
+            "person:1", payload, "" if tombstone else "corrected", "base", tombstone=tombstone
+        ),
+    }
+    begin_stream_cycle(stream, adapter)
+    discrepancy.refresh_from_db()
+    link = RecordLink.objects.get(stream=stream, external_key="person:1")
+    assert adapter.reads == [("person:1",)]
+    assert adapter.extracted == 2
+    assert adapter.applied == ["person:1"]
+    assert not adapter.written
+    assert AppliedRecord.objects.get(key="person:1").payload == payload
+    assert discrepancy.status == DiscrepancyStatus.RESOLVED
+    assert discrepancy.retry_at is None
+    assert link.status == (LinkStatus.TOMBSTONE if tombstone else LinkStatus.CURRENT)
+    assert link.remote_base_hash == ("" if tombstone else "corrected")
+    assert RecordRevision.objects.filter(link=link).count() == 2
+    assert SyncStream.objects.filter(pk=stream.pk).values().get() == before
+    assert SyncStream.objects.count() == 1
+
+
+def test_changed_remote_failure_defers_older_quarantine_for_the_same_identity(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    adapter = ReadKeysAdapter(
+        pages=[StreamPage((RecordChange("poison", {}, "old"),), {"page": 1})],
+        semantic_key="poison",
+        remote={"poison": RecordChange("poison", {}, "new")},
+    )
+    result = advance_stream(stream, adapter)
+    SyncDiscrepancy.objects.filter(pk=result.discrepancy_ids[0]).update(retry_at=timezone.now())
+    begin_stream_cycle(stream, adapter)
+    failures = list(SyncDiscrepancy.objects.order_by("pk"))
+    assert {row.source_hash for row in failures} == {"old", "new"}
+    assert all(row.status == DiscrepancyStatus.OPEN and row.retry_at > timezone.now() for row in failures)
+    assert failures[0].retry_at == failures[1].retry_at
+    begin_stream_cycle(stream, adapter)
+    assert adapter.reads == [("poison",)]
+    assert not AppliedRecord.objects.exists()
+    assert SyncStream.objects.count() == 1
+
+
+def test_identity_rescan_rolls_back_all_records_on_infrastructure_failure(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, cursor={"page": 8}
+    )
+    for key in ("first", "z-broken"):
+        link = RecordLink.objects.observe(stream, key)
+        SyncDiscrepancy.objects.record(
+            stream, link=link, kind=DiscrepancyKind.SEMANTIC, code="invalid_name", source_hash=key
+        )
+    adapter = ReadKeysAdapter(
+        infrastructure_key="z-broken",
+        remote={key: RecordChange(key, {"name": key}, key) for key in ("first", "z-broken")},
+    )
+    with pytest.raises(OperationalError, match="database unavailable"):
+        begin_stream_cycle(stream, adapter)
+    stream.refresh_from_db()
+    assert stream.cursor == {"page": 8}
+    assert not AppliedRecord.objects.exists()
+    assert adapter.applied == ["first", "z-broken"]
+    assert not RecordRevision.objects.exists()
+    assert SyncDiscrepancy.objects.filter(status=DiscrepancyStatus.OPEN).count() == 2
+
+
+def test_identity_rescan_without_read_keys_requests_and_records_baseline(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    record = RecordChange("poison", {"name": "invalid"}, "invalid")
+    adapter = MemoryAdapter(pages=[StreamPage((record,), {"page": 1})], semantic_key="poison")
+    failure = advance_stream(stream, adapter)
+    discrepancy = SyncDiscrepancy.objects.get(pk=failure.discrepancy_ids[0])
+    SyncDiscrepancy.objects.filter(pk=discrepancy.pk).update(retry_at=timezone.now())
+    begin_stream_cycle(stream, adapter)
+    stream.refresh_from_db()
+    discrepancy.refresh_from_db()
+    assert stream.resync_required
+    assert stream.cursor == {"page": 1}
+    assert discrepancy.details == {
+        "key": "poison",
+        "external_key": "poison",
+        "rescan": "baseline",
+        "reason": "read_keys_unavailable",
+    }
+    reset = advance_stream(stream, adapter)
+    assert reset.reset
+    adapter.pages = [StreamPage((record,), {"page": 1})]
+    advance_stream(reset.stream, adapter)
+    begin_stream_cycle(reset.stream, adapter)
+    reset.stream.refresh_from_db()
+    discrepancy.refresh_from_db()
+    assert discrepancy.attempts == 2
+    assert discrepancy.retry_at > timezone.now()
+    assert reset.stream.generation == 2
+    assert not reset.stream.resync_required
+
+
+def test_event_feed_discrepancies_never_trigger_rescan_or_baseline(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "events")
+    adapter = ReadKeysAdapter(pages=[StreamPage(("poison",), {"offset": 1})], semantic_key="poison")
+    failure = advance_stream(stream, adapter)
+    SyncDiscrepancy.objects.filter(pk=failure.discrepancy_ids[0]).update(retry_at=timezone.now())
+    before = SyncStream.objects.filter(pk=stream.pk).values().get()
+    for _ in range(3):
+        begin_stream_cycle(stream, adapter)
+    assert not adapter.reads
+    assert adapter.extracted == 1
+    assert not RecordLink.objects.exists()
+    assert SyncStream.objects.filter(pk=stream.pk).values().get() == before
+
+
+@pytest.mark.parametrize(
+    "interval,cap",
+    [
+        (timedelta(minutes=3), 180),
+        (timedelta(days=2), 86400),
+        (None, 86400),
+        (timedelta(0), 86400),
+    ],
+)
+def test_quarantine_backoff_grows_and_caps_without_generation_inflation(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch, interval: timedelta | None, cap: int
+) -> None:
+    now = timezone.now()
+    monkeypatch.setattr(timezone, "now", lambda: now)
+    stream = SyncStream.objects.current(
+        stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, reconcile_interval=interval
+    )
+    record = RecordChange("poison", {"name": "invalid"}, "invalid")
+    adapter = ReadKeysAdapter(
+        pages=[StreamPage((record,), {"page": 1})], semantic_key="poison", remote={"poison": record}
+    )
+    failure = advance_stream(stream, adapter)
+    discrepancy = SyncDiscrepancy.objects.get(pk=failure.discrepancy_ids[0])
+    expected_attempt = 1
+    for _ in range(4):
+        discrepancy.refresh_from_db()
+        assert discrepancy.attempts == expected_attempt
+        delay = min(60 * 2 ** (expected_attempt - 1), cap)
+        assert discrepancy.retry_at == now + timedelta(seconds=delay)
+        reads = len(adapter.reads)
+        begin_stream_cycle(stream, adapter)
+        assert len(adapter.reads) == reads
+        now = discrepancy.retry_at
+        begin_stream_cycle(stream, adapter)
+        assert len(adapter.reads) == reads + 1
+        expected_attempt += 1
+    SyncDiscrepancy.objects.filter(pk=discrepancy.pk).update(attempts=20, retry_at=now)
+    begin_stream_cycle(stream, adapter)
+    discrepancy.refresh_from_db()
+    stream.refresh_from_db()
+    assert discrepancy.attempts == 21
+    assert discrepancy.retry_at == now + timedelta(seconds=cap)
+    assert discrepancy.status == DiscrepancyStatus.OPEN
+    assert not AppliedRecord.objects.exists()
+    assert stream.cursor == {"page": 1}
+    assert stream.generation == 1
+    assert not stream.resync_required
+    assert SyncStream.objects.count() == SyncDiscrepancy.objects.count() == 1
+
+
+@pytest.mark.parametrize("status", [DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY])
+def test_both_changed_conflict_requires_resolution_before_pull_or_push(stream_bridge: Channel, status: str) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
+    )
+    adapter = ReadKeysAdapter(
+        pages=[StreamPage((RecordChange("person:1", {"name": "base"}, "base"),), {"page": 1})]
+    )
+    advance_stream(stream, adapter)
+    AppliedRecord.objects.filter(key="person:1").update(payload={"name": "local edit"})
+    record = RecordChange("person:1", {"name": "remote edit"}, "remote", "local")
+    adapter.applied.clear()
+    adapter.remote = {"person:1": record}
+    adapter.pages = [StreamPage((record,), {"page": 2})]
+    result = advance_stream(stream, adapter)
+    discrepancy = SyncDiscrepancy.objects.get(pk=result.discrepancy_ids[0])
+    assert result.count == 0
+    assert (discrepancy.kind, discrepancy.code, discrepancy.retry_at) == (
+        DiscrepancyKind.CONFLICT,
+        "both_changed",
+        None,
+    )
+    SyncDiscrepancy.objects.filter(pk=discrepancy.pk).update(status=status)
+    begin_stream_cycle(stream, adapter)
+    # Even if a later remote observation matches the old base, an unresolved
+    # conflict must not silently authorize the pending local write.
+    adapter.pages = [
+        StreamPage((RecordChange("person:1", {"name": "base"}, "base", "local"),), {"page": 3})
+    ]
+    assert advance_stream(stream, adapter).count == 0
+    adapter.candidates = (LocalChange("person:1", {"name": "local edit"}, "local"),)
+    assert push_stream(stream, adapter).count == 0
+    stream.refresh_from_db()
+    discrepancy.refresh_from_db()
+    assert discrepancy.status == status
+    assert discrepancy.retry_at is None
+    assert not adapter.reads
+    assert not adapter.applied
+    assert not adapter.written
+    assert not stream.resync_required
+    assert stream.generation == 1
+    assert AppliedRecord.objects.get(key="person:1").payload == {"name": "local edit"}
+    assert RecordRevision.objects.count() == 1
+    SyncDiscrepancy.objects.resolve(discrepancy)
+    assert push_stream(stream, adapter).count == 1
+    assert adapter.written == [("person:1", {"name": "local edit"}, "")]
+    assert RecordRevision.objects.count() == 2
+
+
 def test_write_back_origin_is_recognized_on_next_pull(stream_bridge: Channel) -> None:
     stream = SyncStream.objects.current(
         stream_bridge,
@@ -318,6 +594,50 @@ def test_event_feeds_apply_without_replica_links(stream_bridge: Channel) -> None
     assert AppliedRecord.objects.count() == 2
     assert not RecordLink.objects.exists()
     assert not RecordRevision.objects.exists()
+
+
+@pytest.mark.parametrize("failed_partition", ["", "sent"])
+def test_parallel_partitions_close_each_adapter_once_even_after_failure(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch, failed_partition: str
+) -> None:
+    if connection.vendor != "postgresql":
+        pytest.skip("Parallel stream partitions require PostgreSQL.")
+    adapters: list[MemoryAdapter] = []
+    adapters_lock = Lock()
+    ready = Barrier(2)
+
+    class PartitionAdapter(MemoryAdapter):
+        def streams(self, *, using: str | None = None) -> Iterable[StreamDefinition]:
+            return tuple(StreamDefinition("messages", partition) for partition in ("inbox", "sent"))
+
+        def extract(self, stream: Any, page_bound: int, *, using: str | None = None) -> StreamPage:
+            assert not connections[using].in_atomic_block
+            ready.wait(timeout=10)
+            if stream.partition == failed_partition:
+                raise OperationalError("partition unavailable")
+            return StreamPage((stream.partition,), {"done": True})
+
+    def backend(bridge: Channel) -> PartitionAdapter:
+        adapter = PartitionAdapter(sync_parallelism=2)
+        with adapters_lock:
+            adapters.append(adapter)
+        return adapter
+
+    monkeypatch.setattr(Channel, "backend", property(backend))
+    stream_bridge.config = {**stream_bridge.config, "sync_parallelism": 2, "sync_time_budget": 60}
+    stream_bridge.save(update_fields=["config"])
+    if failed_partition:
+        with pytest.raises(RuntimeError, match="one or more partitions"):
+            sync_bridge(stream_bridge)
+        assert list(AppliedRecord.objects.values_list("key", flat=True)) == ["inbox"]
+    else:
+        assert sync_bridge(stream_bridge) == 2
+        assert set(AppliedRecord.objects.values_list("key", flat=True)) == {"inbox", "sent"}
+    assert len(adapters) == 3
+    assert [adapter.closed for adapter in adapters] == [1, 1, 1]
+    assert SyncStream.objects.count() == 2
+    assert SyncStream.objects.get(partition="inbox").cursor == {"done": True}
+    assert SyncStream.objects.get(partition="sent").cursor == ({} if failed_partition else {"done": True})
 
 
 def test_json_merge_uses_fresh_locked_row_for_stale_partition_instances(stream_bridge: Channel) -> None:

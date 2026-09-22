@@ -1167,9 +1167,14 @@ replicas retain a remote and local comparison base on each link.
   history; reverify links through their generation marker. A stale peer beyond
   tombstone retention requires a baseline. Complete inventory sweeps count
   absences before confirming tombstones and preserve existing quarantine.
-- **Quarantine is not a work queue.** Stream-cycle rescan re-extracts due semantic
-  failures through a baseline; conflicts await explicit resolution. The shared
-  driver owns budgets, repeated-page detection and partition concurrency.
+- **Quarantine is not a work queue.** Stream-cycle rescan re-reads due replica
+  identities through the optional `StreamAdapter.read_keys` operation, including
+  tombstones for missing remote keys. It composes the same transactional apply
+  path while preserving the cursor. Only adapters without this operation fall
+  back to a baseline, with that fallback recorded in discrepancy details. Event
+  feeds skip rescan. Semantic failures back off between attempts; conflicts await
+  explicit resolution and never auto-retry. The shared driver owns budgets,
+  repeated-page detection and partition concurrency.
   Workflow execution, decisions and durable scheduling stay with their existing
   owners; integrate must not import workflows.
 

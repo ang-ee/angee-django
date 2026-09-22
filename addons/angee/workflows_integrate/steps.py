@@ -139,7 +139,7 @@ class BoundedStreamStage(StepImpl):
                 if not step_run.resume_state and (
                     stream.last_advanced_at is None or stream.last_advanced_at < step_run.created_at
                 ):
-                    stream = begin_stream_cycle(stream, using=alias)
+                    stream = begin_stream_cycle(stream, adapter, using=alias)
                 page = advance_stream(stream, adapter, page_bound=value.page_bound, using=alias)
                 correlation = {"stream": public_id_of(page.stream), "generation": page.stream.generation}
                 if not page.exhausted:

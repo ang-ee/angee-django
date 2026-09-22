@@ -111,7 +111,7 @@ class SyncStreamManager(AngeeManager):
             .sudo(reason="integrate.stream.current_for_bridge")
             .filter(
                 bridge_ct=bridge_ct,
-                bridge_id=str(bridge.pk),
+                bridge_id=bridge.pk,
                 key=key,
             )
         )
@@ -144,16 +144,17 @@ class SyncStreamManager(AngeeManager):
         if absence_threshold < 1:
             raise ValidationError("A stream absence threshold must be positive.")
         integration = apps.get_model("integrate", "Integration")
+        if bridge._meta.proxy or integration not in bridge._meta.get_parent_list():
+            raise ValidationError("A stream bridge must be a concrete Integration child.")
         with system_context(reason="integrate.stream.current"), transaction.atomic(using=using):
             integration.objects.db_manager(using).filter(pk=bridge.pk).lock_if_supported().get()
             bridge_ct = ContentType.objects.db_manager(using).get_for_model(bridge, for_concrete_model=False)
-            identity = {"bridge_ct": bridge_ct, "bridge_id": str(bridge.pk), "key": key, "partition": partition}
+            identity = {"bridge_ct": bridge_ct, "bridge_id": bridge.pk, "key": key, "partition": partition}
             manager = self.db_manager(using)
             stream = manager.filter(**identity).order_by("-generation").first()
             if stream is None:
                 return manager.create(
                     **identity,
-                    integration_id=bridge.pk,
                     kind=kind,
                     direction=direction,
                     cursor={} if cursor is None else cursor,
@@ -175,8 +176,8 @@ class SyncStreamManager(AngeeManager):
         using = get_write_alias(self.model, using=using, bound=self, instance=stream)
         with system_context(reason="integrate.stream.bump_generation"), transaction.atomic(using=using):
             refresh_deferred(stream, using=using)
-            integration = related_on(stream, "integration", using=using)
-            type(integration).objects.db_manager(using).filter(pk=integration.pk).lock_if_supported().get()
+            integration = apps.get_model("integrate", "Integration")
+            integration.objects.db_manager(using).filter(pk=stream.bridge_id).lock_if_supported().get()
             manager = self.db_manager(using)
             latest = (
                 manager.filter(
@@ -192,7 +193,6 @@ class SyncStreamManager(AngeeManager):
             if latest.pk != stream.pk:
                 return latest
             successor = manager.create(
-                integration_id=latest.integration_id,
                 bridge_ct_id=latest.bridge_ct_id,
                 bridge_id=latest.bridge_id,
                 key=latest.key,
@@ -241,10 +241,18 @@ class SyncStream(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "sst_"
-    integration = models.ForeignKey("integrate.Integration", on_delete=models.PROTECT, related_name="sync_streams")
     bridge_ct = models.ForeignKey(ContentType, on_delete=models.PROTECT, related_name="+")
-    bridge_id = models.CharField(max_length=255)
+    bridge_id = models.PositiveBigIntegerField()
     bridge = GenericForeignKey("bridge_ct", "bridge_id", for_concrete_model=False)
+    # Every concrete Bridge is an Integration MTI child. Its GFK id already
+    # identifies that permission owner; this ORM relation adds no second column.
+    integration = models.ForeignObject(
+        "integrate.Integration",
+        on_delete=models.PROTECT,
+        from_fields=("bridge_id",),
+        to_fields=("id",),
+        related_name="sync_streams",
+    )
     key = models.CharField(max_length=160)
     partition = models.CharField(max_length=255, blank=True)
     kind = StateField(choices_enum=StreamKind)
@@ -556,20 +564,23 @@ class SyncDiscrepancyManager(AngeeManager):
                 locked_link = type(link).objects.db_manager(using).filter(pk=link.pk).lock_if_supported().get()
                 if locked_link.stream_id != stream.pk:
                     raise ValidationError("A discrepancy link must belong to its stream.")
-            row, _ = self.db_manager(using).update_or_create(
+            row, _ = self.db_manager(using).get_or_create(
                 stream=stream,
                 kind=kind,
                 code=code,
                 source_hash=source_hash,
                 mapping_version=mapping_version,
                 status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
-                defaults={
-                    "link": link,
-                    "details": dict(details or {}),
-                    "status": DiscrepancyStatus.OPEN,
-                    "retry_at": retry_at,
-                    "resolved_at": None,
-                },
+                defaults={"link": link, "status": DiscrepancyStatus.OPEN},
+            )
+            row.link = link
+            row.details = {**row.details, **dict(details or {})}
+            row.status, row.resolved_at = DiscrepancyStatus.OPEN, None
+            row.retry_at = None if kind == DiscrepancyKind.CONFLICT else retry_at
+            row.attempts += 1
+            row.save(
+                using=using,
+                update_fields=["link", "details", "status", "retry_at", "resolved_at", "attempts", "updated_at"],
             )
             if link is not None:
                 type(link).objects.db_manager(using).filter(pk=link.pk).update(status=LinkStatus.DISCREPANT)
@@ -635,6 +646,7 @@ class SyncDiscrepancy(SqidMixin, AuditMixin, AngeeModel):
     mapping_version = models.PositiveIntegerField(default=1)
     details = models.JSONField(default=dict, blank=True)
     status = StateField(choices_enum=DiscrepancyStatus, default=DiscrepancyStatus.OPEN)
+    attempts = models.PositiveIntegerField(default=0)
     retry_at = models.DateTimeField(null=True, blank=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
     objects = SyncDiscrepancyManager()

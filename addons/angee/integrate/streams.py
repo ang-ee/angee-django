@@ -1,7 +1,7 @@
 """Bounded synchronization: transport outside transactions, page and cursor inside.
 
-Adapters own protocol parsing and domain projections. Retryable discrepancies
-request a fresh enumeration on the next cycle; there is no durable work queue.
+Adapters own protocol parsing and domain projections. Due discrepancies are
+re-read by identity when supported; there is no durable work queue.
 """
 
 from __future__ import annotations
@@ -152,6 +152,16 @@ class StreamAdapter(Protocol):
 
     def streams(self, *, using: str | None = None) -> Iterable[StreamDefinition]: ...
     def extract(self, stream: Any, page_bound: int, *, using: str | None = None) -> StreamPage: ...
+    def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
+        """Optional: read exactly these keys once, returning tombstones for missing keys.
+
+        Like extract, perform transport and project local state outside a
+        transaction. Adapters may omit this operation; rescan then requests a
+        baseline and records that fallback on the due discrepancies.
+        """
+
+        ...
+
     def apply(self, stream: Any, page: StreamPage, *, using: str | None = None) -> Iterable[ApplyResult]: ...
     def finish_page(
         self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult], *, using: str | None = None
@@ -252,21 +262,40 @@ def _has_conflict(link: Any, *, using: str) -> bool:
     )
 
 
+def _retry_at(stream: Any, attempts: int) -> datetime:
+    cap = timedelta(days=1)
+    if stream.reconcile_interval and stream.reconcile_interval > timedelta(0):
+        cap = min(cap, stream.reconcile_interval)
+    return timezone.now() + min(timedelta(minutes=2 ** min(max(0, attempts - 1), 11)), cap)
+
+
 def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = None, using: str) -> Any:
     replica = isinstance(record, RecordChange)
     details = dict(error.details)
     if replica:
         details["external_key"] = record.external_key
-    return _manager("SyncDiscrepancy", using=using).record(
-        stream,
-        link=link,
-        kind=error.kind,
-        code=error.code,
-        source_hash=_source_hash(record),
-        mapping_version=record.mapping_version if replica else 1,
-        details=details,
-        using=using,
-    )
+    manager = _manager("SyncDiscrepancy", using=using)
+    with transaction.atomic(using=using):
+        row = manager.record(
+            stream,
+            link=link,
+            kind=error.kind,
+            code=error.code,
+            source_hash=_source_hash(record),
+            mapping_version=record.mapping_version if replica else 1,
+            details=details,
+            using=using,
+        )
+        if row.kind != DiscrepancyKind.CONFLICT:
+            row.retry_at = _retry_at(stream, row.attempts)
+            row.save(using=using, update_fields=["retry_at", "updated_at"])
+            if link is not None:
+                # Older failed source versions must not bypass this identity's
+                # backoff when its newly read payload also fails semantically.
+                manager.filter(
+                    link=link, status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY)
+                ).exclude(kind=DiscrepancyKind.CONFLICT).update(retry_at=row.retry_at)
+        return row
 
 
 def _reset(stream: Any, *, cursor: dict[str, Any], using: str) -> PageResult:
@@ -352,101 +381,114 @@ def advance_stream(
             return _reset(stream, cursor=error.cursor, using=using)
         if page.resync_required:
             return _reset(stream, cursor={}, using=using)
-        # Conditional remote writes precede the transaction. Compare link bases
-        # again before reflecting the response; a later local edit remains dirty.
-        written: dict[str, tuple[Any, WriteBackResult | SemanticError]] = {}
-        if stream.kind == StreamKind.RECORD_REPLICA and stream.direction != StreamDirection.PULL:
-            for record in page.records:
-                if not isinstance(record, RecordChange):
-                    raise TypeError("Replica pages must contain RecordChange values.")
-                link = (
-                    _manager("RecordLink", using=using).filter(stream=stream, external_key=record.external_key).first()
-                )
-                if (
-                    link is not None
-                    and not _has_conflict(link, using=using)
-                    and _decision(link, record) == ChangeKind.WRITE_BACK
-                ):
-                    bases = (link.remote_base_hash, link.local_base_hash, link.remote_version)
-                    try:
-                        result = adapter.write_back(
-                            link, record.projection, expected_version=link.remote_version, using=using
-                        )
-                    except RemoteRejected as error:
-                        result = error
-                    written[record.external_key] = (bases, result)
-        count, discrepancies = 0, []
-        applied: list[ApplyResult] = []
-        with transaction.atomic(using=using):
-            locked = _manager("SyncStream", using=using).lock_current(stream, using=using)
-            if locked.cursor != original_cursor or locked.resync_required:
-                raise RuntimeError("Stream state changed during extraction; retry the page.")
-            for record in page.records:
-                link = None
+        return _apply_page(stream, adapter, page, original_cursor=original_cursor, using=using)
+
+
+def _apply_page(
+    stream: Any,
+    adapter: StreamAdapter,
+    page: StreamPage,
+    *,
+    original_cursor: dict[str, Any],
+    advance_cursor: bool = True,
+    using: str,
+) -> PageResult:
+    """Apply page or identity observations through the same fenced transaction."""
+
+    # Conditional remote writes precede the transaction. Compare link bases
+    # again before reflecting the response; a later local edit remains dirty.
+    written: dict[str, tuple[Any, WriteBackResult | SemanticError]] = {}
+    if stream.kind == StreamKind.RECORD_REPLICA and stream.direction != StreamDirection.PULL:
+        for record in page.records:
+            if not isinstance(record, RecordChange):
+                raise TypeError("Replica pages must contain RecordChange values.")
+            link = _manager("RecordLink", using=using).filter(stream=stream, external_key=record.external_key).first()
+            if (
+                link is not None
+                and not _has_conflict(link, using=using)
+                and _decision(link, record) == ChangeKind.WRITE_BACK
+            ):
+                bases = (link.remote_base_hash, link.local_base_hash, link.remote_version)
                 try:
-                    with transaction.atomic(using=using):
-                        if locked.kind == StreamKind.RECORD_REPLICA:
-                            if not isinstance(record, RecordChange):
-                                raise TypeError("Replica pages must contain RecordChange values.")
-                            link = _manager("RecordLink", using=using).observe(locked, record.external_key, using=using)
-                            if _has_conflict(link, using=using):
-                                discrepancies.extend(
-                                    _manager("SyncDiscrepancy", using=using)
-                                    .filter(
-                                        link=link,
-                                        kind=DiscrepancyKind.CONFLICT,
-                                        status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
-                                    )
-                                    .values_list("pk", flat=True)
-                                )
-                                continue
-                            decision = _decision(link, record)
-                            if decision == ChangeKind.CONFLICT:
-                                raise SemanticError("both_changed", kind=DiscrepancyKind.CONFLICT)
-                            if decision == ChangeKind.UNCHANGED:
-                                _promote(
-                                    link,
-                                    record,
-                                    ApplyResult(
-                                        target=record.target,
-                                        local_hash=record.local_hash,
-                                        mapped_payload=record.projection,
-                                        count=0,
-                                    ),
-                                    origin=link.origin or "remote",
-                                    using=using,
-                                )
-                                _resolve_applied(locked, record, using=using)
-                                continue
-                            if decision == ChangeKind.WRITE_BACK:
-                                if locked.direction == StreamDirection.PULL:
-                                    raise SemanticError("local_change_on_pull", kind=DiscrepancyKind.CONFLICT)
-                                bases, result = written.get(record.external_key, (None, None))
-                                if bases != (link.remote_base_hash, link.local_base_hash, link.remote_version):
-                                    raise RuntimeError("Record bases changed during extraction; retry the page.")
-                                if isinstance(result, SemanticError):
-                                    raise result
-                                if result is None:
-                                    raise RuntimeError("A conditional write result is missing.")
-                                _reflect_write(link, record, result, using=using)
-                                _resolve_applied(locked, record, using=using)
-                                count += 1
-                                continue
-                        outcomes = tuple(adapter.apply(locked, replace(page, records=(record,)), using=using))
-                        if len(outcomes) != 1:
-                            raise RuntimeError("apply must return one outcome for its single record.")
-                        if link is not None:
-                            _promote(link, record, outcomes[0], origin="remote", using=using)
-                        applied.extend(outcomes)
-                        _resolve_applied(locked, record, using=using)
-                        count += outcomes[0].count
-                except (SemanticError, ValidationError) as error:
-                    # The record savepoint rolled back, including a new identity.
-                    if isinstance(record, RecordChange):
+                    result = adapter.write_back(
+                        link, record.projection, expected_version=link.remote_version, using=using
+                    )
+                except RemoteRejected as error:
+                    result = error
+                written[record.external_key] = (bases, result)
+    count, discrepancies = 0, []
+    applied: list[ApplyResult] = []
+    with transaction.atomic(using=using):
+        locked = _manager("SyncStream", using=using).lock_current(stream, using=using)
+        if locked.cursor != original_cursor or locked.resync_required:
+            raise RuntimeError("Stream state changed during extraction; retry the page.")
+        for record in page.records:
+            link = None
+            try:
+                with transaction.atomic(using=using):
+                    if locked.kind == StreamKind.RECORD_REPLICA:
+                        if not isinstance(record, RecordChange):
+                            raise TypeError("Replica pages must contain RecordChange values.")
                         link = _manager("RecordLink", using=using).observe(locked, record.external_key, using=using)
-                    refusal = error if isinstance(error, SemanticError) else SemanticError("invalid_record")
-                    discrepancies.append(_quarantine(locked, record, refusal, link=link, using=using).pk)
-            adapter.finish_page(locked, page, applied, using=using)
+                        if _has_conflict(link, using=using):
+                            discrepancies.extend(
+                                _manager("SyncDiscrepancy", using=using)
+                                .filter(
+                                    link=link,
+                                    kind=DiscrepancyKind.CONFLICT,
+                                    status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
+                                )
+                                .values_list("pk", flat=True)
+                            )
+                            continue
+                        decision = _decision(link, record)
+                        if decision == ChangeKind.CONFLICT:
+                            raise SemanticError("both_changed", kind=DiscrepancyKind.CONFLICT)
+                        if decision == ChangeKind.UNCHANGED:
+                            _promote(
+                                link,
+                                record,
+                                ApplyResult(
+                                    target=record.target,
+                                    local_hash=record.local_hash,
+                                    mapped_payload=record.projection,
+                                    count=0,
+                                ),
+                                origin=link.origin or "remote",
+                                using=using,
+                            )
+                            _resolve_applied(locked, record, using=using)
+                            continue
+                        if decision == ChangeKind.WRITE_BACK:
+                            if locked.direction == StreamDirection.PULL:
+                                raise SemanticError("local_change_on_pull", kind=DiscrepancyKind.CONFLICT)
+                            bases, result = written.get(record.external_key, (None, None))
+                            if bases != (link.remote_base_hash, link.local_base_hash, link.remote_version):
+                                raise RuntimeError("Record bases changed during extraction; retry the page.")
+                            if isinstance(result, SemanticError):
+                                raise result
+                            if result is None:
+                                raise RuntimeError("A conditional write result is missing.")
+                            _reflect_write(link, record, result, using=using)
+                            _resolve_applied(locked, record, using=using)
+                            count += 1
+                            continue
+                    outcomes = tuple(adapter.apply(locked, replace(page, records=(record,)), using=using))
+                    if len(outcomes) != 1:
+                        raise RuntimeError("apply must return one outcome for its single record.")
+                    if link is not None:
+                        _promote(link, record, outcomes[0], origin="remote", using=using)
+                    applied.extend(outcomes)
+                    _resolve_applied(locked, record, using=using)
+                    count += outcomes[0].count
+            except (SemanticError, ValidationError) as error:
+                # The record savepoint rolled back, including a new identity.
+                if isinstance(record, RecordChange):
+                    link = _manager("RecordLink", using=using).observe(locked, record.external_key, using=using)
+                refusal = error if isinstance(error, SemanticError) else SemanticError("invalid_record")
+                discrepancies.append(_quarantine(locked, record, refusal, link=link, using=using).pk)
+        adapter.finish_page(locked, page, applied, using=using)
+        if advance_cursor:
             _manager("SyncStream", using=using).advance(
                 locked,
                 page.cursor,
@@ -454,10 +496,10 @@ def advance_stream(
                 cursor_expires_at=page.cursor_expires_at,
                 using=using,
             )
-        progress = canonical_json_sha256(
-            [locked.generation, page.cursor, [_source_hash(record) for record in page.records]]
-        )
-        return PageResult(locked, count, page.exhausted, tuple(discrepancies), progress=progress)
+    progress = canonical_json_sha256(
+        [locked.generation, page.cursor, [_source_hash(record) for record in page.records]]
+    )
+    return PageResult(locked, count, page.exhausted, tuple(discrepancies), progress=progress)
 
 
 def push_stream(stream: Any, adapter: StreamAdapter, *, using: str | None = None) -> PageResult:
@@ -537,35 +579,83 @@ def reconcile_stream(stream: Any, adapter: StreamAdapter, *, using: str | None =
     return changed
 
 
-def begin_stream_cycle(stream: Any, *, using: str | None = None) -> Any:
-    """Request a baseline for due retries or a peer stale beyond tombstone retention.
+def begin_stream_cycle(stream: Any, adapter: StreamAdapter | None = None, *, using: str | None = None) -> Any:
+    """Re-read due replica identities, or request a logged baseline fallback.
 
-    Call once per cycle, before bounded advance_stream invocations. Conflicts
-    await an explicit resolution; retryable records are re-extracted through a
-    baseline because the protocol deliberately has no separate read-by-key API.
+    Call once per cycle before advance_stream, outside any transaction. Optional
+    read_keys returns RecordChange observations without moving the stream cursor.
+    Conflicts require explicit resolution. Event feeds have no replica rescan.
     """
 
     using = get_write_alias(type(stream), using=using, instance=stream)
-    with system_context(reason="integrate.stream.cycle"), transaction.atomic(using=using):
+    if connections[using].in_atomic_block:
+        raise RuntimeError("Stream rescan must run outside a database transaction.")
+    with system_context(reason="integrate.stream.cycle"):
         manager = _manager("SyncStream", using=using)
-        stream = manager.lock_current(stream, using=using)
-        discrepancies = _manager("SyncDiscrepancy", using=using).rescan(stream, using=using)
-        retry = any(row.kind != DiscrepancyKind.CONFLICT for row in discrepancies)
-        retention = stream.tombstone_retention
-        if retention and (stream.last_advanced_at is None or stream.last_advanced_at + retention < timezone.now()):
-            retry |= (
-                _manager("RecordLink", using=using)
-                .filter(
-                    stream=stream,
-                    status=LinkStatus.TOMBSTONE,
-                    tombstoned_at__lt=timezone.now() - retention,
+        discrepancies = _manager("SyncDiscrepancy", using=using)
+        read_keys = getattr(adapter, "read_keys", None)
+        with transaction.atomic(using=using):
+            stream = manager.lock_current(stream, using=using)
+            if stream.kind == StreamKind.EVENT_FEED:
+                return stream
+            conflicts = discrepancies.filter(
+                stream=stream,
+                kind=DiscrepancyKind.CONFLICT,
+                status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
+            ).values_list("link_id", flat=True)
+            blocked = set(conflicts)
+            due = [
+                row
+                for row in discrepancies.rescan(stream, using=using)
+                if row.kind != DiscrepancyKind.CONFLICT and row.link_id is not None and row.link_id not in blocked
+            ]
+            retention = stream.tombstone_retention
+            retry = False
+            if retention and (
+                stream.last_advanced_at is None or stream.last_advanced_at + retention < timezone.now()
+            ):
+                retry = (
+                    _manager("RecordLink", using=using)
+                    .filter(
+                        stream=stream,
+                        status=LinkStatus.TOMBSTONE,
+                        tombstoned_at__lt=timezone.now() - retention,
+                    )
+                    .exists()
                 )
-                .exists()
+            if due and read_keys is None:
+                retry = True
+                for row in due:
+                    row.details = {**row.details, "rescan": "baseline", "reason": "read_keys_unavailable"}
+                    row.retry_at = _retry_at(stream, row.attempts)
+                    row.save(using=using, update_fields=["details", "retry_at", "updated_at"])
+            if retry:
+                manager.filter(pk=stream.pk).update(resync_required=True)
+                stream.resync_required = True
+            if stream.resync_required or not due:
+                return stream
+            keys = tuple(
+                _manager("RecordLink", using=using)
+                .filter(stream=stream, pk__in=[row.link_id for row in due])
+                .order_by("external_key")
+                .values_list("external_key", flat=True)
             )
-        if retry:
-            manager.filter(pk=stream.pk).update(resync_required=True)
-            stream.resync_required = True
-    return stream
+            original_cursor = deepcopy(stream.cursor)
+        records = tuple(read_keys(stream, keys, using=using))
+        if (
+            any(not isinstance(record, RecordChange) for record in records)
+            or len(records) != len(keys)
+            or {record.external_key for record in records} != set(keys)
+        ):
+            raise ValueError("read_keys must return each requested key exactly once, including remote tombstones.")
+        return _apply_page(
+            stream,
+            adapter,
+            StreamPage(records, original_cursor, exhausted=False),
+            original_cursor=original_cursor,
+            advance_cursor=False,
+            using=using,
+        ).stream
 
 
 def open_stream(bridge: Any, definition: StreamDefinition, *, using: str | None = None) -> Any:
@@ -594,9 +684,9 @@ def _report(bridge: Any, message: str, **details: Any) -> None:
 
 
 def _drain(bridge: Any, adapter: StreamAdapter, definition: StreamDefinition, deadline: float, *, using: str) -> int:
-    stream = begin_stream_cycle(open_stream(bridge, definition, using=using), using=using)
-    landed, resets = 0, 0
     adapter.sync_deadline = deadline
+    stream = begin_stream_cycle(open_stream(bridge, definition, using=using), adapter, using=using)
+    landed, resets = 0, 0
     page_bound = max(1, int(bridge.config.get("sync_page_bound", 100)))
     exhausted = False
     previous = None
@@ -674,7 +764,6 @@ def sync_bridge(bridge: Any, *, using: str | None = None) -> int:
                 parallelism = 1
             if parallelism <= 1 or len(definitions) <= 1:
                 return sum(_drain(bridge, adapter, definition, deadline, using=using) for definition in definitions)
-            adapter.close()
             failures, landed = [], 0
             with ThreadPoolExecutor(
                 max_workers=min(parallelism, len(definitions)), thread_name_prefix="bridge-sync"

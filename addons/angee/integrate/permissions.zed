@@ -1,7 +1,7 @@
 // Authorization schema for the integrate addon.
 // @rebac_package: integrate
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 8
+// @rebac_schema_revision: 9
 
 definition integrate/oauth_client {
     relation admin: angee/role // rebac:const=admin
@@ -76,6 +76,7 @@ definition integrate/webhook_subscription {
 }
 
 definition integrate/sync_stream {
+    // The ORM owner relation derives from the concrete Bridge GFK's id.
     relation integration: integrate/integration // rebac:field=integration
 
     permission create = integration->write

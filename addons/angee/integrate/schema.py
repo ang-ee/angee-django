@@ -1384,7 +1384,7 @@ _VENDOR_RESOURCE = hasura_model_resource(
 class SyncStreamType(AngeeNode):
     """Read-only inspection of a bridge partition's retained epoch."""
 
-    integration: IntegrationType
+    integration: IntegrationType = strawberry_django.field(only=["bridge_id"], prefetch_related=["integration"])
     key: auto
     partition: auto
     kind: auto
@@ -1448,6 +1448,7 @@ class SyncDiscrepancyType(AngeeNode):
     mapping_version: auto
     details: JSON
     status: auto
+    attempts: auto
     retry_at: auto
     resolved_at: auto
     created_at: auto

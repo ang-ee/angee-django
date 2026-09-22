@@ -48,18 +48,28 @@ reflection and use the remote version precondition. If the process loses the
 response, the next observation must reconcile that uncertainty; this protocol
 does not promise an atomic commit across two systems.
 
-Bounded callers resolve declarations through `open_stream`, use `begin_stream_cycle`
+Bounded callers resolve declarations through `open_stream`, use `begin_stream_cycle(stream, adapter)`
 once, then `advance_stream` until its
 result is exhausted, passing the returned stream after an epoch reset. The
 caller closes its adapter. `push_stream` and `reconcile_stream` complete the
 cycle when applicable. These functions contain no workflow runtime dependency;
 execution composition belongs to `workflows_integrate`.
 
-A due non-conflict discrepancy requests a new baseline on the next cycle. The
-adapter protocol deliberately has no separate read-by-key API, so retries
-re-extract through the same enumeration rather than retaining a private work
-queue. Successful apply resolves earlier non-conflict failures for that identity.
-Conflicts require explicit resolution before either side can be written again.
+At cycle start, due non-conflict replica discrepancies with links are re-read
+through the optional `read_keys(stream, keys, *, using)` adapter operation. It
+returns one `RecordChange` for every requested external key, including a remote
+tombstone when that key no longer exists. Transport runs outside transactions;
+the shared page apply path commits the observations without changing the cursor,
+phase or advancement timestamps. Successful apply resolves earlier non-conflict
+failures for that identity. Event feeds are excluded from discrepancy rescan.
+An adapter without `read_keys` requests a baseline instead, recording the fallback
+and reason in the discrepancy details. No private work queue is retained.
+
+Semantic quarantine increments `attempts` and sets an exponential retry delay
+starting at one minute, capped by the smaller of a positive reconciliation
+interval or 24 hours. A zero interval means continuous inventory reconciliation,
+so it retains the 24-hour retry cap. Conflicts keep `retry_at=None` and require
+explicit resolution before either side can be written again.
 An invalid/expired cursor or `resync_required` creates a new baseline generation,
 carrying existing links and quarantine forward while retaining revision history.
 

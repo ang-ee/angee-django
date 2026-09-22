@@ -7,7 +7,7 @@ operation DTOs remain with their accounting addon. REBAC still owns permissions.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
 from typing import Any, ClassVar
@@ -36,6 +36,14 @@ def _required(value: object, label: str) -> str:
     if not normalized:
         raise ValueError(f"Import {label} is required.")
     return normalized
+
+
+def _identity(value: Sequence[str | int], label: str) -> tuple[str, str]:
+    """Normalize a native or JSON identity pair before comparing source facts."""
+
+    if isinstance(value, (str, bytes)) or len(value) != 2:
+        raise ValueError(f"Import {label} must be a (type, id) pair.")
+    return (_required(value[0], f"{label} type"), _required(value[1], f"{label} id"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,9 +312,9 @@ class ExternalOwnershipManager(AngeeManager.from_queryset(ExternalOwnershipQuery
         pk: Any,
         values: Mapping[str, Any],
         *,
-        source: tuple[str, str],
+        source: Sequence[str | int],
         source_key: str,
-        company: tuple[str, str] | None,
+        company: Sequence[str | int] | None,
         using: str | None = None,
     ) -> Any:
         """Apply source fields to an existing projection with matching provenance.
@@ -333,7 +341,7 @@ class ExternalOwnershipManager(AngeeManager.from_queryset(ExternalOwnershipQuery
             raise ExternalOwnershipError("External imports require concrete source values.")
         with transaction.atomic(using=using):
             persisted = queryset.filter(pk=pk).lock_if_supported().get()
-            persisted.require_external_identity(
+            source = persisted.require_external_identity(
                 source=source,
                 source_key=source_key,
                 company=company,
@@ -410,14 +418,16 @@ class ExternalOwnershipMixin(models.Model):
     def require_external_identity(
         self,
         *,
-        source: tuple[str, str],
+        source: Sequence[str | int],
         source_key: str,
-        company: tuple[str, str] | None,
+        company: Sequence[str | int] | None,
         using: str | None = None,
-    ) -> None:
-        """Reject a projection collision against explicit persisted source facts."""
+    ) -> tuple[str, str]:
+        """Validate native or JSON identity pairs and return the canonical source."""
 
         using = get_write_alias(type(self), using=using, instance=self)
+        source = _identity(source, "source")
+        company = _identity(company, "company") if company is not None else None
         self._state.db = using
         refresh_deferred(self, using=using)
         actual_source = self.import_source(using=using)
@@ -428,6 +438,7 @@ class ExternalOwnershipMixin(models.Model):
             or self.import_company(using=using) != company
         ):
             raise ExternalOwnershipError("The projection belongs to a different source identity or company.")
+        return actual_source
 
     def _check_external_ownership_create(self, *, using: str) -> None:
         self.import_source(using=using)
@@ -462,10 +473,13 @@ class ExternalOwnershipMixin(models.Model):
 
         del using
 
-    def claim_external_ownership(self, source_key: str, *, source: tuple[str, str], using: str | None = None) -> None:
+    def claim_external_ownership(
+        self, source_key: str, *, source: Sequence[str | int], using: str | None = None
+    ) -> None:
         """Claim an unowned row once under its row lock, using explicit source facts."""
 
         using = get_write_alias(type(self), using=using, instance=self)
+        source = _identity(source, "source")
         self._state.db = using
         source_key = _required(source_key, "source key")
         require_authorization_database(using, operation="External ownership claim")
@@ -475,8 +489,8 @@ class ExternalOwnershipMixin(models.Model):
                 raise ExternalOwnershipError("External provenance is already claimed and immutable.")
             row._check_external_ownership_claim(using=using)
             values = {
-                "external_source_type": _required(source[0], "source type"),
-                "external_source_id": _required(source[1], "source id"),
+                "external_source_type": source[0],
+                "external_source_id": source[1],
                 "external_source_key": source_key,
             }
             for name, value in values.items():

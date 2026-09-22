@@ -14,14 +14,14 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.identity import public_id_of
-from angee.integrate.records import DiscrepancyKind, DiscrepancyStatus
-from angee.integrate.streams import StreamDefinition, StreamPage, open_stream
+from angee.integrate.records import DiscrepancyKind, DiscrepancyStatus, StreamKind
+from angee.integrate.streams import RecordChange, StreamDefinition, StreamPage, open_stream
 from angee.workflows.attempts import AttemptResultKind
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepExecutionMode, TransientStepError
 from angee.workflows_integrate import steps as integrate_steps
 from angee.workflows_integrate.steps import BoundedStreamStage, CoverageGate
-from tests.integrate_models import SyncDiscrepancy, SyncStream
+from tests.integrate_models import RecordLink, SyncDiscrepancy, SyncStream
 from tests.messaging_models import Channel
 from tests.test_integrate_streams import AppliedRecord, MemoryAdapter
 from tests.test_integrate_streams import stream_bridge as stream_bridge
@@ -222,18 +222,19 @@ def test_retry_prepares_cycle_when_first_attempt_never_reached_first_page(
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stream = open_stream(stream_bridge, StreamDefinition("records"))
-    SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="retry-on-baseline")
-    adapter = MemoryAdapter(pages=[StreamPage(("repaired",), {"offset": 1})])
+    stream = open_stream(stream_bridge, StreamDefinition("records", kind=StreamKind.RECORD_REPLICA))
+    link = RecordLink.objects.observe(stream, "repaired")
+    SyncDiscrepancy.objects.record(stream, link=link, kind=DiscrepancyKind.SEMANTIC, code="retry-on-baseline")
+    adapter = MemoryAdapter(pages=[StreamPage((RecordChange("repaired", {}, "repaired"),), {"offset": 1})])
     monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
     prepare = integrate_steps.begin_stream_cycle
     calls = []
 
-    def interrupted_prepare(stream: Any, *, using: str | None = None) -> Any:
+    def interrupted_prepare(stream: Any, adapter: Any = None, *, using: str | None = None) -> Any:
         calls.append(stream.pk)
         if len(calls) == 1:
             raise ConnectionError("first preparation interrupted")
-        return prepare(stream, using=using)
+        return prepare(stream, adapter, using=using)
 
     monkeypatch.setattr(integrate_steps, "begin_stream_cycle", interrupted_prepare)
     run, step_run = _start_stage(stream_bridge, retry=True)
