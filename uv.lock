@@ -755,7 +755,7 @@ requires-dist = [
     { name = "django-simple-history", specifier = ">=3.7" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", specifier = ">=0.18.1" },
+    { name = "django-zed-rebac", specifier = ">=0.18.2" },
     { name = "hatch-angee", specifier = ">=0.2.4" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.13" },
@@ -775,7 +775,7 @@ addons = [
     { name = "django-axes", specifier = ">=8.0" },
     { name = "django-countries", specifier = ">=9,<10" },
     { name = "django-import-export", specifier = ">=4.4" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.18.1" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.18.2" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "httpcore", specifier = ">=1.0,<2" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
@@ -803,7 +803,7 @@ addons = [
     { name = "slack-sdk", specifier = ">=3.43.0" },
     { name = "strawberry-django-aggregates", specifier = ">=0.12.0" },
     { name = "strawberry-django-hasura", specifier = ">=0.11.0" },
-    { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=e4fa3198f704d81b3ca96b6dcac75420c5fee516" },
+    { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
     { name = "strawberry-graphql-django", specifier = ">=0.89.2" },
     { name = "tablib", specifier = ">=3" },
     { name = "vobject", specifier = ">=0.9.9" },
@@ -945,14 +945,14 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.18.1"
+version = "0.18.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/59/df/a5836bbb2c00a9997da68f9847c1b20c17833b849d09c97efee61b10536c/django_zed_rebac-0.18.1.tar.gz", hash = "sha256:376b57a9f3b611789477425a1e27e46d427a628a6f9706191ca25b3ac5917766", size = 324531, upload-time = "2026-09-22T07:21:44.334Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/9b/1186b75aa5288797a23fe6c6ea036d91ada9035428a3a4cf4c57e80e2bbd/django_zed_rebac-0.18.2.tar.gz", hash = "sha256:c3db42b85f39b06b37651db3b295e87ca91aedc07d53c32a31bae2491301ec20", size = 325263, upload-time = "2026-09-22T16:28:07.312Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7a/17/29f66b81a69c73db887c1f3789d1dc4364ce33579a9dfc118e57cc85c751/django_zed_rebac-0.18.1-py3-none-any.whl", hash = "sha256:5ddf02e6add6e15233903d9af47f0c063adf83bcb21f470bc8cf06c5b5115ad0", size = 213538, upload-time = "2026-09-22T07:21:43.121Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/d9/d032bcf544e72095506e3da41faf64d03196ce2feff0905d30581aa757e9/django_zed_rebac-0.18.2-py3-none-any.whl", hash = "sha256:983b248609be2f560f8fc77820e5c2df7866ed3e8237cc8bf1b70be35efd8479", size = 213546, upload-time = "2026-09-22T16:28:05.796Z" },
 ]
 
 [package.optional-dependencies]
@@ -2548,8 +2548,8 @@ wheels = [
 
 [[package]]
 name = "strawberry-graphql"
-version = "0.324.0"
-source = { git = "https://github.com/ang-ee/strawberry.git?rev=e4fa3198f704d81b3ca96b6dcac75420c5fee516#e4fa3198f704d81b3ca96b6dcac75420c5fee516" }
+version = "0.327.7"
+source = { git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376#273bf0456d914d4df535222c4cbae73dff46a376" }
 dependencies = [
     { name = "cross-web" },
     { name = "graphql-core" },
