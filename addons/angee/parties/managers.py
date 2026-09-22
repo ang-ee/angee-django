@@ -20,7 +20,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import combinations
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import Any, Self, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -37,19 +37,16 @@ from phonenumbers import (
 )
 from rebac import PermissionDenied, actor_context, current_actor, system_context
 
-from angee.base.db import get_read_alias, get_write_alias
+from angee.base.db import get_read_alias, get_write_alias, related_on
 from angee.base.identity import public_id_for
 from angee.base.mixins import HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_model
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json_sha256
+from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import LinkSource, ScoredLinkMixin
-
-if TYPE_CHECKING:
-    from angee.parties.backends import ParsedContact
-
 
 _SIGNATURE_PHONE_CANDIDATE = re.compile(r"(?<!\w)\+?\d(?:[\d \t()./\-]*\d)?(?!\w)")
 
@@ -101,7 +98,8 @@ class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
             person_model.objects.db_manager(self._db).all().scoped_for_aggregate().canonical().values("pk")
         )
         visible_subtree_circle_ids = (
-            circle_model.objects.db_manager(self._db).all()
+            circle_model.objects.db_manager(self._db)
+            .all()
             .scoped_for_aggregate()
             .filter(
                 created_by_id=OuterRef(OuterRef("created_by_id")),
@@ -110,7 +108,8 @@ class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
             .values("pk")
         )
         subtree_count = (
-            circle_member_model.objects.db_manager(self._db).all()
+            circle_member_model.objects.db_manager(self._db)
+            .all()
             .scoped_for_aggregate()
             .filter(
                 circle_id__in=Subquery(visible_subtree_circle_ids),
@@ -200,12 +199,16 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
 
         phone_platforms = (self.model.Platform.PHONE, self.model.Platform.WHATSAPP)
         changed = 0
-        for handle in self.db_manager(alias).filter(platform__in=phone_platforms).only(
-            "id",
-            "platform",
-            "value",
-            "normalized_value",
-            "updated_at",
+        for handle in (
+            self.db_manager(alias)
+            .filter(platform__in=phone_platforms)
+            .only(
+                "id",
+                "platform",
+                "value",
+                "normalized_value",
+                "updated_at",
+            )
         ):
             normalized = self.model.normalize_value(handle.platform, handle.value)
             if handle.normalized_value == normalized:
@@ -215,7 +218,15 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             changed += 1
         return changed
 
-    def upsert(self, *, platform: str, value: str, created_by_id: Any = None, **fields: Any) -> Any:
+    def upsert(
+        self,
+        *,
+        platform: str,
+        value: str,
+        created_by_id: Any = None,
+        using: str | None = None,
+        **fields: Any,
+    ) -> Any:
         """Get-or-create a handle on the identity it actually has, refreshing display fields.
 
         A source-stable ``external_id`` (in ``fields``, when the source has one)
@@ -239,7 +250,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         on every hit; blank values never clobber.
         """
 
-        alias = get_write_alias(self.model, bound=self)
+        alias = get_write_alias(self.model, using=using, bound=self)
 
         if "owner" in fields or "owner_id" in fields:
             raise TypeError("Handle control ownership must be written through claim_own().")
@@ -375,14 +386,19 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                 created_by_id=user.pk,
                 display_name=display_name,
                 metadata=metadata or {},
+                using=alias,
             )
             handles, _existing_parties = link_owner.lock_identity_rows(
-                party_ids=(), handle_ids=(handle.pk,), using=alias,
+                party_ids=(),
+                handle_ids=(handle.pk,),
+                using=alias,
             )
             handle = handles[handle.pk]
             person = person_model.objects.db_manager(alias).for_user(user)
             handles, parties = link_owner.lock_identity_rows(
-                party_ids=(person.pk,), handle_ids=(handle.pk,), using=alias,
+                party_ids=(person.pk,),
+                handle_ids=(handle.pk,),
+                using=alias,
             )
             handle = handles[handle.pk]
             person = parties[person.pk]
@@ -394,6 +410,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                     source=source,
                     is_confirmed=False,
                     created_by_id=user.pk,
+                    using=alias,
                 )
                 return handle
             if handle.owner_id is None:
@@ -406,6 +423,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                 source=source,
                 is_confirmed=True,
                 created_by_id=user.pk,
+                using=alias,
             )
         return handle
 
@@ -420,7 +438,8 @@ class PartyHandleQuerySet(AngeeQuerySet):
             return Value("", output_field=TextField())
         party_model = apps.get_model("parties", "Party")
         return (
-            party_model.objects.db_manager(self._db).with_actor(actor)
+            party_model.objects.db_manager(self._db)
+            .with_actor(actor)
             .filter(pk=OuterRef("party_id"))
             .readable_scalar_subquery(
                 "display_name",
@@ -437,7 +456,8 @@ class PartyHandleQuerySet(AngeeQuerySet):
             return Value("", output_field=TextField())
         handle_model = apps.get_model("parties", "Handle")
         return (
-            handle_model.objects.db_manager(self._db).with_actor(actor)
+            handle_model.objects.db_manager(self._db)
+            .with_actor(actor)
             .filter(pk=OuterRef("handle_id"))
             .readable_scalar_subquery(
                 "value",
@@ -466,10 +486,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         *,
         party_ids: Iterable[int],
         handle_ids: Iterable[int],
-        using: str,
+        using: str | None = None,
     ) -> tuple[dict[int, Any], dict[int, Any]]:
         """Lock identity rows in the total Handle, Party, PartyHandle order."""
 
+        using = get_write_alias(self.model, using=using, bound=self)
         handle_model = self.model._meta.get_field("handle").remote_field.model
         party_model = self.model._meta.get_field("party").remote_field.model
         ordered_handle_ids = sorted(set(handle_ids))
@@ -485,11 +506,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             ordered_party_ids = sorted(
                 set(ordered_party_ids)
                 .union(row.party_id for row in handles.values() if row.party_id is not None)
-                .union(
-                    self.using(using)
-                    .filter(handle_id__in=ordered_handle_ids)
-                    .values_list("party_id", flat=True)
-                )
+                .union(self.using(using).filter(handle_id__in=ordered_handle_ids).values_list("party_id", flat=True))
             )
             parties = {
                 row.pk: row
@@ -516,7 +533,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         alias = using
         with transaction.atomic(using=alias):
             self.lock_identity_rows(
-                party_ids=(link.party_id,), handle_ids=(link.handle_id,), using=alias,
+                party_ids=(link.party_id,),
+                handle_ids=(link.handle_id,),
+                using=alias,
             )
             locked = self.db_manager(alias).with_actor(actor).with_action("write").get(pk=link.pk)
             if not locked.has_access("write"):
@@ -570,9 +589,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     {"value": "Enter a valid international phone number including country code."}
                 ) from exc
             if not is_possible_number(number) or not is_valid_number(number):
-                raise ValidationError(
-                    {"value": "Enter a valid international phone number including country code."}
-                )
+                raise ValidationError({"value": "Enter a valid international phone number including country code."})
 
         candidate = handle_model(
             platform=normalized_platform,
@@ -587,8 +604,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         with transaction.atomic(using=alias), actor_context(actor):
             handle_owner = handle_model.objects.db_manager(alias)
             handle = (
-                handle_owner
-                .sudo(reason="parties.party_handle.propose_manual_contact.handle")
+                handle_owner.sudo(reason="parties.party_handle.propose_manual_contact.handle")
                 .lock_if_supported()
                 .filter(platform=normalized_platform, value=contact_value)
                 .first()
@@ -600,9 +616,12 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                         platform=normalized_platform,
                         value=contact_value,
                         created_by_id=getattr(actor, "pk", None),
+                        using=alias,
                     )
             handles, parties = self.db_manager(alias).lock_identity_rows(
-                party_ids=(party.pk,), handle_ids=(handle.pk,), using=alias,
+                party_ids=(party.pk,),
+                handle_ids=(handle.pk,),
+                using=alias,
             )
             handle = handles[handle.pk]
             locked_party = parties[party.pk].with_actor(actor)
@@ -634,6 +653,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     source=cast(LinkSource, LinkSource.MANUAL),
                     is_confirmed=False,
                     created_by_id=getattr(actor, "pk", None),
+                    using=alias,
                 )
             if not link.with_actor(actor).has_access("read"):
                 raise PermissionDenied("Denied: cannot read the contact association.")
@@ -647,7 +667,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         handle.with_actor(actor)._require_record_access("read")
         with system_context(reason="parties.party_handle.has_confirmed_association"):
             return self.filter(
-                handle_id=handle.pk, is_confirmed=True, is_dismissed=False,
+                handle_id=handle.pk,
+                is_confirmed=True,
+                is_dismissed=False,
             ).exists()
 
     def assess_claimed_handle(self, party: Any, handle: Any, *, actor: Any) -> HandleAssociationAssessment:
@@ -660,11 +682,10 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         visible = read_scoped_queryset(self.model, actor)
         readable = (
             tuple(visible.using(self._db).filter(handle_id=handle.pk).select_related("party").order_by("pk"))
-            if visible is not None else ()
+            if visible is not None
+            else ()
         )
-        return self._assess_claimed_handle_authorized(
-            party=party, handle=handle, readable_links=readable
-        )
+        return self._assess_claimed_handle_authorized(party=party, handle=handle, readable_links=readable)
 
     def _assess_claimed_handle_authorized(
         self,
@@ -679,17 +700,12 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             raise ValidationError({"handle": "Retained association evidence has the wrong Handle."})
         with system_context(reason="parties.party_handle.assess_claimed_handle"):
             authoritative = tuple(
-                self.filter(handle_id=handle.pk)
-                .only("party_id", "is_confirmed", "is_dismissed")
-                .order_by("pk")
+                self.filter(handle_id=handle.pk).only("party_id", "is_confirmed", "is_dismissed").order_by("pk")
             )
         same = tuple(link for link in authoritative if link.party_id == party.pk)
         if any(link.is_dismissed for link in same):
             status = HandleAssociationStatus.SAME_DISMISSED
-        elif any(
-            link.is_confirmed and not link.is_dismissed and link.party_id != party.pk
-            for link in authoritative
-        ):
+        elif any(link.is_confirmed and not link.is_dismissed and link.party_id != party.pk for link in authoritative):
             status = HandleAssociationStatus.CONFIRMED_OTHER
         elif any(link.is_confirmed and not link.is_dismissed for link in same):
             status = HandleAssociationStatus.SAME_CONFIRMED
@@ -699,14 +715,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             status = HandleAssociationStatus.UNKNOWN
         readable_ids = {link.pk for link in readable_links}
         conflict_ids = {
-            link.pk for link in authoritative
+            link.pk
+            for link in authoritative
             if (
                 (link.party_id == party.pk and link.is_dismissed)
-                or (
-                    link.party_id != party.pk
-                    and link.is_confirmed
-                    and not link.is_dismissed
-                )
+                or (link.party_id != party.pk and link.is_confirmed and not link.is_dismissed)
             )
         }
         return HandleAssociationAssessment(
@@ -764,7 +777,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         alias = using
         with system_context(reason="parties.party_handle.propose_claimed_handle"), transaction.atomic(using=alias):
             handles, parties = self.lock_identity_rows(
-                party_ids=(party.pk,), handle_ids=(handle.pk,), using=alias,
+                party_ids=(party.pk,),
+                handle_ids=(handle.pk,),
+                using=alias,
             )
             locked_handle = handles[handle.pk]
             locked_party = parties[party.pk]
@@ -783,6 +798,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     "evidence": refs,
                 },
                 created_by_id=getattr(actor, "pk", None),
+                using=alias,
             )
 
     def link(
@@ -795,6 +811,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         is_confirmed: bool = False,
         metadata: dict[str, Any] | None = None,
         created_by_id: Any = None,
+        using: str | None = None,
     ) -> Any:
         """Link ``handle`` to ``party`` with ``confidence``, then resolve the handle's owner.
 
@@ -806,10 +823,12 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         a later importer can add provenance without erasing prior evidence.
         """
 
-        alias = get_write_alias(self.model, bound=self, instance=handle)
+        alias = get_write_alias(self.model, using=using, bound=self, instance=handle)
         with transaction.atomic(using=alias):
             handles, parties = self.lock_identity_rows(
-                party_ids=(party.pk,), handle_ids=(handle.pk,), using=alias,
+                party_ids=(party.pk,),
+                handle_ids=(handle.pk,),
+                using=alias,
             )
             handle = handles[handle.pk]
             party = parties[party.pk]
@@ -843,7 +862,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 link._resolve_link(using=alias)
             return link
 
-    def resolve(self, handle: Any) -> None:
+    def resolve(self, handle: Any, *, using: str | None = None) -> None:
         """Materialise ``handle.party`` and its confirmed state from the winning link.
 
         The resolution ordering (``-is_confirmed, -confidence``) is the contacts
@@ -852,20 +871,22 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         the previous owner too, so its ``handle_count`` never goes stale.
         """
 
-        alias = get_write_alias(self.model, bound=self, instance=handle)
+        alias = get_write_alias(self.model, using=using, bound=self, instance=handle)
         with transaction.atomic(using=alias):
             handles, _parties = self.lock_identity_rows(
-                party_ids=(), handle_ids=(handle.pk,), using=alias,
+                party_ids=(),
+                handle_ids=(handle.pk,),
+                using=alias,
             )
             handle = handles[handle.pk]
             previous_pk = handle.party_id
             winner = (
-                self.using(alias).filter(handle=handle, is_dismissed=False)
+                self.using(alias)
+                .filter(handle=handle, is_dismissed=False)
                 .order_by("-is_confirmed", "-confidence", "sqid")
-                .select_related("party")
                 .first()
             )
-            resolved = winner.party if winner else None
+            resolved = related_on(winner, "party", using=alias) if winner else None
             resolved_pk = resolved.pk if resolved else None
             is_confirmed = bool(winner and winner.is_confirmed)
             dirty = []
@@ -878,15 +899,15 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             if dirty:
                 handle.save(using=alias, update_fields=[*dirty, "updated_at"])
             if resolved is not None:
-                self.db_manager(alias).recount(resolved)
+                self.db_manager(alias).recount(resolved, using=alias)
             if previous_pk is not None and previous_pk != resolved_pk:
                 party_model = apps.get_model("parties", "Party")
                 previous = party_model.objects.using(alias).filter(pk=previous_pk).first()
                 if previous is not None:
-                    self.db_manager(alias).recount(previous)
+                    self.db_manager(alias).recount(previous, using=alias)
             handle._party_links_resolved(using=alias)
 
-    def recount(self, party: Any) -> None:
+    def recount(self, party: Any, *, using: str | None = None) -> None:
         """Refresh ``party.handle_count`` from the handles resolved onto it (write only on change).
 
         Idempotent, so it doubles as the repair pass for the drift the counter
@@ -894,7 +915,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         """
 
         handle_model = apps.get_model("parties", "Handle")
-        alias = get_write_alias(self.model, bound=self, instance=party)
+        alias = get_write_alias(self.model, using=using, bound=self, instance=party)
         count = handle_model.objects.using(alias).filter(party_id=party.pk).count()
         if party.handle_count != count:
             party.handle_count = count
@@ -921,7 +942,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             return None
         handle_model = apps.get_model("parties", "Handle")
         twins = (
-            handle_model.objects.db_manager(alias).filter(
+            handle_model.objects.db_manager(alias)
+            .filter(
                 platform=handle.platform,
                 normalized_value=handle.normalized_value,
                 party__isnull=False,
@@ -944,6 +966,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 confidence=1.0 if strongest is None else 0.3,
                 source=cast(LinkSource, LinkSource.EMAIL_MATCH),
                 created_by_id=handle.created_by_id,
+                using=alias,
             )
             if strongest is None:
                 strongest = link
@@ -953,10 +976,12 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             domain = handle.normalized_value.rsplit("@", 1)[1]
             organization_model = apps.get_model("parties", "Organization")
             org = (
-                organization_model.objects.db_manager(alias).filter(
+                organization_model.objects.db_manager(alias)
+                .filter(
                     created_by_id=handle.created_by_id,
                     domain__iexact=domain,
-                ).first()
+                )
+                .first()
                 if domain and domain not in GENERIC_EMAIL_DOMAINS
                 else None
             )
@@ -967,6 +992,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     confidence=0.4,
                     source=cast(LinkSource, LinkSource.RULE),
                     created_by_id=handle.created_by_id,
+                    using=alias,
                 )
         return None
 
@@ -994,10 +1020,12 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         if owner_id is None:
             return 0
         parties = tuple(
-            party_model.objects.db_manager(alias).filter(
+            party_model.objects.db_manager(alias)
+            .filter(
                 pk__in=frozenset(party_ids),
                 created_by_id=owner_id,
-            ).order_by("sqid")
+            )
+            .order_by("sqid")
         )
         if not parties:
             return 0
@@ -1013,6 +1041,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 platform=handle_model.Platform.PHONE,
                 value=value,
                 created_by_id=owner_id,
+                using=alias,
             )
             if handle.created_by_id != owner_id:
                 # Handles are globally unique by source identity. Evidence owned by
@@ -1042,7 +1071,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         handle_model = apps.get_model("parties", "Handle")
         created = 0
         owner_ids = (
-            handle_model.objects.db_manager(alias).exclude(created_by_id=None)
+            handle_model.objects.db_manager(alias)
+            .exclude(created_by_id=None)
             .exclude(display_name="")
             .values_list("created_by_id", flat=True)
             # Clear the model's default ordering: its columns silently join the
@@ -1053,7 +1083,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         )
         for owner_id in owner_ids:
             handles = tuple(
-                handle_model.objects.db_manager(alias).filter(created_by_id=owner_id)
+                handle_model.objects.db_manager(alias)
+                .filter(created_by_id=owner_id)
                 .exclude(display_name="")
                 .select_related("party")
                 .order_by("sqid")
@@ -1119,7 +1150,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         manager = self.db_manager(alias)
         with transaction.atomic(using=alias):
             handles, parties = manager.lock_identity_rows(
-                party_ids=(party.pk,), handle_ids=(handle.pk,), using=alias,
+                party_ids=(party.pk,),
+                handle_ids=(handle.pk,),
+                using=alias,
             )
             locked_handle = handles[handle.pk]
             locked_party = parties[party.pk]
@@ -1135,7 +1168,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             )
             if not created:
                 return 0
-            manager.resolve(locked_handle)
+            manager.resolve(locked_handle, using=alias)
             return 1
 
     @staticmethod
@@ -1191,10 +1224,14 @@ class MergeVetoManager(AngeeManager):
         if not party_ids:
             return set()
         with system_context(reason="parties.merge_veto.forbidden_pairs"):
-            rows = self.model._base_manager.db_manager(self._db).filter(
-                party_a_id__in=party_ids,
-                party_b_id__in=party_ids,
-            ).values_list("party_a_id", "party_b_id")
+            rows = (
+                self.model._base_manager.db_manager(self._db)
+                .filter(
+                    party_a_id__in=party_ids,
+                    party_b_id__in=party_ids,
+                )
+                .values_list("party_a_id", "party_b_id")
+            )
             return set(rows)
 
     def veto(self, a: Any, b: Any, *, actor: Any = None) -> Any:
@@ -1291,7 +1328,8 @@ class PartyQuerySet(AngeeQuerySet):
         circle_member_model = apps.get_model("parties", "CircleMember")
         visible_circle_ids = circle_model.objects.db_manager(self._db).all().scoped_for_aggregate().values("pk")
         visible_memberships = (
-            circle_member_model.objects.db_manager(self._db).all()
+            circle_member_model.objects.db_manager(self._db)
+            .all()
             .scoped_for_aggregate()
             .filter(circle_id__in=Subquery(visible_circle_ids))
             .select_related("circle")
@@ -1312,7 +1350,8 @@ class PartyQuerySet(AngeeQuerySet):
         circle_member_model = apps.get_model("parties", "CircleMember")
         visible_circle_ids = circle_model.objects.db_manager(self._db).all().scoped_for_aggregate().values("pk")
         visible_membership = (
-            circle_member_model.objects.db_manager(self._db).all()
+            circle_member_model.objects.db_manager(self._db)
+            .all()
             .scoped_for_aggregate()
             .filter(
                 party_id=OuterRef("pk"),
@@ -1332,7 +1371,8 @@ class PartyQuerySet(AngeeQuerySet):
 
         party_handle_model = apps.get_model("parties", "PartyHandle")
         visible_review_link = (
-            party_handle_model.objects.db_manager(self._db).all()
+            party_handle_model.objects.db_manager(self._db)
+            .all()
             .scoped_for_aggregate()
             .filter(
                 party_id=OuterRef("pk"),
@@ -1354,7 +1394,8 @@ class PartyQuerySet(AngeeQuerySet):
 
         circle_model = apps.get_model("parties", "Circle")
         visible_subtree_membership = (
-            circle_model.objects.db_manager(self._db).all()
+            circle_model.objects.db_manager(self._db)
+            .all()
             .with_actor(self.actor() or current_actor())
             .subtree_of(circle)
             .memberships(confirmed_only=confirmed_only)
@@ -1414,7 +1455,8 @@ class PartyQuerySet(AngeeQuerySet):
         merge_veto_model = apps.get_model("parties", "MergeVeto")
         visible_party_ids = self.canonical().scoped_for_aggregate().values("pk")
         handles = (
-            handle_model.objects.db_manager(self._db).all()
+            handle_model.objects.db_manager(self._db)
+            .all()
             .scoped_for_aggregate()
             .filter(
                 party_id__in=Subquery(visible_party_ids),
@@ -1475,7 +1517,6 @@ class PartyQuerySet(AngeeQuerySet):
         ]
 
 
-
 class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[misc]
     """Factory for parties, including the idempotent directory-sync ingest.
 
@@ -1493,22 +1534,18 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         if party is None:
             raise ValidationError({"party_id": "Party was not found."})
         party.with_actor(actor)._require_record_access("read")
-        addresses = (
-            apps.get_model("parties", "Address").objects.db_manager(alias).with_actor(actor).filter(party=party)
-        )
+        addresses = apps.get_model("parties", "Address").objects.db_manager(alias).with_actor(actor).filter(party=party)
         readable_handles = (
             apps.get_model("parties", "Handle").objects.db_manager(alias).with_actor(actor).scoped().values("pk")
         )
         link_owner = apps.get_model("parties", "PartyHandle").objects.db_manager(alias)
-        links = (
-            link_owner
-            .with_actor(actor)
-            .filter(party=party, handle_id__in=Subquery(readable_handles))
-        )
+        links = link_owner.with_actor(actor).filter(party=party, handle_id__in=Subquery(readable_handles))
         if lock:
             handle_ids = tuple(links.order_by("handle_id").values_list("handle_id", flat=True))
             _handles, locked_parties = link_owner.lock_identity_rows(
-                party_ids=(party.pk,), handle_ids=handle_ids, using=alias,
+                party_ids=(party.pk,),
+                handle_ids=handle_ids,
+                using=alias,
             )
             party = locked_parties[party.pk].with_actor(actor)
             addresses = addresses.order_by("pk").lock_if_supported()
@@ -1630,9 +1667,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             if left is None or right is None:
                 raise ValidationError({"pair": "Duplicate pair references a missing party."})
             if action == "keep_separate":
-                apps.get_model("parties", "MergeVeto").objects.db_manager(
-                    alias
-                ).veto(left, right, actor=actor)
+                apps.get_model("parties", "MergeVeto").objects.db_manager(alias).veto(left, right, actor=actor)
                 return "vetoed"
             locked = {
                 row.pk: row.with_actor(actor)
@@ -1654,11 +1689,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         if not normalized:
             raise ValidationError({"name": "A replacement Party name must not be empty."})
         with transaction.atomic(using=alias), actor_context(actor):
-            locked = (
-                self.db_manager(alias)
-                .with_actor(actor)
-                .locked_get(pk=party.pk)
-            )
+            locked = self.db_manager(alias).with_actor(actor).locked_get(pk=party.pk)
             if locked.display_name != expected:
                 raise ValidationError({"name": "The Party name changed during review."})
             if not locked.has_access("write"):
@@ -1685,7 +1716,8 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         circle_member_model = apps.get_model("parties", "CircleMember")
         visible_circle_ids = circle_model.objects.db_manager(self._db).all().scoped_for_aggregate().values("pk")
         return list(
-            circle_member_model.objects.db_manager(self._db).all()
+            circle_member_model.objects.db_manager(self._db)
+            .all()
             .scoped_for_aggregate()
             .filter(
                 party_id=party.pk,
@@ -1778,7 +1810,169 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             return None
         return person.user
 
-    def ingest_contact(self, parsed: ParsedContact, *, folder: Any, created_by_id: Any) -> Any:
+    def lock_contact(
+        self,
+        person: Any | None,
+        *,
+        parsed: ParsedContact | None = None,
+        using: str | None = None,
+    ) -> None:
+        """Lock the mapped contact aggregate before a caller rechecks its base.
+
+        Follow the shared Handle, Party, PartyHandle order before locking the
+        Person child and its mapped collections. The parent row lock also fences
+        inserts through its foreign keys while the page transaction is open.
+        """
+
+        alias = get_write_alias(self.model, using=using, bound=self, instance=person)
+        associations = apps.get_model("parties", "PartyHandle").objects.db_manager(alias)
+        handles = apps.get_model("parties", "Handle").objects.db_manager(alias)
+        handle_ids = (
+            set(associations.filter(party_id=person.pk).values_list("handle_id", flat=True))
+            if person is not None
+            else set()
+        )
+        if parsed is not None:
+            handle_ids.update(
+                handles.filter(
+                    Q(platform="email", value__in=[item[0] for item in parsed.emails])
+                    | Q(platform="phone", value__in=[item[0] for item in parsed.phones])
+                ).values_list("pk", flat=True)
+            )
+        associations.lock_identity_rows(
+            party_ids=(person.pk,) if person is not None else (),
+            handle_ids=handle_ids,
+            using=alias,
+        )
+        if person is None:
+            return
+        list(
+            apps.get_model("parties", "Person")
+            .objects.db_manager(alias)
+            .filter(
+                pk=person.pk,
+            )
+            .order_by("pk")
+            .lock_if_supported()
+        )
+        list(
+            apps.get_model("parties", "Address")
+            .objects.db_manager(alias)
+            .filter(
+                party_id=person.pk,
+            )
+            .order_by("pk")
+            .lock_if_supported()
+        )
+        list(
+            apps.get_model("parties", "Relationship")
+            .objects.db_manager(alias)
+            .filter(
+                party_id=person.pk,
+                kind__slug="employee",
+                source=LinkSource.CARDDAV,
+                other_party__isnull=True,
+            )
+            .order_by("pk")
+            .lock_if_supported()
+        )
+
+    def project_contact(self, person: Any, *, using: str | None = None) -> ParsedContact:
+        """Read the local counterpart of the contact fields this mapper writes.
+
+        Active email/phone associations include locally added handles. Employment
+        is the uniquely keyed CardDAV employee edge; independent relationship
+        rows are outside this bridge's mapping. Storage owns reading avatar bytes.
+        The backend's contact projection owns canonical ordering and JSON encoding.
+        """
+
+        alias = get_write_alias(self.model, using=using, bound=self, instance=person)
+        person = apps.get_model("parties", "Person").objects.db_manager(alias).get(pk=person.pk)
+        handle_model = apps.get_model("parties", "Handle")
+        party_handle_model = apps.get_model("parties", "PartyHandle")
+        linked_handles = (
+            party_handle_model.objects.db_manager(alias)
+            .filter(
+                party_id=person.pk,
+                is_dismissed=False,
+            )
+            .values("handle_id")
+        )
+        handles = list(
+            handle_model.objects.db_manager(alias)
+            .filter(pk__in=linked_handles, platform__in=(handle_model.Platform.EMAIL, handle_model.Platform.PHONE))
+            .order_by("platform", "value", "label", "is_preferred")
+        )
+        addresses = apps.get_model("parties", "Address").objects.db_manager(alias).filter(party_id=person.pk)
+        employment = (
+            apps.get_model("parties", "Relationship")
+            .objects.db_manager(alias)
+            .filter(
+                party_id=person.pk,
+                kind__slug="employee",
+                source=LinkSource.CARDDAV,
+                other_party__isnull=True,
+            )
+            .first()
+        )
+        photo = None
+        avatar: Any = related_on(person, "avatar", using=alias)
+        if avatar is not None:
+            mime: Any = related_on(avatar, "mime_type", using=alias)
+            with avatar.open_stream() as content:
+                photo = ParsedPhoto(data=content.read(), mime=mime.mime_type if mime is not None else "")
+        return ParsedContact(
+            uid=person.source_uid,
+            etag=person.source_etag,
+            raw_vcard=person.raw_vcard,
+            display_name=person.display_name,
+            name_prefix=person.name_prefix,
+            given_name=person.given_name,
+            additional_name=person.additional_name,
+            family_name=person.family_name,
+            name_suffix=person.name_suffix,
+            nickname=person.nickname,
+            notes=person.notes,
+            birthday=person.birthday,
+            anniversary=person.anniversary,
+            emails=tuple(
+                (handle.value, handle.label, handle.is_preferred)
+                for handle in handles
+                if handle.platform == handle_model.Platform.EMAIL
+            ),
+            phones=tuple(
+                (handle.value, handle.label, handle.is_preferred)
+                for handle in handles
+                if handle.platform == handle_model.Platform.PHONE
+            ),
+            addresses=tuple(
+                ParsedAddress(
+                    label=address.label,
+                    po_box=address.po_box,
+                    extended=address.extended,
+                    street=address.street,
+                    city=address.city,
+                    region=address.region,
+                    postal_code=address.postal_code,
+                    country=str(address.country),
+                )
+                for address in addresses
+            ),
+            organization=employment.other_name if employment is not None else "",
+            title=employment.title if employment is not None else "",
+            role=employment.notes if employment is not None else "",
+            photo=photo,
+        )
+
+    def ingest_contact(
+        self,
+        parsed: ParsedContact,
+        *,
+        folder: Any,
+        created_by_id: Any,
+        target: Any = None,
+        using: str | None = None,
+    ) -> Any:
         """Upsert a person and its handles/addresses from one parsed contact.
 
         Keyed on ``(folder, source_uid)`` so a re-sync updates the same row instead
@@ -1787,10 +1981,12 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         ``Handle`` rows and link to the person, but the person's identity is the
         source UID, not handle overlap. A contact with no ``source_uid`` has no stable
         key and is skipped — without it the ``(folder, "")`` upsert would collapse
-        every keyless card onto one row.
+        every keyless card onto one row. ``target`` binds a previously local
+        Person after its first push; only a blank or matching source UID may
+        adopt the observed identity, and it must remain in the same folder.
         """
 
-        alias = get_write_alias(self.model, bound=self, instance=folder)
+        alias = get_write_alias(self.model, using=using, bound=self, instance=folder)
 
         if not parsed.uid:
             return None
@@ -1803,50 +1999,77 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         relationship_kind_model = apps.get_model("parties", "RelationshipKind")
 
         with transaction.atomic(using=alias):
-            person, _created = person_model.objects.db_manager(alias).update_or_create(
-                folder=folder,
-                source_uid=parsed.uid,
-                defaults={
-                    "display_name": parsed.display_name or parsed.family_name or person_model.PLACEHOLDER_NAME,
-                    "name_prefix": parsed.name_prefix,
-                    "given_name": parsed.given_name,
-                    "additional_name": parsed.additional_name,
-                    "family_name": parsed.family_name,
-                    "name_suffix": parsed.name_suffix,
-                    "nickname": parsed.nickname,
-                    "notes": parsed.notes,
-                    "birthday": parsed.birthday,
-                    "anniversary": parsed.anniversary,
-                    # Mirror the source's photo: re-syncing identical bytes dedups to
-                    # the same File, and a removed photo clears the avatar.
-                    "avatar": self._ingest_avatar(parsed, created_by_id=created_by_id, using=alias),
-                    "raw_vcard": parsed.raw_vcard,
-                    "source_etag": parsed.etag,
-                    "created_by_id": created_by_id,
-                },
-            )
+            if target is not None:
+                self.lock_contact(target, parsed=parsed, using=alias)
+            handles = []
+            for platform, values in (
+                (handle_model.Platform.EMAIL, parsed.emails),
+                (handle_model.Platform.PHONE, parsed.phones),
+            ):
+                for value, label, is_preferred in values:
+                    handle = handle_model.objects.db_manager(alias).upsert(
+                        platform=platform,
+                        value=value,
+                        created_by_id=created_by_id,
+                        label=label,
+                        is_preferred=is_preferred,
+                        display_name=parsed.display_name,
+                        using=alias,
+                    )
+                    # Unlike a generic enrichment upsert, the source mapping also
+                    # represents a removed label or preference.
+                    mapped = {"label": label, "is_preferred": is_preferred}
+                    dirty = [name for name, value in mapped.items() if getattr(handle, name) != value]
+                    if dirty:
+                        for name in dirty:
+                            setattr(handle, name, mapped[name])
+                        handle.save(using=alias, update_fields=[*dirty, "updated_at"])
+                    handles.append(handle)
+            people = person_model.objects.db_manager(alias)
+            identity = {"folder": folder, "source_uid": parsed.uid}
+            if target is not None:
+                target = people.lock_if_supported().filter(pk=target.pk).first()
+                if target is None or target.folder_id != folder.pk or target.source_uid not in ("", parsed.uid):
+                    raise ValidationError("The linked contact no longer has the expected folder and source identity.")
+                if people.filter(folder=folder, source_uid=parsed.uid).exclude(pk=target.pk).exists():
+                    raise ValidationError("Another contact already has this directory source identity.")
+                identity = {"pk": target.pk, "folder": folder}
+            try:
+                with transaction.atomic(using=alias):
+                    person, _created = people.update_or_create(
+                        **identity,
+                        defaults={
+                            "source_uid": parsed.uid,
+                            "display_name": parsed.display_name or parsed.family_name or person_model.PLACEHOLDER_NAME,
+                            "name_prefix": parsed.name_prefix,
+                            "given_name": parsed.given_name,
+                            "additional_name": parsed.additional_name,
+                            "family_name": parsed.family_name,
+                            "name_suffix": parsed.name_suffix,
+                            "nickname": parsed.nickname,
+                            "notes": parsed.notes,
+                            "birthday": parsed.birthday,
+                            "anniversary": parsed.anniversary,
+                            # Identical bytes dedup; a removed photo clears the avatar.
+                            "avatar": self._ingest_avatar(parsed, created_by_id=created_by_id, using=alias),
+                            "raw_vcard": parsed.raw_vcard,
+                            "source_etag": parsed.etag,
+                            "created_by_id": created_by_id,
+                        },
+                    )
+            except IntegrityError as exc:
+                if (
+                    target is not None
+                    and people.filter(
+                        folder=folder,
+                        source_uid=parsed.uid,
+                    )
+                    .exclude(pk=target.pk)
+                    .exists()
+                ):
+                    raise ValidationError("Another contact already has this directory source identity.") from exc
+                raise
 
-            handles = [
-                handle_model.objects.db_manager(alias).upsert(
-                    platform=handle_model.Platform.EMAIL,
-                    value=value,
-                    created_by_id=created_by_id,
-                    label=label,
-                    is_preferred=is_preferred,
-                    display_name=parsed.display_name,
-                )
-                for value, label, is_preferred in parsed.emails
-            ] + [
-                handle_model.objects.db_manager(alias).upsert(
-                    platform=handle_model.Platform.PHONE,
-                    value=value,
-                    created_by_id=created_by_id,
-                    label=label,
-                    is_preferred=is_preferred,
-                    display_name=parsed.display_name,
-                )
-                for value, label, is_preferred in parsed.phones
-            ]
             for handle in handles:
                 party_handle_model.objects.db_manager(alias).link(
                     person,
@@ -1854,7 +2077,14 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     confidence=1.0,
                     source=LinkSource.CARDDAV,
                     created_by_id=created_by_id,
+                    using=alias,
                 )
+            # Retire only this source's vanished associations. Shared Handle rows
+            # and links established by another source retain their own lifecycle.
+            party_handle_model.objects.db_manager(alias).filter(
+                party_id=person.pk,
+                source=LinkSource.CARDDAV,
+            ).exclude(handle_id__in=[handle.pk for handle in handles]).delete()
 
             # Addresses carry no stable id, so mirror the parsed set wholesale —
             # idempotent because the result is exactly the source's.
@@ -1937,30 +2167,8 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             photo.data,
             filename=f"avatar{extension or '.bin'}",
             owner_id=created_by_id,
+            using=using,
         )
-
-    def purge_missing(self, *, folder: Any, keep_uids: set[str]) -> int:
-        """Delete the folder's synced parties whose source UID is no longer present.
-
-        This is how a contact deleted on the source is mirrored locally: anything in
-        ``folder`` carrying a ``source_uid`` not in ``keep_uids`` is removed (the MTI
-        child cascades with its parent). Cascaded PartyHandle deletes re-resolve
-        shared handles through the delete-path signal owner.
-        """
-
-        alias = get_write_alias(self.model, bound=self, instance=folder)
-
-        stale_pks = list(
-            self.db_manager(alias).filter(folder=folder)
-            .exclude(source_uid="")
-            .exclude(source_uid__in=keep_uids)
-            .values_list("pk", flat=True)
-        )
-        if not stale_pks:
-            return 0
-        # PartyHandle's post_delete receiver owns cascade re-resolution.
-        deleted, _by_model = self.db_manager(alias).filter(pk__in=stale_pks).delete()
-        return deleted
 
 
 def _user_display_name(user: Any) -> str:

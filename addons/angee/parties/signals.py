@@ -73,7 +73,7 @@ def _resolve_from_link(sender: Any, instance: Any, *, using: str, **kwargs: Any)
                 handle = related_on(snapshot, "handle", using=using, required=False)
                 if handle is None:
                     return
-                sender.objects.db_manager(using).resolve(handle)
+                sender.objects.db_manager(using).resolve(handle, using=using)
         except Exception:
             logger.exception("Failed to repair PartyHandle resolution after delete", extra={"handle_id": handle_id})
 
@@ -96,7 +96,7 @@ def _recount_handle_party(sender: Any, instance: Any, *, using: str, **kwargs: A
                 party = related_on(snapshot, "party", using=using, required=False)
                 if party is None:
                     return
-                party_handle_model.objects.db_manager(using).recount(party)
+                party_handle_model.objects.db_manager(using).recount(party, using=using)
         except Exception:
             logger.exception("Failed to recount Party after Handle delete", extra={"party_id": party_id})
 

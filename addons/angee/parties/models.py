@@ -207,7 +207,11 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         return party
 
     def apply_merge_field_overrides(
-        self, source: Party, field_overrides: Any, *, using: str | None = None,
+        self,
+        source: Party,
+        field_overrides: Any,
+        *,
+        using: str | None = None,
     ) -> None:
         """Apply the allow-listed scalar overrides selected for a merge survivor.
 
@@ -700,13 +704,15 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
                 continue
             try:
                 model = apps.get_model(str(ref.get("model") or ""))
-            except (LookupError, ValueError):
+            except LookupError, ValueError:
                 continue
             public_id = str(ref.get("id") or "")
             queryset = read_scoped_queryset(model, actor)
-            if public_id and queryset is not None and instance_from_public_id(
-                model, public_id, queryset=queryset
-            ) is not None:
+            if (
+                public_id
+                and queryset is not None
+                and instance_from_public_id(model, public_id, queryset=queryset) is not None
+            ):
                 visible.append(PartyHandleEvidence(model=model._meta.label, id=public_id))
         return PartyHandleEvidencePage(tuple(visible[:bounded]), len(refs) > bounded)
 
@@ -739,7 +745,7 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
         """Re-materialise :attr:`Handle.party` from this handle's surviving links."""
 
         handle = related_on(self, "handle", using=using)
-        type(self).objects.db_manager(using).resolve(handle)
+        type(self).objects.db_manager(using).resolve(handle, using=using)
 
 
 class AddressManager(AngeeManager):
@@ -774,7 +780,8 @@ class AddressManager(AngeeManager):
 
         self.lock_party(address.party_id, using=using)
         previous = list(
-            self.db_manager(using).sudo(reason="parties.address.primary_integrity")
+            self.db_manager(using)
+            .sudo(reason="parties.address.primary_integrity")
             .lock_if_supported()
             .filter(party_id=address.party_id, is_primary=True)
             .exclude(pk=address.pk)
@@ -790,8 +797,14 @@ class AddressManager(AngeeManager):
         ).update(is_primary=False)
 
     def attach_exact(
-        self, *, party: models.Model, values: Mapping[str, Any], actor: Any,
-        label: str = "Billing", is_primary: bool = True, conflict: str = "raise",
+        self,
+        *,
+        party: models.Model,
+        values: Mapping[str, Any],
+        actor: Any,
+        label: str = "Billing",
+        is_primary: bool = True,
+        conflict: str = "raise",
     ) -> tuple[str, models.Model | None]:
         if conflict not in {"raise", "retain", "append"}:
             raise ValueError("Address conflict policy must be 'raise', 'retain', or 'append'.")
@@ -823,16 +836,24 @@ class AddressManager(AngeeManager):
                 is_primary = False
             verified_actor = manager.check_create({"party": (party,)})
             row = self.model(
-                party=party, label=" ".join(label.split()).strip()[:64], is_primary=is_primary,
-                created_by_id=getattr(actor, "pk", None), **normalized,
+                party=party,
+                label=" ".join(label.split()).strip()[:64],
+                is_primary=is_primary,
+                created_by_id=getattr(actor, "pk", None),
+                **normalized,
             )
             row.sudo(reason="parties.address.attach_exact")
             row.save(using=alias)
             return "created", row.with_actor(verified_actor)
 
     def replace_primary_exact(
-        self, *, party: models.Model, values: Mapping[str, Any], actor: Any,
-        expected_id: Any | None, label: str = "Billing",
+        self,
+        *,
+        party: models.Model,
+        values: Mapping[str, Any],
+        actor: Any,
+        expected_id: Any | None,
+        label: str = "Billing",
     ) -> tuple[str, models.Model]:
         """Replace the frozen primary address, or create it when none existed."""
 
@@ -843,14 +864,24 @@ class AddressManager(AngeeManager):
         manager = self.db_manager(alias)
         with transaction.atomic(using=alias), actor_context(actor):
             manager.lock_party(party.pk, using=alias)
-            current = manager.sudo(reason="parties.address.replace_primary_exact").lock_if_supported().filter(
-                party=party, is_primary=True,
-            ).first()
+            current = (
+                manager.sudo(reason="parties.address.replace_primary_exact")
+                .lock_if_supported()
+                .filter(
+                    party=party,
+                    is_primary=True,
+                )
+                .first()
+            )
             if (current.pk if current else None) != expected_id:
                 raise ValidationError({"address": "The party's primary address changed during review."})
             if current is None:
                 status, created = manager.attach_exact(
-                    party=party, values=normalized, actor=actor, label=label, is_primary=True,
+                    party=party,
+                    values=normalized,
+                    actor=actor,
+                    label=label,
+                    is_primary=True,
                 )
                 if created is None:  # pragma: no cover - non-empty values cannot be missing
                     raise ValidationError({"address": "The replacement address could not be created."})
@@ -939,8 +970,8 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
     The contacts counterpart of storage's ``Drive``/``Folder`` and knowledge's
     ``Vault`` container idea, kept to exactly what sync needs today: the directory
     it mirrors, the collection ``source_href`` (one folder per ``(directory,
-    source_href)`` makes the folder upsert idempotent), and the incremental cursors
-    (``ctag`` / ``sync_token``). Owned via ``created_by``; deleting a folder leaves
+    source_href)`` makes the folder upsert idempotent). Sync progress belongs to
+    ``integrate.SyncStream``. Owned via ``created_by``; deleting a folder leaves
     its parties (``SET_NULL`` on :attr:`Party.folder`). Manual creation and a folder
     tree (``parent``) are deferred until a create path lands to exercise them.
     """
@@ -957,8 +988,6 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
         related_name="folders",
     )
     source_href = models.CharField(max_length=1024, blank=True, default="")
-    ctag = models.CharField(max_length=512, blank=True, default="")
-    sync_token = models.TextField(blank=True, default="")
 
     objects = AngeeManager()
 
@@ -1166,7 +1195,11 @@ class RelationshipKind(SqidMixin, AuditMixin, AngeeModel):
         return self.name if outbound or self.is_symmetric else self.inverse_name
 
     def validate_ends(
-        self, party: Party | None, other_party: Party | None, *, using: str | None = None,
+        self,
+        party: Party | None,
+        other_party: Party | None,
+        *,
+        using: str | None = None,
     ) -> None:
         """Raise :class:`ValidationError` if an edge's ends violate this kind's legality.
 
@@ -1346,8 +1379,8 @@ class Directory(Bridge):
     from the connection substrate) and a ``Bridge`` (so the scheduler and the eager
     ``syncIntegration`` mutation drive it). ``backend_class`` selects the protocol —
     ``carddav`` (contributed by ``parties_integrate_carddav``) — and ``config``
-    carries the source URL. ``sync()`` fetches + parses the source, then maps each
-    contact onto the parties managers.
+    carries the source URL. The inherited ``Bridge.sync()`` drives the backend
+    streams; the parties managers own the contact projection and ingest path.
     """
 
     runtime = True
@@ -1376,46 +1409,3 @@ class Directory(Bridge):
 
         backend_class = cast("type[DirectoryBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
-
-    def sync(self, *, using: str | None = None) -> int:
-        """Discover address books and resolve every contact into parties (the Bridge contract).
-
-        Idempotent: each address book mirrors to one :class:`Folder` (keyed by its
-        ``source_href``), every contact upserts by ``(folder, source_uid)``, and a
-        contact that vanished from the source is purged from its folder — so a
-        re-sync converges to the source instead of duplicating it. A collection whose
-        ``ctag`` is unchanged is skipped wholesale.
-        """
-
-        alias = get_write_alias(type(self), using=using, instance=self)
-        folder_model = apps.get_model("parties", "Folder")
-        party_model = apps.get_model("parties", "Party")
-        backend = self.backend
-        resolved = 0
-        for book in backend.discover():
-            folder, _created = folder_model.objects.db_manager(alias).update_or_create(
-                directory=self,
-                source_href=book.href,
-                defaults={
-                    "name": book.name,
-                    "created_by_id": self.owner_id,
-                },
-            )
-            if folder.ctag and folder.ctag == book.ctag:
-                continue
-            seen: set[str] = set()
-            for parsed in backend.fetch_contacts(book):
-                if not parsed.uid:
-                    continue  # no stable per-folder key → cannot upsert idempotently
-                party_model.objects.db_manager(alias).ingest_contact(
-                    parsed,
-                    folder=folder,
-                    created_by_id=self.owner_id,
-                )
-                seen.add(parsed.uid)
-                resolved += 1
-            party_model.objects.db_manager(alias).purge_missing(folder=folder, keep_uids=seen)
-            folder.ctag = book.ctag
-            folder.sync_token = book.sync_token
-            folder.save(using=alias, update_fields=["ctag", "sync_token", "updated_at"])
-        return resolved

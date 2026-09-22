@@ -32,6 +32,11 @@ remote deletion versus a local edit remain open conflicts. A write-back returns
 the authoritative remote version and content hash; retaining those facts with
 the local projection identifies its later echo without relying on timestamps.
 The adapter owns locking and validating the local projection before applying it.
+Adapter policy lives in `SyncStream.config`, seeded by `StreamDefinition` only
+when the first epoch is created and preserved across epoch changes. A successful
+conditional deletion returns `WriteBackResult(tombstone=True)` so the driver
+retains the link's deletion and local origin. [Directory](../parties/README.md)
+composes this protocol for bidirectional CardDAV contacts.
 
 The driver extracts outside a transaction, then commits each page's database
 effects, discrepancies and cursor together. Each record has a savepoint. A

@@ -1,15 +1,11 @@
-"""CardDAV directory backend: discover address books and sync their contacts.
+"""CardDAV record replicas: RFC 6578 deltas and conditional vCard writes.
 
-Real RFC 6764 + RFC 6352 discovery — ``.well-known/carddav`` (or the configured
-base) → ``current-user-principal`` → ``addressbook-home-set`` → enumerate the
-address-book collections — then per collection a list-then-multiget fetch:
-``PROPFIND Depth:1`` for the vCard hrefs + etags, then a batched
-``addressbook-multiget`` REPORT for the cards. Everything goes over the shared
-SSRF-pinned client (``allow_private=True`` — self-hosted CardDAV servers are
-common), authenticated by the directory's Basic-auth credential, following one
-level of redirect. ``vobject`` parses each card into a neutral ``ParsedContact``;
-the idempotent ``(folder, source_uid)`` map onto parties is owned by
-``Directory.sync`` + the parties managers, never here.
+RFC 6764/6352 discovery creates one contacts stream per address book. Baselines
+list and multiget; later pages use DAV:sync-collection and opaque sync tokens.
+vobject owns vCard parsing/serialization, parties owns the synchronized projection
+and ingest policy, and integrate owns bases, conflict classification and cursors.
+Every HTTP request uses the shared SSRF-pinned client and the Integration owner's
+Basic-auth credential. Writes use resource ETags with If-Match, never timestamps.
 
 Auth is Basic only: HTTP Digest is not yet supported. A Digest server would need a
 ``DigestAuthCredentialHandler`` on the credential registry seam (the challenge /
@@ -24,23 +20,29 @@ import xml.etree.ElementTree as ElementTree
 from dataclasses import replace
 from datetime import date, datetime
 from typing import Any
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 from xml.sax.saxutils import escape
 
 import vobject
+from django.apps import apps
 
+from angee.base.db import get_write_alias, refresh_deferred, related_on
+from angee.base.serialization import canonical_json_sha256
+from angee.integrate.records import LinkStatus
+from angee.integrate.streams import CursorInvalid, RecordChange, RemoteRejected, StreamPage, WriteBackResult
 from angee.parties.backends import (
     DirectoryBackend,
     ParsedAddress,
     ParsedAddressbook,
     ParsedContact,
     ParsedPhoto,
+    contact_from_projection,
+    contact_projection,
 )
 
 _NS = {
     "d": "DAV:",
     "card": "urn:ietf:params:xml:ns:carddav",
-    "cs": "http://calendarserver.org/ns/",
 }
 _MULTIGET_CHUNK = 100
 _REDIRECT_STATUSES = (301, 302, 307, 308)
@@ -58,12 +60,16 @@ _HOME_BODY = (
 )
 _BOOKS_BODY = (
     '<?xml version="1.0" encoding="utf-8"?>'
-    '<d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">'
-    "<d:prop><d:resourcetype/><d:displayname/><cs:getctag/></d:prop></d:propfind>"
+    '<d:propfind xmlns:d="DAV:">'
+    "<d:prop><d:resourcetype/><d:displayname/></d:prop></d:propfind>"
 )
 _LISTING_BODY = (
     '<?xml version="1.0" encoding="utf-8"?>'
-    '<d:propfind xmlns:d="DAV:"><d:prop><d:getetag/><d:getcontenttype/></d:prop></d:propfind>'
+    '<d:propfind xmlns:d="DAV:"><d:prop>'
+    "<d:getetag/><d:getcontenttype/><d:resourcetype/></d:prop></d:propfind>"
+)
+_TOKEN_BODY = (
+    '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:sync-token/></d:prop></d:propfind>'
 )
 
 
@@ -86,7 +92,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
 
     # --- discovery (DirectoryBackend contract) ---
 
-    def probe(self) -> None:
+    def probe(self, *, using: str | None = None) -> None:
         """Run discovery once to validate the URL + credentials before persisting.
 
         Raises :class:`CardDavError` if the server URL is missing, unreachable, or
@@ -95,45 +101,181 @@ class CardDavDirectoryBackend(DirectoryBackend):
         reachable, authenticated) account is allowed.
         """
 
-        if not self._base_url():
+        using = get_write_alias(type(self.bridge), instance=self.bridge, using=using)
+        if not self._base_url(using=using):
             raise CardDavError("A CardDAV server URL is required.")
         try:
-            self.discover()
+            self.discover(using=using)
         except CardDavError:
             raise
         except Exception as error:  # noqa: BLE001 — surface any transport/SSRF failure as a connect error.
-            raise CardDavError(f"Could not connect to the CardDAV server: {error}") from error
+            raise CardDavError("Could not connect to the CardDAV server.") from error
 
-    def discover(self) -> list[ParsedAddressbook]:
+    def discover(self, *, using: str | None = None) -> list[ParsedAddressbook]:
         """Resolve the account's principal → home-set → address-book collections."""
 
-        base = self._base_url()
+        using = get_write_alias(type(self.bridge), instance=self.bridge, using=using)
+        base = self._base_url(using=using)
         if not base:
             return []
         principal = ""
         for candidate in (base, _well_known(base)):
-            principal = self._first_href(candidate, _PRINCIPAL_BODY, ".//d:current-user-principal/d:href")
+            principal = self._first_href(candidate, _PRINCIPAL_BODY, ".//d:current-user-principal/d:href", using=using)
             if principal:
                 break
         principal = principal or base
-        home = self._first_href(principal, _HOME_BODY, ".//card:addressbook-home-set/d:href") or principal
-        return self._enumerate(home)
+        home = self._first_href(principal, _HOME_BODY, ".//card:addressbook-home-set/d:href", using=using) or principal
+        return self._enumerate(home, using=using)
 
-    def fetch_contacts(self, addressbook: ParsedAddressbook) -> list[ParsedContact]:
-        """List the collection's vCard hrefs, multiget them, and resolve photo URIs."""
+    def extract(self, stream: Any, page_bound: int, *, using: str | None = None) -> StreamPage:
+        """Fetch a bounded page; its cursor commits only alongside applied records.
 
-        hrefs = self._list_vcard_hrefs(addressbook.href)
-        contacts: list[ParsedContact] = []
+        Baselines capture the token before listing, so concurrent edits replay
+        on the next delta. Pending hrefs keep a large report durable across pages.
+        """
+
+        using = get_write_alias(type(self.bridge), instance=self.bridge, using=using)
+        cursor = dict(stream.cursor or {})
+        token = str(cursor.get("sync_token", ""))
+        seen = dict(cursor.get("seen", {}))
+        if "pending" in cursor:
+            pending = cursor["pending"]
+            next_token = cursor["next_token"]
+            more = cursor.get("more", False)
+        elif token:
+            pending, next_token, more = self._sync_changes(stream.partition, token, using=using)
+        else:
+            next_token = self._collection_token(stream.partition, using=using)
+            hrefs = self._list_vcard_hrefs(stream.partition, using=using)
+            pending = [{"href": href, "removed": False} for href in hrefs]
+            present = set(hrefs)
+            links = apps.get_model("integrate", "RecordLink").objects.db_manager(using).filter(stream=stream)
+            for link in links.exclude(status=LinkStatus.TOMBSTONE).order_by("external_key"):
+                source = self._source_payload(link, using=using)
+                href = source.get("href") or link.metadata.get("href")
+                if href and href not in present:
+                    pending.append({"href": href, "removed": True})
+            more = False
+        bound = max(1, min(page_bound, _MULTIGET_CHUNK))
+        batch, remaining = pending[:bound], pending[bound:]
+        contacts = self._multiget(
+            stream.partition, [item["href"] for item in batch if not item["removed"]], using=using
+        )
+        changes = []
+        changed_keys = set()
+        for item in batch:
+            contact = contacts.get(item["href"])
+            if item["removed"] or contact is None:
+                continue
+            if isinstance(contact, RecordChange):
+                previous = self._removed_change(stream, item["href"], using=using)
+                if previous is not None:
+                    contact = replace(
+                        contact,
+                        external_key=previous.external_key,
+                        target=previous.target,
+                        projection=previous.projection,
+                        local_hash=previous.local_hash,
+                    )
+                changed_keys.add(contact.external_key)
+                changes.append(contact)
+                continue
+            if contact.uid in seen and seen[contact.uid] != contact.href:
+                raise CardDavError("The address book contains duplicate vCard UIDs.")
+            seen[contact.uid] = contact.href
+            change = self._record_change(stream, self._resolve_photo(contact, using=using), using=using)
+            changed_keys.add(change.external_key)
+            changes.append(change)
+        for item in batch:
+            if item["removed"] or contacts.get(item["href"]) is None:
+                removed = self._removed_change(stream, item["href"], using=using)
+                if removed is not None and removed.external_key not in changed_keys:
+                    changes.append(removed)
+        if remaining:
+            next_cursor = {
+                "sync_token": token,
+                "next_token": next_token,
+                "pending": remaining,
+                "more": more,
+                "seen": seen,
+            }
+        else:
+            next_cursor = {"sync_token": next_token}
+        return StreamPage(changes, next_cursor, exhausted=not remaining and not more)
+
+    def enumerate_keys(self, stream: Any, *, using: str | None = None) -> list[str]:
+        """Enumerate vCard identities for the driver's absence reconciliation."""
+
+        using = get_write_alias(type(self.bridge), instance=self.bridge, using=using)
+        hrefs = self._list_vcard_hrefs(stream.partition, using=using)
+        keys: set[str] = set()
         for start in range(0, len(hrefs), _MULTIGET_CHUNK):
-            contacts.extend(self._multiget(addressbook.href, hrefs[start : start + _MULTIGET_CHUNK]))
-        return [self._resolve_photo(contact) for contact in contacts]
+            contacts = self._multiget(stream.partition, hrefs[start : start + _MULTIGET_CHUNK], using=using)
+            for contact in contacts.values():
+                if contact is not None:
+                    if isinstance(contact, RecordChange):
+                        raise CardDavError("An invalid vCard prevents complete identity reconciliation.")
+                    if contact.uid in keys:
+                        raise CardDavError("The address book contains duplicate vCard UIDs.")
+                    keys.add(contact.uid)
+        return sorted(keys)
 
-    def _resolve_photo(self, contact: ParsedContact) -> ParsedContact:
+    def write_back(
+        self, link: Any, projection: Any, *, expected_version: str, using: str | None = None
+    ) -> WriteBackResult:
+        """Preserve unmapped vCard properties and fence every write by its ETag."""
+
+        using = get_write_alias(type(self.bridge), instance=self.bridge, using=using)
+        refresh_deferred(link, using=using)
+        stream = related_on(link, "stream", using=using)
+        if link.status == LinkStatus.TOMBSTONE:
+            raise RemoteRejected("remote_deleted")
+        source = self._source_payload(link, using=using)
+        href = source.get("href") or link.metadata.get("href")
+        if not href:
+            href = urljoin(stream.partition.rstrip("/") + "/", quote(link.external_key, safe="") + ".vcf")
+        headers = {"If-Match": expected_version} if expected_version else {"If-None-Match": "*"}
+        if projection is None:
+            if stream.config.get("local_delete", "conflict") != "propagate":
+                raise RemoteRejected("local_deleted")
+            if not expected_version:
+                raise RemoteRejected("remote_version_missing")
+            self._request("DELETE", href, "", headers=headers, using=using)
+            return WriteBackResult("", "", source_payload={"href": href}, tombstone=True)
+        if source and not expected_version:
+            raise RemoteRejected("remote_version_missing")
+        raw = _render_vcard(projection, source=source, uid=link.external_key)
+        response = self._request(
+            "PUT",
+            href,
+            raw,
+            headers={**headers, "Content-Type": "text/vcard; charset=utf-8"},
+            using=using,
+        )
+        etag = response.headers.get("etag", "")
+        if not etag or etag.startswith("W/"):
+            response = self._request("GET", href, "", using=using)
+            raw = response.content.decode("utf-8")
+            etag = response.headers.get("etag", "")
+        if not etag or etag.startswith("W/"):
+            raise CardDavError("The CardDAV server did not return a strong resource ETag.")
+        # XML normalizes line endings during multiget; retain the same evidence
+        # on push so our next pull does not append a formatting-only revision.
+        raw = raw.replace("\r\n", "\n").strip()
+        parsed = self._resolve_photo(_parse_vcard(vobject.readOne(raw), etag=etag, href=href, raw=raw), using=using)
+        observed = contact_projection(parsed)
+        return WriteBackResult(
+            etag,
+            canonical_json_sha256(observed),
+            {"href": href, "raw_vcard": raw, "contact": observed},
+        )
+
+    def _resolve_photo(self, contact: ParsedContact, *, using: str) -> ParsedContact:
         """Fetch a remote PHOTO URI into bytes so the map ingests one storage File.
 
         The parse step already decoded inline photos; only a ``uri`` photo needs the
         network, which belongs to the transport, not the pure parser or the map. A
-        fetch failure drops the photo rather than failing the whole contact.
+        A failed fetch leaves the page uncommitted rather than clearing a photo.
         """
 
         photo = contact.photo
@@ -141,55 +283,98 @@ class CardDavDirectoryBackend(DirectoryBackend):
             return contact
         try:
             response = self.http.get(photo.uri, allow_private=True)
-        except Exception:  # noqa: BLE001 — a broken avatar URL must not abort the sync.
-            return replace(contact, photo=None)
+        except Exception as error:  # noqa: BLE001 — do not promote a partial comparison base.
+            raise CardDavError("The vCard photo could not be retrieved.") from error
         if not response.is_success or not response.content:
-            return replace(contact, photo=None)
+            raise CardDavError("The vCard photo could not be retrieved.")
         mime = photo.mime or response.headers.get("content-type", "").split(";")[0].strip()
         return replace(contact, photo=ParsedPhoto(data=response.content, mime=mime))
 
     # --- transport ---
 
-    def _request(self, method: str, url: str, body: str, *, depth: str = "0", _hops: int = 0) -> Any:
-        """Send one DAV request, following a single redirect, and assert it succeeded."""
+    def _request(
+        self,
+        method: str,
+        url: str,
+        body: str,
+        *,
+        using: str,
+        depth: str = "0",
+        headers: dict[str, str] | None = None,
+        cursor_request: bool = False,
+        _hops: int = 0,
+    ) -> Any:
+        """Send DAV through the pinned client and translate conditional failures."""
 
-        headers = {"Depth": depth, "Content-Type": "application/xml; charset=utf-8", **self._auth()}
-        response = self.http.request(method, url, headers=headers, body=body.encode("utf-8"), allow_private=True)
+        request_headers = {
+            "Depth": depth,
+            "Content-Type": "application/xml; charset=utf-8",
+            **self._auth(using=using),
+            **(headers or {}),
+        }
+        response = self.http.request(
+            method, url, headers=request_headers, body=body.encode("utf-8"), allow_private=True
+        )
         if response.status_code in _REDIRECT_STATUSES and _hops < 3:
             location = response.headers.get("location", "")
             if location:
-                return self._request(method, urljoin(url, location), body, depth=depth, _hops=_hops + 1)
-        if not (response.is_success or response.status_code == 207):
-            raise CardDavError(f"CardDAV {method} {url} returned HTTP {response.status_code}.")
+                return self._request(
+                    method,
+                    urljoin(url, location),
+                    body,
+                    depth=depth,
+                    headers=headers,
+                    cursor_request=cursor_request,
+                    _hops=_hops + 1,
+                    using=using,
+                )
+        if response.status_code == 412:
+            raise RemoteRejected()
+        if cursor_request:
+            if response.status_code == 404:
+                raise CursorInvalid()
+            if response.status_code == 403:
+                try:
+                    invalid = _xml(response.content).find(".//d:valid-sync-token", _NS) is not None
+                except ElementTree.ParseError:
+                    invalid = False
+                if invalid:
+                    raise CursorInvalid()
+        if not response.is_success:
+            raise CardDavError(f"CardDAV {method} returned HTTP {response.status_code}.")
         return response
 
-    def _auth(self) -> dict[str, str]:
+    def _auth(self, *, using: str) -> dict[str, str]:
         """Return the directory credential's auth headers (empty if unconfigured)."""
 
-        credential = self.bridge.credential
+        # Connect intentionally passes an unsaved credential before any FK exists.
+        credential = (
+            self.bridge.credential if self.bridge._state.adding else related_on(self.bridge, "credential", using=using)
+        )
         return credential.auth_headers() if credential is not None else {}
 
-    def _base_url(self) -> str:
+    def _base_url(self, *, using: str) -> str:
         """Return the configured server URL."""
 
+        refresh_deferred(self.bridge, using=using, fields=("config",))
         return str((self.bridge.config or {}).get("server_url") or "").strip()
 
     # --- discovery helpers ---
 
-    def _first_href(self, url: str, body: str, xpath: str) -> str:
+    def _first_href(self, url: str, body: str, xpath: str, *, using: str) -> str:
         """PROPFIND ``url`` and return the first ``xpath`` href, absolutised, or ``""``."""
 
         try:
-            response = self._request("PROPFIND", url, body, depth="0")
+            response = self._request("PROPFIND", url, body, depth="0", using=using)
         except CardDavError:
             return ""
         node = _xml(response.content).find(xpath, _NS)
         return urljoin(url, node.text.strip()) if node is not None and node.text else ""
 
-    def _enumerate(self, home: str) -> list[ParsedAddressbook]:
+    def _enumerate(self, home: str, *, using: str) -> list[ParsedAddressbook]:
         """Return the address-book collections under ``home`` (Depth:1)."""
 
-        response = self._request("PROPFIND", home, _BOOKS_BODY, depth="1")
+        response = self._request("PROPFIND", home, _BOOKS_BODY, depth="1", using=using)
         books: list[ParsedAddressbook] = []
         for resp in _xml(response.content).findall("d:response", _NS):
             if resp.find(".//d:resourcetype/card:addressbook", _NS) is None:
@@ -201,29 +386,73 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 ParsedAddressbook(
                     href=urljoin(home, href),
                     name=_text(resp, ".//d:displayname") or "Contacts",
-                    ctag=_text(resp, ".//cs:getctag"),
                 )
             )
-        return books
+        return sorted(books, key=lambda book: book.href)
 
-    def _list_vcard_hrefs(self, collection: str) -> list[str]:
+    def _collection_token(self, collection: str, *, using: str) -> str:
+        response = self._request("PROPFIND", collection, _TOKEN_BODY, cursor_request=True, using=using)
+        token = _text(_xml(response.content), ".//d:sync-token")
+        if not token:
+            raise CardDavError("The CardDAV address book does not expose a DAV:sync-token.")
+        return token
+
+    def _list_vcard_hrefs(self, collection: str, *, using: str) -> list[str]:
         """Return the hrefs of the vCard resources in ``collection`` (Depth:1)."""
 
-        response = self._request("PROPFIND", collection, _LISTING_BODY, depth="1")
-        hrefs: list[str] = []
+        response = self._request("PROPFIND", collection, _LISTING_BODY, depth="1", cursor_request=True, using=using)
+        hrefs: set[str] = set()
         for resp in _xml(response.content).findall("d:response", _NS):
-            if "vcard" not in _text(resp, ".//d:getcontenttype").lower():
+            href = urljoin(collection, _href(resp))
+            if href.rstrip("/") == collection.rstrip("/") or resp.find(".//d:collection", _NS) is not None:
                 continue
-            href = _href(resp)
-            if href:
-                hrefs.append(href)
-        return hrefs
+            if _status(resp) not in (0, 200):
+                raise CardDavError("The CardDAV server could not enumerate an address-book member.")
+            if _href(resp) and ("vcard" in _text(resp, ".//d:getcontenttype").lower() or _text(resp, ".//d:getetag")):
+                hrefs.add(href)
+        return sorted(hrefs)
 
-    def _multiget(self, collection: str, hrefs: list[str]) -> list[ParsedContact]:
-        """REPORT ``addressbook-multiget`` for ``hrefs`` and parse the returned cards."""
+    def _sync_changes(self, collection: str, token: str, *, using: str) -> tuple[list[dict[str, Any]], str, bool]:
+        body = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<d:sync-collection xmlns:d="DAV:">'
+            f"<d:sync-token>{escape(token)}</d:sync-token><d:sync-level>1</d:sync-level>"
+            "<d:prop><d:getetag/></d:prop></d:sync-collection>"
+        )
+        root = _xml(self._request("REPORT", collection, body, cursor_request=True, using=using).content)
+        next_token = _text(root, "d:sync-token")
+        if not next_token:
+            raise CardDavError("The CardDAV sync report omitted its DAV:sync-token.")
+        pending = []
+        seen_hrefs = set()
+        more = False
+        for resp in root.findall("d:response", _NS):
+            href = urljoin(collection, _href(resp))
+            status = _status(resp)
+            if href.rstrip("/") == collection.rstrip("/"):
+                if status == 507:
+                    more = True
+                    continue
+                if status == 404:
+                    raise CursorInvalid()
+            if not _href(resp) or href in seen_hrefs or status not in (0, 200, 404):
+                raise CardDavError("The CardDAV sync report contains an unavailable member.")
+            seen_hrefs.add(href)
+            pending.append({"href": href, "removed": status == 404})
+        pending.sort(key=lambda item: (item["removed"], item["href"]))
+        return pending, next_token, more
+
+    def _multiget(
+        self,
+        collection: str,
+        hrefs: list[str],
+        *,
+        using: str,
+    ) -> dict[str, ParsedContact | RecordChange | None]:
+        """Read each requested href or its explicit tombstone; never skip bad cards."""
 
         if not hrefs:
-            return []
+            return {}
         body = (
             '<?xml version="1.0" encoding="utf-8"?>'
             '<card:addressbook-multiget xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">'
@@ -231,17 +460,35 @@ class CardDavDirectoryBackend(DirectoryBackend):
             + "".join(f"<d:href>{escape(href)}</d:href>" for href in hrefs)
             + "</card:addressbook-multiget>"
         )
-        response = self._request("REPORT", collection, body, depth="1")
-        contacts: list[ParsedContact] = []
+        response = self._request("REPORT", collection, body, depth="1", cursor_request=True, using=using)
+        contacts: dict[str, ParsedContact | RecordChange | None] = {}
         for resp in _xml(response.content).findall("d:response", _NS):
-            data = _text(resp, ".//card:address-data")
-            if not data.strip():
+            href = urljoin(collection, _href(resp))
+            if href not in hrefs or href in contacts:
+                raise CardDavError("The CardDAV multiget returned an unexpected resource.")
+            if _status(resp) == 404:
+                contacts[href] = None
                 continue
+            data = _text(resp, ".//card:address-data")
+            etag = _text(resp, ".//d:getetag")
+            if not data or not etag or _status(resp) not in (0, 200):
+                raise CardDavError("The CardDAV multiget omitted a vCard or its ETag.")
             try:
                 card = vobject.readOne(data)
-            except Exception:  # noqa: BLE001 — one malformed card must not abort the sync.
-                continue
-            contacts.append(_parse_vcard(card, etag=_text(resp, ".//d:getetag").strip('"'), href=_href(resp), raw=data))
+                if card.name != "VCARD":
+                    raise ValueError("The address object is not a vCard.")
+                contacts[href] = _parse_vcard(card, etag=etag, href=href, raw=data)
+            except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
+                payload = {"href": href, "raw_vcard": data, "error": "invalid_vcard"}
+                contacts[href] = RecordChange(
+                    href,
+                    payload,
+                    canonical_json_sha256(payload),
+                    remote_version=etag,
+                    metadata={"href": href},
+                )
+        if set(contacts) != set(hrefs):
+            raise CardDavError("The CardDAV multiget omitted a requested resource.")
         return contacts
 
 
@@ -250,6 +497,93 @@ def _well_known(base: str) -> str:
 
     parts = urlsplit(base)
     return urlunsplit((parts.scheme, parts.netloc, "/.well-known/carddav", "", ""))
+
+
+def _render_vcard(projection: dict[str, Any], *, source: dict[str, Any], uid: str) -> str:
+    """Patch only changed parties projection fields, retaining UID and extensions."""
+
+    raw = source.get("raw_vcard", "")
+    card = vobject.readOne(raw) if raw else vobject.vCard()
+    previous = source.get("contact", {})
+    changed = {field for field in projection if projection[field] != previous.get(field)}
+    contact = contact_from_projection(projection)
+    if not _prop(card, "uid"):
+        card.add("uid").value = uid
+
+    def set_value(prop: str, value: Any) -> None:
+        card.contents.pop(prop, None)
+        if value is not None and value != "":
+            card.add(prop).value = value
+
+    for field, prop in (
+        ("display_name", "fn"),
+        ("nickname", "nickname"),
+        ("notes", "note"),
+        ("title", "title"),
+        ("role", "role"),
+    ):
+        if field in changed:
+            set_value(prop, getattr(contact, field))
+    if not card.contents.get("fn"):
+        card.add("fn").value = contact.display_name
+    if not raw or changed.intersection({"name_prefix", "given_name", "additional_name", "family_name", "name_suffix"}):
+        set_value(
+            "n",
+            vobject.vcard.Name(
+                family=contact.family_name,
+                given=contact.given_name,
+                additional=contact.additional_name,
+                prefix=contact.name_prefix,
+                suffix=contact.name_suffix,
+            ),
+        )
+    if "organization" in changed:
+        units = list(getattr(getattr(card, "org", None), "value", []) or [""])
+        units[0] = contact.organization
+        set_value("org", units if any(units) else None)
+    for field, prop in (("birthday", "bday"), ("anniversary", "anniversary")):
+        if field in changed:
+            value = getattr(contact, field)
+            set_value(prop, value.isoformat() if value else None)
+    for field, prop in (("emails", "email"), ("phones", "tel")):
+        if field not in changed:
+            continue
+        card.contents.pop(prop, None)
+        for value, label, preferred in getattr(contact, field):
+            item = card.add(prop)
+            item.value = value
+            types = [label] if label else []
+            if preferred:
+                if _prop(card, "version") == "4.0":
+                    item.params["PREF"] = ["1"]
+                else:
+                    types.append("PREF")
+            if types:
+                item.params["TYPE"] = types
+    if "addresses" in changed:
+        card.contents.pop("adr", None)
+        for address in contact.addresses:
+            item = card.add("adr")
+            item.value = vobject.vcard.Address(
+                box=address.po_box,
+                extended=address.extended,
+                street=address.street,
+                city=address.city,
+                region=address.region,
+                code=address.postal_code,
+                country=address.country,
+            )
+            if address.label:
+                item.params["TYPE"] = [address.label]
+    if "photo" in changed:
+        card.contents.pop("photo", None)
+        if contact.photo is not None and contact.photo.data is not None:
+            photo = card.add("photo")
+            photo.value = contact.photo.data
+            photo.params["ENCODING"] = ["b"]
+            if contact.photo.mime:
+                photo.params["TYPE"] = [contact.photo.mime.removeprefix("image/").upper()]
+    return card.serialize()
 
 
 def _xml(body: bytes) -> Any:
@@ -272,6 +606,14 @@ def _text(element: Any, xpath: str) -> str:
     return (node.text or "").strip() if node is not None else ""
 
 
+def _status(response_el: Any) -> int:
+    """Return the resource status, or the first property status for live members."""
+
+    value = _text(response_el, "d:status") or _text(response_el, "d:propstat/d:status")
+    parts = value.split()
+    return int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+
+
 def _parse_vcard(card: Any, *, etag: str, href: str, raw: str) -> ParsedContact:
     """Map one parsed vCard into a neutral :class:`ParsedContact`.
 
@@ -284,6 +626,7 @@ def _parse_vcard(card: Any, *, etag: str, href: str, raw: str) -> ParsedContact:
     return ParsedContact(
         uid=_prop(card, "uid") or _prop(card, "fn") or href,
         etag=etag,
+        href=href,
         display_name=_prop(card, "fn"),
         name_prefix=str(getattr(name, "prefix", "") or ""),
         given_name=str(getattr(name, "given", "") or ""),

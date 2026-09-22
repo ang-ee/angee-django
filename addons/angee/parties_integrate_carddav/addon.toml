@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see hatch-angee's native AddonManifest.
 [addon]
 name = "angee.parties_integrate_carddav"
-description = "CardDAV contact sync — pulls address books from a CardDAV server into parties"
+description = "Bidirectional CardDAV contacts with sync-token deltas and conditional vCard writes"
 keywords = ["carddav", "contacts", "sync"]
 category = "Integration"
 depends_on = ["angee.parties", "angee.integrate"]

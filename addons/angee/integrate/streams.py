@@ -42,6 +42,7 @@ class StreamDefinition:
     reconcile_interval: timedelta | None = None
     absence_threshold: int = 2
     tombstone_retention: timedelta | None = None
+    config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +75,7 @@ class RecordChange:
     mapping_version: int = 1
     dependency_digest: str = ""
     tombstone: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +107,7 @@ class WriteBackResult:
     remote_version: str
     source_hash: str
     source_payload: Any = None
+    tombstone: bool = False
 
 
 class CursorInvalid(Exception):
@@ -320,6 +323,8 @@ def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult, *, 
         origin="local",
         using=using,
     )
+    if result.tombstone:
+        _manager("RecordLink", using=using).tombstone(link, using=using)
 
 
 def advance_stream(
@@ -388,7 +393,12 @@ def advance_stream(
                         if locked.kind == StreamKind.RECORD_REPLICA:
                             if not isinstance(record, RecordChange):
                                 raise TypeError("Replica pages must contain RecordChange values.")
-                            link = _manager("RecordLink", using=using).observe(locked, record.external_key, using=using)
+                            link = _manager("RecordLink", using=using).observe(
+                                locked,
+                                record.external_key,
+                                metadata=record.metadata or None,
+                                using=using,
+                            )
                             if _has_conflict(link, using=using):
                                 discrepancies.extend(
                                     _manager("SyncDiscrepancy", using=using)
@@ -443,7 +453,12 @@ def advance_stream(
                 except (SemanticError, ValidationError) as error:
                     # The record savepoint rolled back, including a new identity.
                     if isinstance(record, RecordChange):
-                        link = _manager("RecordLink", using=using).observe(locked, record.external_key, using=using)
+                        link = _manager("RecordLink", using=using).observe(
+                            locked,
+                            record.external_key,
+                            metadata=record.metadata or None,
+                            using=using,
+                        )
                     refusal = error if isinstance(error, SemanticError) else SemanticError("invalid_record")
                     discrepancies.append(_quarantine(locked, record, refusal, link=link, using=using).pk)
             adapter.finish_page(locked, page, applied, using=using)
@@ -579,6 +594,7 @@ def _open_stream(bridge: Any, definition: StreamDefinition, *, using: str) -> An
         reconcile_interval=definition.reconcile_interval,
         absence_threshold=definition.absence_threshold,
         tombstone_retention=definition.tombstone_retention,
+        config=definition.config,
         using=using,
     )
 

@@ -1,17 +1,9 @@
-"""Tests for the CardDAV connection boundary and vCard parser.
-
-The directory-sync map and `purge_missing` are exercised live against the example
-database; these cover the transport-parse boundary the live run can't assert
-deterministically — full field mapping and the UID fallback whose empty result the
-sync deliberately skips (an empty key would collapse keyless cards onto one row).
-The connect cases pin the probe-before-write boundary against concrete test models.
-"""
+"""CardDAV connection and parsing contracts; replica cases live in the sync suite."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import date
-from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -97,7 +89,7 @@ END:VCARD"""
 
 
 def _backend_with_http(http: Any) -> CardDavDirectoryBackend:
-    bridge = SimpleNamespace(credential=None, config={"server_url": "https://dav.example/"})
+    bridge = Directory(credential=None, config={"server_url": "https://dav.example/"})
     backend = CardDavDirectoryBackend(bridge)
     backend.__dict__["http"] = http
     return backend
@@ -116,7 +108,7 @@ def test_native_httpx_multistatus_and_case_insensitive_redirect() -> None:
                 return httpx.Response(302, headers={"LoCaTiOn": "/addressbooks/"})
             return httpx.Response(207, content=b"<d:multistatus xmlns:d='DAV:'/>")
 
-    response = _backend_with_http(FakeHttp())._request("PROPFIND", "https://dav.example/root", "")
+    response = _backend_with_http(FakeHttp())._request("PROPFIND", "https://dav.example/root", "", using="default")
 
     assert response.status_code == 207
     assert calls == ["https://dav.example/root", "https://dav.example/addressbooks/"]
@@ -131,7 +123,7 @@ def test_native_httpx_photo_content_type_ignores_parameters() -> None:
             return httpx.Response(200, content=b"photo", headers={"CoNtEnT-TyPe": "image/jpeg; charset=binary"})
 
     contact = ParsedContact(uid="one", display_name="One", photo=ParsedPhoto(uri="photo.jpg"))
-    resolved = _backend_with_http(FakeHttp())._resolve_photo(contact)
+    resolved = _backend_with_http(FakeHttp())._resolve_photo(contact, using="default")
 
     assert resolved.photo == ParsedPhoto(data=b"photo", mime="image/jpeg")
 
@@ -162,8 +154,8 @@ def test_connect_probe_failure_writes_no_rows(
     del carddav_connect_tables
     probe_atomic_states: list[bool] = []
 
-    def reject_probe(backend: CardDavDirectoryBackend) -> None:
-        del backend
+    def reject_probe(backend: CardDavDirectoryBackend, *, using: str | None = None) -> None:
+        del backend, using
         probe_atomic_states.append(connection.in_atomic_block)
         raise CardDavError("CardDAV probe rejected")
 
@@ -191,8 +183,8 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
     probe_atomic_states: list[bool] = []
     write_atomic_states: list[bool] = []
 
-    def accept_probe(backend: CardDavDirectoryBackend) -> None:
-        del backend
+    def accept_probe(backend: CardDavDirectoryBackend, *, using: str | None = None) -> None:
+        del backend, using
         probe_atomic_states.append(connection.in_atomic_block)
 
     manager_type = type(Handle.objects)
@@ -336,10 +328,7 @@ def test_parse_data_uri_decodes_inline_base64() -> None:
 def test_remote_photo_uri_is_left_for_the_transport_to_fetch() -> None:
     """A remote PHOTO URI is recorded but not fetched by the pure parser."""
 
-    vcard = (
-        "BEGIN:VCARD\nVERSION:3.0\nUID:x\nFN:X\n"
-        "PHOTO;VALUE=uri:https://example.com/a.jpg\nEND:VCARD"
-    )
+    vcard = "BEGIN:VCARD\nVERSION:3.0\nUID:x\nFN:X\nPHOTO;VALUE=uri:https://example.com/a.jpg\nEND:VCARD"
     contact = _parse(vcard)
     assert contact.photo is not None
     assert contact.photo.data is None

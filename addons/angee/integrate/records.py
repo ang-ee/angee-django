@@ -130,6 +130,7 @@ class SyncStreamManager(AngeeManager):
         reconcile_interval: timedelta | None = None,
         absence_threshold: int = 2,
         tombstone_retention: timedelta | None = None,
+        config: Mapping[str, Any] | None = None,
         using: str | None = None,
     ) -> Any:
         """Return the latest epoch, creating its baseline once per partition.
@@ -160,6 +161,7 @@ class SyncStreamManager(AngeeManager):
                     reconcile_interval=reconcile_interval,
                     absence_threshold=absence_threshold,
                     tombstone_retention=tombstone_retention,
+                    config=dict(config or {}),
                 )
             if (stream.kind, stream.direction) != (kind, direction):
                 raise ValidationError("A stream's kind and direction cannot change between declarations.")
@@ -203,6 +205,7 @@ class SyncStreamManager(AngeeManager):
                 reconcile_interval=latest.reconcile_interval,
                 absence_threshold=latest.absence_threshold,
                 tombstone_retention=latest.tombstone_retention,
+                config=latest.config,
             )
             for model_name in ("RecordLink", "SyncDiscrepancy"):
                 apps.get_model("integrate", model_name).objects.db_manager(using).filter(stream=latest).update(
@@ -237,7 +240,7 @@ class SyncStreamManager(AngeeManager):
 
 
 class SyncStream(SqidMixin, AuditMixin, AngeeModel):
-    """One opaque cursor for a bridge stream partition in a particular epoch."""
+    """An epoch's opaque progress and adapter-owned policy for one partition."""
 
     runtime = True
     sqid_prefix = "sst_"
@@ -252,6 +255,7 @@ class SyncStream(SqidMixin, AuditMixin, AngeeModel):
     generation = models.PositiveIntegerField(default=1)
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     cursor = models.JSONField(default=dict, blank=True)
+    config = models.JSONField(default=dict, blank=True)
     cursor_expires_at = models.DateTimeField(null=True, blank=True)
     resync_required = models.BooleanField(default=False)
     last_advanced_at = models.DateTimeField(null=True, blank=True)

@@ -256,7 +256,6 @@ class ContactFolderType(AngeeNode):
     name: auto
     directory: "DirectoryType | None"
     source_href: auto
-    ctag: auto
     created_at: auto
     updated_at: auto
 
@@ -462,9 +461,7 @@ class PartiesIdentityMutation:
         if link.is_dismissed:
             return ActionResult(
                 ok=False,
-                message=(
-                    "This contact remains dismissed. Confirm it in Identity if it should be restored."
-                ),
+                message=("This contact remains dismissed. Confirm it in Identity if it should be restored."),
             )
         return ActionResult(ok=True, message="Contact is available in Identity for review.", id=link.sqid)
 
@@ -580,7 +577,7 @@ class PartiesDirectoryMutation:
         probe_credential = credential_model.objects.db_manager(alias).prepare_local_credential(
             user, **credential_values
         )
-        Directory(credential=probe_credential, **directory_values).backend.probe()
+        Directory(credential=probe_credential, **directory_values).backend.probe(using=alias)
 
         # Persist every owned row in one write-only transaction after the probe.
         with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic(using=alias):
