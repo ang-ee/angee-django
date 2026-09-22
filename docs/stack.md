@@ -227,7 +227,7 @@ calendar.
 | mypy | Python type checking | Strict backend checks |
 | pytest + pytest-django | Backend tests | Synthetic project and integration fixtures |
 | Faker | Test and seed data generation | Bulk lorem fixtures (e.g. `seed_lorem_notes`) |
-| Vitest | TypeScript and React tests | Frontend unit checks; optional peer for `@angee/refine/testing`, which owns provider spies, and the `@angee/app/vitest` config entry |
+| Vitest | TypeScript and React tests | Frontend unit checks; optional peer for `@angee/refine/testing`, which owns provider spies, and the `@angee/app/vitest` config entry. Tests declare direct workspace dependencies for fixture owners such as `@angee/metadata/testing`. |
 | happy-dom | DOM environment for Vitest | Per-file env opt-in for hook and component tests |
 | @testing-library/react | React component and hook test rendering | Provider-wrapped render and hook harnesses |
 | Playwright | Browser tests | `@angee/e2e` harness: workspace-isolated runner, role `storageState` login, GraphQL `api` fixture, Page Object base ([E2E guide](frontend/e2e.md)) |

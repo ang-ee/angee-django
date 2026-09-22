@@ -48,7 +48,7 @@ export function BoundFormValue({ form: surface, name, children }: BoundFormValue
     render={({ field, fieldState }) => children({
       value,
       error: fieldState.error?.message,
-      messages: fieldErrorMessages(fieldState.error ? [fieldState.error] : []),
+      messages: fieldErrorMessages(fieldState.error ? [fieldState.error] : [], ""),
       controlRef: field.ref,
       onCommit: () => surface.commitFieldInteraction(name),
       onChange: (value) => {

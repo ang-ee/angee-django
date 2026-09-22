@@ -2436,7 +2436,7 @@ describe("FormView", () => {
     const tabs = await screen.findAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual(["Editor", "Runs", "Settings"]);
     expect(screen.getByRole("button", { name: "Editor action" })).toBeTruthy();
-    expect(screen.getByText("Active")).toBeTruthy();
+    expect(await screen.findByText("Active")).toBeTruthy();
     expect(screen.queryByText("ACTIVE")).toBeNull();
     expect(screen.queryByLabelText("Reminder")).toBeNull();
     expect(screen.queryByText("Related records")).toBeNull();

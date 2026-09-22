@@ -557,13 +557,14 @@ Hard-won traps — the wise learn from others' mistakes
   `relationIdList`. A `kind:"list"` field with *no* relation target (a plain string
   array) stays the `tagInput`. This mirrors the to-one `relationFieldInfo` +
   `RelationFieldWidget` cell — compose those, never hand-roll a lines cell.
-- **A server-backed typeahead is not a `RelationField`** — `RelationField`/
-  `RelationPicker` own their query state and filter a fixed `options` list
-  client-side, so they cannot drive a remote search. For one (e.g. a host repo
-  search), build a thin control on the dialog/`Input` primitives whose debounced
-  query feeds `@angee/refine`'s `useAuthoredQuery`, and run the write
-  through `useAuthoredMutation(..., { invalidateModels: [...] })` or the
-  matching refine invalidation owner after the write.
+- **Resource relation pickers support server-backed search.** Compose
+  `RelationFieldWidget`; its
+  [relation-options owner](../../packages/ui/src/views/relation/relation-options.ts)
+  handles lazy reads, debouncing, and selected-label resolution against
+  `ResourceQuery`'s executable text fields. `RelationField`/`RelationPicker`
+  expose remote search through `onSearchChange` and `searchState`. Non-resource
+  searches, such as host repository candidates, keep their authored-operation
+  adapter with the owning addon and use Refine's query/mutation lifecycle.
 - **A FormView create dialog under the console layout** needs
   `<ControlBandProvider host={undefined}>` to keep its Save band inline instead of
   portaling into the layout's band.

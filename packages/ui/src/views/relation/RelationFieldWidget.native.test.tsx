@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../../testing";
 import { RelationFieldWidget } from "./RelationFieldWidget";
@@ -26,6 +26,14 @@ function SelectedFilter({ value }: { value: string }) {
 }
 
 test("relation search reaches records beyond the first page and resolves a selected label separately", async () => {
+  const searchFields = ["name", "value"];
+  const resource = testDataResource("contacts.Address", {
+    query: testResourceQuery({
+      fields: Object.fromEntries(searchFields.map((field) => [field, testQueryField(field, {
+        filter: { field, scalar: "String", values: [], operators: ["exact", "iContains"] },
+      })])),
+    }),
+  });
   const selected = { id: "address-999", name: "Distant sender" };
   const getOne = vi.fn(async () => ({ data: selected }));
   const getList = vi.fn(async ({ filters }: { filters?: unknown[] }) => ({
@@ -35,8 +43,8 @@ test("relation search reaches records beyond the first page and resolves a selec
     total: 1000,
   }));
   const change = vi.fn();
-  render(<Provider resources={[testDataResource("contacts.Address")]} refineResources={[]} dataProvider={{ getOne, getList }}>
-    <RelationFieldWidget value={selected.id} onChange={change} relation={{ resource: "contacts.Address", labelField: "name", canCreate: false }} searchFields={["name", "value"]} aria-label="Exact address" />
+  render(<Provider resources={[resource]} refineResources={[]} dataProvider={{ getOne, getList }}>
+    <RelationFieldWidget value={selected.id} onChange={change} relation={{ resource: "contacts.Address", labelField: "name", canCreate: false }} searchFields={searchFields} aria-label="Exact address" />
     <SelectedFilter value={selected.id} />
   </Provider>);
   await screen.findByText("Distant sender");

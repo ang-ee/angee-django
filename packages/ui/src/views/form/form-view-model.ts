@@ -528,6 +528,7 @@ export function gridFieldClass(field: FieldDescriptor): string | undefined {
   return fieldWidgetId(field) === "tagInput" ? "col-span-full" : undefined;
 }
 
+/** Omit paths by default; an empty root includes relative paths, otherwise prefix them with the root. */
 export function fieldErrorMessages(errors: readonly unknown[], path?: string): string[] {
   return errors.flatMap((error) => nestedFieldErrorMessages(error, path));
 }
@@ -541,7 +542,8 @@ function nestedFieldErrorMessages(error: unknown, path?: string): string[] {
   if (!error || typeof error !== "object") return [fieldErrorMessage(error)];
   return Object.entries(error).flatMap(([name, child]) => {
     if (name === "ref" || name === "type" || child === undefined) return [];
-    return nestedFieldErrorMessages(child, path ? `${path}.${name}` : name);
+    const childPath = path === undefined ? undefined : path ? `${path}.${name}` : name;
+    return nestedFieldErrorMessages(child, childPath);
   });
 }
 

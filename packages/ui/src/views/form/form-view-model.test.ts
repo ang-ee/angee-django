@@ -29,6 +29,19 @@ test("field errors retain nested messages while excluding RHF refs", () => {
   }])).toEqual(["Choose a valid relation."]);
 });
 
+test("structured field errors retain explicit root paths through objects and arrays", () => {
+  const errors = [{
+    tasks: [{
+      relation: {
+        message: "Choose a valid relation.",
+        ref: { message: "DOM input details are not validation." },
+      },
+    }],
+  }];
+  expect(fieldErrorMessages(errors, "config")).toEqual(["config.tasks.0.relation: Choose a valid relation."]);
+  expect(fieldErrorMessages(errors, "")).toEqual(["tasks.0.relation: Choose a valid relation."]);
+});
+
 test("titleText preserves string and numeric scalar titles", () => {
   expect(titleText("Daily briefing", "Untitled")).toBe("Daily briefing");
   expect(titleText(42, "Untitled")).toBe("42");

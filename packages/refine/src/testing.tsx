@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Refine, type DataProvider, type RefineProps } from "@refinedev/core";
 import { QueryClient, useQueryClient, type QueryClientConfig } from "@tanstack/react-query";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
 /** Concrete fixture responses retain native envelopes, including missing-record reads. */
 type RefineTestProviderResponse<K extends keyof DataProvider, Result> =
@@ -33,6 +33,17 @@ export interface RefineTestProviderOptions<T extends RefineTestDataProvider = Re
   providerNames?: readonly string[];
 }
 
+type RefineTestProviderSpies = Record<"getOne" | "getList" | "create" | "update" | "deleteOne", Mock>;
+
+/** Public harness contract keeps Vitest's internal inferred types out of declarations. */
+export interface RefineTestProviders<T extends RefineTestDataProvider = Pick<RefineTestDataProvider, never>> {
+  Provider: (props: RefineTestProviderOptions & { children?: React.ReactNode }) => React.ReactElement;
+  dataProvider: DataProvider & Omit<RefineTestProviderSpies, keyof T> & T;
+  clients: QueryClient[];
+  createClient: (config?: QueryClientConfig) => QueryClient;
+  clearClients: () => void;
+}
+
 /**
  * Compose native Refine providers with observable fixture methods. Each mount
  * gets a fresh client unless createClient supplies one for a live provider or
@@ -43,10 +54,10 @@ export interface RefineTestProviderOptions<T extends RefineTestDataProvider = Re
  */
 export function createRefineTestProviders<T extends RefineTestDataProvider = Pick<RefineTestDataProvider, never>>(
   defaults: RefineTestProviderOptions<T> = {},
-) {
+): RefineTestProviders<T> {
   const clients: QueryClient[] = [];
   const providers = new Set<DataProvider>();
-  const spies = {
+  const spies: RefineTestProviderSpies = {
     getOne: vi.fn(),
     getList: vi.fn(),
     create: vi.fn(),
@@ -60,7 +71,7 @@ export function createRefineTestProviders<T extends RefineTestDataProvider = Pic
   ) {
     const provider = { getApiUrl: () => apiUrl, ...spies, ...methods };
     // Fixtures implement concrete responses rather than DataProvider's generic promises.
-    return provider as DataProvider & Omit<typeof spies, keyof Methods> & Methods;
+    return provider as RefineTestProviders<Methods>["dataProvider"];
   }
 
   const dataProvider = composeDataProvider(defaults.dataProvider);

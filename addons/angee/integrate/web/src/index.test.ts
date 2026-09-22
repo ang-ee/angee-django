@@ -57,7 +57,7 @@ describe("integrate addon manifest", () => {
     // Route-less root: target inherited from the first child (Integrations).
     expect(menu?.route).toBeUndefined();
     expect(menu?.group).toBeUndefined();
-    expect(menu?.icon).toBe("connect");
+    expect(menu?.icon).toBe("integration");
     expect(menu?.children?.map((child) => child.id)).toEqual([
       "integrate.integrations.group",
       "integrate.oauth.group",
