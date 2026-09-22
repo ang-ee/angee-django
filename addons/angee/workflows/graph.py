@@ -19,6 +19,7 @@ from angee.workflows.data_contracts import (
     DataContract,
     DataContractNode,
     NumericRange,
+    StringLengthRange,
     model_data_contract,
     schema_data_contract,
 )
@@ -1327,6 +1328,7 @@ def _result_binding_compatible(
             target_schema,
             literal_values=source.literal_values_at_path(binding.path),
             numeric_ranges=source.numeric_ranges_at_path(binding.path),
+            string_length_ranges=source.string_length_ranges_at_path(binding.path),
         )
     if kind == "object":
         if set(target_schema) - {
@@ -1389,23 +1391,48 @@ def _result_binding_compatible(
 
 
 def _tagged_one_of_choice(binding: Any, variants: list[Any]) -> dict[str, Any] | None:
-    """Select a disjoint object branch only when every variant requires one literal tag."""
+    """Select a disjoint object branch only when every variant requires one finite tag."""
 
     if getattr(binding, "kind", None) != "object" or not variants:
         return None
     tag_field: str | None = None
-    tag_values: list[Any] = []
+    tag_value_sets: list[tuple[Any, ...]] = []
     for variant in variants:
         if not isinstance(variant, dict) or variant.get("type") != "object":
             return None
         required, properties = variant.get("required"), variant.get("properties")
         if not isinstance(required, list) or not isinstance(properties, dict):
             return None
-        candidates = {
-            key: properties[key]["const"]
-            for key in required
-            if key in properties and isinstance(properties[key], dict) and "const" in properties[key]
-        }
+        candidates: dict[str, tuple[Any, ...]] = {}
+        for key in required:
+            property_schema = properties.get(key)
+            if not isinstance(property_schema, dict):
+                continue
+            if "const" in property_schema:
+                values = (property_schema["const"],)
+                if "enum" in property_schema:
+                    enum = property_schema["enum"]
+                    if not isinstance(enum, list) or not enum:
+                        continue
+                    values = tuple(
+                        value
+                        for value in values
+                        if any(json_values_equal(value, enum_value) for enum_value in enum)
+                    )
+            elif "enum" in property_schema:
+                enum = property_schema["enum"]
+                if not isinstance(enum, list) or not enum:
+                    continue
+                values = tuple(enum)
+            else:
+                continue
+            if not values or any(
+                json_values_equal(value, prior)
+                for index, value in enumerate(values)
+                for prior in values[:index]
+            ):
+                continue
+            candidates[key] = values
         if tag_field is None:
             matches = [key for key in candidates if getattr(binding.fields.get(key), "kind", None) == "constant"]
             if len(matches) != 1:
@@ -1413,14 +1440,23 @@ def _tagged_one_of_choice(binding: Any, variants: list[Any]) -> dict[str, Any] |
             tag_field = matches[0]
         if tag_field not in candidates:
             return None
-        value = candidates[tag_field]
-        if any(value == prior for prior in tag_values):
+        values = candidates[tag_field]
+        if any(
+            json_values_equal(value, prior)
+            for value in values
+            for prior_values in tag_value_sets
+            for prior in prior_values
+        ):
             return None
-        tag_values.append(value)
+        tag_value_sets.append(values)
     assert tag_field is not None
     bound_value = binding.fields[tag_field].value
-    matches = [variant for variant, value in zip(variants, tag_values, strict=True) if bound_value == value]
-    return matches[0] if len(matches) == 1 else None
+    selected: list[dict[str, Any]] = [
+        variant
+        for variant, values in zip(variants, tag_value_sets, strict=True)
+        if any(json_values_equal(bound_value, value) for value in values)
+    ]
+    return selected[0] if len(selected) == 1 else None
 
 
 def _catalogue_node_compatible(
@@ -1429,6 +1465,7 @@ def _catalogue_node_compatible(
     *,
     literal_values: tuple[Any, ...] | None = None,
     numeric_ranges: tuple[NumericRange, ...] | None = None,
+    string_length_ranges: tuple[StringLengthRange, ...] | None = None,
 ) -> bool:
     if not target_schema:
         return True
@@ -1444,6 +1481,8 @@ def _catalogue_node_compatible(
         "exclusiveMinimum",
         "maximum",
         "exclusiveMaximum",
+        "minLength",
+        "maxLength",
     }:
         return False
     target_type = target_schema.get("type")
@@ -1456,6 +1495,7 @@ def _catalogue_node_compatible(
     has_numeric_constraint = any(
         keyword in target_schema for keyword in ("minimum", "exclusiveMinimum", "maximum", "exclusiveMaximum")
     )
+    has_string_length_constraint = "minLength" in target_schema or "maxLength" in target_schema
     if has_literal_constraint and source.kind != "scalar":
         return False
     if source.kind == "scalar":
@@ -1469,6 +1509,11 @@ def _catalogue_node_compatible(
         if has_numeric_constraint:
             return numeric_ranges is not None and all(
                 _numeric_range_compatible(numeric_range, target_schema) for numeric_range in numeric_ranges
+            )
+        if has_string_length_constraint:
+            return string_length_ranges is not None and all(
+                _string_length_range_compatible(length_range, target_schema)
+                for length_range in string_length_ranges
             )
         return True
     if source.kind == "object":
@@ -1524,6 +1569,21 @@ def _numeric_range_compatible(
             or source_maximum > maximum
             or (source_maximum == maximum and not source_maximum_exclusive)
         ):
+            return False
+    return True
+
+
+def _string_length_range_compatible(source: StringLengthRange, target: dict[str, Any]) -> bool:
+    """Prove one declared source string-length interval is contained by target bounds."""
+
+    source_minimum, source_maximum = source
+    if "minLength" in target:
+        minimum = target["minLength"]
+        if type(minimum) is not int or source_minimum is None or source_minimum < minimum:
+            return False
+    if "maxLength" in target:
+        maximum = target["maxLength"]
+        if type(maximum) is not int or source_maximum is None or source_maximum > maximum:
             return False
     return True
 

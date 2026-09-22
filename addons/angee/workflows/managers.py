@@ -294,6 +294,21 @@ class WorkflowQuerySet(DefinitionQuerySet):
             self.filter(status=WorkflowStatus.PUBLISHED).filter(~models.Exists(newer_version)),
         )
 
+    def current_published_for(self, workflow: Any) -> Any | None:
+        """Return the latest published version for ``workflow``'s lineage.
+
+        Composes the same ``_CURRENCY_STATUSES`` rule ``current_published``
+        owns, scoped to one explicit lineage pool.
+        """
+
+        head_id = workflow.published_from_id or workflow.pk
+        return (
+            self.current_published()
+            .filter(models.Q(pk=head_id) | models.Q(published_from_id=head_id))
+            .order_by("-version", "-pk")
+            .first()
+        )
+
     def for_subject_declaration(self, subject_declaration: str) -> Self:
         """Return current published workflows accepting ``subject_declaration``."""
 
@@ -369,24 +384,6 @@ class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset
         alias = using
         with transaction.atomic(using=alias):
             yield system_queryset(self.model, using=alias, lock=("self",)).get(pk=workflow_id)
-
-    def current_published_for(self, workflow: Any) -> Any | None:
-        """Return the latest published version for ``workflow``'s lineage.
-
-        Composes the same ``_CURRENCY_STATUSES`` rule ``current_published``
-        owns, scoped to one explicit lineage pool.
-        """
-
-        head_id = workflow.published_from_id or workflow.pk
-        latest = (
-            self.filter(status__in=_CURRENCY_STATUSES)
-            .filter(models.Q(pk=head_id) | models.Q(published_from_id=head_id))
-            .order_by("-version", "-pk")
-            .first()
-        )
-        if latest is None or latest.status != WorkflowStatus.PUBLISHED:
-            return None
-        return latest
 
     def test_snapshot(self, workflow: Any, *, expected_revision: int, require_readiness: bool = True) -> Any:
         """Return the immutable test copy of one exact saved draft revision."""

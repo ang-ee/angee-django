@@ -20,10 +20,10 @@ Reference resolution composes the two owners, never re-deriving either:
   REBAC identity (:func:`rebac.to_object_ref` / :func:`rebac.to_subject_ref`)
   gives the tuple side — so the row owns its resource type, never a fixture
   prefix. On the resource side a grant honors the row's IS-A: an MTI child
-  materializes one tuple per REBAC identity it carries — its own type plus each
-  REBAC-registered concrete parent it IS-A (``Organization`` IS-A ``Party``) —
-  so the grant reaches the row through a foreign key typed to any ancestor. An
-  ancestor with no REBAC type is skipped; the row's own type still fails fast;
+  materializes its own tuple and expands to REBAC-registered concrete parents
+  that accept the same relation and subject as a stored grant. This reaches
+  parent-typed foreign keys without copying child-only roles into parent schemas.
+  The explicitly requested tuple still passes through native REBAC validation;
 * the bare ``*`` subject is the public wildcard (the anonymous subject).
 """
 
@@ -37,10 +37,12 @@ from rebac import (
     RelationshipTuple,
     SubjectRef,
     anonymous_actor,
+    backend,
     to_subject_ref,
     write_relationships,
 )
 from rebac.models import active_relationship_model
+from rebac.schema.walker import find_relation, subject_allowed_by_relation
 
 from angee.base.identity import canonical_subject_ref
 from angee.base.refs import ancestor_object_refs
@@ -92,19 +94,28 @@ def _grant_tuples(
     ledger_model: type[models.Model],
     addon_aliases: Mapping[str, str],
 ) -> list[RelationshipTuple]:
-    """Return the REBAC tuples one grant row names — one per identity its resource carries.
+    """Return the explicit grant and compatible grants on its MTI ancestors.
 
-    A literal ref or a plain (non-MTI) row yields exactly one tuple. An MTI child
-    on the resource side yields one tuple per REBAC identity it carries (its own
-    type plus each REBAC-registered concrete parent it IS-A), all sharing this
-    row's relation and subject.
+    Literal refs and plain rows yield exactly one tuple. Ancestor expansion
+    follows the native schema's allowed subjects and relation backing. Never
+    filter the explicit tuple: invalid requests must fail at the native writer.
     """
 
     subject = _resolve_subject(row, ledger_model, addon_aliases)
-    return [
-        RelationshipTuple(resource=resource, relation=row.relation, subject=subject)
-        for resource in _resolve_resource_refs(row, ledger_model, addon_aliases)
-    ]
+    own, *ancestors = _resolve_resource_refs(row, ledger_model, addon_aliases)
+    tuples = [RelationshipTuple(resource=own, relation=row.relation, subject=subject)]
+    if ancestors:
+        schema = backend().schema()
+        for resource in ancestors:
+            definition = schema.get_definition(resource.resource_type)
+            relation = find_relation(definition, row.relation) if definition is not None else None
+            if (
+                relation is not None
+                and not relation.has_backing(resource.resource_id)
+                and subject_allowed_by_relation(relation, subject, caveat_name="")
+            ):
+                tuples.append(RelationshipTuple(resource=resource, relation=row.relation, subject=subject))
+    return tuples
 
 
 def _resolve_resource_refs(
@@ -116,9 +127,8 @@ def _resolve_resource_refs(
 
     A literal ref names exactly one identity. A row xref resolves through the
     ledger to the loaded row and expands to each REBAC identity the row IS-A — the
-    MTI fan-out owned by :func:`angee.base.refs.ancestor_object_refs` — so a
-    grant on an MTI child also lands on every concrete parent identity a
-    parent-typed foreign key would scope reads on.
+    MTI enumeration owned by :func:`angee.base.refs.ancestor_object_refs`.
+    The caller filters implicit ancestor grants against the native schema.
     """
 
     value = row.resource

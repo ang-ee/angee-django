@@ -14,6 +14,7 @@ ConcretePath: TypeAlias = Sequence[str | int]
 JsonScalarType: TypeAlias = Literal["string", "integer", "number", "boolean", "null"]
 JsonNumber: TypeAlias = int | float
 NumericRange: TypeAlias = tuple[JsonNumber | None, bool, JsonNumber | None, bool]
+StringLengthRange: TypeAlias = tuple[int | None, int | None]
 
 
 def _check_json_schema(value: dict[str, Any]) -> dict[str, Any]:
@@ -146,6 +147,13 @@ class DataContract:
         if self.raw_schema is None:
             return None
         return _numeric_ranges_at_path(self.raw_schema, tuple(path), self.raw_schema, frozenset())
+
+    def string_length_ranges_at_path(self, path: ConcretePath) -> tuple[StringLengthRange, ...] | None:
+        """Return every declared string-length range at a bounded scalar path."""
+
+        if self.raw_schema is None:
+            return None
+        return _string_length_ranges_at_path(self.raw_schema, tuple(path), self.raw_schema, frozenset())
 
     def flat_catalogue(self) -> "FlatDataContract":
         """Return deterministic rows for depth-independent transport."""
@@ -429,6 +437,55 @@ def _numeric_ranges_at_path(
     lower = boundary("exclusiveMinimum" if lower_exclusive else "minimum")
     upper = boundary("exclusiveMaximum" if upper_exclusive else "maximum")
     return ((lower, lower_exclusive, upper, upper_exclusive),)
+
+
+def _string_length_ranges_at_path(
+    schema: Any,
+    path: tuple[str | int, ...],
+    root: Mapping[str, Any],
+    active_refs: frozenset[str],
+) -> tuple[StringLengthRange, ...] | None:
+    """Resolve string-length bounds through local refs and closed schema variants."""
+
+    supported = _supported_node(schema, root, active_refs)
+    if supported is None:
+        return None
+    schema = supported.schema
+    active_refs = supported.active_refs
+    if supported.variants:
+        base_ranges = _string_length_ranges_at_path(schema, path, root, active_refs)
+        if base_ranges is not None:
+            return base_ranges
+        ranges: list[StringLengthRange] = []
+        for choice in supported.variants:
+            choice_ranges = _string_length_ranges_at_path(choice, path, root, active_refs)
+            if choice_ranges is None:
+                return None
+            ranges.extend(choice_ranges)
+        return tuple(ranges) if ranges else None
+    if path:
+        segment, rest = path[0], path[1:]
+        if isinstance(segment, str) and schema.get("type") == "object":
+            properties = schema.get("properties", {})
+            if isinstance(properties, Mapping):
+                return _string_length_ranges_at_path(properties.get(segment), rest, root, active_refs)
+        if (
+            isinstance(segment, int)
+            and not isinstance(segment, bool)
+            and segment >= 0
+            and schema.get("type") == "array"
+        ):
+            return _string_length_ranges_at_path(schema.get("items"), rest, root, active_refs)
+        return None
+    if schema.get("type") != "string":
+        return None
+    minimum = schema.get("minLength", 0)
+    maximum = schema.get("maxLength")
+    if type(minimum) is not int or minimum < 0 or maximum is not None and (
+        type(maximum) is not int or maximum < 0
+    ):
+        return None
+    return ((minimum, maximum),)
 
 
 class _CatalogueProjector:

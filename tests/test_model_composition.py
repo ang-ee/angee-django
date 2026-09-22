@@ -10,7 +10,9 @@ import reversion
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
-from django.db.migrations.state import ModelState
+from django.db.migrations.autodetector import MigrationAutodetector
+from django.db.migrations.operations import CreateModel
+from django.db.migrations.state import ModelState, ProjectState
 from django.test.utils import isolate_apps
 
 from angee.base.mixins import HistoryMixin, RevisionMixin, SqidMixin
@@ -453,6 +455,71 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
         with connection.schema_editor() as editor:
             editor.delete_model(history)
             editor.delete_model(Tracked)
+
+
+@isolate_apps()
+def test_native_history_mti_reference_has_a_migration_dependency(modules):
+    create, emit = modules
+    config, module = create("native_history_mti")
+    source(
+        module,
+        "Tracked",
+        config.label,
+        bases=(HistoryMixin, models.Model),
+        runtime=True,
+        title=models.CharField(max_length=32),
+    )
+    source(
+        module,
+        "Child",
+        config.label,
+        bases=(HistoryMixin, models.Model),
+        runtime=True,
+        extends=f"{config.label}.Tracked",
+        extra=models.IntegerField(default=0),
+    )
+    generated = emit(ModelComposition.discover((config,)))[config.label]
+    history = generated.Child.history.model
+    parent_reference = history._meta.get_field("tracked_ptr")
+
+    assert parent_reference.auto_created is False
+    assert parent_reference.remote_field.parent_link is False
+    assert parent_reference.target_field.name == "id"
+    snapshot = history(
+        tracked_ptr_id=7,
+        id=7,
+        title="parent",
+        extra=2,
+        history_user_id=None,
+    )
+    assert snapshot.instance.pk == 7
+    assert snapshot.instance.extra == 2
+
+    models_to_migrate = (generated.Tracked, generated.Child, history)
+    target = ProjectState()
+    for model in models_to_migrate:
+        state = ModelState.from_model(model)
+        if state.name == "HistoricalChild":
+            state.fields.pop("history_user")
+        target.add_model(state)
+    changes = MigrationAutodetector(ProjectState(), target)._detect_changes()
+    operations = changes[config.label][0].operations
+    parent_create = next(
+        index
+        for index, operation in enumerate(operations)
+        if isinstance(operation, CreateModel) and operation.name == "Tracked"
+    )
+    history_create = next(
+        index
+        for index, operation in enumerate(operations)
+        if isinstance(operation, CreateModel) and operation.name == "HistoricalChild"
+    )
+
+    assert parent_create < history_create
+    rendered = ProjectState()
+    for operation in operations:
+        operation.state_forwards(config.label, rendered)
+    rendered.apps.get_model(config.label, "HistoricalChild")
 
 
 @isolate_apps()

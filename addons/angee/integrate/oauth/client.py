@@ -259,7 +259,7 @@ class OAuthClientProtocol:
             "grant_type": grant_type,
             **grant,
         }
-        client_secret = str(getattr(self.oauth_client, "client_secret", "") or "")
+        client_secret = self._client_secret()
         if client_secret:
             body["client_secret"] = client_secret
         client = self._httpx_client()
@@ -293,7 +293,7 @@ class OAuthClientProtocol:
         cannot be replayed behind ``Credential`` refresh locking.
         """
 
-        secret = str(getattr(self.oauth_client, "client_secret", "") or "")
+        secret = self._client_secret()
         return OAuth2Client(
             client_id=str(getattr(self.oauth_client, "client_id", "")),
             client_secret=secret or None,
@@ -301,6 +301,21 @@ class OAuthClientProtocol:
             headers=dict(OUTBOUND_HEADERS),
             **_outbound_kwargs(self._transport),
         )
+
+    def _client_secret(self) -> str:
+        """Return confidential-client material without reading it for fixed public clients.
+
+        ``manual_redirect_uri`` declares the RFC 8252-style fixed public client
+        whose callback allow-list Angee cannot extend.  Such a client authenticates
+        its authorization-code grant with PKCE and has no client secret, so touching
+        the encrypted field is both unnecessary and wrong: an unreadable historical
+        encrypted blank must not block its public-client exchange.  Confidential
+        clients retain the encrypted descriptor's fail-closed behavior.
+        """
+
+        if str(getattr(self.oauth_client, "manual_redirect_uri", "") or ""):
+            return ""
+        return str(getattr(self.oauth_client, "client_secret", "") or "")
 
     def _httpx_client(self) -> httpx.Client:
         """Return a plain httpx client carrying the outbound headers (JSON-shim transport)."""

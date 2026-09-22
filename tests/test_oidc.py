@@ -311,6 +311,80 @@ def test_refresh_token_posts_refresh_grant() -> None:
     }
 
 
+@pytest.mark.parametrize("request_format", ("json", "form"))
+@pytest.mark.parametrize("grant", ("authorization_code", "refresh_token"))
+def test_fixed_public_client_never_reads_encrypted_secret(request_format: str, grant: str) -> None:
+    """A fixed public PKCE client exchanges every grant without secret access."""
+
+    captured: dict[str, Any] = {}
+
+    class PublicClient:
+        slug = "public-client"
+        client_id = "public-client-id"
+        token_endpoint = "https://issuer.example/oauth/token"
+        token_request_format_value = request_format
+        token_param_values: dict[str, Any] = {}
+        supports_pkce = True
+        manual_redirect_uri = "https://issuer.example/oauth/code/callback"
+
+        @property
+        def client_secret(self) -> str:
+            raise ImproperlyConfigured("encrypted secret must remain unread")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["fields"] = (
+            json.loads(request.content)
+            if request_format == "json"
+            else dict(parse.parse_qsl(request.content.decode()))
+        )
+        captured["authorization"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"access_token": "synthetic-access"})
+
+    protocol = OAuthClientProtocol(PublicClient())
+    protocol._transport = httpx.MockTransport(handler)
+
+    if grant == "authorization_code":
+        result = protocol.exchange_code(
+            code="synthetic-code",
+            redirect_uri="https://app.example/callback",
+            code_verifier="synthetic-verifier",
+            state="synthetic-state",
+        )
+        assert captured["fields"]["code_verifier"] == "synthetic-verifier"
+    else:
+        result = protocol.refresh_token(refresh_token="synthetic-refresh")
+
+    assert result["access_token"] == "synthetic-access"
+    assert captured["fields"]["client_id"] == "public-client-id"
+    assert "client_secret" not in captured["fields"]
+    assert captured["authorization"] is None
+
+
+def test_confidential_json_client_keeps_unreadable_secret_fail_closed() -> None:
+    """A confidential client still fails before exchange when its secret is unreadable."""
+
+    class ConfidentialClient:
+        slug = "confidential-client"
+        client_id = "confidential-client-id"
+        token_endpoint = "https://issuer.example/oauth/token"
+        token_request_format_value = "json"
+        token_param_values: dict[str, Any] = {}
+        supports_pkce = True
+        manual_redirect_uri = ""
+
+        @property
+        def client_secret(self) -> str:
+            raise ImproperlyConfigured("synthetic unreadable secret")
+
+    with pytest.raises(ImproperlyConfigured, match="synthetic unreadable secret"):
+        OAuthClientProtocol(ConfidentialClient()).exchange_code(
+            code="synthetic-code",
+            redirect_uri="https://app.example/callback",
+            code_verifier="synthetic-verifier",
+            state="synthetic-state",
+        )
+
+
 def test_exchange_code_form_path_maps_non_json_error_to_oauth_flow_error() -> None:
     """A non-JSON token error on the default form path surfaces as ``OAuthFlowError``.
 

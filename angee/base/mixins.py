@@ -441,6 +441,22 @@ class ModelHistory(HistoricalRecords):
         options["app_label"] = model._meta.app_label
         return options
 
+    def copy_fields(self, model: type[models.Model]) -> dict[str, models.Field]:
+        """Copy MTI identity as a regular historical relation, not an inheritance link."""
+
+        fields = super().copy_fields(model)
+        for name, field in fields.items():
+            source = model._meta.get_field(name)
+            if (
+                source.remote_field is None
+                or not source.auto_created
+                or not source.remote_field.parent_link
+            ):
+                continue
+            field.auto_created = False
+            field.remote_field.parent_link = False
+        return fields
+
     def fields_included(self, model: type[models.Model]) -> list[models.Field]:
         """Keep snapshot fields, excluding virtual and row-derived generated columns."""
 

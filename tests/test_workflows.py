@@ -1023,17 +1023,30 @@ def test_start_workflow_run_requires_access_to_the_subject(
 
 @pytest.mark.django_db(transaction=True)
 def test_current_published_resolution_uses_lineage_head(workflow_tables: None) -> None:
-    """The manager resolves the latest published version from any row in a lineage."""
+    """Scoped querysets resolve visible current versions and honor retirement."""
 
     with system_context(reason="test workflows current version"):
-        draft = create_workflow()
-        create_entry(draft)
-        first = draft.publish()
+        owner = User.objects.create_user(username="workflow-current-owner")
+        outsider = User.objects.create_user(username="workflow-current-outsider")
+        draft, first = _published_workflow(
+            name="Current publication",
+            subject_declaration=Workflow._meta.label,
+            owner=owner,
+        )
         second = draft.publish()
 
         assert Workflow.objects.current_published_for(draft) == second
         assert Workflow.objects.current_published_for(first) == second
         assert Workflow.objects.current_published_for(second) == second
+        scoped = Workflow.objects.with_actor(owner).using("default")
+        assert scoped.current_published_for(draft) == second
+        assert scoped.current_published_for(draft)._state.db == "default"
+        assert Workflow.objects.with_actor(outsider).current_published_for(draft) is None
+        assert Workflow.objects.filter(pk=first.pk).current_published_for(draft) is None
+
+        second.archive()
+        assert scoped.current_published_for(draft) is None
+        assert Workflow.objects.filter(pk=first.pk).current_published_for(draft) is None
 
 
 @pytest.mark.django_db(transaction=True)

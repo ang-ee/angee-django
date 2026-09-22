@@ -2297,6 +2297,87 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
             schema_editor.delete_model(MtiGrantLedger)
 
 
+@pytest.mark.parametrize(
+    ("parent_relation", "expected_parent"),
+    [
+        ("relation reviewer: auth/user", True),
+        ("", False),
+        ("relation reviewer: auth/group#member", False),
+        ("relation reviewer: auth/user // rebac:field=created_by", False),
+        ("relation reviewer: auth/user // rebac:const=1", False),
+    ],
+    ids=["shared", "child-only", "different-subject", "field-backed", "const-backed"],
+)
+def test_mti_grants_follow_ancestor_relation_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parent_relation: str, expected_parent: bool
+) -> None:
+    """Implicit ancestor grants require a compatible tuple-backed relation."""
+
+    from rebac import ObjectRef, SubjectRef
+    from rebac.backends.local import LocalBackend
+    from rebac.schema import parse_zed
+
+    from angee.resources import grants
+
+    active = LocalBackend()
+    active.set_schema(parse_zed(f"""
+        definition auth/user {{}}
+        definition auth/group {{ relation member: auth/user }}
+        definition mtidemo/parent {{
+            {parent_relation}
+        }}
+        definition mtidemo/child {{ relation reviewer: auth/user }}
+    """))
+    child, parent = ObjectRef("mtidemo/child", "1"), ObjectRef("mtidemo/parent", "1")
+    subject = SubjectRef.of("auth/user", "2")
+    # Xref resolution and real MTI identity enumeration are covered by the
+    # integration test above; exercise distinct native relation contracts here.
+    monkeypatch.setattr(grants, "backend", lambda: active)
+    monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args: [child, parent])
+    monkeypatch.setattr(grants, "_resolve_subject", lambda *args: subject)
+    row = GrantRow(
+        entry=entry(tmp_path, {"path": "grants/demo.yaml", "kind": "grants"}),
+        resource="resource_addon.child", relation="reviewer", subject="iam.reader", index=1,
+    )
+
+    tuples = _grant_tuples(row, Resource, {})
+    assert [grant.resource for grant in tuples] == ([child, parent] if expected_parent else [child])
+    assert all(grant.subject == subject and grant.relation == "reviewer" for grant in tuples)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_invalid_explicit_mti_grant_still_fails_native_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Filtering implicit ancestors must never silently discard a bad request."""
+
+    from rebac import ObjectRef, SubjectRef
+    from rebac.backends.local import LocalBackend
+    from rebac.schema import parse_zed
+
+    from angee.resources import grants
+
+    active = LocalBackend()
+    active.set_schema(parse_zed("""
+        definition auth/user {}
+        definition mtidemo/parent {}
+        definition mtidemo/child {}
+    """))
+    child, parent = ObjectRef("mtidemo/child", "1"), ObjectRef("mtidemo/parent", "1")
+    monkeypatch.setattr(grants, "backend", lambda: active)
+    monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args: [child, parent])
+    monkeypatch.setattr(grants, "_resolve_subject", lambda *args: SubjectRef.of("auth/user", "2"))
+    row = GrantRow(
+        entry=entry(tmp_path, {"path": "grants/demo.yaml", "kind": "grants"}),
+        resource="resource_addon.child", relation="unknown", subject="iam.reader", index=1,
+    )
+
+    tuples = _grant_tuples(row, Resource, {})
+    assert [grant.resource for grant in tuples] == [child]
+    with pytest.raises(ValueError, match="unknown"):
+        active.write_relationships(tuples)
+
+
 def _write_resource_files(tmp_path: Path) -> AppConfig:
     """Write a small resource set and return its declaring addon."""
 

@@ -18,6 +18,7 @@ from angee.workflows.graph import (
     WorkflowGraph,
     _choice_sets_coapplicable,
     _result_binding_compatible,
+    _tagged_one_of_choice,
 )
 from angee.workflows.steps import GateStep, MapStep, StepImpl, StepResult, WaitStep
 from angee.workflows_agents.steps import AgentSessionStepImpl
@@ -80,6 +81,22 @@ class SupersetLiteralOutput(BaseModel):
 
 class UnboundedStringOutput(BaseModel):
     status: str
+
+
+class NonemptyStringOutput(BaseModel):
+    status: str = Field(min_length=1)
+
+
+class BoundedStringOutput(BaseModel):
+    status: str = Field(min_length=2, max_length=10)
+
+
+class NestedNonemptyStringOutput(BaseModel):
+    result: NonemptyStringOutput
+
+
+class MixedStringVariantOutput(BaseModel):
+    result: NonemptyStringOutput | UnboundedStringOutput
 
 
 class BooleanLiteralOutput(BaseModel):
@@ -173,6 +190,8 @@ def graph(
     *,
     max_steps: int = 100,
     subject_declaration: str = "",
+    output_schema: dict[str, Any] | None = None,
+    result_rules: list[dict[str, Any]] | None = None,
 ) -> WorkflowGraph:
     return WorkflowGraph(
         GraphIdentity(client_key="workflow-1"),
@@ -181,8 +200,8 @@ def graph(
         tuple(edges or []),
         subject_declaration,
         {"type": "object", "properties": {}},
-        {"type": "object", "properties": {}, "additionalProperties": False},
-        [],
+        output_schema or {"type": "object", "properties": {}, "additionalProperties": False},
+        result_rules or [],
     )
 
 
@@ -237,6 +256,40 @@ def test_result_binding_literal_subset_uses_json_type_semantics() -> None:
         model_data_contract(BooleanLiteralOutput, mode="serialization"),
         "producer",
     )
+
+
+@pytest.mark.parametrize(
+    ("source_model", "target_schema", "expected"),
+    [
+        (NonemptyStringOutput, {"type": "string", "minLength": 1}, True),
+        (UnboundedStringOutput, {"type": "string", "minLength": 1}, False),
+        (BoundedStringOutput, {"type": "string", "minLength": 1, "maxLength": 10}, True),
+        (BoundedStringOutput, {"type": "string", "minLength": 3}, False),
+        (BoundedStringOutput, {"type": "string", "maxLength": 9}, False),
+        (NestedNonemptyStringOutput, {"type": "string", "minLength": 1}, True),
+        (MixedStringVariantOutput, {"type": "string", "minLength": 1}, False),
+        (NonemptyStringOutput, {"type": "string", "pattern": ".+"}, False),
+    ],
+)
+def test_result_binding_proves_only_contained_string_length_ranges(
+    source_model: type[BaseModel], target_schema: dict[str, Any], expected: bool,
+) -> None:
+    path = ["result", "status"] if source_model in {
+        NestedNonemptyStringOutput, MixedStringVariantOutput,
+    } else ["status"]
+    binding = parse_binding({
+        "kind": "step_output", "step_key": "producer", "path": path,
+    })
+
+    compatible = _result_binding_compatible(
+        binding,
+        target_schema,
+        schema_data_contract({"type": "object", "properties": {}}),
+        model_data_contract(source_model, mode="serialization"),
+        "producer",
+    )
+
+    assert compatible is expected
 
 
 @pytest.mark.parametrize(
@@ -331,6 +384,154 @@ def test_result_binding_rejects_unbounded_container_literals(
         model_data_contract(source_model, mode="serialization"),
         "producer",
     )
+
+
+def tagged_result_schema(*tag_schemas: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {"status": tag_schema},
+                "required": ["status"],
+                "additionalProperties": False,
+            }
+            for tag_schema in tag_schemas
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    ("schema", "status", "selected_index"),
+    [
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "completed_with_warnings"]},
+                {"type": "string", "enum": ["failed", "blocked"]},
+            ),
+            "completed_with_warnings",
+            0,
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "const": "completed"},
+                {"type": "string", "enum": ["failed", "blocked"]},
+            ),
+            "blocked",
+            1,
+        ),
+    ],
+)
+def test_tagged_one_of_selects_disjoint_enum_and_const_branches(
+    schema: dict[str, Any], status: str, selected_index: int,
+) -> None:
+    binding = parse_binding({
+        "kind": "object",
+        "fields": {"status": {"kind": "constant", "value": status}},
+    })
+
+    assert _tagged_one_of_choice(binding, schema["oneOf"]) is schema["oneOf"][selected_index]
+
+
+@pytest.mark.parametrize(
+    ("schema", "status"),
+    [
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "shared"]},
+                {"type": "string", "enum": ["shared", "failed"]},
+            ),
+            "completed",
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "completed_with_warnings"]},
+                {"type": "string", "const": "failed"},
+            ),
+            "unknown",
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": []},
+                {"type": "string", "const": "failed"},
+            ),
+            "failed",
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "const": "completed", "enum": ["failed"]},
+                {"type": "string", "const": "failed"},
+            ),
+            "failed",
+        ),
+    ],
+)
+def test_tagged_one_of_refuses_overlapping_sets_and_unknown_values(
+    schema: dict[str, Any], status: str,
+) -> None:
+    binding = parse_binding({
+        "kind": "object",
+        "fields": {"status": {"kind": "constant", "value": status}},
+    })
+
+    assert _tagged_one_of_choice(binding, schema["oneOf"]) is None
+
+
+@pytest.mark.parametrize(
+    ("schema", "status", "expected"),
+    [
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "completed_with_warnings"]},
+                {"type": "string", "enum": ["failed", "blocked"]},
+            ),
+            "completed",
+            True,
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "const": "completed"},
+                {"type": "string", "enum": ["failed", "blocked"]},
+            ),
+            "failed",
+            True,
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "shared"]},
+                {"type": "string", "enum": ["shared", "failed"]},
+            ),
+            "completed",
+            False,
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "completed_with_warnings"]},
+                {"type": "string", "const": "failed"},
+            ),
+            "unknown",
+            False,
+        ),
+    ],
+)
+def test_result_publication_requires_one_disjoint_tagged_branch(
+    schema: dict[str, Any], status: str, expected: bool,
+) -> None:
+    binding = {
+        "kind": "object",
+        "fields": {"status": {"kind": "constant", "value": status}},
+    }
+    value = graph(
+        [node("producer", LegacyOutcomeStep, entry=True)],
+        output_schema=schema,
+        result_rules=[{
+            "outcome": "completed",
+            "producer": "producer",
+            "when_outcome": "",
+            "binding": binding,
+        }],
+    )
+
+    assert ("result_binding_schema" not in codes(value)) is expected
 
 
 def test_map_body_candidates_use_graph_ownership_and_explain_exclusions() -> None:
