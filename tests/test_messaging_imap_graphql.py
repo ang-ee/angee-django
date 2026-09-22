@@ -11,9 +11,11 @@ from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
-from angee.messaging_integrate_imap.backend import ImapChannelBackend, ImapError
+from angee.integrate.streams import CursorInvalid, advance_stream
+from angee.messaging_integrate_imap.backend import ImapChannelBackend
 from tests.conftest import SchemaAddon, Vendor, execute_schema
 from tests.conftest import result_data as _data
+from tests.integrate_models import SyncStream
 from tests.test_messaging_graphql import (
     Channel,
     _platform_admin,
@@ -248,27 +250,47 @@ def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
         saved = Channel.objects.get(sqid=channel["id"])
     assert saved.prepare_imap_new_mail(actor=admin) == (1, True)
 
-    account.folders["INBOX"]["messages"][3] = {
-        "raw": _eml(subject="new", message_id="<new@example.com>")
-    }
+    account.folders["INBOX"]["messages"][3] = {"raw": _eml(subject="new", message_id="<new@example.com>")}
     with system_context(reason="test.messaging.imap.new_mail.repeat"):
         saved = Channel.objects.get(sqid=channel["id"])
     assert saved.prepare_imap_new_mail(actor=admin) == (1, False)
 
     with system_context(reason="test.messaging.imap.new_mail.verify"):
         saved = Channel.objects.get(sqid=channel["id"])
-        assert saved.cursor["delivery_mode"] == "new_only"
-        assert len(saved.cursor["source_identity"]) == 64
-        assert saved.cursor["mailboxes"] == {"INBOX": {"uidvalidity": 100, "last_uid": 2}}
+        stream = SyncStream.objects.current(saved, "messages", "INBOX")
+        assert saved.config["delivery_mode"] == "new_only"
+        assert len(saved.config["source_identity"]) == 64
+        assert stream.cursor["uidvalidity"] == 100
+        assert stream.cursor["last_uid"] == 2
         backend = saved.backend
-        messages = []
-        while batch := backend.fetch_messages():
-            messages.extend(batch)
-        assert [message.subject for message in messages] == ["new"]
+        try:
+            page = backend.extract(stream, 200)
+            assert [message.subject for message in page.records] == ["new"]
+        finally:
+            backend.close()
+
+        stream.resync_required = True
+        stream.save(update_fields=["resync_required"])
+        backend = saved.backend
+        try:
+            reset = advance_stream(stream, backend)
+            assert reset.reset
+            resumed = advance_stream(reset.stream, backend)
+            assert resumed.count == 0
+            assert resumed.stream.cursor["last_uid"] == 3
+        finally:
+            backend.close()
 
         account.folders["INBOX"]["uidvalidity"] = 200
-        with pytest.raises(ImapError, match="changed UIDVALIDITY after its new-mail starting point"):
-            saved.backend.fetch_messages()
+        backend = saved.backend
+        try:
+            with pytest.raises(CursorInvalid) as invalid:
+                backend.extract(stream, 200)
+            assert saved.config["delivery_mode"] == "new_only"
+            assert invalid.value.cursor["uidvalidity"] == 200
+            assert invalid.value.cursor["last_uid"] == 3
+        finally:
+            backend.close()
 
 
 def test_test_connection_logs_in_through_the_imap_backend(

@@ -18,17 +18,19 @@ from slack_sdk.errors import SlackApiError
 
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.live import PairingState
+from angee.integrate.streams import StreamPage
 from angee.messaging.backends import ChannelBackend, ParsedMessage, body_part
-from angee.messaging.models import Channel as AbstractChannel
 from angee.messaging.session import LiveChannelSession
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
 from angee.messaging_integrate_slack.backend import SlackChannelBackend, SlackRateLimitError
 from angee.messaging_integrate_slack.identity import parsed_message
 from tests.conftest import Credential, Vendor, _clear_model_tables, _create_missing_tables, make_integration
+from tests.integrate_models import RECORD_SYNC_TEST_MODELS, RecordLink, SyncStream
+from tests.stream_adapters import AdapterPages
 from tests.test_messaging import MESSAGING_TEST_MODELS, Message, Part, Thread
 from tests.test_messaging_graphql import Channel, _platform_admin
 
-SLACK_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel)
+SLACK_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel, *RECORD_SYNC_TEST_MODELS)
 
 
 class _CredentialStub:
@@ -41,6 +43,7 @@ class _BridgeStub:
         self.config = config or {}
         self.cursor: dict[str, Any] = cursor if cursor is not None else {}
         self.credential = _CredentialStub()
+        self._state = SimpleNamespace(adding=False, db="default")
         self.subscription_state = {"team_id": "T1", "own_id": "U0"}
 
 
@@ -147,7 +150,12 @@ def _backend(
     config: dict[str, Any] | None = None,
 ) -> SlackChannelBackend:
     monkeypatch.setattr(SlackChannelBackend, "client_class", client_class)
-    return SlackChannelBackend(bridge or _BridgeStub(config=config))
+    monkeypatch.setattr(
+        "angee.messaging_integrate_slack.backend.related_on", lambda obj, field_name, **kwargs: getattr(obj, field_name)
+    )
+    backend = SlackChannelBackend(bridge or _BridgeStub(config=config))
+    backend.test_pages = AdapterPages(backend)
+    return backend
 
 
 def test_slack_serial_drain_discovers_and_caches_workspace_lists_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,11 +163,11 @@ def test_slack_serial_drain_discovers_and_caches_workspace_lists_once(monkeypatc
 
     FakeWebClient.calls = []
     backend = _backend(monkeypatch, config={"batch_size": 2})
-    assert backend.sync_partitions() == ()
+    assert backend.sync_parallelism == 1
     assert FakeWebClient.calls == []
 
     batches: list[list[ParsedMessage]] = []
-    while batch := backend.fetch_messages():
+    while batch := backend.test_pages.next_batch():
         batches.append(batch)
 
     messages = [message for batch in batches for message in batch]
@@ -183,13 +191,11 @@ def test_slack_serial_drain_discovers_and_caches_workspace_lists_once(monkeypatc
     assert parent.sender.external_id == "T1:U1"
     assert parent.sender.display_name == "Linus"
     assert messages[2].metadata["thread_ts"] == "100.000001"
-    assert backend.bridge.cursor == {
-        "conversations": {
-            "C1": {"last_ts": "104.000001"},
-            "D1": {"last_ts": "200.000001"},
-        },
-        "threads": {"C1": {"100.000001": "102.000001"}},
+    assert backend.test_pages.cursors == {
+        "C1": {"conversation": {"last_ts": "104.000001"}, "threads": {"100.000001": "102.000001"}},
+        "D1": {"conversation": {"last_ts": "200.000001"}, "threads": {}},
     }
+    assert backend.bridge.cursor == {}
 
     names = [name for name, _kwargs in FakeWebClient.calls]
     assert names.count("users.conversations") == 2
@@ -203,30 +209,55 @@ def test_slack_serial_drain_discovers_and_caches_workspace_lists_once(monkeypatc
             assert kwargs["oldest"]
 
 
-def test_fetch_messages_persists_page_resume_before_history_watermark(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_extract_persists_page_resume_before_history_watermark(monkeypatch: pytest.MonkeyPatch) -> None:
     """A bounded newest-first page resumes after a fresh backend without skipping older history."""
 
     FakeWebClient.calls = []
     bridge = _BridgeStub(config={"batch_size": 2})
     first_backend = _backend(monkeypatch, bridge=bridge)
 
-    first = first_backend.fetch_messages()
+    first = first_backend.test_pages.next_batch()
 
     assert [message.external_id for message in first] == ["C1/103.000001"]
-    history_cursor = bridge.cursor["conversations"]["C1"]["history"]
+    stream = first_backend.test_pages.rows["C1"]
+    history_cursor = stream.cursor["conversation"]["history"]
     assert history_cursor["cursor"] == "history-2"
     assert history_cursor["oldest"]
     assert history_cursor["last_ts"] == "104.000001"
 
     resumed_backend = _backend(monkeypatch, bridge=bridge)
-    second = resumed_backend.fetch_messages()
+    page = resumed_backend.extract(stream, 200, using="default")
+    second = page.records
 
     assert [message.external_id for message in second] == ["C1/100.000001"]
-    assert bridge.cursor["conversations"]["C1"] == {"last_ts": "104.000001"}
+    assert page.cursor["conversation"] == {"last_ts": "104.000001"}
     c1_history = [
         kwargs for name, kwargs in FakeWebClient.calls if name == "conversations.history" and kwargs["channel"] == "C1"
     ]
     assert c1_history[-1]["cursor"] == "history-2"
+
+
+def test_media_bounded_history_slice_resumes_on_a_fresh_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An interrupted partial history page retains a stable within-page boundary."""
+
+    class MediaPageClient(FakeWebClient):
+        def conversations_history(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "messages": [
+                    {"ts": "101.000001", "user": "U1", "text": "First", "files": [{"size": 4}]},
+                    {"ts": "102.000001", "user": "U1", "text": "Second", "files": [{"size": 4}]},
+                ]
+            }
+
+    backend = _backend(monkeypatch, MediaPageClient, config={"max_batch_bytes": 4})
+    monkeypatch.setattr(SlackChannelBackend, "_media", lambda *args, **kwargs: ((), 4))
+    first = backend.test_pages.next_batch()
+    stream = backend.test_pages.rows["C1"]
+    assert [message.external_id for message in first] == ["C1/101.000001"]
+    assert stream.cursor["conversation"]["history"]["after_ts"] == "101.000001"
+    resumed = _backend(monkeypatch, MediaPageClient, bridge=backend.bridge)
+    page = resumed.extract(stream, 200, using="default")
+    assert [message.external_id for message in page.records] == ["C1/102.000001"]
 
 
 def test_initial_backfill_uses_bounded_configured_window() -> None:
@@ -236,8 +267,8 @@ def test_initial_backfill_uses_bounded_configured_window() -> None:
     default_backend = SlackChannelBackend(_BridgeStub())
     current_only_backend = SlackChannelBackend(_BridgeStub(config={"backfill_days": 0}))
 
-    assert now - float(default_backend._oldest("C1")) == pytest.approx(90 * 86_400, abs=2)
-    assert now - float(current_only_backend._oldest("C1")) == pytest.approx(0, abs=2)
+    assert now - float(default_backend._oldest()) == pytest.approx(90 * 86_400, abs=2)
+    assert now - float(current_only_backend._oldest()) == pytest.approx(0, abs=2)
 
 
 @pytest.mark.parametrize(
@@ -362,7 +393,7 @@ def test_media_download_uses_bearer_and_failed_files_get_markers(monkeypatch: py
 
     monkeypatch.setattr(backend, "_download_file", download)
 
-    messages = backend.fetch_messages()
+    messages = backend.test_pages.next_batch()
 
     assert len(messages) == 1
     assert calls == ["https://files.slack.com/report.pdf", ""]
@@ -395,9 +426,10 @@ def test_download_file_stops_streaming_after_the_byte_cap(monkeypatch: pytest.Mo
         lambda *, allow_private: httpx.MockTransport(handler),
     )
     backend = SlackChannelBackend(_BridgeStub(config={"max_media_bytes": 5}))
+    backend._credential = backend.bridge.credential
 
     assert backend._download_file({"url_private": "https://files.slack.com/file.bin"}) is None
-    assert reads < 20
+    assert 0 < reads < 20
 
 
 def test_rate_limit_honors_retry_after_then_retries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -420,7 +452,7 @@ def test_rate_limit_honors_retry_after_then_retries(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("angee.messaging_integrate_slack.backend.sleep", delays.append)
     backend = _backend(monkeypatch, RateLimitedWebClient)
 
-    assert backend.fetch_messages() == []
+    assert backend.test_pages.next_batch() == []
     assert RateLimitedWebClient.attempts == 2
     assert delays == [60.0]
 
@@ -441,7 +473,7 @@ def test_rate_limit_stops_before_the_sync_deadline(monkeypatch: pytest.MonkeyPat
     backend.sync_deadline = monotonic() + 1
 
     with pytest.raises(SlackRateLimitError, match="time budget exhausted"):
-        backend.fetch_messages()
+        backend.test_pages.next_batch()
     assert delays == []
 
 
@@ -454,6 +486,7 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
     """
 
     calls: list[dict[str, Any]] = []
+    edge_batches: list[list[Any]] = []
 
     class IngestManager:
         def db_manager(self, using: str) -> IngestManager:
@@ -464,22 +497,25 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
             calls.append(kwargs)
             return batch
 
+        def resolve_ingest_edges(self, messages: list[Any], *, using: str | None = None) -> None:
+            edge_batches.append(messages)
+
     message_model = SimpleNamespace(objects=IngestManager())
-    monkeypatch.setattr("angee.messaging.models.apps.get_model", lambda *_args: message_model)
+    monkeypatch.setattr("angee.messaging.backends.apps.get_model", lambda *_args: message_model)
 
     def drain(backend_class: type[ChannelBackend]) -> None:
-        backend = object.__new__(backend_class)
-        batches = [[ParsedMessage(external_id="one", platform="test", body=body_part("one"))], []]
-        monkeypatch.setattr(backend, "fetch_messages", lambda: batches.pop(0))
-        monkeypatch.setattr(backend, "close", lambda: None)
-        channel = cast(AbstractChannel, SimpleNamespace(cursor={}, save=lambda **_kwargs: None))
-        AbstractChannel._drain(channel, backend, using="default")
+        backend = backend_class(_BridgeStub())
+        page = StreamPage(records=[ParsedMessage(external_id="one", platform="test", body=body_part("one"))], cursor={})
+        outcomes = tuple(backend.apply(None, page, using="default"))
+        assert len(outcomes) == 1
+        backend.finish_page(None, page, outcomes, using="default")
 
     drain(SlackChannelBackend)
     drain(ImapChannelBackend)
 
     assert calls[0]["quote_edges"] is False
-    assert calls[1]["quote_edges"] is True
+    assert calls[1]["quote_edges"] is False
+    assert len(edge_batches) == 1
     assert all("message_kind" not in call for call in calls)
 
     calls.clear()
@@ -646,10 +682,11 @@ def test_late_reply_below_history_watermark_lands_on_the_next_poll(
     assert set(Message._base_manager.values_list("message_type", flat=True)) == {Message.MessageKind.CHAT}
     assert Part._base_manager.filter(role=Part.PartRole.BODY).count() == 4
     channel.refresh_from_db()
-    assert channel.cursor == {
-        "conversations": {"C1": {"last_ts": "1784700002.000001"}},
-        "threads": {"C1": {"1784700000.000001": "1784700003.000001"}},
+    assert SyncStream.objects.current(channel, "messages", "C1").cursor == {
+        "conversation": {"last_ts": "1784700002.000001"},
+        "threads": {"1784700000.000001": "1784700003.000001"},
     }
+    assert RecordLink._base_manager.count() == 0
     assert IncrementalWebClient.history_calls[-1]["oldest"] == "1784700002.000001"
     assert IncrementalWebClient.history_responses[-1] == []
     assert IncrementalWebClient.reply_calls[-1]["oldest"] == "1784700001.000001"

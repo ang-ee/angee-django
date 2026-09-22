@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import secrets
 from collections.abc import Iterable, Mapping
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -67,6 +67,13 @@ from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
+from angee.integrate.records import (  # noqa: F401 -- model discovery
+    RecordLink,
+    RecordRevision,
+    SyncDiscrepancy,
+    SyncStream,
+)
+from angee.integrate.streams import sync_bridge
 from angee.integrate.sync import bridge_progress_context, bridge_sync_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
@@ -1842,9 +1849,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         self._state.db = using
 
         resolved_account = (
-            related_on(credential, "external_account", using=using, required=False)
-            if account is _UNSET
-            else account
+            related_on(credential, "external_account", using=using, required=False) if account is _UNSET else account
         )
         if self.pk is None:
             self._set_connection_fields(credential=credential, account=resolved_account)
@@ -1978,6 +1983,41 @@ def _integration_child_models(parent_model: type[Integration]) -> tuple[type[Int
             key=lambda model: model._meta.label_lower,
         )
     )
+
+
+def merge_json_state(
+    instance: Any,
+    field_name: str,
+    values: Mapping[str, Any],
+    *,
+    path: tuple[str, ...] = (),
+    using: str | None = None,
+) -> dict[str, Any]:
+    """Merge keys at a JSON path under the row lock, preserving sibling owners.
+
+    Each supplied value replaces its key; omitted keys survive. This is shared by
+    subscription state and cursor slices. Full opaque cursor replacement belongs
+    to SyncStreamManager.advance. The instance receives the committed document.
+    """
+
+    using = get_write_alias(type(instance), using=using, instance=instance)
+    if not isinstance(instance._meta.get_field(field_name), models.JSONField):
+        raise TypeError("JSON state merge requires a JSONField.")
+    with system_context(reason="integrate.json_state.merge"), transaction.atomic(using=using):
+        row = type(instance).objects.db_manager(using).lock_if_supported().get(pk=instance.pk)
+        value = getattr(row, field_name)
+        document = deepcopy(value) if isinstance(value, dict) else {}
+        node = document
+        for key in path:
+            if not isinstance(node.get(key), dict):
+                node[key] = {}
+            node = node[key]
+        node.update(deepcopy(values))
+        setattr(row, field_name, document)
+        row.save(using=using, update_fields=[field_name, "updated_at"])
+    instance._state.db = using
+    setattr(instance, field_name, document)
+    return document
 
 
 class Bridge(models.Model, metaclass=RebacModelBase):
@@ -2595,10 +2635,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             raise
         return result
 
-    def sync(self) -> int:
-        """Synchronize this bridge with its external system."""
+    def sync(self, *, using: str | None = None) -> int:
+        """Drive backend streams; concrete bridges may override this sync seam."""
 
-        raise NotImplementedError("Bridge subclasses must implement sync().")
+        using = get_write_alias(type(self), using=using, instance=self)
+        return sync_bridge(self, using=using)
 
     def handle_webhook(self, payload: Any) -> None:
         """Apply one verified inbound webhook payload to this bridge."""
@@ -2638,26 +2679,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         that may write concurrently from separately-loaded instances. A full
         read-modify-write from a stale instance would clobber the other owner's
         key, so this re-reads the row locked, merges only the given keys, and
-        saves. Mirrors :meth:`Channel._persist_cursor_slice`.
+        saves through the shared nested-JSON owner.
         """
 
         using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
-
-        with transaction.atomic(using=using):
-            row = (
-                type(self)
-                .objects.db_manager(using)
-                .sudo(reason="integrate.bridge.subscription_state")
-                .lock_if_supported()
-                .get(pk=self.pk)
-            )
-            state = dict(row.subscription_state) if isinstance(row.subscription_state, dict) else {}
-            state.update(values)
-            row.subscription_state = state
-            row.save(update_fields=["subscription_state", "updated_at"], using=using)
-        self.subscription_state = state
-        return state
+        return merge_json_state(self, "subscription_state", values, using=using)
 
     def _next_sync_at(self, *, now: datetime) -> datetime | None:
         """Return the next polling timestamp from this bridge's interval.

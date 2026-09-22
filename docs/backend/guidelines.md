@@ -1141,6 +1141,38 @@ and current contracts before applying a historical example to a new deployment.
   `resolve_action_target` and IAM's `user_from_public_id` elevate lookup and are
   not interchangeable with readable queries.
 
+### Record sync
+
+[`angee.integrate`](../../addons/angee/integrate/README.md) owns the shared record
+protocol. Backends declare independently ordered stream partitions; domain
+managers retain identity and ingest policy. Event feeds are append-only and
+idempotent by domain identity, so they never create replica links. Mutable record
+replicas retain a remote and local comparison base on each link.
+
+- **The cursor commits with the records it covers.** Extract outside the database
+  transaction; commit the applied page, its quarantine and the stream cursor in
+  one transaction on the operation's write alias. Semantic record failures use
+  savepoints so later records continue. Infrastructure failures roll back the
+  page. Conditional remote writes happen outside database transactions and are
+  reflected only after their response; no cross-system atomicity is implied.
+- **Compare both sides with their last applied bases.** Unchanged pairs do
+  nothing, remote-only changes apply, and local-only changes may write back with
+  the expected remote version. Both changed, including a remote tombstone against
+  a local edit, is an unresolved conflict: never silently choose a winner. The
+  adapter locks and revalidates its local projection before applying. An origin
+  stamp plus the returned version/hash makes a successful write-back recognizable
+  on its next pull.
+- **A cursor belongs to an epoch.** An invalid/expired cursor or explicit resync
+  request creates the next baseline generation. Retain links and revision
+  history; reverify links through their generation marker. A stale peer beyond
+  tombstone retention requires a baseline. Complete inventory sweeps count
+  absences before confirming tombstones and preserve existing quarantine.
+- **Quarantine is not a work queue.** Stream-cycle rescan re-extracts due semantic
+  failures through a baseline; conflicts await explicit resolution. The shared
+  driver owns budgets, repeated-page detection and partition concurrency.
+  Workflow execution, decisions and durable scheduling stay with their existing
+  owners; integrate must not import workflows.
+
 ### Integrations and workers
 
 - **An integration failure reaches the operator only as an `IntegrationError`.**

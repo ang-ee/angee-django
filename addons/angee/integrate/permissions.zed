@@ -1,7 +1,7 @@
 // Authorization schema for the integrate addon.
 // @rebac_package: integrate
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 8
 
 definition integrate/oauth_client {
     relation admin: angee/role // rebac:const=admin
@@ -73,4 +73,40 @@ definition integrate/webhook_subscription {
     permission read = owner + admin->member
     permission write = owner + admin->member
     permission delete = owner + admin->member
+}
+
+definition integrate/sync_stream {
+    relation integration: integrate/integration // rebac:field=integration
+
+    permission create = integration->write
+    permission read = integration->read
+    permission write = integration->write
+    permission delete = integration->delete
+}
+
+definition integrate/record_link {
+    relation stream: integrate/sync_stream // rebac:field=stream
+
+    permission create = stream->write
+    permission read = stream->read
+    permission write = stream->write
+    permission delete = stream->delete
+}
+
+definition integrate/record_revision {
+    relation link: integrate/record_link // rebac:field=link
+
+    permission create = link->write
+    permission read = link->read
+    permission write = link->write
+    permission delete = link->delete
+}
+
+definition integrate/sync_discrepancy {
+    relation stream: integrate/sync_stream // rebac:field=stream
+
+    permission create = stream->write
+    permission read = stream->read
+    permission write = stream->write
+    permission delete = stream->delete
 }

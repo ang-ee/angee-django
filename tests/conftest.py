@@ -66,15 +66,13 @@ from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 from tests import messaging_models  # noqa: F401 -- register the managed posts FK targets before database setup
 from tests.iam_models import Group as IAMGroup
-from tests.integrate_models import Integration
+from tests.integrate_models import RECORD_SYNC_TEST_MODELS, Integration
 
 pytest_plugins = ("tests.workflows",)
 
 
 @pytest.fixture
-def database_alias(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Callable[[str], AbstractContextManager[str]]:
+def database_alias(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[[str], AbstractContextManager[str]]:
     """Expose an alias, snapshotting SQLite's seeded database on first use.
 
     SQLite aliases need independent files: an alias transaction and an upstream
@@ -744,6 +742,22 @@ def _create_missing_tables(
         for model in missing:
             schema_editor.create_model(model)
     return missing
+
+
+@pytest.fixture
+def record_sync_tables(transactional_db: Any) -> Iterator[None]:
+    """Create the connected stream graph for model, driver and adapter tests."""
+
+    del transactional_db
+    created = _create_missing_tables(
+        IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + (messaging_models.Channel,) + RECORD_SYNC_TEST_MODELS,
+    )
+    try:
+        yield
+    finally:
+        with connection.schema_editor() as editor:
+            for model in reversed(created):
+                editor.delete_model(model)
 
 
 def _clear_model_tables(test_models: tuple[type[models.Model], ...]) -> None:

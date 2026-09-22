@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
@@ -16,6 +16,9 @@ from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
 from angee.integrate.live import PairingProjection, SessionLoggedOut
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey
+
+if TYPE_CHECKING:
+    from angee.integrate.streams import ApplyResult, LocalChange, StreamPage, WriteBackResult
 
 
 class IntegrationImpl(ImplBase):
@@ -54,7 +57,7 @@ class IntegrationImpl(ImplBase):
 
 
 class BridgeImpl(IntegrationImpl):
-    """Base descriptor for an inbound bridge — it pulls/subscribes to external data.
+    """Base descriptor for a bridge that exchanges data with an external system.
 
     Bridges run through the queued due scheduler over ``Bridge.next_sync_at`` and
     keep their sync state on a concrete ``Bridge`` child model.
@@ -63,12 +66,38 @@ class BridgeImpl(IntegrationImpl):
     category = "bridge"
     label = "Bridge"
     icon = "plug"
+    sync_parallelism: ClassVar[int | None] = None
+    """Optional protocol cap; the bridge config and database may lower it."""
+    sync_deadline: float | None = None
+    """Monotonic budget shared with bounded transport retries."""
 
     @property
     def bridge(self) -> Any:
         """Return the concrete bridge child this implementation is bound to."""
 
         return self.integration
+
+    def enumerate_keys(self, stream: Any, *, using: str | None = None) -> Iterable[str]:
+        """Enumerate a replica's complete remote inventory for reconciliation."""
+
+        raise NotImplementedError("Replica adapters must enumerate remote keys.")
+
+    def finish_page(
+        self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult], *, using: str | None = None
+    ) -> None:
+        """Finish domain batch relationships before the page cursor commits."""
+
+    def local_changes(self, stream: Any, *, using: str | None = None) -> Iterable[LocalChange]:
+        """Project local replica candidates on the supplied operation database."""
+
+        raise NotImplementedError("Push adapters must project local changes.")
+
+    def write_back(
+        self, link: Any, projection: Any, *, expected_version: str, using: str | None = None
+    ) -> WriteBackResult:
+        """Conditionally write a remote record or raise RemoteRejected."""
+
+        raise NotImplementedError("Push adapters must implement conditional write-back.")
 
 
 class LiveBridgeImpl(BridgeImpl):

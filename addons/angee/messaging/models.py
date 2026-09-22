@@ -22,12 +22,8 @@ The write path lives on the managers.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextvars import copy_context
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from time import monotonic
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -39,7 +35,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import close_old_connections, connections, models, transaction
+from django.db import models
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.utils.text import capfirst
@@ -59,8 +55,6 @@ from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.integrate.models import Bridge
-from angee.integrate.sync import bridge_progress_context, current_bridge_progress
-from angee.jobs.autoconfig import SETTINGS as _JOB_SETTINGS
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
     ChannelManager,
@@ -80,10 +74,6 @@ from angee.messaging.managers import (
 from angee.messaging.tracking import FieldTracker, TrackingChange
 from angee.messaging.webforms import WebformSpec, default_webform_schema
 from angee.parties.models import Handle
-
-# Partitioned channel syncs (IMAP mailboxes) drain up to this many partitions
-# concurrently unless config["sync_parallelism"] says otherwise.
-_DEFAULT_SYNC_PARALLELISM = 4
 
 
 def _owner_user_id(instance: models.Model) -> Any | None:
@@ -1033,237 +1023,6 @@ class Channel(Bridge):
         if self.subscription_state.get("desired") == self.LiveState.LIVE:
             return None
         return super()._next_sync_at(now=now)
-
-    def sync(self, *, using: str | None = None) -> int:
-        """Sync the channel's source (the Bridge child-sync contract); report the landed count.
-
-        A backend that partitions its source (:meth:`ChannelBackend.sync_partitions`
-        — IMAP mailboxes) drains each partition on its own backend instance and
-        transport connection, in parallel threads capped by
-        ``config["sync_parallelism"]`` (default ``4``). Every other backend keeps
-        the serial single-drain path. The whole run stays under the bridge's one
-        advisory sync lock either way; parallelism across *channels* rides the
-        worker fleet, parallelism within a channel rides these threads.
-        """
-
-        using = get_write_alias(type(self), using=using, instance=self)
-
-        self._state.db = using
-        backend = self.backend
-        deadline = self._sync_deadline()
-        cap = self._sync_parallelism(using=using)
-        # Enumerating partitions costs a transport round-trip; skip it entirely
-        # when the drain is pinned serial (SQLite, or an operator cap of 1).
-        partitions = tuple(backend.sync_partitions()) if cap > 1 else ()
-        parallelism = min(len(partitions), cap) if partitions else 0
-        if parallelism > 1:
-            # Partition drains own their own transports; release the discovery
-            # connection this instance opened enumerating them.
-            backend.close()
-            return self._sync_parallel(partitions, parallelism, deadline=deadline, using=using)
-        return self._drain(backend, deadline=deadline, using=using)
-
-    def _sync_deadline(self) -> float:
-        """Return the monotonic instant this run must stop draining by.
-
-        Celery hard-kills a task at Celery's ``task_time_limit`` with SIGKILL — no
-        exception, no cleanup, a stuck ``syncing`` stage and a dropped lock. A
-        backfill is bigger than any one task budget, so the drain stops cleanly
-        inside the soft limit instead, records the partial run, and the scheduler
-        resumes from the persisted cursor watermarks on the next poll.
-        ``config["sync_time_budget"]`` (seconds) overrides.
-        """
-
-        config = self.config if isinstance(self.config, dict) else {}
-        soft_limit = float(
-            cast(
-                "float | int",
-                getattr(
-                    settings,
-                    "CELERY_TASK_SOFT_TIME_LIMIT",
-                    _JOB_SETTINGS["CELERY_TASK_SOFT_TIME_LIMIT"],
-                ),
-            )
-        )
-        # An unparsable operator value raises into record_sync_error — silently
-        # substituting the default would hide the misconfiguration.
-        budget = float(cast("float | int | str", config.get("sync_time_budget", max(60.0, soft_limit - 60.0))))
-        return monotonic() + max(0.0, budget)
-
-    def _sync_parallelism(self, *, using: str) -> int:
-        """Return the configured per-channel partition thread cap (min 1).
-
-        Parallel partitions need a database that takes concurrent writers with
-        row locks; SQLite (the zero-config dev fallback) cannot, so any other
-        vendor pins the drain serial — same vendor gate as fragment full-text.
-        """
-
-        if connections[using].vendor != "postgresql":
-            return 1
-        config = self.config if isinstance(self.config, dict) else {}
-        value = int(config.get("sync_parallelism", _DEFAULT_SYNC_PARALLELISM))
-        return max(1, value)
-
-    def _sync_parallel(self, partitions: tuple[str, ...], parallelism: int, *, deadline: float, using: str) -> int:
-        """Drain every partition concurrently; fail the run if any partition failed.
-
-        Each worker gets a ``copy_context()`` so the scheduler's ``system_context``
-        elevation and the bridge progress reporter propagate into the thread. A
-        failed partition never hides a healthy one's progress: the healthy slices
-        are already persisted, and the raised error names which partitions broke
-        so ``record_sync_error`` reports something actionable.
-        """
-
-        landed = 0
-        failures: list[tuple[str, Exception]] = []
-        with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix=f"channel-{self.pk}-sync") as pool:
-            futures = {
-                pool.submit(copy_context().run, self._drain_partition, name, deadline, using=using): name
-                for name in partitions
-            }
-            for future in as_completed(futures):
-                name = futures[future]
-                try:
-                    landed += int(future.result())
-                except Exception as error:  # noqa: BLE001 — collected, then re-raised below.
-                    failures.append((name, error))
-        # Partition threads persisted their cursor slices onto the row; reload the
-        # merged cursor so the caller's post-run save cannot clobber it with this
-        # instance's stale in-memory copy.
-        self.refresh_from_db(using=using, fields=["cursor"])
-        if failures:
-            names = ", ".join(sorted(name for name, _ in failures))
-            raise RuntimeError(f"Channel sync failed for partition(s): {names}") from failures[0][1]
-        return landed
-
-    def _drain_partition(self, partition: str, deadline: float | None = None, *, using: str) -> int:
-        """Drain one partition on this thread — own channel row, own backend, own connection."""
-
-        close_old_connections()
-        try:
-            # A per-thread channel instance keeps the in-memory cursor private to
-            # this partition: a shared instance would let one thread's slice save
-            # persist a sibling's pre-ingest advance (a crash could then skip mail).
-            channel = type(self)._base_manager.db_manager(using).get(pk=self.pk)
-            backend = channel.backend
-            backend.partition = partition
-            # Rebind the progress reporter to this thread's own row: the copied
-            # context would otherwise share the parent's reporter — one model
-            # instance mutated and saved from every pool thread concurrently.
-            with bridge_progress_context(channel, using=using):
-                return channel._drain(backend, partition=partition, deadline=deadline, using=using)
-        finally:
-            # close_all, not close_old: a healthy young connection on a dying
-            # pool thread would otherwise leak to GC under persistent CONN_MAX_AGE.
-            connections.close_all()
-
-    def _drain(
-        self, backend: ChannelBackend, *, partition: str | None = None, deadline: float | None = None, using: str
-    ) -> int:
-        """Drain one backend batch by batch and ingest each.
-
-        The batch/drain contract lives on :meth:`ChannelBackend.fetch_messages`;
-        this loop holds one backend instance across it (that is where the in-run
-        paging state and in-memory cursor advance live), releases the backend's
-        transport when the run ends either way, and fails loudly when a backend
-        stops making progress — a repeated batch with an unmoved cursor would
-        otherwise spin a worker forever. A partition drain persists only its own
-        cursor slice (under a row lock); the serial drain persists the whole cursor.
-        """
-
-        message_model = apps.get_model("messaging", "Message")
-        landed = 0
-        previous: tuple[tuple[str, ...], Any] | None = None
-        backend.sync_deadline = deadline
-        reporter = current_bridge_progress()
-        if reporter is not None:
-            reporter.report(
-                str(self.SyncStage.SYNCING),
-                message="Starting channel sync",
-                details=self._sync_details(backend, partition=partition, landed=landed),
-            )
-        try:
-            while deadline is None or monotonic() < deadline:
-                batch = backend.fetch_messages()
-                if not batch:
-                    break
-                current = (tuple(parsed.external_id for parsed in batch), deepcopy(self.cursor))
-                if current == previous:
-                    raise RuntimeError(
-                        f"{type(backend).__name__} returned the same batch twice without advancing its cursor."
-                    )
-                previous = current
-                landed += len(
-                    message_model.objects.db_manager(using).ingest(
-                        batch,
-                        channel=self,
-                        quote_edges=backend.quote_edges,
-                    )
-                )
-                if partition is None:
-                    self.save(using=using, update_fields=["cursor", "updated_at"])
-                else:
-                    self._persist_cursor_slice(backend, partition, using=using)
-                if reporter is not None:
-                    reporter.report(
-                        str(self.SyncStage.SYNCING),
-                        message="Ingested message batch",
-                        details=self._sync_details(backend, partition=partition, landed=landed, batch_size=len(batch)),
-                    )
-            else:
-                # Budget reached with the source not yet drained: the cursor is
-                # persisted, so the next scheduled run resumes where this stopped.
-                if reporter is not None:
-                    reporter.report(
-                        str(self.SyncStage.SYNCING),
-                        message="Sync time budget reached; resuming next run",
-                        details=self._sync_details(backend, partition=partition, landed=landed, budget_exhausted=True),
-                    )
-        finally:
-            backend.close()
-        return landed
-
-    def _sync_details(self, backend: ChannelBackend, *, partition: str | None, **extra: Any) -> dict[str, Any]:
-        """Return one progress-report detail payload, merged over the stored details."""
-
-        details: dict[str, Any] = {}
-        if isinstance(self.sync_progress, dict):
-            details = dict(self.sync_progress.get("details") or {})
-        details.update({"backend": type(backend).__name__, **extra})
-        if partition is not None:
-            details["partition"] = partition
-        return details
-
-    def _persist_cursor_slice(self, backend: ChannelBackend, partition: str, *, using: str) -> None:
-        """Merge one partition's cursor fragment into the persisted cursor, row-locked.
-
-        Parallel partitions each write only the nested slice they own, so a save
-        never clobbers a sibling's persisted watermark and never persists a
-        sibling's in-memory advance whose batch has not been ingested yet.
-        """
-
-        path, value = backend.partition_cursor_slice(partition)
-        if not path or value is None:
-            return
-        with transaction.atomic(using=using):
-            row = (
-                type(self)
-                .objects.db_manager(using)
-                .sudo(reason="messaging.channel.cursor_slice")
-                .lock_if_supported()
-                .get(pk=self.pk)
-            )
-            cursor = row.cursor if isinstance(row.cursor, dict) else {}
-            node = cursor
-            for key in path[:-1]:
-                child = node.get(key)
-                if not isinstance(child, dict):
-                    child = {}
-                    node[key] = child
-                node = child
-            node[path[-1]] = value
-            row.cursor = cursor
-            row.save(using=using, update_fields=["cursor", "updated_at"])
 
 
 class ChannelWebform(models.Model):

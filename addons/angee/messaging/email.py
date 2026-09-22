@@ -14,7 +14,7 @@ from django.conf import settings
 from django.utils.html import strip_tags
 
 from angee.base.db import get_write_alias, related_on
-from angee.messaging.backends import ChannelBackend, ParsedMessage
+from angee.messaging.backends import ChannelBackend
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +33,6 @@ class AnymailEmailChannelBackend(ChannelBackend):
     key = "email"
     label = "Email"
     icon = "mail"
-
-    def fetch_messages(self) -> list[ParsedMessage]:
-        """Return no messages; an outbound-only email channel has no poll source."""
-
-        return []
 
     def deliver(self, message: Any, *, using: str | None = None) -> bool:
         """Render and send ``message`` when an email transport is configured."""

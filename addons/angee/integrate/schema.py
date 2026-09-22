@@ -63,6 +63,10 @@ OAuthClient = apps.get_model("integrate", "OAuthClient")
 ExternalAccount = apps.get_model("integrate", "ExternalAccount")
 Credential = apps.get_model("integrate", "Credential")
 WebhookSubscription = apps.get_model("integrate", "WebhookSubscription")
+SyncStream = apps.get_model("integrate", "SyncStream")
+RecordLink = apps.get_model("integrate", "RecordLink")
+RecordRevision = apps.get_model("integrate", "RecordRevision")
+SyncDiscrepancy = apps.get_model("integrate", "SyncDiscrepancy")
 User = get_user_model()
 
 
@@ -1379,6 +1383,130 @@ _VENDOR_RESOURCE = hasura_model_resource(
     insertable=["display_name", "slug", "website_url", "icon", "description"],
     updatable=["slug", "display_name", "website_url", "icon", "description"],
 )
+
+
+@strawberry_django.type(SyncStream)
+class SyncStreamType(AngeeNode):
+    """Read-only inspection of a bridge partition's retained epoch."""
+
+    integration: IntegrationType
+    key: auto
+    partition: auto
+    kind: auto
+    direction: auto
+    generation: auto
+    phase: auto
+    cursor: JSON
+    cursor_expires_at: auto
+    resync_required: auto
+    last_advanced_at: auto
+    last_reconciled_at: auto
+    absence_threshold: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.type(RecordLink)
+class RecordLinkType(AngeeNode):
+    """Read-only identity, comparison bases and deletion evidence."""
+
+    stream: SyncStreamType
+    external_key: auto
+    status: auto
+    remote_version: auto
+    remote_base_hash: auto
+    local_base_hash: auto
+    origin: auto
+    last_seen_at: auto
+    last_verified_generation: auto
+    absence_count: auto
+    metadata: JSON
+    tombstoned_at: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.type(RecordRevision)
+class RecordRevisionType(AngeeNode):
+    """Read-only immutable observed and applied revision."""
+
+    link: RecordLinkType
+    number: auto
+    source_payload: JSON
+    source_hash: auto
+    mapping_version: auto
+    mapped_payload: JSON
+    dependency_digest: auto
+    applied_at: auto
+    created_at: auto
+
+
+@strawberry_django.type(SyncDiscrepancy)
+class SyncDiscrepancyType(AngeeNode):
+    """Read-only record quarantine without a mutation or work-queue surface."""
+
+    stream: SyncStreamType
+    link: RecordLinkType | None
+    kind: auto
+    code: auto
+    source_hash: auto
+    mapping_version: auto
+    details: JSON
+    status: auto
+    retry_at: auto
+    resolved_at: auto
+    created_at: auto
+    updated_at: auto
+
+
+_SYNC_STREAM_RESOURCE = hasura_model_resource(
+    SyncStreamType,
+    model=SyncStream,
+    name="sync_streams",
+    filterable=["id", "integration", "key", "partition", "kind", "phase", "generation", "resync_required"],
+    sortable=["key", "partition", "generation", "last_advanced_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"integration": public_pk_decoder(Integration)},
+)
+_RECORD_LINK_RESOURCE = hasura_model_resource(
+    RecordLinkType,
+    model=RecordLink,
+    name="record_links",
+    filterable=["id", "stream", "external_key", "status", "origin"],
+    sortable=["external_key", "last_seen_at", "status"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"stream": public_pk_decoder(SyncStream)},
+)
+_RECORD_REVISION_RESOURCE = hasura_model_resource(
+    RecordRevisionType,
+    model=RecordRevision,
+    name="record_revisions",
+    filterable=["id", "link", "number", "source_hash", "mapping_version"],
+    sortable=["number", "applied_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"link": public_pk_decoder(RecordLink)},
+)
+_SYNC_DISCREPANCY_RESOURCE = hasura_model_resource(
+    SyncDiscrepancyType,
+    model=SyncDiscrepancy,
+    name="sync_discrepancies",
+    filterable=["id", "stream", "link", "kind", "code", "status"],
+    sortable=["kind", "status", "retry_at", "created_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"stream": public_pk_decoder(SyncStream), "link": public_pk_decoder(RecordLink)},
+)
 _INTEGRATION_RESOURCE = hasura_model_resource(
     IntegrationType,
     model=Integration,
@@ -1617,6 +1745,14 @@ class WebhookActionMutation:
 # invariance check; ``list[type]`` widens it. (iam's inline lists are heterogeneous,
 # so they don't hit this.)
 _CONSOLE_TYPES: list[object] = [
+    SyncStreamType,
+    RecordLinkType,
+    RecordRevisionType,
+    SyncDiscrepancyType,
+    *_SYNC_STREAM_RESOURCE.types,
+    *_RECORD_LINK_RESOURCE.types,
+    *_RECORD_REVISION_RESOURCE.types,
+    *_SYNC_DISCREPANCY_RESOURCE.types,
     OAuthClientType,
     CredentialOAuthClientType,
     ExternalAccountType,
@@ -1671,6 +1807,10 @@ schemas = {
             _VENDOR_RESOURCE.query,
             _INTEGRATION_RESOURCE.query,
             _WEBHOOK_SUBSCRIPTION_RESOURCE.query,
+            _SYNC_STREAM_RESOURCE.query,
+            _RECORD_LINK_RESOURCE.query,
+            _RECORD_REVISION_RESOURCE.query,
+            _SYNC_DISCREPANCY_RESOURCE.query,
         ],
         "mutation": [
             _OAUTH_CLIENT_RESOURCE.mutation,

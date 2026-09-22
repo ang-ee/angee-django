@@ -2860,9 +2860,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         # one in the same batch still links (an inline pass would miss it). It is the
         # email graph, so a non-email producer skips it via ``quote_edges=False``.
         if quote_edges:
-            edges = apps.get_model("messaging", "MessageEdge").objects.db_manager(using)
-            for message in ingested:
-                edges.create_for_message(message)
+            self.resolve_ingest_edges(ingested, using=using)
         # Revisit unresolved envelopes after each committed batch so later directory
         # evidence can resolve an older sender without coupling it to first contact.
         if unresolved_handles and not historical:
@@ -2886,6 +2884,14 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
 
             transaction.on_commit(suggest_parties, using=using)
         return ingested
+
+    def resolve_ingest_edges(self, messages: Sequence[Any], *, using: str | None = None) -> None:
+        """Resolve quotation edges after every successful message in a page has landed."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=messages[0] if messages else None)
+        edges = apps.get_model("messaging", "MessageEdge").objects.db_manager(using)
+        for message in messages:
+            edges.create_for_message(message, using=using)
 
     def expand_retained_part(
         self, part: Any, children: tuple[ParsedPart, ...], *, using: str | None = None
@@ -3377,9 +3383,7 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
         )
         return self._walk_parts(roots, siblings, seen=set())
 
-    def children_for_message(
-        self, message: Message, parent_id: Any | None, *, using: str | None = None
-    ) -> list[Part]:
+    def children_for_message(self, message: Message, parent_id: Any | None, *, using: str | None = None) -> list[Part]:
         """Return direct children in sibling order; ``parent_id=None`` selects roots.
 
         IDs are Part primary keys within ``message``; an unknown or foreign

@@ -38,6 +38,28 @@ class ImapChannelSampling(models.Model):
         if not isinstance(self.backend, ImapChannelBackend):
             raise ValidationError("Mailbox positioning is available for IMAP channels.")
 
+    def _imap_stream_cursor(self, *, using: str) -> dict[str, Any]:
+        """Project current mailbox streams into the transport's boundary snapshot."""
+
+        streams = list(
+            apps.get_model("integrate", "SyncStream").objects.current_for_bridge(
+                self,
+                "messages",
+                using=using,
+            )
+        )
+        if not streams:
+            return self.cursor if isinstance(self.cursor, dict) else {}
+        boundary = self.backend.delivery_boundary(using=using)
+        return {
+            "delivery_mode": boundary.get("delivery_mode", ""),
+            "source_identity": boundary.get("source_identity", ""),
+            "mailboxes": {
+                stream.partition: {name: stream.cursor.get(name, 0) for name in ("uidvalidity", "last_uid")}
+                for stream in streams
+            },
+        }
+
     def prepare_imap_new_mail(self, *, actor: Any, using: str | None = None) -> tuple[int, bool]:
         """Atomically exclude the selected mailboxes' current contents from live sync.
 
@@ -50,44 +72,83 @@ class ImapChannelSampling(models.Model):
         require_authorization_database(using, operation="IMAP sample and mailbox access")
         channel_model = type(self)
         with actor_context(actor):
-            current = channel_model._base_manager.using(using).select_related(
-                "credential__external_account", "credential__oauth_client",
-            ).get(pk=self.pk)
+            current = (
+                channel_model._base_manager.using(using)
+                .select_related(
+                    "credential__external_account",
+                    "credential__oauth_client",
+                )
+                .get(pk=self.pk)
+            )
             current._require_paused_imap(actor)
-            original_cursor = current.cursor if isinstance(current.cursor, dict) else {}
             with bridge_advisory_lock(current) as acquired:
                 if not acquired:
                     raise ValidationError("The channel is busy. Retry when its current operation finishes.")
-                cursor, changed = current.backend.prepare_new_mail_cursor(original_cursor)
+                original_cursor = current._imap_stream_cursor(using=using)
+                cursor, changed = current.backend.prepare_new_mail_cursor(original_cursor, using=using)
                 with transaction.atomic(using=using):
-                    locked = channel_model._base_manager.using(using).select_for_update().get(pk=self.pk)
+                    locked = (
+                        channel_model.objects.db_manager(using)
+                        .sudo(
+                            reason="messaging.imap.new_mail.lock",
+                        )
+                        .lock_if_supported(of=())
+                        .get(pk=self.pk)
+                    )
                     locked._require_paused_imap(actor)
                     if locked.config != current.config or locked.credential_id != current.credential_id:
                         raise ValidationError("The channel configuration changed. Set the starting point again.")
-                    locked_cursor = locked.cursor if isinstance(locked.cursor, dict) else {}
+                    locked_cursor = locked._imap_stream_cursor(using=using)
                     if locked_cursor != original_cursor:
                         raise ValidationError("The channel cursor changed. Set the starting point again.")
-                    if changed:
-                        locked.cursor = cursor
-                        locked.save(using=using, update_fields=["cursor", "updated_at"])
+                    locked.config = {
+                        **locked.config,
+                        "delivery_mode": cursor["delivery_mode"],
+                        "source_identity": cursor["source_identity"],
+                        "mailbox_selection": sorted(cursor["mailboxes"]),
+                    }
+                    locked.save(using=using, update_fields=["config", "updated_at"])
+                    streams = apps.get_model("integrate", "SyncStream").objects.db_manager(using)
+                    for partition, value in sorted(cursor["mailboxes"].items()):
+                        stream = streams.current(locked, "messages", partition, cursor=value, using=using)
+                        if stream.cursor != value:
+                            stream = streams.bump_generation(stream, using=using)
+                            streams.advance(stream, value, using=using)
             return len(cursor.get("mailboxes", {})), changed
 
     def preview_imap_sample(
-        self, *, actor: Any, mailbox: str, since: date, before: date, limit: int = 20,
+        self,
+        *,
+        actor: Any,
+        mailbox: str,
+        since: date,
+        before: date,
+        limit: int = 20,
         using: str | None = None,
     ) -> ImapSamplePreview:
         """Read a bounded header preview; leave the mailbox and normal cursor unchanged."""
 
         using = get_write_alias(type(self), using=using, instance=self)
         require_authorization_database(using, operation="IMAP sample and mailbox access")
-        current = type(self)._base_manager.using(using).select_related(
-            "credential__external_account", "credential__oauth_client",
-        ).get(pk=self.pk)
+        current = (
+            type(self)
+            ._base_manager.using(using)
+            .select_related(
+                "credential__external_account",
+                "credential__oauth_client",
+            )
+            .get(pk=self.pk)
+        )
         current._require_paused_imap(actor)
-        return current.backend.preview_sample(mailbox=mailbox, since=since, before=before, limit=limit)
+        return current.backend.preview_sample(mailbox=mailbox, since=since, before=before, limit=limit, using=using)
 
     def import_imap_sample(
-        self, *, actor: Any, mailbox: str, uidvalidity: int, uids: list[int],
+        self,
+        *,
+        actor: Any,
+        mailbox: str,
+        uidvalidity: int,
+        uids: list[int],
         using: str | None = None,
     ) -> ImapSampleImport:
         """Land selected messages as historical records with native live events suppressed.
@@ -100,29 +161,54 @@ class ImapChannelSampling(models.Model):
 
         using = get_write_alias(type(self), using=using, instance=self)
         require_authorization_database(using, operation="IMAP sample and mailbox access")
-        current = type(self)._base_manager.using(using).select_related(
-            "credential__external_account", "credential__oauth_client",
-        ).get(pk=self.pk)
+        current = (
+            type(self)
+            ._base_manager.using(using)
+            .select_related(
+                "credential__external_account",
+                "credential__oauth_client",
+            )
+            .get(pk=self.pk)
+        )
         current._require_paused_imap(actor)
         with bridge_advisory_lock(current) as acquired:
             if not acquired:
                 raise ValidationError("The channel is busy. Retry when its current operation finishes.")
             parsed, imported_uids, flags_unchanged = current.backend.fetch_sample(
-                mailbox=mailbox, uidvalidity=uidvalidity, uids=uids,
+                mailbox=mailbox,
+                uidvalidity=uidvalidity,
+                uids=uids,
+                using=using,
             )
             with transaction.atomic(using=using):
-                locked = type(self)._base_manager.using(using).select_for_update().get(pk=self.pk)
+                locked = (
+                    type(self)
+                    .objects.db_manager(using)
+                    .sudo(
+                        reason="messaging.imap.sample.lock",
+                    )
+                    .lock_if_supported(of=())
+                    .get(pk=self.pk)
+                )
                 locked._require_paused_imap(actor)
                 if locked.config != current.config or locked.credential_id != current.credential_id:
                     raise ValidationError("The channel configuration changed. Preview the sample again.")
                 with system_context(reason="messaging_integrate_imap.historical_sample"):
-                    messages = apps.get_model("messaging", "Message").objects.db_manager(using).ingest(
-                        parsed, channel=locked, historical=True,
+                    messages = (
+                        apps.get_model("messaging", "Message")
+                        .objects.db_manager(using)
+                        .ingest(
+                            parsed,
+                            channel=locked,
+                            historical=True,
+                        )
                     )
             return ImapSampleImport(
                 message_ids=[str(message.sqid) for message in messages],
-                requested_uids=sorted(uids), imported_uids=imported_uids,
-                missing_uids=sorted(set(uids) - set(imported_uids)), flags_unchanged=flags_unchanged,
+                requested_uids=sorted(uids),
+                imported_uids=imported_uids,
+                missing_uids=sorted(set(uids) - set(imported_uids)),
+                flags_unchanged=flags_unchanged,
             )
 
     def expand_retained_imap_part(self, part: Any, *, actor: Any, using: str | None = None) -> tuple[Any, ...]:
@@ -142,8 +228,11 @@ class ImapChannelSampling(models.Model):
             if not isinstance(part, part_model) or part.pk is None:
                 raise ValidationError("Embedded expansion requires a retained Message Part.")
             retained = part_model._base_manager.using(using).select_related("message", "file").get(pk=part.pk)
-            if (retained.message.channel_id != current.pk or str(retained.type).lower() != "message/rfc822"
-                    or retained.file_id is None):
+            if (
+                retained.message.channel_id != current.pk
+                or str(retained.type).lower() != "message/rfc822"
+                or retained.file_id is None
+            ):
                 raise ValidationError("Select an RFC 822 Part retained by this IMAP Channel.")
             retained.file._require_record_access("read")
             with retained.file.open_stream() as stream:
@@ -151,6 +240,11 @@ class ImapChannelSampling(models.Model):
             child = expand_embedded_message(raw)
             if child is None:
                 return ()
-            return apps.get_model("messaging", "Message").objects.db_manager(using).expand_retained_part(
-                retained, (child,),
+            return (
+                apps.get_model("messaging", "Message")
+                .objects.db_manager(using)
+                .expand_retained_part(
+                    retained,
+                    (child,),
+                )
             )

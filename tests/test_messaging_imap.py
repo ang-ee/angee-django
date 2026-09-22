@@ -14,6 +14,7 @@ import ssl
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -24,6 +25,7 @@ from imapclient.exceptions import LoginError
 from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.streams import CursorInvalid, advance_stream
 from angee.messaging_integrate_imap import parser as imap_parser
 from angee.messaging_integrate_imap.backend import ImapChannelBackend, ImapError
 from angee.messaging_integrate_imap.parser import (
@@ -34,10 +36,13 @@ from angee.messaging_integrate_imap.parser import (
     synthetic_external_id,
 )
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
+from tests.integrate_models import RECORD_SYNC_TEST_MODELS, RecordLink, SyncStream
+from tests.stream_adapters import AdapterPages
 from tests.test_messaging import (
     MESSAGING_TEST_MODELS,
     Handle,
     Message,
+    MessageEdge,
     Part,
     Participant,
     Thread,
@@ -45,7 +50,7 @@ from tests.test_messaging import (
 )
 from tests.test_messaging_graphql import Channel
 
-IMAP_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel)
+IMAP_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel, *RECORD_SYNC_TEST_MODELS)
 
 _INTERNAL_DATE = datetime(2026, 7, 2, 9, 30, tzinfo=UTC)
 
@@ -682,6 +687,7 @@ class _BridgeStub:
         self.config = {"host": "192.0.2.10", **(config or {})}
         self.cursor: dict[str, Any] = {}
         self.credential = credential
+        self._state = SimpleNamespace(adding=False, db="default")
 
 
 class _BasicCredentialStub:
@@ -725,7 +731,12 @@ def _backend(
     monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
     monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
     bridge = _BridgeStub(config=config, credential=credential or _BasicCredentialStub())
-    return ImapChannelBackend(bridge)
+    monkeypatch.setattr(
+        "angee.messaging_integrate_imap.backend.related_on", lambda obj, field_name, **kwargs: getattr(obj, field_name)
+    )
+    backend = ImapChannelBackend(bridge)
+    backend.test_pages = AdapterPages(backend)
+    return backend
 
 
 def _folder(*raws: bytes, uidvalidity: int = 100, flags: tuple[bytes, ...] = (b"\\HasNoChildren",)) -> dict[str, Any]:
@@ -742,7 +753,7 @@ def _drain(backend: ImapChannelBackend) -> list[Any]:
     """Drain the backend the way Channel.sync does, collecting every message."""
 
     collected: list[Any] = []
-    while batch := backend.fetch_messages():
+    while batch := backend.test_pages.next_batch():
         collected.extend(batch)
     return collected
 
@@ -816,15 +827,15 @@ def test_backfill_pages_in_batches_and_sets_the_cursor(monkeypatch: pytest.Monke
     )
     backend = _backend(monkeypatch, account, config={"batch_size": 2})
 
-    first = backend.fetch_messages()
-    second = backend.fetch_messages()
-    third = backend.fetch_messages()
+    first = backend.test_pages.next_batch()
+    second = backend.test_pages.next_batch()
+    third = backend.test_pages.next_batch()
 
     assert [message.subject for message in first] == ["A", "B"]
     assert [message.subject for message in second] == ["C"]
     assert third == []
     assert account.selects == ["INBOX"]  # Junk never opened
-    assert backend.bridge.cursor["mailboxes"]["INBOX"] == {"uidvalidity": 100, "last_uid": 3}
+    assert backend.test_pages.cursors["INBOX"] == {"uidvalidity": 100, "last_uid": 3}
     assert account.logouts == 1
     assert account.logins == [("login", "ada@example.com", "pw")]
 
@@ -845,9 +856,9 @@ def test_present_unanswered_uid_fails_before_cursor_advance(monkeypatch: pytest.
     monkeypatch.setattr(FakeIMAPClient, "fetch", omit_second_body)
 
     with pytest.raises(ImapError, match="still contains UID"):
-        backend.fetch_messages()
+        backend.test_pages.next_batch()
 
-    assert backend.bridge.cursor == {"mailboxes": {}}
+    assert backend.test_pages.cursors == {"INBOX": {}}
     assert ("INBOX", ["UID", "2"]) in account.searches
     assert account.selects == ["INBOX"]
 
@@ -866,10 +877,10 @@ def test_confirmed_expunged_uid_allows_cursor_advance(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(FakeIMAPClient, "fetch", expunge_before_fetch)
 
-    messages = backend.fetch_messages()
+    messages = backend.test_pages.next_batch()
 
     assert [message.subject for message in messages] == ["A"]
-    assert backend.bridge.cursor["mailboxes"]["INBOX"] == {"uidvalidity": 100, "last_uid": 2}
+    assert backend.test_pages.cursors["INBOX"] == {"uidvalidity": 100, "last_uid": 2}
     assert ("INBOX", ["UID", "2"]) in account.searches
 
 
@@ -889,10 +900,10 @@ def test_unanswered_uid_confirmation_rejects_changed_epoch(monkeypatch: pytest.M
 
     monkeypatch.setattr(FakeIMAPClient, "fetch", omit_and_change_epoch)
 
-    with pytest.raises(ImapError, match="changed UIDVALIDITY"):
-        backend.fetch_messages()
+    with pytest.raises(CursorInvalid):
+        backend.test_pages.next_batch()
 
-    assert backend.bridge.cursor == {"mailboxes": {}}
+    assert backend.test_pages.cursors == {"INBOX": {}}
     assert account.selects == ["INBOX"]
 
 
@@ -941,7 +952,7 @@ def test_each_mailbox_fetches_from_its_own_selected_folder(monkeypatch: pytest.M
         ("INBOX", "i2@x"),
         ("Archive", "a1@x"),
     }
-    assert backend.bridge.cursor["mailboxes"] == {
+    assert backend.test_pages.cursors == {
         "INBOX": {"uidvalidity": 100, "last_uid": 2},
         "Archive": {"uidvalidity": 100, "last_uid": 1},
     }
@@ -986,7 +997,7 @@ def test_incremental_run_prescreens_with_uidnext(monkeypatch: pytest.MonkeyPatch
     backend = _backend(monkeypatch, account)
     backend.bridge.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 2}}}
 
-    assert backend.fetch_messages() == []
+    assert backend.test_pages.next_batch() == []
     assert account.status_calls == ["INBOX"]
     assert account.selects == []
     assert account.fetches == []
@@ -1011,7 +1022,7 @@ def test_incremental_run_fetches_only_new_uids(monkeypatch: pytest.MonkeyPatch) 
 
     assert [message.subject for message in messages] == ["C"]
     assert account.searches == [("INBOX", ["UID", "3:*"])]
-    assert backend.bridge.cursor["mailboxes"]["INBOX"]["last_uid"] == 3
+    assert backend.test_pages.cursors["INBOX"]["last_uid"] == 3
 
 
 def test_uid_star_range_quirk_is_filtered_client_side(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1029,7 +1040,7 @@ def test_uid_star_range_quirk_is_filtered_client_side(monkeypatch: pytest.Monkey
         lambda self, name, what=None: {b"UIDVALIDITY": 100, b"UIDNEXT": 4},
     )
 
-    assert backend.fetch_messages() == []
+    assert backend.test_pages.next_batch() == []
     assert account.fetches == []  # the echoed max-UID (2) was filtered, nothing fetched
 
 
@@ -1040,11 +1051,16 @@ def test_uidvalidity_change_resets_the_folder_cursor(monkeypatch: pytest.MonkeyP
     backend = _backend(monkeypatch, account)
     backend.bridge.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 50}}}
 
+    with pytest.raises(CursorInvalid) as invalid:
+        _drain(backend)
+    stream = backend.test_pages.rows["INBOX"]
+    stream.generation += 1
+    stream.cursor = invalid.value.cursor
     messages = _drain(backend)
 
     assert [message.subject for message in messages] == ["A"]
     assert account.searches == [("INBOX", "ALL")]
-    assert backend.bridge.cursor["mailboxes"]["INBOX"] == {"uidvalidity": 777, "last_uid": 1}
+    assert backend.test_pages.cursors["INBOX"] == {"uidvalidity": 777, "last_uid": 1}
 
 
 def test_oversized_message_lands_header_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1106,11 +1122,11 @@ def test_unusable_configuration_fails_loudly(monkeypatch: pytest.MonkeyPatch) ->
     backend = _backend(monkeypatch, account)
     backend.bridge.config["host"] = ""
     with pytest.raises(ImapError, match="host"):
-        backend.fetch_messages()
+        backend.test_pages.next_batch()
 
     backend = _backend(monkeypatch, account, config={"security": "carrier-pigeon"})
     with pytest.raises(ImapError, match="security"):
-        backend.fetch_messages()
+        backend.test_pages.next_batch()
 
     class _SshCredential:
         kind = CredentialKind.SSH_KEY
@@ -1118,12 +1134,12 @@ def test_unusable_configuration_fails_loudly(monkeypatch: pytest.MonkeyPatch) ->
 
     backend = _backend(monkeypatch, account, credential=_SshCredential())
     with pytest.raises(ImapError, match="credential"):
-        backend.fetch_messages()
+        backend.test_pages.next_batch()
 
     backend = _backend(monkeypatch, account)
     backend.bridge.credential = None
     with pytest.raises(ImapError, match="credential"):
-        backend.fetch_messages()
+        backend.test_pages.next_batch()
 
 
 def test_host_is_judged_by_the_outbound_address_owner(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1132,11 +1148,11 @@ def test_host_is_judged_by_the_outbound_address_owner(monkeypatch: pytest.Monkey
     account = FakeImapAccount({"INBOX": _folder()})
     backend = _backend(monkeypatch, account, config={"host": "169.254.169.254"})
     with pytest.raises(ImapError, match="forbidden"):
-        backend.fetch_messages()
+        backend.test_pages.next_batch()
 
     # A private (RFC 1918) host is the legitimate self-hosted case and connects.
     backend = _backend(monkeypatch, account, config={"host": "10.0.0.4"})
-    assert backend.fetch_messages() == []
+    assert backend.test_pages.next_batch() == []
     assert account.logins  # the private host authenticated
 
 
@@ -1153,7 +1169,7 @@ def test_login_refusal_names_the_account_and_host(monkeypatch: pytest.MonkeyPatc
     backend = _backend(monkeypatch, account, config={"host": "10.0.0.4"})
 
     with pytest.raises(ImapError) as raised:
-        backend.fetch_messages()
+        backend.test_pages.next_batch()
 
     assert raised.value.public_message == (
         "IMAP login failed for 'ada@example.com' at 10.0.0.4. Check the account credentials."
@@ -1176,7 +1192,7 @@ def test_transport_failure_while_dialing_is_an_imap_error(monkeypatch: pytest.Mo
     backend = _backend(monkeypatch, account, config={"host": "10.0.0.4"})
 
     with pytest.raises(ImapError) as raised:
-        backend.fetch_messages()
+        backend.test_pages.next_batch()
     assert raised.value.public_message == (
         "IMAP connection to 10.0.0.4 failed. Check the host, port, and security settings."
     )
@@ -1233,7 +1249,7 @@ def test_ssl_context_is_the_stdlib_default(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(FakeIMAPClient, "__init__", capturing_init)
     backend = _backend(monkeypatch, account)
-    backend.fetch_messages()
+    backend.test_pages.next_batch()
 
     assert isinstance(captured["ssl_context"], ssl.SSLContext)
     assert captured["ssl"] is True
@@ -1283,14 +1299,7 @@ def test_channel_sync_partitions_mailboxes(
     imap_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Mailboxes are the partition units and a partition drain stays in its lane.
-
-    The threaded fan-out itself is Postgres-only (`Channel._sync_parallelism`
-    pins other vendors serial — SQLite cannot take concurrent writers), so this
-    exercises the partition contract single-threaded: enumeration, the
-    per-partition plan filter, the row-locked cursor-slice merge, and the serial
-    fallback landing every mailbox's mail with a merged cursor.
-    """
+    """Independent mailbox streams retain their own cursors without replica links."""
 
     del imap_tables
     account = FakeImapAccount(
@@ -1302,26 +1311,26 @@ def test_channel_sync_partitions_mailboxes(
     _wire_fake(monkeypatch, account)
     channel = _imap_channel(sync_parallelism=2, own_addresses=["ada@example.com"])
 
-    assert set(channel.backend.sync_partitions()) == {"INBOX", "Archive"}
-
     with system_context(reason="test imap partition drain"):
-        # One partition drained in isolation touches only its own mailbox and
-        # persists only its own cursor slice.
-        landed_archive = channel._drain_partition("Archive", using=channel._state.db)
-        channel.refresh_from_db()
-        assert landed_archive == 1
-        assert set(channel.cursor["mailboxes"]) == {"Archive"}
+        backend = channel.backend
+        try:
+            definitions = backend.streams(using=channel._state.db)
+            assert {definition.partition for definition in definitions} == {"INBOX", "Archive"}
+            stream = SyncStream.objects.current(channel, "messages", "Archive")
+            result = advance_stream(stream, backend)
+            assert result.count == 1
+            assert {row.partition for row in SyncStream.objects.current_for_bridge(channel, "messages")} == {"Archive"}
+        finally:
+            backend.close()
 
-        # The full sync (serial on SQLite) still lands the rest and merges the
-        # INBOX watermark beside the already-persisted Archive slice.
         landed = channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
 
     assert landed == 1
     assert Message._base_manager.count() == 2
-    channel.refresh_from_db()
-    mailboxes = channel.cursor["mailboxes"]
+    mailboxes = {row.partition: row.cursor for row in SyncStream.objects.current_for_bridge(channel, "messages")}
     assert set(mailboxes) == {"INBOX", "Archive"}
     assert all(int(entry["last_uid"]) >= 1 for entry in mailboxes.values())
+    assert RecordLink._base_manager.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1489,12 +1498,12 @@ def test_channel_sync_lands_threads_parts_and_attachments(
     assert Participant._base_manager.filter(message=reply).count() == 2  # from + to
 
     channel.refresh_from_db()
-    assert channel.cursor["mailboxes"]["INBOX"] == {"uidvalidity": 100, "last_uid": 3}
+    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 3}
     assert channel.last_sync_status == "ok"
     assert channel.last_sync_items == 3
     assert channel.sync_stage == Channel.SyncStage.COMPLETED
     assert channel.sync_progress["stage"] == Channel.SyncStage.COMPLETED
-    assert channel.sync_progress["message"] == "Ingested message batch"
+    assert channel.sync_progress["message"] == "Applied stream page"
     assert channel.sync_progress["details"]["backend"] == "ImapChannelBackend"
     assert channel.sync_progress["details"]["mailbox"] == "INBOX"
     assert channel.sync_progress["details"]["batch_size"] == 1
@@ -1638,7 +1647,10 @@ def test_channel_resync_is_incremental_and_idempotent(
 
     assert Message._base_manager.count() == 3  # refetch converged, no duplicates
     channel.refresh_from_db()
-    assert channel.cursor["mailboxes"]["INBOX"] == {"uidvalidity": 999, "last_uid": 103}
+    stream = SyncStream.objects.current(channel, "messages", "INBOX")
+    assert stream.cursor == {"uidvalidity": 999, "last_uid": 103}
+    assert stream.generation == 2
+    assert RecordLink._base_manager.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1661,7 +1673,8 @@ def test_failed_run_never_persists_the_cursor(
         channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
 
     channel.refresh_from_db()
-    assert channel.cursor == {}  # in-memory advance was never persisted
+    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
+    assert Message._base_manager.count() == 0
     assert channel.last_sync_status == "error"
     assert channel.sync_stage == Channel.SyncStage.FAILED
     assert channel.sync_error == "Integration operation failed."
@@ -1696,7 +1709,7 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(
     def fail_second_batch(manager: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == 3:
             raise RuntimeError("second batch died")
         return original_ingest(manager, *args, **kwargs)
 
@@ -1706,6 +1719,62 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(
 
     assert Message._base_manager.count() == 2
     channel.refresh_from_db()
-    assert channel.cursor["mailboxes"]["INBOX"] == {"uidvalidity": 100, "last_uid": 2}
+    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 2}
     assert channel.last_sync_status == "error"
     assert channel.sync_error == "Integration operation failed."
+
+
+@pytest.mark.django_db(transaction=True)
+def test_failed_second_record_rolls_back_the_whole_page(
+    imap_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later infrastructure failure in one page rolls back its messages and cursor."""
+
+    del imap_tables
+    account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<a@x>"), _eml(message_id="<b@x>"))})
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel(batch_size=2)
+    manager_type = type(Message.objects)
+    ingest = manager_type.ingest
+    calls = 0
+
+    def fail_second(manager: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("second record failed")
+        return ingest(manager, *args, **kwargs)
+
+    monkeypatch.setattr(manager_type, "ingest", fail_second)
+    with system_context(reason="test imap page rollback"), pytest.raises(RuntimeError, match="second record"):
+        channel.run_sync()
+    assert Message._base_manager.count() == 0
+    assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_page_closure_resolves_quotes_of_a_later_record(
+    imap_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The original and its later quoted-only sharer link after both page rows land."""
+
+    del imap_tables
+    paragraph = "Please retain this complete paragraph for our meeting tomorrow."
+    account = FakeImapAccount(
+        {
+            "INBOX": _folder(
+                _eml(message_id="<original@x>", subject="Meeting", body=paragraph + "\n"),
+                _eml(message_id="<quoted@x>", subject="Re: Meeting", body="Agreed.\n\n> " + paragraph + "\n"),
+            )
+        }
+    )
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel(batch_size=2)
+    with system_context(reason="test imap page quotation closure"):
+        assert channel.run_sync() == 2
+    original = Message._base_manager.get(external_id="original@x")
+    quoted = Message._base_manager.get(external_id="quoted@x")
+    assert Part._base_manager.filter(message=quoted, role=Part.PartRole.QUOTED).exists()
+    assert MessageEdge._base_manager.filter(src=original, dst=quoted, kind="quote").exists()
