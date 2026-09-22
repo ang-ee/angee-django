@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import datetime
 import math
-from collections.abc import Mapping, Sequence
 from typing import Any
 
 from django.apps import apps
@@ -220,23 +219,27 @@ class Cadence(SqidMixin, AngeeModel):
         self.touch_due_at = touch_due_at
         super().save(using=using, update_fields=["touch_due_at", "updated_at"])
 
-    def apply_create_defaults(self, *, using: str | None = None) -> Mapping[str, Sequence[Any]]:
+    def _default_user(self, *, using: str) -> None:
         """Bind a blank user relation to the authenticated REBAC actor."""
 
-        contributions = dict(super().apply_create_defaults())
         if self.user_id is not None:
-            return contributions
-        user_id = actor_user_id(current_actor())
+            return
+        user_id = actor_user_id(self.actor() or current_actor())
         if user_id is None:
             raise ValidationError({"user": "An authenticated user is required."})
         user_model = type(self)._meta.get_field("user").related_model
-        using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
         user = user_model._base_manager.using(using).filter(pk=user_id).first()
         if user is None:
             raise ValidationError({"user": "The authenticated user no longer exists."})
         self.user = user
-        contributions["user"] = (user,)
-        return contributions
+
+    def full_clean(self, *args: Any, **kwargs: Any) -> None:
+        """Default the required user before Django validates its foreign key."""
+
+        using = get_write_alias(type(self), using=self._state.db, instance=self)
+        self._state.db = using
+        self._default_user(using=using)
+        super().full_clean(*args, **kwargs)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Refresh the server-owned due date whenever cadence intent changes."""
@@ -244,6 +247,7 @@ class Cadence(SqidMixin, AngeeModel):
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
+        self._default_user(using=using)
         self.touch_due_at = self.derive_touch_due()
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:

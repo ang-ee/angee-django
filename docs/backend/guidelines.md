@@ -191,8 +191,10 @@ Use these owners instead of maintaining another contract in an addon:
     alias. Keep these guards at their entry owners; instance pinning cannot make
     an unbound upstream query safe. Native ORM membership writes are separately
     alias-bound; a bound through-table manager does not route REBAC side effects.
-    The same upstream limitation applies to its pre-save/pre-delete permission
-    checks. Excluded [`storage write entries`](../../addons/angee/storage/models.py)
+    The same upstream limitation applies to its existing-row pre-save/pre-delete
+    permission checks. Candidate create gates project required ORM relations on
+    the write alias, but post-hop authorization still uses the backend's alias
+    contract. Excluded [`storage write entries`](../../addons/angee/storage/models.py)
     (`FolderManager.create_in_drive`, `FileManager.draft`, `File.finalize`,
     `File._authorize_push`, and `File.delete`) still call these unbound checks;
     their alias-aware persistence does not close authorization routing. They
@@ -997,8 +999,13 @@ and current contracts before applying a historical example to a new deployment.
 - **GraphQL authorization tests include a non-admin reader.** Admin-only tests
   neither pin deny-hard-fail behavior nor expose a leaked `sudo()` scope.
 - **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
-  The Hasura model-resource create path builds a dummy instance from the input and calls
-  `full_clean()` before saving — two traps follow. (1) A `JSONField(default=dict)`
+  Strawberry prepares one instance, calls `full_clean()`, and passes that same
+  instance to the manager's `insert()` (or native insert-only save when absent).
+  Factory invariants needed by both ORM and GraphQL creation belong on the
+  queryset's cooperative `insert()`, which ordinary `create()` also composes.
+  Model-owned required defaults must exist before field validation as well as
+  before saving; see [`Cadence`](../../addons/angee/nexus/models.py).
+  Two input traps follow. (1) A `JSONField(default=dict)`
   (or `default=list`) needs `blank=True`: Django counts `{}`/`[]` as blank, so a
   `blank=False` container default fails `full_clean` ("cannot be blank") on every
   create. (2) An optional create-input field over a **non-null** column must

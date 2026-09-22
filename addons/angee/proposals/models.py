@@ -307,18 +307,6 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
 
         return self.name
 
-    def apply_create_defaults(self, *, using: str | None = None) -> Mapping[str, tuple[models.Model, ...]]:
-        """Expose the exactly-one target to the unsaved-row create preflight."""
-
-        using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
-        self._state.db = using
-        refresh_deferred(self, using=using)
-
-        self._validate_target()
-        if self.task_id is not None:
-            return {"task": (related_on(self, "task", using=using),)}
-        return {"project": (related_on(self, "project", using=using),)}
-
     def clean(self) -> None:
         """Validate target, deadline, outcome, and receipt coherence."""
 

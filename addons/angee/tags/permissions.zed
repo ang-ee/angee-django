@@ -22,9 +22,8 @@ definition tags/role {
 // uses to open a drive to everyone. Downstream addons may contribute additional
 // scope relations through `permissions.extends.zed`.
 // Configuration is admin-only: a `tags_admin` (const-backed, the framework canon)
-// writes the vocabulary, everyone else only reads. The create path preflights
-// `create` through the write backend and runs elevated, so an admin/manager is
-// granted and everyone else denied on writes.
+// writes the vocabulary, everyone else only reads. The candidate-aware pre-save
+// gate admits an admin/manager and denies everyone else on creation.
 definition tags/tag {
     relation shared:   auth/user:*
     relation admin:    angee/role  // rebac:const=admin

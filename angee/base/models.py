@@ -241,12 +241,11 @@ class AngeeManager(RebacManager.from_queryset(AngeeQuerySet)):  # type: ignore[m
     ) -> SubjectRef:
         """Authorize the ambient actor to create one not-yet-persisted row.
 
-        The REBAC pre-save signal cannot evaluate a per-row ``create`` gate
-        for a row that has no id yet, so manager factories preflight the
-        schema's ``create`` permission with the relations the row would
-        carry (``rebac.check_new``), run the insert under per-instance
-        sudo, and re-bind the verified actor on the saved row with
-        ``with_actor`` so the bypass ends with that one insert.
+        Manual factories use this explicit relationship preflight
+        (``rebac.check_new``), insert under per-instance sudo, and re-bind the
+        verified actor with ``with_actor`` so the bypass ends with that insert.
+        Ordinary ``create`` and prepared-instance ``insert`` instead rely on
+        REBAC's candidate-aware pre-save gate.
 
         ``relationships`` values may be model instances or ``SubjectRef``s;
         instances are resolved through their declared REBAC resource type.
@@ -779,27 +778,6 @@ class AngeeModel(TimestampMixin, RebacMixin):
         if not value and default is not None:
             return field.resolve_class(default)
         return field.resolve_for(self)
-
-    def apply_create_defaults(self) -> Mapping[str, Sequence[Any]]:
-        """Apply this row's blank-on-input create defaults before the create gate.
-
-        The auto-CRUD create preflight (``AngeeManager.check_create`` via the
-        Hasura write backend) evaluates the REBAC ``create`` permission against
-        the unsaved instance *before* ``save()`` runs. A field a model defaults
-        in ``save()`` — a blank-on-input scope relation derived from the actor,
-        for example — is therefore still blank when the gate fires, so a
-        ``create = scope->member`` arm fail-closes on a create that would in fact
-        have persisted a scope.
-
-        A model that defaults a subject-bearing relation on ``save()`` overrides
-        this hook to apply that default here too (idempotent with ``save()``, so
-        the row still persists with it) and return the relation contributions the
-        default adds, keyed by relation name with subject values — so the gate is
-        evaluated against the row as it will persist. The base default applies no
-        defaults and contributes nothing.
-        """
-
-        return {}
 
     @property
     def public_id(self) -> str:

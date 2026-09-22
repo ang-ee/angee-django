@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
@@ -19,6 +19,7 @@ from rebac import (
     to_object_ref,
     write_relationships,
 )
+from rebac.managers import RebacQuerySet
 from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
@@ -119,14 +120,20 @@ class ConditionalSharedReaderMixin(models.Model):
 
         return False
 
-    def apply_create_defaults(self) -> Any:
-        """Contribute the wildcard relation before a per-row create preflight."""
+    def _shared_reader_relationships(self) -> dict[str, tuple[SubjectRef, ...]]:
+        """Return the managed relation and its eligible subjects, empty to revoke."""
 
-        contributions = dict(super().apply_create_defaults())
         relation = self.shared_reader_relation
-        if relation is not None and self.shared_reader_eligible:
-            contributions[relation] = (_EVERY_AUTHENTICATED_USER,)
-        return contributions
+        if relation is None:
+            return {}
+        return {relation: (_EVERY_AUTHENTICATED_USER,) if self.shared_reader_eligible else ()}
+
+    def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, Iterable[SubjectRef | models.Model]]:
+        """Propose only the shared-reader tuple that save will reconcile atomically."""
+
+        relationships = dict(super().proposed_relationships(using=using))
+        relationships.update(self._shared_reader_relationships())
+        return relationships
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist and reconcile when this write can change reader eligibility."""
@@ -162,27 +169,25 @@ class ConditionalSharedReaderMixin(models.Model):
             raise ValidationError("A shared reader requires a saved row.")
         with transaction.atomic(using=alias):
             canonical = system_queryset(type(self), using=alias, lock=("self",)).get(pk=self.pk)
-            relation = canonical.shared_reader_relation
-            if relation is None:
-                return
-            resource = to_object_ref(canonical)
-            relationship = RelationshipTuple(
-                resource=resource,
-                relation=relation,
-                subject=_EVERY_AUTHENTICATED_USER,
-            )
-            if canonical.shared_reader_eligible:
-                write_relationships([relationship])
-            else:
-                delete_relationships(
-                    RelationshipFilter(
-                        resource_type=resource.resource_type,
-                        resource_id=resource.resource_id,
-                        relation=relation,
-                        subject_type=_EVERY_AUTHENTICATED_USER.subject_type,
-                        subject_id=_EVERY_AUTHENTICATED_USER.subject_id,
+            for relation, subjects in canonical._shared_reader_relationships().items():
+                resource = to_object_ref(canonical)
+                if subjects:
+                    write_relationships(
+                        [
+                            RelationshipTuple(resource=resource, relation=relation, subject=subject)
+                            for subject in subjects
+                        ]
                     )
-                )
+                else:
+                    delete_relationships(
+                        RelationshipFilter(
+                            resource_type=resource.resource_type,
+                            resource_id=resource.resource_id,
+                            relation=relation,
+                            subject_type=_EVERY_AUTHENTICATED_USER.subject_type,
+                            subject_id=_EVERY_AUTHENTICATED_USER.subject_id,
+                        )
+                    )
 
 
 class TimestampMixin(models.Model):
@@ -308,7 +313,7 @@ class AuditMixin(models.Model):
         super().save(*args, **kwargs)
 
 
-class AppendOnlyQuerySet(models.QuerySet[_ModelT]):
+class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
     """Allow inserts, but never collection edits or deletion.
 
     Compose before the domain's base queryset to preserve authorization.
@@ -326,11 +331,11 @@ class AppendOnlyQuerySet(models.QuerySet[_ModelT]):
     def validate_insert(self) -> None:
         """Let the domain owner narrow insert admission."""
 
-    def create(self, **kwargs: Any) -> _ModelT:
+    def insert(self, obj: _ModelT) -> _ModelT:
         """Validate one append before its ordinary authorized insertion."""
 
         self.validate_insert()
-        return super().create(**kwargs)
+        return super().insert(obj)
 
     def bulk_create(
         self,
@@ -347,7 +352,10 @@ class AppendOnlyQuerySet(models.QuerySet[_ModelT]):
             raise self.immutable_error("bulk_create")
         self.validate_insert()
         return super().bulk_create(
-            objs, batch_size=batch_size, update_fields=update_fields, unique_fields=unique_fields,
+            objs,
+            batch_size=batch_size,
+            update_fields=tuple(update_fields) if update_fields is not None else None,
+            unique_fields=tuple(unique_fields) if unique_fields is not None else None,
         )
 
     def update(self, **kwargs: Any) -> int:

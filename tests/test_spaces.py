@@ -11,6 +11,7 @@ import pytest
 from django.apps import apps
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
+from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 from rebac.models import SchemaRelation, active_relationship_model
@@ -31,6 +32,8 @@ from tests.conftest import (
     _create_missing_tables,
     assert_private_hasura_insert_access,
     create_user,
+    execute_schema,
+    result_data,
 )
 from tests.spaces_models import Group, Membership
 from tests.test_messaging import Party, Person, Thread
@@ -140,6 +143,26 @@ def _schema() -> Any:
         for module in modules
     ]
     return GraphQLSchemas(addons).build("console")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("rebac_storage", ("denormalized", "registry"))
+def test_group_create_ignores_roster_backings_unused_by_create(spaces_tables: None, rebac_storage: str) -> None:
+    """The authenticated create arm needs none of the filtered reverse roster paths."""
+
+    del spaces_tables
+    actor = create_user("spaces-unused-roster")
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=rebac_storage):
+        call_command("rebac", "sync", verbosity=0)
+        result = execute_schema(
+            _schema(),
+            'mutation { insert_space_groups_one(object: {name: "No roster"}) { id } }',
+            user=actor,
+        )
+        public_id = result_data(result)["insert_space_groups_one"]["id"]
+    group = Group._base_manager.get(sqid=public_id)
+    assert group.created_by_id == actor.pk
+    assert not Membership._base_manager.filter(group=group).exists()
 
 
 @pytest.mark.django_db(transaction=True)
