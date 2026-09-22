@@ -104,6 +104,12 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
 class TaskManager(AngeeManager):
     """Own task creation policy and ThreadActivity maturation."""
 
+    def _require_project_write(self, projects: Sequence[Any]) -> None:
+        """Require each proposed project to admit a new task."""
+
+        if any(not project.has_access("write") for project in projects):
+            raise PermissionDenied("Write access to the project is required to add a task.")
+
     def check_create(
         self,
         relationships: Mapping[str, Sequence[Any]] | None = None,
@@ -114,9 +120,7 @@ class TaskManager(AngeeManager):
 
         using = get_write_alias(self.model, using=using, bound=self)
         require_authorization_database(using, operation="Task creation preflight", error_class=ImproperlyConfigured)
-        project_values = tuple((relationships or {}).get("project", ()))
-        if any(not project.has_access("write") for project in project_values):
-            raise PermissionDenied("Write access to the project is required to add a task.")
+        self._require_project_write((relationships or {}).get("project", ()))
         return super().check_create(relationships)
 
     def from_activity(self, activity: models.Model, *, using: str | None = None) -> models.Model:
@@ -635,12 +639,22 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         self._validate_structure(lock=False, using=using)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist after revalidating mutable project structure."""
+        """Authorize project attachment on insert and revalidate mutable structure."""
 
         using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
         kwargs["using"] = using
         self._state.db = using
         refresh_deferred(self, using=using)
+
+        if self._state.adding and self.project_id is not None:
+            actor, bypass = self.effective_actor(strict=True)
+            if not bypass:
+                assert actor is not None
+                require_authorization_database(
+                    using, operation="Task creation preflight", error_class=ImproperlyConfigured,
+                )
+                project = cast(Project, related_on(self, "project", using=using)).with_actor(actor)
+                cast(TaskManager, type(self)._default_manager)._require_project_write((project,))
 
         self._normalize_insert_lifecycle()
         update_fields = kwargs.get("update_fields")

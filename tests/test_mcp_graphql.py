@@ -95,7 +95,8 @@ def _read_page(fields: tuple[Any, ...] = _NESTED_FIELDS) -> GraphQLTool:
     )
 
 
-def test_flat_spec_still_compiles(tiny_schema: None) -> None:
+@pytest.mark.usefixtures("tiny_schema")
+def test_flat_spec_still_compiles() -> None:
     """A scalar-only spec keeps the flat behavior: a flat selection and flat projection."""
 
     compiled = _compile(_read_page(fields=("sqid", "title", "kind")))
@@ -109,7 +110,8 @@ def test_flat_spec_still_compiles(tiny_schema: None) -> None:
     assert compiled.output_schema["properties"]["sqid"] == {"type": "string"}
 
 
-def test_nested_spec_compiles_to_a_nested_document(tiny_schema: None) -> None:
+@pytest.mark.usefixtures("tiny_schema")
+def test_nested_spec_compiles_to_a_nested_document() -> None:
     """A depth-2 spec renders ``wire { children }`` with the schema's own wire names."""
 
     compiled = _compile(_read_page())
@@ -125,7 +127,8 @@ def test_nested_spec_compiles_to_a_nested_document(tiny_schema: None) -> None:
     )
 
 
-def test_nested_output_schema_describes_objects_and_arrays(tiny_schema: None) -> None:
+@pytest.mark.usefixtures("tiny_schema")
+def test_nested_output_schema_describes_objects_and_arrays() -> None:
     """The advertised output schema mirrors the nested object/array shape."""
 
     schema = _compile(_read_page()).output_schema
@@ -162,7 +165,8 @@ def test_nested_output_schema_describes_objects_and_arrays(tiny_schema: None) ->
     }
 
 
-def test_project_shapes_a_nested_row(tiny_schema: None) -> None:
+@pytest.mark.usefixtures("tiny_schema")
+def test_project_shapes_a_nested_row() -> None:
     """Projection recurses: id→sqid, wire→snake child keys, list per-element."""
 
     compiled = _compile(_read_page())
@@ -197,7 +201,8 @@ def test_project_shapes_a_nested_row(tiny_schema: None) -> None:
     }
 
 
-def test_project_handles_nullable_object_and_empty_list(tiny_schema: None) -> None:
+@pytest.mark.usefixtures("tiny_schema")
+def test_project_handles_nullable_object_and_empty_list() -> None:
     """A null single object stays null; a missing list projects to an empty list."""
 
     compiled = _compile(_read_page())
@@ -211,7 +216,8 @@ def test_project_handles_nullable_object_and_empty_list(tiny_schema: None) -> No
     }
 
 
-def test_depth_over_two_fails_fast(tiny_schema: None) -> None:
+@pytest.mark.usefixtures("tiny_schema")
+def test_depth_over_two_fails_fast() -> None:
     """A third object level (markdown → outline → anchor) is rejected at compile time."""
 
     deep = (
@@ -222,7 +228,8 @@ def test_depth_over_two_fails_fast(tiny_schema: None) -> None:
         _compile(_read_page(fields=deep))
 
 
-def test_unknown_nested_child_fails_fast(tiny_schema: None) -> None:
+@pytest.mark.usefixtures("tiny_schema")
+def test_unknown_nested_child_fails_fast() -> None:
     """An unknown child on a nested object is named at compile time, not at runtime."""
 
     bad = ("sqid", ("markdown", ("body", "nonexistent")))

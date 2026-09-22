@@ -490,6 +490,21 @@ def test_party_resource_metadata_projects_the_canonical_party_label() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_cadence_orm_create_defaults_the_queryset_actor(nexus_tables: None) -> None:
+    """The save owner supplies user defaults for bound ORM insertion too."""
+
+    del nexus_tables
+    viewer = User.objects.create_user(username="cadence-orm-viewer")
+    with system_context(reason="test nexus cadence ORM seed"):
+        party = Party._base_manager.create(display_name="Party", created_by=viewer)
+
+    cadence = Cadence.objects.as_user(viewer).create(party=party, cadence_days=10)
+
+    assert cadence.user_id == viewer.pk
+    assert Cadence._base_manager.get(pk=cadence.pk).user_id == viewer.pk
+
+
+@pytest.mark.django_db(transaction=True)
 def test_cadence_create_binds_the_authenticated_user(nexus_tables: None) -> None:
     """The CRUD surface accepts intent fields and owns the viewer relation server-side."""
 

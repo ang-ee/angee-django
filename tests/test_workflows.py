@@ -88,6 +88,14 @@ class ContractProbeStep(StepImpl):
     subject_declaration = "tests.workflow"
 
 
+class CreateDefaultsStep(StepImpl):
+    """Defaults without config normalization, exposing lost insert provenance."""
+
+    key = "fixture"
+    label = "Create defaults"
+    defaults = {"config": {"seeded": True}}
+
+
 @pytest.mark.parametrize(
     ("declaration", "message"),
     [
@@ -531,6 +539,47 @@ def test_graphql_filters_workflow_runs_across_a_public_workflow_lineage(workflow
 
     assert {row["id"] for row in data["workflow_runs"]} == {run.sqid for run in expected}
     assert data["workflow_runs_aggregate"]["aggregate"]["count"] == 3
+
+
+@pytest.mark.django_db(transaction=True)
+def test_graphql_step_create_materializes_omitted_impl_defaults(
+    workflow_tables: None,
+    settings: Any,
+) -> None:
+    """The prepared step reaches its insert owner without reconstructing config."""
+
+    settings.ANGEE_WORKFLOW_STEP_CLASSES = {
+        **settings.ANGEE_WORKFLOW_STEP_CLASSES,
+        "fixture": "tests.test_workflows.CreateDefaultsStep",
+    }
+    admin = _platform_admin("workflow-create-defaults-admin")
+    with system_context(reason="test workflow create defaults parent"):
+        workflow = create_workflow("Create defaults")
+
+    created = result_data(
+        execute_schema(
+            _console_schema(),
+            """
+            mutation CreateStep($object: workflow_steps_insert_input!) {
+              insert_workflow_steps_one(object: $object) { id config }
+            }
+            """,
+            {
+                "object": {
+                    "workflow": workflow.sqid,
+                    "key": "seeded",
+                    "name": "Seeded",
+                    "step_class": "FIXTURE",
+                },
+            },
+            user=admin,
+        )
+    )["insert_workflow_steps_one"]
+
+    assert created["config"] == {"seeded": True}
+    step = Step.objects.as_user(admin).get(sqid=created["id"])
+    assert step.config == {"seeded": True}
+    assert Step.objects.as_user(admin).filter(workflow=workflow, key="seeded").count() == 1
 
 
 @pytest.mark.django_db(transaction=True)

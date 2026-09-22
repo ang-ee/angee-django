@@ -1,11 +1,11 @@
 """The auto-CRUD create gate honors model-owned input defaults.
 
 ``tests.scopedemo.ScopeScopedMixin.scope`` is blank-on-input and defaulted from
-the acting user's sole membership on ``save()``. The Hasura write backend's
-create preflight evaluates the REBAC ``create`` permission against the *unsaved*
-row before ``save()`` runs, so a relation-arm-gated model (``create =
-scope->member``) would fail-close unless the gate sees the scope the row will
-persist with. These drive the real gate over a built schema:
+the acting user's sole membership on ``save()``. The upstream pre-save signal
+evaluates the REBAC ``create`` permission against the unsaved candidate after
+its model-owned defaults run, so a relation-arm-gated model (``create =
+scope->member``) authorizes the scope the row will persist with. These drive the
+real gate over a built schema:
 
 1. single-membership actor, no scope input -> gate passes, row persists with the
    defaulted scope;
@@ -51,8 +51,8 @@ class ScopedDocType(AngeeNode):
 
 # A scoped resource whose writable ``scope`` is exposed as a public id:
 # ``field_id_decode`` types it ``ID`` on the insert input, the write backend's
-# ``public_id_fields`` decodes it under the actor-scoped write owner and folds it
-# into the create preflight relations.
+# ``public_id_fields`` decodes it under the actor-scoped write owner before the
+# resolver prepares the candidate evaluated by the pre-save create gate.
 _RESOURCE = hasura_model_resource(
     ScopedDocType,
     model=ScopedDoc,

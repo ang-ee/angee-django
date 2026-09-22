@@ -17,7 +17,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django_choices_field import IntegerChoicesField
 from graphql import GraphQLEnumType, GraphQLError, GraphQLObjectType, get_named_type
-from rebac import MissingActorError, PermissionDenied, RebacMixin, SubjectRef
+from rebac import MissingActorError, PermissionDenied, RebacMixin
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
@@ -25,7 +25,7 @@ from strawberry.extensions import SchemaExtension
 
 from angee.base.fields import StateField
 from angee.base.mixins import RevisionMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.models import AngeeModel
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
@@ -75,44 +75,17 @@ class ManagedThing(RebacMixin):
         rebac_resource_type = "tests/managed"
 
 
-class GatedWriteThingManager(AngeeManager):
-    """Test manager recording create preflight relationships."""
-
-    checked_relationships: dict[str, tuple[Any, ...]] | None = None
-
-    def check_create(self, relationships: dict[str, tuple[Any, ...]] | None = None) -> SubjectRef:
-        """Record the relationship map and return the verified actor."""
-
-        self.checked_relationships = dict(relationships or {})
-        return SubjectRef.of("auth/user", "verified")
-
-
 class GatedWriteThing(AngeeModel):
     """Concrete Angee model used to exercise Hasura write authorization."""
 
     owner = models.ForeignKey(ManagedThing, on_delete=models.CASCADE)
     name = models.CharField(max_length=32, blank=True)
 
-    objects = GatedWriteThingManager()
-
     class Meta:
         """Django model options for the gated write test model."""
 
         app_label = "tests"
         rebac_resource_type = "tests/gated-write"
-
-
-class UngatedWriteThing(AngeeModel):
-    """Concrete Angee model whose manager is missing the create gate."""
-
-    objects = models.Manager()
-    name = models.CharField(max_length=32, blank=True)
-
-    class Meta:
-        """Django model options for the ungated write test model."""
-
-        app_label = "tests"
-        rebac_resource_type = "tests/ungated-write"
 
 
 class UnmanagedThing(RebacMixin):
@@ -289,14 +262,12 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
     }
 
 
-def test_hasura_write_backend_create_uses_manager_create_gate(
+def test_hasura_write_backend_create_delegates_prepared_insertion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Hasura create preflights relationship-conditioned create rules on the manager."""
+    """Hasura only decodes public IDs before native preparation and insertion."""
 
     related = SimpleNamespace(pk=7)
-    manager = GatedWriteThing._default_manager
-    manager.checked_relationships = None
     created: dict[str, Any] = {}
 
     def fake_instance_from_public_id(
@@ -317,10 +288,8 @@ def test_hasura_write_backend_create_uses_manager_create_gate(
         del info
         assert model is GatedWriteThing
         assert data == {"owner_id": related.pk, "name": "Row"}
-        pre_save_hook = kwargs["pre_save_hook"]
+        assert kwargs == {"key_attr": "sqid", "full_clean": True}
         instance = model(owner_id=data["owner_id"], name=data["name"])
-        pre_save_hook(instance)
-        assert instance.is_sudo()
         created["row"] = instance
         return instance
 
@@ -332,18 +301,7 @@ def test_hasura_write_backend_create_uses_manager_create_gate(
     result = backend.create(cast(Any, SimpleNamespace()), {"owner": "pub-owner", "name": "Row"})
 
     assert result is created["row"]
-    assert manager.checked_relationships == {"owner": (related,)}
-    assert result.actor() == SubjectRef.of("auth/user", "verified")
     assert not result.is_sudo()
-
-
-def test_hasura_write_backend_create_requires_gate_for_angee_rebac_models() -> None:
-    """Angee REBAC models fail closed when their manager lacks ``check_create``."""
-
-    backend = AngeeHasuraWriteBackend(UngatedWriteThing)
-
-    with pytest.raises(ImproperlyConfigured, match="check_create"):
-        backend.create(cast(Any, SimpleNamespace()), {"name": "unguarded"})
 
 
 @strawberry.type

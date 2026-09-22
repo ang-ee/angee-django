@@ -10,12 +10,13 @@ schemas = "sharing.schemas"
 dependencies = [
   "channels>=4.0",
   "channels-redis>=4.2",
-  "django-zed-rebac[strawberry-django]>=0.17.2",
+  "django-zed-rebac[strawberry-django]>=0.18.1",
   "strawberry-django-aggregates>=0.12.0",
   "strawberry-django-hasura>=0.11.0",
   # The GraphQL addon owns the fork pin as a direct reference so every composed
   # host receives the same source through its generated addons group; repeating
   # uv.sources tables in each consumer/template would split that ownership.
   "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@e4fa3198f704d81b3ca96b6dcac75420c5fee516",
-  "strawberry-graphql-django>=0.86.7",
+  # Based on upstream v0.87.0; fork metadata reports 0.86.8. No requirer pins >=0.87 today.
+  "strawberry-graphql-django @ git+https://github.com/ang-ee/strawberry-django.git@2f2b09aaa80624e487e9b58a0aea3658ea30a9e8",
 ]

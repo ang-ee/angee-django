@@ -16,9 +16,10 @@ Dependency changes must update this file in the same change.
   composed manifests into the host's generated `[dependency-groups].addons` key.
   `uv.lock` pins the resolved Python graph. The `angee.graphql` folder addon's
   manifest owns its Strawberry stack, Channels Redis adapter, and exact
-  Strawberry fork reference. REBAC, Hasura and aggregates use published release
+  Strawberry and strawberry-django fork references. REBAC, Hasura and aggregates use published release
   floors in their owning manifests and registry artifacts in `uv.lock`. The
-  Strawberry fork remains necessary for native input/object extensions.
+  Strawberry fork remains necessary for native input/object extensions; the
+  strawberry-django fork supplies the unified prepared-instance create resolver.
   Use `uv add` / `uv lock`; do not use `pip install` by hand.
 - Package `package.json` files own scripts and declared JavaScript dependencies.
   The installing workspace's `pnpm-workspace.yaml` owns membership and its
@@ -35,7 +36,7 @@ Dependency changes must update this file in the same change.
 |---|---|---|
 | Python >= 3.14 | Runtime and typing | Project conventions |
 | Django 6.0+ | ORM, migrations, admin, auth contract, app registry | Abstract bases and build-time composition into runtime apps |
-| strawberry-django | GraphQL types, resolvers, dataloaders, schema printing | Merge addon schema parts into named schemas, `changes` subscription shortcuts, emit SDL, serve per name |
+| strawberry-django (direct Git pin: `strawberry-graphql-django @ git+https://github.com/ang-ee/strawberry-django.git@2f2b09aaa80624e487e9b58a0aea3658ea30a9e8`, based on 0.87.0) | GraphQL types, dataloaders, schema printing, and unified create resolver: prepare, hook, full-clean and persist one instance through `manager.insert(instance)` when available, otherwise `save(force_insert=True, using=manager.db)`; manager `create` overrides are not the resolver seam | Merge addon schema parts into named schemas, public-ID decoding, `changes` subscription shortcuts, emit SDL, serve per name |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
 | django-countries >= 9 | Configurable ISO 3166-1 country choices, overrides, localized names, and translated display names | `angee.parties.fields.CountryCodeField` preserves configured codes and names, stores alpha-2 as a plain string, and exposes the upstream choices through resource metadata |
 | pycountry >= 26 | Complete ISO country code and official/common-name lookup | `angee.parties.fields.CountryCodeField` uses the upstream catalogue only when the configured django-countries catalogue has no match |
@@ -52,7 +53,7 @@ Dependency changes must update this file in the same change.
 | python-dateutil | RFC-5545 recurrence-rule parsing and expansion (`rrulestr`) | `angee.scheduling` owns recurrence — `RecurrenceField` (a validated RRULE column) + `Recurrence.occurrences(window)`, bounded, timezone-aware expansion in the project `TIME_ZONE` |
 | phonenumbers | Region-aware telephone parsing, validation, matching, and E.164 formatting | `parties.Handle.normalize_value` parses phone/WhatsApp values with `region=None`, so canonical E.164 input requires a leading `+country` code; invalid, impossible, or region-unknown values use the digit-only comparison fallback, and signature evidence mines through the same owner |
 | channels + channels-redis + uvicorn | ASGI/WebSocket transport and serving; Redis-backed channel layer for production fanout | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`); in-memory channel layer remains dev/test only |
-| django-zed-rebac >= 0.17.2 | REBAC engine, Zed introspection/rendering/extension, model subject identity, memberships and garbage collection, live ORM backing and lazy SQL permission scoping | Addon schema composition, resource grant policy and IAM product surfaces through public REBAC APIs |
+| django-zed-rebac >= 0.18.1 (PyPI release floor) | REBAC engine, Zed introspection/rendering/extension, model subject identity, memberships and garbage collection, live ORM backing and lazy SQL permission scoping; prepared-instance `QuerySet.insert` composed by `create`; candidate-aware pre-save create gate projects only required relations on the write alias, with per-relation unknowns denying dependent arms; trusted `proposed_relationships` hook for model-owned tuple facts persisted atomically after insert (field/const-backed relations remain library-owned); `manage.py rebac grant`, `revoke`, and `relationships` | Addon schema composition, shared-reader tuple proposal/reconciliation, resource grant policy and IAM product surfaces through public REBAC APIs |
 | django-axes | Login failure throttling at Django's `authenticate()`/auth-backend signal seam | IAM composes the app, standalone backend, and middleware so password GraphQL login stays a thin `authenticate(request=...)` caller |
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |
 | django-simple-history | Shadow history tables and revert | `HistoryMixin` marker (knowledge Vault/Page; messaging edits are in-row `edit_history` + immutable fragments instead) |

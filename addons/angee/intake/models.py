@@ -17,7 +17,6 @@ Messaging's canonical attachment manager.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
@@ -369,15 +368,6 @@ class Need(AuditMixin, AngeeDataModel):
         finally:
             object.__setattr__(self, "_intake_track_targets", True)
             object.__setattr__(self, "_intake_project_assigned", False)
-
-    def apply_create_defaults(self, *, using: str | None = None) -> Mapping[str, Sequence[Any]]:
-        """Project the target before the generic create gate evaluates its relations."""
-
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._normalize_target(using=using)
-        if self.task_id is not None:
-            return {"task": (related_on(self, "task", using=using),)}
-        return {"project": (related_on(self, "project", using=using),)}
 
     def clean(self) -> None:
         """Normalize task-project context and reject missing or double-authored targets."""

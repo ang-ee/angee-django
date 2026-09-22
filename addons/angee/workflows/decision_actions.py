@@ -467,7 +467,7 @@ def validate_decision_resolution(
     if selected_branch_index is not None:
         # Project the selected branch's native errors without changing schema
         # locations that retained local references may address.
-        projected = []
+        projected: list[SchemaValidationError] = []
         for failure in failures:
             if (
                 failure.validator == "oneOf"

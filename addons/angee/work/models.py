@@ -9,7 +9,7 @@ itself.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -920,22 +920,6 @@ class TaskWork(StagedModelMixin):
             super().full_clean(*args, **kwargs)
         finally:
             object.__setattr__(self, "_work_track_status", tracking)
-
-    def apply_create_defaults(self, *, using: str | None = None) -> Mapping[str, Sequence[Any]]:
-        """Default queue/stage from the actor and return their create relations."""
-
-        using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
-        self._state.db = using
-        refresh_deferred(self, using=using)
-
-        relationships: dict[str, Sequence[Any]] = {}
-        parent = getattr(super(), "apply_create_defaults", None)
-        if callable(parent):
-            relationships.update(parent())
-        self._apply_queue_and_stage_defaults(provision=True, using=using)
-        if self.queue_id is not None:
-            relationships["queue"] = (related_on(self, "queue", using=using),)
-        return relationships
 
     def clean(self) -> None:
         """Project a stage before base lifecycle validation and enforce scope."""

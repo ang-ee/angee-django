@@ -35,6 +35,7 @@ definition projects/task {
 
     // With a project set, its grant arms apply. A NULL project contributes no
     // arrow result, leaving the creator as the standalone task owner.
+    // Attachments require project->write via Task.save/_require_project_write; one Zed arm would deny standalone tasks.
     permission create = authenticated
     permission read   = project->read + owner + reader + editor + admin->member
     permission write  = project->write + owner + editor + admin->member

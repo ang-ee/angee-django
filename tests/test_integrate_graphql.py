@@ -389,6 +389,37 @@ def test_resource_metadata_names_the_impl_columns_it_projects() -> None:
     assert wire["integrate.Vendor"]["implFields"] == []
 
 
+def test_graphql_oauth_client_create_materializes_omitted_impl_defaults(
+    integrate_console_tables: None,
+) -> None:
+    """Preparation preserves omitted fields until the provider seeds its defaults."""
+
+    admin = _platform_admin("oauth-create-defaults-admin")
+    created = _data(
+        _execute(
+            _schema(),
+            """
+            mutation CreateClient($object: oauth_clients_insert_input!) {
+              insert_oauth_clients_one(object: $object) { id }
+            }
+            """,
+            {"object": {"slug": "create-defaults", "display_name": "Defaults", "provider_type": "GOOGLE"}},
+            user=admin,
+        )
+    )["insert_oauth_clients_one"]
+
+    client = OAuthClient.objects.as_user(admin).get(sqid=created["id"])
+    assert client.discovery_url == "https://accounts.google.com/.well-known/openid-configuration"
+    assert client.authorize_endpoint == "https://accounts.google.com/o/oauth2/v2/auth"
+    assert client.default_scopes == [
+        "openid",
+        "profile",
+        "email",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+    ]
+
+
 def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
     """Impl choice metadata is console data, so it is platform-admin gated."""
 

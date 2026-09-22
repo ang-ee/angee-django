@@ -286,7 +286,7 @@ class WorkflowGraph:
         map_targets, _ = self._maps()
         eligible: set[GraphIdentity] = set()
         include_map_item = False
-        owners = map_targets.get(target.identity, ())
+        owners = map_targets.get(target.identity, [])
         if (
             len(owners) == 1
             and owners[0].identity != target.identity

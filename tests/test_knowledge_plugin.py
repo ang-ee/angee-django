@@ -154,7 +154,8 @@ def _registered_tools() -> dict[str, Any]:
     return {tool.name: tool for tool in asyncio.run(server.list_tools())}
 
 
-def test_semantic_search_tool_compiles(plugin_discovery: None) -> None:
+@pytest.mark.usefixtures("plugin_discovery")
+def test_semantic_search_tool_compiles() -> None:
     """The plugin's ``semantic_search`` tool compiles against the merged schema."""
 
     tools = _registered_tools()

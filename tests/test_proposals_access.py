@@ -51,7 +51,7 @@ def _grant(resource: Any, relation: str, subject: Any) -> None:
 
 
 def _create_proposal(*, actor: Any, round: Round, responder: Any) -> Proposal:
-    """Run the same create preflight and one-row sudo insert as auto-CRUD."""
+    """Exercise the retained manual factory's explicit preflight and scoped insert."""
 
     proposal = Proposal(round=round, responder=responder)
     with actor_context(actor):

@@ -42,7 +42,7 @@ dependencies = [
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
-  "django-zed-rebac>=0.17.2",
+  "django-zed-rebac>=0.18.1",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's
   # override does not accept it yet; lift the cap when rebac supports 6.1.
   "django>=6.0,<6.1",
@@ -103,7 +103,7 @@ addons = [
     "django-axes>=8.0",
     "django-countries>=9,<10",
     "django-import-export>=4.4",
-    "django-zed-rebac[strawberry-django]>=0.17.2",
+    "django-zed-rebac[strawberry-django]>=0.18.1",
     "fastmcp>=3.4.2,<4",
     "httpcore>=1.0,<2",
     "httpx>=0.28.1,<0.29",
@@ -132,7 +132,8 @@ addons = [
     "strawberry-django-aggregates>=0.12.0",
     "strawberry-django-hasura>=0.11.0",
     "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@e4fa3198f704d81b3ca96b6dcac75420c5fee516",
-    "strawberry-graphql-django>=0.86.7",
+    # Based on upstream v0.87.0; fork metadata reports 0.86.8. No requirer pins >=0.87 today.
+    "strawberry-graphql-django @ git+https://github.com/ang-ee/strawberry-django.git@2f2b09aaa80624e487e9b58a0aea3658ea30a9e8",
     "tablib>=3",
     "vobject>=0.9.9",
 ]

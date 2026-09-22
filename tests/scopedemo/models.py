@@ -3,22 +3,23 @@
 ``ScopedDoc`` composes this test app's local ``ScopeScopedMixin``. The blank-on-
 input ``scope`` FK defaults from the actor's sole direct scope membership and
 the adjacent ``permissions.zed`` gates ``create`` on ``scope->member``. That arm
-fail-closes unless the auto-CRUD create preflight evaluates against the defaulted
-scope, so these models keep coverage on Angee's generic create-default machinery
+fail-closes unless the pre-save create gate evaluates against the defaulted
+scope, so these models keep coverage on model-owned defaults before authorization
 without depending on any framework-owned business scope.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from rebac import app_settings, current_actor, is_anonymous_actor, to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
+from angee.base.db import get_write_alias
+from angee.base.mixins import ConditionalSharedReaderMixin, ConditionalSharedReaderQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 
 SCOPE_MEMBER_RELATION = "direct_member"
@@ -102,15 +103,6 @@ class ScopeScopedMixin(models.Model):
             self.scope = self._default_scope_from_membership()
         super().save(*args, **kwargs)
 
-    def apply_create_defaults(self) -> Mapping[str, Sequence[Any]]:
-        """Default blank ``scope`` before the create gate evaluates the row."""
-
-        contributions = dict(super().apply_create_defaults())
-        if self.scope_id is None:
-            self.scope = self._default_scope_from_membership()
-            contributions["scope"] = (self.scope,)
-        return contributions
-
     def _default_scope_from_membership(self) -> Scope:
         """Return the acting user's sole direct scope, or raise naming ``scope``."""
 
@@ -144,3 +136,76 @@ class ScopedDoc(ScopeScopedMixin, AngeeDataModel):
         app_label = "scopedemo"
         db_table = "test_scopedemo_doc"
         rebac_resource_type = "scopedemo/doc"
+
+
+class FactoryDocQuerySet(AngeeQuerySet["FactoryDoc"]):
+    """Keep a companion row in the same transaction as every document insert."""
+
+    def insert(self, obj: FactoryDoc) -> FactoryDoc:
+        """Persist the prepared document and its companion exactly once."""
+
+        using = get_write_alias(self.model, bound=self)
+        with transaction.atomic(using=using):
+            obj = super().insert(obj)
+            FactoryCompanion.objects.using(using).create(document=obj)
+        return obj
+
+
+class FactoryDoc(ScopeScopedMixin, AngeeDataModel):
+    """A scoped document whose factory has a transactional companion invariant."""
+
+    sqid_prefix = "fcd_"
+    title = models.CharField(max_length=200)
+    objects = AngeeManager.from_queryset(FactoryDocQuerySet)()
+
+    class Meta(AngeeDataModel.Meta):
+        abstract = False
+        app_label = "scopedemo"
+        rebac_resource_type = "scopedemo/factory_doc"
+
+
+class FactoryCompanion(models.Model):
+    """One row per factory invocation, so duplicate calls are observable."""
+
+    document = models.ForeignKey(FactoryDoc, on_delete=models.CASCADE, related_name="companions")
+
+    class Meta:
+        app_label = "scopedemo"
+
+
+class ProjectionDoc(AngeeDataModel):
+    """A create policy depending on a forward-then-reverse candidate relation."""
+
+    sqid_prefix = "pjd_"
+    title = models.CharField(max_length=200)
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="children")
+
+    class Meta(AngeeDataModel.Meta):
+        abstract = False
+        app_label = "scopedemo"
+        rebac_resource_type = "scopedemo/projection_doc"
+
+
+class SharedDocQuerySet(ConditionalSharedReaderQuerySet[Any], AngeeQuerySet[Any]):
+    """Keep shared eligibility changes on the tuple reconciliation owner."""
+
+
+class SharedDoc(ConditionalSharedReaderMixin, AngeeDataModel):
+    """A candidate whose create permission needs its promised wildcard tuple."""
+
+    sqid_prefix = "shd_"
+    title = models.CharField(max_length=200)
+    is_shared = models.BooleanField(default=False)
+    shared_reader_policy_fields = ("is_shared",)
+    objects = AngeeManager.from_queryset(SharedDocQuerySet)()
+
+    class Meta(AngeeDataModel.Meta):
+        abstract = False
+        app_label = "scopedemo"
+        rebac_resource_type = "scopedemo/shared_doc"
+
+    @property
+    def shared_reader_eligible(self) -> bool:
+        """Share only rows whose persisted policy opts in."""
+
+        return self.is_shared
