@@ -15,11 +15,11 @@ Dependency changes must update this file in the same change.
   addon's `addon.toml` owns that addon's dependencies; `angee build` projects the
   composed manifests into the host's generated `[dependency-groups].addons` key.
   `uv.lock` pins the resolved Python graph. The `angee.graphql` folder addon's
-  manifest owns its Strawberry stack, Channels Redis adapter, and exact
-  Strawberry and strawberry-django fork references. REBAC, Hasura and aggregates use published release
-  floors in their owning manifests and registry artifacts in `uv.lock`. The
-  Strawberry fork remains necessary for native input/object extensions; the
-  strawberry-django fork supplies the unified prepared-instance create resolver.
+  manifest owns its Strawberry stack, Channels Redis adapter, and the exact
+  Strawberry fork reference. strawberry-django, REBAC, Hasura and aggregates use
+  published release floors in their owning manifests and registry artifacts in
+  `uv.lock`. The Strawberry fork remains necessary for native input/object
+  extensions; every other Python dependency tracks its PyPI release.
   Use `uv add` / `uv lock`; do not use `pip install` by hand.
 - Package `package.json` files own scripts and declared JavaScript dependencies.
   The installing workspace's `pnpm-workspace.yaml` owns membership and its
@@ -36,7 +36,7 @@ Dependency changes must update this file in the same change.
 |---|---|---|
 | Python >= 3.14 | Runtime and typing | Project conventions |
 | Django 6.0+ | ORM, migrations, admin, auth contract, app registry | Abstract bases and build-time composition into runtime apps |
-| strawberry-django (direct Git pin: `strawberry-graphql-django @ git+https://github.com/ang-ee/strawberry-django.git@f61579a1b3fb8a7f28e9595b8f132ba8b52e8f85`, based on upstream 0.89.2, the current PyPI release; temporary until upstream ships the create-resolver change) | GraphQL types, dataloaders, schema printing, and unified create resolver: prepare, hook, full-clean and persist one instance through `manager.insert(instance)` when available, otherwise `save(force_insert=True, using=manager.db)`; manager `create` overrides are not the resolver seam | Merge addon schema parts into named schemas, public-ID decoding, `changes` subscription shortcuts, emit SDL, serve per name |
+| strawberry-django >= 0.89.2 | GraphQL types, dataloaders, schema printing, and the create resolver, which without a pre-save hook persists through `manager.create(**kwargs)`; on a REBAC manager that composes `RebacQuerySet.insert`, so queryset factories and the candidate gate run for GraphQL creates. Upstream PR strawberry-graphql/strawberry-django#959 proposes persisting the same prepared instance the resolver validated | Merge addon schema parts into named schemas, public-ID decoding, `changes` subscription shortcuts, emit SDL, serve per name; the write backend passes no pre-save hook |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
 | django-countries >= 9 | Configurable ISO 3166-1 country choices, overrides, localized names, and translated display names | `angee.parties.fields.CountryCodeField` preserves configured codes and names, stores alpha-2 as a plain string, and exposes the upstream choices through resource metadata |
 | pycountry >= 26 | Complete ISO country code and official/common-name lookup | `angee.parties.fields.CountryCodeField` uses the upstream catalogue only when the configured django-countries catalogue has no match |

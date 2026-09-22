@@ -132,8 +132,7 @@ addons = [
     "strawberry-django-aggregates>=0.12.0",
     "strawberry-django-hasura>=0.11.0",
     "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@e4fa3198f704d81b3ca96b6dcac75420c5fee516",
-    # Based on upstream 0.89.2; fork metadata reports 0.89.2, the current PyPI release; the pin is temporary until upstream ships the create-resolver change.
-    "strawberry-graphql-django @ git+https://github.com/ang-ee/strawberry-django.git@f61579a1b3fb8a7f28e9595b8f132ba8b52e8f85",
+    "strawberry-graphql-django>=0.89.2",
     "tablib>=3",
     "vobject>=0.9.9",
 ]

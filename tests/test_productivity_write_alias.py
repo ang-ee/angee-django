@@ -45,7 +45,8 @@ from tests.conftest import (
 )
 from tests.projects_models import Task
 from tests.proposals_models import Proposal, Round
-from tests.spaces_models import Group
+from tests.spaces_models import Group, Membership
+from tests.test_messaging import Party, Person
 from tests.test_sequence import SEQUENCE_TEST_MODELS
 from tests.test_transitions import TransitionRouter
 
@@ -98,6 +99,7 @@ class Queue(AbstractQueue, Group):
         abstract = False
         app_label = "work"
         db_table = "test_create_work_queue"
+        rebac_resource_type = "work/queue"
 
 
 class Stage(AbstractWorkStage):
@@ -107,6 +109,7 @@ class Stage(AbstractWorkStage):
         abstract = False
         app_label = "work"
         db_table = "test_create_work_stage"
+        rebac_resource_type = "work/stage"
 
 
 class CreateProject(AngeeDataModel):
@@ -186,7 +189,19 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
     """Expose the production donors through real Hasura resources and local REBAC."""
 
     del transactional_db
-    model_types = (Group, Queue, Stage, *SEQUENCE_TEST_MODELS, CreateProject, CreateTask, CreateNeed)
+    # Queue access delegates to Group's memberships__party__person__user path.
+    model_types = (
+        Party,
+        Person,
+        Group,
+        Membership,
+        Queue,
+        Stage,
+        *SEQUENCE_TEST_MODELS,
+        CreateProject,
+        CreateTask,
+        CreateNeed,
+    )
     created_models = _create_missing_tables(model_types)
     call_command("rebac", "sync", verbosity=0)
     active = backend()
@@ -221,6 +236,9 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
                 node,
                 model=model,
                 name=name,
+                filterable=["id"],
+                sortable=["id"],
+                aggregatable=["id"],
                 insertable=fields,
                 update=False,
                 delete=False,

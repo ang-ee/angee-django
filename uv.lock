@@ -804,7 +804,7 @@ addons = [
     { name = "strawberry-django-aggregates", specifier = ">=0.12.0" },
     { name = "strawberry-django-hasura", specifier = ">=0.11.0" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=e4fa3198f704d81b3ca96b6dcac75420c5fee516" },
-    { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=f61579a1b3fb8a7f28e9595b8f132ba8b52e8f85" },
+    { name = "strawberry-graphql-django", specifier = ">=0.89.2" },
     { name = "tablib", specifier = ">=3" },
     { name = "vobject", specifier = ">=0.9.9" },
 ]
@@ -2561,11 +2561,15 @@ dependencies = [
 [[package]]
 name = "strawberry-graphql-django"
 version = "0.89.2"
-source = { git = "https://github.com/ang-ee/strawberry-django.git?rev=f61579a1b3fb8a7f28e9595b8f132ba8b52e8f85#f61579a1b3fb8a7f28e9595b8f132ba8b52e8f85" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asgiref" },
     { name = "django" },
     { name = "strawberry-graphql" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d1/6c/b7c0e37062412639d56652295da898e0468ad079f356b6fa09a564562ef8/strawberry_graphql_django-0.89.2.tar.gz", hash = "sha256:2c7d33eaf0ae8029274c446d6fc30a27361040077101473b39b250cd250cf2db", size = 96917, upload-time = "2026-09-13T10:14:05.74Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/88/1bca5f3155c69b963120a1b9c10d85293d954a6766ec44efd1a9e14b2acf/strawberry_graphql_django-0.89.2-py3-none-any.whl", hash = "sha256:e049bb4c08f42fe104390556ae8e723705a39a6bf7913c1afc76b4099a5891c2", size = 121218, upload-time = "2026-09-13T10:14:04.556Z" },
 ]
 
 [[package]]
