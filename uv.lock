@@ -804,7 +804,7 @@ addons = [
     { name = "strawberry-django-aggregates", specifier = ">=0.12.0" },
     { name = "strawberry-django-hasura", specifier = ">=0.11.0" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=e4fa3198f704d81b3ca96b6dcac75420c5fee516" },
-    { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=2f2b09aaa80624e487e9b58a0aea3658ea30a9e8" },
+    { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=f61579a1b3fb8a7f28e9595b8f132ba8b52e8f85" },
     { name = "tablib", specifier = ">=3" },
     { name = "vobject", specifier = ">=0.9.9" },
 ]
@@ -2560,8 +2560,8 @@ dependencies = [
 
 [[package]]
 name = "strawberry-graphql-django"
-version = "0.86.8"
-source = { git = "https://github.com/ang-ee/strawberry-django.git?rev=2f2b09aaa80624e487e9b58a0aea3658ea30a9e8#2f2b09aaa80624e487e9b58a0aea3658ea30a9e8" }
+version = "0.89.2"
+source = { git = "https://github.com/ang-ee/strawberry-django.git?rev=f61579a1b3fb8a7f28e9595b8f132ba8b52e8f85#f61579a1b3fb8a7f28e9595b8f132ba8b52e8f85" }
 dependencies = [
     { name = "asgiref" },
     { name = "django" },
