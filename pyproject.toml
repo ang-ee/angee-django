@@ -192,8 +192,8 @@ only-include = [
 [tool.pytest.ini_options]
 cache_dir = ".pytest_cache"
 DJANGO_SETTINGS_MODULE = "tests.settings"
-python_files = ["test_*.py"]
-testpaths = ["tests", "addons/angee/resources/tests"]
+python_files = ["test_*.py", "tests_*.py"]
+testpaths = ["tests", "addons/angee/resources/tests", "addons/angee/workflows_integrate"]
 pythonpath = [".", "addons", "examples/addons"]
 addopts = "-ra --strict-markers --import-mode=importlib"
 

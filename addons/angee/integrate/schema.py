@@ -1256,14 +1256,9 @@ class BridgeSyncStatusMixin:
 
         return bool(cast(Any, self).is_syncing)
 
-    @strawberry_django.field(name="sync_stage", only=["id", "sync_stage"])
+    @strawberry_django.field(name="sync_stage", only=["id", "sync_stage", "sync_progress"])
     def sync_stage(self) -> str:
-        """Return the sync stage reconciled against the live lock.
-
-        The raw column is a progress report a crashed worker leaves stale; the
-        model's ``effective_sync_stage`` trusts the advisory lock instead, so a
-        dead run reads ``failed`` — never a phantom ``syncing``.
-        """
+        """Reconcile direct workers against their lock; retained runs settle durably."""
 
         return str(cast(Any, self).effective_sync_stage)
 
@@ -1389,7 +1384,7 @@ _VENDOR_RESOURCE = hasura_model_resource(
 class SyncStreamType(AngeeNode):
     """Read-only inspection of a bridge partition's retained epoch."""
 
-    integration: IntegrationType
+    integration: IntegrationType = strawberry_django.field(only=["bridge_id"], prefetch_related=["integration"])
     key: auto
     partition: auto
     kind: auto
@@ -1453,6 +1448,7 @@ class SyncDiscrepancyType(AngeeNode):
     mapping_version: auto
     details: JSON
     status: auto
+    attempts: auto
     retry_at: auto
     resolved_at: auto
     created_at: auto

@@ -5,12 +5,19 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from enum import StrEnum
 from typing import Any
 
 from django.db import transaction
 
 from angee.base.db import get_write_alias
 from angee.graphql.publishing import publication_ingestion_context
+
+
+class SyncDispatch(StrEnum):
+    """A durable execution owner will report this sync's terminal result later."""
+
+    DISPATCHED = "dispatched"
 
 
 @contextmanager
@@ -97,6 +104,7 @@ def current_bridge_progress() -> BridgeProgressReporter | None:
 
 __all__ = [
     "BridgeProgressReporter",
+    "SyncDispatch",
     "bridge_progress_context",
     "bridge_sync_context",
     "current_bridge_progress",

@@ -89,6 +89,21 @@ terminal. A child's `child_failed` or `child_canceled` call outcome has
 and output bindings on those routes are rejected. A Map body of calls completes
 only after each item's child result is complete and joins results in item order.
 
+Every terminal run transition retains one `RUN_SETTLE` intent in its own
+transaction. Addons register database-only subject handlers through
+`ANGEE_WORKFLOW_SUBJECT_SETTLERS:append`, mapping an explicit model-class import
+path to a callable import path. Abstract declarations expand to their installed
+concrete content types; overlapping declarations fail at startup. A handler
+implements `handler(run, *, using=None)`, locks its subject on that alias, and
+guards settlement against a newer operation on the subject. Delivery commits
+the handler's writes and consumes the intent together; failures leave it pending
+for the existing dispatch publisher. Unregistered subjects consume a no-op.
+
+Long STANDARD steps compose `StepImpl.heartbeat_during(step_run, using=alias)`
+around bounded external I/O. It refreshes only the captured attempt lease on a
+separate connection and shares the reaper's configured heartbeat timeout. The
+step's page transaction remains separate from attempt finalization.
+
 `join_continuation` passes the child id and current invocation lease explicitly
 to `StepAttemptManager`. The manager checks the retained parent relationship,
 starter class, execution lineage and actor scope. It subscribes to that original

@@ -14,11 +14,10 @@ import traceback
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, cast
 
 from django.apps import apps
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
@@ -73,7 +72,7 @@ from angee.workflows.models import (
     Verdict,
     WaitingKind,
 )
-from angee.workflows.steps import MapStep, StepExecutionMode, TransientStepError
+from angee.workflows.steps import MapStep, StepExecutionMode, TransientStepError, heartbeat_timeout
 
 VERDICT_PENDING = cast(Verdict, Verdict.PENDING)
 VERDICT_COMPLETED = cast(Verdict, Verdict.COMPLETED)
@@ -147,6 +146,7 @@ def start(
         origin=origin,
         input=input,
         validate_new=validate_new,
+        using=alias,
     )
 
 
@@ -466,6 +466,18 @@ def cancel_run_dispatch(
             kind=WorkflowDispatchKind.RUN_CANCEL,
             expected_run_id=expected_run_id,
         )
+    )
+
+
+def settle_run_dispatch(
+    dispatch_id: int, *, expected_run_id: int | None = None, using: str | None = None
+) -> dict[str, int]:
+    """Deliver a terminal subject settlement through the retained run owner."""
+
+    model = apps.get_model("workflows", "WorkflowRun")
+    alias = get_write_alias(model, using=using)
+    return model.objects.db_manager(alias).settle_from_dispatch(
+        dispatch_id, expected_run_id=expected_run_id, using=alias,
     )
 
 
@@ -827,7 +839,7 @@ def reap(*, now: datetime | None = None, using: str | None = None) -> dict[str, 
     alias = get_write_alias(apps.get_model("workflows", "StepRun"), using=using)
 
     timestamp = now or timezone.now()
-    deadline = timestamp - _heartbeat_timeout()
+    deadline = timestamp - heartbeat_timeout()
     step_run_model = apps.get_model("workflows", "StepRun")
     reaped = 0
     with system_context(reason="workflows.engine.reap.discover"):
@@ -2109,15 +2121,6 @@ def _step_key(step_run: Any) -> str:
     if step_run.step_id is not None:
         return str(step_run.step.key)
     return step_run.system_kind or str(step_run.pk)
-
-
-def _heartbeat_timeout() -> timedelta:
-    """Return the configured heartbeat timeout as a timedelta."""
-
-    configured = getattr(settings, "ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT", 300)
-    if isinstance(configured, timedelta):
-        return configured
-    return timedelta(seconds=float(configured))
 
 
 def _fail_run(run: Any, error: str, *, failed_step_run: Any, alias: str) -> None:

@@ -14,6 +14,7 @@ import {
   CONNECT_CALLBACK_PATH,
 } from "./connect/redirects";
 import { enIntegrateMessages } from "./i18n";
+import { integrationSyncProgressWidget } from "./sync-fragments";
 import {
   DisconnectIntegrationAction,
   INTEGRATION_DISCONNECT_ACTION_ID,
@@ -109,6 +110,7 @@ const integrate = defineBaseAddon({
   routes: integrateRoutes,
   menus: integrateMenu,
   i18n: { integrate: enIntegrateMessages },
+  widgets: { integrationSyncProgress: integrationSyncProgressWidget },
   // The credential CRUD form: used by the Credentials page "New" and the
   // relation-picker inline create (e.g. an Integration's credential field).
   forms: {

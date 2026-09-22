@@ -264,7 +264,11 @@ class SlackChannelBackend(ChannelBackend):
         except SlackApiError as error:
             if not cursor or str(response_data(error.response).get("error") or "") != "invalid_cursor":
                 raise
-            raise CursorInvalid() from error
+            # Only the history pagination state expired; conversation and
+            # thread watermarks remain valid in the successor generation.
+            retained = deepcopy(self._cursor)
+            retained["conversation"].pop("history", None)
+            raise CursorInvalid(cursor=retained) from error
         messages = [dict(raw) for raw in data.get("messages") or () if isinstance(raw, Mapping)]
         target = _latest_timestamp(messages, floor=last_ts)
         return _HistoryPage(

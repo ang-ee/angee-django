@@ -53,6 +53,8 @@ from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import (
     result_data as _data,
 )
+from tests.integrate_models import SyncStream
+from tests.messaging_models import Channel
 from tests.test_agents import InferenceProvider
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
 from tests.test_messaging import MESSAGING_TEST_MODELS
@@ -104,6 +106,43 @@ def test_integration_node_resolves_nested_relations(
         "owner": {"username": "conn-node-owner"},
         "account": None,
     }
+
+
+def test_sync_stream_filter_and_batched_integration_projection(
+    integrate_console_tables: None,
+    record_sync_tables: None,
+) -> None:
+    """The derived owner relation filters by public id and batches its projection."""
+
+    del integrate_console_tables, record_sync_tables
+    admin = _platform_admin("stream-relation-admin")
+    bridge = make_integration("stream-relation", model=Channel)
+    other = make_integration("stream-relation-other", model=Channel)
+    with system_context(reason="test stream relation projection"):
+        SyncStream.objects.current(bridge, "messages", "first")
+        SyncStream.objects.current(other, "messages", "hidden")
+    schema = _schema()
+    query = """
+        query StreamOwner($id: String!) {
+            sync_streams(where: {integration: {_eq: $id}}, limit: 20) {
+                partition
+                integration { id display_name }
+            }
+        }
+    """
+    with CaptureQueriesContext(connection) as one:
+        first = _data(_execute(schema, query, {"id": _public_id(bridge)}, user=admin))["sync_streams"]
+    assert [row["partition"] for row in first] == ["first"]
+    assert first[0]["integration"]["id"] == _public_id(bridge)
+
+    with system_context(reason="test additional stream partitions"):
+        for index in range(4):
+            SyncStream.objects.current(bridge, "messages", f"partition-{index}")
+    with CaptureQueriesContext(connection) as many:
+        rows = _data(_execute(schema, query, {"id": _public_id(bridge)}, user=admin))["sync_streams"]
+    assert len(rows) == 5
+    assert all(row["integration"] == first[0]["integration"] for row in rows)
+    assert len(many) <= len(one) + 1
 
 
 def test_integration_capabilities_are_native_creatable_children(

@@ -9,6 +9,7 @@ export const enIntegrateMessages: Record<string, string> = {
   // it is a real handshake per subtype, so the addon that owns the vendor owns
   // its label as well as its UX.
   "connection.test": "Test connection",
+  "sync.openRun": "View sync run",
   "lifecycle.pause": "Pause",
   "lifecycle.resume": "Resume",
   "lifecycle.disconnect": "Disconnect",

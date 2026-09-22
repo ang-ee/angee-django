@@ -26,6 +26,7 @@ class WorkflowDispatchKind(StrEnum):
     ARTIFACT_DELIVERY = "artifact_delivery"
     CHILD_CANCEL = "child_cancel"
     RUN_CANCEL = "run_cancel"
+    RUN_SETTLE = "run_settle"
 
 
 class DispatchConsumption(StrEnum):

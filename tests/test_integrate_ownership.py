@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from unittest.mock import patch
 
 import pytest
@@ -142,6 +142,35 @@ def test_import_command_preserves_local_overlay_and_source_identity(ownership_ta
             source_key="record-1",
             company=None,
         )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("pair_type", [tuple, list], ids=["tuple", "json-list"])
+@pytest.mark.parametrize("id_type", [int, str], ids=["int-id", "str-id"])
+def test_identity_pairs_normalize_at_import_and_claim_boundaries(
+    ownership_tables: None, pair_type: type[tuple] | type[list], id_type: type[int] | type[str]
+) -> None:
+    company = OwnershipCompany.objects.create()
+    row = OwnedProjection.objects.create(name="local", company=company)
+    source: Sequence[str | int] = pair_type(("directory", id_type(7)))
+    company_identity: Sequence[str | int] = pair_type(("integrate.ownershipcompany", id_type(company.pk)))
+
+    row.claim_external_ownership("record-1", source=source, using="default")
+    assert row.import_source(using="default") == ("directory", "7")
+    assert row.require_external_identity(
+        source=source, source_key="record-1", company=company_identity, using="default"
+    ) == ("directory", "7")
+    applied = OwnedProjection.objects.apply_external(
+        row.pk,
+        {"name": "remote update"},
+        source=source,
+        source_key="record-1",
+        company=company_identity,
+        using="default",
+    )
+    row.refresh_from_db()
+    assert row.name == applied.name == "remote update"
+    assert row.company_id == company.pk
 
 
 @pytest.mark.django_db(transaction=True)

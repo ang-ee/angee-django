@@ -14,6 +14,7 @@ from rebac import system_context
 from angee.base.db import get_write_alias
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge
+from angee.integrate.sync import SyncDispatch
 
 
 def run_bridge_sync_job(
@@ -40,9 +41,11 @@ def run_bridge_sync_job(
                 # The holder owns this bridge; this run declines. Clear our own queue
                 # claim so the stale-queue recovery stops re-queuing a row nobody will
                 # ever pick up — a live session holds the lock for its whole life.
-                bridge.release_sync_queue(now=now)
+                bridge.release_sync_queue(now=now, using=using)
                 return {"ok": True, "items": 0, "skipped": True}
-            items = bridge.run_sync(now=now)
+            items = bridge.run_sync(now=now, using=using)
+    if items is SyncDispatch.DISPATCHED:
+        return {"ok": True, "items": 0, "skipped": False, "dispatched": True}
     return {"ok": True, "items": items, "skipped": False}
 
 

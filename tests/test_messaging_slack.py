@@ -18,7 +18,7 @@ from slack_sdk.errors import SlackApiError
 
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.live import PairingState
-from angee.integrate.streams import StreamPage
+from angee.integrate.streams import StreamPage, advance_stream
 from angee.messaging.backends import ChannelBackend, ParsedMessage, body_part
 from angee.messaging.session import LiveChannelSession
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
@@ -235,6 +235,71 @@ def test_extract_persists_page_resume_before_history_watermark(monkeypatch: pyte
         kwargs for name, kwargs in FakeWebClient.calls if name == "conversations.history" and kwargs["channel"] == "C1"
     ]
     assert c1_history[-1]["cursor"] == "history-2"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_invalid_history_cursor_retains_watermarks_across_generation(
+    slack_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One expired page resumes at its committed history and thread watermarks."""
+
+    class ExpiredHistoryClient(FakeWebClient):
+        calls: ClassVar[list[tuple[str, dict[str, Any]]]] = []
+
+        def conversations_history(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(("conversations.history", kwargs))
+            if kwargs.get("cursor") == "expired-page":
+                response = SimpleNamespace(data={"ok": False, "error": "invalid_cursor"})
+                raise SlackApiError("History page expired", response)
+            return {"messages": []}
+
+        def conversations_replies(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(("conversations.replies", kwargs))
+            return {"messages": []}
+
+    monkeypatch.setattr(SlackChannelBackend, "client_class", ExpiredHistoryClient)
+    monkeypatch.setattr(SlackChannelBackend, "_backfill_floor", lambda self: "0")
+    channel = _slack_channel("slack-invalid-history-cursor")
+    cursor = {
+        "conversation": {
+            "last_ts": "100.000001",
+            "history": {"cursor": "expired-page", "oldest": "100.000001", "last_ts": "104.000001"},
+        },
+        "threads": {"99.000001": "101.000001"},
+    }
+    with system_context(reason="test slack invalid page cursor"):
+        stream = SyncStream.objects.current(channel, "messages", "C1", cursor=cursor, using="default")
+        other = SyncStream.objects.current(
+            channel,
+            "messages",
+            "D1",
+            cursor={"conversation": {"last_ts": "200.000001"}, "threads": {"199.000001": "201.000001"}},
+            using="default",
+        )
+        other_cursor = other.cursor
+        backend = SlackChannelBackend(channel)
+        try:
+            reset = advance_stream(stream, backend, using="default")
+            assert reset.stream.generation == stream.generation + 1
+            assert reset.stream.cursor == {
+                "conversation": {"last_ts": "100.000001"},
+                "threads": {"99.000001": "101.000001"},
+            }
+            resumed = advance_stream(reset.stream, backend, using="default")
+            assert resumed.exhausted is True
+            assert resumed.stream.cursor == reset.stream.cursor
+        finally:
+            backend.close()
+        other.refresh_from_db()
+        assert other.cursor == other_cursor
+        assert other.generation == stream.generation
+        stream.refresh_from_db()
+        assert stream.cursor == cursor
+    history = [kwargs for name, kwargs in ExpiredHistoryClient.calls if name == "conversations.history"]
+    replies = [kwargs for name, kwargs in ExpiredHistoryClient.calls if name == "conversations.replies"]
+    assert history[-1]["cursor"] is None
+    assert history[-1]["oldest"] == "100.000001"
+    assert replies[-1]["oldest"] == "101.000001"
 
 
 def test_media_bounded_history_slice_resumes_on_a_fresh_adapter(monkeypatch: pytest.MonkeyPatch) -> None:

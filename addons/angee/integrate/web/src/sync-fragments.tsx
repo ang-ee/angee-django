@@ -4,9 +4,17 @@ import {
   Column,
   Field,
   Group,
+  JsonValueView,
+  TextLink,
+  jsonObjectFromUnknown,
+  useResourceRecordHrefLookup,
   useRecordActionMutation,
+  type WidgetDefinition,
+  type WidgetRenderProps,
 } from "@angee/ui";
 import type { ReactElement, ReactNode } from "react";
+
+import { useIntegrateT } from "./i18n";
 
 export type IntegrationSyncFieldName =
   | "is_syncing"
@@ -84,8 +92,28 @@ export function useIntegrationSyncAction(
 }
 
 function syncWidget(name: IntegrationSyncFieldName): string | undefined {
-  if (name === "sync_progress" || name === "last_sync_summary") return "json";
+  if (name === "sync_progress") return "integrationSyncProgress";
+  if (name === "last_sync_summary") return "json";
   if (name === "last_sync_status") return "statusBadge";
   if (name === "is_syncing") return "booleanBadge";
   return undefined;
 }
+
+function SyncProgress({ value }: WidgetRenderProps): ReactElement {
+  const t = useIntegrateT();
+  const recordHref = useResourceRecordHrefLookup();
+  const details = jsonObjectFromUnknown(jsonObjectFromUnknown(value)?.details);
+  const run = details?.run;
+  const href = typeof run === "string" ? recordHref("workflows.WorkflowRun", run) : undefined;
+  return (
+    <div className="space-y-2">
+      {href ? <TextLink href={href}>{t("sync.openRun")}</TextLink> : null}
+      <JsonValueView value={value} />
+    </div>
+  );
+}
+
+/** Bridge progress composes the host's workflow route when it is available. */
+export const integrationSyncProgressWidget = {
+  read: SyncProgress,
+} satisfies WidgetDefinition;

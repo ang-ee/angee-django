@@ -141,6 +141,18 @@ def _deliver_results(root: Any, *, now: datetime | None = None, using: str) -> N
     for dispatch in deliveries:
         engine.deliver_artifact_dispatch(dispatch.pk, now=timestamp, using=alias)
 
+    with system_context(reason="workflows.testing due subject settlements"):
+        settlements = list(
+            dispatch_model.objects.db_manager(alias).filter(
+                kind=WorkflowDispatchKind.RUN_SETTLE,
+                run_id__in=tree_ids,
+                available_at__lte=timestamp,
+                consumed_at__isnull=True,
+            ).order_by("pk")
+        )
+    for dispatch in settlements:
+        engine.settle_run_dispatch(dispatch.pk, expected_run_id=dispatch.run_id, using=alias)
+
 
 def start_run(workflow: Any, *, subject: Any = None, actor: Any = None, using: str | None = None) -> Any:
     """Start a workflow run without relying on a live queue."""

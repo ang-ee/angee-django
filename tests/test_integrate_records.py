@@ -5,14 +5,16 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.db import transaction
 from django.utils import timezone
 from rebac import system_context
 
 from angee.integrate.records import DiscrepancyKind, DiscrepancyStatus, LinkStatus, StreamKind, StreamPhase
 from tests.conftest import make_integration
-from tests.integrate_models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
+from tests.integrate_models import Integration, RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from tests.messaging_models import Channel
 
 
@@ -185,3 +187,50 @@ def test_current_partition_query_returns_latest_generation_only(record_sync_tabl
             sent.pk,
         ]
         assert SyncStream.objects.current(bridge, "messages", "inbox", cursor={"uid": 999}).cursor == {}
+
+
+def test_stream_bridge_identity_derives_integration_without_a_second_column(record_sync_tables: None) -> None:
+    del record_sync_tables
+    with system_context(reason="test stream bridge identity"):
+        bridge = make_integration("stream-identity", model=Channel)
+        stream = SyncStream.objects.current(bridge, "messages", using="default")
+        stream.refresh_from_db(using="default")
+        assert stream.bridge == bridge
+        assert stream.bridge_id == bridge.pk
+        assert stream.integration.pk == bridge.pk
+        assert "integration_id" not in {field.column for field in stream._meta.concrete_fields}
+        assert not stream._meta.get_field("integration").concrete
+        successor = SyncStream.objects.bump_generation(stream, using="default")
+        assert successor.bridge == bridge
+        assert SyncStream.objects.filter(integration=bridge.pk).count() == 2
+
+
+def test_stream_rejects_an_integration_without_a_concrete_bridge(record_sync_tables: None) -> None:
+    del record_sync_tables
+    with system_context(reason="test stream requires a bridge"):
+        integration = make_integration("stream-no-bridge")
+        with pytest.raises(ValidationError, match="concrete Integration child"):
+            SyncStream.objects.current(integration, "messages", using="default")
+        assert not SyncStream.objects.exists()
+
+
+def test_stream_and_links_follow_the_gfk_integration_owner(record_sync_tables: None) -> None:
+    del record_sync_tables
+    call_command("rebac", "sync", verbosity=0)
+    with system_context(reason="test derived stream authorization"):
+        bridge = make_integration("stream-rebac", model=Channel)
+        owner = get_user_model().objects.get(pk=bridge.owner_id)
+        other = get_user_model().objects.create_user(username="stream-rebac-other")
+        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "person:1")
+
+    for model, row in ((SyncStream, stream), (RecordLink, link)):
+        assert model.objects.with_actor(owner).filter(pk=row.pk).exists()
+        assert not model.objects.with_actor(other).filter(pk=row.pk).exists()
+
+    with system_context(reason="test derived stream owner change"):
+        Integration.objects.filter(pk=bridge.pk).update(owner=other)
+
+    for model, row in ((SyncStream, stream), (RecordLink, link)):
+        assert not model.objects.with_actor(owner).filter(pk=row.pk).exists()
+        assert model.objects.with_actor(other).filter(pk=row.pk).exists()

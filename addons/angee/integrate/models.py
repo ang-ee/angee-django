@@ -33,6 +33,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connections, models, transaction
 from django.db.models import Prefetch, Q
 from django.utils import timezone
+from django.utils.module_loading import import_string
 from django.utils.text import capfirst
 from rebac import (
     RelationshipTuple,
@@ -50,6 +51,7 @@ from strawberry_django.descriptors import model_property
 
 from angee.base.db import get_write_alias, related_on
 from angee.base.fields import EncryptedField, StateField
+from angee.base.identity import public_id_for
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
@@ -74,7 +76,7 @@ from angee.integrate.records import (  # noqa: F401 -- model discovery
     SyncStream,
 )
 from angee.integrate.streams import sync_bridge
-from angee.integrate.sync import bridge_progress_context, bridge_sync_context
+from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
 
@@ -2057,6 +2059,9 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     scheduler, but the live-session reconciler does not inspect or dispatch them.
     """
 
+    sync_workflow_key: ClassVar[str] = ""
+    """Optional workflow lineage selected through the installed sync dispatch hook."""
+
     config = models.JSONField(default=dict, blank=True)
     """Bridge-scoped settings interpreted by the selected backend."""
     cursor = models.JSONField(default=dict, blank=True)
@@ -2297,9 +2302,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             duplicate_channel_name="" if duplicate is None else str(duplicate.display_name),
         )
 
-    # The persisted stages that assert a live run. Their whole legitimate lifetime
-    # is spent holding the advisory sync lock, so a row carrying one without the
-    # lock is a stale record — the worker died before writing an outcome.
+    # Direct syncs hold their advisory lock; dispatched syncs retain a run pointer
+    # until their execution owner durably reports the terminal outcome.
     LIVE_SYNC_STAGES: ClassVar[tuple[str, ...]] = (
         str(SyncStage.DISCOVERING),
         str(SyncStage.SYNCING),
@@ -2307,22 +2311,34 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
     @property
     def effective_sync_stage(self) -> str:
-        """Return the sync stage reconciled against the live lock, not the record.
+        """Reconcile direct workers against their lock; dispatched runs settle durably.
 
-        The persisted ``sync_stage`` is a progress report, not the source of truth
-        for "is a run alive" — only the advisory lock is. A crashed worker leaves
-        ``syncing`` behind forever; this projection reports such a row as
-        ``FAILED`` (the run was interrupted) instead of trusting the stale column.
-        ``queued`` is exempt: a queued task legitimately holds no lock until a
-        worker picks it up. When the lock backend is process-local (the SQLite
-        floor), the web process cannot see a worker's lock at all — reconciling
-        there would misreport every healthy run, so the column is trusted as-is.
+        Queued work has not acquired a lock yet. A retained dispatch is owned by
+        its execution engine until terminal delivery. Process-local locks cannot
+        prove another worker's liveness, so that backend trusts the stored stage.
         """
 
         stage = str(self.sync_stage)
-        if stage in self.LIVE_SYNC_STAGES and task_locks_are_cross_process() and not self.is_syncing:
+        if (
+            stage in self.LIVE_SYNC_STAGES
+            and not self.sync_is_dispatched
+            and task_locks_are_cross_process()
+            and not self.is_syncing
+        ):
             return str(self.SyncStage.FAILED)
         return stage
+
+    @property
+    def sync_is_dispatched(self) -> bool:
+        """Whether a retained run owns terminal reporting for this bridge."""
+
+        progress = self.sync_progress if isinstance(self.sync_progress, Mapping) else {}
+        details = progress.get("details", {})
+        return (
+            self.sync_stage in self.LIVE_SYNC_STAGES
+            and isinstance(details, Mapping)
+            and bool(details.get("run"))
+        )
 
     def sync_lock_key(self) -> LockKey:
         """Return the advisory task lock key for this bridge sync."""
@@ -2432,11 +2448,21 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
 
-        self.sync_stage = self.SyncStage.QUEUED
-        self.sync_error = ""
-        self.sync_progress = self._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
         with transaction.atomic(using=using):
-            self.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"], using=using)
+            row = (
+                type(self).objects.db_manager(using)
+                .sudo(reason="integrate.bridge.queue").lock_if_supported().get(pk=self.pk)
+            )
+            if not row.sync_is_dispatched:
+                row.sync_stage = self.SyncStage.QUEUED
+                row.sync_error = ""
+                row.sync_progress = row._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
+                # A previous run's inspection pointer must not claim the next attempt.
+                details = row.sync_progress.get("details")
+                if isinstance(details, Mapping) and "run" in details:
+                    row.sync_progress["details"] = {key: value for key, value in details.items() if key != "run"}
+                row.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"], using=using)
+        self.sync_stage, self.sync_error, self.sync_progress = row.sync_stage, row.sync_error, row.sync_progress
 
     def reset_sync_queue(self, *, now: datetime, using: str | None = None) -> None:
         """Make a failed queue dispatch due again for the next scheduler pass."""
@@ -2612,34 +2638,58 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.sync_error = row.sync_error
         self.sync_progress = row.sync_progress
 
-    def run_sync(self, *, now: datetime, using: str | None = None) -> int:
+    def run_sync(self, *, now: datetime, using: str | None = None) -> int | SyncDispatch:
         """Run one sync attempt and persist its lifecycle telemetry."""
 
         using = get_write_alias(type(self), using=using, instance=self)
         self._state.db = using
 
-        self.mark_sync_started(now=now)
+        if self.sync_is_dispatched:
+            return SyncDispatch.DISPATCHED
+        self.mark_sync_started(now=now, using=using)
         try:
             with bridge_sync_context(), bridge_progress_context(self, using=using):
                 result = self.sync()
+            if result is SyncDispatch.DISPATCHED:
+                return result
             # Partitioned syncs report through thread-local Bridge instances.
             # Re-read their last merged payload before this parent writes the
             # terminal marker, or its stale in-memory value drops budget/cursor
             # detail. The scheduler timestamp identifies the attempt; completion
             # is when the external work actually finished.
             self.refresh_from_db(fields=["sync_progress"], using=using)
-            self.record_sync(result, now=timezone.now())
+            self.record_sync(result, now=timezone.now(), using=using)
         except Exception as error:  # noqa: BLE001 — sync failure is telemetry, then caller policy.
             self.refresh_from_db(fields=["sync_progress"], using=using)
-            self.record_sync_error(error, now=timezone.now())
+            self.record_sync_error(error, now=timezone.now(), using=using)
             raise
         return result
 
-    def sync(self, *, using: str | None = None) -> int:
+    def sync(self, *, using: str | None = None) -> int | SyncDispatch:
         """Drive backend streams; concrete bridges may override this sync seam."""
 
         using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        dispatched = self.dispatch_sync()
+        if dispatched is not None:
+            return dispatched
         return sync_bridge(self, using=using)
+
+    def dispatch_sync(self, *, using: str | None = None) -> SyncDispatch | None:
+        """Hand a declared cycle to the composition addon's durable admission hook."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        if not self.sync_workflow_key:
+            return None
+        handler = getattr(settings, "ANGEE_BRIDGE_SYNC_DISPATCH", "")
+        if not handler:
+            raise ImproperlyConfigured("A sync_workflow_key requires the workflows_integrate addon.")
+        return import_string(handler)(self, using=using)
+
+    def sync_workflow_input(self, *, using: str | None = None) -> dict[str, Any]:
+        """Snapshot immutable cycle input; connectors may add their admitted facts."""
+
+        return {"bridge": {"model": self._meta.label_lower, "id": public_id_for(type(self), self.pk)}}
 
     def handle_webhook(self, payload: Any) -> None:
         """Apply one verified inbound webhook payload to this bridge."""

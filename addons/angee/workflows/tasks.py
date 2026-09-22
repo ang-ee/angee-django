@@ -115,6 +115,8 @@ def consume_workflow_dispatch(
         engine.cancel_child_dispatch(dispatch_id, expected_child_id=target_id, using=alias)
     elif parsed == WorkflowDispatchKind.RUN_CANCEL:
         engine.cancel_run_dispatch(dispatch_id, expected_run_id=target_id, using=alias)
+    elif parsed == WorkflowDispatchKind.RUN_SETTLE:
+        engine.settle_run_dispatch(dispatch_id, expected_run_id=target_id, using=alias)
 
 
 @shared_task(bind=True, name="workflows.publish_dispatches")

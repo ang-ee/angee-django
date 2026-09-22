@@ -112,6 +112,7 @@ from angee.workflows.dispatch import (
     enqueue_dispatch_publisher,
 )
 from angee.workflows.graph import GraphFreshnessReason, GraphIdentity, WorkflowGraph
+from angee.workflows.settlement import settle_subject
 from angee.workflows.states import (
     CURRENT_PUBLICATION_STATUSES,
     ParentRelation,
@@ -605,6 +606,37 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 )
                 return {"canceled": int(canceled)}
 
+    def settle_from_dispatch(
+        self,
+        dispatch_id: int,
+        *,
+        expected_run_id: int | None = None,
+        using: str | None = None,
+    ) -> dict[str, int]:
+        """Deliver and consume a terminal subject settlement atomically."""
+
+        alias = get_write_alias(self.model, using=using, bound=self)
+        timestamp = timezone.now()
+        dispatch_model = self.model._meta.apps.get_model("workflows", "WorkflowDispatch")
+        dispatches = dispatch_model.objects.db_manager(alias)
+        with transaction.atomic(using=alias), system_context(reason="workflows.runs.settle_from_dispatch"):
+            with dispatches._owner_transition(
+                dispatch_id=dispatch_id, lease_token=None, at=timestamp, using=alias,
+            ) as preflight:
+                if preflight.disposition != DispatchPreflightDisposition.READY:
+                    return {"settled": 0}
+                envelope = preflight.envelope
+                if envelope.kind != WorkflowDispatchKind.RUN_SETTLE or (
+                    expected_run_id is not None and expected_run_id != envelope.target_id
+                ):
+                    raise ValidationError({"dispatch": "Subject settlement envelope changed."})
+                run = system_queryset(self.model, using=alias, lock=None).get(pk=envelope.target_id)
+                if not run.is_terminal:
+                    raise ValidationError({"run": "Subject settlement requires a terminal run."})
+                settle_subject(run, using=alias)
+                dispatches._consume_locked(dispatch_id, envelope=envelope, at=timestamp, alias=alias)
+                return {"settled": 1}
+
     def _cancel_locked(self, run: Any, *, alias: str, at: datetime) -> bool:
         """Persist the admitted run cancellation and its owned-child intents."""
 
@@ -657,6 +689,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         input: JsonPresence = JsonPresence(),
         available_at: datetime | None = None,
         validate_new: Callable[[], None] | None = None,
+        using: str | None = None,
     ) -> Any:
         """Create or exactly retain a pinned run and its first ADVANCE.
 
@@ -678,7 +711,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             raise ValidationError({"parent_relation": "Unknown parent relationship."})
         if dedup_key is not None and len(dedup_key) > self.model._meta.get_field("dedup_key").max_length:
             raise ValidationError({"dedup_key": "Workflow run dedup key is too long."})
-        alias = get_write_alias(self.model, bound=self, instance=workflow)
+        alias = get_write_alias(self.model, using=using, bound=self, instance=workflow)
         require_authorization_database(alias, operation="Workflow actor admission", error_field="using")
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
         head_id = workflow.pk if workflow.published_from_id is None else workflow.published_from_id
@@ -6665,20 +6698,17 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
         """Lock canonical ancestry and preflight one exact delivery intent."""
 
         unresolved = system_queryset(self.model, using=using, lock=None).get(pk=dispatch_id)
-        if unresolved.kind == WorkflowDispatchKind.ADVANCE:
+        if unresolved.kind in {
+            WorkflowDispatchKind.ADVANCE,
+            WorkflowDispatchKind.RUN_CANCEL,
+            WorkflowDispatchKind.RUN_SETTLE,
+        }:
             run_model = self.model._meta.get_field("run").remote_field.model
             locked_run = run_model.objects.db_manager(using).lock_execution_ancestry((unresolved.run_id,))[
                 unresolved.run_id
             ]
             if locked_run.pk != unresolved.run_id:
-                raise OperationalError("Advance dispatch ancestry changed while locking.")
-        elif unresolved.kind == WorkflowDispatchKind.RUN_CANCEL:
-            run_model = self.model._meta.get_field("run").remote_field.model
-            locked_run = run_model.objects.db_manager(using).lock_execution_ancestry((unresolved.run_id,))[
-                unresolved.run_id
-            ]
-            if locked_run.pk != unresolved.run_id:
-                raise OperationalError("Run cancellation target changed while locking.")
+                raise OperationalError("Run dispatch ancestry changed while locking.")
         elif unresolved.kind == WorkflowDispatchKind.CHILD_CANCEL:
             run_model = self.model._meta.get_field("run").remote_field.model
             ancestry = (
@@ -6845,6 +6875,29 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
             dispatch = self.model(kind=WorkflowDispatchKind.ADVANCE, run_id=locked.pk, available_at=available_at)
             dispatch.persist_delivery(using=alias)
             return dispatch
+
+    def schedule_run_settle(self, run: Any, *, using: str | None = None) -> tuple[Any, bool]:
+        """Retain one subject settlement in the terminal run's transaction."""
+
+        alias = get_write_alias(self.model, using=using, bound=self, instance=run)
+        if not connections[alias].in_atomic_block:
+            raise RuntimeError("Subject settlement must share the terminal run transaction.")
+        run_model = self.model._meta.get_field("run").remote_field.model
+        locked = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run.pk)
+        if not locked.is_terminal:
+            raise ValidationError({"run": "Subject settlement requires a terminal run."})
+        existing = system_queryset(self.model, using=alias, lock=None).filter(
+            kind=WorkflowDispatchKind.RUN_SETTLE, run_id=locked.pk,
+        ).first()
+        if existing is not None:
+            return existing, False
+        dispatch = self.model(
+            kind=WorkflowDispatchKind.RUN_SETTLE, run_id=locked.pk, available_at=timezone.now(),
+        )
+        with system_context(reason="workflows.dispatch.schedule_run_settle"):
+            dispatch.persist_delivery(using=alias)
+        transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
+        return dispatch, True
 
     def schedule_artifact_delivery(self, resource: Any, *, available_at: datetime | None = None) -> Any:
         """Retain a domain-change intent without taking any Workflow run lock."""
