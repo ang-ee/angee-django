@@ -1887,6 +1887,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                     delivery_target = self.delivery_target(using=alias)
                     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
                     dispatch_model.objects.db_manager(alias).schedule_artifact_delivery(delivery_target)
+                    dispatch_model.objects.db_manager(alias).schedule_run_settle(self, using=alias)
 
     @classmethod
     def invocation_identity_write_names(cls) -> frozenset[str]:
@@ -3297,7 +3298,8 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
                     | models.Q(kind=WorkflowDispatchKind.CHILD_CANCEL, run__isnull=False,
                                step_attempt__isnull=True, decision__isnull=True, generation__isnull=True,
                                artifact_content_type__isnull=True, artifact_object_id__isnull=True)
-                    | models.Q(kind=WorkflowDispatchKind.RUN_CANCEL, run__isnull=False,
+                    | models.Q(kind__in=[WorkflowDispatchKind.RUN_CANCEL, WorkflowDispatchKind.RUN_SETTLE],
+                               run__isnull=False,
                                step_attempt__isnull=True, decision__isnull=True, generation__isnull=True,
                                artifact_content_type__isnull=True, artifact_object_id__isnull=True)
                 ),
@@ -3322,6 +3324,10 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
                 fields=("kind", "run"), condition=models.Q(kind=WorkflowDispatchKind.RUN_CANCEL),
                 name="uniq_wfd_run_cancel",
             ),
+            models.UniqueConstraint(
+                fields=("kind", "run"), condition=models.Q(kind=WorkflowDispatchKind.RUN_SETTLE),
+                name="uniq_wfd_run_settle",
+            ),
         )
 
     @property
@@ -3344,6 +3350,7 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
                 WorkflowDispatchKind.ADVANCE,
                 WorkflowDispatchKind.CHILD_CANCEL,
                 WorkflowDispatchKind.RUN_CANCEL,
+                WorkflowDispatchKind.RUN_SETTLE,
             } else
             self.step_attempt_id if kind == WorkflowDispatchKind.EXECUTE else self.decision_id
         )

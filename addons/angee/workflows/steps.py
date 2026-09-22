@@ -23,15 +23,18 @@ from __future__ import annotations
 import copy
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import Enum
+from threading import Event, Thread
 from typing import Any, ClassVar, Literal, Self
 
 from django.apps import apps
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
-from django.db import models
+from django.db import connections, models
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from jsonschema import Draft202012Validator
@@ -504,6 +507,65 @@ class StepImpl(ImplBase):
         step_run.heartbeat_at = timestamp
         with system_context(reason="workflows.step.heartbeat"):
             step_run.save(using=alias, update_fields=["heartbeat_at", "updated_at"])
+
+    @contextmanager
+    def heartbeat_during(self, step_run: Any, *, using: str | None = None) -> Iterator[None]:
+        """Keep one admitted STANDARD attempt's lease alive during bounded I/O.
+
+        The helper captures the exact attempt and lease before starting its own
+        database connection. Cancellation or supersession stops heartbeat;
+        delivery finalization still owns the authoritative attempt fence.
+        """
+
+        alias = get_write_alias(type(step_run), using=using, instance=step_run)
+        if self.execution_mode is not StepExecutionMode.STANDARD or connections[alias].in_atomic_block:
+            raise RuntimeError("Lease heartbeat during I/O requires STANDARD execution outside a transaction.")
+        with system_context(reason="workflows.step.heartbeat_during.load"):
+            attempt: Any = related_on(step_run, "current_attempt", using=alias)
+        if attempt is None:
+            raise ValidationError({"attempt": "A lease heartbeat requires a retained attempt."})
+        interval = heartbeat_timeout().total_seconds() / 3
+        if interval <= 0:
+            raise ImproperlyConfigured("The workflow heartbeat timeout must be positive.")
+        stopped = Event()
+        failures: list[Exception] = []
+
+        def pulse(*, using: str) -> None:
+            with system_context(reason="workflows.step.heartbeat_during"):
+                accepted = type(attempt).objects.db_manager(using).heartbeat(
+                    attempt.pk, lease_token=attempt.lease_token, at=timezone.now(),
+                )
+            if not accepted:
+                raise ValidationError({"attempt": "The workflow attempt lease is no longer active."})
+
+        def keep_alive(*, using: str) -> None:
+            try:
+                while not stopped.wait(interval):
+                    pulse(using=using)
+            except Exception as error:  # noqa: BLE001 - relay the lease failure to the invoking worker.
+                failures.append(error)
+            finally:
+                connections[using].close()
+
+        pulse(using=alias)
+        worker = Thread(target=keep_alive, kwargs={"using": alias}, name="workflow-heartbeat", daemon=True)
+        worker.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            worker.join()
+        if failures:
+            raise failures[0]
+
+
+def heartbeat_timeout() -> timedelta:
+    """Return the shared lease expiry used by keepalive and stale-attempt recovery."""
+
+    configured = getattr(settings, "ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT", 300)
+    if isinstance(configured, timedelta):
+        return configured
+    return timedelta(seconds=float(configured))
 
 
 def retry_policy_from_config(config: Any) -> StepRetryPolicy:

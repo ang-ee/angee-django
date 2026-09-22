@@ -37,5 +37,6 @@ SETTINGS = {
         "emit": "angee.workflows.steps.EmitStep",
     },
     "ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT": 300,
+    "ANGEE_WORKFLOW_SUBJECT_SETTLERS": {},
 }
 """Django settings contributed when the workflows addon is installed."""

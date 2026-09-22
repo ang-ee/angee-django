@@ -568,7 +568,10 @@ def begin_stream_cycle(stream: Any, *, using: str | None = None) -> Any:
     return stream
 
 
-def _open_stream(bridge: Any, definition: StreamDefinition, *, using: str) -> Any:
+def open_stream(bridge: Any, definition: StreamDefinition, *, using: str | None = None) -> Any:
+    """Resolve a backend declaration to its current durable stream generation."""
+
+    using = get_write_alias(type(bridge), using=using, instance=bridge)
     return _manager("SyncStream", using=using).current(
         bridge,
         definition.key,
@@ -591,7 +594,7 @@ def _report(bridge: Any, message: str, **details: Any) -> None:
 
 
 def _drain(bridge: Any, adapter: StreamAdapter, definition: StreamDefinition, deadline: float, *, using: str) -> int:
-    stream = begin_stream_cycle(_open_stream(bridge, definition, using=using), using=using)
+    stream = begin_stream_cycle(open_stream(bridge, definition, using=using), using=using)
     landed, resets = 0, 0
     adapter.sync_deadline = deadline
     page_bound = max(1, int(bridge.config.get("sync_page_bound", 100)))

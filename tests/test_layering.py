@@ -12,6 +12,8 @@ from typing import NamedTuple
 
 import pytest
 
+from tests.test_base_layering import _module_imports
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_SERVING_IMPORTS = (
     "angee.asgi",
@@ -126,6 +128,20 @@ def test_data_contract_import_closure_stays_transport_neutral() -> None:
         or module.startswith("strawberry.")
     }
     assert reached == set()
+
+
+def test_integrate_does_not_import_workflows() -> None:
+    """Record truth stays independent of optional workflow execution composition."""
+
+    root = PROJECT_ROOT / "addons" / "angee" / "integrate"
+    violations = {
+        str(path.relative_to(PROJECT_ROOT)): sorted(
+            name for name in _module_imports(path)
+            if name == "angee.workflows" or name.startswith(("angee.workflows.", "angee.workflows_"))
+        )
+        for path in sorted(root.rglob("*.py"))
+    }
+    assert not {path: names for path, names in violations.items() if names}
 
 
 class _FKReload(NamedTuple):

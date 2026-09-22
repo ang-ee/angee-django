@@ -1,0 +1,6 @@
+[addon]
+name = "angee.workflows_integrate"
+description = "Bounded bridge cycles composed over workflows and record streams"
+keywords = ["workflows", "integrations", "sync"]
+category = "Workflows"
+depends_on = ["angee.workflows", "angee.integrate"]

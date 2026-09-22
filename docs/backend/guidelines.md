@@ -1173,6 +1173,34 @@ replicas retain a remote and local comparison base on each link.
   Workflow execution, decisions and durable scheduling stay with their existing
   owners; integrate must not import workflows.
 
+### Bridge cycles as workflow runs
+
+[`angee.workflows_integrate`](../../addons/angee/workflows_integrate/README.md)
+composes workflow execution over integrate's data protocol. The dependency points
+from the composition addon to both owners; integrate never imports workflows.
+
+- **Admission retains one cycle.** Use `admit_bridge_cycle` with the concrete
+  Bridge subject, its queued cadence token and active Integration owner. The
+  native start manager owns publication/input validation and exact deduplication;
+  `validate_new` serializes on the Bridge and rejects another active cycle. The
+  run's dedup key is the only cycle identity. Declare `sync_workflow_key` on the
+  Bridge and immutable facts through `sync_workflow_input`; no secondary schedule.
+- **Stream stages are STANDARD.** Delegate one page to `advance_stream` outside
+  the workflow finalization transaction. The driver atomically commits records,
+  discrepancies and cursor on the selected alias. Retrying a crash between the
+  page commit and workflow finalization reads that cursor. Renew the retained
+  lease during long pages. Resume state contains correlation only; never a second
+  cursor or reconstructed count. Use stage branches, never a per-record Map.
+- **Coverage keeps data truth authoritative.** OPEN/RETRY discrepancies prevent
+  acceptance. Only the composition addon's coverage gate turns CONFLICT rows
+  into native workflow Decisions; a review does not itself resolve a discrepancy.
+- **Terminal delivery uses expected-run CAS.** Every terminal run transition
+  retains `RUN_SETTLE`. Explicit subject-type registration routes to the Bridge
+  handler, which locks the row and compares `sync_progress.details.run` plus its
+  busy stage before composing `record_sync` or `record_sync_error`. Direct cancel
+  and retry exhaustion therefore clear syncing, and old delivery cannot overwrite
+  a newer cycle. Keep the run pointer for the shared inspection link.
+
 ### Integrations and workers
 
 - **An integration failure reaches the operator only as an `IntegrationError`.**

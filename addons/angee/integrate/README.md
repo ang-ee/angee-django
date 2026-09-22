@@ -5,6 +5,11 @@ bridge adds scheduling and telemetry; its backend declares independently ordered
 stream partitions. `Bridge.sync()` drives those declarations by default, while
 existing capability overrides remain valid.
 
+An installed execution composition may select durable dispatch through
+`Bridge.dispatch_sync()`. A declared `sync_workflow_key` uses
+[`workflows_integrate`](../workflows_integrate/README.md); `SyncDispatch.DISPATCHED`
+defers terminal telemetry to that owner. Direct bridges still return an integer.
+
 | Concern | Owner |
 |---|---|
 | Connection, cadence, queue admission and run telemetry | [Integration and Bridge](models.py) |
@@ -43,11 +48,12 @@ reflection and use the remote version precondition. If the process loses the
 response, the next observation must reconcile that uncertainty; this protocol
 does not promise an atomic commit across two systems.
 
-Bounded callers use `begin_stream_cycle` once, then `advance_stream` until its
+Bounded callers resolve declarations through `open_stream`, use `begin_stream_cycle`
+once, then `advance_stream` until its
 result is exhausted, passing the returned stream after an epoch reset. The
 caller closes its adapter. `push_stream` and `reconcile_stream` complete the
 cycle when applicable. These functions contain no workflow runtime dependency;
-execution composition belongs to the later workflows integration slice.
+execution composition belongs to `workflows_integrate`.
 
 A due non-conflict discrepancy requests a new baseline on the next cycle. The
 adapter protocol deliberately has no separate read-by-key API, so retries
