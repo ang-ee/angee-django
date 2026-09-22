@@ -95,6 +95,7 @@ export type FormSpecWire = v.InferOutput<typeof FieldBaseSchema> & {
   else?: FormSpecWire;
   not?: FormSpecWire;
   $defs?: Record<string, FormSpecWire>;
+  definitions?: Record<string, FormSpecWire>;
   $ref?: string;
   additionalProperties?: boolean | FormSpecWire;
 };
@@ -110,6 +111,7 @@ const FieldSchema: v.GenericSchema<unknown, FormSpecWire> = v.lazy(() => v.objec
   else: v.optional(FieldSchema),
   not: v.optional(FieldSchema),
   $defs: v.optional(v.record(v.string(), FieldSchema)),
+  definitions: v.optional(v.record(v.string(), FieldSchema)),
   $ref: v.optional(v.string()),
   additionalProperties: v.optional(v.union([v.boolean(), FieldSchema])),
 }));

@@ -229,6 +229,64 @@ test("nested Decision errors remain visible through their owning top-level field
   });
 });
 
+test.each(["$defs", "definitions"])("resolves %s row references without losing Decision constraints or annotations", (definitions) => {
+  const choices = { type: "array", label: "Choices", items: { $ref: `#/${definitions}/Choice` } };
+  const form = compileDecisionActionFormSpec({
+    type: "object", required: ["action"], properties: {
+      action: { type: "string", enum: ["apply", "reject"], options: [
+        { value: "apply", label: "Apply choices", verdict: "COMPLETE" },
+        { value: "reject", label: "Reject", verdict: "REJECT" },
+      ] },
+      choices,
+      reviewed: { ...choices, layout: "context", widget: "facts" },
+    },
+    [definitions]: {
+      Choice: { type: "object", required: ["identity", "reason"], properties: {
+        identity: { $ref: `#/${definitions}/Identity`, label: "Selected identity" },
+        reason: { type: "string", label: "Reason", placeholder: "Explain the choice", minLength: 1 },
+      }, additionalProperties: false },
+      Identity: { type: "string", enum: ["first", "second"], options: [
+        { value: "first", label: "First identity" },
+        { value: "second", label: "Second identity" },
+      ] },
+    },
+    oneOf: [
+      { type: "object", required: ["action", "choices"], properties: {
+        action: { const: "apply" }, choices,
+      }, additionalProperties: false },
+      { type: "object", required: ["action"], properties: {
+        action: { const: "reject" },
+      }, additionalProperties: false },
+    ],
+  }, widgets, t);
+
+  expect(form.fieldsFor("apply")).toEqual([{
+    name: "choices", kind: "array", widget: "rows", label: "Choices",
+    rowTemplate: [
+      { name: "identity", kind: "string", widget: "select", label: "Selected identity", required: true,
+        options: [
+          { value: "first", label: "First identity" },
+          { value: "second", label: "Second identity" },
+        ] },
+      { name: "reason", kind: "string", widget: "text", label: "Reason", required: true,
+        placeholder: "Explain the choice", minLength: 1 },
+    ],
+  }]);
+  const values = { choices: [{ identity: "first", reason: "Reviewed" }] };
+  expect(form.project("apply", values)).toEqual({ action: "apply", ...values });
+  expect(form.validate(form.project("apply", values))).toEqual({ valid: true, messages: {} });
+  expect(form.validate({ action: "apply", choices: [{ identity: "unknown", reason: "Reviewed" }] }))
+    .toEqual({ valid: false, messages: { choices: ["choices.0.identity: identity has an invalid value."] } });
+  expect(form.validate({ action: "apply", choices: [{ identity: "first", reason: "" }] }))
+    .toEqual({ valid: false, messages: { choices: ["choices.0.reason: reason must contain at least 1 character."] } });
+  expect(form.fieldsFor("reject")).toEqual([]);
+  expect(form.project("reject", values)).toEqual({ action: "reject" });
+  expect(form.validate(form.project("reject", values))).toEqual({ valid: true, messages: {} });
+  expect(form.validateContext({ reviewed: values.choices })).toEqual({ valid: true, messages: {} });
+  expect(form.validateContext({ reviewed: [{ identity: "unknown", reason: "Reviewed" }] }))
+    .toEqual({ valid: false, messages: { reviewed: ["Frozen Decision context is invalid."] } });
+});
+
 test("retains omitted optional reasons inside a structured Decision object", () => {
   const form = compileDecisionActionFormSpec({
     type: "object", required: ["action"], properties: {

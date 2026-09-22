@@ -29,6 +29,8 @@ export type FormSpecRelationCreate = Pick<
  * string-labelled `options`, and the pure-data `relation` config. A property's
  * key becomes the descriptor's `name`; no function-valued extension is admitted.
  * Arrays of objects resolve to the registered fixed-N `rows` view composer.
+ * Properties and items may reference root-local `$defs` or `definitions`;
+ * reference siblings override presentation metadata on the referenced schema.
  */
 export interface FormSpecFieldDescriptor extends MutationDialogField {
   /** Approval layout intent; ordinary forms and unspecified fields remain inputs. */
@@ -58,7 +60,8 @@ export function deserializeFormSpec(
   value: unknown,
   widgets: WidgetMap,
 ): readonly FormSpecFieldDescriptor[] {
-  return deserializeObjectFields(parseFormSpec(value), widgets, "form spec");
+  const schema = parseFormSpec(value);
+  return deserializeObjectFields(schema, widgets, "form spec", schema, []);
 }
 
 /** Resolve a form spec against the current app's build-time widget registry. */
@@ -165,11 +168,43 @@ export function normalizeFormSpecValues(
   }));
 }
 
+/** Resolve only projected nodes: opaque context schemas need no finite template. */
+function resolveFieldReferences(
+  field: FormSpecWire,
+  root: FormSpecWire,
+  path: string,
+  references: readonly FormSpecWire[],
+): { field: FormSpecWire; references: readonly FormSpecWire[] } {
+  const chain: FormSpecWire[] = [];
+  while (field.$ref !== undefined) {
+    const { $ref, ...siblings } = field;
+    const match = /^#\/(\$defs|definitions)\/([^/]+)$/.exec($ref);
+    if (!match) throw new Error(`Invalid ${path}: unsupported reference "${$ref}".`);
+    const definitions = match[1] === "$defs" ? root.$defs : root.definitions;
+    const name = decodeURIComponent(match[2]!).replace(/~1/g, "/").replace(/~0/g, "~");
+    const target = definitions && Object.hasOwn(definitions, name) ? definitions[name] : undefined;
+    if (!target) throw new Error(`Invalid ${path}: missing reference "${$ref}".`);
+    if (chain.includes(target)) throw new Error(`Invalid ${path}: cyclic reference "${$ref}".`);
+    chain.push(target);
+    field = { ...target, ...siblings };
+  }
+  return { field, references: [...references, ...chain] };
+}
+
+function assertFiniteTemplate(references: readonly FormSpecWire[], path: string): void {
+  if (new Set(references).size !== references.length) {
+    throw new Error(`Invalid ${path}: cyclic reference requires an infinite form template.`);
+  }
+}
+
 function deserializeObjectFields(
   schema: FormSpecWire,
   widgets: WidgetMap,
   path: string,
+  root: FormSpecWire,
+  references: readonly FormSpecWire[],
 ): readonly FormSpecFieldDescriptor[] {
+  assertFiniteTemplate(references, path);
   const required = new Set(schema.required ?? []);
   const properties = schema.properties ?? {};
   const names = schema.propertyOrder ?? Object.keys(properties);
@@ -179,34 +214,40 @@ function deserializeObjectFields(
     throw new Error(`Invalid ${path}.propertyOrder: every property must be named exactly once.`);
   }
   return names.map((name) =>
-    deserializeField(name, properties[name]!, required.has(name), widgets, path),
+    deserializeField(name, properties[name]!, required.has(name), widgets, path, root, references),
   );
 }
 
 function deserializeField(
   name: string,
-  field: FormSpecWire,
+  schema: FormSpecWire,
   required: boolean,
   widgets: WidgetMap,
   parentPath: string,
+  root: FormSpecWire,
+  ancestors: readonly FormSpecWire[],
 ): FormSpecFieldDescriptor {
   const path = parentPath === "form spec" ? name : `${parentPath}.${name}`;
+  const { field, references } = resolveFieldReferences(schema, root, path, ancestors);
   const type = formSpecFieldType(field.type, field.anyOf);
   const nullable = field.nullable
     || field.type === "null"
     || (Array.isArray(field.type) && field.type.includes("null"))
     || field.anyOf?.some((alternative) => alternative.type === "null");
   const variableList = type === "array" && field.widget === "list";
-  const rowTemplate = type === "array" && field.items
-    && formSpecFieldType(field.items.type, field.items.anyOf) === "object"
-    && field.layout !== "context" && !variableList
-    ? deserializeObjectFields(field.items, widgets, path)
+  const items = type === "array" && field.items && field.layout !== "context"
+    ? resolveFieldReferences(field.items, root, `${path}[]`, references)
+    : undefined;
+  const rowTemplate = items && !variableList
+    && formSpecFieldType(items.field.type, items.field.anyOf) === "object"
+    ? deserializeObjectFields(items.field, widgets, path, root, items.references)
     : undefined;
   const objectTemplate = type === "object" && field.widget === "object" && field.layout !== "context"
-    ? deserializeObjectFields(field, widgets, path)
+    ? deserializeObjectFields(field, widgets, path, root, references)
     : undefined;
-  const itemTemplate = variableList && field.items
-    ? deserializeField("item", field.items, true, widgets, `${path}[]`)
+  if (variableList && items) assertFiniteTemplate(references, path);
+  const itemTemplate = variableList && items
+    ? deserializeField("item", items.field, true, widgets, `${path}[]`, root, items.references)
     : undefined;
   const {
     relation, widget: authoredWidget, label, addLabel, removeLabel,

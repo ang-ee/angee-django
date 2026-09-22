@@ -146,7 +146,11 @@ export function compileDecisionActionFormSpec(
       throw new Error(t("inbox.validation.contextSchema", { name }));
     }
     try {
-      return [name, ajv.compile({ ...fieldSchema, ...(root.$defs ? { $defs: root.$defs } : {}) })];
+      return [name, ajv.compile({
+        ...fieldSchema,
+        ...(root.$defs ? { $defs: root.$defs } : {}),
+        ...(root.definitions ? { definitions: root.definitions } : {}),
+      })];
     } catch {
       throw new Error(t("inbox.validation.invalidSchema"));
     }
