@@ -15,6 +15,7 @@ import {
   type QueryClient,
   type QueryFunctionContext,
   type QueryKey,
+  type QueryOptions,
   type UnusedSkipTokenOptions,
 } from "@tanstack/react-query";
 
@@ -110,8 +111,10 @@ export function sharedAuthoredMeta(
   models: readonly string[],
   records: readonly { model: string; id: string }[] = [],
   relatedModels: readonly string[] = [],
+  { gcTime }: Pick<QueryOptions, "gcTime"> = {},
 ) {
-  const defaulted = client.defaultQueryOptions({ queryKey });
+  // Query only extends GC lifetimes, so apply an explicit lifetime on first build.
+  const defaulted = client.defaultQueryOptions({ queryKey, ...(gcTime === undefined ? {} : { gcTime }) });
   const query = client.getQueryCache().build(client, defaulted);
   // Host defaults may share a single meta object across every query. This entry
   // needs its own object before observers can union interests in place.

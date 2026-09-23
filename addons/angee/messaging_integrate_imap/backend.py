@@ -107,8 +107,32 @@ class ImapSampleMessage(BaseModel):
     flags: list[str]
 
 
+class ImapSamplePreviewRequest(BaseModel):
+    """One mailbox scope and its optional explicit snapshot continuation.
+
+    Continuations carry the preceding page's ``total_count``. The backend counts
+    the selection once, then only subtracts UIDs confirmed expunged between that
+    page's SEARCH and FETCH; it never silently recounts a changing mailbox.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    mailbox: str
+    since: date | None = None
+    before: date | None = None
+    all_dates: bool = False
+    uidvalidity: int | None = None
+    upper_uid: int | None = None
+    before_uid: int | None = None
+    total_count: int | None = None
+    limit: int = 20
+
+
 class ImapSamplePreview(BaseModel):
-    """Explicit remote selection; previewing does not move the sync cursor."""
+    """Explicit remote selection; previewing does not move the sync cursor.
+
+    ``total_count`` is the first SEARCH's count less confirmed fetch-time
+    expunges encountered so far. Unobserved changes do not rewrite that count.
+    """
 
     model_config = ConfigDict(frozen=True)
     mailbox: str
@@ -117,7 +141,6 @@ class ImapSamplePreview(BaseModel):
     total_count: int
     next_before_uid: int | None
     messages: list[ImapSampleMessage]
-    truncated: bool
 
 
 class ImapSampleImport(BaseModel):
@@ -202,13 +225,10 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                 for message in messages
                 if isinstance(message.metadata, dict) and message.metadata.get("uid") is not None
             }
-            missing = sorted(set(chunk) - answered)
-            still_present = self._present_uids(work, missing) if missing else set()
-            if still_present:
-                raise ImapError(
-                    f"IMAP mailbox {work.name!r} still contains UID(s) that its FETCH did not answer: "
-                    f"{sorted(still_present)[:20]}. Retry the sync before advancing its cursor."
-                )
+            self._confirm_expunged(
+                work.name, work.uidvalidity, set(chunk) - answered,
+                retry_hint="Retry the sync before advancing its cursor.",
+            )
             self._advance_cursor(work.name, work.uidvalidity, chunk[-1])
             if messages:
                 return messages
@@ -227,89 +247,66 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             raise ValidationError("The mailbox UID identity changed. Preview the messages again.")
         return current
 
-    def preview_sample(
-        self,
-        *,
-        mailbox: str,
-        since: date | None,
-        before: date | None,
-        all_dates: bool = False,
-        uidvalidity: int | None = None,
-        upper_uid: int | None = None,
-        before_uid: int | None = None,
-        limit: int = 20,
-    ) -> ImapSamplePreview:
+    def preview_sample(self, request: ImapSamplePreviewRequest) -> ImapSamplePreview:
         """Read one page from a UID-frozen mailbox selection without moving its cursor."""
 
-        if not 1 <= limit <= MAX_SAMPLE_MESSAGES:
+        if not 1 <= request.limit <= MAX_SAMPLE_MESSAGES:
             raise ValidationError(f"Choose a sample limit between 1 and {MAX_SAMPLE_MESSAGES}.")
-        if all_dates:
-            if since is not None or before is not None:
+        if request.all_dates:
+            if request.since is not None or request.before is not None:
                 raise ValidationError("Do not combine all-dates preview with a date window.")
-            criteria: list[Any] = ["ALL"]
+            criteria: list[Any] = []
         else:
-            if since is None or before is None or not 0 < (before - since).days <= 366:
+            if request.since is None or request.before is None or not 0 < (request.before - request.since).days <= 366:
                 raise ValidationError("Choose a positive date window of at most one year.")
-            criteria = ["SINCE", since, "BEFORE", before]
-        continuation = uidvalidity is not None or upper_uid is not None or before_uid is not None
+            criteria = ["SINCE", request.since, "BEFORE", request.before]
+        continuation = any(value is not None for value in (
+            request.uidvalidity, request.upper_uid, request.before_uid, request.total_count,
+        ))
         if continuation and (
-            type(uidvalidity) is not int
-            or uidvalidity <= 0
-            or type(upper_uid) is not int
-            or upper_uid < 0
-            or (before_uid is not None and (type(before_uid) is not int or before_uid <= 0))
+            request.uidvalidity is None or request.uidvalidity <= 0
+            or request.upper_uid is None or request.upper_uid < 0
+            or request.before_uid is None or not 0 < request.before_uid <= request.upper_uid
+            or request.total_count is None or request.total_count < 0
         ):
             raise ValidationError("Preview this mailbox scope again before loading its next page.")
         try:
             current_uidvalidity = self._sample_mailbox(
-                mailbox,
-                uidvalidity=uidvalidity,
+                request.mailbox,
+                uidvalidity=request.uidvalidity,
             )
             client = self._client_or_fail()
-            status = client.folder_status(mailbox, [b"UIDNEXT"])
-            current_upper_uid = max(int(status[b"UIDNEXT"]) - 1, 0)
-            snapshot_upper_uid = current_upper_uid if upper_uid is None else upper_uid
+            status = client.folder_status(request.mailbox, [b"UIDNEXT"])
+            current_upper_uid = self._uidnext(request.mailbox, status) - 1
+            snapshot_upper_uid = current_upper_uid if request.upper_uid is None else request.upper_uid
             if snapshot_upper_uid > current_upper_uid:
                 raise ValidationError("The mailbox snapshot is no longer available. Preview it again.")
-            found = sorted(
-                (
-                    int(uid)
-                    for uid in client.search(criteria)
-                    if int(uid) <= snapshot_upper_uid
-                ),
-                reverse=True,
+            page_upper_uid = (
+                min(snapshot_upper_uid, request.before_uid - 1)
+                if request.before_uid is not None else snapshot_upper_uid
             )
-            page = [uid for uid in found if before_uid is None or uid < before_uid]
-            chosen = page[:limit]
+            # Never send 1:0: IMAP treats reversed UID ranges as inclusive too.
+            criteria = ["UID", f"1:{page_upper_uid}", *criteria]
+            found = sorted(
+                (int(uid) for uid in client.search(criteria) if 0 < int(uid) <= page_upper_uid),
+                reverse=True,
+            ) if page_upper_uid > 0 else []
+            chosen = found[:request.limit]
             rows = client.fetch(chosen, [b"BODY.PEEK[HEADER]", b"FLAGS", b"RFC822.SIZE"]) if chosen else {}
             answered = {
                 uid: item
                 for uid in chosen
                 if (item := rows.get(uid)) is not None and b"BODY[HEADER]" in item
             }
-            missing = sorted(set(chosen) - set(answered))
             self._report_unanswered(
-                mailbox, chosen, answered, phase="sample header fetch"
+                request.mailbox, chosen, answered, phase="sample header fetch"
             )
-            work = _MailboxWork(name=mailbox, uidvalidity=current_uidvalidity)
-            still_present = self._present_uids(work, missing) if missing else set()
-            if still_present:
-                raise ImapError(
-                    f"IMAP mailbox {mailbox!r} still contains UID(s) that its FETCH did not answer: "
-                    f"{sorted(still_present)[:20]}. Retry the preview before advancing its page."
-                )
-            confirmed_expunged = set(missing)
-            present_found = [uid for uid in found if uid not in confirmed_expunged]
-            present_page = [
-                uid
-                for uid in present_found
-                if before_uid is None or uid < before_uid
-            ]
-            next_before_uid = (
-                chosen[-1]
-                if chosen and any(uid < chosen[-1] for uid in present_page)
-                else None
+            confirmed_expunged = self._confirm_expunged(
+                request.mailbox, current_uidvalidity, set(chosen) - set(answered),
+                retry_hint="Retry the preview before advancing its page.",
             )
+            total_count = len(found) if request.total_count is None else request.total_count
+            next_before_uid = chosen[-1] if len(found) > len(chosen) else None
             messages = []
             for uid in chosen:
                 item = answered.get(uid)
@@ -324,15 +321,14 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                     sent_at=str(header.get("Date", "")), size=int(item.get(b"RFC822.SIZE", 0)),
                     flags=sorted(_text(flag) for flag in item.get(b"FLAGS", ())),
                 ))
-            self._sample_mailbox(mailbox, uidvalidity=current_uidvalidity)
+            self._sample_mailbox(request.mailbox, uidvalidity=current_uidvalidity)
             return ImapSamplePreview(
-                mailbox=mailbox,
+                mailbox=request.mailbox,
                 uidvalidity=current_uidvalidity,
                 upper_uid=snapshot_upper_uid,
-                total_count=len(present_found),
+                total_count=max(total_count - len(confirmed_expunged), 0),
                 next_before_uid=next_before_uid,
                 messages=messages,
-                truncated=next_before_uid is not None,
             )
         finally:
             self.close()
@@ -433,7 +429,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             for name in selected:
                 status = client.folder_status(name, [b"UIDVALIDITY", b"UIDNEXT"])
                 uidvalidity = int(status[b"UIDVALIDITY"])
-                uidnext = int(status[b"UIDNEXT"])
+                uidnext = self._uidnext(name, status)
                 selected_status = client.select_folder(name, readonly=True)
                 self._selected = name
                 selected_uidvalidity = int(selected_status[b"UIDVALIDITY"])
@@ -497,7 +493,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         for index, name in enumerate(selected_mailboxes, start=1):
             status = client.folder_status(name, [b"UIDVALIDITY", b"UIDNEXT"])
             uidvalidity = int(status[b"UIDVALIDITY"])
-            uidnext = int(status[b"UIDNEXT"])
+            uidnext = self._uidnext(name, status)
             entry = mailboxes.get(name) or {}
             retained_uidvalidity = int(entry.get("uidvalidity", -1))
             if new_only and retained_uidvalidity != uidvalidity:
@@ -620,7 +616,35 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             messages.extend(self._parse_fetched(work, data, body_key=b"BODY[HEADER]", truncated=True))
         return messages
 
-    def _present_uids(self, work: _MailboxWork, uids: list[int]) -> set[int]:
+    @staticmethod
+    def _uidnext(mailbox: str, status: dict[bytes, Any]) -> int:
+        """Require the server's next allocatable UID for safe mailbox boundaries."""
+
+        try:
+            uidnext = int(status[b"UIDNEXT"])
+            if uidnext < 1:
+                raise ValueError
+        except (KeyError, TypeError, ValueError) as error:
+            raise ImapError(
+                f"IMAP mailbox {mailbox!r} did not report a valid UIDNEXT. "
+                "Check the server's IMAP STATUS support, then retry."
+            ) from error
+        return uidnext
+
+    def _confirm_expunged(
+        self, mailbox: str, uidvalidity: int, unanswered: set[int], *, retry_hint: str,
+    ) -> set[int]:
+        """Permit advancing only when every unanswered UID is confirmed absent."""
+
+        still_present = self._present_uids(mailbox, uidvalidity, sorted(unanswered))
+        if still_present:
+            raise ImapError(
+                f"IMAP mailbox {mailbox!r} still contains UID(s) that its FETCH did not answer: "
+                f"{sorted(still_present)[:20]}. {retry_hint}"
+            )
+        return unanswered
+
+    def _present_uids(self, mailbox: str, uidvalidity: int, uids: list[int]) -> set[int]:
         """Return unanswered UIDs that still exist in the planned mailbox epoch."""
 
         if not uids:
@@ -628,15 +652,15 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
         def search() -> set[int]:
             client = self._client_or_fail()
-            current = int(client.folder_status(work.name, [b"UIDVALIDITY"])[b"UIDVALIDITY"])
-            if current != work.uidvalidity:
+            current = int(client.folder_status(mailbox, [b"UIDVALIDITY"])[b"UIDVALIDITY"])
+            if current != uidvalidity:
                 raise ImapError(
-                    f"IMAP mailbox {work.name!r} changed UIDVALIDITY while confirming unanswered messages."
+                    f"IMAP mailbox {mailbox!r} changed UIDVALIDITY while confirming unanswered messages."
                 )
             sequence = ",".join(str(uid) for uid in uids)
             return {int(uid) for uid in client.search(["UID", sequence])} & set(uids)
 
-        return self._with_retry(work.name, search)
+        return self._with_retry(mailbox, search)
 
     def _fetch_bodies(self, run: list[int]) -> dict[int, dict[bytes, Any]]:
         """Pull one byte-budgeted run of full bodies (flags and receipt time ride along)."""

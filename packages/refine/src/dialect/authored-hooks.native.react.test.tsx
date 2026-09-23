@@ -1,24 +1,29 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { LiveProvider } from "@refinedev/core";
-import { keepPreviousData } from "@tanstack/react-query";
+import { focusManager, keepPreviousData, onlineManager } from "@tanstack/react-query";
 import { parse } from "graphql";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { authoredQueryKey, authoredQueryOptions, useAuthoredQuery, useAuthoredQueryBatch } from "./authored-hooks";
+import { authoredQueryKey, authoredQueryOptions, useAuthoredMutation, useAuthoredQuery, useAuthoredQueryBatch } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { invalidateAuthoredQueries } from "../query-invalidation";
 import { createRefineTestProviders } from "../testing";
+import { keysetFeedRows, useAuthoredKeysetFeed, type KeysetFeedWindow } from "./keyset-feed";
 
 type Data = { notes: { id: string }[] };
 type Variables = { id: string };
 const DOCUMENT = parse("query Notes($id: ID!) { notes(id: $id) { id } }") as TypedDocumentNode<Data, Variables>;
 const OTHER = parse("query ArchivedNotes($id: ID!) { notes(id: $id, archived: true) { id } }") as TypedDocumentNode<Data, Variables>;
+const MUTATION = parse("mutation UpdateNotes($id: ID!) { notes: update_notes(id: $id) { id } }") as TypedDocumentNode<Data, Variables>;
 const { Provider, dataProvider, createClient, clearClients } = createRefineTestProviders({
   apiUrl: "test://query", providerNames: ["alternate"],
 });
-afterEach(() => { cleanup(); clearClients(); });
+afterEach(() => {
+  cleanup(); clearClients();
+  focusManager.setFocused(undefined); onlineManager.setOnline(true);
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -39,6 +44,163 @@ function fixture(custom = vi.fn(async () => ({ data: { notes: [{ id: "one" }] } 
   }
   return { client, custom, onError, notify, wrapper: Providers };
 }
+
+const feedWindow = {
+  document: DOCUMENT,
+  variables: (before: string | null) => ({ id: before ?? "head" }),
+  select: ({ notes }: Data): KeysetFeedWindow<Data["notes"][number]> => ({
+    rows: notes, count: 2, older_cursor: notes.at(-1)?.id ?? null,
+    has_older: notes.length > 0, has_more_in_window: false, has_older_than_through: false,
+  }),
+};
+
+test("keyset feeds forward native policy and avoid implicit focus, reconnect and mount reads", async () => {
+  const f = fixture();
+  f.client.setDefaultOptions({ queries: {
+    staleTime: 0, retry: 3, refetchOnMount: "always", refetchOnWindowFocus: "always", refetchOnReconnect: "always",
+  } });
+  const queryOptions = {
+    staleTime: "static" as const, gcTime: 0, retry: false, retryOnMount: false,
+    refetchOnMount: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
+  };
+  const useFeed = () => useAuthoredKeysetFeed({
+    actor: "reader", models: [], pageSize: 1, window: feedWindow, queryOptions,
+  });
+  const first = renderHook(useFeed, { wrapper: f.wrapper });
+  await waitFor(() => expect(first.result.current.data?.pages).toHaveLength(1));
+  const query = f.client.getQueryCache().find({ queryKey: ["angee", "authored", "keyset-feed"], exact: false });
+  expect(query?.options).toMatchObject(queryOptions);
+  const second = renderHook(useFeed, { wrapper: f.wrapper });
+  await act(async () => {
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    onlineManager.setOnline(false);
+    onlineManager.setOnline(true);
+    await f.client.invalidateQueries();
+  });
+  expect(f.custom).toHaveBeenCalledTimes(1);
+  first.unmount();
+  second.unmount();
+  await waitFor(() => expect(f.client.getQueryCache().find({ queryKey: ["angee", "authored", "keyset-feed"], exact: false })).toBeUndefined());
+});
+
+test.each([
+  { enabled: false, staleTime: "static" as const },
+  { enabled: true, staleTime: "static" as const },
+  { enabled: true, staleTime: Infinity },
+])("keyset restart discards loaded history with enabled=$enabled and staleTime=$staleTime", async ({ enabled, staleTime }) => {
+  const custom = vi.fn(async () => ({ data: { notes: [{ id: "fresh" }] } }));
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "one" }] } });
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "two" }] } });
+  custom.mockResolvedValueOnce({ data: { notes: [] } });
+  const f = fixture(custom);
+  const { result } = renderHook(() => useAuthoredKeysetFeed({
+    actor: "reader", enabled, models: [], pageSize: 1, window: feedWindow,
+    queryOptions: { staleTime, retry: false },
+  }), { wrapper: f.wrapper });
+  if (!enabled) {
+    expect(custom).not.toHaveBeenCalled();
+    expect(result.current.data).toBeUndefined();
+    await act(async () => { await result.current.restart(); });
+  }
+  await waitFor(() => expect(result.current.data?.pages).toHaveLength(1));
+  await act(async () => { await result.current.fetchNextPage(); });
+  await waitFor(() => expect(result.current.data?.pages).toHaveLength(2));
+  await act(async () => { await result.current.fetchNextPage(); });
+  await waitFor(() => expect(result.current.data?.pages).toHaveLength(3));
+  expect(keysetFeedRows(result.current.data, (left, right) => left.id.localeCompare(right.id))).toEqual([{ id: "one" }, { id: "two" }]);
+  expect(result.current.hasNextPage).toBe(false);
+  await act(async () => { await result.current.restart(); });
+  await waitFor(() => expect(result.current.data?.pages).toHaveLength(1));
+  expect(result.current.data?.pages[0]?.rows).toEqual([{ id: "fresh" }]);
+  expect(custom).toHaveBeenCalledTimes(4);
+});
+
+test("keyset restart waits for an actor", async () => {
+  const f = fixture();
+  const { result } = renderHook(() => useAuthoredKeysetFeed({
+    actor: undefined, models: [], pageSize: 1, window: feedWindow,
+  }), { wrapper: f.wrapper });
+  await act(async () => { await result.current.restart(); });
+  expect(f.custom).not.toHaveBeenCalled();
+});
+
+test("authored mutation reset clears native error state without another request", async () => {
+  const error = new Error("Update declined.");
+  const f = fixture(vi.fn().mockRejectedValue(error));
+  const { result } = renderHook(() => useAuthoredMutation(MUTATION), { wrapper: f.wrapper });
+  await act(async () => { await expect(result.current[0]({ id: "a" })).rejects.toBe(error); });
+  await waitFor(() => expect(result.current[1].error).toBe(error));
+  act(() => result.current[1].reset());
+  await waitFor(() => expect(result.current[1].error).toBeNull());
+  expect(result.current[1].fetching).toBe(false);
+  expect(f.custom).toHaveBeenCalledTimes(1);
+});
+
+test("authored mutations stay pending until active query invalidation settles", async () => {
+  const refreshed = deferred<{ data: Data }>();
+  const custom = vi.fn(async () => ({ data: { notes: [{ id: "one" }] } }));
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "one" }] } });
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "updated" }] } });
+  custom.mockImplementationOnce(() => refreshed.promise);
+  const f = fixture(custom);
+  const { result } = renderHook(() => ({
+    read: useAuthoredQuery(DOCUMENT, { id: "a" }, { models: ["notes.Note"] }),
+    mutation: useAuthoredMutation(MUTATION, { invalidateModels: ["notes.Note"] }),
+  }), { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.read.data).toBeDefined());
+  const completed = vi.fn();
+  let pending!: Promise<void>;
+  act(() => { pending = result.current.mutation[0]({ id: "a" }).then(completed); });
+  await waitFor(() => expect(custom).toHaveBeenCalledTimes(3));
+  expect(result.current.mutation[1].fetching).toBe(true);
+  expect(completed).not.toHaveBeenCalled();
+  await act(async () => {
+    refreshed.resolve({ data: { notes: [{ id: "updated" }] } });
+    await pending;
+  });
+  await waitFor(() => expect(result.current.mutation[1].fetching).toBe(false));
+  expect(completed).toHaveBeenCalledWith({ notes: [{ id: "updated" }] });
+  expect(result.current.read.data).toEqual({ notes: [{ id: "updated" }] });
+});
+
+test("authored completion keeps its starting policy and the next operation gets current options", async () => {
+  const response = deferred<{ data: Data }>();
+  const custom = vi.fn(async () => ({ data: { notes: [{ id: "updated" }] } }));
+  custom.mockImplementationOnce(() => response.promise);
+  const f = fixture(custom);
+  const first = vi.fn(() => false);
+  const second = vi.fn(() => false);
+  const { result, rerender } = renderHook(({ shouldInvalidate }) => useAuthoredMutation(MUTATION, {
+    invalidateModels: ["notes.Note"], shouldInvalidate,
+  }), { wrapper: f.wrapper, initialProps: { shouldInvalidate: first } });
+  const mutate = result.current[0];
+  let pending!: ReturnType<typeof mutate>;
+  act(() => { pending = mutate({ id: "first" }); });
+  await waitFor(() => expect(custom).toHaveBeenCalledTimes(1));
+  rerender({ shouldInvalidate: second });
+  expect(result.current[0]).toBe(mutate);
+  await act(async () => { response.resolve({ data: { notes: [{ id: "updated" }] } }); await pending; });
+  expect(first).toHaveBeenCalledWith({ notes: [{ id: "updated" }] }, { id: "first" });
+  expect(second).not.toHaveBeenCalled();
+  await act(async () => { await mutate({ id: "second" }); });
+  expect(second).toHaveBeenCalledWith({ notes: [{ id: "updated" }] }, { id: "second" });
+});
+
+test("authored envelope failures enter native error state before invalidation", async () => {
+  const f = fixture();
+  const invalidate = vi.spyOn(f.client, "invalidateQueries");
+  const { result } = renderHook(() => useAuthoredMutation(MUTATION, {
+    invalidateModels: ["notes.Note"],
+    errorFrom: () => ({ error_code: "DENIED", error: "Permission denied" }),
+  }), { wrapper: f.wrapper });
+  await act(async () => { await expect(result.current[0]({ id: "a" })).rejects.toThrow("Permission denied"); });
+  await waitFor(() => expect(result.current[1].error?.message).toBe("Permission denied"));
+  expect(result.current[1].fetching).toBe(false);
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(f.onError).toHaveBeenCalledTimes(1);
+  expect(f.notify).toHaveBeenCalledTimes(1);
+});
 
 test("singleton and batch share one request, native refetch and every model interest", async () => {
   const pending = deferred<{ data: Data }>();
