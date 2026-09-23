@@ -528,23 +528,36 @@ export function gridFieldClass(field: FieldDescriptor): string | undefined {
   return fieldWidgetId(field) === "tagInput" ? "col-span-full" : undefined;
 }
 
-/** Omit paths by default; an empty root includes relative paths, otherwise prefix them with the root. */
-export function fieldErrorMessages(errors: readonly unknown[], path?: string): string[] {
-  return errors.flatMap((error) => nestedFieldErrorMessages(error, path));
+/** Whether a descriptor owns structured child controls through a template. */
+export function isCompositeFieldDescriptor(field: FieldDescriptor): boolean {
+  return Boolean(field.objectTemplate || field.itemTemplate || ("rowTemplate" in field && field.rowTemplate));
 }
 
-function nestedFieldErrorMessages(error: unknown, path?: string): string[] {
-  if (error && typeof error === "object" && "message" in error
-    && (typeof error.message === "string" || typeof error.message === "number")) {
+/**
+ * Exact-field messages stay bare. With a root path, descendants keep their full
+ * dotted paths for nested routing; an empty root produces relative paths.
+ * Omit the root to leave every message unprefixed.
+ */
+export function fieldErrorMessages(errors: readonly unknown[], path?: string): string[] {
+  return errors.flatMap((error) => nestedFieldErrorMessages(error, path, path));
+}
+
+function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: string): string[] {
+  if (error == null) return [];
+  if (typeof error !== "object") return [String(error)];
+  const messages: string[] = [];
+  const hasMessage = "message" in error
+    && (typeof error.message === "string" || typeof error.message === "number");
+  if (hasMessage) {
     const message = String(error.message);
-    return path ? [`${path}: ${message}`] : [message];
+    messages.push(path && path !== rootPath ? `${path}: ${message}` : message);
   }
-  if (!error || typeof error !== "object") return [fieldErrorMessage(error)];
-  return Object.entries(error).flatMap(([name, child]) => {
-    if (name === "ref" || name === "type" || child === undefined) return [];
+  return messages.concat(Object.entries(error).flatMap(([name, child]) => {
+    if (name === "ref" || name === "type" || child === undefined
+      || (hasMessage && (name === "message" || name === "types"))) return [];
     const childPath = path === undefined ? undefined : path ? `${path}.${name}` : name;
-    return nestedFieldErrorMessages(child, childPath);
-  });
+    return nestedFieldErrorMessages(child, childPath, rootPath);
+  }));
 }
 
 export function fieldValidationSummary(
@@ -558,19 +571,6 @@ export function fieldValidationSummary(
   return fields.length > 0
     ? t("form.fixHighlightedFieldsNamed", { fields: fields.join(", ") })
     : t("form.fixHighlightedFields");
-}
-
-function fieldErrorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (
-    error &&
-    typeof error === "object" &&
-    "message" in error &&
-    (typeof error.message === "string" || typeof error.message === "number")
-  ) {
-    return String(error.message);
-  }
-  return String(error);
 }
 
 export function recordSubtitleParts(

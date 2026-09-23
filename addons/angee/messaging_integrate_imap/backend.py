@@ -113,6 +113,9 @@ class ImapSamplePreview(BaseModel):
     model_config = ConfigDict(frozen=True)
     mailbox: str
     uidvalidity: int
+    upper_uid: int
+    total_count: int
+    next_before_uid: int | None
     messages: list[ImapSampleMessage]
     truncated: bool
 
@@ -224,23 +227,93 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             raise ValidationError("The mailbox UID identity changed. Preview the messages again.")
         return current
 
-    def preview_sample(self, *, mailbox: str, since: date, before: date, limit: int = 20) -> ImapSamplePreview:
-        """Read headers for at most fifty messages in an explicit one-year window."""
+    def preview_sample(
+        self,
+        *,
+        mailbox: str,
+        since: date | None,
+        before: date | None,
+        all_dates: bool = False,
+        uidvalidity: int | None = None,
+        upper_uid: int | None = None,
+        before_uid: int | None = None,
+        limit: int = 20,
+    ) -> ImapSamplePreview:
+        """Read one page from a UID-frozen mailbox selection without moving its cursor."""
 
         if not 1 <= limit <= MAX_SAMPLE_MESSAGES:
             raise ValidationError(f"Choose a sample limit between 1 and {MAX_SAMPLE_MESSAGES}.")
-        if not 0 < (before - since).days <= 366:
-            raise ValidationError("Choose a positive date window of at most one year.")
+        if all_dates:
+            if since is not None or before is not None:
+                raise ValidationError("Do not combine all-dates preview with a date window.")
+            criteria: list[Any] = ["ALL"]
+        else:
+            if since is None or before is None or not 0 < (before - since).days <= 366:
+                raise ValidationError("Choose a positive date window of at most one year.")
+            criteria = ["SINCE", since, "BEFORE", before]
+        continuation = uidvalidity is not None or upper_uid is not None or before_uid is not None
+        if continuation and (
+            type(uidvalidity) is not int
+            or uidvalidity <= 0
+            or type(upper_uid) is not int
+            or upper_uid < 0
+            or (before_uid is not None and (type(before_uid) is not int or before_uid <= 0))
+        ):
+            raise ValidationError("Preview this mailbox scope again before loading its next page.")
         try:
-            uidvalidity = self._sample_mailbox(mailbox)
+            current_uidvalidity = self._sample_mailbox(
+                mailbox,
+                uidvalidity=uidvalidity,
+            )
             client = self._client_or_fail()
-            found = sorted((int(uid) for uid in client.search(["SINCE", since, "BEFORE", before])), reverse=True)
-            chosen = found[:limit]
+            status = client.folder_status(mailbox, [b"UIDNEXT"])
+            current_upper_uid = max(int(status[b"UIDNEXT"]) - 1, 0)
+            snapshot_upper_uid = current_upper_uid if upper_uid is None else upper_uid
+            if snapshot_upper_uid > current_upper_uid:
+                raise ValidationError("The mailbox snapshot is no longer available. Preview it again.")
+            found = sorted(
+                (
+                    int(uid)
+                    for uid in client.search(criteria)
+                    if int(uid) <= snapshot_upper_uid
+                ),
+                reverse=True,
+            )
+            page = [uid for uid in found if before_uid is None or uid < before_uid]
+            chosen = page[:limit]
             rows = client.fetch(chosen, [b"BODY.PEEK[HEADER]", b"FLAGS", b"RFC822.SIZE"]) if chosen else {}
+            answered = {
+                uid: item
+                for uid in chosen
+                if (item := rows.get(uid)) is not None and b"BODY[HEADER]" in item
+            }
+            missing = sorted(set(chosen) - set(answered))
+            self._report_unanswered(
+                mailbox, chosen, answered, phase="sample header fetch"
+            )
+            work = _MailboxWork(name=mailbox, uidvalidity=current_uidvalidity)
+            still_present = self._present_uids(work, missing) if missing else set()
+            if still_present:
+                raise ImapError(
+                    f"IMAP mailbox {mailbox!r} still contains UID(s) that its FETCH did not answer: "
+                    f"{sorted(still_present)[:20]}. Retry the preview before advancing its page."
+                )
+            confirmed_expunged = set(missing)
+            present_found = [uid for uid in found if uid not in confirmed_expunged]
+            present_page = [
+                uid
+                for uid in present_found
+                if before_uid is None or uid < before_uid
+            ]
+            next_before_uid = (
+                chosen[-1]
+                if chosen and any(uid < chosen[-1] for uid in present_page)
+                else None
+            )
             messages = []
             for uid in chosen:
-                item = rows.get(uid)
-                if item is None or b"BODY[HEADER]" not in item:
+                item = answered.get(uid)
+                if item is None:
                     continue
                 raw = bytes(item[b"BODY[HEADER]"])
                 if len(raw) > 1_000_000:
@@ -251,9 +324,16 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                     sent_at=str(header.get("Date", "")), size=int(item.get(b"RFC822.SIZE", 0)),
                     flags=sorted(_text(flag) for flag in item.get(b"FLAGS", ())),
                 ))
-            self._sample_mailbox(mailbox, uidvalidity=uidvalidity)
-            return ImapSamplePreview(mailbox=mailbox, uidvalidity=uidvalidity,
-                                     messages=messages, truncated=len(found) > limit)
+            self._sample_mailbox(mailbox, uidvalidity=current_uidvalidity)
+            return ImapSamplePreview(
+                mailbox=mailbox,
+                uidvalidity=current_uidvalidity,
+                upper_uid=snapshot_upper_uid,
+                total_count=len(present_found),
+                next_before_uid=next_before_uid,
+                messages=messages,
+                truncated=next_before_uid is not None,
+            )
         finally:
             self.close()
 

@@ -4039,16 +4039,18 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         self,
         step_run: Any,
         *,
+        input: AttemptInput,
         at: datetime,
     ) -> tuple[Any, MapExpansionPlan] | None:
         """Retain one internal Map expansion wait without physical admission."""
 
+        self._validate_claim(AttemptCause.MAP_ENGINE, input)
         alias = get_write_alias(self.model, bound=self, instance=step_run)
         with transaction.atomic(using=alias), system_context(reason="workflows.map.expand"):
             run, locked = self._locked_ancestry(step_run.pk, alias)
             if run.is_terminal or locked.status != StepRunStatus.SCHEDULED:
                 raise ValidationError({"step_run": "Map expansion requires a scheduled current generation."})
-            plan = self._map_expansion_plan(locked, alias=alias)
+            plan = self._map_expansion_plan(locked, input=input, alias=alias)
             step_run_model = self.model._meta.get_field("step_run").remote_field.model
             run_rows = system_queryset(step_run_model, using=alias, lock=None).filter(run_id=run.pk)
             admitted = run_rows.filter(status=StepRunStatus.SCHEDULED).count()
@@ -4095,7 +4097,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             attempt = self._allocate_locked(
                 locked,
                 cause=AttemptCause.MAP_ENGINE,
-                input=AttemptInput(),
+                input=input,
                 claimed_at=at,
                 alias=alias,
             )
@@ -4112,13 +4114,18 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             return attempt, plan
 
     @staticmethod
-    def _map_expansion_plan(step_run: Any, *, alias: str) -> MapExpansionPlan:
+    def _map_expansion_plan(
+        step_run: Any,
+        *,
+        input: AttemptInput,
+        alias: str,
+    ) -> MapExpansionPlan:
         impl_class = step_run.step.resolve_impl("step_class")
         if getattr(impl_class, "key", None) != "map":
             raise ValidationError({"step_run": "Map expansion requires a Map step."})
         try:
             target = impl_class.target_step(step_run, using=alias)
-            items = impl_class.items(step_run, using=alias)
+            items = impl_class.items(step_run, input=input, using=alias)
         except ValidationError as error:
             return MapExpansionPlan(None, "", [], str(error))
         return MapExpansionPlan(target.pk, target.key, items, "")
@@ -4586,7 +4593,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             aggregate = self._allocate_locked(
                 locked,
                 cause=AttemptCause.MAP_ENGINE,
-                input=AttemptInput(),
+                input=AttemptInput(
+                    expansion.input_present,
+                    copy.deepcopy(expansion.input),
+                    copy.deepcopy(expansion.input_provenance),
+                ),
                 claimed_at=at,
                 alias=alias,
             )
@@ -5798,6 +5809,35 @@ class DecisionQuerySet(AngeeQuerySet[Any]):
 class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ignore[misc]
     """Create actionable decisions and their authorization tuples atomically."""
 
+    def resync_issuers(self) -> int:
+        """Backfill issuer tuples from immutable run admission after REBAC sync.
+
+        Missing admission and deleted principals grant no authority. Repeated
+        calls are idempotent and return the number of eligible Decisions.
+        """
+
+        alias = get_write_alias(self.model, bound=self)
+        require_authorization_database(alias, operation="Decision issuer resync", error_field="using")
+        if not isinstance(rebac_backend(), LocalBackend):
+            raise ValidationError({"rebac": "Decision issuer resync requires the transactional local REBAC adapter."})
+        with transaction.atomic(using=alias), system_context(reason="workflows.decision.resync_issuers"):
+            relationships = []
+            for decision in (
+                system_queryset(self.model, using=alias, lock=None)
+                .select_related("step_run__run")
+                .order_by("pk")
+            ):
+                actor = decision.step_run.run.admission_actor(using=alias)
+                if actor is not None:
+                    relationships.append(
+                        RelationshipTuple(
+                            resource=to_object_ref(decision), relation="issuer", subject=to_subject_ref(actor)
+                        )
+                    )
+            if relationships:
+                write_relationships(relationships)
+        return len(relationships)
+
     def predecessor_decision(self, step_run: Any, gate_step_class: type[Any]) -> Any:
         """Load the nearest declared gate's settled slot on retained ancestry.
 
@@ -5943,6 +5983,12 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 for row in attempts.values():
                     row.step_run = steps[row.step_run_id]
                 historical_runs: set[int] = set()
+                parent_runs = {
+                    steps[row.parent_step_run_id].run_id
+                    for row in runs.values()
+                    if row.parent_step_run_id is not None
+                    and row.parent_relation == ParentRelation.CONTINUATION
+                }
                 for row in runs.values():
                     if row.recovery_source_attempt_id is not None:
                         row.recovery_source_attempt = attempts[row.recovery_source_attempt_id]
@@ -5969,7 +6015,10 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                     if (
                         consumer is None
                         or consumer.pk == gate.pk
-                        or any(row.is_terminal and row.pk not in historical_runs for row in runs.values())
+                        or any(
+                            row.is_terminal and row.pk not in historical_runs | parent_runs
+                            for row in runs.values()
+                        )
                         or consumer.status != StepRunStatus.STARTED
                         or active is None
                         or active.started_at is None
@@ -6444,6 +6493,9 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         database with REBAC's transactional local backend. Other aliases and
         remote backends require a durable relationship-intent contract before
         retained Decision creation can support them.
+
+        The admitted run actor retains evidence-sharing authority as issuer,
+        independently of the requester's separation-of-duties restriction.
         """
         require_authorization_database(using, operation="Atomic Decision relationship creation", error_field="using")
         if attempt.step_run_id != step_run.pk:
@@ -6472,6 +6524,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             prepared_rows.append(
                 (
                     spec,
+                    to_subject_ref(grant_actor),
                     tuple(canonical_subject_ref(subject) for subject in spec.assignees),
                     canonical_subject_ref(spec.requester) if spec.requester else None,
                     tuple(canonical_subject_ref(subject) for subject in spec.escalation),
@@ -6489,6 +6542,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         with transaction.atomic(using=using):
             for index, (
                 spec,
+                issuer,
                 assignees,
                 requester,
                 escalation,
@@ -6519,8 +6573,11 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 decision.create_for_suspension(using=using)
                 resource = to_object_ref(decision)
                 relationships = [
-                    RelationshipTuple(resource=resource, relation="assignee", subject=subject) for subject in assignees
+                    RelationshipTuple(resource=resource, relation="issuer", subject=issuer),
                 ]
+                relationships.extend(
+                    RelationshipTuple(resource=resource, relation="assignee", subject=subject) for subject in assignees
+                )
                 if requester is not None:
                     relationships.append(RelationshipTuple(resource=resource, relation="requester", subject=requester))
                 relationships.extend(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
+from io import StringIO
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,10 +12,11 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.management import call_command
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.signals import post_save, pre_save
 from django.utils import timezone
-from rebac import system_context, to_subject_ref
+from rebac import actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
 from angee.workflows.attempts import (
@@ -996,6 +998,121 @@ def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents
         decisions[0].save()
     with pytest.raises(TypeError, match="owned by DecisionManager"):
         Decision.objects.filter(pk=decisions[0].pk).update(declaration_index=4)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_suspension_issuer_shares_evidence_without_changing_decision_authority(
+    scheduled_step_run: StepRun,
+) -> None:
+    """Self-review preserves issuer sharing without delegating it to reviewers."""
+
+    issuer = scheduled_step_run.run.admission_actor()
+    assert issuer is not None
+    reviewer = User.objects.create_user(username="issuer-sharing-reviewer")
+    reader = User.objects.create_user(username="issuer-sharing-reader")
+    outsider = User.objects.create_user(username="issuer-sharing-outsider")
+    issuer_ref = str(to_subject_ref(issuer))
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    with actor_context(outsider):
+        StepAttempt.objects.finalize(
+            attempt.pk,
+            lease_token=attempt.lease_token,
+            result=AttemptResult(
+                AttemptResultKind.SUSPEND,
+                decisions=(
+                    DecisionSpec(assignees=(issuer_ref,), action="self-review"),
+                    DecisionSpec(
+                        assignees=(str(to_subject_ref(reviewer)),),
+                        action="independent-review",
+                    ),
+                    DecisionSpec(
+                        assignees=(issuer_ref, str(to_subject_ref(reviewer))),
+                        requester=issuer_ref,
+                        action="requester-excluded",
+                    ),
+                ),
+                waiting_kind="approval",
+            ),
+            recorded_at=timezone.now(),
+        )
+    with system_context(reason="test native Decision issuer authority"):
+        self_review, independent, separated = tuple(
+            Decision.objects.filter(suspension_attempt=attempt).order_by("declaration_index")
+        )
+
+    assert self_review.with_actor(issuer).has_access("act")
+    assert self_review.with_actor(issuer).has_access("share")
+    assert not self_review.with_actor(issuer).has_access("write")
+    assert not self_review.with_actor(outsider).has_access("share")
+    with actor_context(issuer):
+        self_review.with_actor(issuer).grant_record_access("reader", reader)
+    assert self_review.with_actor(reader).has_access("read")
+    assert not self_review.with_actor(reader).has_access("act")
+    assert not self_review.with_actor(reader).has_access("share")
+    with actor_context(reader), pytest.raises(PermissionDenied):
+        self_review.with_actor(reader).grant_record_access("reader", outsider)
+    assert not self_review.with_actor(outsider).has_access("read")
+
+    assert not independent.with_actor(issuer).has_access("act")
+    assert independent.with_actor(issuer).has_access("read")
+    assert independent.with_actor(issuer).has_access("share")
+    assert independent.with_actor(reviewer).has_access("read")
+    assert independent.with_actor(reviewer).has_access("act")
+    assert not independent.with_actor(reviewer).has_access("share")
+    with actor_context(reviewer), pytest.raises(PermissionDenied):
+        independent.with_actor(reviewer).grant_record_access("reader", outsider)
+    assert not independent.with_actor(outsider).has_access("read")
+    assert not separated.with_actor(issuer).has_access("act")
+    assert separated.with_actor(issuer).has_access("share")
+    assert separated.with_actor(reviewer).has_access("act")
+    with actor_context(issuer):
+        self_review.with_actor(issuer).revoke_record_access("reader", reader)
+    assert not self_review.with_actor(reader).has_access("read")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_issuer_resync_uses_retained_admission_and_is_idempotent(
+    scheduled_step_run: StepRun,
+) -> None:
+    """Old Decisions gain issuer sharing without trusting mutable audit users."""
+
+    issuer = scheduled_step_run.run.admission_actor()
+    assert issuer is not None
+    outsider = User.objects.create_user(username="issuer-backfill-auditor")
+    deleted = User.objects.create_user(username="issuer-backfill-deleted")
+    deleted_subject = str(to_subject_ref(deleted))
+    with system_context(reason="seed historical Decisions without issuer tuples"):
+        deleted.delete()
+        models.QuerySet.update(WorkflowRun.objects.filter(pk=scheduled_step_run.run_id), created_by=outsider)
+        legacy = Decision.objects.create(step_run=scheduled_step_run, action="legacy", created_by=outsider)
+        skipped = []
+        for admission in ("", deleted_subject):
+            run = WorkflowRun.objects.create(
+                workflow=scheduled_step_run.run.workflow,
+                status=RunStatus.RUNNING,
+                admitted_actor_ref=admission,
+                created_by=outsider,
+            )
+            step_run = StepRun.objects.create(run=run, step=scheduled_step_run.step)
+            skipped.append(Decision.objects.create(step_run=step_run, action="legacy", created_by=outsider))
+
+    assert not legacy.with_actor(issuer).has_access("share")
+    command_output = StringIO()
+    with actor_context(outsider):
+        assert Decision.objects.resync_issuers() == 1
+        call_command("resync_decision_issuers", stdout=command_output)
+    assert "reconciled 1 Decision issuer(s)" in command_output.getvalue()
+    relationships = active_relationship_model().objects.filter(resource_type="workflows/decision", relation="issuer")
+    assert list(relationships.values_list("resource_id", "subject_id")) == [(str(legacy.pk), str(issuer.pk))]
+    assert legacy.with_actor(issuer).has_access("share")
+    assert legacy.with_actor(issuer).has_access("read")
+    assert not legacy.with_actor(issuer).has_access("act")
+    assert not legacy.with_actor(issuer).has_access("write")
+    for decision in (legacy, *skipped):
+        assert not decision.with_actor(outsider).has_access("share")
+        assert not decision.with_actor(outsider).has_access("act")
+        assert not decision.with_actor(outsider).has_access("write")
 
 
 @pytest.mark.django_db(transaction=True)

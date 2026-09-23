@@ -36,6 +36,7 @@ import {
   fieldAriaLabel,
   fieldErrorMessages,
   gridFieldClass,
+  isCompositeFieldDescriptor,
   recordRepresentationValue,
   resolveField,
   titleText,
@@ -251,6 +252,7 @@ export function FormViewOverview({
   linesTabLabel,
   linePrimaryFields,
   lineSupplementalColumns,
+  lineRelationFilters,
   context,
 }: {
   surface: FormViewSurface;
@@ -260,6 +262,7 @@ export function FormViewOverview({
   linesTabLabel?: React.ReactNode;
   linePrimaryFields?: readonly string[];
   lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
+  lineRelationFilters?: EditableLinesProps["relationFilters"];
   context: RecordToolbarContext;
 }): React.ReactElement {
   const {
@@ -310,6 +313,7 @@ export function FormViewOverview({
       rowErrors={lineRowErrors}
       primaryFields={linePrimaryFields}
       supplementalColumns={lineSupplementalColumns}
+      relationFilters={lineRelationFilters}
     />
   ) : null;
   const renderOverviewSections = (list: readonly FormSectionModel[]): React.ReactNode => {
@@ -674,7 +678,7 @@ function BoundFieldRow({
   controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): React.ReactElement {
   const effectiveReadOnly = Boolean(readOnly);
-  const composite = Boolean(field.objectTemplate || field.itemTemplate || "rowTemplate" in field);
+  const composite = isCompositeFieldDescriptor(field);
   const messages = [...fieldErrorMessages(errors, composite ? field.name : undefined), ...(serverMessages ?? [])];
   const displayedMessages = composite
     ? directDottedPathMessages(messages, field.name)
@@ -746,7 +750,7 @@ function BodyFieldControl({
   onCommit?: () => void;
   controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
 }): React.ReactElement {
-  const composite = Boolean(field.objectTemplate || field.itemTemplate || "rowTemplate" in field);
+  const composite = isCompositeFieldDescriptor(field);
   const messages = [...fieldErrorMessages(errors, composite ? field.name : undefined), ...(serverMessages ?? [])];
   return (
     <FieldRoot invalid={messages.length > 0} className="grid gap-2">

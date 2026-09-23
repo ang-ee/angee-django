@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -628,6 +629,22 @@ class InferEvidenceStepImpl(StepImpl):
                 current = apps.get_model("workflows_extraction", "Extraction").objects.db_manager(using).get(
                     sqid=outcome.current_extraction_id,
                 )
+            if current.status == "failed":
+                retained = _retained_inference_result(
+                    current,
+                    actor=actor,
+                    success_outcome="superseded",
+                    artifact_label="Current extraction evidence",
+                    using=using,
+                )
+                return StepResult.done(
+                    output={
+                        **retained.output,
+                        "superseded_by": outcome.current_extraction_id,
+                    },
+                    outcome=retained.outcome,
+                    artifacts=retained.artifacts,
+                )
             return StepResult.done(
                 output={**_inference_output(current), "superseded_by": outcome.current_extraction_id},
                 outcome="superseded", artifacts=(ArtifactSpec(current, "Current extraction evidence"),),
@@ -641,15 +658,34 @@ class InferEvidenceStepImpl(StepImpl):
         )
 
 
-def _inference_failure(error: DocumentPipelineError) -> dict[str, str]:
-    """Project one bounded provider or retained-carrier failure into the journal."""
+def _inference_failure(source: DocumentPipelineError | Mapping[str, Any]) -> dict[str, str]:
+    """Project a live error or persisted stage provenance into bounded journal facts."""
 
-    return {
-        "type": type(error).__name__,
-        "message": str(error),
-        "stage": str(error.stage or ""),
-        "code": str(error.code or ""),
+    if isinstance(source, DocumentPipelineError):
+        details: Mapping[str, Any] = {
+            "type": type(source).__name__,
+            "stage": source.stage,
+            "code": source.code,
+        }
+        message = str(source)
+        metadata = source.metadata
+    else:
+        details = source.get("failure", {})
+        message = str(details.get("message") or "Inference failed.")
+        # Processing stores diagnostics beside failure; retained inference stores
+        # them inside failure.metadata, which takes precedence over inherited facts.
+        metadata = details.get("metadata", source)
+
+    failure = {
+        "type": str(details.get("type") or "DocumentPipelineError"),
+        "message": message,
+        "stage": str(details.get("stage") or ""),
+        "code": str(details.get("code") or ""),
     }
+    for key in ("provider_response_id", "finish_reason", "output_text_length", "output_text_sha256"):
+        if key in metadata:
+            failure[key] = str(metadata[key])
+    return failure
 
 
 def _inference_output(extraction: Any) -> dict[str, Any]:
@@ -673,16 +709,10 @@ def _retained_inference_result(
     if extraction.status == "failed" and extraction.error_code != (
         "source_hold:identity_correspondence_required"
     ):
-        failure = extraction.stage_provenance.get("failure", {})
         return StepResult.done(
             output={
                 **_inference_output(extraction),
-                "inference_failure": {
-                    "type": str(failure.get("type") or "DocumentPipelineError"),
-                    "message": str(failure.get("message") or "Inference failed."),
-                    "stage": str(failure.get("stage") or ""),
-                    "code": str(failure.get("code") or ""),
-                },
+                "inference_failure": _inference_failure(extraction.stage_provenance),
             },
             outcome="inference_failed",
             artifacts=(ArtifactSpec(extraction, "Failed inferred extraction evidence"),),
@@ -708,12 +738,11 @@ def _retained_inference_result(
     return StepResult.done(
         output={
             **_inference_output(authority),
-            "inference_failure": {
-                "type": "DocumentPipelineError",
-                "message": "The retained correspondence candidate is empty.",
-                "stage": "correspondence",
-                "code": "empty_correspondence_candidate",
-            },
+            "inference_failure": _inference_failure(DocumentPipelineError(
+                "The retained correspondence candidate is empty.",
+                stage="correspondence",
+                code="empty_correspondence_candidate",
+            )),
         },
         outcome="inference_failed",
         artifacts=(

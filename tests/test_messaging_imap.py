@@ -756,10 +756,73 @@ def test_sample_preview_is_bounded_readonly_and_keeps_cursor(monkeypatch: pytest
 
     assert [message.uid for message in result.messages] == [3, 2]
     assert result.truncated and result.uidvalidity == 100
+    assert result.upper_uid == result.total_count == 3
+    assert result.next_before_uid == 2
     assert account.searches == [("INBOX", ["SINCE", date(2026, 7, 1), "BEFORE", date(2026, 8, 1)])]
     assert all(b"BODY.PEEK[]" not in fields for _, _, fields in account.fetches)
     assert backend.bridge.cursor == {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
     assert len(account.logins) == account.logouts == 1
+
+
+def test_sample_preview_pages_one_all_dates_snapshot_and_excludes_new_mail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account = FakeImapAccount({"INBOX": _folder(*(_eml(subject=str(index)) for index in range(1, 6)))})
+    backend = _backend(monkeypatch, account)
+
+    first = backend.preview_sample(
+        mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
+    )
+    account.folders["INBOX"]["messages"][6] = {"raw": _eml(subject="new")}
+    second = backend.preview_sample(
+        mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
+        uidvalidity=first.uidvalidity, upper_uid=first.upper_uid,
+        before_uid=first.next_before_uid,
+    )
+    third = backend.preview_sample(
+        mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
+        uidvalidity=second.uidvalidity, upper_uid=second.upper_uid,
+        before_uid=second.next_before_uid,
+    )
+
+    assert first.total_count == second.total_count == third.total_count == 5
+    assert first.upper_uid == second.upper_uid == third.upper_uid == 5
+    assert [message.uid for message in first.messages] == [5, 4]
+    assert [message.uid for message in second.messages] == [3, 2]
+    assert [message.uid for message in third.messages] == [1]
+    assert first.next_before_uid == 4
+    assert second.next_before_uid == 2
+    assert third.next_before_uid is None and not third.truncated
+    assert account.searches == [("INBOX", ["ALL"])] * 3
+    assert backend.bridge.cursor == {}
+
+
+def test_sample_preview_rejects_still_present_unanswered_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account = FakeImapAccount(
+        {"INBOX": _folder(_eml(subject="A"), _eml(subject="B"))}
+    )
+    backend = _backend(monkeypatch, account)
+    original_fetch = FakeIMAPClient.fetch
+
+    def omit_second_header(
+        self: FakeIMAPClient, uids: list[int], data: list[bytes]
+    ) -> dict[int, dict[bytes, Any]]:
+        response = original_fetch(self, uids, data)
+        if b"BODY.PEEK[HEADER]" in data:
+            response.pop(2, None)
+        return response
+
+    monkeypatch.setattr(FakeIMAPClient, "fetch", omit_second_header)
+
+    with pytest.raises(ImapError, match="still contains UID"):
+        backend.preview_sample(
+            mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
+        )
+
+    assert ("INBOX", ["UID", "2"]) in account.searches
+    assert backend.bridge.cursor == {}
 
 
 def test_sample_fetch_pins_uids_and_preserves_unread_flags(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -796,6 +859,14 @@ def test_sample_rejects_unbounded_requests_before_connect(monkeypatch: pytest.Mo
         backend.preview_sample(mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), limit=51)
     with pytest.raises(ValidationError, match="one year"):
         backend.preview_sample(mailbox="INBOX", since=date(2024, 7, 1), before=date(2026, 8, 1))
+    with pytest.raises(ValidationError, match="Do not combine all-dates"):
+        backend.preview_sample(
+            mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), all_dates=True,
+        )
+    with pytest.raises(ValidationError, match="Preview this mailbox scope again"):
+        backend.preview_sample(
+            mailbox="INBOX", since=None, before=None, all_dates=True, uidvalidity=100,
+        )
     with pytest.raises(ValidationError, match="positive message UIDs"):
         backend.fetch_sample(mailbox="INBOX", uidvalidity=100, uids=list(range(1, 52)))
     assert account.logins == []

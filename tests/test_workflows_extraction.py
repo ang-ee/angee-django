@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from pydantic import ValidationError as PydanticValidationError
-from pydantic_ai.messages import BinaryContent, ModelResponse, ToolCallPart
+from pydantic_ai.messages import BinaryContent, ModelResponse, TextPart, ToolCallPart
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows.steps import TransientStepError
@@ -30,7 +30,7 @@ from angee.workflows_extraction.steps import (
     RecognizePageStepImpl,
 )
 from tests.conftest import SchemaAddon
-from tests.extraction_models import Extraction as _Extraction  # noqa: F401 - registers composed test models.
+from tests.extraction_models import Extraction
 from tests.test_agents import InferenceModel as _InferenceModel  # noqa: F401 - registers composed test models.
 
 SCHEMA = {
@@ -40,6 +40,32 @@ SCHEMA = {
     "required": ["number"],
     "additionalProperties": False,
 }
+
+
+@pytest.mark.parametrize(
+    ("status", "provenance", "error_code", "expected"),
+    [
+        (
+            "failed",
+            {"document": {"failure": {"stage": "inference", "code": "invalid_response"}}},
+            "inference:invalid_response",
+            True,
+        ),
+        ("failed", {"document": {"failure": {"stage": "inference"}}}, "recognition:failed", True),
+        ("failed", {"document": {"failure": {"stage": "recognition"}}}, "inference:failed", False),
+        ("succeeded", {"document": {"failure": {"stage": "inference"}}}, "inference:failed", False),
+        ("failed", {}, "inference:failed", False),
+        ("failed", {"document": {}}, "inference:failed", False),
+        ("failed", {"document": {"failure": {"code": "failed"}}}, "inference:failed", False),
+        ("failed", {"document": {"failure": None}}, "inference:failed", False),
+    ],
+)
+def test_extraction_failed_at_inference_uses_retained_stage(
+    status: str, provenance: dict[str, object], error_code: str, expected: bool,
+) -> None:
+    extraction = Extraction(status=status, provenance=provenance, error_code=error_code)
+
+    assert extraction.failed_at_inference is expected
 
 
 def test_extraction_evidence_uses_native_closed_kind_enums() -> None:
@@ -240,8 +266,8 @@ def test_schema_owner_requires_object_root() -> None:
 
 
 def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -> None:
-    response = SimpleNamespace(
-        text='{"number":"INV-42"}',
+    response = ModelResponse(
+        parts=[TextPart('{"number":"INV-42"}')],
         provider_response_id="response-1",
     )
     requested = {}
@@ -289,8 +315,8 @@ def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -
 
 def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -> None:
     raw_output = "invoice data, but not JSON"
-    response = SimpleNamespace(
-        text=raw_output,
+    response = ModelResponse(
+        parts=[TextPart(raw_output)],
         provider_response_id="response-invalid",
         finish_reason="length",
     )
@@ -326,7 +352,10 @@ def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -
 
 
 def test_inference_mapping_consumes_native_structured_tool_result() -> None:
-    response = ModelResponse(parts=[ToolCallPart("inference_output", {"number": "INV-43"}, "call-1")])
+    response = ModelResponse(parts=[
+        TextPart("The structured invoice facts follow."),
+        ToolCallPart("inference_output", {"number": "INV-43"}, "call-1"),
+    ])
     model = SimpleNamespace(
         status="available",
         model_use="chat",
@@ -346,6 +375,52 @@ def test_inference_mapping_consumes_native_structured_tool_result() -> None:
 
     assert result.value == {"number": "INV-43"}
     assert isinstance(result, MappingResult)
+
+
+def test_inference_mapping_consumes_text_with_non_output_tool_call() -> None:
+    response = ModelResponse(parts=[
+        TextPart('{"number":"INV-43"}'),
+        ToolCallPart("lookup_invoice", {"number": "INV-44"}, "call-1"),
+    ])
+    model = SimpleNamespace(
+        status="available",
+        model_use="chat",
+        infer=lambda *args, **kwargs: (response, {}),
+    )
+
+    result = InferenceMappingEngine().map_text_parts(
+        (DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-43", "native", "hash"),),
+        SCHEMA,
+        model=model,
+        config={},
+        timeout=5,
+    )
+
+    assert result.value == {"number": "INV-43"}
+
+
+def test_inference_mapping_rejects_multiple_output_tool_calls() -> None:
+    response = ModelResponse(parts=[
+        TextPart('{"number":"INV-43"}'),
+        ToolCallPart("inference_output", {"number": "INV-43"}, "call-1"),
+        ToolCallPart("inference_output", {"number": "INV-44"}, "call-2"),
+    ])
+    model = SimpleNamespace(
+        status="available",
+        model_use="chat",
+        infer=lambda *args, **kwargs: (response, {}),
+    )
+
+    with pytest.raises(DocumentPipelineError) as raised:
+        InferenceMappingEngine().map_text_parts(
+            (DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-43", "native", "hash"),),
+            SCHEMA,
+            model=model,
+            config={},
+            timeout=5,
+        )
+    assert raised.value.stage == "mapping_response"
+    assert raised.value.code == "ValueError"
 
 
 def test_inference_model_roles_and_retired_status_share_the_execution_validator():

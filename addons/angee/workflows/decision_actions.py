@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import re
 from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
@@ -22,6 +21,7 @@ from referencing.jsonschema import DRAFT202012
 
 from angee.base.identity import instance_from_public_id
 from angee.base.scoping import read_scoped_queryset
+from angee.workflows.attempts import validate_json_value
 
 
 class ReviewRecordReference(BaseModel):
@@ -90,6 +90,7 @@ def build_decision_action(
     *,
     actions: Collection[ReviewAction],
     properties: Mapping[str, Mapping[str, Any]] | None = None,
+    action_properties: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None,
     payload: Mapping[str, Any] | None = None,
     facts: Collection[ReviewFact] = (),
     references: ReviewRecordReference | Collection[ReviewRecordReference] | None = None,
@@ -98,8 +99,11 @@ def build_decision_action(
 
     Consumers declare action metadata and ordinary editable property schemas;
     this owner emits the closed ``oneOf`` branches and serializes the standard
-    review context models. The runtime validator remains the sole owner that
-    admits the resulting schema when a Decision is retained.
+    review context models. ``action_properties`` shallowly refines one admitted
+    field inside one branch: root annotations remain unless overridden, while a
+    replacement annotation such as ``relation`` can change that branch's picker.
+    The runtime validator remains the sole owner that admits the resulting
+    schema when a Decision is retained.
     """
 
     declared = tuple(actions)
@@ -113,6 +117,24 @@ def build_decision_action(
         if unknown:
             raise ValueError(
                 f"Decision action {action.value!r} admits undeclared fields: {', '.join(sorted(unknown))}."
+            )
+    overrides = {
+        str(action): {
+            str(name): copy.deepcopy(dict(schema))
+            for name, schema in fields.items()
+        }
+        for action, fields in (action_properties or {}).items()
+    }
+    unknown_actions = set(overrides) - {action.value for action in declared}
+    if unknown_actions:
+        raise ValueError(
+            f"Decision field overrides name undeclared actions: {', '.join(sorted(unknown_actions))}."
+        )
+    for action in declared:
+        unknown = set(overrides.get(action.value, {})) - set(action.fields)
+        if unknown:
+            raise ValueError(
+                f"Decision action {action.value!r} overrides unadmitted fields: {', '.join(sorted(unknown))}."
             )
 
     context_values: dict[str, Any] = {}
@@ -153,7 +175,13 @@ def build_decision_action(
                 "required": ["action", *action.required],
                 "properties": {
                     "action": {"const": action.value},
-                    **{name: copy.deepcopy(editable[name]) for name in action.fields},
+                    **{
+                        name: {
+                            **copy.deepcopy(editable[name]),
+                            **copy.deepcopy(overrides.get(action.value, {}).get(name, {})),
+                        }
+                        for name in action.fields
+                    },
                 },
                 "additionalProperties": False,
             }
@@ -299,7 +327,7 @@ class DecisionActionContract:
 
 def _valid_context(adapter: TypeAdapter[Any], value: Any) -> bool:
     try:
-        adapter.validate_json(json.dumps(value, allow_nan=False))
+        validate_json_value(adapter.validate_json, value)
     except PydanticValidationError, TypeError, ValueError:
         return False
     return True

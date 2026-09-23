@@ -57,7 +57,9 @@ class DirectRecordAccess:
     subject: SubjectRef
 
 
-class _PublicIdQuerySetMixin(Generic[_ModelT]):
+class _AngeeQuerySetMixin(Generic[_ModelT]):
+    """Query conveniences shared by scoped and explicitly unscoped managers."""
+
     model: type[_ModelT]
 
     def from_public_id(self, value: str) -> _ModelT | None:
@@ -71,9 +73,27 @@ class _PublicIdQuerySetMixin(Generic[_ModelT]):
         except TypeError, ValueError:
             return None
 
+    def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:
+        """Apply a self-scoped row lock only on database backends that support it."""
+
+        queryset = cast(models.QuerySet[_ModelT], self)
+        alias = get_write_alias(self.model, bound=queryset)
+        queryset = queryset.using(alias)
+        features = connections[alias].features
+        if features.has_select_for_update:
+            if of and features.has_select_for_update_of:
+                return cast(Self, queryset.select_for_update(of=of))
+            return cast(Self, queryset.select_for_update())
+        return cast(Self, queryset)
+
+    def locked_get(self, *args: Any, **kwargs: Any) -> _ModelT:
+        """Return one row under a database row lock when the backend supports it."""
+
+        return cast(models.QuerySet[_ModelT], self.lock_if_supported()).get(*args, **kwargs)
+
 
 class AngeeQuerySet(
-    _PublicIdQuerySetMixin[_ModelT],
+    _AngeeQuerySetMixin[_ModelT],
     RebacQuerySet[_ModelT],
 ):
     """QuerySet API shared by Angee source and runtime models."""
@@ -193,35 +213,22 @@ class AngeeQuerySet(
             has_newer_than_before=self.filter(order.after(anchor)).exists() if anchor is not None else False,
         )
 
-    def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:
-        """Apply a self-scoped row lock only on database backends that support it."""
-
-        alias = get_write_alias(self.model, bound=self)
-        self = self.using(alias)
-        features = connections[alias].features
-        if features.has_select_for_update:
-            if of and features.has_select_for_update_of:
-                return cast(Self, self.select_for_update(of=of))
-            return cast(Self, self.select_for_update())
-        return self
-
-    def locked_get(self, *args: Any, **kwargs: Any) -> _ModelT:
-        """Return one row under a database row lock when the backend supports it."""
-
-        return self.lock_if_supported().get(*args, **kwargs)
-
 
 class AngeeUnscopedQuerySet(
-    _PublicIdQuerySetMixin[_ModelT],
+    _AngeeQuerySetMixin[_ModelT],
     models.QuerySet[_ModelT],
 ):
-    """Angee queryset API for models that intentionally have no REBAC row policy."""
+    """Angee queryset API for intentionally permission-naive managers.
+
+    Used by models without REBAC row policy and explicit Django base managers
+    whose unfiltered relation reads must retain native Django semantics.
+    """
 
     def scoped_for_aggregate(self) -> Self:
         """Return this queryset for permission-naive aggregation.
 
-        These querysets are only for Angee models without ``rebac_resource_type``;
-        row authorization has no model-owned policy to apply.
+        The manager deliberately supplies no row authorization; aggregation
+        preserves that same explicit unscoped policy.
         """
 
         return self

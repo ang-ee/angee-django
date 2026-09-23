@@ -73,10 +73,20 @@ class ImapChannelSampling(models.Model):
             return len(cursor.get("mailboxes", {})), changed
 
     def preview_imap_sample(
-        self, *, actor: Any, mailbox: str, since: date, before: date, limit: int = 20,
+        self,
+        *,
+        actor: Any,
+        mailbox: str,
+        since: date | None,
+        before: date | None,
+        all_dates: bool = False,
+        uidvalidity: int | None = None,
+        upper_uid: int | None = None,
+        before_uid: int | None = None,
+        limit: int = 20,
         using: str | None = None,
     ) -> ImapSamplePreview:
-        """Read a bounded header preview; leave the mailbox and normal cursor unchanged."""
+        """Read one frozen preview page; leave mailbox flags and the live cursor unchanged."""
 
         using = get_write_alias(type(self), using=using, instance=self)
         require_authorization_database(using, operation="IMAP sample and mailbox access")
@@ -84,7 +94,16 @@ class ImapChannelSampling(models.Model):
             "credential__external_account", "credential__oauth_client",
         ).get(pk=self.pk)
         current._require_paused_imap(actor)
-        return current.backend.preview_sample(mailbox=mailbox, since=since, before=before, limit=limit)
+        return current.backend.preview_sample(
+            mailbox=mailbox,
+            since=since,
+            before=before,
+            all_dates=all_dates,
+            uidvalidity=uidvalidity,
+            upper_uid=upper_uid,
+            before_uid=before_uid,
+            limit=limit,
+        )
 
     def import_imap_sample(
         self, *, actor: Any, mailbox: str, uidvalidity: int, uids: list[int],

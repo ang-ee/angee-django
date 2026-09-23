@@ -33,7 +33,7 @@ import {
   FormViewOverview,
   FormViewRecordHeader,
 } from "./form-view-body";
-import type { EditableLineSupplementalColumn } from "./EditableLines";
+import type { EditableLineSupplementalColumn, EditableLinesProps } from "./EditableLines";
 import { recordRepresentationValue, titleText } from "./form-view-model";
 
 export {
@@ -97,6 +97,8 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   linePrimaryFields?: readonly string[];
   /** Read-only domain projections rendered beside editable line fields. */
   lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
+  /** Domain-owned filters applied to relation pickers on editable lines. */
+  lineRelationFilters?: EditableLinesProps["relationFilters"];
   /** Record chrome density and height behavior. */
   recordPresentation?: RecordPresentation;
   /** Initial saved-record tab; invalid or unavailable ids fall back to Overview. */
@@ -156,6 +158,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     linesTabLabel,
     linePrimaryFields,
     lineSupplementalColumns,
+    lineRelationFilters,
     recordPresentation = "document",
     defaultRecordTab,
     overviewTab,
@@ -237,7 +240,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     <FormViewOverview
       surface={surface} layout={layout} groupLayout={groupLayout} bodyTabs={bodyTabs}
       linesTabLabel={linesTabLabel} linePrimaryFields={linePrimaryFields}
-      lineSupplementalColumns={lineSupplementalColumns} context={recordToolbarContext}
+      lineSupplementalColumns={lineSupplementalColumns}
+      lineRelationFilters={lineRelationFilters} context={recordToolbarContext}
     />
   );
   const overviewLabel = overviewTab?.label ?? t("form.tabOverview");

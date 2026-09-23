@@ -41,7 +41,7 @@ from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref
 from angee.base.impl import ImplClassField, ImplDefaultsMixin, resolve_all_impl_classes
 from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel
+from angee.base.models import AngeeDataModel, AngeeUnscopedManager
 from angee.base.permissions import require_authorization_database
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
@@ -2183,11 +2183,13 @@ class StepRun(AuditMixin, AngeeDataModel):
     )
 
     objects = StepRunManager()
+    unscoped_objects = AngeeUnscopedManager()
 
     class Meta:
         """Django model options for workflow step-run journal rows."""
 
         abstract = True
+        base_manager_name = "unscoped_objects"
         ordering = ("created_at", "sqid")
         rebac_resource_type = "workflows/step_run"
         constraints = (

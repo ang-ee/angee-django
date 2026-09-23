@@ -8,6 +8,37 @@ import {
 } from "./form-spec";
 
 describe("deserializeFormSpec", () => {
+  test("retains hidden schema fields through initialization and normalized submission", () => {
+    const fields = deserializeFormSpec({
+      type: "object",
+      properties: {
+        identity: { type: "string", hidden: true, readOnly: true },
+        details: { type: "object", widget: "object", properties: {
+          fingerprint: { type: "string", hidden: true },
+          title: { type: "string" },
+        } },
+        items: { type: "array", widget: "list", items: {
+          type: "object", widget: "object", properties: {
+            identity: { type: "string", hidden: true },
+            title: { type: "string" },
+          },
+        } },
+      },
+    }, defaultWidgets);
+    const payload = {
+      identity: "retained-root",
+      details: { fingerprint: "retained-fingerprint", title: "Details" },
+      items: [{ identity: "retained-item", title: "Item" }],
+    };
+
+    expect(fields[0]).toMatchObject({ hidden: true, readOnly: true });
+    expect(fields[1]?.objectTemplate?.[0]).toMatchObject({ hidden: true });
+    expect(fields[2]?.itemTemplate?.objectTemplate?.[0]).toMatchObject({ hidden: true });
+    const initialValues = formSpecInitialValues(fields, payload);
+    expect(initialValues).toEqual(payload);
+    expect(normalizeFormSpecValues(fields, initialValues)).toEqual(payload);
+  });
+
   test.each(["$defs", "definitions"])("resolves %s references for rows, objects, and list items without losing annotations", (definitions) => {
     const ref = (name: string) => ({ $ref: `#/${definitions}/${name}` });
     const schema = {

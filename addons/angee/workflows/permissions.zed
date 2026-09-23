@@ -1,7 +1,7 @@
 // Authorization schema for the workflows addon.
 // @rebac_package: workflows
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 6
+// @rebac_schema_revision: 7
 
 definition workflows/workflow {
     relation owner: auth/user // rebac:field=created_by
@@ -93,6 +93,9 @@ definition workflows/recovery_evidence {
 }
 
 definition workflows/decision {
+    // Retained by the suspension owner from the immutable admitted run actor.
+    // Separate from requester so ordinary self-review remains actionable.
+    relation issuer: auth/user
     relation assignee: auth/user | angee/role#member
     relation requester: auth/user
     relation escalation: auth/user | angee/role#member
@@ -103,8 +106,8 @@ definition workflows/decision {
 
     permission create = admin->member
     permission act = ((assignee - requester) + admin->member) & person->active_member
-    permission read = assignee + requester + escalation + reader + pending_decision->assignee + admin->member
-    permission share = requester + admin->member
+    permission read = issuer + assignee + requester + escalation + reader + pending_decision->assignee + admin->member
+    permission share = issuer + requester + admin->member
     permission write = admin->member
     permission delete = admin->member
 }

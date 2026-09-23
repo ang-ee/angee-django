@@ -1,13 +1,14 @@
 import { useMessagingT } from "@angee/messaging";
 import { useAuthoredMutation } from "@angee/refine";
-import { Alert, Button, ControlBandProvider, DialogForm, FieldRow, Input, RecordActionTrigger, RowsListView, errorMessage, useRecordChromeContext, type ListColumn } from "@angee/ui";
+import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRow, Input, RecordActionTrigger, RowsListView, errorMessage, useRecordChromeContext, type ListColumn } from "@angee/ui";
+import type { DocumentType } from "@angee/gql/console";
 import * as React from "react";
 
 import { ImportImapSample, PreviewImapSample } from "./documents";
 
 type SampleRow = { id: string; uid: number; subject: string; sender: string; sentAt: string; size: number; flags: string };
-type Preview = { mailbox: string; uidvalidity: number; truncated: boolean; messages: readonly { uid: number; subject: string; sent_at: string; sender: string; size: number; flags: readonly string[] }[] };
-type Outcome = { imported_uids: readonly number[]; missing_uids: readonly number[]; flags_unchanged: boolean };
+type Preview = DocumentType<typeof PreviewImapSample>["preview_imap_sample"];
+type Outcome = DocumentType<typeof ImportImapSample>["import_imap_sample"];
 
 const columns: readonly ListColumn<SampleRow>[] = [
   { field: "subject", header: "Subject" },
@@ -31,8 +32,10 @@ export function ImportImapSampleAction(): React.ReactElement | null {
   const [mailbox, setMailbox] = React.useState("INBOX");
   const [since, setSince] = React.useState(() => isoDate(-30));
   const [before, setBefore] = React.useState(() => isoDate(1));
+  const [allDates, setAllDates] = React.useState(false);
   const [limit, setLimit] = React.useState(20);
   const [preview, setPreview] = React.useState<Preview | null>(null);
+  const [previewGeneration, setPreviewGeneration] = React.useState(0);
   const [outcome, setOutcome] = React.useState<Outcome | null>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
   const [runPreview, previewState] = useAuthoredMutation(PreviewImapSample);
@@ -47,18 +50,33 @@ export function ImportImapSampleAction(): React.ReactElement | null {
     sentAt: message.sent_at, size: message.size, flags: message.flags.join(", "),
   }));
 
-  const loadPreview = async (): Promise<void> => {
+  const loadPreview = async (continuation?: Pick<Preview, "uidvalidity" | "upper_uid" | "next_before_uid">): Promise<void> => {
     setLocalError(null); setOutcome(null);
     const from = Date.parse(`${since}T00:00:00Z`); const to = Date.parse(`${before}T00:00:00Z`);
-    if (!mailbox.trim() || !Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+    if (!mailbox.trim() || (!allDates && (!Number.isFinite(from) || !Number.isFinite(to) || to <= from))) {
       setLocalError(t("channel.imap.sample.invalidRange")); return;
     }
-    if ((to - from) / 86_400_000 > 366) {
+    if (!allDates && (to - from) / 86_400_000 > 366) {
       setLocalError(t("channel.imap.sample.rangeTooLong")); return;
     }
     try {
-      const data = await runPreview({ id: recordId, mailbox: mailbox.trim(), since, before, limit: Math.max(1, Math.min(50, limit)) });
-      setPreview(data?.preview_imap_sample ?? null);
+      const data = await runPreview({
+        id: recordId,
+        mailbox: mailbox.trim(),
+        since: allDates ? null : since,
+        before: allDates ? null : before,
+        allDates,
+        uidvalidity: continuation?.uidvalidity,
+        upperUid: continuation?.upper_uid,
+        beforeUid: continuation?.next_before_uid,
+        limit: Math.max(1, Math.min(50, limit)),
+      });
+      const page = data?.preview_imap_sample ?? null;
+      if (!continuation) setPreviewGeneration((current) => current + 1);
+      setPreview((current) => continuation && current && page ? {
+        ...page,
+        messages: [...current.messages, ...page.messages],
+      } : page);
     } catch { /* Authored mutation state renders the server error. */ }
   };
 
@@ -83,9 +101,10 @@ export function ImportImapSampleAction(): React.ReactElement | null {
       </RecordActionTrigger>
     }
       footer={<Button type="button" variant="primary" disabled={busy} onClick={() => void loadPreview()}>{previewState.fetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.preview")}</Button>}>
-      <FieldRow label={t("channel.imap.sample.mailbox")}><Input value={mailbox} onChange={(event) => setMailbox(event.target.value)} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.since")}><Input type="date" value={since} onChange={(event) => setSince(event.target.value)} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.before")}><Input type="date" value={before} onChange={(event) => setBefore(event.target.value)} /></FieldRow>
+      <FieldRow label={t("channel.imap.sample.mailbox")}><Input value={mailbox} onChange={(event) => { setMailbox(event.target.value); setPreview(null); }} /></FieldRow>
+      <FieldRow label={t("channel.imap.sample.scope")}><Checkbox checked={allDates} onCheckedChange={(checked) => { setAllDates(checked); setPreview(null); }}>{t("channel.imap.sample.allDates")}</Checkbox></FieldRow>
+      <FieldRow label={t("channel.imap.sample.since")}><Input type="date" value={since} disabled={allDates} onChange={(event) => { setSince(event.target.value); setPreview(null); }} /></FieldRow>
+      <FieldRow label={t("channel.imap.sample.before")}><Input type="date" value={before} disabled={allDates} onChange={(event) => { setBefore(event.target.value); setPreview(null); }} /></FieldRow>
       <FieldRow label={t("channel.imap.sample.limit")}><Input type="number" min={1} max={50} value={limit} onChange={(event) => setLimit(Number(event.target.value))} /></FieldRow>
       {localError || operationError ? <Alert className="col-span-full" tone="danger">{localError ?? errorMessage(operationError, t("channel.imap.sample.failed"))}</Alert> : null}
       {outcome ? <Alert
@@ -101,11 +120,18 @@ export function ImportImapSampleAction(): React.ReactElement | null {
           : t("channel.imap.sample.flagsChanged")}
       </Alert> : null}
       {preview ? <div className="col-span-full min-h-0 space-y-3">
-        {preview.truncated ? <Alert tone="info">{t("channel.imap.sample.truncated")}</Alert> : null}
+        <Alert tone="info">{t("channel.imap.sample.count", {
+          loaded: preview.messages.length, total: preview.total_count,
+          uidvalidity: preview.uidvalidity, upperUid: preview.upper_uid,
+        })}</Alert>
         <ControlBandProvider host={undefined}>
-          <RowsListView scope="local" rows={rows} columns={columns} pageSize={50} selectable emptyContent={t("channel.imap.sample.empty")}
-            bulkActions={(selectedIds, clear) => <Button size="sm" variant="primary" disabled={busy} onClick={() => void importSelected(selectedIds, clear)}>{importState.fetching ? t("channel.imap.sample.importing") : t("channel.imap.sample.importSelected", { count: selectedIds.size })}</Button>} />
+          <RowsListView key={previewGeneration} scope="local" rows={rows} columns={columns} pageSize={50} selectable emptyContent={t("channel.imap.sample.empty")}
+            bulkActions={(selectedIds, clear) => <Button size="sm" variant="primary" disabled={busy || !selectedIds.size || selectedIds.size > 50}
+              title={selectedIds.size > 50 ? t("channel.imap.sample.selectionTooLarge") : undefined}
+              onClick={() => void importSelected(selectedIds, clear)}>{importState.fetching ? t("channel.imap.sample.importing") : t("channel.imap.sample.importSelected", { count: selectedIds.size })}</Button>} />
         </ControlBandProvider>
+        {preview.next_before_uid ? <Button type="button" variant="secondary" disabled={busy}
+          onClick={() => void loadPreview(preview)}>{previewState.fetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.loadOlder")}</Button> : null}
       </div> : null}
     </DialogForm>;
 }

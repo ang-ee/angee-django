@@ -68,13 +68,31 @@ class MessagingImapMutation:
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
     def preview_imap_sample(
-        self, info: strawberry.Info, id: PublicID, mailbox: str, since: date, before: date, limit: int = 20,
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        mailbox: str,
+        since: date | None = None,
+        before: date | None = None,
+        all_dates: bool = False,
+        uidvalidity: int | None = None,
+        upper_uid: int | None = None,
+        before_uid: int | None = None,
+        limit: int = 20,
     ) -> ImapSamplePreviewType:
-        """Preview headers from a bounded historical mailbox selection."""
+        """Preview one page from a frozen historical mailbox selection."""
 
         channel = authorized_action_target(info, Channel, id, "write")
         return channel.preview_imap_sample(
-            actor=session_user(info), mailbox=mailbox, since=since, before=before, limit=limit,
+            actor=session_user(info),
+            mailbox=mailbox,
+            since=since,
+            before=before,
+            all_dates=all_dates,
+            uidvalidity=uidvalidity,
+            upper_uid=upper_uid,
+            before_uid=before_uid,
+            limit=limit,
         )
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)

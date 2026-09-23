@@ -21,7 +21,6 @@ capability by overriding ``recovery_capability()``.
 from __future__ import annotations
 
 import copy
-import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -54,6 +53,7 @@ from angee.workflows.attempts import (
     RecoveryCapability,
     RecoveryMode,
     json_values_equal,
+    validate_json_value,
 )
 from angee.workflows.bindings import (
     BindingContext,
@@ -329,7 +329,7 @@ class StepImpl(ImplBase):
 
         if cls.input_model is None:
             raise ImproperlyConfigured(f"{cls.__name__} does not declare an input model.")
-        return cls.input_model.model_validate_json(json.dumps(value, allow_nan=False))
+        return validate_json_value(cls.input_model.model_validate_json, value)
 
     @classmethod
     def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
@@ -1112,7 +1112,7 @@ class DecisionApplyStep(StepImpl):
             if result.output_present:
                 output_model = type(self).output_model
                 assert output_model is not None
-                output_model.model_validate(result.output)
+                validate_json_value(output_model.model_validate_json, result.output)
         return result
 
 
@@ -1185,7 +1185,13 @@ class MapStep(StepImpl):
             raise ValidationError({"config": f"Map target step {key!r} does not exist."}) from error
 
     @classmethod
-    def items(cls, step_run: Any, *, using: str | None = None) -> list[Any]:
+    def items(
+        cls,
+        step_run: Any,
+        *,
+        input: JsonPresence,
+        using: str | None = None,
+    ) -> list[Any]:
         """Return the item list resolved from this map step's config."""
 
         alias = get_write_alias(type(step_run), using=using, instance=step_run)
@@ -1194,7 +1200,7 @@ class MapStep(StepImpl):
         )
 
         expression = cls.config_mapping(step_run).get("items")
-        value = cls.expression_value(expression, step_run)
+        value = cls.expression_value(expression, step_run, input=input)
         if not isinstance(value, list):
             raise ValidationError({"config": "Map items expression must resolve to a list."})
         return list(value)
@@ -1224,7 +1230,13 @@ class MapStep(StepImpl):
         return config if isinstance(config, Mapping) else {}
 
     @classmethod
-    def expression_value(cls, expression: Any, step_run: Any) -> Any:
+    def expression_value(
+        cls,
+        expression: Any,
+        step_run: Any,
+        *,
+        input: JsonPresence,
+    ) -> Any:
         """Resolve a map ``items`` expression against subject, run, or input."""
 
         if isinstance(expression, list):
@@ -1240,7 +1252,7 @@ class MapStep(StepImpl):
         elif root == "run":
             value = step_run.run
         elif root == "input":
-            value = step_run.input
+            value = input.value if input.present else None
         for part in path:
             value = cls.lookup(value, part)
         return value

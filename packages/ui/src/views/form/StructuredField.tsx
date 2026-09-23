@@ -7,6 +7,8 @@ import type { WidgetDefinition, WidgetField, WidgetRenderProps } from "../../wid
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { initialFormSpecValue } from "./form-spec";
 import { LabeledDescriptorField } from "./MutationDialog";
+import { updatedRecord } from "./field-values";
+import { RowsField, type RowsValue } from "./RowsField";
 import { messagesForDottedPath } from "./validation-errors";
 
 type StructuredWidgetField = WidgetField & {
@@ -19,8 +21,9 @@ type StructuredWidgetField = WidgetField & {
 };
 
 function ObjectField({ value, field, messages = [], readOnly = false, onChange, onCommit, controlRef }: WidgetRenderProps): React.ReactElement {
-  const template = structuredField(field).objectTemplate;
-  if (!template) throw new Error('The "object" widget requires field.objectTemplate.');
+  const objectTemplate = structuredField(field).objectTemplate;
+  if (!objectTemplate) throw new Error('The "object" widget requires field.objectTemplate.');
+  const template = objectTemplate.filter((child) => !child.hidden);
   const objectValue = recordValue(value);
   const name = requiredName(field, "object");
   const focusIndex = template.findIndex((child) => !child.readOnly);
@@ -95,18 +98,20 @@ function recordValue(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function updatedRecord(value: Record<string, unknown>, key: string, next: unknown): Record<string, unknown> {
-  if (next !== undefined) return { ...value, [key]: next };
-  const updated = { ...value };
-  delete updated[key];
-  return updated;
-}
-
 function moved<T>(values: readonly T[], from: number, to: number): T[] {
   const updated = [...values];
   const [entry] = updated.splice(from, 1);
   updated.splice(to, 0, entry as T);
   return updated;
+}
+
+export interface SectionedRowsFieldProps extends WidgetRenderProps<RowsValue> {
+  rowTitle: (row: Readonly<Record<string, unknown>>, index: number) => React.ReactNode;
+}
+
+/** Fixed object rows in titled sections; scalar fields share a two-column grid. */
+export function SectionedRowsField(props: SectionedRowsFieldProps): React.ReactElement {
+  return <RowsField {...props} />;
 }
 
 /** Stable client-only identities for controlled list rows across moves/removal. */

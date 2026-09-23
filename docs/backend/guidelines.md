@@ -759,7 +759,11 @@ and current contracts before applying a historical example to a new deployment.
 
 ### Migrations and runtime
 
-- [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its subclasses from historical models because their expressions belong to the live row.
+- [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its
+  subclasses from historical models because their expressions belong to the live
+  row. Its `ModelHistory` owner allocates a separate nullable text change-reason
+  field for each historical model; inherited tracking must never share mutable
+  field instances across models.
 - **Domain renames need an explicit upgrade path.** When persisted references or
   permission namespaces change, describe which old state needs data migration
   and which reconciliation follows it. Keep those operations out of startup.

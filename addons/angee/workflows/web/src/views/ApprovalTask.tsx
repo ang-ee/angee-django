@@ -2,7 +2,7 @@ import * as React from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
-  Badge, Button, Collapsible, ErrorBanner, fieldErrorMessages,
+  Badge, Button, Collapsible, ErrorBanner, fieldErrorMessages, isCompositeFieldDescriptor,
   Glyph, JsonValueView, LabeledDescriptorField, LazyBoundary, TextLink, formSpecInitialValues,
   LARGE_VIEWPORT_QUERY,
   PageAside,
@@ -86,14 +86,16 @@ function contextFieldLabel(widget: string | undefined, t: ReturnType<typeof useW
 }
 
 /** Render one native Decision input through the shared FormSpec field owner. */
-export function DecisionField({ name, props, label }: {
+export function DecisionField({ name, props, label, widget }: {
   name: string;
   props: WorkflowDecisionContentProps;
   label?: string;
+  /** Select a registered presentation while preserving the native field contract. */
+  widget?: string;
 }): React.ReactElement | null {
   const field = props.inputFields.find((candidate) => candidate.name === name);
   if (!field) return null;
-  return <LabeledDescriptorField field={label ? { ...field, label } : field} value={props.values[name]}
+  return <LabeledDescriptorField field={{ ...field, label: label ?? field.label, widget: widget ?? field.widget }} value={props.values[name]}
     dialogValues={{ ...props.values }} readOnly={field.readOnly || props.readOnly || props.fetching}
     messages={props.messagesFor(name)} onChange={(value) => props.setValue(name, value)} />;
 }
@@ -421,7 +423,11 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
       submitting.current = false;
     }
   }
-  const messagesFor = (name: string): readonly string[] => fieldErrorMessages([errors[name]]);
+  const messagesFor = (name: string): readonly string[] => {
+    const field = branchFields.find((candidate) => candidate.name === name);
+    const composite = field !== undefined && isCompositeFieldDescriptor(field);
+    return fieldErrorMessages([errors[name]], composite ? name : undefined);
+  };
   const selectAction = React.useCallback((action: string) => {
     if (!form?.options.some((option) => option.value === action)) return;
     rhf.clearErrors();
@@ -486,7 +492,7 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
 
 function isOpaqueDecisionInput(field: FormSpecFieldDescriptor): boolean {
   return (field.kind === "object" || field.kind === "array" || field.kind === "any")
-    && !field.objectTemplate && !field.itemTemplate && !field.rowTemplate;
+    && !isCompositeFieldDescriptor(field);
 }
 
 function useApprovalResolver(onResolved: ApprovalTaskProps["onResolved"], reconcile: ReconcileApproval | undefined, onCommitted: (verdict: string) => void): {

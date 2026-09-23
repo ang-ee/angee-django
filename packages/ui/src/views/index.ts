@@ -105,7 +105,9 @@ export {
 } from "./form/use-action-form";
 export {
   useDottedPathFieldErrors,
+  directDottedPathMessages,
   lineRowErrorsFromDottedPaths,
+  messagesForDottedPath,
   validationErrorMessages,
   validationErrorMap,
   validationErrorsFromError,
@@ -113,7 +115,7 @@ export {
   type DottedPathFieldErrors,
   type ValidationErrors,
 } from "./form/validation-errors";
-export { fieldErrorMessages } from "./form/form-view-model";
+export { fieldErrorMessages, isCompositeFieldDescriptor } from "./form/form-view-model";
 export {
   FieldDescriptorControl,
   type FieldDescriptorControlProps,
@@ -245,7 +247,7 @@ export {
   type BoundFormValueProps,
   type BoundFormValueRenderProps,
 } from "./form/BoundDescriptorField";
-export { useListIdentities } from "./form/StructuredField";
+export { SectionedRowsField, type SectionedRowsFieldProps, useListIdentities } from "./form/StructuredField";
 export {
   diffLines,
   duplicateLineRow,

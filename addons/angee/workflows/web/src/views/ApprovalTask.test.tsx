@@ -3,7 +3,14 @@
 import type { ReactNode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider, createRouteHref, defaultWidgets, type JsonValue } from "@angee/ui";
+import {
+  AppRuntimeProvider,
+  createRouteHref,
+  defaultWidgets,
+  directDottedPathMessages,
+  messagesForDottedPath,
+  type JsonValue,
+} from "@angee/ui";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 
@@ -29,7 +36,11 @@ vi.mock("../documents.public", () => ({ DecideWorkflowDecisionDocument: { kind: 
 
 vi.mock("@angee/ui", async (importOriginal) => {
   const { createUiTestModule } = await import("@angee/ui/testing");
-  return createUiTestModule(importOriginal, { useConfirm: () => async () => true });
+  const actual = await importOriginal<typeof import("@angee/ui")>();
+  return {
+    ...await createUiTestModule(importOriginal, { useConfirm: () => async () => true }),
+    messagesForDottedPath: actual.messagesForDottedPath,
+  };
 });
 
 import type { PendingWorkflowDecision } from "../documents.public";
@@ -71,7 +82,7 @@ const titleActionSchema: JsonValue = {
     title: { type: "string", label: "Title" },
   },
   oneOf: [{ type: "object", required: ["action", "title"], properties: {
-    action: { const: "record" }, title: { type: "string" },
+    action: { const: "record" }, title: { type: "string", label: "Title" },
   }, additionalProperties: false }],
 };
 const authoredApproval: PendingWorkflowDecision = {
@@ -115,16 +126,17 @@ const correctionActionSchema: JsonValue = {
   },
   oneOf: [
     { type: "object", required: ["action", "note"], properties: {
-      action: { const: "correct" }, note: { type: "string", minLength: 1 },
-      currency: { type: ["string", "null"] }, invoice_date: { type: ["string", "null"] },
-      vendor_name: { type: ["string", "null"] },
+      action: { const: "correct" }, note: { type: "string", label: "Review explanation", minLength: 1 },
+      currency: { type: ["string", "null"], label: "Invoice currency", omittable: true },
+      invoice_date: { type: ["string", "null"], label: "Invoice date", widget: "date", omittable: true },
+      vendor_name: { type: ["string", "null"], label: "Supplier name", omittable: true },
     }, anyOf: [
       { required: ["currency"], properties: { currency: { type: "string", minLength: 1 } } },
       { required: ["invoice_date"], properties: { invoice_date: { type: "string", minLength: 1 } } },
       { required: ["vendor_name"], properties: { vendor_name: { type: "string", minLength: 1 } } },
     ], additionalProperties: false },
     { type: "object", required: ["action", "note"], properties: {
-      action: { const: "reject" }, note: { type: "string", minLength: 1 },
+      action: { const: "reject" }, note: { type: "string", label: "Review explanation", minLength: 1 },
     }, additionalProperties: false },
   ],
 };
@@ -307,6 +319,94 @@ describe("ApprovalTask", () => {
     });
   });
 
+  test.each([
+    { source: "server", label: "Paper", message: "Choose a line description.", parentMessage: "" },
+    { source: "client", label: "", message: "label must contain at least 1 character.", parentMessage: "" },
+    { source: "client with a parent error", label: "", message: "label must contain at least 1 character.",
+      parentMessage: "Documents has an invalid value." },
+  ])("scopes nested composite $source validation errors to the matching authored control", async ({ source, label, message, parentMessage }) => {
+    if (source === "server") mocks.decide.mockResolvedValueOnce({
+      decide: {
+        validation_errors: {
+          "documents.0.lines.0.label": [message],
+        },
+      },
+    });
+    const documents: JsonValue = {
+      type: "array", widget: "rows", label: "Documents", ...(parentMessage ? { maxItems: 0 } : {}), items: {
+        type: "object", widget: "object", properties: {
+          party_name: { type: "string", label: "Supplier name" },
+          lines: { type: "array", widget: "list", items: {
+            type: "object", widget: "object", properties: {
+              label: { type: "string", label: "Description", minLength: 1 },
+            },
+          } },
+        },
+      },
+    };
+    const schema: JsonValue = {
+      type: "object",
+      required: ["action"],
+      properties: {
+        action: { type: "string", enum: ["correct"], options: [
+          { value: "correct", label: "Correct source facts", verdict: "COMPLETE" },
+        ] },
+        documents,
+      },
+      oneOf: [{
+        type: "object", required: ["action", "documents"], additionalProperties: false,
+        properties: {
+          action: { const: "correct" },
+          documents,
+        },
+      }],
+    };
+    function Specialized(props: WorkflowDecisionContentProps) {
+      const messages = props.messagesFor("documents");
+      const lineMessages = messagesForDottedPath(messages, "documents.0.lines");
+      return <>
+        {props.actionPicker}
+        <span data-testid="documents-errors">
+          {directDottedPathMessages(messages, "documents").join(" ")}
+        </span>
+        <span data-testid="line-errors">
+          {lineMessages.join(" ")}
+        </span>
+        <span data-testid="line-label-errors">
+          {messagesForDottedPath(lineMessages, "documents.0.lines.0.label").join(" ")}
+        </span>
+        <span data-testid="supplier-errors">
+          {messagesForDottedPath(messages, "documents.0.party_name").join(" ")}
+        </span>
+      </>;
+    }
+    Object.assign(Specialized, {
+      renderedInputFields: ["documents"],
+      placesActionPicker: true,
+    });
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets, slots: [{
+      slot: WORKFLOW_DECISION_CONTENT_SLOT,
+      model: "workflows.Decision",
+      impl: "review",
+      id: "test.nested-composite-errors",
+      content: Specialized,
+    }] }}><ApprovalTask approval={{
+      ...approval,
+      payload: { documents: [{ party_name: "Northstar", lines: [{ label }] }] },
+      decision_schema: schema,
+    }} onResolved={() => undefined} /></AppRuntimeProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Correct source facts" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Correct source facts" })[1]!);
+
+    await waitFor(() => expect(screen.getByTestId("line-errors").textContent)
+      .toBe(`documents.0.lines.0.label: ${message}`));
+    expect(screen.getByTestId("line-label-errors").textContent).toBe(message);
+    expect(screen.getByTestId("documents-errors").textContent).toBe(parentMessage);
+    expect(screen.getByTestId("supplier-errors").textContent).toBe("");
+    expect(mocks.decide).toHaveBeenCalledTimes(source === "server" ? 1 : 0);
+  });
+
   test("keeps dirty action fields across a same-decision refetch and submits through the form", async () => {
     const { rerender } = render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <ApprovalTask approval={{ ...approval, payload: { title: "Original" }, decision_schema: titleActionSchema }}
@@ -357,7 +457,7 @@ describe("ApprovalTask", () => {
       oneOf: [
         { type: "object", required: ["action"], properties: { action: { const: "approve" } }, additionalProperties: false },
         { type: "object", required: ["action", "note"], properties: {
-          action: { const: "reject" }, note: { type: "string", minLength: 1 },
+          action: { const: "reject" }, note: { type: "string", label: "Review note", minLength: 1 },
         }, additionalProperties: false },
       ],
     };

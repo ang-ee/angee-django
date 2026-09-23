@@ -1195,7 +1195,12 @@ def _process_recovery_map_aggregate(run: Any, *, timestamp: datetime, alias: str
 
 
 def _process_map_steps(run: Any, *, timestamp: datetime, alias: str) -> bool:
-    locked_rows = list(run.step_runs.db_manager(alias).lock_if_supported().select_related("step").order_by("pk"))
+    locked_rows = list(
+        run.step_runs.db_manager(alias)
+        .lock_if_supported()
+        .select_related("step", "current_attempt", "current_map_expansion")
+        .order_by("pk")
+    )
     map_rows = [
         row
         for row in locked_rows
@@ -1225,7 +1230,29 @@ def _process_map_steps(run: Any, *, timestamp: datetime, alias: str) -> bool:
                     run, available_at=timestamp
                 )
                 continue
-            if not _expand_retained_map_step(run, step_run, timestamp=timestamp, alias=alias):
+            preparation = _prepare_attempt_input(
+                run,
+                step_run,
+                source_rows=locked_rows,
+                alias=alias,
+            )
+            if preparation.failure is not None:
+                apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).fail_preparation(
+                    step_run,
+                    cause=AttemptCause.INITIAL,
+                    input=preparation.input,
+                    result=preparation.failure,
+                    claimed_at=timestamp,
+                    recorded_at=timestamp,
+                )
+                continue
+            if not _expand_retained_map_step(
+                run,
+                step_run,
+                input=preparation.input,
+                timestamp=timestamp,
+                alias=alias,
+            ):
                 return False
         if step_run.status == StepRunStatus.WAITING:
             if not _complete_retained_map_step_if_ready(run, step_run, timestamp=timestamp, alias=alias):
@@ -1233,13 +1260,20 @@ def _process_map_steps(run: Any, *, timestamp: datetime, alias: str) -> bool:
     return True
 
 
-def _expand_retained_map_step(run: Any, step_run: Any, *, timestamp: datetime, alias: str) -> bool:
+def _expand_retained_map_step(
+    run: Any,
+    step_run: Any,
+    *,
+    input: AttemptInput,
+    timestamp: datetime,
+    alias: str,
+) -> bool:
     """Retain one Map expansion generation before exposing any body slot."""
 
     recorded = (
         apps.get_model("workflows", "StepAttempt")
         .objects.db_manager(alias)
-        .record_map_expansion(step_run, at=timestamp)
+        .record_map_expansion(step_run, input=input, at=timestamp)
     )
     if recorded is None:
         return False

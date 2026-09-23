@@ -32,10 +32,33 @@ export const ConnectImapChannel = graphql(`
 `);
 
 export const PreviewImapSample = graphql(`
-  mutation PreviewImapSample($id: ID!, $mailbox: String!, $since: Date!, $before: Date!, $limit: Int!) {
-    preview_imap_sample(id: $id, mailbox: $mailbox, since: $since, before: $before, limit: $limit) {
+  mutation PreviewImapSample(
+    $id: ID!
+    $mailbox: String!
+    $since: Date
+    $before: Date
+    $allDates: Boolean!
+    $uidvalidity: Int
+    $upperUid: Int
+    $beforeUid: Int
+    $limit: Int!
+  ) {
+    preview_imap_sample(
+      id: $id
+      mailbox: $mailbox
+      since: $since
+      before: $before
+      all_dates: $allDates
+      uidvalidity: $uidvalidity
+      upper_uid: $upperUid
+      before_uid: $beforeUid
+      limit: $limit
+    ) {
       mailbox
       uidvalidity
+      upper_uid
+      total_count
+      next_before_uid
       truncated
       messages { uid subject sent_at sender size flags }
     }

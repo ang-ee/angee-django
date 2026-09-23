@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,7 +18,8 @@ from django.db.models.deletion import ProtectedError
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from pydantic import BaseModel, ConfigDict
+from jsonschema import Draft202012Validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, TypeAdapter
 from rebac import (
     app_settings,
     system_context,
@@ -33,7 +34,13 @@ from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import decision_actions, engine
 from angee.workflows import models as workflow_models
-from angee.workflows.attempts import AttemptResultKind, DecisionResolution, JsonPresence, RecoveryMode
+from angee.workflows.attempts import (
+    AttemptResultKind,
+    DecisionResolution,
+    JsonPresence,
+    RecoveryMode,
+    validate_json_value,
+)
 from angee.workflows.configs import GateBinding
 from angee.workflows.decision_actions import (
     ReviewAction,
@@ -123,6 +130,85 @@ def test_decision_action_builder_owns_tagged_branches_and_typed_context() -> Non
     contract = compile_decision_action_schema(authored.decision_schema)
     assert contract is not None
     contract.validate_context(authored.payload)
+
+
+def test_decision_action_builder_merges_action_field_overrides() -> None:
+    """One field keeps shared annotations while each action owns its constraints."""
+
+    frozen_id = "pty_frozen"
+    authored = build_decision_action(
+        actions=(
+            ReviewAction(
+                value="bind",
+                label="Select candidate",
+                verdict="COMPLETE",
+                fields=("party_id",),
+                required=("party_id",),
+            ),
+            ReviewAction(
+                value="other",
+                label="Select another",
+                verdict="COMPLETE",
+                fields=("party_id",),
+                required=("party_id",),
+            ),
+        ),
+        properties={
+            "party_id": {
+                "type": "string",
+                "label": "Party",
+                "defaultValue": frozen_id,
+                "relation": {
+                    "resource": "parties.Party",
+                    "permission": "read",
+                    "create": {"resource": "parties.Organization"},
+                },
+            }
+        },
+        action_properties={
+            "bind": {
+                "party_id": {
+                    "enum": [frozen_id],
+                    "relation": {
+                        "resource": "parties.Party",
+                        "permission": "read",
+                        "filters": [
+                            {"field": "id", "operator": "in", "value": [frozen_id]}
+                        ],
+                    },
+                }
+            },
+            "other": {"party_id": {"not": {"enum": [frozen_id]}}},
+        },
+    )
+
+    schema = authored.decision_schema
+    assert "enum" not in schema["properties"]["party_id"]
+    bind_field = schema["oneOf"][0]["properties"]["party_id"]
+    other_field = schema["oneOf"][1]["properties"]["party_id"]
+    assert bind_field["label"] == "Party"
+    assert bind_field["defaultValue"] == frozen_id
+    assert bind_field["enum"] == [frozen_id]
+    assert "create" not in bind_field["relation"]
+    assert other_field["relation"]["create"] == {"resource": "parties.Organization"}
+    assert other_field["not"] == {"enum": [frozen_id]}
+    validator = Draft202012Validator(schema)
+    assert validator.is_valid({"action": "bind", "party_id": frozen_id})
+    assert not validator.is_valid({"action": "bind", "party_id": "pty_other"})
+    assert validator.is_valid({"action": "other", "party_id": "pty_other"})
+    assert not validator.is_valid({"action": "other", "party_id": frozen_id})
+
+    with pytest.raises(ValueError, match="overrides unadmitted fields"):
+        build_decision_action(
+            actions=(
+                ReviewAction(
+                    value="invalid",
+                    label="Invalid",
+                    verdict="COMPLETE",
+                ),
+            ),
+            action_properties={"invalid": {"party_id": {"type": "string"}}},
+        )
 
 
 def test_gate_resolves_bound_dynamic_slots_context_and_clean_predicate() -> None:
@@ -357,6 +443,40 @@ class _ApplyOutput(BaseModel):
     applied: bool
 
 
+class _StrictTupleOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    values: tuple[str, ...]
+    resolved_at: AwareDatetime
+
+
+@pytest.mark.parametrize(
+    "validator",
+    [_StrictTupleOutput.model_validate_json, TypeAdapter(_StrictTupleOutput).validate_json],
+    ids=["model", "adapter"],
+)
+@pytest.mark.parametrize("values", [["retained"], ("retained",)])
+def test_json_validation_preserves_strict_types_after_transport(
+    validator: Callable[[str], _StrictTupleOutput],
+    values: Any,
+) -> None:
+    resolved_at = timezone.now()
+    value = {"values": values, "resolved_at": resolved_at.isoformat()}
+
+    parsed = validate_json_value(validator, value)
+
+    assert parsed.values == ("retained",)
+    assert parsed.resolved_at == resolved_at
+    with pytest.raises(ValueError, match="valid string"):
+        validate_json_value(validator, {**value, "values": [1]})
+
+
+@pytest.mark.parametrize("number", [float("nan"), float("inf"), float("-inf")])
+def test_json_validation_rejects_nonfinite_values_before_schema_validation(number: float) -> None:
+    with pytest.raises(ValueError, match="Out of range float values"):
+        validate_json_value(TypeAdapter(Any).validate_json, {"nested": [number]})
+
+
 @pytest.mark.parametrize("has_resolver", [True, False])
 def test_decision_apply_dispatches_identity_and_preserves_wait(
     monkeypatch: pytest.MonkeyPatch,
@@ -390,6 +510,58 @@ def test_decision_apply_dispatches_identity_and_preserves_wait(
     assert result.kind == "wait"
     assert result.resume_state == {"manager": "retained"}
     assert calls == [{"decision_id": 42, "actor": actor, "now": now}]
+
+
+def test_decision_apply_validates_strict_output_through_json_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict tuple and datetime fields round-trip through retained JSON."""
+
+    predecessor = SimpleNamespace(pk=42, resolution_actor_subject=lambda: object())
+    resolved_at = timezone.now()
+
+    class Apply(DecisionApplyStep):
+        input_model = _ApplyInput
+        output_model = _StrictTupleOutput
+        outcomes = (StepOutcome("applied", "Applied"),)
+        effect = StepEffect.WRITE
+        execution_mode = StepExecutionMode.DATABASE_COMMAND
+        idempotent = True
+
+        def invoke_command(self, step_run: Any, **kwargs: Any) -> StepResult:
+            del self, step_run, kwargs
+            return StepResult.done(
+                {
+                    "values": ["retained"],
+                    "resolved_at": resolved_at.isoformat(),
+                },
+                outcome="applied",
+            )
+
+    monkeypatch.setattr(
+        type(Decision.objects),
+        "predecessor_decision",
+        lambda *args: predecessor,
+    )
+    result = Apply().run(StepRun(), now=timezone.now())
+    assert result.output == {
+        "values": ["retained"],
+        "resolved_at": resolved_at.isoformat(),
+    }
+
+    class InvalidApply(Apply):
+        def invoke_command(self, step_run: Any, **kwargs: Any) -> StepResult:
+            del self, step_run, kwargs
+            return StepResult.done(
+                {
+                    "values": "retained",
+                    "resolved_at": resolved_at.isoformat(),
+                },
+                outcome="applied",
+            )
+
+    with pytest.raises(ValueError, match="valid array"):
+        InvalidApply().run(StepRun(), now=timezone.now())
 
 
 @pytest.mark.parametrize("through_prepare", (False, True))
@@ -687,6 +859,71 @@ def test_predecessor_lookup_crosses_map_and_child_ancestry(
     monkeypatch.setattr(FixtureStep, "run", apply)
     run_to_terminal(run)
 
+    assert applied == [decision.pk]
+
+
+def test_locked_resolution_allows_active_child_after_parent_run_succeeds(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed asynchronous starter remains valid retained child ancestry."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="completed-parent-child-assignee")
+    parent_workflow = workflow_with_steps(
+        name="Completed child starter",
+        steps=({"key": "start", "config": {}},),
+        edges=(),
+    )
+    child_workflow = workflow_with_steps(
+        name="Decision child after completed starter",
+        steps=(
+            {"key": "gate", "step_class": "gate", "config": _gate_config([assignee], None, [])},
+            {"key": "apply", "config": {}},
+        ),
+        edges=(("gate", "apply", "completed"),),
+    )
+    admit_workflow_actor(child_workflow, assignee)
+    parent = start_run(parent_workflow, actor=assignee)
+    run_to_terminal(parent)
+    with system_context(reason="load completed child starter"):
+        parent_step = StepRun.objects.get(run=parent, step__key="start")
+    child = engine.start(
+        child_workflow,
+        subject=None,
+        actor=assignee,
+        parent_step_run=parent_step,
+        parent_relation="continuation",
+        origin=workflow_models.RunOrigin.WORKFLOW,
+    )
+    advance_once(child)
+    execute_started(child)
+    decision = _decision_for(child, "gate")
+    assert engine.decide(
+        decision,
+        "complete",
+        payload={"action": "complete"},
+        actor=assignee,
+    ).validation_error is None
+    applied: list[int] = []
+    fixture_run = FixtureStep.run
+
+    def apply(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
+        if step_run.step.key != "apply":
+            return fixture_run(self, step_run, now=now)
+        with Decision.objects.locked_resolution(
+            decision.pk,
+            actor=assignee,
+            consumer_step_run_id=step_run.pk,
+        ) as retained:
+            applied.append(retained.pk)
+        return StepResult.done(outcome="done")
+
+    monkeypatch.setattr(FixtureStep, "run", apply)
+    run_to_terminal(child)
+
+    assert parent.status == workflow_models.RunStatus.SUCCEEDED
     assert applied == [decision.pk]
 
 

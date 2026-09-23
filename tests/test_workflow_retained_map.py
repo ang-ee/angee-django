@@ -11,6 +11,7 @@ from django.db.models.signals import post_save
 from django.utils import timezone
 from rebac import system_context
 
+from angee.workflows import engine
 from angee.workflows.attempts import (
     AttemptCause,
     AttemptInput,
@@ -129,6 +130,86 @@ def test_automatic_map_body_keeps_wrapped_input_and_captures_raw_source(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_map_expansion_uses_declared_bound_input_instead_of_routing_predecessor(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    django_assert_num_queries: Any,
+) -> None:
+    del workflow_engine_tables, no_workflow_queue
+    prepare_input = engine._prepare_attempt_input
+    prepared_maps: list[int] = []
+
+    def prepare(run: Any, step_run: Any, *, source_rows: Any, alias: str) -> Any:
+        if step_run.step.key != "map":
+            return prepare_input(run, step_run, source_rows=source_rows, alias=alias)
+        with django_assert_num_queries(0, using=alias):
+            result = prepare_input(run, step_run, source_rows=source_rows, alias=alias)
+        prepared_maps.append(step_run.pk)
+        return result
+
+    monkeypatch.setattr(engine, "_prepare_attempt_input", prepare)
+    item = {"invoice_id": "invoice-1"}
+    workflow = workflow_with_steps(
+        name="Bound Map input",
+        steps=(
+            {
+                "key": "materialize",
+                "config": {"output": {"invoice_review_items": [item]}},
+            },
+            {
+                "key": "prepare",
+                "config": {"output": {"clean": True}},
+                "input_binding": {
+                    "kind": "step_output",
+                    "step_key": "materialize",
+                    "path": [],
+                },
+            },
+            {
+                "key": "map",
+                "step_class": "map",
+                "config": {
+                    "target_step": "body",
+                    "items": "input.invoice_review_items",
+                },
+                "input_binding": {
+                    "kind": "step_output",
+                    "step_key": "materialize",
+                    "path": [],
+                },
+            },
+            {"key": "body", "step_class": "fixture"},
+        ),
+        edges=(
+            ("materialize", "prepare", "done"),
+            ("prepare", "map", "done"),
+        ),
+    )
+
+    run = start_run(workflow)
+    run_to_terminal(run)
+
+    with system_context(reason="verify bound Map controller input"):
+        controller = StepRun.objects.get(run=run, step__key="map")
+        attempts = list(StepAttempt.objects.filter(step_run=controller).order_by("ordinal"))
+        body = StepRun.objects.get(run=run, step__key="body", map_index=0)
+    expected_input = {
+        "key": "materialize",
+        "input": {},
+        "invoice_review_items": [item],
+    }
+    assert run.status == RunStatus.SUCCEEDED
+    assert prepared_maps == [controller.pk]
+    assert controller.input == {"key": "prepare", "input": expected_input, "clean": True}
+    assert [attempt.input for attempt in attempts] == [expected_input, expected_input]
+    assert all(attempt.input_present for attempt in attempts)
+    assert all(attempt.input_provenance["kind"] == "step_output" for attempt in attempts)
+    assert all(attempt.input_provenance["step_key"] == "materialize" for attempt in attempts)
+    assert body.output["input"] == item
+
+
+@pytest.mark.django_db(transaction=True)
 def test_map_capacity_failure_rolls_back_expansion_and_children(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -239,7 +320,11 @@ def test_map_override_shrinks_current_membership_without_rebinding_history(
             config={"target_step": "body", "items": [1]},
         )
         controller.step.refresh_from_db()
-    recorded = StepAttempt.objects.record_map_expansion(controller, at=now)
+    recorded = StepAttempt.objects.record_map_expansion(
+        controller,
+        input=AttemptInput(),
+        at=now,
+    )
     assert recorded is not None
     new_expansion, _plan = recorded
     StepRun.objects.bind_map_membership(
@@ -378,7 +463,11 @@ def test_map_expansion_owner_rejects_non_map_step_without_writes(
         fixture = StepRun.objects.get(run=run, step__key="fixture")
 
     with pytest.raises(ValidationError, match="requires a Map step"):
-        StepAttempt.objects.record_map_expansion(fixture, at=timezone.now())
+        StepAttempt.objects.record_map_expansion(
+            fixture,
+            input=AttemptInput(),
+            at=timezone.now(),
+        )
 
     with system_context(reason="verify non-Map expansion rollback"):
         fixture.refresh_from_db()
@@ -554,7 +643,11 @@ def test_map_expansion_signal_cannot_forge_membership_inside_owner_session(
     post_save.connect(forge_membership, sender=StepAttempt, weak=False)
     try:
         with pytest.raises(ValidationError, match="initialized by StepAttemptManager"):
-            StepAttempt.objects.record_map_expansion(controller, at=timezone.now())
+            StepAttempt.objects.record_map_expansion(
+                controller,
+                input=AttemptInput(),
+                at=timezone.now(),
+            )
     finally:
         post_save.disconnect(forge_membership, sender=StepAttempt)
 

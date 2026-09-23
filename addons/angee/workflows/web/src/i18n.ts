@@ -474,7 +474,6 @@ export const enWorkflowsMessages: Record<string, string> = {
   "inbox.validation.maxLength_other": "{label} must contain at most {count} characters.",
   "inbox.validation.invalidFormat": "{label} has an invalid format.",
   "inbox.validation.invalidValue": "{label} has an invalid value.",
-  "inbox.validation.detail": "{label}: {detail}",
   "inbox.frozenContextUnavailable": "Frozen Decision context is unavailable.",
   "inbox.workflowFallback": "Workflow",
   "inbox.resolution": "Resolution payload",
