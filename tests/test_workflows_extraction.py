@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
+from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -13,6 +16,7 @@ from pydantic_ai.messages import BinaryContent, ModelResponse, TextPart, ToolCal
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows.steps import TransientStepError
 from angee.workflows_extraction import service
+from angee.workflows_extraction import steps as extraction_steps
 from angee.workflows_extraction.engines import (
     DocumentPart,
     DocumentPipelineError,
@@ -197,6 +201,69 @@ def test_recognize_page_input_owns_inference_defaults_and_validates_timeout() ->
             **value.model_dump(mode="json"),
             "timeout": 0,
         })
+
+
+def test_recognize_page_uses_retained_actor_subject_for_file_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    image_bytes = b"synthetic page"
+    image_digest = hashlib.sha256(image_bytes).hexdigest()
+    actor = object()
+    actor_subject = object()
+    owner_subjects: list[object] = []
+    image_file = MagicMock(
+        sqid="fil_image", upload_state="ready", content_hash=image_digest,
+        drive=SimpleNamespace(sqid="drv_test"),
+    )
+    image_file.with_actor.return_value.has_access.return_value = True
+    image_file.open_stream.return_value = BytesIO(image_bytes)
+    model = MagicMock(sqid="imd_recognition")
+    model.with_actor.return_value.has_access.return_value = True
+    text_file = SimpleNamespace(sqid="fil_text")
+    file_model = MagicMock()
+    file_manager = file_model.objects.db_manager.return_value
+    file_manager.select_related.return_value.get.return_value = image_file
+    file_manager.ingest_stream.return_value = text_file
+    model_model = MagicMock()
+    model_model.objects.db_manager.return_value.get.return_value = model
+    run = SimpleNamespace(
+        admission_actor=lambda: actor,
+        admission_actor_subject=lambda: actor_subject,
+        debit_budget=lambda usage, using: None,
+    )
+    value = SimpleNamespace(
+        source_position=0, page_position=0, image_file_id="fil_image", image_digest=image_digest,
+        width=100, height=200, dpi=300, model_id="imd_recognition", config_digest="digest",
+        engine_config={}, engine="test", timeout=60,
+    )
+    engine = MagicMock()
+    engine.recognize_page.return_value = SimpleNamespace(
+        text="recognized text", usage_delta=None, duration_ms=1,
+    )
+    monkeypatch.setattr(extraction_steps, "related_on", lambda *args, **kwargs: run)
+    monkeypatch.setattr(
+        extraction_steps, "external_operation_request",
+        lambda *args, **kwargs: SimpleNamespace(request_key="recognition-request", input={}),
+    )
+    monkeypatch.setattr(RecognizePageStepImpl, "validate_input", staticmethod(lambda request: value))
+    monkeypatch.setattr(extraction_steps, "canonical_json_sha256", lambda config: "digest")
+    monkeypatch.setattr(extraction_steps, "actor_context", lambda value: nullcontext())
+    monkeypatch.setattr(
+        extraction_steps.apps,
+        "get_model",
+        lambda app, name: file_model if (app, name) == ("storage", "File") else model_model,
+    )
+    monkeypatch.setattr(extraction_steps, "require_approved_model_deployment", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_steps, "resolve_impl_class", lambda *args, **kwargs: lambda: engine)
+    monkeypatch.setattr(
+        extraction_steps,
+        "actor_user_id",
+        lambda value: owner_subjects.append(value) or 7,
+    )
+
+    result = RecognizePageStepImpl()._recognize(SimpleNamespace(), using="default")
+
+    assert result.outcome == "recognized"
+    assert owner_subjects == [actor_subject]
+    assert file_manager.ingest_stream.call_args.kwargs["owner_id"] == 7
 
 
 @pytest.mark.parametrize("role", ["body", "title", "quoted", "signature", "header"])

@@ -232,6 +232,9 @@ class RecognizePageStepImpl(StepImpl):
         actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page recognition requires the workflow actor.")
+        actor_subject = run.admission_actor_subject()
+        if actor_subject is None:
+            raise PermissionDenied("Page recognition requires the workflow actor subject.")
         with actor_context(actor):
             file_model = apps.get_model("storage", "File")
             model_model = apps.get_model("agents", "InferenceModel")
@@ -275,7 +278,7 @@ class RecognizePageStepImpl(StepImpl):
             }
             text_file = file_model.objects.db_manager(using).ingest_stream(
                 ContentFile(text), filename=f"recognized-page-{value.source_position}-{value.page_position}.txt",
-                content_hash=digest, size_bytes=len(text), owner_id=actor_user_id(actor),
+                content_hash=digest, size_bytes=len(text), owner_id=actor_user_id(actor_subject),
                 drive_id=str(image_file.drive.sqid),
                 metadata={"workflows_extraction": {"recognitions": {request.request_key: facts}}},
             )
