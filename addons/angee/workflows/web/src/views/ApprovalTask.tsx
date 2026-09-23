@@ -7,6 +7,7 @@ import {
   LARGE_VIEWPORT_QUERY,
   PageAside,
   deserializeFormSpec, errorMessage, jsonValueFromUnknown, normalizeFormSpecValues, statusTone, useAppRuntime, useConfirm, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
+  useNamespaceT,
   recordTargetHref, useMediaQuery, useModelSlot,
   useRecordPeek,
   type DottedPathFieldErrorMap, type FormSpecFieldDescriptor, type JsonValue, type RecordPeekOpen, type RecordPeekReference,
@@ -20,8 +21,15 @@ import { WORKFLOW_DECISION_CONTENT_SLOT } from "../slots";
 import { DECISION_OBJECT_WIDGET } from "./DecisionContextWidgets";
 
 const DECISION_MODEL = "workflows.Decision";
+const EMPTY_ACTION_MESSAGES: Readonly<Record<string, string>> = {};
 export type ApprovalVerdict = DocumentVariables<typeof DecideWorkflowDecisionDocument>["verdict"];
 export type WorkflowDecisionRecordReference = RecordPeekReference;
+export interface WorkflowDecisionActionPresentation {
+  namespace: string;
+  messages: Readonly<Record<string, string>>;
+  /** Map frozen action values to addon-owned translation keys. */
+  labels: Readonly<Record<string, string>>;
+}
 export interface WorkflowDecisionContentProps {
   approval: PendingWorkflowDecision;
   contextFields: readonly FormSpecFieldDescriptor[];
@@ -45,6 +53,8 @@ export type WorkflowDecisionContentComponent = React.ComponentType<WorkflowDecis
   renderedInputFields?: readonly string[];
   /** The fragment places the framework-owned action picker in its review layout. */
   placesActionPicker?: boolean;
+  /** Override displayed action labels without changing the frozen Decision contract. */
+  actionPresentation?: WorkflowDecisionActionPresentation;
 };
 export interface ApprovalTaskProps {
   approval: PendingWorkflowDecision;
@@ -385,6 +395,15 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
   const contextCheck = form?.validateContext(approval.payload);
   const submitting = React.useRef(false);
   const Content = useDecisionContent(approval.action);
+  const actionPresentation = Content?.actionPresentation;
+  const actionT = useNamespaceT(
+    actionPresentation?.namespace ?? "workflows",
+    actionPresentation?.messages ?? EMPTY_ACTION_MESSAGES,
+  );
+  const presentedOptions = React.useMemo(() => form?.options.map((option) => {
+    const key = actionPresentation?.labels[option.value];
+    return key ? { ...option, label: actionT(key) } : option;
+  }) ?? [], [actionPresentation, actionT, form]);
   const renderedInputFields = new Set(Content?.renderedInputFields ?? []);
   const unclaimedBranchFields = branchFields.filter((field) => !renderedInputFields.has(field.name));
   const unsupportedBranchFields = unclaimedBranchFields.filter(isOpaqueDecisionInput);
@@ -405,7 +424,7 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
         || !contextCheck?.valid || unsupportedBranchFields.length) return;
     rhf.clearErrors();
     if (!form || !selectedAction) return;
-    const option = form.options.find((entry) => entry.value === selectedAction);
+    const option = presentedOptions.find((entry) => entry.value === selectedAction);
     if (!option) return;
     const candidate = form.project(selectedAction, submitted);
     const check = form.validate(candidate);
@@ -436,7 +455,7 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
   const actionPicker = form ? <section className="space-y-3">
     <h3 className="text-xs font-semibold text-fg-muted">{t("inbox.yourDecision")}</h3>
     <div className="flex flex-wrap gap-2" role="group" aria-label={t("inbox.decisionActions")}>
-      {form.options.map((option) => <Button key={option.value} type="button"
+      {presentedOptions.map((option) => <Button key={option.value} type="button"
         variant={selectedAction === option.value ? "primary" : "secondary"}
         disabled={!resolutionEditable || resolution.fetching || isSubmitting}
         aria-pressed={selectedAction === option.value}
@@ -476,11 +495,11 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
         })}</p>
       </div> : null}
       {resolutionEditable && selectedAction ? <div className="flex justify-end"><Button type="submit"
-        variant={form.options.find((option) => option.value === selectedAction)?.variant === "destructive" ? "danger" : "primary"}
+        variant={presentedOptions.find((option) => option.value === selectedAction)?.variant === "destructive" ? "danger" : "primary"}
         loading={resolution.fetching || isSubmitting}
         disabled={!contextCheck?.valid || isSubmitting || unsupportedBranchFields.length > 0}
         >
-        {form.options.find((option) => option.value === selectedAction)?.label}
+        {presentedOptions.find((option) => option.value === selectedAction)?.label}
       </Button></div> : null}
       </section>
       : null}

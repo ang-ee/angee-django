@@ -15,6 +15,7 @@ import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@an
 import { testDataResource } from "@angee/metadata/testing";
 
 const mocks = vi.hoisted(() => ({
+  confirm: vi.fn(async () => true),
   decide: vi.fn(async (): Promise<unknown> => ({
     decide: {
       decision: {
@@ -38,7 +39,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const { createUiTestModule } = await import("@angee/ui/testing");
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
-    ...await createUiTestModule(importOriginal, { useConfirm: () => async () => true }),
+    ...await createUiTestModule(importOriginal, { useConfirm: () => mocks.confirm }),
     messagesForDottedPath: actual.messagesForDottedPath,
   };
 });
@@ -143,6 +144,7 @@ const correctionActionSchema: JsonValue = {
 
 afterEach(() => {
   cleanup();
+  mocks.confirm.mockClear();
   mocks.decide.mockClear();
   mocks.decide.mockResolvedValue({
     decide: {
@@ -158,6 +160,60 @@ afterEach(() => {
 });
 
 describe("ApprovalTask", () => {
+  test("a registered content presents frozen action labels without changing submission semantics", async () => {
+    const schema: JsonValue = {
+      type: "object",
+      required: ["action"],
+      properties: {
+        action: { type: "string", enum: ["record", "reject"], options: [{
+          value: "record", label: "Record decision", verdict: "COMPLETE", confirm: "Keep this confirmation body.",
+        }, { value: "reject", label: "Keep declared rejection", verdict: "REJECT" }] },
+        title: { type: "string", label: "Title" },
+      },
+      oneOf: [{ type: "object", required: ["action", "title"], properties: {
+        action: { const: "record" }, title: { type: "string", label: "Title" },
+      }, additionalProperties: false }, {
+        type: "object", required: ["action"], properties: { action: { const: "reject" } }, additionalProperties: false,
+      }],
+    };
+    function Specialized({ actionPicker }: WorkflowDecisionContentProps) {
+      return <>{actionPicker}</>;
+    }
+    Object.assign(Specialized, {
+      placesActionPicker: true,
+      actionPresentation: {
+        namespace: "approval-test",
+        messages: { "action.confirm": "Confirm publication" },
+        labels: { record: "action.confirm" },
+      },
+    });
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets, slots: [{
+      slot: WORKFLOW_DECISION_CONTENT_SLOT,
+      model: "workflows.Decision",
+      impl: "review",
+      id: "test.action-presentation",
+      content: Specialized,
+    }] }}><ApprovalTask approval={{ ...authoredApproval, decision_schema: schema }} onResolved={() => undefined} />
+    </AppRuntimeProvider>);
+
+    expect(screen.queryByRole("button", { name: "Record decision" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Keep declared rejection" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm publication" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Confirm publication" })[1]!);
+
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith({
+      title: "Confirm publication",
+      body: "Keep this confirmation body.",
+      confirm: "Confirm publication",
+      danger: false,
+    }));
+    await waitFor(() => expect(mocks.decide).toHaveBeenCalledExactlyOnceWith({
+      decision: approval.id,
+      verdict: "COMPLETE",
+      payload: { action: "record", title: "Original" },
+    }));
+  });
+
   test("fails closed before collapsed processing details when no action schema was authored", () => {
     render(<ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([
       testDataResource("notes.Note"),
