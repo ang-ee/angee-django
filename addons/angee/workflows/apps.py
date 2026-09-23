@@ -29,6 +29,7 @@ class WorkflowsConfig(AppConfig):
 
         _register_checks(check_event_trigger_publishers, check_database_command_replay_declarations)
         connect_event_trigger_receiver()
+        subject_settlement_handlers.cache_clear()
         subject_settlement_handlers()
 
 

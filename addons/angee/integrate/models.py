@@ -2646,7 +2646,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         if self.sync_is_dispatched:
             return SyncDispatch.DISPATCHED
-        self.mark_sync_started(now=now, using=using)
+        if not self.sync_workflow_key:
+            self.mark_sync_started(now=now, using=using)
         try:
             with bridge_sync_context(), bridge_progress_context(self, using=using):
                 result = self.sync()

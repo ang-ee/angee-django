@@ -9,6 +9,7 @@ import pytest
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.db import get_write_alias, related_on
 from angee.base.identity import public_id_for
 from angee.integrate.sync import BridgeProgressReporter
 from angee.workflows import engine
@@ -48,12 +49,14 @@ class SettlementStream(BoundedStreamStage):
     config_model = SettlementStreamConfig
 
     def run(self, step_run: Any, *, now: Any, using: str | None = None) -> StepResult:
-        del self, now, using
-        if step_run.step.config.get("mode") == "failure":
+        del self, now
+        using = get_write_alias(type(step_run), using=using, instance=step_run)
+        step = related_on(step_run, "step", using=using)
+        if step.config.get("mode") == "failure":
             raise RuntimeError("private provider response must stay in workflow evidence")
         return StepResult.done(
             output=StreamStageOutput(
-                counts={"page_items": 4},
+                counts={"page_items": 4, "cycle_items": 9},
                 discrepancy_ids=[],
                 evidence=[],
             ).model_dump(mode="json")
@@ -82,7 +85,7 @@ def settlement_bridge(
 
 def _admit(bridge: Channel, *, occurrence: str, mode: str = "success") -> Any:
     with system_context(reason="test Bridge cycle publication"):
-        actor = bridge.owner
+        actor = related_on(bridge, "owner", using="default")
     config: dict[str, Any] = {"mode": mode}
     if mode == "retry_exhaustion":
         config["retry"] = {"max_attempts": 2, "backoff": {"wait": 7}}
@@ -91,9 +94,9 @@ def _admit(bridge: Channel, *, occurrence: str, mode: str = "success") -> Any:
         subject_declaration="messaging.channel",
         steps=(
             {"key": "stream", "step_class": "settlement_stream", "config": config},
-            {"key": "unrelated", "is_entry": True, "config": {"output": {"counts": {"page_items": 99}}}},
+            {"key": "unrelated", "is_entry": False, "config": {"output": {"counts": {"cycle_items": 99}}}},
         ),
-        edges=(),
+        edges=(("stream", "unrelated", ""),),
     )
     admit_workflow_actor(workflow, actor)
     return admit_bridge_cycle(
@@ -137,6 +140,9 @@ def _finish(run: Any, *, mode: str, monkeypatch: pytest.MonkeyPatch) -> Any:
             clock[0] += timedelta(seconds=7)
             execute_started(run, now=clock[0])
         advance_once(run, now=clock[0])
+        if mode == "success":
+            execute_started(run, now=clock[0], key="unrelated")
+            advance_once(run, now=clock[0])
     with system_context(reason="test Bridge terminal intent"):
         run.refresh_from_db()
         assert run.is_terminal
@@ -188,7 +194,7 @@ def test_each_terminal_path_settles_once_and_clears_busy_stage(
         assert calls == ["success"]
         assert bridge.sync_stage == bridge.SyncStage.COMPLETED
         assert bridge.last_sync_status == "ok"
-        assert bridge.last_sync_items == 4
+        assert bridge.last_sync_items == 9
     else:
         assert run.status == (RunStatus.CANCELED if mode == "cancel" else RunStatus.FAILED)
         assert calls == ["error"]
@@ -217,7 +223,7 @@ def test_late_terminal_delivery_cannot_settle_a_newer_bridge_cycle(
     assert bridge.last_sync_status == ""
 
     with system_context(reason="test current cycle owner"):
-        actor = bridge.owner
+        actor = related_on(bridge, "owner", using="default")
     engine.cancel(new_run, actor=actor)
     with system_context(reason="test current cycle cancellation intent"):
         dispatch = WorkflowDispatch.objects.get(run=new_run, kind=WorkflowDispatchKind.RUN_SETTLE)
@@ -226,3 +232,28 @@ def test_late_terminal_delivery_cannot_settle_a_newer_bridge_cycle(
         bridge.refresh_from_db()
     assert bridge.sync_stage == bridge.SyncStage.FAILED
     assert bridge.sync_progress["details"]["run"] == pointer
+
+
+@pytest.mark.parametrize("details", [None, [], "malformed"])
+def test_malformed_run_pointer_consumes_delivery_without_settling(
+    settlement_bridge: Channel,
+    monkeypatch: pytest.MonkeyPatch,
+    details: Any,
+) -> None:
+    bridge = settlement_bridge
+    run = _admit(bridge, occurrence="malformed-pointer")
+    dispatch = _finish(run, mode="success", monkeypatch=monkeypatch)
+    with system_context(reason="test malformed Bridge progress"):
+        bridge.refresh_from_db()
+        bridge.sync_progress = {**bridge.sync_progress, "details": details}
+        bridge.save(update_fields=["sync_progress", "updated_at"])
+        before = bridge.sync_progress
+
+    assert engine.settle_run_dispatch(dispatch.pk, expected_run_id=run.pk) == {"settled": 1}
+    with system_context(reason="test malformed Bridge pointer is fenced"):
+        bridge.refresh_from_db()
+        dispatch.refresh_from_db()
+    assert dispatch.consumed_at is not None
+    assert bridge.sync_progress == before
+    assert bridge.sync_stage == bridge.SyncStage.SYNCING
+    assert bridge.last_sync_status == ""

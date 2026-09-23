@@ -93,6 +93,7 @@ from angee.workflows.managers import (
     _definition_rows,
 )
 from angee.workflows.resources import WorkflowDefinitionResource
+from angee.workflows.settlement import subject_settlement_handler
 from angee.workflows.states import (
     DecisionGate,
     JoinRule,
@@ -1887,7 +1888,10 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                     delivery_target = self.delivery_target(using=alias)
                     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
                     dispatch_model.objects.db_manager(alias).schedule_artifact_delivery(delivery_target)
-                    dispatch_model.objects.db_manager(alias).schedule_run_settle(self, using=alias)
+                    if self.subject_content_type_id is not None and subject_settlement_handler(
+                        related_on(self, "subject_content_type", using=alias),
+                    ) is not None:
+                        dispatch_model.objects.db_manager(alias).schedule_run_settle(self, using=alias)
 
     @classmethod
     def invocation_identity_write_names(cls) -> frozenset[str]:

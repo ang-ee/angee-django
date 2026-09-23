@@ -75,7 +75,11 @@ def _start_stage(bridge: Channel, *, coverage: bool = False, retry: bool = False
     return run, advance_once(run)[0]
 
 
-def test_stage_waits_with_correlation_then_completes(
+@pytest.mark.parametrize("final_records", [(), ("second",)])
+@pytest.mark.parametrize("retry_between_pages", [False, True])
+def test_stage_retains_cycle_total_through_wait_and_retry(
+    final_records: tuple[str, ...],
+    retry_between_pages: bool,
     stream_bridge: Channel,
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -84,25 +88,37 @@ def test_stage_waits_with_correlation_then_completes(
     adapter = MemoryAdapter(
         pages=[
             StreamPage(("first",), {"offset": 1}, exhausted=False),
-            StreamPage(("second",), {"offset": 2}),
+            *([ConnectionError("retry next page")] if retry_between_pages else []),
+            StreamPage(final_records, {"offset": 2}),
         ]
     )
     monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
-    run, step_run = _start_stage(stream_bridge)
+    run, step_run = _start_stage(stream_bridge, retry=retry_between_pages)
 
     execute_started(run)
     step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.WAITING
     with system_context(reason="test stream stage cursor"):
         stream = SyncStream.objects.get()
-    assert step_run.resume_state == {"stream": public_id_of(stream), "generation": stream.generation}
+    assert step_run.resume_state == {
+        "stream": public_id_of(stream),
+        "generation": stream.generation,
+        "cycle_items": 1,
+    }
     assert stream.cursor == {"offset": 1}
 
     advance_once(run)
     execute_started(run)
     step_run.refresh_from_db()
+    if retry_between_pages:
+        assert step_run.status == StepRunStatus.STARTED
+        assert step_run.resume_state["cycle_items"] == 1
+        with system_context(reason="test stream cycle total retry"):
+            successor = StepAttempt.objects.get(pk=step_run.current_attempt_id)
+        execute_started(run, now=successor.available_at)
+        step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.SUCCEEDED
-    assert step_run.output["counts"] == {"page_items": 1}
+    assert step_run.output["counts"] == {"page_items": len(final_records), "cycle_items": 1 + len(final_records)}
     assert step_run.output["discrepancy_ids"] == []
     assert step_run.output["evidence"][0]["id"] == public_id_of(stream)
     assert BoundedStreamStage.execution_mode is StepExecutionMode.STANDARD
@@ -131,6 +147,7 @@ def test_semantic_failure_quarantines_and_continues_later_records(
         assert SyncStream.objects.get().cursor == {"offset": 2}
     assert AppliedRecord.objects.filter(key="good").exists()
     assert not AppliedRecord.objects.filter(key="bad").exists()
+    assert step_run.output["counts"] == {"page_items": 1, "cycle_items": 1}
     assert step_run.output["discrepancy_ids"] == [public_id_of(discrepancy)]
 
 
@@ -210,6 +227,9 @@ def test_crash_after_commit_replays_from_stream_cursor(
     result = BoundedStreamStage().run(step_run, now=timezone.now())
 
     assert result.kind == "done"
+    # The driver's earlier commit survives the crash; its unfinalized telemetry
+    # does not. Count only the page reported by the replayed pulse.
+    assert result.output["counts"] == {"page_items": 1, "cycle_items": 1}
     assert adapter.extracted == 2
     assert sorted(AppliedRecord.objects.values_list("key", flat=True)) == ["record-0", "record-1"]
     with system_context(reason="test committed stream after replay"):
@@ -247,6 +267,7 @@ def test_retry_prepares_cycle_when_first_attempt_never_reached_first_page(
 
     step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.WAITING
+    assert step_run.resume_state["cycle_items"] == 0
     assert calls == [stream.pk, stream.pk]
     with system_context(reason="test prepared retry baseline"):
         current = SyncStream.objects.current_for_bridge(stream_bridge, "records").get()
@@ -256,6 +277,7 @@ def test_retry_prepares_cycle_when_first_attempt_never_reached_first_page(
     execute_started(run, now=step_run.wait_until)
     step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.SUCCEEDED
+    assert step_run.output["counts"] == {"page_items": 1, "cycle_items": 1}
     assert calls == [stream.pk, stream.pk]
     with system_context(reason="test reset wait retains cycle preparation"):
         assert SyncStream.objects.current_for_bridge(stream_bridge, "records").get().pk == current.pk

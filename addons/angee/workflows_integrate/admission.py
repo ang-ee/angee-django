@@ -108,6 +108,7 @@ def dispatch_bridge_cycle(bridge: Bridge, *, using: str | None = None) -> SyncDi
         workflow = (
             workflow_model.objects.db_manager(using)
             .filter(published_from__isnull=True, key=bridge.sync_workflow_key)
+            .order_by("pk")
             .first()
         )
         if workflow is None:

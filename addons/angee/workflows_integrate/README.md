@@ -77,13 +77,13 @@ in native step config; semantic records remain quarantined while infrastructure
 failures retry the attempt.
 
 Each invocation handles one page. Incomplete pages return a timer wait due now,
-with only stream public ID and generation in `resume_state`. Completed output
-contains `counts.page_items`, discrepancy IDs and record evidence. `page_items`
-means the final committed page, not a whole-cycle total: the protocol has no
-durable per-cycle count, including across a page-commit/finalization crash.
-Settlement sums those reported final-page counts from successful stream stages.
-Consumers needing full totals must obtain them from their domain's durable
-evidence rather than reconstructing them from resume state.
+with stream public ID, generation and accumulated `cycle_items` in native
+`StepRun.resume_state`. Completion publishes that total as `counts.cycle_items`
+alongside the final `counts.page_items`, discrepancy IDs and record evidence.
+Settlement sums the cycle totals from successful stream stages. Finalized pulse
+counts survive waits and retries, including an empty final page. A crash between
+the driver's page commit and workflow finalization can still omit that pulse's
+count; data replay follows the committed cursor without applying the page twice.
 
 There is **no per-record Map**. The workflow DAG coordinates independent stream
 stages; a single logical stream partition must have one writer stage at a time.
@@ -96,7 +96,8 @@ semantic quarantine from silently accepting the cycle.
 
 ## Settlement and inspection
 
-Every terminal workflow transition atomically retains a `RUN_SETTLE` dispatch.
+Terminal workflow transitions with a subject and a registered settlement handler
+atomically retain a `RUN_SETTLE` dispatch.
 The explicit `ANGEE_WORKFLOW_SUBJECT_SETTLERS` contribution declares the Bridge
 base and `settle_bridge_run`; the workflows owner expands it to concrete content
 type keys with collision rejection. Handler delivery and dispatch consumption

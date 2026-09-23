@@ -48,7 +48,7 @@ class StreamStageInput(StreamReference):
 
 
 class StreamStageOutput(BaseModel):
-    """Final-page counts and durable stream/discrepancy evidence, never cycle totals."""
+    """Stage counts and durable stream/discrepancy evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -84,9 +84,11 @@ class CoverageConfig(WorkflowStepConfig):
 class BoundedStreamStage(StepImpl):
     """Advance one driver page outside the engine's finalization transaction.
 
-    A crash after the page commits replays from SyncStream.cursor. Journal
-    correlation never supplies a cursor or an applied-item total. Consumers may
-    subclass this operation to declare their concrete subject_declaration.
+    A crash after the page commits replays from SyncStream.cursor. Resume state
+    retains stream correlation and the applied count from finalized pulses;
+    completion publishes that cycle total. The separate page/finalization commits
+    can omit a crashed pulse's count, but never reconstruct a cursor or reapply
+    that page. Consumers may declare their concrete subject_declaration.
     """
 
     key = "integrate_stream"
@@ -141,9 +143,16 @@ class BoundedStreamStage(StepImpl):
                 ):
                     stream = begin_stream_cycle(stream, adapter, using=alias)
                 page = advance_stream(stream, adapter, page_bound=value.page_bound, using=alias)
-                correlation = {"stream": public_id_of(page.stream), "generation": page.stream.generation}
+                cycle_items = step_run.resume_state.get("cycle_items", 0) + page.count
                 if not page.exhausted:
-                    return StepResult.wait(until=now, resume_state=correlation)
+                    return StepResult.wait(
+                        until=now,
+                        resume_state={
+                            "stream": public_id_of(page.stream),
+                            "generation": page.stream.generation,
+                            "cycle_items": cycle_items,
+                        },
+                    )
                 discrepancies = list(
                     apps.get_model("integrate", "SyncDiscrepancy")
                     .objects.db_manager(alias)
@@ -155,12 +164,12 @@ class BoundedStreamStage(StepImpl):
                 )
                 return StepResult.done(
                     output=StreamStageOutput(
-                        counts={"page_items": page.count},
+                        counts={"page_items": page.count, "cycle_items": cycle_items},
                         discrepancy_ids=[public_id_of(row) for row in discrepancies],
                         evidence=[_evidence(page.stream), *(_evidence(row) for row in discrepancies)],
                     ).model_dump(mode="json")
                 )
-        except ValidationError:
+        except (ValidationError, TransientStepError):
             raise
         except Exception as error:  # noqa: BLE001 -- driver quarantines semantic failures itself.
             raise TransientStepError(str(error) or type(error).__name__) from error

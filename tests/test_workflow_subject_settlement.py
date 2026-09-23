@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from threading import Event
+from threading import Event, Thread, current_thread
 from typing import Any
 
 import pytest
@@ -13,7 +13,9 @@ from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.db import related_on
 from angee.workflows import engine, settlement
+from angee.workflows.attempts import AttemptResultKind, LeaseRevocationReason
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.states import RunStatus
 from angee.workflows.steps import StepResult, TransientStepError
@@ -34,14 +36,42 @@ def settle_fixture(run: Any, *, using: str | None = None) -> None:
     """Replaceable declared handler for tests of the real registration seam."""
 
 
+def settle_unavailable(run: Any, *, using: str | None = None) -> None:
+    """Fail delivery without consuming its retained dispatch."""
+
+    raise RuntimeError("subject writer unavailable")
+
+
 @pytest.fixture
 def settlement_calls(settings: Any, monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, str | None]]:
     calls: list[tuple[int, str | None]] = []
+    monkeypatch.setattr(f"{__name__}.settle_fixture", lambda run, *, using=None: calls.append((run.pk, using)))
     settings.ANGEE_WORKFLOW_SUBJECT_SETTLERS = {
         "tests.workflows.Workflow": f"{__name__}.settle_fixture",
     }
-    monkeypatch.setattr(f"{__name__}.settle_fixture", lambda run, *, using=None: calls.append((run.pk, using)))
     return calls
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("subject_kind", ["subjectless", "unregistered", "registered"])
+def test_terminal_settlement_intent_requires_a_registered_subject(
+    subject_kind: str,
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    settlement_calls: list[tuple[int, str | None]],
+) -> None:
+    workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
+    subject = None if subject_kind == "subjectless" else workflow
+    if subject_kind == "unregistered":
+        with system_context(reason="unregistered settlement subject"):
+            subject = related_on(workflow, "created_by", using="default")
+    run = start_run(workflow, subject=subject)
+    with system_context(reason="terminal settlement registration boundary"):
+        run.mark_failed()
+        assert WorkflowDispatch.objects.filter(kind=WorkflowDispatchKind.RUN_SETTLE, run=run).count() == (
+            1 if subject_kind == "registered" else 0
+        )
+    assert settlement_calls == []
 
 
 @pytest.mark.django_db(transaction=True)
@@ -107,7 +137,6 @@ def test_failed_subject_settlement_preserves_pending_delivery(
     workflow_engine_tables: None,
     no_workflow_queue: None,
     settlement_calls: list[tuple[int, str | None]],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
     run = start_run(workflow, subject=workflow)
@@ -115,11 +144,9 @@ def test_failed_subject_settlement_preserves_pending_delivery(
         run.mark_failed("failure")
         intent = WorkflowDispatch.objects.get(kind=WorkflowDispatchKind.RUN_SETTLE, run=run)
 
-    def unavailable(run: Any, *, using: str | None = None) -> None:
-        raise RuntimeError("subject writer unavailable")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(f"{__name__}.settle_fixture", unavailable)
+    with override_settings(
+        ANGEE_WORKFLOW_SUBJECT_SETTLERS={"tests.workflows.Workflow": f"{__name__}.settle_unavailable"},
+    ):
         with pytest.raises(RuntimeError, match="writer unavailable"):
             engine.settle_run_dispatch(intent.pk, expected_run_id=run.pk)
     with system_context(reason="retained delivery survives handler failure"):
@@ -134,9 +161,10 @@ def test_failed_subject_settlement_preserves_pending_delivery(
 def test_subject_settlement_requires_terminal_transaction_and_exact_envelope(
     workflow_engine_tables: None,
     no_workflow_queue: None,
+    settlement_calls: list[tuple[int, str | None]],
 ) -> None:
     workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
-    run = start_run(workflow)
+    run = start_run(workflow, subject=workflow)
     with pytest.raises(RuntimeError, match="terminal run transaction"):
         WorkflowDispatch.objects.schedule_run_settle(run)
     with transaction.atomic(), pytest.raises(ValidationError, match="terminal run"):
@@ -156,14 +184,17 @@ def test_settlement_registration_is_explicit_and_collisions_fail(
 ) -> None:
     handlers = settlement.subject_settlement_handlers()
     assert set(handlers) == {(Workflow._meta.app_label, Workflow._meta.model_name)}
+    with override_settings(ANGEE_WORKFLOW_SUBJECT_SETTLERS={}):
+        assert settlement.subject_settlement_handlers() == {}
+    assert settlement.subject_settlement_handlers() == handlers
     with (
+        pytest.raises(ImproperlyConfigured, match="Multiple subject settlement handlers"),
         override_settings(
             ANGEE_WORKFLOW_SUBJECT_SETTLERS={
                 "tests.workflows.Workflow": f"{__name__}.settle_fixture",
                 "angee.workflows.models.Workflow": f"{__name__}.settle_fixture",
             }
         ),
-        pytest.raises(ImproperlyConfigured, match="Multiple subject settlement handlers"),
     ):
         settlement.subject_settlement_handlers()
 
@@ -172,12 +203,14 @@ def test_settlement_registration_is_explicit_and_collisions_fail(
 def test_terminal_transition_and_subject_intent_roll_back_together(
     workflow_engine_tables: None,
     no_workflow_queue: None,
+    settlement_calls: list[tuple[int, str | None]],
 ) -> None:
     workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
-    run = start_run(workflow)
+    run = start_run(workflow, subject=workflow)
     with system_context(reason="terminal transaction rollback fixture"):
         with pytest.raises(RuntimeError, match="rollback"), transaction.atomic():
             run.mark_failed("failure")
+            assert WorkflowDispatch.objects.filter(kind=WorkflowDispatchKind.RUN_SETTLE, run=run).exists()
             raise RuntimeError("rollback")
         run.refresh_from_db()
         assert not run.is_terminal
@@ -185,7 +218,9 @@ def test_terminal_transition_and_subject_intent_roll_back_together(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("body_fails", [False, True])
 def test_bounded_io_heartbeats_the_captured_attempt_and_closes_its_worker(
+    body_fails: bool,
     workflow_engine_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -197,12 +232,16 @@ def test_bounded_io_heartbeats_the_captured_attempt_and_closes_its_worker(
     row = advance_once(run)[0]
     heartbeated = Event()
     heartbeats: list[tuple[int, str | None]] = []
+    workers: set[Thread] = set()
+    invoking_thread = current_thread()
     manager_class = type(StepAttempt.objects)
     original = manager_class.heartbeat
 
     def heartbeat(manager: Any, attempt_id: int, **kwargs: Any) -> bool:
         result = original(manager, attempt_id, **kwargs)
         heartbeats.append((attempt_id, manager._db))
+        if current_thread() is not invoking_thread:
+            workers.add(current_thread())
         if len(heartbeats) >= 2:
             heartbeated.set()
         return result
@@ -213,6 +252,8 @@ def test_bounded_io_heartbeats_the_captured_attempt_and_closes_its_worker(
             # another lease. The durable attempt is still the admitted one.
             step_run.current_attempt_id = None
             assert heartbeated.wait(timeout=2)
+            if body_fails:
+                raise RuntimeError("bounded I/O failed")
         return StepResult.done(output={})
 
     monkeypatch.setattr(manager_class, "heartbeat", heartbeat)
@@ -221,4 +262,50 @@ def test_bounded_io_heartbeats_the_captured_attempt_and_closes_its_worker(
 
     assert len(heartbeats) >= 2
     assert set(heartbeats) == {(row.current_attempt_id, "default")}
-    assert step_run_for(run, "page").status == "succeeded"
+    assert workers and all(worker.daemon and not worker.is_alive() for worker in workers)
+    assert step_run_for(run, "page").status == ("failed" if body_fails else "succeeded")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_bounded_io_lost_lease_retains_transient_unapplied_result(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Any,
+) -> None:
+    settings.ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT = 0.09
+    workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
+    run = start_run(workflow)
+    row = advance_once(run)[0]
+    rejected = Event()
+    manager_class = type(StepAttempt.objects)
+    original = manager_class.heartbeat
+
+    def heartbeat(manager: Any, attempt_id: int, **kwargs: Any) -> bool:
+        accepted = original(manager, attempt_id, **kwargs)
+        if not accepted:
+            rejected.set()
+        return accepted
+
+    def perform(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
+        with system_context(reason="capture heartbeat test lease"):
+            attempt = related_on(step_run, "current_attempt", using="default")
+        with self.heartbeat_during(step_run, using="default"):
+            StepAttempt.objects.db_manager("default").revoke(
+                attempt.pk,
+                lease_token=attempt.lease_token,
+                reason=LeaseRevocationReason.SUPERSEDED,
+                at=now,
+            )
+            assert rejected.wait(timeout=2)
+        return StepResult.done(output={})
+
+    monkeypatch.setattr(manager_class, "heartbeat", heartbeat)
+    monkeypatch.setattr(FixtureStep, "run", perform)
+    execute_started(run)
+    with system_context(reason="inspect retained lost-lease evidence"):
+        attempt = related_on(row, "current_attempt", using="default")
+        assert attempt.result_kind == str(AttemptResultKind.TRANSIENT_ERROR)
+        assert attempt.applied_at is None
+        assert attempt.lease_revocation_reason == str(LeaseRevocationReason.SUPERSEDED)
+        assert "superseded" in attempt.error

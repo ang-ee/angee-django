@@ -121,9 +121,18 @@ def test_nondefault_authorization_fails_before_admission(cycle: tuple[Any, Any, 
 def test_declared_key_dispatches_without_early_settlement(cycle: tuple[Any, Any, Any, str], monkeypatch: Any) -> None:
     bridge, workflow, _, _ = cycle
     monkeypatch.setattr(Channel, "sync_workflow_key", workflow.key)
+    starts: list[int] = []
+    native_start = Channel.mark_sync_started
+
+    def mark_sync_started(self: Channel, *, now: Any, using: str | None = None) -> None:
+        starts.append(self.pk)
+        native_start(self, now=now, using=using)
+
+    monkeypatch.setattr(Channel, "mark_sync_started", mark_sync_started)
     with override_settings(ANGEE_BRIDGE_SYNC_DISPATCH="angee.workflows_integrate.admission.dispatch_bridge_cycle"):
         with system_context(reason="test bridge dispatch"):
             assert bridge.run_sync(now=timezone.now()) is SyncDispatch.DISPATCHED
+            assert starts == [bridge.pk]
             bridge.refresh_from_db()
             run_pointer = bridge.sync_progress["details"]["run"]
             assert bridge.last_sync_status != "ok"

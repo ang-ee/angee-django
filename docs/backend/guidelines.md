@@ -1194,14 +1194,16 @@ from the composition addon to both owners; integrate never imports workflows.
   the workflow finalization transaction. The driver atomically commits records,
   discrepancies and cursor on the selected alias. Retrying a crash between the
   page commit and workflow finalization reads that cursor. Renew the retained
-  lease during long pages. Resume state contains correlation only; never a second
-  cursor or reconstructed count. Use stage branches, never a per-record Map.
+  lease during long pages. Resume state retains stream correlation and the sum
+  of reported page counts; the terminal output carries that stage total. It must
+  never duplicate the cursor or reconstruct counts from it. Use stage branches,
+  never a per-record Map.
 - **Coverage keeps data truth authoritative.** OPEN/RETRY discrepancies prevent
   acceptance. Only the composition addon's coverage gate turns CONFLICT rows
   into native workflow Decisions; a review does not itself resolve a discrepancy.
-- **Terminal delivery uses expected-run CAS.** Every terminal run transition
-  retains `RUN_SETTLE`. Explicit subject-type registration routes to the Bridge
-  handler, which locks the row and compares `sync_progress.details.run` plus its
+- **Terminal delivery uses expected-run CAS.** A terminal run transition retains
+  `RUN_SETTLE` only for a subject with an explicitly registered settler. The Bridge
+  handler locks the row and compares `sync_progress.details.run` plus its
   busy stage before composing `record_sync` or `record_sync_error`. Direct cancel
   and retry exhaustion therefore clear syncing, and old delivery cannot overwrite
   a newer cycle. Keep the run pointer for the shared inspection link.
