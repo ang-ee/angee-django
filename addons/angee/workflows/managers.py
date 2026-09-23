@@ -631,9 +631,16 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             .filter(run=run)
             .order_by("pk")
         ):
-            was_waiting = step_run.status == StepRunStatus.WAITING
+            current_attempt = step_run.current_attempt
+            held_applied_suspension = (
+                step_run.status == StepRunStatus.WAITING
+                and current_attempt is not None
+                and current_attempt.result_kind == str(AttemptResultKind.SUSPEND)
+                and current_attempt.applied_at is not None
+                and current_attempt.lease_revoked_at is None
+            )
             attempt_model.objects.db_manager(alias).cancel_current(step_run.pk, at=at)
-            if was_waiting:
+            if held_applied_suspension:
                 decision_model.objects.db_manager(alias).expire_canceled_suspension(
                     step_run.pk,
                     resolved_by="workflows/cancel",

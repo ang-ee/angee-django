@@ -1149,6 +1149,37 @@ def test_cancel_expires_applied_suspension_without_revoking_completed_attempt(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_cancel_skips_decision_expiry_when_waiting_projection_has_failed_attempt(
+    scheduled_step_run: StepRun,
+) -> None:
+    attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.ERROR, error="The draft changed."),
+        recorded_at=timezone.now(),
+    )
+    scheduled_step_run.refresh_from_db()
+    scheduled_step_run.status = StepRunStatus.WAITING
+    with system_context(reason="retain waiting projection before run failure settles"):
+        scheduled_step_run.project_from_attempt(attempt, fields={"status"}, using="default")
+
+    from angee.workflows import engine
+
+    engine.cancel(scheduled_step_run.run, actor=scheduled_step_run.run.admission_actor())
+
+    with system_context(reason="verify cancellation ignores failed waiting attempt"):
+        scheduled_step_run.run.refresh_from_db()
+        scheduled_step_run.refresh_from_db()
+        attempt.refresh_from_db()
+    assert scheduled_step_run.run.status == RunStatus.CANCELED
+    assert scheduled_step_run.status == StepRunStatus.CANCELED
+    assert attempt.result_kind == str(AttemptResultKind.ERROR)
+    assert attempt.lease_revoked_at is None
+
+
+@pytest.mark.django_db(transaction=True)
 def test_decision_relationship_failure_rolls_back_entire_suspension(
     scheduled_step_run: StepRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
