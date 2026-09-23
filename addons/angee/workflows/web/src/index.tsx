@@ -17,7 +17,7 @@ import {
 import { enWorkflowsMessages } from "./i18n";
 import { RunWorkflowMenu } from "./RunWorkflowMenu";
 import { decisionContextWidgets } from "./views/DecisionContextWidgets";
-export { decisionReviewFact } from "./views/DecisionContextWidgets";
+export { decisionReviewContext, decisionReviewFact } from "./views/DecisionContextWidgets";
 import { WorkflowImplementationDetails } from "./views/WorkflowImplementationDetails";
 export {
   WORKFLOW_DECISION_CONTENT_SLOT,
