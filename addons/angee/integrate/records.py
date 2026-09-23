@@ -6,6 +6,7 @@ retain remote vocabulary and domain ingest policy.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
@@ -205,7 +206,7 @@ class SyncStreamManager(AngeeManager):
                 reconcile_interval=latest.reconcile_interval,
                 absence_threshold=latest.absence_threshold,
                 tombstone_retention=latest.tombstone_retention,
-                config=latest.config,
+                config=copy.deepcopy(latest.config),
             )
             for model_name in ("RecordLink", "SyncDiscrepancy"):
                 apps.get_model("integrate", model_name).objects.db_manager(using).filter(stream=latest).update(

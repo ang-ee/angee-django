@@ -114,16 +114,25 @@ def test_native_httpx_multistatus_and_case_insensitive_redirect() -> None:
     assert calls == ["https://dav.example/root", "https://dav.example/addressbooks/"]
 
 
-def test_native_httpx_photo_content_type_ignores_parameters() -> None:
-    """Native case-insensitive headers preserve photo bytes and strip MIME parameters."""
+def test_photo_download_is_capped_and_uses_the_collection_origin() -> None:
+    """Photo downloads preserve vCard MIME and use the shared SSRF-safe cap."""
 
     class FakeHttp:
-        def get(self, url: str, **kwargs: Any) -> httpx.Response:
-            del url, kwargs
-            return httpx.Response(200, content=b"photo", headers={"CoNtEnT-TyPe": "image/jpeg; charset=binary"})
+        def download_capped(self, url: str, **kwargs: Any) -> bytes:
+            assert url == "https://dav.example/books/photo.jpg"
+            assert kwargs["cap"] == 5 * 1024 * 1024
+            assert kwargs["allow_private"] is False
+            assert kwargs["follow_redirects"] is False
+            return b"photo"
 
-    contact = ParsedContact(uid="one", display_name="One", photo=ParsedPhoto(uri="photo.jpg"))
-    resolved = _backend_with_http(FakeHttp())._resolve_photo(contact, using="default")
+    contact = ParsedContact(
+        uid="one",
+        display_name="One",
+        photo=ParsedPhoto(uri="https://dav.example/books/photo.jpg", mime="image/jpeg"),
+    )
+    resolved = _backend_with_http(FakeHttp())._resolve_photo(
+        contact, collection="https://dav.example/books/", using="default"
+    )
 
     assert resolved.photo == ParsedPhoto(data=b"photo", mime="image/jpeg")
 
@@ -302,7 +311,9 @@ def test_parse_full_vcard_maps_every_field() -> None:
         "EC1",
         "UK",
     )
-    assert contact.raw_vcard == _FULL_VCARD
+    retained = vobject.readOne(contact.raw_vcard)
+    assert "photo" not in retained.contents
+    assert retained.org.value == ["Analytical Engines", "Research"]
 
 
 def test_parse_date_accepts_the_common_vcard_formats() -> None:
@@ -335,18 +346,19 @@ def test_remote_photo_uri_is_left_for_the_transport_to_fetch() -> None:
     assert contact.photo.uri == "https://example.com/a.jpg"
 
 
-def test_uid_falls_back_to_fn_then_href() -> None:
-    """A card without UID keys on FN; without UID and FN, on the resource href."""
+def test_uid_falls_back_to_href_without_using_the_display_name() -> None:
+    """Cards without UID remain distinct even when their display names match."""
 
     no_uid = "BEGIN:VCARD\nVERSION:3.0\nFN:Grace Hopper\nEMAIL:grace@example.com\nEND:VCARD"
-    assert _parse(no_uid, href="/ab/grace.vcf").uid == "Grace Hopper"
+    assert _parse(no_uid, href="/ab/grace.vcf").uid == "/ab/grace.vcf"
+    assert _parse(no_uid, href="/ab/another-grace.vcf").uid == "/ab/another-grace.vcf"
 
     bare = "BEGIN:VCARD\nVERSION:3.0\nEMAIL:anon@example.com\nEND:VCARD"
     assert _parse(bare, href="/ab/anon.vcf").uid == "/ab/anon.vcf"
 
 
 def test_no_stable_key_yields_empty_uid() -> None:
-    """With no UID, FN, or href the uid is empty — the sync skips these (no collapse)."""
+    """A display name alone cannot supply a missing UID and resource href."""
 
-    bare = "BEGIN:VCARD\nVERSION:3.0\nEMAIL:anon@example.com\nEND:VCARD"
+    bare = "BEGIN:VCARD\nVERSION:3.0\nFN:Anonymous\nEMAIL:anon@example.com\nEND:VCARD"
     assert _parse(bare, href="").uid == ""

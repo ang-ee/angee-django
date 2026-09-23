@@ -13,10 +13,14 @@ on the next delta. Pending hrefs and the next token live only in the stream curs
 An unchanged token produces an empty page. `DAV:valid-sync-token` failure creates
 a new baseline generation, retaining links and revisions. Explicit removed-member
 404 responses become tombstones; a failed transport never advances the cursor.
+Per-identity discrepancy rescans use CardDAV multiget without advancing that
+cursor. A daily depth-one PROPFIND sweep reconciles hrefs and ETags so a silently
+vanished resource becomes unavailable even when the change feed omits it.
 
 `RecordLink.external_key` preserves the existing `(folder, source_uid)` identity:
-vCard UID, falling back to FN and then href for legacy cards without UID. A
-resource keeps that first identity even if its fallback name changes. Observed
+vCard UID, falling back to href for legacy cards without UID. A resource keeps
+that first identity across display-name changes. Duplicate UIDs quarantine the
+colliding card while other cards proceed. Observed
 link metadata retains the href even when the first card is malformed, allowing a
 corrected card to resolve the same quarantine. Applied revisions retain the
 resource href separately with the vCard version used for conditional writes.
@@ -27,7 +31,12 @@ later pull reuses that person through the same ingest owner.
 
 [`contact_projection`](backends.py) declares exactly the fields synchronized in
 both directions. It includes names, notes, dates, email/phone contact points,
-postal addresses, the source employment edge and avatar bytes. Collection order
+postal addresses, the source employment edge and the avatar content hash and MIME
+type. Extraction fetches and pre-stores avatars through storage's idempotent
+`File.objects.ingest_bytes` before the page transaction. Apply only validates and
+links the prepared File under the row lock; it performs database work only.
+Local comparisons use the stored hash without reading avatar bytes, and revisions
+retain the content address instead of base64 photo bytes. Collection order
 does not affect hashes. The remote and local bases are separate because domain
 fields may normalize values. Transport metadata, unmapped ORG department units,
 and other vCard properties remain outside the comparison. Conditional writes
@@ -76,3 +85,7 @@ RFC 6578 and strong per-resource ETags for this bidirectional backend. Basic
 authentication remains supported; Digest authentication needs a credential
 handler. Tests in `tests/test_parties_carddav_sync.py` exercise the real adapter,
 driver and ingest against a deterministic DAV server double.
+
+The public GraphQL `ContactFolderType.ctag` field was removed when collection
+progress moved to `SyncStream`; clients must remove it from their selections.
+The repository's addon, package and example web sources have no remaining reads.

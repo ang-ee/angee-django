@@ -704,7 +704,7 @@ class PartyHandle(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):
                 continue
             try:
                 model = apps.get_model(str(ref.get("model") or ""))
-            except LookupError, ValueError:
+            except (LookupError, ValueError):
                 continue
             public_id = str(ref.get("id") or "")
             queryset = read_scoped_queryset(model, actor)

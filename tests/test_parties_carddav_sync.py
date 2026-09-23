@@ -7,21 +7,29 @@ ingest owner or the three-way classifier.
 
 from __future__ import annotations
 
+import hashlib
+import ipaddress
+import json
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, replace
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from urllib.parse import urljoin
 from xml.sax.saxutils import escape
 
+import httpcore
 import httpx
 import pytest
 import vobject
+from defusedxml.common import DefusedXmlException
+from django.core.exceptions import ValidationError
 from django.db import connection
+from django.utils import timezone
 from rebac import system_context
 
 from angee.base.serialization import canonical_json_sha256
+from angee.integrate.http import HttpClient
 from angee.integrate.records import (
     DiscrepancyKind,
     DiscrepancyStatus,
@@ -30,7 +38,7 @@ from angee.integrate.records import (
     StreamKind,
     StreamPhase,
 )
-from angee.integrate.streams import advance_stream, push_stream
+from angee.integrate.streams import advance_stream, begin_stream_cycle, push_stream, reconcile_stream
 from angee.parties.backends import (
     CONTACT_FIELDS,
     ParsedAddress,
@@ -39,8 +47,9 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
-from angee.parties_integrate_carddav.backend import CardDavDirectoryBackend, _parse_vcard
-from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
+from angee.parties_integrate_carddav.backend import CardDavDirectoryBackend, CardDavError, _parse_vcard, _xml
+from angee.storage.models import UploadState
+from tests.conftest import Backend, Drive, File, MimeType, _clear_model_tables, _create_missing_tables, make_integration
 from tests.integrate_models import RECORD_SYNC_TEST_MODELS, RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from tests.test_messaging import MESSAGING_TEST_MODELS, Directory, Folder, Party, Person, RelationshipKind
 
@@ -83,6 +92,9 @@ class FakeDav:
         self.events: list[tuple[int, str, bool]] = []
         self.invalid_tokens: set[str] = set()
         self.requests: list[tuple[str, str, dict[str, str], str]] = []
+        self.photos: dict[str, bytes] = {}
+        self.downloads: list[tuple[str, dict[str, Any]]] = []
+        self.include_collection_response = False
         self.store(_HREF, _card())
 
     @property
@@ -106,6 +118,14 @@ class FakeDav:
 
     def get(self, url: str, **kwargs: Any) -> httpx.Response:
         return self.request("GET", url, **kwargs)
+
+    def download_capped(self, url: str, **kwargs: Any) -> bytes | None:
+        """Keep the transport double on the shared capped-download contract."""
+
+        assert not connection.in_atomic_block, "Photo download must precede the page transaction"
+        self.downloads.append((url, kwargs))
+        content = self.photos.get(url)
+        return content if content is not None and len(content) <= kwargs["cap"] else None
 
     def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         body = kwargs.get("body", b"")
@@ -140,6 +160,8 @@ class FakeDav:
                 since = int(token.rsplit("/", 1)[1]) if token else 0
                 changed = {href: removed for version, href, removed in self.events if version > since}
                 responses = "".join(self._response(href, removed=removed) for href, removed in sorted(changed.items()))
+                if self.include_collection_response:
+                    responses = self._property(_BOOK, "<d:resourcetype><d:collection/></d:resourcetype>") + responses
                 return self._multistatus(responses, token=True)
             assert root.tag == "{urn:ietf:params:xml:ns:carddav}addressbook-multiget"
             hrefs = [urljoin(url, item.text or "") for item in root.findall("d:href", _NAMESPACES)]
@@ -459,6 +481,16 @@ def test_new_local_person_is_created_conditionally_then_recognized(replica: Repl
     assert link.external_key == f"angee-{person.pk}"
     assert puts[-1][2]["if-none-match"] == "*"
     assert link.origin == "local"
+    # A new outbound identity has its locator in the applied revision before a
+    # pull can populate link metadata; both locator consumers must retain it.
+    assert not link.metadata.get("href")
+    assert set(replica.backend.enumerate_keys(replica.stream, using="default")) == {"ada", link.external_key}
+    cursor = dict(replica.stream.cursor)
+    requested = replica.backend.read_keys(replica.stream, (link.external_key,), using="default")
+    assert [record.external_key for record in requested] == [link.external_key]
+    assert requested[0].metadata["href"] == puts[-1][1]
+    assert requested[0].remote_version == link.remote_version
+    assert replica.stream.cursor == cursor
     assert replica.pull().count == 0
     assert Person.objects.filter(pk=person.pk).count() == 1
     assert not SyncDiscrepancy.objects.exists()
@@ -521,7 +553,7 @@ def test_contact_projection_is_deterministic_and_declares_exact_bridge_fields() 
     assert set(CONTACT_FIELDS) == set(projection) == _DECLARED_FIELDS
     assert projection["birthday"] == "1815-12-10"
     assert projection["anniversary"] == "1835-01-01"
-    assert projection["photo"] == {"data": "QUJD", "mime": "image/png"}
+    assert projection["photo"] == {"hash": hashlib.sha256(b"ABC").hexdigest(), "mime": "image/png"}
     assert projection == contact_projection(reordered)
     assert projection == contact_projection(contact_from_projection(projection))
     assert canonical_json_sha256(projection) == canonical_json_sha256(contact_projection(reordered))
@@ -644,3 +676,326 @@ def test_propagated_local_delete_round_trip_keeps_local_tombstone(replica: Repli
     assert not SyncDiscrepancy.objects.exists()
     assert not Party.objects.exists()
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
+
+
+def test_remote_xml_rejects_entity_expansion_before_parsing_resources() -> None:
+    payload = (
+        b'<!DOCTYPE multistatus [<!ENTITY seed "expanded">'
+        b'<!ENTITY repeated "&seed;&seed;&seed;&seed;">]>'
+        b'<d:multistatus xmlns:d="DAV:"><d:response><d:href>&repeated;</d:href></d:response></d:multistatus>'
+    )
+    with pytest.raises(DefusedXmlException):
+        _xml(payload)
+
+
+@pytest.mark.parametrize("uri", ["http://127.0.0.1/avatar.png", "https://photos.example/avatar.png"])
+def test_photo_uri_outside_collection_origin_is_refused(replica: Replica, uri: str) -> None:
+    replica.server.store(_HREF, _card().replace("END:VCARD", f"PHOTO;VALUE=URI:{uri}\r\nEND:VCARD"))
+    with pytest.raises(CardDavError):
+        replica.pull()
+    assert replica.server.downloads == []
+    assert not Person.objects.exists()
+    replica.stream.refresh_from_db()
+    assert replica.stream.cursor == {}
+
+
+def test_same_origin_private_photo_is_refused_by_pinned_client(
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operator-selected private DAV access must not authorize private photo reads."""
+
+    def unexpected_socket(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        pytest.fail("A private photo address must be rejected before opening a socket")
+
+    monkeypatch.setattr(httpcore.SyncBackend, "connect_tcp", unexpected_socket)
+    monkeypatch.setattr(
+        "angee.integrate.http.resolved_addresses", lambda host, port: (ipaddress.ip_address("127.0.0.1"),)
+    )
+    replica.backend.__dict__["http"] = HttpClient()
+    contact = ParsedContact(photo=ParsedPhoto(uri="http://private.example/avatar.png", mime="image/png"))
+    with pytest.raises(CardDavError) as rejected:
+        replica.backend._resolve_photo(contact, collection="http://private.example/book/", using="default")
+    assert isinstance(rejected.value.__cause__, ValidationError)
+
+
+def test_photo_download_uses_shared_cap_and_disallows_private_addresses(replica: Replica) -> None:
+    uri = f"{_BASE}avatar.png"
+    replica.server.photos[uri] = b"ABC"
+    contact = ParsedContact(photo=ParsedPhoto(uri=uri, mime="image/png"))
+    resolved = replica.backend._resolve_photo(contact, collection=_BOOK, using="default")
+    assert resolved.photo is not None
+    assert resolved.photo.data == b"ABC"
+    assert len(replica.server.downloads) == 1
+    downloaded_url, options = replica.server.downloads[0]
+    assert downloaded_url == uri
+    assert options["cap"] == 5 * 1024 * 1024
+    assert options["allow_private"] is False
+    assert options.get("follow_redirects", False) is False
+
+    replica.server.photos[uri] = b"x" * (options["cap"] + 1)
+    with pytest.raises(CardDavError):
+        replica.backend._resolve_photo(contact, collection=_BOOK, using="default")
+
+
+def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The storage-owner double observes intake before apply; only hashes enter revisions."""
+
+    backend = Backend.objects.create(slug="avatar-double", label="Avatar double", backend_class="local")
+    drive = Drive.objects.create(backend=backend, slug="assets", name="Assets")
+    mime = MimeType.objects.create(mime_type="image/png", category="image", label="PNG")
+    digest = hashlib.sha256(b"ABC").hexdigest()
+    phases: list[str] = []
+
+    def ingest_bytes(
+        manager: Any,
+        content: bytes,
+        *,
+        filename: str,
+        owner_id: Any = None,
+        using: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        del kwargs
+        assert using == "default"
+        assert not connection.in_atomic_block
+        assert content == b"ABC"
+        phases.append("extract")
+        stored, _ = manager.db_manager(using).get_or_create(
+            drive=drive,
+            content_hash=hashlib.sha256(content).hexdigest(),
+            defaults={
+                "filename": filename,
+                "size_bytes": len(content),
+                "mime_type": mime,
+                "storage_path": f"avatars/{digest}",
+                "upload_state": UploadState.READY,
+                "created_by_id": owner_id,
+            },
+        )
+        return stored
+
+    def unexpected_open(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        pytest.fail("Apply and local comparison must not open avatar storage")
+
+    original_apply = replica.backend.apply
+
+    def apply_after_intake(stream: Any, page: Any, *, using: str | None = None) -> Any:
+        assert connection.in_atomic_block
+        assert phases == ["extract"]
+        assert File.objects.get(content_hash=digest).upload_state == UploadState.READY
+        assert page.records[0].source_payload["contact"]["photo"] == {"hash": digest, "mime": "image/png"}
+        phases.append("apply")
+        yield from original_apply(stream, page, using=using)
+
+    monkeypatch.setattr(type(File.objects), "ingest_bytes", ingest_bytes)
+    monkeypatch.setattr(File, "open_stream", unexpected_open)
+    monkeypatch.setattr(replica.backend, "apply", apply_after_intake)
+    replica.server.store(_HREF, _card().replace("END:VCARD", "PHOTO;ENCODING=b;TYPE=PNG:QUJD\r\nEND:VCARD"))
+    person, link = replica.baseline()
+    stored = File.objects.get(content_hash=digest)
+    assert phases == ["extract", "apply"]
+    assert person.avatar_id == stored.pk
+    assert tuple(replica.backend.local_changes(replica.stream, using="default")) == ()
+    assert phases == ["extract", "apply"]
+    revisions = list(RecordRevision.objects.filter(link=link))
+    assert revisions
+    for revision in revisions:
+        assert revision.source_payload["contact"]["photo"] == {"hash": digest, "mime": "image/png"}
+        assert revision.mapped_payload["photo"] == {"hash": digest, "mime": "image/png"}
+        assert "QUJD" not in json.dumps(revision.source_payload)
+        assert "QUJD" not in json.dumps(revision.mapped_payload)
+
+
+@pytest.mark.parametrize("page_bound", [1, 100])
+def test_duplicate_uid_quarantines_one_resource_and_commits_the_rest(replica: Replica, page_bound: int) -> None:
+    duplicate_href = f"{_BOOK}duplicate.vcf"
+    replica.server.store(duplicate_href, _card(uid="ada", name="Impostor"))
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+    landed = 0
+    for _ in range(3):
+        result = advance_stream(replica.stream, replica.backend, page_bound=page_bound, using="default")
+        replica.stream = result.stream
+        landed += result.count
+        if result.exhausted:
+            break
+    assert result.exhausted
+    assert landed == 2
+    assert set(Person.objects.values_list("source_uid", flat=True)) == {"ada", "grace"}
+    discrepancy = SyncDiscrepancy.objects.get(stream=replica.stream)
+    link = RecordLink.objects.get(pk=discrepancy.link_id)
+    assert discrepancy.kind == DiscrepancyKind.SEMANTIC
+    assert link.status == LinkStatus.DISCREPANT
+    assert link.external_key == link.metadata["href"] == duplicate_href
+    assert replica.stream.cursor == {"sync_token": replica.server.token}
+
+
+def test_uidless_cards_with_same_name_use_distinct_resource_hrefs(replica: Replica) -> None:
+    other_href = f"{_BOOK}other.vcf"
+    raw = _card().replace("UID:ada\r\n", "")
+    replica.server.store(_HREF, raw)
+    replica.server.store(other_href, raw)
+    result = replica.pull()
+    assert result.count == 2
+    assert not result.discrepancy_ids
+    assert set(Person.objects.values_list("source_uid", flat=True)) == {_HREF, other_href}
+    assert set(RecordLink.objects.values_list("external_key", flat=True)) == {_HREF, other_href}
+
+
+def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(replica: Replica) -> None:
+    collision_href = f"{_BOOK}duplicate.vcf"
+    replica.server.store(_HREF, _card(uid=collision_href))
+    assert replica.pull().count == 1
+    original = Person.objects.get(source_uid=collision_href)
+    owner = RecordLink.objects.get(stream=replica.stream, external_key=collision_href)
+    bases = owner.remote_base_hash, owner.local_base_hash, owner.remote_version
+    replica.server.store(collision_href, _card(name="Impostor").replace("UID:ada\r\n", ""))
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+
+    result = replica.pull()
+
+    assert result.exhausted
+    assert result.count == 1
+    discrepancy = SyncDiscrepancy.objects.get(stream=replica.stream)
+    refused = RecordLink.objects.get(pk=discrepancy.link_id)
+    assert discrepancy.kind == DiscrepancyKind.SEMANTIC
+    assert refused.status == LinkStatus.DISCREPANT
+    assert refused.metadata["href"] == collision_href
+    assert refused.external_key != owner.external_key
+    assert refused.target_id is None
+    owner.refresh_from_db()
+    original.refresh_from_db()
+    assert owner.metadata["href"] == _HREF
+    assert owner.target_id == str(original.pk)
+    assert (owner.remote_base_hash, owner.local_base_hash, owner.remote_version) == bases
+    assert original.display_name == "Ada Lovelace"
+    assert set(Person.objects.values_list("source_uid", flat=True)) == {collision_href, "grace"}
+    assert replica.stream.cursor == {"sync_token": replica.server.token}
+
+
+def test_due_read_keys_redrives_only_discrepant_hrefs_without_advancing_cursor(replica: Replica) -> None:
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+    assert replica.pull().count == 2
+    replica.server.store(_HREF, "Not a vCard")
+    assert replica.pull().discrepancy_ids
+    discrepancy = SyncDiscrepancy.objects.get(stream=replica.stream)
+    link = RecordLink.objects.get(pk=discrepancy.link_id)
+    assert link.external_key == "ada"
+    replica.server.store(_HREF, _card(notes="Fixed without a baseline"))
+    SyncDiscrepancy.objects.filter(pk=discrepancy.pk).update(retry_at=timezone.now() - timedelta(seconds=1))
+    old_cursor = dict(replica.stream.cursor)
+    old_generation, old_advanced_at = replica.stream.generation, replica.stream.last_advanced_at
+    replica.server.requests.clear()
+
+    replica.stream = begin_stream_cycle(replica.stream, replica.backend, using="default")
+
+    discrepancy.refresh_from_db()
+    link.refresh_from_db()
+    assert discrepancy.status == DiscrepancyStatus.RESOLVED
+    assert link.status == LinkStatus.CURRENT
+    assert Person.objects.get(source_uid="ada").notes == "Fixed without a baseline"
+    assert replica.stream.cursor == old_cursor
+    assert replica.stream.generation == old_generation
+    assert replica.stream.last_advanced_at == old_advanced_at
+    assert not replica.stream.resync_required
+    assert len(replica.server.requests) == 1
+    method, collection, _, body = replica.server.requests[0]
+    assert (method, collection) == ("REPORT", _BOOK)
+    report = ElementTree.fromstring(body)
+    assert report.tag == "{urn:ietf:params:xml:ns:carddav}addressbook-multiget"
+    assert [item.text for item in report.findall("d:href", _NAMESPACES)] == [_HREF]
+
+
+def test_enumeration_sweep_marks_vanished_href_unavailable_without_multiget(replica: Replica) -> None:
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+    assert replica.pull().count == 2
+    person = Person.objects.get(source_uid="ada")
+    replica.server.remove(_HREF)
+    old_cursor = dict(replica.stream.cursor)
+    replica.server.requests.clear()
+    assert replica.stream.reconcile_interval == timedelta(days=1)
+
+    assert reconcile_stream(replica.stream, replica.backend, using="default") == 1
+
+    link = RecordLink.objects.get(stream=replica.stream, external_key="ada")
+    assert (link.status, link.absence_count, link.tombstoned_at) == (LinkStatus.UNAVAILABLE, 1, None)
+    assert RecordLink.objects.get(stream=replica.stream, external_key="grace").status == LinkStatus.CURRENT
+    assert Person.objects.filter(pk=person.pk).exists()
+    replica.stream.refresh_from_db()
+    assert replica.stream.cursor == old_cursor
+    assert len(replica.server.requests) == 1
+    method, collection, headers, body = replica.server.requests[0]
+    assert (method, collection, headers["depth"]) == ("PROPFIND", _BOOK, "1")
+    assert ElementTree.fromstring(body).find(".//d:getetag", _NAMESPACES) is not None
+
+
+def test_generation_bump_deepcopies_nested_config(replica: Replica, monkeypatch: pytest.MonkeyPatch) -> None:
+    replica.stream.config = {"policy": {"fields": ["notes"]}}
+    replica.stream.save(update_fields=["config"])
+    previous: list[Any] = []
+    original_from_db = SyncStream.from_db
+
+    def capture_previous(cls: Any, db: str, field_names: Any, values: Any) -> Any:
+        del cls
+        row = original_from_db(db, field_names, values)
+        if row.pk == replica.stream.pk:
+            previous.append(row)
+        return row
+
+    monkeypatch.setattr(SyncStream, "from_db", classmethod(capture_previous))
+    successor = SyncStream.objects.bump_generation(replica.stream, using="default")
+    assert previous
+    assert successor.config == replica.stream.config
+    successor.config["policy"]["fields"].append("photo")
+    assert all(row.config == {"policy": {"fields": ["notes"]}} for row in previous)
+    replica.stream.refresh_from_db()
+    assert replica.stream.config == {"policy": {"fields": ["notes"]}}
+
+
+def test_cross_origin_redirect_refuses_to_forward_basic_auth(
+    replica: Replica,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[tuple[str, dict[str, Any]]] = []
+
+    def redirect(method: str, url: str, **kwargs: Any) -> httpx.Response:
+        del method
+        sent.append((url, kwargs))
+        return httpx.Response(302, headers={"Location": "https://attacker.example/collect"})
+
+    monkeypatch.setattr(replica.server, "request", redirect)
+    monkeypatch.setattr(replica.backend, "_auth", lambda *, using: {"Authorization": "Basic dXNlcjpwYXNz"})
+    with pytest.raises(CardDavError):
+        replica.backend._request("PROPFIND", _BOOK, "<propfind/>", using="default")
+    assert len(sent) == 1
+    assert sent[0][0] == _BOOK
+    assert sent[0][1]["headers"]["Authorization"] == "Basic dXNlcjpwYXNz"
+
+
+def test_sync_report_skips_successful_collection_self_response(replica: Replica) -> None:
+    person, _ = replica.baseline()
+    replica.server.include_collection_response = True
+    replica.server.store(_HREF, _card(notes="Remote edit with collection response"))
+    replica.server.requests.clear()
+    assert replica.pull().count == 1
+    person.refresh_from_db()
+    assert person.notes == "Remote edit with collection response"
+    multigets = [body for method, _, _, body in replica.server.requests if method == "REPORT" and "multiget" in body]
+    assert len(multigets) == 1
+    assert [item.text for item in ElementTree.fromstring(multigets[0]).findall("d:href", _NAMESPACES)] == [_HREF]
+
+
+def test_extract_multigets_the_complete_bounded_page_once(replica: Replica) -> None:
+    hrefs = [_HREF, *(f"{_BOOK}contact-{index}.vcf" for index in range(4))]
+    for index, href in enumerate(hrefs[1:]):
+        replica.server.store(href, _card(uid=f"contact-{index}"))
+    replica.server.requests.clear()
+    assert replica.pull().count == len(hrefs)
+    multigets = [body for method, _, _, body in replica.server.requests if method == "REPORT" and "multiget" in body]
+    assert len(multigets) == 1
+    assert {item.text for item in ElementTree.fromstring(multigets[0]).findall("d:href", _NAMESPACES)} == set(hrefs)

@@ -17,7 +17,7 @@ import mimetypes
 import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from itertools import combinations
 from typing import Any, Self, cast
@@ -47,6 +47,7 @@ from angee.base.serialization import canonical_json_sha256
 from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import LinkSource, ScoredLinkMixin
+from angee.storage.models import UploadState
 
 _SIGNATURE_PHONE_CANDIDATE = re.compile(r"(?<!\w)\+?\d(?:[\d \t()./\-]*\d)?(?!\w)")
 
@@ -1878,74 +1879,42 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         )
 
     def project_contact(self, person: Any, *, using: str | None = None) -> ParsedContact:
-        """Read the local counterpart of the contact fields this mapper writes.
-
-        Active email/phone associations include locally added handles. Employment
-        is the uniquely keyed CardDAV employee edge; independent relationship
-        rows are outside this bridge's mapping. Storage owns reading avatar bytes.
-        The backend's contact projection owns canonical ordering and JSON encoding.
-        """
+        """Read one contact through the same batched projection used by sync."""
 
         alias = get_write_alias(self.model, using=using, bound=self, instance=person)
-        person = apps.get_model("parties", "Person").objects.db_manager(alias).get(pk=person.pk)
-        handle_model = apps.get_model("parties", "Handle")
-        party_handle_model = apps.get_model("parties", "PartyHandle")
-        linked_handles = (
-            party_handle_model.objects.db_manager(alias)
-            .filter(
-                party_id=person.pk,
-                is_dismissed=False,
-            )
-            .values("handle_id")
+        projected = self.project_contacts((person,), using=alias)
+        if person.pk not in projected:
+            raise apps.get_model("parties", "Person").DoesNotExist
+        return projected[person.pk]
+
+    def project_contacts(self, people: Iterable[Any], *, using: str | None = None) -> dict[Any, ParsedContact]:
+        """Project contacts with bounded queries and no avatar storage reads.
+
+        Explicitly bound value queries read related scalar facts in bulk. The
+        shared contact projection owns canonical ordering and JSON encoding.
+        """
+
+        alias = get_write_alias(self.model, using=using, bound=self)
+        people = tuple(
+            apps.get_model("parties", "Person").objects.db_manager(alias).filter(pk__in=[row.pk for row in people])
         )
-        handles = list(
-            handle_model.objects.db_manager(alias)
-            .filter(pk__in=linked_handles, platform__in=(handle_model.Platform.EMAIL, handle_model.Platform.PHONE))
-            .order_by("platform", "value", "label", "is_preferred")
-        )
-        addresses = apps.get_model("parties", "Address").objects.db_manager(alias).filter(party_id=person.pk)
-        employment = (
-            apps.get_model("parties", "Relationship")
+        ids = [person.pk for person in people]
+        if not ids:
+            return {}
+        platforms = apps.get_model("parties", "Handle").Platform
+        handles: dict[Any, dict[str, list[tuple[str, str, bool]]]] = defaultdict(lambda: defaultdict(list))
+        for row in (
+            apps.get_model("parties", "PartyHandle")
             .objects.db_manager(alias)
-            .filter(
-                party_id=person.pk,
-                kind__slug="employee",
-                source=LinkSource.CARDDAV,
-                other_party__isnull=True,
+            .filter(party_id__in=ids, is_dismissed=False, handle__platform__in=(platforms.EMAIL, platforms.PHONE))
+            .values("party_id", "handle__platform", "handle__value", "handle__label", "handle__is_preferred")
+        ):
+            handles[row["party_id"]][row["handle__platform"]].append(
+                (row["handle__value"], row["handle__label"], row["handle__is_preferred"])
             )
-            .first()
-        )
-        photo = None
-        avatar: Any = related_on(person, "avatar", using=alias)
-        if avatar is not None:
-            mime: Any = related_on(avatar, "mime_type", using=alias)
-            with avatar.open_stream() as content:
-                photo = ParsedPhoto(data=content.read(), mime=mime.mime_type if mime is not None else "")
-        return ParsedContact(
-            uid=person.source_uid,
-            etag=person.source_etag,
-            raw_vcard=person.raw_vcard,
-            display_name=person.display_name,
-            name_prefix=person.name_prefix,
-            given_name=person.given_name,
-            additional_name=person.additional_name,
-            family_name=person.family_name,
-            name_suffix=person.name_suffix,
-            nickname=person.nickname,
-            notes=person.notes,
-            birthday=person.birthday,
-            anniversary=person.anniversary,
-            emails=tuple(
-                (handle.value, handle.label, handle.is_preferred)
-                for handle in handles
-                if handle.platform == handle_model.Platform.EMAIL
-            ),
-            phones=tuple(
-                (handle.value, handle.label, handle.is_preferred)
-                for handle in handles
-                if handle.platform == handle_model.Platform.PHONE
-            ),
-            addresses=tuple(
+        addresses: dict[Any, list[ParsedAddress]] = defaultdict(list)
+        for address in apps.get_model("parties", "Address").objects.db_manager(alias).filter(party_id__in=ids):
+            addresses[address.party_id].append(
                 ParsedAddress(
                     label=address.label,
                     po_box=address.po_box,
@@ -1956,13 +1925,99 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     postal_code=address.postal_code,
                     country=str(address.country),
                 )
-                for address in addresses
-            ),
-            organization=employment.other_name if employment is not None else "",
-            title=employment.title if employment is not None else "",
-            role=employment.notes if employment is not None else "",
-            photo=photo,
+            )
+        employment = {
+            edge.party_id: edge
+            for edge in (
+                apps.get_model("parties", "Relationship")
+                .objects.db_manager(alias)
+                .filter(party_id__in=ids, kind__slug="employee", source=LinkSource.CARDDAV, other_party__isnull=True)
+            )
+        }
+        photos = {
+            row["pk"]: ParsedPhoto(content_hash=row["content_hash"], mime=row["mime_type__mime_type"] or "")
+            for row in (
+                apps.get_model("storage", "File")
+                .objects.db_manager(alias)
+                .filter(pk__in=[person.avatar_id for person in people if person.avatar_id])
+                .values("pk", "content_hash", "mime_type__mime_type")
+            )
+        }
+        result = {}
+        for person in people:
+            edge = employment.get(person.pk)
+            result[person.pk] = ParsedContact(
+                uid=person.source_uid,
+                etag=person.source_etag,
+                raw_vcard=person.raw_vcard,
+                display_name=person.display_name,
+                name_prefix=person.name_prefix,
+                given_name=person.given_name,
+                additional_name=person.additional_name,
+                family_name=person.family_name,
+                name_suffix=person.name_suffix,
+                nickname=person.nickname,
+                notes=person.notes,
+                birthday=person.birthday,
+                anniversary=person.anniversary,
+                emails=tuple(handles[person.pk][platforms.EMAIL]),
+                phones=tuple(handles[person.pk][platforms.PHONE]),
+                addresses=tuple(addresses[person.pk]),
+                organization=edge.other_name if edge is not None else "",
+                title=edge.title if edge is not None else "",
+                role=edge.notes if edge is not None else "",
+                photo=photos.get(person.avatar_id),
+            )
+        return result
+
+    def prepare_contact(
+        self, parsed: ParsedContact, *, created_by_id: Any, using: str | None = None
+    ) -> ParsedContact:
+        """Store fetched photo bytes before contact locks, retaining their address."""
+
+        alias = get_write_alias(self.model, using=using, bound=self)
+        photo = parsed.photo
+        if photo is None or photo.content_hash:
+            return parsed
+        if photo.uri:
+            raise ValidationError("Contact photo URIs must be resolved before preparation.")
+        if not photo.data:
+            return replace(parsed, photo=None)
+        extension = mimetypes.guess_extension(photo.mime) if photo.mime else ""
+        avatar = apps.get_model("storage", "File").objects.db_manager(alias).ingest_bytes(
+            photo.data,
+            filename=f"avatar{extension or '.bin'}",
+            owner_id=created_by_id,
+            using=alias,
         )
+        mime: Any = related_on(avatar, "mime_type", using=alias)
+        return replace(
+            parsed,
+            photo=ParsedPhoto(content_hash=avatar.content_hash, mime=mime.mime_type if mime is not None else ""),
+        )
+
+    def resolve_contact_photo(
+        self, photo: ParsedPhoto | None, *, using: str | None = None, lock: bool = False
+    ) -> Any:
+        """Resolve a prepared avatar, optionally validating it under its row lock."""
+
+        alias = get_write_alias(self.model, using=using, bound=self)
+        if photo is None:
+            return None
+        if not photo.content_hash or photo.data is not None or photo.uri:
+            raise ValidationError("Contact photos must have a prepared content address.")
+        rows = apps.get_model("storage", "File").objects.db_manager(alias).filter(
+            content_hash=photo.content_hash,
+            mime_type__mime_type=photo.mime,
+            upload_state=UploadState.READY,
+            is_trashed=False,
+        )
+        if lock:
+            rows = rows.lock_if_supported()
+        avatar = rows.order_by("pk").first()
+        if avatar is None:
+            raise ValidationError("The prepared contact photo is no longer available.")
+        return avatar
 
     def ingest_contact(
         self,
@@ -1990,6 +2045,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
 
         if not parsed.uid:
             return None
+        parsed = self.prepare_contact(parsed, created_by_id=created_by_id, using=alias)
 
         person_model = apps.get_model("parties", "Person")
         handle_model = apps.get_model("parties", "Handle")
@@ -2050,8 +2106,8 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                             "notes": parsed.notes,
                             "birthday": parsed.birthday,
                             "anniversary": parsed.anniversary,
-                            # Identical bytes dedup; a removed photo clears the avatar.
-                            "avatar": self._ingest_avatar(parsed, created_by_id=created_by_id, using=alias),
+                            # Preparation stored the bytes before this transaction.
+                            "avatar": self.resolve_contact_photo(parsed.photo, using=alias, lock=True),
                             "raw_vcard": parsed.raw_vcard,
                             "source_etag": parsed.etag,
                             "created_by_id": created_by_id,
@@ -2148,27 +2204,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                         edge.save(using=alias, update_fields=[*dirty, "updated_at"])
 
             return person
-
-    def _ingest_avatar(self, parsed: ParsedContact, *, created_by_id: Any, using: str) -> Any:
-        """Persist a parsed contact photo through the storage File owner, or return None.
-
-        Delegates to ``File.objects.ingest_bytes`` — the storage owner's server-side
-        byte intake — so the avatar lands content-addressed (identical photos dedup)
-        and ``Party.avatar`` resolves. A URI photo is already resolved to bytes by
-        the directory backend's transport step before it reaches here.
-        """
-
-        photo = parsed.photo
-        if photo is None or not photo.data:
-            return None
-        file_model = apps.get_model("storage", "File")
-        extension = mimetypes.guess_extension(photo.mime) if photo.mime else ""
-        return file_model.objects.db_manager(using).ingest_bytes(
-            photo.data,
-            filename=f"avatar{extension or '.bin'}",
-            owner_id=created_by_id,
-            using=using,
-        )
 
 
 def _user_display_name(user: Any) -> str:
