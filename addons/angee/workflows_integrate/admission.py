@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -36,13 +37,19 @@ def admit_bridge_cycle(
     workflow: Any,
     occurrence_key: str,
     actor: Any,
-    input: JsonPresence,
+    input: JsonPresence | None = None,
+    prepare: Callable[[str], None] | None = None,
     available_at: datetime | None = None,
     using: str | None = None,
 ) -> Any:
     """Exactly retain a cycle; cadence identity is only the run's dedup key.
 
-    ``input`` is the native workflow JsonPresence contract. The Integration's
+    An omitted ``input`` snapshots the locked Bridge's ``sync_workflow_input``.
+    ``prepare(using)`` is database-only and runs after workflow/retained-run
+    locks, before the Bridge lock and its input snapshot. Use it for upstream
+    scope locks; input construction may lock downstream scope rows. Both run on
+    duplicate deliveries, whose immutable facts must still match exactly.
+    Explicit ``input`` uses the native workflow JsonPresence contract. The Integration's
     active owner is the actor; callers cannot substitute the workflow author.
     The manager owns publication selection, frozen-input validation and exact
     duplicate matching. Its validate_new hook serializes different lineages on
@@ -60,12 +67,20 @@ def admit_bridge_cycle(
         owner = _active_owner(current, actor, using=using)
         content_type = ContentType.objects.db_manager(using).get_for_model(bridge, for_concrete_model=False)
         dedup_key = f"bridge-sync:{content_type.pk}:{bridge.pk}:{occurrence_key}"
+        prepared_bridge = None
         new_bridge = None
+
+        def frozen_input(alias: str) -> JsonPresence:
+            nonlocal prepared_bridge
+            if prepare is not None:
+                prepare(alias)
+            prepared_bridge = type(bridge).objects.db_manager(alias).lock_if_supported().get(pk=bridge.pk)
+            _active_owner(prepared_bridge, owner, using=alias)
+            return input if input is not None else JsonPresence(True, prepared_bridge.sync_workflow_input(using=alias))
 
         def validate_new() -> None:
             nonlocal new_bridge
-            new_bridge = type(bridge).objects.db_manager(using).lock_if_supported().get(pk=bridge.pk)
-            _active_owner(new_bridge, owner, using=using)
+            new_bridge = prepared_bridge
             active = run_model.objects.db_manager(using).for_subject(new_bridge).exclude(status__in=RunStatus.TERMINAL)
             if active.exclude(dedup_key=dedup_key).exists():
                 raise ValidationError({"bridge": "This Bridge already has an active cycle."})
@@ -75,7 +90,7 @@ def admit_bridge_cycle(
             subject=bridge,
             actor=owner,
             dedup_key=dedup_key,
-            input=input,
+            input=frozen_input,
             available_at=available_at,
             validate_new=validate_new,
             using=using,
@@ -94,7 +109,9 @@ def admit_bridge_cycle(
         return run
 
 
-def dispatch_bridge_cycle(bridge: Bridge, *, using: str | None = None) -> SyncDispatch:
+def dispatch_bridge_cycle(
+    bridge: Bridge, *, prepare: Callable[[str], None] | None = None, using: str | None = None
+) -> SyncDispatch:
     """Admit a declared workflow key at its current publication from Bridge.sync."""
 
     using = get_write_alias(type(bridge), using=using, instance=bridge)
@@ -108,6 +125,7 @@ def dispatch_bridge_cycle(bridge: Bridge, *, using: str | None = None) -> SyncDi
         workflow = (
             workflow_model.objects.db_manager(using)
             .filter(published_from__isnull=True, key=bridge.sync_workflow_key)
+            .order_by("pk")
             .first()
         )
         if workflow is None:
@@ -118,7 +136,7 @@ def dispatch_bridge_cycle(bridge: Bridge, *, using: str | None = None) -> SyncDi
             workflow=workflow,
             occurrence_key=occurrence_key,
             actor=owner,
-            input=JsonPresence(present=True, value=bridge.sync_workflow_input()),
+            prepare=prepare,
             using=using,
         )
     return SyncDispatch.DISPATCHED

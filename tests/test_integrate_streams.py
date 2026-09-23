@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from threading import Barrier, Lock
 from typing import Any
@@ -115,12 +115,15 @@ class MemoryAdapter:
                 target=row,
                 local_hash=record.source_hash if isinstance(record, RecordChange) else "",
                 mapped_payload=payload,
+                mapping_version=record.mapping_version if isinstance(record, RecordChange) else 1,
+                dependency_digest=record.dependency_digest if isinstance(record, RecordChange) else "",
             ),
         )
 
-    def enumerate_keys(self, stream: Any, *, using: str | None = None) -> Iterable[str]:
+    def enumerate_keys(self, stream: Any, *, after: str | None = None, using: str | None = None) -> Iterable[str]:
         assert not connections[using].in_atomic_block
-        return self.inventory
+        start = 0 if after is None else self.inventory.index(after) + 1
+        yield from self.inventory[start:]
 
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Any, *, using: str | None = None) -> None:
         assert connections[using].in_atomic_block
@@ -156,6 +159,18 @@ class ReadKeysAdapter(MemoryAdapter):
         assert not connections[using].in_atomic_block
         self.reads.append(tuple(keys))
         return tuple(self.remote[key] for key in sorted(keys))
+
+
+def finish_sweep(stream: SyncStream, adapter: MemoryAdapter, *, page_bound: int = 100) -> int:
+    """Drain bounded pulses for tests that assert a completed inventory sweep."""
+
+    changed = 0
+    for _ in range(30):
+        changed += reconcile_stream(stream, adapter, page_bound=page_bound)
+        stream.refresh_from_db()
+        if "_angee_reconcile" not in stream.cursor:
+            return changed
+    raise AssertionError("The bounded sweep did not finish.")
 
 
 @pytest.mark.parametrize(
@@ -231,17 +246,354 @@ def test_sweep_counts_absence_then_retains_confirmed_tombstone(stream_bridge: Ch
     )
     missing = RecordLink.objects.observe(stream, "missing")
     present = RecordLink.objects.observe(stream, "present")
-    adapter = MemoryAdapter(inventory=("present",))
-    assert reconcile_stream(stream, adapter) == 1
+    adapter = ReadKeysAdapter(inventory=("present",), remote={"present": RecordChange("present", {}, "present")})
+    assert finish_sweep(stream, adapter) == 1
     missing.refresh_from_db()
     assert (missing.absence_count, missing.status) == (1, LinkStatus.UNAVAILABLE)
-    assert reconcile_stream(stream, adapter) == 1
+    adapter.remote["present"] = replace(adapter.remote["present"], local_hash="present")
+    assert finish_sweep(stream, adapter) == 1
     missing.refresh_from_db()
     present.refresh_from_db()
     assert (missing.absence_count, missing.status) == (2, LinkStatus.TOMBSTONE)
     assert missing.tombstoned_at is not None
     assert present.absence_count == 0
     assert RecordLink.objects.count() == 2
+
+
+def test_single_promotion_retains_applied_evidence_and_revalidation_reuses_it(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+
+    class AppliedEvidenceAdapter(MemoryAdapter):
+        def apply(self, stream: Any, page: StreamPage, *, using: str | None = None) -> Iterable[ApplyResult]:
+            return tuple(
+                replace(outcome, mapped_payload={"normalized": True}, dependency_digest="applied", mapping_version=7)
+                for outcome in super().apply(stream, page, using=using)
+            )
+
+    adapter = AppliedEvidenceAdapter(
+        pages=[StreamPage((RecordChange("person:1", {"name": "Ada"}, "source", dependency_digest="old"),), {})]
+    )
+    assert advance_stream(stream, adapter).count == 1
+    revision = RecordRevision.objects.get()
+    assert (revision.mapping_version, revision.dependency_digest, revision.mapped_payload) == (
+        7,
+        "applied",
+        {"normalized": True},
+    )
+    adapter.pages = [
+        StreamPage(
+            (
+                RecordChange(
+                    "person:1",
+                    {"name": "Ada"},
+                    "source",
+                    "source",
+                    projection={"different_observation_shape": True},
+                    mapping_version=7,
+                    dependency_digest="applied",
+                ),
+            ),
+            {"page": 2},
+        )
+    ]
+    assert advance_stream(stream, adapter).count == 0
+    assert adapter.applied == ["person:1"]
+    assert RecordRevision.objects.count() == 1
+
+
+@pytest.mark.parametrize("changed_evidence", [{"mapping_version": 2}, {"dependency_digest": "updated"}])
+def test_mapping_evidence_change_reapplies_unchanged_source(
+    stream_bridge: Channel, changed_evidence: dict[str, Any]
+) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    record = RecordChange("person:1", {"name": "Ada"}, "source")
+    adapter = MemoryAdapter(pages=[StreamPage((record,), {"page": 1})])
+    advance_stream(stream, adapter)
+    adapter.pages = [StreamPage((replace(record, local_hash="source", **changed_evidence),), {"page": 2})]
+    assert advance_stream(stream, adapter).count == 1
+    assert adapter.applied == ["person:1", "person:1"]
+    assert RecordRevision.objects.count() == 2
+    revision = RecordRevision.objects.order_by("-number").first()
+    for name, expected in changed_evidence.items():
+        assert getattr(revision, name) == expected
+
+
+def test_adapter_cannot_promote_before_the_driver(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+
+    class PromotingAdapter(MemoryAdapter):
+        def apply(self, stream: Any, page: StreamPage, *, using: str | None = None) -> Iterable[ApplyResult]:
+            outcomes = tuple(super().apply(stream, page, using=using))
+            record = page.records[0]
+            link = RecordLink.objects.db_manager(using).get(stream=stream, external_key=record.external_key)
+            RecordLink.objects.promote(
+                link,
+                source_payload=record.source_payload,
+                source_hash=record.source_hash,
+                mapped_payload={"intermediate": True},
+                local_hash=record.source_hash,
+                using=using,
+            )
+            return outcomes
+
+    adapter = PromotingAdapter(pages=[StreamPage((RecordChange("person:1", {}, "source"),), {"page": 1})])
+    with pytest.raises(RuntimeError, match="promot"):
+        advance_stream(stream, adapter)
+    stream.refresh_from_db()
+    assert stream.cursor == {}
+    assert not RecordLink.objects.exists()
+    assert not RecordRevision.objects.exists()
+    assert not AppliedRecord.objects.exists()
+
+
+def test_sweep_imports_unseen_keys_and_resumes_after_failed_page(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge,
+        "contacts",
+        kind=StreamKind.RECORD_REPLICA,
+        cursor={"incremental": 900},
+        reconcile_interval=timedelta(0),
+    )
+
+    class ResumableAdapter(ReadKeysAdapter):
+        fail = True
+
+        def enumerate_keys(self, stream: Any, *, after: str | None = None, using: str | None = None) -> Iterable[str]:
+            starts.append(after)
+            emitted = 0
+            for key in super().enumerate_keys(stream, after=after, using=using):
+                emitted += 1
+                assert emitted <= 3, "The driver consumed beyond one bounded page plus lookahead."
+                yield key
+
+        def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
+            assert len(keys) <= 2
+            if "3" in keys and self.fail:
+                raise OperationalError("inventory transport interrupted")
+            return super().read_keys(stream, keys, using=using)
+
+    starts: list[str | None] = []
+    adapter = ResumableAdapter(
+        inventory=("1", "2", "3", "4"),
+        remote={key: RecordChange(key, {"id": key}, key) for key in ("1", "2", "3", "4")},
+    )
+    reconcile_stream(stream, adapter, page_bound=2)
+    stream.refresh_from_db()
+    committed_cursor = dict(stream.cursor)
+    assert committed_cursor["incremental"] == 900
+    assert committed_cursor["_angee_reconcile"]["after"] == "2"
+    assert set(AppliedRecord.objects.values_list("key", flat=True)) == {"1", "2"}
+    with pytest.raises(OperationalError, match="inventory transport interrupted"):
+        reconcile_stream(stream, adapter, page_bound=2)
+    stream.refresh_from_db()
+    assert stream.cursor == committed_cursor
+    adapter.fail = False
+    finish_sweep(stream, adapter, page_bound=2)
+    assert starts[:3] == [None, "2", "2"]
+    assert set(AppliedRecord.objects.values_list("key", flat=True)) == {"1", "2", "3", "4"}
+    assert RecordRevision.objects.count() == 4
+    assert stream.cursor == {"incremental": 900}
+    assert stream.last_reconciled_at is not None
+
+
+def test_sweep_without_read_keys_resumes_bounded_baseline_without_moving_delta_cursor(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge,
+        "contacts",
+        kind=StreamKind.RECORD_REPLICA,
+        cursor={"incremental": 900},
+        reconcile_interval=timedelta(0),
+    )
+    extracted_cursors: list[dict[str, Any]] = []
+
+    class BaselineAdapter(MemoryAdapter):
+        fail = True
+
+        def extract(self, stream: Any, page_bound: int, *, using: str | None = None) -> StreamPage:
+            assert not connections[using].in_atomic_block
+            assert page_bound == 1
+            extracted_cursors.append(dict(stream.cursor))
+            if not stream.cursor:
+                return StreamPage((RecordChange("a", {"id": "a"}, "a"),), {"baseline": "a"}, exhausted=False)
+            assert stream.cursor == {"baseline": "a"}
+            if self.fail:
+                raise OperationalError("baseline transport interrupted")
+            return StreamPage((RecordChange("b", {"id": "b"}, "b"),), {"baseline": "b"})
+
+    adapter = BaselineAdapter(inventory=("a", "b"))
+    reconcile_stream(stream, adapter, page_bound=1)
+    stream.refresh_from_db()
+    committed_cursor = dict(stream.cursor)
+    assert committed_cursor["incremental"] == 900
+    assert committed_cursor["_angee_reconcile"]["cursor"] == {"baseline": "a"}
+    assert AppliedRecord.objects.get().key == "a"
+    with pytest.raises(OperationalError, match="baseline transport interrupted"):
+        reconcile_stream(stream, adapter, page_bound=1)
+    stream.refresh_from_db()
+    assert stream.cursor == committed_cursor
+    resumed_stream = SyncStream.objects.get(pk=stream.pk)
+    resumed_adapter = BaselineAdapter(inventory=("a", "b"))
+    resumed_adapter.fail = False
+    assert finish_sweep(resumed_stream, resumed_adapter, page_bound=1) == 0
+    assert extracted_cursors == [{}, {"baseline": "a"}, {"baseline": "a"}]
+    assert set(AppliedRecord.objects.values_list("key", flat=True)) == {"a", "b"}
+    assert RecordRevision.objects.count() == 2
+    assert resumed_stream.cursor == {"incremental": 900}
+    assert resumed_stream.last_reconciled_at is not None
+
+
+def test_visibility_hooks_run_in_transaction_once_per_status_transition(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge,
+        "contacts",
+        kind=StreamKind.RECORD_REPLICA,
+        reconcile_interval=timedelta(0),
+        absence_threshold=3,
+    )
+    absent: list[tuple[str, str]] = []
+    revalidated: list[tuple[str, str]] = []
+
+    class VisibilityAdapter(ReadKeysAdapter):
+        def on_absent(self, stream: Any, links: Sequence[Any], *, using: str | None = None) -> None:
+            assert connections[using].in_atomic_block
+            for link in links:
+                link.refresh_from_db(using=using)
+                absent.append((link.external_key, link.status))
+
+        def on_revalidated(self, stream: Any, links: Sequence[Any], *, using: str | None = None) -> None:
+            assert connections[using].in_atomic_block
+            for link in links:
+                link.refresh_from_db(using=using)
+                revalidated.append((link.external_key, link.status))
+
+    record = RecordChange("person:1", {}, "source")
+    adapter = VisibilityAdapter(pages=[StreamPage((record,), {})])
+    advance_stream(stream, adapter)
+    for _ in range(4):
+        finish_sweep(stream, adapter, page_bound=1)
+    assert absent == [("person:1", LinkStatus.UNAVAILABLE), ("person:1", LinkStatus.TOMBSTONE)]
+    adapter.pages = [StreamPage((replace(record, local_hash="source"),), {"page": 2})]
+    assert advance_stream(stream, adapter).count == 0
+    assert revalidated == [("person:1", LinkStatus.CURRENT)]
+    assert RecordRevision.objects.count() == 1
+
+
+def test_absence_hook_failure_rolls_back_transition_and_cursor_before_retry(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge,
+        "contacts",
+        kind=StreamKind.RECORD_REPLICA,
+        reconcile_interval=timedelta(days=1),
+    )
+    missing = RecordLink.objects.observe(stream, "missing")
+    calls: list[tuple[str, int]] = []
+
+    class FailingVisibilityAdapter(ReadKeysAdapter):
+        fail = True
+
+        def on_absent(self, stream: Any, links: Sequence[Any], *, using: str | None = None) -> None:
+            assert connections[using].in_atomic_block
+            for link in links:
+                calls.append((link.external_key, link.absence_count))
+                AppliedRecord.objects.db_manager(using).create(key=link.external_key, payload={"withdrawn": True})
+            if self.fail:
+                raise OperationalError("visibility persistence interrupted")
+
+    adapter = FailingVisibilityAdapter()
+    reconcile_stream(stream, adapter, page_bound=1)
+    stream.refresh_from_db()
+    committed_cursor = dict(stream.cursor)
+    with pytest.raises(OperationalError, match="visibility persistence interrupted"):
+        reconcile_stream(stream, adapter, page_bound=1)
+    missing.refresh_from_db()
+    stream.refresh_from_db()
+    assert (missing.status, missing.absence_count) == (LinkStatus.OBSERVED, 0)
+    assert stream.cursor == committed_cursor
+    assert not AppliedRecord.objects.exists()
+    adapter.fail = False
+    assert finish_sweep(stream, adapter, page_bound=1) == 1
+    missing.refresh_from_db()
+    assert (missing.status, missing.absence_count) == (LinkStatus.UNAVAILABLE, 1)
+    assert AppliedRecord.objects.get().payload == {"withdrawn": True}
+    assert calls == [("missing", 1), ("missing", 1)]
+    assert reconcile_stream(stream, adapter, page_bound=1) == 0
+    assert len(calls) == 2
+
+
+def test_sweep_children_follow_parent_presence_and_absence(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge,
+        "contacts",
+        kind=StreamKind.RECORD_REPLICA,
+        reconcile_interval=timedelta(0),
+        absence_threshold=2,
+    )
+    parent = RecordLink.objects.observe(stream, "parent")
+    child = RecordLink.objects.observe(stream, "child", parent=parent)
+    RecordLink.objects.promote(child, source_payload={}, source_hash="child", mapped_payload={}, local_hash="child")
+    adapter = ReadKeysAdapter(inventory=("parent",), remote={"parent": RecordChange("parent", {}, "parent")})
+    finish_sweep(stream, adapter, page_bound=1)
+    child.refresh_from_db()
+    assert child.status == LinkStatus.CURRENT
+    assert child.absence_count == 0
+    adapter.inventory = ()
+    for expected in (LinkStatus.UNAVAILABLE, LinkStatus.TOMBSTONE):
+        finish_sweep(stream, adapter, page_bound=1)
+        parent.refresh_from_db()
+        child.refresh_from_db()
+        assert child.status == parent.status == expected
+        assert child.absence_count == parent.absence_count
+
+
+def test_child_discrepancy_rescans_and_reapplies_parent_identity(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    record = RecordChange("parent", {}, "parent")
+    adapter = ReadKeysAdapter(pages=[StreamPage((record,), {"page": 1})])
+    advance_stream(stream, adapter)
+    parent = RecordLink.objects.get(external_key="parent")
+    child = RecordLink.objects.observe(stream, "child", parent=parent)
+    discrepancy = SyncDiscrepancy.objects.record(
+        stream,
+        link=child,
+        kind=DiscrepancyKind.MISSING_DEPENDENCY,
+        code="child_dependency",
+        source_hash="child",
+    )
+    adapter.remote = {"parent": replace(record, local_hash="parent")}
+    begin_stream_cycle(stream, adapter, page_bound=1)
+    assert adapter.reads == [("parent",)]
+    assert adapter.applied == ["parent", "parent"]
+    discrepancy.refresh_from_db()
+    assert discrepancy.status == DiscrepancyStatus.OPEN
+    stream.refresh_from_db()
+    assert stream.cursor == {"page": 1}
+
+
+def test_prepare_page_runs_once_before_record_savepoints_and_transport_is_refused(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "events")
+    events: list[str] = []
+    prepared_depth = -1
+
+    class PreparedAdapter(MemoryAdapter):
+        def prepare_page(self, stream: Any, page: StreamPage, *, using: str | None = None) -> None:
+            nonlocal prepared_depth
+            assert connections[using].in_atomic_block
+            prepared_depth = len(connections[using].savepoint_ids)
+            assert page.records == ("first", "poison", "last")
+            events.append("prepare")
+            with pytest.raises(RuntimeError, match="outside a database transaction"):
+                advance_stream(stream, self, using=using)
+
+        def apply(self, stream: Any, page: StreamPage, *, using: str | None = None) -> Iterable[ApplyResult]:
+            assert len(connections[using].savepoint_ids) > prepared_depth
+            events.append(page.records[0])
+            return super().apply(stream, page, using=using)
+
+    adapter = PreparedAdapter(pages=[StreamPage(("first", "poison", "last"), {})], semantic_key="poison")
+    result = advance_stream(stream, adapter)
+    assert result.count == 2
+    assert events == ["prepare", "first", "poison", "last"]
+    assert adapter.extracted == 1
 
 
 def test_stale_peer_beyond_tombstone_retention_requires_baseline(stream_bridge: Channel) -> None:
@@ -305,9 +657,7 @@ def test_identity_rescan_resolves_current_remote_state_without_advancing_stream(
     )
     advance_stream(stream, adapter)
     adapter.semantic_key = "person:1"
-    adapter.pages = [
-        StreamPage((RecordChange("person:1", {"name": "invalid"}, "invalid", "base"),), {"page": 2})
-    ]
+    adapter.pages = [StreamPage((RecordChange("person:1", {"name": "invalid"}, "invalid", "base"),), {"page": 2})]
     failure = advance_stream(stream, adapter)
     discrepancy = SyncDiscrepancy.objects.get(pk=failure.discrepancy_ids[0])
     SyncDiscrepancy.objects.filter(pk=discrepancy.pk).update(status=status, retry_at=timezone.now())
@@ -329,9 +679,7 @@ def test_identity_rescan_resolves_current_remote_state_without_advancing_stream(
     adapter.semantic_key = ""
     payload = {} if tombstone else {"name": "corrected"}
     adapter.remote = {
-        "person:1": RecordChange(
-            "person:1", payload, "" if tombstone else "corrected", "base", tombstone=tombstone
-        ),
+        "person:1": RecordChange("person:1", payload, "" if tombstone else "corrected", "base", tombstone=tombstone),
     }
     begin_stream_cycle(stream, adapter)
     discrepancy.refresh_from_db()
@@ -371,9 +719,7 @@ def test_changed_remote_failure_defers_older_quarantine_for_the_same_identity(st
 
 
 def test_identity_rescan_rolls_back_all_records_on_infrastructure_failure(stream_bridge: Channel) -> None:
-    stream = SyncStream.objects.current(
-        stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, cursor={"page": 8}
-    )
+    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, cursor={"page": 8})
     for key in ("first", "z-broken"):
         link = RecordLink.objects.observe(stream, key)
         SyncDiscrepancy.objects.record(
@@ -493,9 +839,7 @@ def test_both_changed_conflict_requires_resolution_before_pull_or_push(stream_br
     stream = SyncStream.objects.current(
         stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
     )
-    adapter = ReadKeysAdapter(
-        pages=[StreamPage((RecordChange("person:1", {"name": "base"}, "base"),), {"page": 1})]
-    )
+    adapter = ReadKeysAdapter(pages=[StreamPage((RecordChange("person:1", {"name": "base"}, "base"),), {"page": 1})])
     advance_stream(stream, adapter)
     AppliedRecord.objects.filter(key="person:1").update(payload={"name": "local edit"})
     record = RecordChange("person:1", {"name": "remote edit"}, "remote", "local")
@@ -514,9 +858,7 @@ def test_both_changed_conflict_requires_resolution_before_pull_or_push(stream_br
     begin_stream_cycle(stream, adapter)
     # Even if a later remote observation matches the old base, an unresolved
     # conflict must not silently authorize the pending local write.
-    adapter.pages = [
-        StreamPage((RecordChange("person:1", {"name": "base"}, "base", "local"),), {"page": 3})
-    ]
+    adapter.pages = [StreamPage((RecordChange("person:1", {"name": "base"}, "base", "local"),), {"page": 3})]
     assert advance_stream(stream, adapter).count == 0
     adapter.candidates = (LocalChange("person:1", {"name": "local edit"}, "local"),)
     assert push_stream(stream, adapter).count == 0

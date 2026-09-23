@@ -435,9 +435,7 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
     def for_subject(self, subject: Any) -> Self:
         """Return runs whose generic subject is ``subject``."""
 
-        alias = (
-            get_write_alias(self.model, bound=self) if self._for_write else get_read_alias(self.model, bound=self)
-        )
+        alias = get_write_alias(self.model, bound=self) if self._for_write else get_read_alias(self.model, bound=self)
         content_type = ContentType.objects.db_manager(alias).get_for_model(subject, for_concrete_model=False)
         return cast(
             Self,
@@ -621,7 +619,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         dispatches = dispatch_model.objects.db_manager(alias)
         with transaction.atomic(using=alias), system_context(reason="workflows.runs.settle_from_dispatch"):
             with dispatches._owner_transition(
-                dispatch_id=dispatch_id, lease_token=None, at=timestamp, using=alias,
+                dispatch_id=dispatch_id,
+                lease_token=None,
+                at=timestamp,
+                using=alias,
             ) as preflight:
                 if preflight.disposition != DispatchPreflightDisposition.READY:
                     return {"settled": 0}
@@ -686,7 +687,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         parent_relation: ParentRelation | str = "",
         dedup_key: str | None = None,
         origin: RunOrigin | None = None,
-        input: JsonPresence = JsonPresence(),
+        input: JsonPresence | Callable[[str], JsonPresence] = JsonPresence(),
         available_at: datetime | None = None,
         validate_new: Callable[[], None] | None = None,
         using: str | None = None,
@@ -696,13 +697,18 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         ``validate_new`` is a side-effect-free domain consistency check. It runs
         inside the start transaction only when no retained identity exists;
         the actor's run permission is checked here before engine persistence.
+        A callable ``input(using)`` performs database-only preparation after the
+        workflow and retained-run locks, then returns the input to freeze. It
+        also runs for a duplicate; native exact matching checks its returned
+        facts against the retained invocation.
         """
 
         try:
             actor_ref = to_subject_ref(actor)
         except NoActorResolvedError as error:
             raise PermissionDenied("Starting a workflow requires an explicit actor.") from error
-        input = validate_json_presence(input, label="workflow run input")
+        if not callable(input):
+            input = validate_json_presence(input, label="workflow run input")
         if (parent_step_run is None) != (parent_relation == ""):
             raise ValidationError(
                 {"parent_relation": "Choose a parent relationship exactly when starting from a parent step."}
@@ -972,7 +978,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         dedup_key: str | None = None,
         occurrence_id: str | None = None,
         origin: RunOrigin | None = None,
-        input: JsonPresence = JsonPresence(),
+        input: JsonPresence | Callable[[str], JsonPresence] = JsonPresence(),
         available_at: datetime,
         using: str,
         reprocessed_from: Any = None,
@@ -1028,6 +1034,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             raise ValidationError({"workflow": "Workflow runs must pin a published version."})
         if retained is None and trigger is not None and not trigger.enabled:
             raise ValidationError({"trigger": "Workflow trigger is disabled."})
+        if callable(input):
+            input = validate_json_presence(input(using), label="workflow run input")
         return self._start_pinned_locked(
             version,
             subject,
@@ -6886,13 +6894,20 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
         locked = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run.pk)
         if not locked.is_terminal:
             raise ValidationError({"run": "Subject settlement requires a terminal run."})
-        existing = system_queryset(self.model, using=alias, lock=None).filter(
-            kind=WorkflowDispatchKind.RUN_SETTLE, run_id=locked.pk,
-        ).first()
+        existing = (
+            system_queryset(self.model, using=alias, lock=None)
+            .filter(
+                kind=WorkflowDispatchKind.RUN_SETTLE,
+                run_id=locked.pk,
+            )
+            .first()
+        )
         if existing is not None:
             return existing, False
         dispatch = self.model(
-            kind=WorkflowDispatchKind.RUN_SETTLE, run_id=locked.pk, available_at=timezone.now(),
+            kind=WorkflowDispatchKind.RUN_SETTLE,
+            run_id=locked.pk,
+            available_at=timezone.now(),
         )
         with system_context(reason="workflows.dispatch.schedule_run_settle"):
             dispatch.persist_delivery(using=alias)

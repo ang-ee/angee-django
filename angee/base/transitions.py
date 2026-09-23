@@ -42,6 +42,9 @@ Write bodies accept a keyword-only ``using`` and callers pass their operation's
 alias (or ``None`` to derive it here). That keyword is resolved before the body
 and carried through ``save_state``, including when a three-argument hook wraps it.
 Bodies, conditions and custom hooks own explicit binding of their database work.
+Callers may pass ``persist=callback`` to a declared transition to compose its
+final save. The existing success hook must explicitly accept and forward that
+keyword to ``save_state``; source authority is never stored on the instance.
 The body, target write and success hook share one ``transaction.atomic`` on that
 alias, so a hook failure rolls back the body's database writes too. Existing outer
 transactions on that alias compose through Django savepoints; commit callbacks
@@ -75,7 +78,7 @@ from angee.base.fields import StateField, enum_member_for
 from angee.base.scoping import system_queryset
 
 Condition = Callable[[models.Model], bool]
-SuccessHook = Callable[[models.Model, Any, Any], None]
+SuccessHook = Callable[..., None]
 TransitionMethod = Callable[..., Any]
 
 
@@ -269,6 +272,9 @@ class StateTransitions:
         """Execute the body, target write and success hook atomically on one alias."""
 
         using = get_write_alias(type(instance), using=kwargs.get("using"), instance=instance)
+        persist = kwargs.pop("persist", None)
+        if persist is not None and spec.on_success is None:
+            raise ImproperlyConfigured("A composed transition save requires an explicit success hook.")
         if "using" in kwargs:
             kwargs["using"] = using
         refresh_deferred(instance, using=using, fields=(self.field.attname,))
@@ -291,7 +297,10 @@ class StateTransitions:
                 previous = getattr(instance, "_angee_transition_save", None)
                 setattr(instance, "_angee_transition_save", (self.field.attname, using))
                 try:
-                    spec.on_success(instance, source, target)
+                    if persist is None:
+                        spec.on_success(instance, source, target)
+                    else:
+                        spec.on_success(instance, source, target, persist=persist)
                 finally:
                     if previous is None:
                         delattr(instance, "_angee_transition_save")
@@ -529,7 +538,14 @@ def get_transition_save_using(instance: models.Model) -> str | None:
     return context[1] if context is not None else None
 
 
-def save_state(instance: models.Model, source: Any, target: Any, *, using: str | None = None) -> None:
+def save_state(
+    instance: models.Model,
+    source: Any,
+    target: Any,
+    *,
+    using: str | None = None,
+    persist: Callable[..., None] | None = None,
+) -> None:
     """Persist a transition-owned state change plus method-touched fields.
 
     An optimistic concurrency guard brackets the write: the row is locked and its
@@ -542,6 +558,10 @@ def save_state(instance: models.Model, source: Any, target: Any, *, using: str |
     publishers, and pre-save change trackers observe the real old->new transition.
     The transition carries its entry alias into this three-argument hook; direct
     callers may supply ``using`` explicitly.
+
+    ``persist(instance, *, using, update_fields)`` composes this final save while
+    retaining the native concurrency guard. Custom success hooks must forward
+    it explicitly; no persistence callback is installed as ambient state.
     """
 
     context = cast(tuple[str, str] | None, getattr(instance, "_angee_transition_save", None))
@@ -553,7 +573,10 @@ def save_state(instance: models.Model, source: Any, target: Any, *, using: str |
     try:
         with transaction.atomic(using=using):
             _verify_uncontended_source(instance, field_name, source, target, using=using)
-            instance.save(using=using, update_fields=fields)
+            if persist is None:
+                instance.save(using=using, update_fields=fields)
+            else:
+                persist(instance, using=using, update_fields=fields)
     finally:
         if hasattr(instance, "_transition_fields"):
             delattr(instance, "_transition_fields")

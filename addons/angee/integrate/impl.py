@@ -77,10 +77,27 @@ class BridgeImpl(IntegrationImpl):
 
         return self.integration
 
-    def enumerate_keys(self, stream: Any, *, using: str | None = None) -> Iterable[str]:
-        """Enumerate a replica's complete remote inventory for reconciliation."""
+    def enumerate_keys(self, stream: Any, *, after: str | None = None, using: str | None = None) -> Iterable[str]:
+        """Yield unique remote identities in stable order, resuming after a key.
+
+        Seek directly past ``after`` instead of materializing the inventory or
+        replaying its prefix. The adapter owns its identity ordering.
+        """
 
         raise NotImplementedError("Replica adapters must enumerate remote keys.")
+
+    def prepare_page(self, stream: Any, page: StreamPage, *, using: str | None = None) -> None:
+        """Lock the page's complete identity/target set before record savepoints.
+
+        This optional hook runs inside the page transaction: database work only,
+        in a canonical order. Fetch all remote facts during extraction.
+        """
+
+    def on_revalidated(self, stream: Any, links: Sequence[Any], *, using: str | None = None) -> None:
+        """Restore native projection visibility after unchanged-row revalidation."""
+
+    def on_absent(self, stream: Any, links: Sequence[Any], *, using: str | None = None) -> None:
+        """Withdraw native projection visibility when absence changes link status."""
 
     def finish_page(
         self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult], *, using: str | None = None

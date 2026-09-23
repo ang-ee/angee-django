@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection, models
-from django.db.models.signals import pre_delete
+from django.db.models.signals import post_save, pre_delete
 from rebac import system_context
 
+from angee.base.fields import StateField
 from angee.base.models import AngeeModel
+from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
 from angee.integrate.ownership import (
     ExternalOwnershipContribution,
     ExternalOwnershipDeclaration,
@@ -19,6 +22,7 @@ from angee.integrate.ownership import (
     ExternalOwnershipMixin,
     check_external_ownership_declarations,
     check_external_ownership_delete,
+    run_external_transition,
 )
 from tests.conftest import _create_missing_tables
 
@@ -63,11 +67,49 @@ class OwnedRelationship(ExternalOwnershipMixin, AngeeModel):
         db_table = "test_integrate_owned_relationship"
 
 
+def persist_owned_transition(
+    instance: Any, source: Any, target: Any, *, persist: Callable[..., None] | None = None
+) -> None:
+    """A native success hook forwards explicit persistence and retains its work."""
+
+    save_state(instance, source, target, persist=persist)
+    if getattr(instance, "change_local_in_hook", False):
+        type(instance).objects.filter(pk=instance.pk).update(note="hook changed local overlay")
+
+
+class OwnedLifecycleProjection(ExternalOwnershipMixin, AngeeModel):
+    """A validated native transition with a source-owned state and reference."""
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        READY = "ready", "Ready"
+
+    status = StateField(choices_enum=Status, default=Status.DRAFT)
+    number = models.CharField(max_length=64, blank=True)
+    note = models.CharField(max_length=64, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    status_transitions = StateTransitions(status, {Status.DRAFT: [Status.READY]})
+    external_ownership = ExternalOwnershipDeclaration(source_owned_fields={"status", "number"}, local_fields={"note"})
+
+    @transition(status, source=Status.DRAFT, target=Status.READY, on_success=persist_owned_transition)
+    def complete(self, *, number: str, using: str | None = None) -> str:
+        if not number:
+            raise ValidationError("A native reference is required.")
+        self.number = number
+        self._transition_fields = {"number"}
+        self.transition_company_id = OwnershipCompany.objects.using(using).create().pk
+        return number
+
+    class Meta:
+        app_label = "integrate"
+        db_table = "test_integrate_owned_lifecycle_projection"
+
+
 @pytest.fixture
 def ownership_tables() -> Iterator[None]:
     """Register the same sender-scoped deletion guards as AppConfig.ready()."""
 
-    created = _create_missing_tables((OwnershipCompany, OwnedProjection, OwnedRelationship))
+    created = _create_missing_tables((OwnershipCompany, OwnedProjection, OwnedRelationship, OwnedLifecycleProjection))
     for model in (OwnedProjection, OwnedRelationship):
         pre_delete.connect(check_external_ownership_delete, sender=model)
     try:
@@ -142,6 +184,77 @@ def test_import_command_preserves_local_overlay_and_source_identity(ownership_ta
             source_key="record-1",
             company=None,
         )
+
+
+def lifecycle_projection() -> OwnedLifecycleProjection:
+    return OwnedLifecycleProjection.objects.create(
+        external_source_type="directory", external_source_id="source-1", external_source_key="lifecycle-1"
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_external_transition_preserves_native_validation_and_explicit_save(ownership_tables: None) -> None:
+    row = lifecycle_projection()
+    with pytest.raises(ValidationError, match="native reference"):
+        run_external_transition(row, ("directory", "source-1"), "complete", number="", using="default")
+    assert (
+        run_external_transition(row, ("directory", "source-1"), "complete", number="external-1", using="default")
+        == "external-1"
+    )
+    row.refresh_from_db()
+    assert (row.status, row.number) == (row.Status.READY, "external-1")
+    assert OwnershipCompany.objects.filter(pk=row.transition_company_id).exists()
+    with pytest.raises(TransitionNotAllowed):
+        run_external_transition(row, ("directory", "source-1"), "complete", number="second", using="default")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_external_transition_undeclared_hook_change_rolls_back_every_write(ownership_tables: None) -> None:
+    row = lifecycle_projection()
+    row.change_local_in_hook = True
+    with pytest.raises(ExternalOwnershipError, match="undeclared source fields.*note"):
+        run_external_transition(row, ("directory", "source-1"), "complete", number="external-1", using="default")
+    persisted = OwnedLifecycleProjection.objects.get(pk=row.pk)
+    assert (persisted.status, persisted.number, persisted.note) == (row.Status.DRAFT, "", "")
+    assert not OwnershipCompany.objects.filter(pk=row.transition_company_id).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_external_transition_grants_no_ambient_authority_to_reentrant_save(ownership_tables: None) -> None:
+    row = lifecycle_projection()
+    unrelated = projection()
+    observed = []
+
+    def reentrant_save(sender: Any, instance: Any, **kwargs: Any) -> None:
+        unrelated.name = "a reentrant source rewrite"
+        with pytest.raises(ExternalOwnershipError, match="apply_external"):
+            unrelated.save(using="default", update_fields=["name"])
+        observed.append(instance.pk)
+
+    post_save.connect(reentrant_save, sender=OwnedLifecycleProjection)
+    try:
+        run_external_transition(row, ("directory", "source-1"), "complete", number="external-1", using="default")
+    finally:
+        post_save.disconnect(reentrant_save, sender=OwnedLifecycleProjection)
+    assert observed == [row.pk]
+    unrelated.refresh_from_db()
+    assert unrelated.name == "remote name"
+    ordinary = lifecycle_projection()
+    with pytest.raises(ExternalOwnershipError, match="apply_external"):
+        ordinary.complete(number="local", using="default")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_external_transition_rejects_wrong_source_and_stale_native_state(ownership_tables: None) -> None:
+    row = lifecycle_projection()
+    stale = OwnedLifecycleProjection.objects.get(pk=row.pk)
+    with pytest.raises(ExternalOwnershipError, match="different source"):
+        run_external_transition(row, ("directory", "other-source"), "complete", number="external-1", using="default")
+    assert not OwnershipCompany.objects.exists()
+    run_external_transition(row, ("directory", "source-1"), "complete", number="external-1", using="default")
+    with pytest.raises(TransitionNotAllowed, match="changed before external admission"):
+        run_external_transition(stale, ("directory", "source-1"), "complete", number="external-2", using="default")
+    assert OwnershipCompany.objects.count() == 1
 
 
 @pytest.mark.django_db(transaction=True)

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from functools import cache
 from typing import Any
 
+from django.core.signals import setting_changed
 from django.db import transaction
+from django.dispatch import receiver
 from django.utils import timezone
 from rebac import system_context
 
@@ -16,6 +20,25 @@ from angee.integrate.models import Bridge
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import StepImpl
 from angee.workflows_integrate.steps import BoundedStreamStage, StreamStageOutput
+
+
+@cache
+def _stream_step_keys() -> tuple[str, ...]:
+    return tuple(
+        implementation.key
+        for implementation in resolve_all_impl_classes("ANGEE_WORKFLOW_STEP_CLASSES", StepImpl)
+        if issubclass(implementation, BoundedStreamStage)
+    )
+
+
+@receiver(setting_changed)
+def _refresh_stream_step_keys(*, setting: str, **kwargs: Any) -> None:
+    if setting == "ANGEE_WORKFLOW_STEP_CLASSES":
+        _stream_step_keys.cache_clear()
+        _stream_step_keys()
+
+
+_stream_step_keys()
 
 
 def settle_bridge_run(run: Any, *, using: str | None = None) -> None:
@@ -38,31 +61,27 @@ def settle_bridge_run(run: Any, *, using: str | None = None) -> None:
         if bridge is None:
             return
         expected = public_id_for(type(run), run.pk)
-        if bridge.sync_progress.get("details", {}).get("run") != expected or bridge.sync_stage not in (
+        progress = bridge.sync_progress if isinstance(bridge.sync_progress, Mapping) else {}
+        details = progress.get("details")
+        pointer = details.get("run") if isinstance(details, Mapping) else None
+        if pointer != expected or bridge.sync_stage not in (
             bridge.SyncStage.QUEUED,
             *bridge.LIVE_SYNC_STAGES,
         ):
             return
         now = timezone.now()
         if run.status == RunStatus.SUCCEEDED:
-            # Each stream step labels its count as final-page work. The data
-            # protocol does not promise a whole-cycle count across commit/replay.
             steps = run._meta.apps.get_model("workflows", "StepRun")
-            stream_keys = [
-                implementation.key
-                for implementation in resolve_all_impl_classes("ANGEE_WORKFLOW_STEP_CLASSES", StepImpl)
-                if issubclass(implementation, BoundedStreamStage)
-            ]
             outputs = (
                 steps.objects.db_manager(using)
                 .filter(
                     run_id=run.pk,
                     status=StepRunStatus.SUCCEEDED,
-                    step__step_class__in=stream_keys,
+                    step__step_class__in=_stream_step_keys(),
                 )
                 .values_list("output", flat=True)
             )
-            items = sum(StreamStageOutput.model_validate(output).counts["page_items"] for output in outputs)
+            items = sum(StreamStageOutput.model_validate(output).counts["cycle_items"] for output in outputs)
             bridge.record_sync(items, now=now, using=using)
         else:
             message = "Sync workflow was canceled." if run.status == RunStatus.CANCELED else "Sync workflow failed."

@@ -54,6 +54,7 @@ from angee.workflows.attempts import (
     DecisionSpec,
     ExternalOperationPolicy,
     JsonPresence,
+    LeaseRevocationReason,
     RecoveryCapability,
     RecoveryMode,
     json_values_equal,
@@ -512,9 +513,13 @@ class StepImpl(ImplBase):
     def heartbeat_during(self, step_run: Any, *, using: str | None = None) -> Iterator[None]:
         """Keep one admitted STANDARD attempt's lease alive during bounded I/O.
 
-        The helper captures the exact attempt and lease before starting its own
-        database connection. Cancellation or supersession stops heartbeat;
-        delivery finalization still owns the authoritative attempt fence.
+        ``heartbeat`` needs caller-driven pulses; the reaper only expires leases.
+        Opaque synchronous I/O provides no mid-call hook, so a daemon worker
+        composes the attempt manager's heartbeat on the captured write alias.
+        Its connection closes in the worker's finally, and this context always
+        stops and joins the worker before the invoking attempt can finalize.
+        A rejected lease reports its retained revocation reason as a transient
+        error; delivery finalization still owns the authoritative attempt fence.
         """
 
         alias = get_write_alias(type(step_run), using=using, instance=step_run)
@@ -535,8 +540,18 @@ class StepImpl(ImplBase):
                 accepted = type(attempt).objects.db_manager(using).heartbeat(
                     attempt.pk, lease_token=attempt.lease_token, at=timezone.now(),
                 )
-            if not accepted:
-                raise ValidationError({"attempt": "The workflow attempt lease is no longer active."})
+                if not accepted:
+                    reason = (
+                        type(attempt)
+                        .objects.db_manager(using)
+                        .values_list("lease_revocation_reason", flat=True)
+                        .get(pk=attempt.pk)
+                    )
+                    raise TransientStepError(
+                        f"Workflow attempt lease revoked: {LeaseRevocationReason(reason).value}."
+                        if reason
+                        else "The workflow attempt lease is no longer active."
+                    )
 
         def keep_alive(*, using: str) -> None:
             try:

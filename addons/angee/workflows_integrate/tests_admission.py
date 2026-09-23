@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import connections
 from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
@@ -13,6 +14,7 @@ from angee.base.db import related_on
 from angee.base.identity import public_id_of
 from angee.integrate.models import Bridge
 from angee.integrate.sync import SyncDispatch
+from angee.workflows import managers as workflow_managers
 from angee.workflows.attempts import JsonPresence
 from angee.workflows_integrate.admission import admit_bridge_cycle
 from tests.conftest import make_integration
@@ -65,6 +67,58 @@ def test_conflicting_frozen_input_rejects_same_identity(cycle: tuple[Any, Any, A
     _admit(cycle, input={"scope": "one"})
     with pytest.raises(ValidationError, match="frozen input"):
         _admit(cycle, input={"scope": "two"})
+
+
+def test_prepare_runs_after_workflow_locks_before_bridge_and_frozen_input(
+    cycle: tuple[Any, Any, Any, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge, workflow, owner, occurrence = cycle
+    events: list[str] = []
+    snapshot = {"scope": "one"}
+    native_queryset = workflow_managers.system_queryset
+    queryset_class = type(Channel.objects.get_queryset())
+    native_lock = queryset_class.lock_if_supported
+
+    def system_queryset(model: Any, *, using: str, **kwargs: Any) -> Any:
+        if kwargs.get("lock"):
+            events.append(model._meta.model_name)
+        return native_queryset(model, using=using, **kwargs)
+
+    def lock_bridge(queryset: Any, *args: Any, **kwargs: Any) -> Any:
+        if queryset.model is Channel:
+            events.append("bridge")
+        return native_lock(queryset, *args, **kwargs)
+
+    def prepare(using: str) -> None:
+        assert using == "default"
+        assert connections[using].in_atomic_block
+        assert "workflow" in events and "workflowrun" in events
+        assert "bridge" not in events
+        events.append("prepare")
+
+    def sync_input(current: Channel, *, using: str | None = None) -> dict[str, str]:
+        assert current._state.db == using == "default"
+        assert events[-2:] == ["prepare", "bridge"]
+        events.append("input")
+        return snapshot
+
+    monkeypatch.setattr(workflow_managers, "system_queryset", system_queryset)
+    monkeypatch.setattr(queryset_class, "lock_if_supported", lock_bridge)
+    monkeypatch.setattr(Channel, "sync_workflow_input", sync_input)
+
+    def admit() -> Any:
+        return admit_bridge_cycle(
+            bridge, workflow=workflow, occurrence_key=occurrence, actor=owner, prepare=prepare, using="default"
+        )
+
+    first = admit()
+    assert first.input == {"scope": "one"}
+    events.clear()
+    assert admit().pk == first.pk
+    events.clear()
+    snapshot["scope"] = "two"
+    with pytest.raises(ValidationError, match="frozen input"):
+        admit()
 
 
 def test_validate_new_rejects_second_active_cycle_even_on_another_lineage(cycle: tuple[Any, Any, Any, str]) -> None:
@@ -121,9 +175,18 @@ def test_nondefault_authorization_fails_before_admission(cycle: tuple[Any, Any, 
 def test_declared_key_dispatches_without_early_settlement(cycle: tuple[Any, Any, Any, str], monkeypatch: Any) -> None:
     bridge, workflow, _, _ = cycle
     monkeypatch.setattr(Channel, "sync_workflow_key", workflow.key)
+    starts: list[int] = []
+    native_start = Channel.mark_sync_started
+
+    def mark_sync_started(self: Channel, *, now: Any, using: str | None = None) -> None:
+        starts.append(self.pk)
+        native_start(self, now=now, using=using)
+
+    monkeypatch.setattr(Channel, "mark_sync_started", mark_sync_started)
     with override_settings(ANGEE_BRIDGE_SYNC_DISPATCH="angee.workflows_integrate.admission.dispatch_bridge_cycle"):
         with system_context(reason="test bridge dispatch"):
             assert bridge.run_sync(now=timezone.now()) is SyncDispatch.DISPATCHED
+            assert starts == [bridge.pk]
             bridge.refresh_from_db()
             run_pointer = bridge.sync_progress["details"]["run"]
             assert bridge.last_sync_status != "ok"

@@ -17,6 +17,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import connections, models, transaction
 from django.db.models import OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rebac import system_context
 
@@ -24,6 +25,9 @@ from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import StateField
 from angee.base.mixins import AppendOnlyQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+
+UNSET = object()
+"""Omitted record binding; ``None`` explicitly clears the target."""
 
 
 class StreamKind(models.TextChoices):
@@ -296,9 +300,15 @@ class RecordLinkManager(AngeeManager):
         *,
         remote_version: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        parent: Any = UNSET,
+        target: Any = UNSET,
         using: str | None = None,
     ) -> Any:
-        """Retain a remote identity without advancing either applied base."""
+        """Retain identity without advancing applied bases.
+
+        A child belongs to one root link in the same stream. Omitted bindings
+        remain unchanged; ``target=None`` withdraws the projection explicitly.
+        """
 
         using = get_write_alias(self.model, using=using, bound=self, instance=stream)
         with system_context(reason="integrate.record.observe"), transaction.atomic(using=using):
@@ -306,6 +316,17 @@ class RecordLinkManager(AngeeManager):
             if stream.kind != StreamKind.RECORD_REPLICA:
                 raise ValidationError("Event feeds do not create record links.")
             link, _ = self.db_manager(using).lock_if_supported().get_or_create(stream=stream, external_key=external_key)
+            if parent is not UNSET:
+                if parent is not None:
+                    parent = self.db_manager(using).filter(pk=parent.pk).lock_if_supported().get()
+                    if parent.stream_id != stream.pk or parent.parent_id is not None or parent.pk == link.pk:
+                        raise ValidationError("A record parent must be another root link in the same stream.")
+                    if self.db_manager(using).filter(parent=link).exists():
+                        raise ValidationError("A root with children cannot become a child link.")
+                parent_id = None if parent is None else parent.pk
+                if link.parent_id is not None and link.parent_id != parent_id:
+                    raise ValidationError("A record link's aggregate parent is immutable.")
+                link.parent_id = parent_id
             if (
                 remote_version is not None
                 and remote_version != link.remote_version
@@ -319,6 +340,10 @@ class RecordLinkManager(AngeeManager):
             link.absence_count = 0
             if metadata is not None:
                 link.metadata = dict(metadata)
+            if target is not UNSET:
+                self._set_target(link, target, using=using)
+                if target is None:
+                    link.status = LinkStatus.WITHDRAWN
             link.save(
                 using=using,
                 update_fields=[
@@ -327,6 +352,9 @@ class RecordLinkManager(AngeeManager):
                     "last_verified_generation",
                     "absence_count",
                     "metadata",
+                    "parent_id",
+                    "target_ct_id",
+                    "target_id",
                     "updated_at",
                 ],
             )
@@ -342,12 +370,17 @@ class RecordLinkManager(AngeeManager):
         local_hash: str,
         mapping_version: int = 1,
         dependency_digest: str = "",
-        target: models.Model | None = None,
+        target: Any = UNSET,
         remote_version: str = "",
         origin: str = "remote",
         using: str | None = None,
     ) -> Any:
-        """Append exact applied evidence and advance both comparison bases."""
+        """Append applied evidence and advance both bases; the driver owns promotion.
+
+        Adapters return their evidence to the driver, never promote its link
+        themselves. Omit ``target`` to retain its binding; pass ``None`` to clear
+        it and retain a WITHDRAWN identity.
+        """
 
         using = get_write_alias(self.model, using=using, bound=self, instance=link)
         with system_context(reason="integrate.record.promote"), transaction.atomic(using=using):
@@ -371,12 +404,12 @@ class RecordLinkManager(AngeeManager):
                 revision = previous
             else:
                 revision = revisions.append(locked, **facts, applied_at=timezone.now(), using=using)
-            if target is not None:
-                target._state.db = using
-                locked.target_ct = ContentType.objects.db_manager(using).get_for_model(target)
-                locked.target_id = str(target.pk)
+            if target is not UNSET:
+                self._set_target(locked, target, using=using)
             locked.remote_base_hash, locked.local_base_hash = source_hash, local_hash
             locked.remote_version, locked.origin, locked.status = remote_version, origin, LinkStatus.CURRENT
+            if target is None:
+                locked.status = LinkStatus.WITHDRAWN
             locked.tombstoned_at = None
             fields = [
                 "target_ct_id",
@@ -393,8 +426,22 @@ class RecordLinkManager(AngeeManager):
                 setattr(link, field, getattr(locked, field))
             return revision
 
+    def _set_target(self, link: Any, target: models.Model | None, *, using: str) -> None:
+        if target is None:
+            link.target_ct_id = link.target_id = None
+        else:
+            if target.pk is None:
+                raise ValidationError("A record target must be saved.")
+            target._state.db = using
+            link.target_ct = ContentType.objects.db_manager(using).get_for_model(target)
+            link.target_id = str(target.pk)
+
     def mark_absent(self, stream: Any, keys: Iterable[str], *, using: str | None = None) -> int:
-        """Count a completed sweep's missing keys, retaining tombstones."""
+        """Count a bounded batch of missing keys, retaining tombstones.
+
+        Children may be included only after their parent has absence evidence;
+        the sweep supplies bounded child batches after marking missing roots.
+        """
 
         using = get_write_alias(self.model, using=using, bound=self, instance=stream)
         with system_context(reason="integrate.record.mark_absent"), transaction.atomic(using=using):
@@ -402,6 +449,10 @@ class RecordLinkManager(AngeeManager):
             rows = (
                 self.db_manager(using)
                 .filter(stream=stream, external_key__in=tuple(keys))
+                .filter(
+                    Q(parent__isnull=True)
+                    | Q(parent_id__in=self.db_manager(using).filter(absence_count__gt=0).values("pk"))
+                )
                 .exclude(
                     status=LinkStatus.TOMBSTONE,
                 )
@@ -438,6 +489,7 @@ class RecordLink(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
     sqid_prefix = "rlk_"
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
     external_key = models.CharField(max_length=512)
     target_ct = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+")
     target_id = models.CharField(max_length=255, null=True, blank=True)
@@ -620,20 +672,34 @@ class SyncDiscrepancyManager(AngeeManager):
                 link.save(using=using, update_fields=["status", "updated_at"])
             return row
 
-    def rescan(self, stream: Any, *, using: str | None = None) -> tuple[Any, ...]:
-        """Return due unresolved rows; a rescan is not a durable work queue."""
+    def rescan(self, stream: Any, *, limit: int | None = None, using: str | None = None) -> tuple[Any, ...]:
+        """Return bounded due identities whose aggregate has no open conflict.
+
+        Eligibility is filtered before the limit so parked conflicts cannot
+        starve later retryable identities. Unlinked failures have no rescan key.
+        """
 
         using = get_write_alias(self.model, using=using, bound=self, instance=stream)
+        if limit is not None and limit < 1:
+            raise ValueError("A discrepancy rescan limit must be positive.")
         with system_context(reason="integrate.discrepancy.rescan"):
-            return tuple(
-                self.db_manager(using)
-                .filter(
-                    stream=stream,
-                    status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
-                )
+            unresolved = self.db_manager(using).filter(
+                stream=stream,
+                status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
+                link__isnull=False,
+            )
+            conflicts = (
+                unresolved.filter(kind=DiscrepancyKind.CONFLICT)
+                .annotate(aggregate=Coalesce("link__parent_id", "link_id"))
+                .values("aggregate")
+            )
+            rows = (
+                unresolved.alias(aggregate=Coalesce("link__parent_id", "link_id"))
+                .exclude(aggregate__in=conflicts)
                 .filter(Q(retry_at__isnull=True) | Q(retry_at__lte=timezone.now()))
                 .order_by("pk")
             )
+            return tuple(rows if limit is None else rows[:limit])
 
 
 class SyncDiscrepancy(SqidMixin, AuditMixin, AngeeModel):
