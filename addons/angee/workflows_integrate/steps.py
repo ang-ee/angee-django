@@ -79,6 +79,7 @@ class CoverageConfig(WorkflowStepConfig):
     """Bounded reconciliation timer for discrepancies resolved outside the run."""
 
     reconcile_seconds: int = Field(default=60, ge=1)
+    rescan_bound: int = Field(default=100, ge=1)
 
 
 class BoundedStreamStage(StepImpl):
@@ -111,7 +112,7 @@ class BoundedStreamStage(StepImpl):
         alias = get_write_alias(type(step_run), using=using, instance=step_run)
         value = self.validate_input(step_run.input)
         with system_context(reason="workflows_integrate.stream.resolve"):
-            bridge = _bridge_for_step(step_run, value.bridge, using=alias)
+            bridge = bridge_for_step(step_run, value.bridge, using=alias)
         try:
             with (
                 self.heartbeat_during(step_run, using=alias),
@@ -169,7 +170,7 @@ class BoundedStreamStage(StepImpl):
                         evidence=[_evidence(page.stream), *(_evidence(row) for row in discrepancies)],
                     ).model_dump(mode="json")
                 )
-        except (ValidationError, TransientStepError):
+        except ValidationError, TransientStepError:
             raise
         except Exception as error:  # noqa: BLE001 -- driver quarantines semantic failures itself.
             raise TransientStepError(str(error) or type(error).__name__) from error
@@ -181,6 +182,9 @@ class CoverageGate(GateStep):
     Conflict Decisions request review, never authorize automatic reconciliation.
     Their completion only rechecks coverage: the discrepancy remains authoritative
     until its own domain resolution calls SyncDiscrepancy.objects.resolve().
+    Waiting pulses retry at most one bounded stream page, rotating through the
+    admitted partitions. Provider reads run outside workflow finalization; native
+    gate results still let the engine retain Decisions atomically.
     """
 
     key = "integrate_coverage"
@@ -190,9 +194,9 @@ class CoverageGate(GateStep):
     input_model = CoverageInput
     output_model = StreamStageOutput
     config_model = CoverageConfig
-    execution_mode = StepExecutionMode.DATABASE_COMMAND
+    execution_mode = StepExecutionMode.STANDARD
     effect = StepEffect.WRITE
-    effect_description = "Creates native workflow Decisions for unresolved stream conflicts."
+    effect_description = "Retries due stream discrepancies and requests native conflict Decisions."
     idempotent = True
     replay_mode = RecoveryMode.FRESH
     deterministic = False
@@ -204,7 +208,7 @@ class CoverageGate(GateStep):
         alias = get_write_alias(type(step_run), using=using, instance=step_run)
         value = self.validate_input(step_run.input)
         with system_context(reason="workflows_integrate.coverage"):
-            bridge = _bridge_for_step(step_run, value.bridge, using=alias)
+            bridge = bridge_for_step(step_run, value.bridge, using=alias)
             step_run.step = related_on(step_run, "step", using=alias)
             config = CoverageConfig.model_validate(step_run.step.config)
             manager = apps.get_model("integrate", "SyncStream").objects.db_manager(alias)
@@ -212,16 +216,48 @@ class CoverageGate(GateStep):
                 manager.current_for_bridge(bridge, reference.key, using=alias).get(partition=reference.partition)
                 for reference in value.streams
             ]
+            discrepancy_manager = apps.get_model("integrate", "SyncDiscrepancy").objects.db_manager(alias)
             discrepancies = list(
-                apps.get_model("integrate", "SyncDiscrepancy")
-                .objects.db_manager(alias)
-                .filter(
+                discrepancy_manager.filter(
                     stream__in=streams,
                     status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
-                )
-                .order_by("pk")
+                ).order_by("pk")
             )
-            if not discrepancies:
+            state = step_run.resume_state.get("state", step_run.resume_state)
+            index = state.get("rescan_index", 0) % len(streams)
+            baseline = state.get("rescan_baseline", "")
+            if step_run.resume_state and (
+                baseline
+                or any(row.link_id is not None and row.kind != DiscrepancyKind.CONFLICT for row in discrepancies)
+            ):
+                try:
+                    with self.heartbeat_during(step_run, using=alias), closing(bridge.backend) as adapter:
+                        stream = streams[index]
+                        if baseline != public_id_of(stream):
+                            stream = begin_stream_cycle(stream, adapter, page_bound=config.rescan_bound, using=alias)
+                        if baseline or stream.resync_required:
+                            page = advance_stream(stream, adapter, page_bound=config.rescan_bound, using=alias)
+                            stream = page.stream
+                            baseline = "" if page.exhausted else public_id_of(stream)
+                        streams[index] = stream
+                except ValidationError, TransientStepError:
+                    raise
+                except Exception as error:  # noqa: BLE001 -- transport failures use native retained retries.
+                    raise TransientStepError(str(error) or type(error).__name__) from error
+                if not baseline:
+                    index = (index + 1) % len(streams)
+                discrepancies = list(
+                    discrepancy_manager.filter(
+                        stream__in=streams,
+                        status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
+                    ).order_by("pk")
+                )
+            resume_state = {
+                "streams": [public_id_of(stream) for stream in streams],
+                "rescan_index": index,
+                **({"rescan_baseline": baseline} if baseline else {}),
+            }
+            if not discrepancies and not baseline:
                 return StepResult.done(
                     output=StreamStageOutput(
                         counts={"streams": len(streams)},
@@ -267,14 +303,15 @@ class CoverageGate(GateStep):
                         "resume": True,
                         "slots": slots,
                     },
+                    retained_state=resume_state,
                 )
             return StepResult.wait(
                 until=now + timedelta(seconds=config.reconcile_seconds),
-                resume_state={"streams": [public_id_of(stream) for stream in streams]},
+                resume_state=resume_state,
             )
 
 
-def _bridge_for_step(step_run: Any, reference: BridgeReference, *, using: str) -> Any:
+def bridge_for_step(step_run: Any, reference: BridgeReference, *, using: str) -> Any:
     """Resolve only the Bridge that was admitted as this run's subject."""
 
     run = related_on(step_run, "run", using=using)

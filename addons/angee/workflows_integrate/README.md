@@ -31,12 +31,17 @@ The public admission function is:
 
 ```python
 admit_bridge_cycle(
-    bridge, *, workflow, occurrence_key, actor, input,
-    available_at=None, using=None,
+    bridge, *, workflow, occurrence_key, actor, input=None,
+    prepare=None, available_at=None, using=None,
 )
 ```
 
-`input` is the native `JsonPresence(present=True, value=...)` envelope. `workflow`
+Explicit `input` is the native `JsonPresence(present=True, value=...)` envelope;
+omission snapshots the locked Bridge through `sync_workflow_input`. The optional
+database-only `prepare(using)` runs after native workflow/retained-run locks,
+before Bridge is locked and input is constructed. Consumers acquire upstream
+scope locks in preparation and downstream scope locks during input construction.
+`dispatch_bridge_cycle` forwards the same optional preparation hook. `workflow`
 is a lineage head or exact publication. Key dispatch loads the lineage head;
 the manager pins its current publication. Duplicate delivery retains its prior
 publication and exact frozen input, even after a later publication. A conflicting
@@ -46,7 +51,7 @@ The actor must be the active Integration owner. Admission refuses ownerless
 platform installs and non-default databases at the existing authorization
 frontier; it never substitutes the workflow author.
 
-The manager's `validate_new` locks the Bridge and rejects another non-terminal
+The manager's `validate_new` runs under the Bridge lock and rejects another non-terminal
 run for that subject, including another workflow lineage. Admission records the
 run public ID at `sync_progress.details.run`, marks syncing and pauses cadence
 until terminal settlement. Duplicate admission never rewrites a newer pointer.
@@ -75,6 +80,7 @@ those commits resumes from the durable cursor. `heartbeat_during` renews the
 exact retained attempt lease during long pages. Declare automatic retry/backoff
 in native step config; semantic records remain quarantined while infrastructure
 failures retry the attempt.
+Consumer stages resolve the admitted Bridge with the public `bridge_for_step`.
 
 Each invocation handles one page. Incomplete pages return a timer wait due now,
 with stream public ID, generation and accumulated `cycle_items` in native
@@ -93,6 +99,12 @@ one Decision per open CONFLICT. A Decision asks for review and rechecking; it
 does not resolve a data conflict. The domain resolution must call the discrepancy
 owner's `resolve()` operation. A timed recheck keeps missing dependencies and
 semantic quarantine from silently accepting the cycle.
+Coverage uses STANDARD execution so waiting pulses can perform remote reads.
+Each pulse re-drives due discrepancies for one partition, bounded by
+`rescan_bound` (default 100), and rotates through admitted streams. Adapters
+without identity reads fall back to a bounded baseline that must finish before
+acceptance. Conflicts still require explicit resolution, and another active cycle
+remains barred by admission.
 
 ## Settlement and inspection
 

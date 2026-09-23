@@ -23,7 +23,7 @@ from angee.workflows_integrate import steps as integrate_steps
 from angee.workflows_integrate.steps import BoundedStreamStage, CoverageGate
 from tests.integrate_models import RecordLink, SyncDiscrepancy, SyncStream
 from tests.messaging_models import Channel
-from tests.test_integrate_streams import AppliedRecord, MemoryAdapter
+from tests.test_integrate_streams import AppliedRecord, MemoryAdapter, ReadKeysAdapter
 from tests.test_integrate_streams import stream_bridge as stream_bridge
 from tests.workflows import (
     Decision,
@@ -54,10 +54,14 @@ def stage_registry() -> Iterator[None]:
         yield
 
 
-def _start_stage(bridge: Channel, *, coverage: bool = False, retry: bool = False) -> tuple[Any, Any]:
+def _start_stage(
+    bridge: Channel, *, coverage: bool = False, retry: bool = False, rescan_bound: int = 100
+) -> tuple[Any, Any]:
     value = {"bridge": {"model": bridge._meta.label_lower, "id": public_id_of(bridge)}}
     value.update({"streams": [{"key": "records"}]} if coverage else {"key": "records", "page_bound": 2})
-    config = {"retry": {"max_attempts": 3, "backoff": {"wait": 7}}} if retry else {}
+    config: dict[str, Any] = {"retry": {"max_attempts": 3, "backoff": {"wait": 7}}} if retry else {}
+    if coverage:
+        config["rescan_bound"] = rescan_bound
     workflow = workflow_with_steps(
         actor=bridge.owner,
         subject_declaration=bridge._meta.label_lower,
@@ -308,13 +312,97 @@ def test_coverage_waits_for_unresolved_semantic_and_dependency_rows(
     execute_started(run)
     step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.WAITING
-    assert step_run.resume_state == {"streams": [public_id_of(stream)]}
-    assert CoverageGate.execution_mode is StepExecutionMode.DATABASE_COMMAND
+    assert step_run.resume_state == {"streams": [public_id_of(stream)], "rescan_index": 0}
+    assert CoverageGate.execution_mode is StepExecutionMode.STANDARD
 
     SyncDiscrepancy.objects.resolve(discrepancy)
     advance_once(run, now=step_run.wait_until)
     execute_started(run, now=step_run.wait_until)
     step_run.refresh_from_db()
+    assert step_run.status == StepRunStatus.SUCCEEDED
+
+
+def test_waiting_coverage_redrives_due_identities_with_one_bounded_page(
+    stream_bridge: Channel,
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = open_stream(stream_bridge, StreamDefinition("records", kind=StreamKind.RECORD_REPLICA))
+    adapter = ReadKeysAdapter(
+        remote={key: RecordChange(key, {"name": key}, key) for key in ("first", "second", "future")}
+    )
+    rows = {}
+    for key in adapter.remote:
+        link = RecordLink.objects.observe(stream, key)
+        rows[key] = SyncDiscrepancy.objects.record(
+            stream,
+            link=link,
+            kind=DiscrepancyKind.MISSING_DEPENDENCY,
+            code="dependency",
+            source_hash=key,
+            retry_at=timezone.now() + timedelta(days=1) if key == "future" else timezone.now() - timedelta(seconds=1),
+        )
+    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    run, step_run = _start_stage(stream_bridge, coverage=True, rescan_bound=1)
+
+    execute_started(run)
+    step_run.refresh_from_db()
+    assert step_run.status == StepRunStatus.WAITING
+    assert not adapter.reads
+    original_cursor = stream.cursor
+
+    for expected in ("first", "second"):
+        advance_once(run, now=step_run.wait_until)
+        execute_started(run, now=step_run.wait_until)
+        step_run.refresh_from_db()
+        rows[expected].refresh_from_db()
+        assert adapter.reads[-1] == (expected,)
+        assert rows[expected].status == DiscrepancyStatus.RESOLVED
+        assert step_run.status == StepRunStatus.WAITING
+
+    stream.refresh_from_db()
+    rows["future"].refresh_from_db()
+    assert stream.cursor == original_cursor
+    assert adapter.reads == [("first",), ("second",)]
+    assert rows["future"].status == DiscrepancyStatus.OPEN
+    with system_context(reason="test coverage remains a timer without conflicts"):
+        assert not Decision.objects.filter(step_run=step_run).exists()
+
+
+def test_waiting_coverage_finishes_bounded_baseline_fallback_before_accepting(
+    stream_bridge: Channel,
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = open_stream(stream_bridge, StreamDefinition("records", kind=StreamKind.RECORD_REPLICA))
+    link = RecordLink.objects.observe(stream, "first")
+    discrepancy = SyncDiscrepancy.objects.record(
+        stream, link=link, kind=DiscrepancyKind.SEMANTIC, code="repair", source_hash="first"
+    )
+    adapter = MemoryAdapter(
+        pages=[
+            StreamPage((RecordChange("first", {}, "first"),), {"page": 1}, exhausted=False),
+            StreamPage((RecordChange("second", {}, "second"),), {"page": 2}),
+        ]
+    )
+    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    run, step_run = _start_stage(stream_bridge, coverage=True, rescan_bound=1)
+    execute_started(run)
+    step_run.refresh_from_db()
+
+    for expected_applied in ([], ["first"], ["first", "second"]):
+        advance_once(run, now=step_run.wait_until)
+        execute_started(run, now=step_run.wait_until)
+        step_run.refresh_from_db()
+        assert adapter.applied == expected_applied
+        if len(expected_applied) < 2:
+            assert step_run.status == StepRunStatus.WAITING
+            assert step_run.resume_state["rescan_baseline"]
+
+    discrepancy.refresh_from_db()
+    assert discrepancy.status == DiscrepancyStatus.RESOLVED
     assert step_run.status == StepRunStatus.SUCCEEDED
 
 

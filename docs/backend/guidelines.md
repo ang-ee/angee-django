@@ -1162,11 +1162,35 @@ replicas retain a remote and local comparison base on each link.
   adapter locks and revalidates its local projection before applying. An origin
   stamp plus the returned version/hash makes a successful write-back recognizable
   on its next pull.
+- **Applied evidence has one promoter.** Adapters return the actual mapped
+  payload, mapping version and dependency digest in `ApplyResult`; the driver
+  alone promotes the primary link. Mapping or dependency changes count as remote
+  changes. Intermediate adapter promotion is refused and rolled back. Explicit
+  `target=None` withdraws a binding; omission preserves it.
+- **Prepare the entire page before singleton application.** The optional
+  `prepare_page` hook acquires compound identities and targets in canonical order
+  inside the page transaction, before record savepoints. It does database work
+  only; all remote facts belong to extraction. Optional `on_revalidated` and
+  `on_absent` hooks restore or withdraw native projection visibility in the same
+  transaction as the corresponding link status. Absence hooks run only for actual
+  status transitions, never repeated observations of an already-unavailable row.
 - **A cursor belongs to an epoch.** An invalid/expired cursor or explicit resync
   request creates the next baseline generation. Retain links and revision
   history; reverify links through their generation marker. A stale peer beyond
   tombstone retention requires a baseline. Complete inventory sweeps count
   absences before confirming tombstones and preserve existing quarantine.
+- **Inventory is a resumable import.** `reconcile_stream` consumes one bounded
+  iterator page per pulse, reading and applying enumerated keys before absence.
+  The driver reserves `_angee_reconcile` in `SyncStream.cursor`; adapters seek
+  exclusively after the committed key in their own deterministic ordering.
+  Without `read_keys`, a bounded extraction baseline precedes enumeration.
+  Callers pulse until the reserved cursor member disappears; only then is
+  reconciliation complete. Root and child absence passes are bounded too.
+- **Compound children belong to one aggregate.** A link's optional immutable
+  `parent` is a root link in the same stream. Enumerate aggregate keys only:
+  children cannot independently become absent, and child retries read and
+  reapply the parent's key. The aggregate adapter owns successful child evidence
+  and discrepancy resolution; a successful parent alone does not resolve them.
 - **Quarantine is not a work queue.** Stream-cycle rescan re-reads due replica
   identities through the optional `StreamAdapter.read_keys` operation, including
   tombstones for missing remote keys. It composes the same transactional apply
@@ -1177,6 +1201,15 @@ replicas retain a remote and local comparison base on each link.
   repeated-page detection and partition concurrency.
   Workflow execution, decisions and durable scheduling stay with their existing
   owners; integrate must not import workflows.
+- **Native imports keep native lifecycle validation.**
+  `run_external_transition` carries explicit source facts through a declared
+  transition's persistence callback. No ambient authority or instance import
+  flag is consulted. The locked source claim must match; every changed concrete
+  field must be source-owned or native lifecycle bookkeeping (`auto_now` and
+  `AuditMixin.updated_by`). The transition graph, conditions, success hook,
+  ordinary save hooks and uncontended-state check still run. Undeclared changes
+  roll back the whole transition, including related database effects. Custom
+  success hooks must explicitly forward the `persist` callback.
 
 ### Bridge cycles as workflow runs
 
@@ -1187,7 +1220,10 @@ from the composition addon to both owners; integrate never imports workflows.
 - **Admission retains one cycle.** Use `admit_bridge_cycle` with the concrete
   Bridge subject, its queued cadence token and active Integration owner. The
   native start manager owns publication/input validation and exact deduplication;
-  `validate_new` serializes on the Bridge and rejects another active cycle. The
+  Deferred input invokes an optional database-only `prepare(using)` after the
+  workflow and retained Run locks, then locks Bridge before constructing its
+  input. Input construction can lock downstream scope rows. `validate_new`
+  rejects another active cycle under that Bridge lock. The
   run's dedup key is the only cycle identity. Declare `sync_workflow_key` on the
   Bridge and immutable facts through `sync_workflow_input`; no secondary schedule.
 - **Stream stages are STANDARD.** Delegate one page to `advance_stream` outside
@@ -1201,6 +1237,11 @@ from the composition addon to both owners; integrate never imports workflows.
 - **Coverage keeps data truth authoritative.** OPEN/RETRY discrepancies prevent
   acceptance. Only the composition addon's coverage gate turns CONFLICT rows
   into native workflow Decisions; a review does not itself resolve a discrepancy.
+  Coverage is STANDARD: waiting pulses re-drive one bounded stream's due
+  identities outside the workflow transaction, rotating through partitions.
+  Baseline fallback must exhaust before acceptance. Admission continues to bar
+  a competing cycle. Consumer stages use the public `bridge_for_step` resolver
+  to enforce the admitted subject identity.
 - **Terminal delivery uses expected-run CAS.** A terminal run transition retains
   `RUN_SETTLE` only for a subject with an explicitly registered settler. The Bridge
   handler locks the row and compares `sync_progress.details.run` plus its

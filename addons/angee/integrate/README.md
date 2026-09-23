@@ -37,6 +37,11 @@ remote deletion versus a local edit remain open conflicts. A write-back returns
 the authoritative remote version and content hash; retaining those facts with
 the local projection identifies its later echo without relying on timestamps.
 The adapter owns locking and validating the local projection before applying it.
+Changes to mapping version or dependency digest also require application. The
+adapter returns applied evidence in `ApplyResult`; only the driver promotes the
+primary link. An adapter promotion of that link aborts the page. Optional
+`prepare_page` locks a page's compound identities and targets once, before the
+record savepoints; it and the visibility hooks perform database work only.
 
 The driver extracts outside a transaction, then commits each page's database
 effects, discrepancies and cursor together. Each record has a savepoint. A
@@ -73,10 +78,25 @@ explicit resolution before either side can be written again.
 An invalid/expired cursor or `resync_required` creates a new baseline generation,
 carrying existing links and quarantine forward while retaining revision history.
 
-Inventory sweeps increment absence counts, first recording unavailability and
-then a retained tombstone at the declared threshold. They never delete domain
-rows or overwrite an open conflict. A peer that has not advanced within its
-tombstone retention period must reverify a baseline.
+Inventory sweeps read and apply newly enumerated identities before incrementing
+absence counts. Each `reconcile_stream(..., page_bound=100)` call commits one
+bounded pulse; repeat while `_angee_reconcile` remains in the stream cursor.
+Adapters implement `enumerate_keys(..., after=None, using=None)` as a stable
+iterator with exclusive seek, and treat the reserved cursor member as opaque.
+`read_keys` handles unseen identities as well as existing links. Without that
+operation, the driver first extracts a separate bounded baseline. Root and child
+absence passes also checkpoint their progress; completion alone updates
+`last_reconciled_at`. First absence records unavailability, then a retained
+tombstone at the declared threshold. `on_absent` runs once per status transition;
+`on_revalidated` runs after each successful unchanged observation. Both share the
+status transaction so domain visibility changes roll back with the link.
+
+A compound link declares one immutable root `parent` in the same stream. Children
+follow parent absence and retries read the parent's identity; their own successful
+evidence and discrepancy resolution remain with the aggregate adapter. Sweeps
+never delete domain rows or overwrite an open conflict. A peer beyond its
+tombstone retention period must reverify a baseline. Link observation and
+promotion preserve an omitted target; explicit `target=None` clears its binding.
 
 Ownership declarations protect ordinary save, collection update, bulk and
 delete paths. Source-owned fields change through `apply_external`, which checks
@@ -85,3 +105,9 @@ outside that command. Accounting import DTOs remain consumer-owned. Source-owned
 many-to-many relations require an explicitly owned through model. These writes
 currently fail closed on a non-default database because the upstream REBAC
 permission checks do not accept an operation alias.
+For a validated native lifecycle action, compose `run_external_transition` with
+the explicit source identity and declared method name. It preserves transition
+and save validation while verifying the complete changed field set before commit;
+only source fields and native lifecycle bookkeeping may change. Custom transition
+success hooks forward the explicit persistence callback. No ambient import
+authority is installed; see the [ownership guideline](../../../docs/backend/guidelines.md#record-sync).

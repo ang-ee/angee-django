@@ -22,9 +22,10 @@ from django.core.exceptions import (
 from django.db import models, transaction
 
 from angee.base.db import get_write_alias, refresh_deferred, related_on
-from angee.base.mixins import AppendOnlyQuerySet
+from angee.base.mixins import AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.permissions import require_authorization_database
+from angee.base.transitions import StateTransitions, TransitionNotAllowed
 
 
 class ExternalOwnershipError(PermissionDenied):
@@ -142,6 +143,85 @@ def _update_field(model: type[models.Model], name: str) -> models.Field[Any, Any
         if field is None:
             raise
         return field
+
+
+def _check_transition_fields(instance: Any, persisted: Any, *, using: str) -> None:
+    """Validate the complete transition diff, including native save-hook changes."""
+
+    refresh_deferred(instance, using=using)
+    allowed = ExternalOwnershipDeclaration.for_model(type(instance)).source_owned_fields
+    # These allowances belong to the actual lifecycle owners, not field names
+    # that a consumer could coincidentally use for ordinary mutable data.
+    lifecycle = {field.name for field in instance._meta.concrete_fields if getattr(field, "auto_now", False)}
+    if isinstance(instance, AuditMixin):
+        lifecycle.add("updated_by")
+    refused = {
+        field.name
+        for field in instance._meta.concrete_fields
+        if field.name not in allowed | lifecycle
+        and getattr(instance, field.attname) != getattr(persisted, field.attname)
+    }
+    if refused:
+        raise ExternalOwnershipError(f"External transitions changed undeclared source fields: {sorted(refused)}")
+
+
+def run_external_transition(
+    instance: Any,
+    source: Sequence[str | int],
+    transition: str,
+    *,
+    using: str | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Run a declared native transition under an explicit matching source claim.
+
+    The native body, graph, conditions, success hook and cooperative model save
+    remain authoritative. Its success hook must accept/forward ``persist`` to
+    ``save_state``. Every changed concrete field must be source-owned, except
+    native ``auto_now`` fields and ``AuditMixin.updated_by``. Any other change
+    rolls back the complete transition. No import authority is retained on the
+    instance or in ambient context; nested writes need their own explicit claim.
+    """
+
+    if not isinstance(instance, ExternalOwnershipMixin):
+        raise ExternalOwnershipError("External transitions require an ownership projection.")
+    alias = get_write_alias(type(instance), using=using, instance=instance)
+    require_authorization_database(alias, operation="External projection transition")
+    source = _identity(source, "source")
+    specs = {spec.name: spec for spec in StateTransitions.action_specs(type(instance))}
+    if transition not in specs:
+        raise ExternalOwnershipError("External imports require a declared native transition.")
+    if "persist" in kwargs:
+        raise ExternalOwnershipError("External transition persistence belongs to the ownership owner.")
+    instance._state.db = alias
+    with transaction.atomic(using=alias):
+        persisted = instance._persisted_ownership(using=alias, for_update=True)
+        if persisted is None:
+            raise ExternalOwnershipError("External transitions require a saved projection.")
+        refresh_deferred(instance, using=alias)
+        persisted.require_external_identity(
+            source=source,
+            source_key=instance.external_source_key,
+            company=instance.import_company(using=alias),
+            using=alias,
+        )
+        state_field = specs[transition].field
+        if getattr(instance, state_field) != getattr(persisted, state_field):
+            raise TransitionNotAllowed("The native transition state changed before external admission.")
+
+        def persist(row: Any, *, using: str, update_fields: Iterable[str]) -> None:
+            if row is not instance or using != alias:
+                raise ExternalOwnershipError("External transition persistence belongs to its admitted projection.")
+            row.save(using=using, update_fields=update_fields, external_source=source)
+
+        result = getattr(instance, transition)(using=alias, persist=persist, **kwargs)
+        _check_transition_fields(instance, persisted, using=alias)
+        applied = instance._persisted_ownership(using=alias)
+        if applied is None:
+            raise ExternalOwnershipError("External transitions cannot delete their projection.")
+        applied._check_external_ownership_update(persisted=persisted, source=source, using=alias)
+        _check_transition_fields(applied, persisted, using=alias)
+        return result
 
 
 class ExternalOwnershipQuerySet(AngeeQuerySet[Any]):
@@ -571,21 +651,43 @@ class ExternalOwnershipMixin(models.Model):
             persisted._check_external_ownership_relations(using=alias)
             self._check_external_ownership_relations(using=alias)
 
-    def save(self, *args: Any, using: str | None = None, **kwargs: Any) -> None:
-        """Retain source identity and reject local edits to source-owned fields."""
+    def save(
+        self,
+        *args: Any,
+        using: str | None = None,
+        external_source: Sequence[str | int] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Retain provenance; explicit transition saves verify their complete diff.
+
+        ``external_source`` is persistence plumbing for the explicit transition
+        owner. It is a matching source identity, never ambient import authority.
+        """
 
         alias = get_write_alias(type(self), using=using, instance=self)
         require_authorization_database(alias, operation="External ownership save")
         self._state.db = alias
         with transaction.atomic(using=alias):
             persisted = self._persisted_ownership(using=alias, for_update=True)
+            source = None if external_source is None else _identity(external_source, "source")
+            if source is not None:
+                if persisted is None or persisted.import_source(using=alias) != source:
+                    raise ExternalOwnershipError("The projection belongs to a different source identity.")
+                _check_transition_fields(self, persisted, using=alias)
             self._check_external_ownership_update(
                 kwargs.get("update_fields"),
                 persisted=persisted,
                 using=alias,
+                source=source,
             )
             kwargs["using"] = alias
             super().save(*args, **kwargs)
+            if source is not None:
+                applied = self._persisted_ownership(using=alias)
+                if applied is None:
+                    raise ExternalOwnershipError("External transitions cannot delete their projection.")
+                applied._check_external_ownership_update(persisted=persisted, source=source, using=alias)
+                _check_transition_fields(applied, persisted, using=alias)
 
     def delete(self, *args: Any, using: str | None = None, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Lock and retain external rows before Django collects deletion edges."""

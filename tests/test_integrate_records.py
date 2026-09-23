@@ -77,6 +77,59 @@ def test_sweep_absence_unavailable_then_tombstone_and_reappearance(replica: Any)
     assert (link.status, link.tombstoned_at) == (LinkStatus.CURRENT, None)
 
 
+@pytest.mark.parametrize("operation", ["observe", "promote"])
+def test_explicit_target_withdrawal_differs_from_omitted_target(replica: Any, operation: str) -> None:
+    link = RecordLink.objects.observe(replica, "person:1", target=replica)
+    evidence = dict(source_payload={}, source_hash="remote", mapped_payload={}, local_hash="local")
+    if operation == "observe":
+        RecordLink.objects.observe(replica, link.external_key)
+    else:
+        RecordLink.objects.promote(link, **evidence)
+    link.refresh_from_db()
+    assert link.target_id == str(replica.pk)
+    if operation == "observe":
+        RecordLink.objects.observe(replica, link.external_key, target=None)
+    else:
+        RecordLink.objects.promote(link, target=None, **evidence)
+    link.refresh_from_db()
+    assert (link.target_ct_id, link.target_id, link.status) == (None, None, LinkStatus.WITHDRAWN)
+
+
+def test_child_absence_requires_parent_absence_evidence(replica: Any) -> None:
+    parent = RecordLink.objects.observe(replica, "aggregate:1")
+    child = RecordLink.objects.observe(replica, "member:1", parent=parent)
+    assert RecordLink.objects.mark_absent(replica, [child.external_key]) == 0
+    child.refresh_from_db()
+    assert child.absence_count == 0
+    assert RecordLink.objects.mark_absent(replica, [parent.external_key]) == 1
+    assert RecordLink.objects.mark_absent(replica, [child.external_key]) == 1
+    child.refresh_from_db()
+    assert (child.status, child.absence_count) == (LinkStatus.UNAVAILABLE, 1)
+    RecordLink.objects.observe(replica, parent.external_key)
+    assert RecordLink.objects.mark_absent(replica, [child.external_key]) == 0
+
+
+def test_record_parent_is_one_root_in_same_stream_and_cannot_be_reassigned(replica: Any) -> None:
+    parent = RecordLink.objects.observe(replica, "aggregate:1")
+    other = RecordLink.objects.observe(replica, "aggregate:2")
+    child = RecordLink.objects.observe(replica, "member:1", parent=parent)
+    assert RecordLink.objects.observe(replica, child.external_key).parent_id == parent.pk
+    for replacement in (None, other):
+        with pytest.raises(ValidationError, match="immutable"):
+            RecordLink.objects.observe(replica, child.external_key, parent=replacement)
+    with pytest.raises(ValidationError, match="root link"):
+        RecordLink.objects.observe(replica, "nested:1", parent=child)
+    with pytest.raises(ValidationError, match="root link"):
+        RecordLink.objects.observe(replica, parent.external_key, parent=parent)
+    with pytest.raises(ValidationError, match="root with children"):
+        RecordLink.objects.observe(replica, parent.external_key, parent=other)
+    bridge = make_integration("other-record-protocol", model=Channel)
+    stream = SyncStream.objects.current(bridge, "other", kind=StreamKind.RECORD_REPLICA)
+    foreign = RecordLink.objects.observe(stream, "aggregate:foreign")
+    with pytest.raises(ValidationError, match="same stream"):
+        RecordLink.objects.observe(replica, "member:foreign", parent=foreign)
+
+
 def test_revision_numbering_and_all_mutation_paths_refuse_edits(replica: Any) -> None:
     link = RecordLink.objects.observe(replica, "person:1")
     first = RecordRevision.objects.append(link, source_payload={"v": 1}, source_hash="one", mapping_version=1)
@@ -119,13 +172,17 @@ def test_retired_epoch_rejects_late_page_before_records(replica: Any) -> None:
 
 
 def test_discrepancy_coalescing_rescan_and_resolution_history(replica: Any) -> None:
-    first = SyncDiscrepancy.objects.record(replica, kind=DiscrepancyKind.SEMANTIC, code="bad_name", source_hash="one")
+    link = RecordLink.objects.observe(replica, "person:1")
+    first = SyncDiscrepancy.objects.record(
+        replica, link=link, kind=DiscrepancyKind.SEMANTIC, code="bad_name", source_hash="one"
+    )
     repeated = SyncDiscrepancy.objects.record(
         replica,
         kind=DiscrepancyKind.SEMANTIC,
         code="bad_name",
         source_hash="one",
         details={"attempt": 2},
+        link=link,
     )
     future = SyncDiscrepancy.objects.record(
         replica,
@@ -145,6 +202,40 @@ def test_discrepancy_coalescing_rescan_and_resolution_history(replica: Any) -> N
     )
     assert replacement.pk not in (first.pk, future.pk)
     assert SyncDiscrepancy.objects.filter(pk=first.pk, status=DiscrepancyStatus.RESOLVED).exists()
+
+
+def test_discrepancy_rescan_is_bounded_before_materialization(replica: Any) -> None:
+    rows = [
+        SyncDiscrepancy.objects.record(
+            replica,
+            link=RecordLink.objects.observe(replica, f"person:{index}"),
+            kind=DiscrepancyKind.SEMANTIC,
+            code=f"bad_{index}",
+        )
+        for index in range(3)
+    ]
+    assert [row.pk for row in SyncDiscrepancy.objects.rescan(replica, limit=2)] == [row.pk for row in rows[:2]]
+    with pytest.raises(ValueError, match="positive"):
+        SyncDiscrepancy.objects.rescan(replica, limit=0)
+
+
+def test_rescan_filters_conflicted_aggregates_and_unlinked_failures_before_limit(replica: Any) -> None:
+    parent = RecordLink.objects.observe(replica, "aggregate:conflicted")
+    child = RecordLink.objects.observe(replica, "member:conflicted", parent=parent)
+    for kind, link, code in (
+        (DiscrepancyKind.CONFLICT, child, "conflict"),
+        (DiscrepancyKind.SEMANTIC, parent, "blocked_parent"),
+        (DiscrepancyKind.SEMANTIC, child, "blocked_child"),
+        (DiscrepancyKind.SEMANTIC, None, "no_identity"),
+    ):
+        SyncDiscrepancy.objects.record(replica, link=link, kind=kind, code=code)
+    retryable = SyncDiscrepancy.objects.record(
+        replica,
+        link=RecordLink.objects.observe(replica, "person:retryable"),
+        kind=DiscrepancyKind.SEMANTIC,
+        code="retryable",
+    )
+    assert [row.pk for row in SyncDiscrepancy.objects.rescan(replica, limit=1)] == [retryable.pk]
 
 
 def test_quarantine_survives_observation_and_absence_until_last_resolution(replica: Any) -> None:
