@@ -313,9 +313,18 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         return self._local_states(stream, (external_key,), links=links, using=using)[external_key]
 
     def _record_changes(
-        self, stream: Any, contacts: Mapping[str, ParsedContact | RecordChange | None], *, using: str
+        self,
+        stream: Any,
+        contacts: Mapping[str, ParsedContact | RecordChange | None],
+        *,
+        requested_keys: Mapping[str, str] | None = None,
+        using: str,
     ) -> list[RecordChange]:
-        """Bind a fetched batch to stable identities and quarantine collisions."""
+        """Bind fetched contacts, preserving identities assigned before parsing.
+
+        Identity reads supply href-to-key bindings, including unlinked hrefs and
+        their tombstones. A parsed UID remains metadata on those identities.
+        """
 
         if not contacts:
             return []
@@ -326,23 +335,32 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         records: dict[str, RecordChange] = {}
         for href, parsed in sorted(contacts.items()):
             prior = by_href.get(href)
-            if parsed is None and prior is None:
+            if prior is None and isinstance(parsed, ParsedContact) and requested_keys is None:
+                owner = identities.get(parsed.uid)
+                if owner in contacts and contacts[owner] is None:
+                    prior = by_href.get(owner)
+            if parsed is None and prior is None and requested_keys is None:
                 continue
-            key = (
-                prior.external_key
-                if prior is not None
-                else parsed.uid if isinstance(parsed, ParsedContact) else href
-            )
-            if parsed is None and occupied.get(key) != href:
+            if requested_keys is not None:
+                key = requested_keys[href]
+            elif prior is not None:
+                key = prior.external_key
+            else:
+                key = parsed.uid if isinstance(parsed, ParsedContact) else href
+            if parsed is None and prior is not None and occupied.get(key) != href:
                 continue  # The same batch already relocated this UID.
             metadata = {**(prior.metadata if prior is not None else {}), "href": href}
+            moved = False
             if isinstance(parsed, ParsedContact):
                 owner = identities.get(parsed.uid)
                 duplicate = owner and owner != href and not (owner in contacts and contacts[owner] is None)
                 key_owner = occupied.get(key)
-                moved = key == parsed.uid and key_owner in contacts and contacts[key_owner] is None
+                moved = key_owner in contacts and contacts[key_owner] is None and (
+                    key == parsed.uid or (prior is not None and prior.metadata.get("uid") == parsed.uid)
+                )
                 if duplicate or (key_owner not in (None, href) and not moved):
-                    key = prior.external_key if prior is not None else href
+                    if requested_keys is None:
+                        key = prior.external_key if prior is not None else href
                     parsed = RecordChange(
                         key,
                         {"href": href, "error": "duplicate_vcard_uid"},
@@ -351,16 +369,9 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 else:
                     metadata["uid"] = parsed.uid
                     identities[parsed.uid] = href
-            # A UID may itself equal another card's href. Give only that refusal
-            # a free locator key; never overwrite the legitimate identity.
-            while key in occupied and occupied[key] not in (None, href) and not (
-                isinstance(parsed, ParsedContact)
-                and key == parsed.uid
-                and occupied[key] in contacts
-                and contacts[occupied[key]] is None
-            ):
-                key = f"href:{key}"
-            occupied[key] = href
+            if moved and isinstance(parsed, ParsedContact):
+                occupied[key] = href
+            key = self._claim_key(key, href, occupied=occupied)
             if isinstance(parsed, RecordChange):
                 record = replace(parsed, external_key=key, metadata=metadata)
             elif parsed is None:
@@ -387,8 +398,29 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             for record in records.values()
         ]
 
+    def _claim_key(self, key: str, href: str, *, occupied: dict[str, str | None]) -> str:
+        """Reserve a locator without overwriting a UID that happens to equal it."""
+
+        while key in occupied and occupied[key] not in (None, href):
+            key = f"href:{key}"
+        occupied[key] = href
+        return key
+
+    def _href_for_key(self, key: str, *, bindings: Mapping[str, str | None]) -> str:
+        """Resolve retained locators or decode a not-yet-observed inventory key."""
+
+        if href := bindings.get(key):
+            return href
+        while key.startswith("href:"):
+            key = key.removeprefix("href:")
+        return key
+
     def apply(self, stream: Any, page: StreamPage, *, using: str | None = None) -> Iterable[ApplyResult]:
-        """Revalidate under domain locks, then use the single contact ingest verb."""
+        """Revalidate under domain locks, then use the single contact ingest verb.
+
+        The fixed contact projection has mapping version 1 and no dependency
+        digest; ApplyResult's defaults are the evidence actually applied.
+        """
 
         using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
         refresh_deferred(self.bridge, using=using, fields=("owner_id",))

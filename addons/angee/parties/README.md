@@ -14,14 +14,19 @@ An unchanged token produces an empty page. `DAV:valid-sync-token` failure create
 a new baseline generation, retaining links and revisions. Explicit removed-member
 404 responses become tombstones; a failed transport never advances the cursor.
 Per-identity discrepancy rescans use CardDAV multiget without advancing that
-cursor. A daily depth-one PROPFIND sweep reconciles hrefs and ETags so a silently
+cursor. A daily depth-one PROPFIND sweep seeks in href order and reads bounded
+multiget pages through the same apply path, importing contacts missed by the
+change feed. The driver checkpoints each page before counting absent resources;
+callers pulse until its `_angee_reconcile` checkpoint disappears. A silently
 vanished resource becomes unavailable even when the change feed omits it.
 
 `RecordLink.external_key` preserves the existing `(folder, source_uid)` identity:
-vCard UID, falling back to href for legacy cards without UID. A resource keeps
-that first identity across display-name changes. Duplicate UIDs quarantine the
-colliding card while other cards proceed. Observed
-link metadata retains the href even when the first card is malformed, allowing a
+vCard UID, falling back to href for legacy cards without UID. A newly enumerated
+href also becomes its identity before a sweep can read its UID; parsed UIDs stay
+in link metadata. A resource keeps that first identity on later reads and when
+a delta relocates its UID. Duplicate UIDs quarantine the colliding card while
+other cards proceed. Observed link metadata retains the href even when the first
+card is malformed, allowing a
 corrected card to resolve the same quarantine. Applied revisions retain the
 resource href separately with the vCard version used for conditional writes.
 Its target is the Person produced by `Party.objects.ingest_contact`; shared

@@ -176,26 +176,39 @@ class CardDavDirectoryBackend(DirectoryBackend):
         return StreamPage(changes, next_cursor, exhausted=not remaining and not more)
 
     def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> list[RecordChange]:
-        """Multiget only the requested identities without reading or changing the cursor."""
+        """Read bound identities or new inventory hrefs through the same mapper."""
 
         using = get_write_alias(type(self.bridge), instance=self.bridge, using=using)
-        requested = frozenset(keys)
-        if not requested:
+        if not keys:
             return []
-        hrefs = [link.source_href for link in self._links(stream, using=using) if link.external_key in requested]
-        if len(hrefs) != len(requested) or any(not href for href in hrefs):
+        bindings = {link.external_key: link.source_href for link in self._links(stream, using=using)}
+        requested = {self._href_for_key(key, bindings=bindings): key for key in keys}
+        hrefs = sorted(requested)
+        if len(requested) != len(keys) or any(not urlsplit(href).netloc for href in hrefs):
             raise CardDavError("A requested CardDAV identity has no resource href.")
         contacts = {}
         for start in range(0, len(hrefs), _MULTIGET_CHUNK):
             contacts.update(self._multiget(stream.partition, hrefs[start : start + _MULTIGET_CHUNK], using=using))
-        return self._record_changes(stream, contacts, using=using)
+        return self._record_changes(stream, contacts, requested_keys=requested, using=using)
 
-    def enumerate_keys(self, stream: Any, *, using: str | None = None) -> list[str]:
-        """Verify existing identities from a depth-one href/ETag inventory, without fetching cards."""
+    def enumerate_keys(self, stream: Any, *, after: str | None = None, using: str | None = None) -> list[str]:
+        """Seek exclusively by href over every depth-one inventory member.
+
+        Known hrefs keep their keys. New hrefs are identities before their UIDs
+        can be parsed; the mapper retains that key and stores the UID as metadata.
+        The committed link resolves continuation even if its href has vanished.
+        """
 
         using = get_write_alias(type(self.bridge), instance=self.bridge, using=using)
-        hrefs = set(self._list_vcard_hrefs(stream.partition, using=using))
-        return sorted(link.external_key for link in self._links(stream, using=using) if link.source_href in hrefs)
+        links = self._links(stream, using=using)
+        occupied = {link.external_key: link.source_href for link in links}
+        by_href = {link.source_href: link.external_key for link in links if link.source_href}
+        after_href = self._href_for_key(after, bindings=occupied) if after is not None else None
+        return [
+            self._claim_key(by_href.get(href, href), href, occupied=occupied)
+            for href in self._list_vcard_hrefs(stream.partition, using=using)
+            if after_href is None or href > after_href
+        ]
 
     def write_back(
         self, link: Any, projection: Any, *, expected_version: str, using: str | None = None
@@ -208,7 +221,8 @@ class CardDavDirectoryBackend(DirectoryBackend):
         if link.status == LinkStatus.TOMBSTONE:
             raise RemoteRejected("remote_deleted")
         source = self._source_payload(link, using=using)
-        href = source.get("href") or link.metadata.get("href")
+        # Unchanged revalidation can relocate a card without a new revision.
+        href = link.metadata.get("href") or source.get("href")
         if not href:
             href = urljoin(stream.partition.rstrip("/") + "/", quote(link.external_key, safe="") + ".vcf")
         headers = {"If-Match": expected_version} if expected_version else {"If-None-Match": "*"}

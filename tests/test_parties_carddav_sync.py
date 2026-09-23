@@ -241,6 +241,15 @@ class Replica:
         assert result.count == 1
         return Person.objects.get(source_uid="ada"), RecordLink.objects.get(stream=self.stream, external_key="ada")
 
+    def reconcile(self, *, page_bound: int = 100) -> int:
+        absent = 0
+        for _ in range(20):
+            absent += reconcile_stream(self.stream, self.backend, page_bound=page_bound, using="default")
+            self.stream.refresh_from_db()
+            if "_angee_reconcile" not in self.stream.cursor:
+                return absent
+        pytest.fail("The CardDAV reconciliation checkpoint did not finish")
+
 
 @pytest.fixture
 def replica(transactional_db: Any) -> Iterator[Replica]:
@@ -847,20 +856,26 @@ def test_uidless_cards_with_same_name_use_distinct_resource_hrefs(replica: Repli
     assert set(RecordLink.objects.values_list("external_key", flat=True)) == {_HREF, other_href}
 
 
-def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(replica: Replica) -> None:
+@pytest.mark.parametrize("sweep", [False, True])
+def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(
+    replica: Replica, sweep: bool
+) -> None:
     collision_href = f"{_BOOK}duplicate.vcf"
     replica.server.store(_HREF, _card(uid=collision_href))
     assert replica.pull().count == 1
     original = Person.objects.get(source_uid=collision_href)
     owner = RecordLink.objects.get(stream=replica.stream, external_key=collision_href)
     bases = owner.remote_base_hash, owner.local_base_hash, owner.remote_version
+    old_cursor = dict(replica.stream.cursor)
     replica.server.store(collision_href, _card(name="Impostor").replace("UID:ada\r\n", ""))
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
 
-    result = replica.pull()
-
-    assert result.exhausted
-    assert result.count == 1
+    if sweep:
+        assert replica.reconcile(page_bound=1) == 0
+    else:
+        result = replica.pull()
+        assert result.exhausted
+        assert result.count == 1
     discrepancy = SyncDiscrepancy.objects.get(stream=replica.stream)
     refused = RecordLink.objects.get(pk=discrepancy.link_id)
     assert discrepancy.kind == DiscrepancyKind.SEMANTIC
@@ -874,8 +889,8 @@ def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(
     assert owner.target_id == str(original.pk)
     assert (owner.remote_base_hash, owner.local_base_hash, owner.remote_version) == bases
     assert original.display_name == "Ada Lovelace"
-    assert set(Person.objects.values_list("source_uid", flat=True)) == {collision_href, "grace"}
-    assert replica.stream.cursor == {"sync_token": replica.server.token}
+    assert set(Person.objects.values_list("display_name", flat=True)) == {"Ada Lovelace", "Grace Hopper"}
+    assert replica.stream.cursor == (old_cursor if sweep else {"sync_token": replica.server.token})
 
 
 def test_due_read_keys_redrives_only_discrepant_hrefs_without_advancing_cursor(replica: Replica) -> None:
@@ -911,7 +926,22 @@ def test_due_read_keys_redrives_only_discrepant_hrefs_without_advancing_cursor(r
     assert [item.text for item in report.findall("d:href", _NAMESPACES)] == [_HREF]
 
 
-def test_enumeration_sweep_marks_vanished_href_unavailable_without_multiget(replica: Replica) -> None:
+@pytest.mark.parametrize("linked", [False, True])
+def test_read_keys_returns_tombstone_for_missing_unbound_href(replica: Replica, linked: bool) -> None:
+    missing_href = f"{_BOOK}missing.vcf"
+    if linked:
+        RecordLink.objects.observe(replica.stream, missing_href, using="default")
+
+    records = replica.backend.read_keys(replica.stream, [missing_href], using="default")
+
+    assert len(records) == 1
+    assert records[0].external_key == missing_href
+    assert records[0].tombstone
+    assert records[0].metadata["href"] == missing_href
+    assert RecordLink.objects.exists() is linked
+
+
+def test_enumeration_sweep_reads_present_href_and_marks_vanished_unavailable(replica: Replica) -> None:
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
     assert replica.pull().count == 2
     person = Person.objects.get(source_uid="ada")
@@ -920,7 +950,7 @@ def test_enumeration_sweep_marks_vanished_href_unavailable_without_multiget(repl
     replica.server.requests.clear()
     assert replica.stream.reconcile_interval == timedelta(days=1)
 
-    assert reconcile_stream(replica.stream, replica.backend, using="default") == 1
+    assert replica.reconcile() == 1
 
     link = RecordLink.objects.get(stream=replica.stream, external_key="ada")
     assert (link.status, link.absence_count, link.tombstoned_at) == (LinkStatus.UNAVAILABLE, 1, None)
@@ -928,10 +958,133 @@ def test_enumeration_sweep_marks_vanished_href_unavailable_without_multiget(repl
     assert Person.objects.filter(pk=person.pk).exists()
     replica.stream.refresh_from_db()
     assert replica.stream.cursor == old_cursor
-    assert len(replica.server.requests) == 1
-    method, collection, headers, body = replica.server.requests[0]
-    assert (method, collection, headers["depth"]) == ("PROPFIND", _BOOK, "1")
-    assert ElementTree.fromstring(body).find(".//d:getetag", _NAMESPACES) is not None
+    assert len(replica.server.requests) == 3
+    for index in (0, 2):
+        method, collection, headers, body = replica.server.requests[index]
+        assert (method, collection, headers["depth"]) == ("PROPFIND", _BOOK, "1")
+        assert ElementTree.fromstring(body).find(".//d:getetag", _NAMESPACES) is not None
+    method, collection, _, body = replica.server.requests[1]
+    assert (method, collection) == ("REPORT", _BOOK)
+    report = ElementTree.fromstring(body)
+    assert report.tag == "{urn:ietf:params:xml:ns:carddav}addressbook-multiget"
+    assert [item.text for item in report.findall("d:href", _NAMESPACES)] == [f"{_BOOK}grace.vcf"]
+
+
+def test_enumeration_sweep_imports_unlinked_contact_once_across_later_delta(replica: Replica) -> None:
+    replica.baseline()
+    old_cursor = dict(replica.stream.cursor)
+    href = f"{_BOOK}grace.vcf"
+    replica.server.store(href, _card(uid="grace", name="Grace Hopper"))
+    assert not RecordLink.objects.filter(stream=replica.stream, metadata__href=href).exists()
+
+    assert replica.reconcile(page_bound=1) == 0
+
+    link = RecordLink.objects.get(stream=replica.stream, metadata__href=href)
+    person = Person.objects.get(pk=link.target_id)
+    assert person.display_name == "Grace Hopper"
+    assert link.metadata["uid"] == "grace"
+    assert link.status == LinkStatus.CURRENT
+    assert link.remote_base_hash and link.local_base_hash
+    assert replica.stream.cursor == old_cursor
+    assert RecordRevision.objects.filter(link=link).count() == 1
+    assert replica.pull().count == 0
+    link.refresh_from_db()
+    assert link.target_id == str(person.pk)
+    assert Person.objects.count() == RecordLink.objects.count() == RecordRevision.objects.count() == 2
+    assert not SyncDiscrepancy.objects.exists()
+
+
+@pytest.mark.parametrize("filename", ["0-ada.vcf", "z-ada.vcf"])
+def test_sweep_imported_identity_survives_remote_href_relocation(replica: Replica, filename: str) -> None:
+    assert replica.reconcile() == 0
+    link = RecordLink.objects.get(stream=replica.stream, metadata__href=_HREF)
+    person = Person.objects.get(pk=link.target_id)
+    assert link.external_key == _HREF
+    assert replica.pull().count == 0
+    moved_href = f"{_BOOK}{filename}"
+    replica.server.remove(_HREF)
+    replica.server.store(moved_href, _card())
+
+    result = replica.pull()
+
+    assert result.exhausted
+    assert not result.discrepancy_ids
+    link.refresh_from_db()
+    assert link.external_key == _HREF
+    assert link.target_id == str(person.pk)
+    assert link.metadata["href"] == moved_href
+    assert link.metadata["uid"] == "ada"
+    assert link.status == LinkStatus.CURRENT
+    assert Person.objects.count() == RecordLink.objects.count() == 1
+    assert replica.stream.cursor == {"sync_token": replica.server.token}
+    remote_version = replica.server.cards[moved_href][1]
+    person.notes = "Edited after relocation"
+    person.save(update_fields=["notes"])
+    replica.server.requests.clear()
+
+    assert push_stream(replica.stream, replica.backend, using="default").count == 1
+
+    puts = [request for request in replica.server.requests if request[0] == "PUT"]
+    assert len(puts) == 1
+    assert puts[0][1] == moved_href
+    assert puts[0][2]["if-match"] == remote_version
+    assert vobject.readOne(replica.server.cards[moved_href][0]).uid.value == "ada"
+    link.refresh_from_db()
+    assert link.remote_version == replica.server.cards[moved_href][1]
+    assert Person.objects.count() == RecordLink.objects.count() == 1
+
+
+def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second_href, unseen_href = f"{_BOOK}beta.vcf", f"{_BOOK}gamma.vcf"
+    replica.server.store(_HREF, _card(uid="zulu"))
+    replica.server.store(second_href, _card(uid="alpha", name="Grace Hopper"))
+    assert replica.pull().count == 2
+    old_cursor = dict(replica.stream.cursor)
+    replica.server.store(_HREF, _card(uid="zulu", notes="First committed page"))
+    replica.server.store(second_href, _card(uid="alpha", name="Grace Hopper", notes="Second page"))
+    replica.server.store(unseen_href, _card(uid="beta", name="Katherine Johnson"))
+    assert reconcile_stream(replica.stream, replica.backend, page_bound=1, using="default") == 0
+    replica.stream.refresh_from_db()
+    committed_cursor = dict(replica.stream.cursor)
+    assert committed_cursor["_angee_reconcile"]["after"] == "zulu"
+    assert Person.objects.get(source_uid="zulu").notes == "First committed page"
+    original_apply = replica.backend.apply
+
+    def crash_after_apply(stream: Any, page: Any, *, using: str | None = None) -> Any:
+        outcomes = tuple(original_apply(stream, page, using=using))
+        assert page.records[0].external_key == "alpha"
+        assert Person.objects.get(source_uid="alpha").notes == "Second page"
+        assert outcomes
+        raise RuntimeError("Interrupted CardDAV sweep apply")
+
+    monkeypatch.setattr(replica.backend, "apply", crash_after_apply)
+    with pytest.raises(RuntimeError, match="Interrupted CardDAV sweep apply"):
+        reconcile_stream(replica.stream, replica.backend, page_bound=1, using="default")
+    replica.stream.refresh_from_db()
+    assert replica.stream.cursor == committed_cursor
+    assert Person.objects.get(source_uid="alpha").notes == "Original"
+    assert Person.objects.count() == 2
+    assert RecordRevision.objects.count() == 3
+
+    replica.backend = CardDavDirectoryBackend(replica.directory)
+    replica.backend.__dict__["http"] = replica.server
+    replica.stream = SyncStream.objects.get(pk=replica.stream.pk)
+    replica.server.requests.clear()
+    assert replica.reconcile(page_bound=1) == 0
+    assert replica.stream.cursor == old_cursor
+    assert replica.stream.last_reconciled_at is not None
+    assert Person.objects.get(source_uid="alpha").notes == "Second page"
+    assert Person.objects.count() == RecordLink.objects.count() == 3
+    assert RecordRevision.objects.count() == 5
+    fetched = [
+        [item.text for item in ElementTree.fromstring(body).findall("d:href", _NAMESPACES)]
+        for method, _, _, body in replica.server.requests
+        if method == "REPORT"
+    ]
+    assert fetched == [[second_href], [unseen_href]]
+    assert not SyncDiscrepancy.objects.exists()
 
 
 def test_generation_bump_deepcopies_nested_config(replica: Replica, monkeypatch: pytest.MonkeyPatch) -> None:
