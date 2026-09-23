@@ -25,7 +25,7 @@ from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
 from angee.messaging_integrate_imap import parser as imap_parser
-from angee.messaging_integrate_imap.backend import ImapChannelBackend, ImapError
+from angee.messaging_integrate_imap.backend import ImapChannelBackend, ImapError, ImapSamplePreviewRequest
 from angee.messaging_integrate_imap.parser import (
     fallback_message,
     html_to_text,
@@ -631,19 +631,28 @@ class FakeIMAPClient:
     def search(self, criteria: Any = "ALL") -> list[int]:
         self.account.searches.append((self._selected, criteria))
         uids = self.account.uids(self._selected)
-        if isinstance(criteria, (list, tuple)) and criteria and criteria[0] == "UID":
-            sequence = str(criteria[1])
+        if isinstance(criteria, (list, tuple)) and "UID" in criteria:
+            sequence = str(criteria[criteria.index("UID") + 1])
             if "," in sequence:
                 requested = {int(value) for value in sequence.split(",")}
-                return [uid for uid in uids if uid in requested]
-            if ":" not in sequence:
+                uids = [uid for uid in uids if uid in requested]
+            elif ":" not in sequence:
                 requested = int(sequence)
-                return [uid for uid in uids if uid == requested]
-            start = int(sequence.split(":", 1)[0])
-            matched = [uid for uid in uids if uid >= start]
-            # RFC 3501: a UID range of ``n:*`` returns the highest-UID message
-            # even when every UID is below ``n``.
-            return matched or uids[-1:]
+                uids = [uid for uid in uids if uid == requested]
+            else:
+                start, end = sequence.split(":", 1)
+                lower = int(start)
+                upper = max(uids, default=0) if end == "*" else int(end)
+                lower, upper = sorted((lower, upper))
+                uids = [uid for uid in uids if lower <= uid <= upper]
+        if isinstance(criteria, (list, tuple)):
+            messages = self.account.folders[self._selected]["messages"]
+            if "SINCE" in criteria:
+                since = criteria[criteria.index("SINCE") + 1]
+                uids = [uid for uid in uids if messages[uid].get("internal_date", _INTERNAL_DATE).date() >= since]
+            if "BEFORE" in criteria:
+                before = criteria[criteria.index("BEFORE") + 1]
+                uids = [uid for uid in uids if messages[uid].get("internal_date", _INTERNAL_DATE).date() < before]
         return uids
 
     def fetch(self, uids: list[int], data: list[bytes]) -> dict[int, dict[bytes, Any]]:
@@ -752,13 +761,15 @@ def test_sample_preview_is_bounded_readonly_and_keeps_cursor(monkeypatch: pytest
     backend = _backend(monkeypatch, account)
     backend.bridge.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
 
-    result = backend.preview_sample(mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), limit=2)
+    result = backend.preview_sample(ImapSamplePreviewRequest(
+        mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), limit=2,
+    ))
 
     assert [message.uid for message in result.messages] == [3, 2]
-    assert result.truncated and result.uidvalidity == 100
+    assert result.uidvalidity == 100
     assert result.upper_uid == result.total_count == 3
     assert result.next_before_uid == 2
-    assert account.searches == [("INBOX", ["SINCE", date(2026, 7, 1), "BEFORE", date(2026, 8, 1)])]
+    assert account.searches == [("INBOX", ["UID", "1:3", "SINCE", date(2026, 7, 1), "BEFORE", date(2026, 8, 1)])]
     assert all(b"BODY.PEEK[]" not in fields for _, _, fields in account.fetches)
     assert backend.bridge.cursor == {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
     assert len(account.logins) == account.logouts == 1
@@ -770,20 +781,20 @@ def test_sample_preview_pages_one_all_dates_snapshot_and_excludes_new_mail(
     account = FakeImapAccount({"INBOX": _folder(*(_eml(subject=str(index)) for index in range(1, 6)))})
     backend = _backend(monkeypatch, account)
 
-    first = backend.preview_sample(
+    first = backend.preview_sample(ImapSamplePreviewRequest(
         mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
-    )
+    ))
     account.folders["INBOX"]["messages"][6] = {"raw": _eml(subject="new")}
-    second = backend.preview_sample(
+    second = backend.preview_sample(ImapSamplePreviewRequest(
         mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
         uidvalidity=first.uidvalidity, upper_uid=first.upper_uid,
-        before_uid=first.next_before_uid,
-    )
-    third = backend.preview_sample(
+        before_uid=first.next_before_uid, total_count=first.total_count,
+    ))
+    third = backend.preview_sample(ImapSamplePreviewRequest(
         mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
         uidvalidity=second.uidvalidity, upper_uid=second.upper_uid,
-        before_uid=second.next_before_uid,
-    )
+        before_uid=second.next_before_uid, total_count=second.total_count,
+    ))
 
     assert first.total_count == second.total_count == third.total_count == 5
     assert first.upper_uid == second.upper_uid == third.upper_uid == 5
@@ -792,8 +803,8 @@ def test_sample_preview_pages_one_all_dates_snapshot_and_excludes_new_mail(
     assert [message.uid for message in third.messages] == [1]
     assert first.next_before_uid == 4
     assert second.next_before_uid == 2
-    assert third.next_before_uid is None and not third.truncated
-    assert account.searches == [("INBOX", ["ALL"])] * 3
+    assert third.next_before_uid is None
+    assert account.searches == [("INBOX", ["UID", f"1:{upper}"]) for upper in (5, 3, 1)]
     assert backend.bridge.cursor == {}
 
 
@@ -817,12 +828,125 @@ def test_sample_preview_rejects_still_present_unanswered_header(
     monkeypatch.setattr(FakeIMAPClient, "fetch", omit_second_header)
 
     with pytest.raises(ImapError, match="still contains UID"):
-        backend.preview_sample(
+        backend.preview_sample(ImapSamplePreviewRequest(
             mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
-        )
+        ))
 
     assert ("INBOX", ["UID", "2"]) in account.searches
     assert backend.bridge.cursor == {}
+
+
+@pytest.mark.parametrize("expunged", [(3,), (3, 2)])
+def test_sample_preview_confirmed_expunges_reduce_retained_count_and_advance(
+    monkeypatch: pytest.MonkeyPatch, expunged: tuple[int, ...],
+) -> None:
+    account = FakeImapAccount({"INBOX": _folder(*(_eml(subject=str(uid)) for uid in range(1, 6)))})
+    backend = _backend(monkeypatch, account)
+    request = ImapSamplePreviewRequest(mailbox="INBOX", all_dates=True, limit=2)
+    first = backend.preview_sample(request)
+    original_fetch = FakeIMAPClient.fetch
+
+    def expunge_before_headers(
+        self: FakeIMAPClient, uids: list[int], data: list[bytes],
+    ) -> dict[int, dict[bytes, Any]]:
+        if b"BODY.PEEK[HEADER]" in data:
+            for uid in set(uids) & set(expunged):
+                self.account.folders["INBOX"]["messages"].pop(uid)
+        return original_fetch(self, uids, data)
+
+    monkeypatch.setattr(FakeIMAPClient, "fetch", expunge_before_headers)
+    second = backend.preview_sample(request.model_copy(update={
+        "uidvalidity": first.uidvalidity, "upper_uid": first.upper_uid,
+        "before_uid": first.next_before_uid, "total_count": first.total_count,
+    }))
+    third = backend.preview_sample(request.model_copy(update={
+        "uidvalidity": second.uidvalidity, "upper_uid": second.upper_uid,
+        "before_uid": second.next_before_uid, "total_count": second.total_count,
+    }))
+
+    assert [message.uid for message in second.messages] == [uid for uid in (3, 2) if uid not in expunged]
+    assert second.total_count == third.total_count == 5 - len(expunged)
+    assert second.next_before_uid == 2
+    assert [message.uid for message in third.messages] == [1]
+    assert third.next_before_uid is None
+    assert backend.bridge.cursor == {}
+
+
+def test_sample_preview_date_window_continuation_preserves_server_search_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    folder = _folder(*(_eml(subject=str(uid)) for uid in range(1, 7)))
+    folder["messages"][1]["internal_date"] = datetime(2026, 6, 30, tzinfo=UTC)
+    folder["messages"][6]["internal_date"] = datetime(2026, 8, 1, tzinfo=UTC)
+    account = FakeImapAccount({"INBOX": folder})
+    backend = _backend(monkeypatch, account)
+    request = ImapSamplePreviewRequest(mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), limit=2)
+
+    first = backend.preview_sample(request)
+    second = backend.preview_sample(request.model_copy(update={
+        "uidvalidity": first.uidvalidity, "upper_uid": first.upper_uid,
+        "before_uid": first.next_before_uid, "total_count": first.total_count,
+    }))
+
+    assert [message.uid for message in first.messages] == [5, 4]
+    assert [message.uid for message in second.messages] == [3, 2]
+    assert first.total_count == second.total_count == 4
+    assert second.next_before_uid is None
+    assert account.searches == [
+        ("INBOX", ["UID", f"1:{upper}", "SINCE", request.since, "BEFORE", request.before])
+        for upper in (6, 3)
+    ]
+
+
+@pytest.mark.parametrize("changed_epoch", [False, True])
+def test_sample_preview_rejects_unavailable_snapshot_or_changed_continuation_epoch(
+    monkeypatch: pytest.MonkeyPatch, changed_epoch: bool,
+) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml(), _eml())})
+    backend = _backend(monkeypatch, account)
+    request = ImapSamplePreviewRequest(mailbox="INBOX", all_dates=True, limit=1)
+    first = backend.preview_sample(request)
+    if changed_epoch:
+        account.folders["INBOX"]["uidvalidity"] += 1
+    else:
+        account.folders["INBOX"]["messages"].pop(2)
+    searched = len(account.searches)
+
+    message = "UID identity changed" if changed_epoch else "snapshot is no longer available"
+    with pytest.raises(ValidationError, match=message):
+        backend.preview_sample(request.model_copy(update={
+            "uidvalidity": first.uidvalidity, "upper_uid": first.upper_uid,
+            "before_uid": first.next_before_uid, "total_count": first.total_count,
+        }))
+
+    assert len(account.searches) == searched
+    assert backend.bridge.cursor == {}
+    assert account.logouts == 2
+
+
+@pytest.mark.parametrize("operation", ["preview", "prepare", "sync"])
+def test_missing_uidnext_is_an_actionable_imap_error(
+    monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml())})
+    backend = _backend(monkeypatch, account)
+    original_status = FakeIMAPClient.folder_status
+
+    def missing_uidnext(self: FakeIMAPClient, name: str, what: Any = None) -> dict[bytes, int]:
+        status = original_status(self, name, what)
+        del status[b"UIDNEXT"]
+        return status
+
+    monkeypatch.setattr(FakeIMAPClient, "folder_status", missing_uidnext)
+    with pytest.raises(ImapError, match="did not report a valid UIDNEXT.*Check the server's IMAP STATUS support"):
+        if operation == "preview":
+            backend.preview_sample(ImapSamplePreviewRequest(mailbox="INBOX", all_dates=True))
+        elif operation == "prepare":
+            backend.prepare_new_mail_cursor({})
+        else:
+            backend.fetch_messages()
+    assert backend.bridge.cursor.get("mailboxes", {}) == {}
+    backend.close()
 
 
 def test_sample_fetch_pins_uids_and_preserves_unread_flags(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -856,17 +980,21 @@ def test_sample_rejects_unbounded_requests_before_connect(monkeypatch: pytest.Mo
     account = FakeImapAccount({"INBOX": _folder(_eml())})
     backend = _backend(monkeypatch, account)
     with pytest.raises(ValidationError, match="sample limit"):
-        backend.preview_sample(mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), limit=51)
+        backend.preview_sample(ImapSamplePreviewRequest(
+            mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), limit=51,
+        ))
     with pytest.raises(ValidationError, match="one year"):
-        backend.preview_sample(mailbox="INBOX", since=date(2024, 7, 1), before=date(2026, 8, 1))
+        backend.preview_sample(ImapSamplePreviewRequest(
+            mailbox="INBOX", since=date(2024, 7, 1), before=date(2026, 8, 1),
+        ))
     with pytest.raises(ValidationError, match="Do not combine all-dates"):
-        backend.preview_sample(
+        backend.preview_sample(ImapSamplePreviewRequest(
             mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), all_dates=True,
-        )
+        ))
     with pytest.raises(ValidationError, match="Preview this mailbox scope again"):
-        backend.preview_sample(
+        backend.preview_sample(ImapSamplePreviewRequest(
             mailbox="INBOX", since=None, before=None, all_dates=True, uidvalidity=100,
-        )
+        ))
     with pytest.raises(ValidationError, match="positive message UIDs"):
         backend.fetch_sample(mailbox="INBOX", uidvalidity=100, uids=list(range(1, 52)))
     assert account.logins == []

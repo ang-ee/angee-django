@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 from django.apps import apps
@@ -17,6 +16,7 @@ from angee.messaging_integrate_imap.backend import (
     ImapChannelBackend,
     ImapSampleImport,
     ImapSamplePreview,
+    ImapSamplePreviewRequest,
 )
 from angee.messaging_integrate_imap.parser import EMBEDDED_MESSAGE_MAX_BYTES, expand_embedded_message
 
@@ -74,16 +74,9 @@ class ImapChannelSampling(models.Model):
 
     def preview_imap_sample(
         self,
+        request: ImapSamplePreviewRequest,
         *,
         actor: Any,
-        mailbox: str,
-        since: date | None,
-        before: date | None,
-        all_dates: bool = False,
-        uidvalidity: int | None = None,
-        upper_uid: int | None = None,
-        before_uid: int | None = None,
-        limit: int = 20,
         using: str | None = None,
     ) -> ImapSamplePreview:
         """Read one frozen preview page; leave mailbox flags and the live cursor unchanged."""
@@ -94,16 +87,7 @@ class ImapChannelSampling(models.Model):
             "credential__external_account", "credential__oauth_client",
         ).get(pk=self.pk)
         current._require_paused_imap(actor)
-        return current.backend.preview_sample(
-            mailbox=mailbox,
-            since=since,
-            before=before,
-            all_dates=all_dates,
-            uidvalidity=uidvalidity,
-            upper_uid=upper_uid,
-            before_uid=before_uid,
-            limit=limit,
-        )
+        return current.backend.preview_sample(request)
 
     def import_imap_sample(
         self, *, actor: Any, mailbox: str, uidvalidity: int, uids: list[int],

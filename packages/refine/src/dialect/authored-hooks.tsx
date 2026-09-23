@@ -189,18 +189,46 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
     DocumentData<TDocument>,
     AuthoredVariables<TDocument>
   > = {},
-): [AuthoredMutate<TDocument>, { fetching: boolean; error: Error | null }] {
+): [AuthoredMutate<TDocument>, { fetching: boolean; error: Error | null; reset: () => void }] {
   type Data = DocumentData<TDocument>;
   type Variables = AuthoredVariables<TDocument>;
   const activeDataProviderName = useActiveDataProviderName();
   const dataProviderName = options.dataProviderName ?? activeDataProviderName ?? "default";
-  const run = useCustomMutation<BaseRecord, HttpError, Variables>();
   const invalidateModelLabels = useStableArray(options.invalidateModels ?? []);
   const invalidates = options.invalidates ?? EMPTY_INVALIDATIONS;
   const invalidate = useInvalidate();
   const queryClient = useQueryClient();
   const shouldInvalidate = options.shouldInvalidate;
   const errorFrom = options.errorFrom;
+  // Native context pins completion policy before transport starts; later renders
+  // can update the next operation without retargeting this operation's writes.
+  const captureMutationContext = () => ({
+    invalidate, invalidateModelLabels, invalidates, queryClient, shouldInvalidate, errorFrom,
+  });
+  const run = useCustomMutation<BaseRecord, HttpError, Variables>({
+    mutationOptions: {
+      onMutate: captureMutationContext,
+      async onSuccess(response, { values }, context) {
+        // Refine exposes native mutation context as unknown; this hook supplies it.
+        const { invalidate, invalidateModelLabels, invalidates, queryClient, shouldInvalidate, errorFrom } =
+          context as ReturnType<typeof captureMutationContext>;
+        const data = authoredOperationData<Data>(response.data);
+        const resultError = errorFromAuthoredEnvelope(errorFrom?.(data, values));
+        if (resultError) throw resultError;
+        if (
+          (invalidateModelLabels.length > 0 || invalidates.length > 0)
+          && (shouldInvalidate?.(data, values) ?? true)
+        ) {
+          await Promise.all([
+            ...invalidates.map((target) => invalidate(target)),
+            ...(invalidateModelLabels.length > 0
+              ? [invalidateAuthoredQueries(queryClient, invalidateModelLabels)]
+              : []),
+          ]);
+        }
+      },
+    },
+  });
   // Stable identity: chat runtimes and other long-lived effects may depend on
   // authored mutations, while refine can churn `mutateAsync` across renders.
   // Read the latest execution context at call time so consumers do not reconnect
@@ -208,36 +236,18 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
   const mutationRef = useRef({
     dataProviderName,
     document,
-    invalidate,
-    invalidateModelLabels,
-    invalidates,
     mutateAsync: run.mutateAsync,
-    queryClient,
-    shouldInvalidate,
-    errorFrom,
   });
   mutationRef.current = {
     dataProviderName,
     document,
-    invalidate,
-    invalidateModelLabels,
-    invalidates,
     mutateAsync: run.mutateAsync,
-    queryClient,
-    shouldInvalidate,
-    errorFrom,
   };
   const mutate = useCallback<AuthoredMutate<TDocument>>(async (variables) => {
     const {
       dataProviderName,
       document,
-      invalidate,
-      invalidateModelLabels,
-      invalidates,
       mutateAsync,
-      queryClient,
-      shouldInvalidate,
-      errorFrom,
     } = mutationRef.current;
     const resolvedVariables = (variables ?? {}) as Variables;
     const response = await mutateAsync({
@@ -247,31 +257,14 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
       dataProviderName,
       meta: mutationMeta(document, resolvedVariables),
     });
-    const data = authoredOperationData<Data>(response.data);
-    const resultError = errorFromAuthoredEnvelope(
-      errorFrom?.(data, resolvedVariables),
-    );
-    if (resultError) throw resultError;
-    if (
-      (invalidateModelLabels.length > 0 || invalidates.length > 0)
-      && (shouldInvalidate?.(data, resolvedVariables) ?? true)
-    ) {
-      await Promise.all([
-        ...invalidates.map((target) => invalidate(target)),
-        ...(invalidateModelLabels.length > 0
-          ? [
-              invalidateAuthoredQueries(queryClient, invalidateModelLabels),
-            ]
-          : []),
-      ]);
-    }
-    return data;
+    return authoredOperationData<Data>(response.data);
   }, []);
   return [
     mutate,
     {
       fetching: run.mutation.isPending,
       error: run.mutation.error as Error | null,
+      reset: run.mutation.reset,
     },
   ];
 }

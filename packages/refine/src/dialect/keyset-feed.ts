@@ -6,6 +6,7 @@ import {
   type QueryClient,
   type QueryFunctionContext,
   type QueryKey,
+  type UseInfiniteQueryOptions,
   type UseInfiniteQueryResult,
 } from "@tanstack/react-query";
 import { useDataProvider } from "@refinedev/core";
@@ -60,7 +61,7 @@ interface KeysetFeedReads<TRow extends KeysetRow> {
     limit: number,
     context: QueryFunctionContext,
   ) => Promise<KeysetFeedWindow<TRow>>;
-  revalidate: (
+  revalidate?: (
     ids: string[],
     context: QueryFunctionContext,
   ) => Promise<KeysetFeedRevalidation<TRow>>;
@@ -69,11 +70,13 @@ interface KeysetFeedReads<TRow extends KeysetRow> {
 
 /**
  * Loaded history lives only in native InfiniteData. Refetch walks each original
- * fixed window and revalidates all IDs owned by that page. A moved row keeps
- * its native-page owner; the derived presentation applies the server's order.
+ * fixed window and revalidates all IDs owned by that page when revalidation is
+ * supplied. Without it, native sequential reads replace pages on refetch.
+ * A moved row in a revalidated feed keeps its native-page owner; the derived
+ * presentation applies the server's order.
  *
  * Every HTTP request is bounded, but a complete refresh grows with loaded history
- * and new head arrivals. There is no cross-request server snapshot or maxPages.
+ * and new head arrivals. The adapter owns any cross-request server snapshot.
  */
 export function keysetFeedOptions<TRow extends KeysetRow>(
   client: QueryClient,
@@ -92,21 +95,21 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
     initialPageParam: { start: true },
     placeholderData: undefined,
     async queryFn(context): Promise<Page> {
-      const previous = cached();
+      const previous = reads.revalidate ? cached() : undefined;
       const index = previous?.pageParams.findIndex(param => JSON.stringify(param ?? { start: true }) === JSON.stringify(context.pageParam ?? { start: true })) ?? -1;
       const oldPage = index < 0 ? undefined : previous?.pages[index];
       const owned = new Set(previous?.pages.flatMap((page) => page.rows.map((row) => row.id)));
       const newer = context.pageParam !== null && typeof context.pageParam === "object" && "after" in context.pageParam
         ? context.pageParam : null;
       const older = typeof context.pageParam === "string" ? context.pageParam : null;
-      if (!oldPage || oldPage.through === null) {
+      if (!reads.revalidate || !oldPage || oldPage.through === null) {
         if (newer && !reads.newer) throw new Error("Keyset feed does not support newer-page reads.");
         const page = newer && reads.newer
           ? await reads.newer(newer.after, reads.pageSize, context)
           : await reads.window(older, null, reads.pageSize, context);
         context.signal.throwIfAborted();
         return {
-          rows: page.rows.filter((row) => !owned.has(row.id)),
+          rows: reads.revalidate ? page.rows.filter((row) => !owned.has(row.id)) : page.rows,
           through: page.older_cursor,
           hasOlder: page.has_older,
           count: page.count,
@@ -167,7 +170,7 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
     },
     getNextPageParam(lastPage, allPages) {
       // Native sequential refetch must not move older cuts with a growing head.
-      const savedNext = cached()?.pageParams[allPages.length];
+      const savedNext = reads.revalidate ? cached()?.pageParams[allPages.length] : undefined;
       // Null is the original anchored page after newer pages were prepended;
       // TanStack reserves null for exhaustion, so keep that saved boundary as
       // an explicit first-window cursor during sequential refetch.
@@ -211,6 +214,13 @@ export interface AuthoredKeysetFeedOptions<
   dataProviderName?: string;
   models: readonly string[];
   pageSize: number;
+  /** Native request lifecycle policy; identity and retained pages stay with this owner. */
+  queryOptions?: Pick<UseInfiniteQueryOptions<
+    KeysetFeedPage<TRow>, Error, InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>,
+    QueryKey, KeysetFeedCursor
+  >, "staleTime" | "gcTime" | "retry" | "retryDelay" | "retryOnMount"
+    | "refetchOnMount" | "refetchOnWindowFocus" | "refetchOnReconnect"
+    | "refetchInterval" | "refetchIntervalInBackground">;
   window: {
     document: TWindow;
     variables: (before: string | null, through: string | null, limit: number) => AuthoredVariables<TWindow>;
@@ -218,7 +228,8 @@ export interface AuthoredKeysetFeedOptions<
     /** Optional native newer-page read using the same operation and scope. */
     newerVariables?: (after: string, limit: number) => AuthoredVariables<TWindow>;
   };
-  revalidate: {
+  /** Omit for snapshot feeds whose explicit refresh restarts native page discovery. */
+  revalidate?: {
     document: TRevalidation;
     variables: (ids: string[]) => AuthoredVariables<TRevalidation>;
     select: (data: DocumentData<TRevalidation>) => KeysetFeedRevalidation<TRow>;
@@ -232,7 +243,10 @@ export function useAuthoredKeysetFeed<
   TRevalidation extends AuthoredDocument,
 >(options: AuthoredKeysetFeedOptions<TRow, TWindow, TRevalidation>): UseInfiniteQueryResult<
   InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>, Error
-> {
+> & {
+  /** Discard loaded history and explicitly fetch the first page, including disabled/static feeds. */
+  restart: () => Promise<void>;
+} {
   const client = useQueryClient();
   const dataProvider = useDataProvider();
   const activeProvider = useActiveDataProviderName();
@@ -241,7 +255,7 @@ export function useAuthoredKeysetFeed<
   const enabled = Boolean(actor) && (options.enabled ?? true);
   const queryKey = ["angee", "authored", "keyset-feed", actor,
     authoredQueryKey(window.document, window.variables(null, null, pageSize), provider),
-    authoredQueryKey(revalidate.document, revalidate.variables([]), provider),
+    ...(revalidate ? [authoredQueryKey(revalidate.document, revalidate.variables([]), provider)] : []),
   ] as const;
   const configured = keysetFeedOptions(client, {
     queryKey,
@@ -256,13 +270,25 @@ export function useAuthoredKeysetFeed<
         dataProvider, provider, window.document, window.newerVariables!(after, limit), context,
       ),
     ) : undefined,
-    revalidate: async (ids, context) => revalidate.select(
+    revalidate: revalidate ? async (ids, context) => revalidate.select(
       await requestAuthoredData<DocumentData<TRevalidation>>(
         dataProvider, provider, revalidate.document, revalidate.variables(ids), context,
       ),
-    ),
+    ) : undefined,
   });
   useAuthoredLiveInterest(enabled, models);
   useAuthoredErrorPolicy([queryKey]);
-  return useInfiniteQuery({ ...configured, enabled, meta: sharedAuthoredMeta(client, queryKey, models) });
+  const result = useInfiniteQuery({
+    ...options.queryOptions, ...configured, enabled,
+    meta: sharedAuthoredMeta(client, queryKey, models, [], [], options.queryOptions),
+  });
+  // Preserve native tracked getters rather than observing every result field via a spread.
+  return Object.assign(result, {
+    async restart() {
+      if (!actor) return;
+      await client.resetQueries({ queryKey, exact: true }, { throwOnError: true });
+      // Native reset refetches active queries, but skips disabled/static observers.
+      if (client.getQueryData(queryKey) === undefined) await result.refetch({ throwOnError: true });
+    },
+  });
 }

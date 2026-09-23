@@ -32,7 +32,7 @@ export const ConnectImapChannel = graphql(`
 `);
 
 export const PreviewImapSample = graphql(`
-  mutation PreviewImapSample(
+  query PreviewImapSample(
     $id: ID!
     $mailbox: String!
     $since: Date
@@ -41,6 +41,7 @@ export const PreviewImapSample = graphql(`
     $uidvalidity: Int
     $upperUid: Int
     $beforeUid: Int
+    $totalCount: Int
     $limit: Int!
   ) {
     preview_imap_sample(
@@ -52,6 +53,7 @@ export const PreviewImapSample = graphql(`
       uidvalidity: $uidvalidity
       upper_uid: $upperUid
       before_uid: $beforeUid
+      total_count: $totalCount
       limit: $limit
     ) {
       mailbox
@@ -59,7 +61,6 @@ export const PreviewImapSample = graphql(`
       upper_uid
       total_count
       next_before_uid
-      truncated
       messages { uid subject sent_at sender size flags }
     }
   }
