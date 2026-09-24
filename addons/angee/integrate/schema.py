@@ -18,7 +18,9 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Count, Q
 from django.utils import timezone
+from django.utils.translation import gettext as _
 from rebac import MissingActorError, PermissionDenied, system_context
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -26,7 +28,13 @@ from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.db import get_write_alias
 from angee.base.identity import public_id_of
-from angee.graphql.actions import ActionResult, action_target, resolve_action_target
+from angee.graphql.actions import (
+    ActionResult,
+    action_guard,
+    action_target,
+    authorized_action_target,
+    resolve_action_target,
+)
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -53,6 +61,7 @@ from angee.integrate.models import Bridge, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.queue import queue_bridge_sync
+from angee.integrate.records import DiscrepancyStatus
 from angee.integrate.registry import models_with
 
 logger = logging.getLogger(__name__)
@@ -1224,13 +1233,13 @@ class VendorType(AngeeNode):
 
 @strawberry.type
 class IntegrationLabelMixin:
-    """Project ``Integration.display_label`` as the ``display_name`` field for a type.
+    """Project Integration identity, credential health and saved-stream visibility.
 
     Compose alongside the node base, e.g. ``class ChannelType(IntegrationLabelMixin,
     AngeeNode)``, to surface the operator label (falling back to ``Vendor
-    (lifecycle)``) on every ``Integration`` child type without re-declaring the
-    resolver. A ``@strawberry.type`` (not an interface): merges the field into the
-    concrete type without adding a GraphQL interface to the SDL.
+    (lifecycle)``) and annotated ``stream_count`` on every ``Integration`` child
+    type. A ``@strawberry.type`` (not an interface): merges fields into the concrete
+    type without adding a GraphQL interface to the SDL.
     """
 
     @strawberry_django.field(only=["display_name", "vendor", "lifecycle"])
@@ -1244,6 +1253,12 @@ class IntegrationLabelMixin:
         """Return the attached credential's status, or ``""`` when none is attached."""
 
         return str(cast(Any, self).credential_status)
+
+    @strawberry_django.field(annotate=Count("sync_streams", distinct=True))
+    def stream_count(self) -> int:
+        """Count retained streams through the same Integration permission owner."""
+
+        return cast(int, cast(Any, self).stream_count)
 
 
 @strawberry.type
@@ -1391,7 +1406,7 @@ class SyncStreamType(AngeeNode):
     direction: auto
     generation: auto
     phase: auto
-    cursor: JSON
+    cursor: JSON = strawberry_django.field(metadata={"angee_widget": "angee.integrate.sync_cursor"})
     cursor_expires_at: auto
     resync_required: auto
     last_advanced_at: auto
@@ -1399,6 +1414,24 @@ class SyncStreamType(AngeeNode):
     absence_threshold: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(
+        annotate=Count(
+            "discrepancies",
+            filter=Q(discrepancies__status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY)),
+            distinct=True,
+        )
+    )
+    def open_discrepancy_count(self) -> int:
+        """Count unresolved quarantine, including requested retries, in the row query."""
+
+        return cast(int, cast(Any, self).open_discrepancy_count)
+
+    @strawberry_django.field(annotate=Count("links", distinct=True))
+    def link_count(self) -> int:
+        """Count replica identities without multiplying the discrepancy join."""
+
+        return cast(int, cast(Any, self).link_count)
 
 
 @strawberry_django.type(RecordLink)
@@ -1420,6 +1453,18 @@ class RecordLinkType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["target_ct_id", "target_id"])
+    def model_label(self) -> str:
+        """Project target identity through the shared record-reference owner."""
+
+        return cast(Any, self).record_model_label
+
+    @strawberry_django.field(only=["target_ct_id", "target_id"])
+    def record_id(self) -> PublicID:
+        """Return the target public id; navigation rechecks the target's read policy."""
+
+        return PublicID(cast(Any, self).record_public_id)
+
 
 @strawberry_django.type(RecordRevision)
 class RecordRevisionType(AngeeNode):
@@ -1438,7 +1483,7 @@ class RecordRevisionType(AngeeNode):
 
 @strawberry_django.type(SyncDiscrepancy)
 class SyncDiscrepancyType(AngeeNode):
-    """Read-only record quarantine without a mutation or work-queue surface."""
+    """Read-only record quarantine; operator transitions use manager-backed actions."""
 
     stream: SyncStreamType
     link: RecordLinkType | None
@@ -1459,9 +1504,24 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
     SyncStreamType,
     model=SyncStream,
     name="sync_streams",
-    filterable=["id", "integration", "key", "partition", "kind", "phase", "generation", "resync_required"],
-    sortable=["key", "partition", "generation", "last_advanced_at"],
+    filterable=[
+        "id",
+        "integration",
+        "key",
+        "partition",
+        "kind",
+        "direction",
+        "phase",
+        "generation",
+        "resync_required",
+        "last_advanced_at",
+        "last_reconciled_at",
+    ],
+    sortable=[
+        "key", "partition", "kind", "direction", "phase", "generation", "last_advanced_at", "last_reconciled_at",
+    ],
     aggregatable=["id"],
+    groupable=["key", "partition", "kind", "direction", "phase", "resync_required"],
     insert=False,
     update=False,
     delete=False,
@@ -1471,9 +1531,12 @@ _RECORD_LINK_RESOURCE = hasura_model_resource(
     RecordLinkType,
     model=RecordLink,
     name="record_links",
-    filterable=["id", "stream", "external_key", "status", "origin"],
-    sortable=["external_key", "last_seen_at", "status"],
+    filterable=[
+        "id", "stream", "stream__integration", "external_key", "status", "origin", "remote_version", "last_seen_at",
+    ],
+    sortable=["external_key", "last_seen_at", "status", "origin", "remote_version"],
     aggregatable=["id"],
+    groupable=["status", "origin"],
     insert=False,
     update=False,
     delete=False,
@@ -1495,14 +1558,52 @@ _SYNC_DISCREPANCY_RESOURCE = hasura_model_resource(
     SyncDiscrepancyType,
     model=SyncDiscrepancy,
     name="sync_discrepancies",
-    filterable=["id", "stream", "link", "kind", "code", "status"],
+    filterable=["id", "stream", "stream__integration", "link", "kind", "code", "status", "retry_at", "created_at"],
     sortable=["kind", "status", "retry_at", "created_at"],
     aggregatable=["id"],
+    groupable=["kind", "code", "status"],
     insert=False,
     update=False,
     delete=False,
     field_id_decode={"stream": public_pk_decoder(SyncStream), "link": public_pk_decoder(RecordLink)},
 )
+
+
+@strawberry.type
+class SyncRecordActionMutation:
+    """Admin-gated operational transitions on the bridge-owned record protocol."""
+
+    @strawberry.mutation(name="resolveSyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not resolve the discrepancy.")
+    def resolve_sync_discrepancy(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Dispatch resolution through the discrepancy manager after row authorization."""
+
+        using = get_write_alias(SyncDiscrepancy)
+        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write", using=using)
+        SyncDiscrepancy.objects.db_manager(using).resolve(discrepancy, using=using)
+        return ActionResult(ok=True, message=_("Discrepancy resolved."))
+
+    @strawberry.mutation(name="retrySyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not retry the discrepancy.")
+    def retry_sync_discrepancy(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Make quarantine due now through its retained-history owner."""
+
+        using = get_write_alias(SyncDiscrepancy)
+        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write", using=using)
+        SyncDiscrepancy.objects.db_manager(using).retry(discrepancy, using=using)
+        return ActionResult(ok=True, message=_("Discrepancy retry requested."))
+
+    @strawberry.mutation(name="resyncSyncStream", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not request a stream resync.")
+    def resync_sync_stream(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Request the driver-owned baseline transition without running a cycle."""
+
+        using = get_write_alias(SyncStream)
+        stream = authorized_action_target(info, SyncStream, id, "write", using=using)
+        SyncStream.objects.db_manager(using).request_resync(stream, using=using)
+        return ActionResult(ok=True, message=_("Stream resync requested."))
+
+
 _INTEGRATION_RESOURCE = hasura_model_resource(
     IntegrationType,
     model=Integration,
@@ -1821,6 +1922,7 @@ schemas = {
             IntegrationCredentialMutation,
             IntegrationActionMutation,
             WebhookActionMutation,
+            SyncRecordActionMutation,
         ],
         "subscription": [
             changes(Integration, field="integrationChanged"),

@@ -41,6 +41,7 @@ interface RowActionDeclarationBase<TRow extends Row> {
   visible: (row: TRow) => boolean;
   disabled: (row: TRow) => boolean;
   pendingPolicy: RowActionPendingPolicy;
+  confirm?: RowActionConfirmCopy<TRow>;
 }
 
 /** An authored mutation rendered and run by the shared row-action surface. */
@@ -51,7 +52,6 @@ export interface AuthoredRowActionDeclaration<TRow extends Row>
   variables: (row: TRow) => unknown;
   succeeded: (result: unknown) => boolean;
   invalidateModels: readonly string[];
-  confirm?: RowActionConfirmCopy<TRow>;
   toast: RowActionToastCopy<TRow>;
 }
 
@@ -284,12 +284,30 @@ interface AuthoredRowActionButtonProps<TRow extends Row> {
   row: TRow;
 }
 
+/** Both generated callbacks and authored mutations share confirmation semantics. */
+function useRowActionConfirmation<TRow extends Row>(
+  action: RowActionDeclarationBase<TRow>,
+  row: TRow,
+): () => Promise<boolean> {
+  const requestConfirm = useConfirm();
+  return React.useCallback(async () => {
+    if (!action.confirm) return true;
+    return requestConfirm({
+      title: action.confirm.title(row),
+      body: action.confirm.body(row),
+      confirm: action.confirm.confirm(row),
+      ...(action.confirm.cancel ? { cancel: action.confirm.cancel(row) } : {}),
+      danger: true,
+    });
+  }, [action, requestConfirm, row]);
+}
+
 function AuthoredRowActionButton<TRow extends Row>({
   action,
   controller,
   row,
 }: AuthoredRowActionButtonProps<TRow>): React.ReactElement {
-  const requestConfirm = useConfirm();
+  const confirmAction = useRowActionConfirmation(action, row);
   const toast = useToast();
   const mutationOptions = React.useMemo(
     () => ({
@@ -306,18 +324,7 @@ function AuthoredRowActionButton<TRow extends Row>({
   const busy = controller.pending !== null;
   const runArmed = React.useCallback(async (): Promise<void> => {
     try {
-      if (action.confirm) {
-        const accepted = await requestConfirm({
-          title: action.confirm.title(row),
-          body: action.confirm.body(row),
-          confirm: action.confirm.confirm(row),
-          ...(action.confirm.cancel
-            ? { cancel: action.confirm.cancel(row) }
-            : {}),
-          danger: true,
-        });
-        if (!accepted) return;
-      }
+      if (action.confirm && !await confirmAction()) return;
       controller.commit(action.id, row);
       // The unexported declaration brand proves this document and projector
       // were paired by defineRowAction before the heterogeneous array erased TDocument.
@@ -333,7 +340,7 @@ function AuthoredRowActionButton<TRow extends Row>({
     } finally {
       controller.release(action.id, row);
     }
-  }, [action, controller, mutate, requestConfirm, row, toast]);
+  }, [action, confirmAction, controller, mutate, row, toast]);
 
   return (
     <RowActionButton
@@ -360,6 +367,7 @@ function PageRowActionButton<TRow extends Row>({
   controller,
   row,
 }: PageRowActionButtonProps<TRow>): React.ReactElement {
+  const confirmAction = useRowActionConfirmation(action, row);
   const active =
     controller.pending?.actionId === action.id
     && controller.pending.row === row
@@ -367,12 +375,13 @@ function PageRowActionButton<TRow extends Row>({
   const busy = controller.pending !== null;
   const runArmed = React.useCallback(async (): Promise<void> => {
     try {
+      if (action.confirm && !await confirmAction()) return;
       controller.commit(action.id, row);
       await action.onSelect(row);
     } finally {
       controller.release(action.id, row);
     }
-  }, [action, controller, row]);
+  }, [action, confirmAction, controller, row]);
   return (
     <RowActionButton
       action={action}

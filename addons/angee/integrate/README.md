@@ -21,6 +21,7 @@ defers terminal telemetry to that owner. Direct bridges still return an integer.
 | Source/local field declarations, immutable provenance and explicit imports | [ExternalOwnershipMixin and ExternalOwnershipManager](ownership.py) |
 | Concurrent nested JSON edits | [merge_json_state](models.py) |
 | Operator inspection | Read-only record-sync resources in [the console schema](schema.py), inheriting [Integration permissions](permissions.zed) |
+| Saved-record Streams tab, discrepancy/link drill-downs and cursor summary | [Generic Streams data views](web/src/IntegrationStreams.tsx), contributed once to Integration forms by [the web addon](web/src/index.tsx) |
 
 Event feeds compose their domain's idempotent ingest verb and never create links
 or revisions. Messaging uses conversation partitions for Slack and mailbox

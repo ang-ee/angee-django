@@ -1,4 +1,4 @@
-import { formViewRecordActionsSlot, type BaseMenuItem } from "@angee/ui";
+import { Tab, formViewRecordActionsSlot, formViewSectionsSlot, type BaseMenuItem } from "@angee/ui";
 import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
@@ -15,6 +15,13 @@ import {
 } from "./connect/redirects";
 import { enIntegrateMessages } from "./i18n";
 import { integrationSyncProgressWidget } from "./sync-fragments";
+import {
+  INTEGRATION_STREAMS_TAB_ID,
+  IntegrationStreamsPane,
+  StreamsLabel,
+  integrationHasStreams,
+  integrationSyncCursorWidget,
+} from "./IntegrationStreams";
 import {
   DisconnectIntegrationAction,
   INTEGRATION_DISCONNECT_ACTION_ID,
@@ -110,17 +117,35 @@ const integrate = defineBaseAddon({
   routes: integrateRoutes,
   menus: integrateMenu,
   i18n: { integrate: enIntegrateMessages },
-  widgets: { integrationSyncProgress: integrationSyncProgressWidget },
+  widgets: {
+    integrationSyncProgress: integrationSyncProgressWidget,
+    "angee.integrate.sync_cursor": integrationSyncCursorWidget,
+  },
   // The credential CRUD form: used by the Credentials page "New" and the
   // relation-picker inline create (e.g. an Integration's credential field).
   forms: {
     "integrate.Credential": credentialCreateForm,
   },
-  // Lifecycle verbs contributed against the MTI parent, so every integration
-  // subtype's form inherits them. Connecting is not among them: it means a real
+  // Saved-record streams and lifecycle verbs target the MTI parent, so every
+  // integration subtype's form inherits them. Connecting means a real
   // handshake wherever an integration has credentials, and the addon that owns
   // the vendor contributes that against its own model.
   slots: [
+    {
+      ...formViewSectionsSlot(INTEGRATION_MODEL),
+      id: INTEGRATION_STREAMS_TAB_ID,
+      sequence: 30,
+      content: (
+        <Tab
+          id="streams"
+          label={<StreamsLabel />}
+          requiredFields={["stream_count"]}
+          visibleWhen={integrationHasStreams}
+        >
+          <IntegrationStreamsPane />
+        </Tab>
+      ),
+    },
     {
       ...formViewRecordActionsSlot(INTEGRATION_MODEL),
       id: INTEGRATION_PAUSE_ACTION_ID,

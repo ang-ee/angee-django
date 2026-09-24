@@ -1985,6 +1985,35 @@ describe("FormView", () => {
     });
   });
 
+  test.each([
+    ["parties.Party", "Ready", true],
+    ["notes.Note", "Ready", true],
+    ["notes.Note", "Empty", false],
+  ] as const)("selects inherited tab dependencies on %s and evaluates %s visibility", async (resource, title, visible) => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "record-1", title };
+    const visibleWhen = vi.fn((record: Row) => record.title === "Ready");
+    renderWithProviders(
+      <FormView resource={resource} id="record-1" fields={[]} />,
+      mtiMetadata(),
+      undefined,
+      {
+        slots: [{
+          ...formViewSectionsSlot("parties.Party"),
+          id: "party.related",
+          content: (
+            <Tab id="related" label="Related" requiredFields={["title"]} visibleWhen={visibleWhen}>
+              <p>Related records</p>
+            </Tab>
+          ),
+        }],
+      },
+    );
+    await waitFor(() => expect(visibleWhen).toHaveBeenCalledWith(expect.objectContaining({ title })));
+    expect(sdkMocks.recordSelection).toContain("title");
+    expect(screen.queryAllByRole("tab", { name: "Related" })).toHaveLength(visible ? 1 : 0);
+  });
+
   test("composes FORM_VIEW_SECTIONS_SLOT tabs through the saved-record tab owner", async () => {
     sdkMocks.record = { id: "note-1", title: "Slot note" };
 

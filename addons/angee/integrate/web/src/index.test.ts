@@ -1,6 +1,7 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
 import {
   formViewRecordActionsSlot,
+  formViewSectionsSlot,
   MenuTree,
   type BaseMenuItem,
   type ChromeMenuItem,
@@ -184,5 +185,18 @@ describe("integrate addon manifest", () => {
     const ids = (integrate.slots ?? []).map((entry) => entry.id);
     expect(ids).not.toContain("integrate.lifecycle.connect");
     expect(integrate.i18n?.integrate?.["lifecycle.connect"]).toBeUndefined();
+  });
+
+  test("contributes one Streams section to the Integration parent without a new route", () => {
+    const target = formViewSectionsSlot(INTEGRATION_MODEL);
+    const sections = (integrate.slots ?? []).filter((entry) => entry.slot === target.slot);
+
+    expect(sections).toHaveLength(1);
+    expect(sections[0]).toMatchObject(target);
+    expect(sections[0]?.impl).toBeUndefined();
+    expect((integrate.routes ?? []).some((route) => /stream|discrepancy|record-link/.test(route.name)))
+      .toBe(false);
+    expect(integrate.widgets?.integrationSyncProgress).toBeDefined();
+    expect(integrate.widgets?.["angee.integrate.sync_cursor"]).toBeDefined();
   });
 });

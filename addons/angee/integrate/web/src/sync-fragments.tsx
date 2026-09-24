@@ -99,15 +99,20 @@ function syncWidget(name: IntegrationSyncFieldName): string | undefined {
   return undefined;
 }
 
-function SyncProgress({ value }: WidgetRenderProps): ReactElement {
+/** One workflow run link shared by bridge progress and stream inspection. */
+export function IntegrationSyncRunLink({ value }: { value: unknown }): ReactElement | null {
   const t = useIntegrateT();
   const recordHref = useResourceRecordHrefLookup();
   const details = jsonObjectFromUnknown(jsonObjectFromUnknown(value)?.details);
   const run = details?.run;
   const href = typeof run === "string" ? recordHref("workflows.WorkflowRun", run) : undefined;
+  return href ? <TextLink href={href}>{t("sync.openRun")}</TextLink> : null;
+}
+
+function SyncProgress({ value }: WidgetRenderProps): ReactElement {
   return (
     <div className="space-y-2">
-      {href ? <TextLink href={href}>{t("sync.openRun")}</TextLink> : null}
+      <IntegrationSyncRunLink value={value} />
       <JsonValueView value={value} />
     </div>
   );

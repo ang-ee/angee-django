@@ -238,6 +238,8 @@ function tabDescriptor(props: TabProps): TabDescriptor {
     ...(props.icon !== undefined ? { icon: props.icon } : {}),
     ...(props.badge !== undefined ? { badge: props.badge } : {}),
     ...(props.hidden !== undefined ? { hidden: props.hidden } : {}),
+    ...(props.requiredFields !== undefined ? { requiredFields: props.requiredFields } : {}),
+    ...(props.visibleWhen !== undefined ? { visibleWhen: props.visibleWhen } : {}),
     ...(props.children !== undefined ? { children: props.children } : {}),
   }));
 }

@@ -59,6 +59,20 @@ def test_epoch_retains_links_revisions_and_quarantine(replica: Any) -> None:
     assert link.last_verified_generation == successor.generation
 
 
+def test_resync_request_follows_latest_epoch_and_leaves_bump_to_driver(replica: Any) -> None:
+    """A retained historical row requests work on its successor without another epoch."""
+
+    successor = SyncStream.objects.bump_generation(replica)
+    requested = SyncStream.objects.request_resync(replica)
+    assert requested.pk == successor.pk
+    assert requested.resync_required
+    assert SyncStream.objects.count() == 2
+    assert SyncStream.objects.request_resync(replica).pk == successor.pk
+    fresh = SyncStream.objects.bump_generation(requested)
+    assert fresh.generation == successor.generation + 1
+    assert fresh.phase == StreamPhase.BASELINE and not fresh.resync_required
+
+
 def test_sweep_absence_unavailable_then_tombstone_and_reappearance(replica: Any) -> None:
     link = RecordLink.objects.observe(replica, "person:1")
     assert RecordLink.objects.mark_absent(replica, [link.external_key]) == 1
@@ -202,6 +216,29 @@ def test_discrepancy_coalescing_rescan_and_resolution_history(replica: Any) -> N
     )
     assert replacement.pk not in (first.pk, future.pk)
     assert SyncDiscrepancy.objects.filter(pk=first.pk, status=DiscrepancyStatus.RESOLVED).exists()
+
+
+def test_retry_is_due_now_but_preserves_conflict_and_resolved_history_guards(replica: Any) -> None:
+    """Retry advances scheduling only; conflict admission and immutable history survive."""
+
+    link = RecordLink.objects.observe(replica, "person:retry")
+    discrepancy = SyncDiscrepancy.objects.record(
+        replica,
+        link=link,
+        kind=DiscrepancyKind.SEMANTIC,
+        code="invalid",
+        retry_at=timezone.now() + timedelta(days=1),
+    )
+    before = timezone.now()
+    retried = SyncDiscrepancy.objects.retry(discrepancy)
+    assert retried.status == DiscrepancyStatus.RETRY and retried.retry_at >= before
+    assert [row.pk for row in SyncDiscrepancy.objects.rescan(replica)] == [retried.pk]
+    conflict = SyncDiscrepancy.objects.record(replica, link=link, kind=DiscrepancyKind.CONFLICT, code="both_changed")
+    SyncDiscrepancy.objects.retry(conflict)
+    assert SyncDiscrepancy.objects.rescan(replica) == ()
+    resolved = SyncDiscrepancy.objects.resolve(discrepancy)
+    with pytest.raises(ValidationError, match="resolved discrepancy"):
+        SyncDiscrepancy.objects.retry(resolved)
 
 
 def test_discrepancy_rescan_is_bounded_before_materialization(replica: Any) -> None:

@@ -44,6 +44,7 @@ from angee.integrate.schema import (
     ConnectIntegrationResult,
     CredentialType,
     ExternalAccountType,
+    IntegrationLabelMixin,
     VendorType,
     apply_integration_patch_fields,
     connect_integration_target,
@@ -73,7 +74,7 @@ User = get_user_model()
 
 
 @strawberry_django.type(InferenceProvider)
-class InferenceProviderType(AngeeNode):
+class InferenceProviderType(IntegrationLabelMixin, AngeeNode):
     """Admin projection of an inference provider child model."""
 
     vendor: VendorType
