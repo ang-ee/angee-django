@@ -177,18 +177,9 @@ class AddonManager(AngeeManager):
             roots_after = roots_before if refusal or name in canonical_roots else (*roots_before, name)
         else:
             declarations = tuple(root for root in roots_before if aliases.get(root, root) == name)
-            config = loaded_configs.get(name)
-            if config is not None and getattr(config, "angee_forced", False):
-                dependants = sorted(
-                    candidate.name
-                    for candidate in loaded_configs.values()
-                    if (manifest := addon_manifest(candidate)) is not None
-                    and any(aliases.get(dependency, dependency) == name for dependency in manifest.depends_on)
-                )
-                required_by = ", ".join(dependants) or "another enabled app"
-                refusal = f"{name} is required by {required_by} and cannot be disabled."
-            elif name not in loaded_configs and not declarations and not self.filter(name=name).exists():
-                refusal = f"{name} is not known to this project."
+            refusal = self.disable_block_reason(
+                name, loaded=loaded_configs, declared=bool(declarations), aliases=aliases
+            )
             roots_after = roots_before if refusal else tuple(root for root in roots_before if root not in declarations)
         after = resolve_manifest_roots(roots_after, manifests, aliases=aliases)
         after_by_name = {manifest.name: manifest for manifest in after}
@@ -229,6 +220,37 @@ class AddonManager(AngeeManager):
             migration_warning=warning,
             settings_text=snapshot.text,
         )
+
+    @staticmethod
+    def _dependants(manifests: Iterable[AddonManifest], *, aliases: Mapping[str, str]) -> dict[str, list[str]]:
+        """Invert the caller's declaration set using canonical dependency names."""
+
+        depended_by: dict[str, list[str]] = {}
+        for manifest in sorted(manifests, key=lambda item: item.name):
+            for dependency in sorted({aliases.get(name, name) for name in manifest.depends_on}):
+                depended_by.setdefault(dependency, []).append(manifest.name)
+        return depended_by
+
+    def disable_block_reason(
+        self,
+        name: str,
+        *,
+        loaded: Mapping[str, AppConfig],
+        declared: bool,
+        aliases: Mapping[str, str],
+    ) -> str | None:
+        """Refuse loaded dependencies or unknown targets, ignoring stale catalogue flags."""
+
+        config = loaded.get(name)
+        if config is not None and getattr(config, "angee_forced", False):
+            manifests = (
+                manifest for candidate in loaded.values() if (manifest := addon_manifest(candidate)) is not None
+            )
+            required_by = ", ".join(self._dependants(manifests, aliases=aliases).get(name, ())) or "another enabled app"
+            return f"{name} is required by {required_by} and cannot be disabled."
+        if name not in loaded and not declared and not self.filter(name=name).exists():
+            return f"{name} is not known to this project."
+        return None
 
     @staticmethod
     def _resolve_app_configs(declarations: Iterable[str]) -> tuple[dict[str, str], dict[str, AppConfig]]:
@@ -328,10 +350,7 @@ class AddonManager(AngeeManager):
         for name, config in loaded.items():
             if (manifest := addon_manifest(config)) is not None:
                 manifests[name] = manifest
-        depended_by: dict[str, list[str]] = {}
-        for name, manifest in sorted(manifests.items()):
-            for dependency in manifest.depends_on:
-                depended_by.setdefault(dependency, []).append(name)
+        depended_by = self._dependants(manifests.values(), aliases=aliases)
         counts = composed.resource_counts(using=using)
         rows = self.using(using)
         with transaction.atomic(using=using):

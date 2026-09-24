@@ -17,6 +17,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
@@ -1047,7 +1048,7 @@ class ConnectionMutation:
 
         ``Credential.check_disconnect()`` validates the model invariant before
         deletion. The login addon's model contribution vetoes removing a user's
-        last sign-in account by raising an :class:`OAuthFlowError`, surfaced here
+        last sign-in account by raising a coded :class:`ValidationError`, surfaced here
         as a typed error rather than a 500.
         """
 
@@ -1072,8 +1073,8 @@ class ConnectionMutation:
                     Credential.objects.db_manager(using).filter(pk=credential.pk).with_action("delete").delete()
                 )
             return UnlinkAccountResult(ok=deleted > 0)
-        except OAuthFlowError as error:
-            return UnlinkAccountResult(ok=False, error=error.public_message, error_code=error.code)
+        except ValidationError as error:
+            return UnlinkAccountResult(ok=False, error="; ".join(error.messages), error_code=error.code)
 
 
 @strawberry.type

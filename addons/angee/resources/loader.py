@@ -24,6 +24,7 @@ from angee.base.permissions import require_authorization_database
 from angee.base.serialization import json_safe
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.widgets import (
     XrefForeignKeyWidget,
     XrefManyToManyWidget,
@@ -688,13 +689,16 @@ def build_resource(
 ) -> AngeeResource:
     """Compose the model's ``resource_class`` with native xref import options.
 
-    The declaration defaults to AngeeResource and must subclass it so every
+    ResourceLoadMixin declares the adapter; other models use AngeeResource.
+    A custom declaration must subclass AngeeResource so every
     adapter retains the same identity, row diagnostics and canonical ledger.
     """
 
     alias = get_write_alias(model, using=using)
     require_authorization_database(alias, operation="Resource loading", error_class=ResourceLoadError)
-    resource_class = getattr(model, "resource_class", AngeeResource)
+    resource_class = model.resource_class if issubclass(model, ResourceLoadMixin) else None
+    if resource_class is None:
+        resource_class = AngeeResource
     if not isinstance(resource_class, type) or not issubclass(resource_class, AngeeResource):
         raise ImproperlyConfigured(f"{model._meta.label}.resource_class must subclass AngeeResource")
     resource_type = resources.modelresource_factory(

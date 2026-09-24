@@ -61,7 +61,6 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
-from rebac.actors import is_sudo
 from rebac.backends import backend as rebac_backend
 from rebac.managers import RebacManager
 
@@ -72,6 +71,7 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, role_anchor
 from angee.base.refs import RecordRefMixin, canonical_record_target
+from angee.base.scoping import elevated
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -254,7 +254,7 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
         read access to the backend row itself.
         """
 
-        with contextlib.nullcontext() if is_sudo() else system_context(reason="storage.drive.storage"):
+        with elevated(reason="storage.drive.storage"):
             field = self._meta.get_field("backend")
             backend = field.get_cached_value(self, default=None)
             if backend is None:
@@ -1283,7 +1283,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         from the per-``(row, config)`` backend cache.
         """
 
-        with contextlib.nullcontext() if is_sudo() else system_context(reason="storage.file.storage"):
+        with elevated(reason="storage.file.storage"):
             using = get_read_alias(type(self)._meta.get_field("drive").related_model, instance=self)
             drive: Any = related_on(self, "drive", using=using, select_related=("backend",))
             return drive.storage

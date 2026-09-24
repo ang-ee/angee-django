@@ -541,7 +541,7 @@ def resolve_impl_class[T](registry_setting: str, key: str, base_class: type[T]) 
     return impl
 
 
-def resolve_all_impl_classes[T](
+def resolve_all_impl_classes[T: ImplBase](
     registry_setting: str,
     base_class: type[T],
     *,
@@ -559,7 +559,7 @@ def resolve_all_impl_classes[T](
     for key in sorted(impl_registry(registry_setting)):
         try:
             impl = resolve_impl_class(registry_setting, key, base_class)
-            declared_key = getattr(impl, "key", None)
+            declared_key = impl.key
             if declared_key != key:
                 raise ImproperlyConfigured(
                     f"settings.{registry_setting}[{key!r}] resolves "

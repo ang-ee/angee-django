@@ -31,7 +31,7 @@ from rebac import (
     to_object_ref,
     write_relationships,
 )
-from rebac.actors import is_sudo as ambient_is_sudo
+from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 from rebac.types import RelationshipFilter
 
@@ -415,7 +415,7 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         self._state.db = using
         refresh_deferred(self, using=using)
 
-        if not ambient_is_sudo():
+        if not is_sudo():
             loaded_category = getattr(self, "_loaded_category", None)
             if self.category in self.SYSTEM_CATEGORIES and (
                 self._state.adding or loaded_category != self.category
@@ -442,7 +442,7 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         self._state.db = using
         refresh_deferred(self, using=using)
 
-        if not ambient_is_sudo() and self.category in self.SYSTEM_CATEGORIES:
+        if not is_sudo() and self.category in self.SYSTEM_CATEGORIES:
             raise ValidationError({"category": "System-provisioned stages cannot be deleted."})
         return super().delete(*args, **kwargs)
 
@@ -1308,7 +1308,7 @@ class TaskWork(StagedModelMixin):
             or getattr(self, "_work_internal_status", False)
             # Audited system bypass (resource seeding/provisioning) — the same
             # precedent Stage.save applies to system-category stages.
-            or ambient_is_sudo()
+            or is_sudo()
         ):
             return
         stage = related_on(self, "stage", using=using)

@@ -11,6 +11,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import MinValueValidator
 from django.db import IntegrityError, connection, models, router, transaction
+from django.test.utils import CaptureQueriesContext
 
 from angee.base.models import AngeeModel
 from tests.test_transitions import TransitionRouter
@@ -72,6 +73,46 @@ def validation_writer(database_alias: Callable[[str], AbstractContextManager[str
         with connection.schema_editor() as editor:
             editor.delete_model(ValidationRecord)
             editor.delete_model(ValidationTarget)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "values, options",
+    [
+        ({}, {}),
+        ({"code": "existing", "slot": "existing", "label": "existing"}, {}),
+        ({"target_id": None, "code": "", "label": "invalid", "amount": -1}, {}),
+        ({"code": "existing", "amount": -1}, {"exclude": {"code", "amount"}}),
+        ({"code": "existing"}, {"validate_unique": False}),
+        ({"amount": -1}, {"validate_constraints": False}),
+    ],
+)
+def test_default_alias_validation_matches_django(
+    validation_writer: str, values: dict[str, Any], options: dict[str, Any]
+) -> None:
+    """Default delegation preserves native errors, queries, cleaning and affinity."""
+
+    target = ValidationTarget.objects.create()
+    ValidationRecord.objects.create(target=target, code="existing", slot="existing", label="existing")
+    outcomes = []
+    for native in (True, False):
+        candidate = ValidationRecord(target_id=target.pk, code="new", slot="new", label="new")
+        for name, value in values.items():
+            setattr(candidate, name, value)
+        errors = {}
+        with CaptureQueriesContext(connection) as queries:
+            try:
+                if native:
+                    candidate.full_clean(**options)
+                else:
+                    candidate.full_clean_for_write(using="default", **options)
+            except ValidationError as error:
+                errors = {
+                    name: [(str(item), item.code) for item in items]
+                    for name, items in error.error_dict.items()
+                }
+        outcomes.append((errors, [query["sql"] for query in queries], candidate.cleaned_using, candidate._state.db))
+    assert outcomes[0] == outcomes[1]
 
 
 @pytest.mark.django_db(transaction=True)

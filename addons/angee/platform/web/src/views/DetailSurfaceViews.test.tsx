@@ -154,15 +154,15 @@ describe("platform detail surfaces", () => {
   });
 
   test("AddonDetail names an unresolved catalogue entry by its canonical name", () => {
-    routerMocks.params = { id: "arp.base" };
+    routerMocks.params = { id: "example.base" };
     platformMocks.usePlatformAddon.mockReturnValue({
       addon: {
         field_count: 0,
-        id: "arp.base",
+        id: "example.base",
         kind: "required",
         label: "",
         model_count: 0,
-        namespace: "arp",
+        namespace: "example",
         resource_count: 0,
       },
       dependedBy: [],
@@ -173,7 +173,7 @@ describe("platform detail surfaces", () => {
 
     render(<AddonDetail />);
 
-    expect(screen.getByRole("heading", { name: "arp.base" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "example.base" })).toBeTruthy();
   });
 
   test("ModelDetail keeps metric links navigable", () => {

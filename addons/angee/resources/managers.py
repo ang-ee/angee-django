@@ -30,10 +30,10 @@ from angee.resources.entries import (
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import materialize_grant_groups
 from angee.resources.loader import (
-    AngeeResource,
     DryRunRollback,
     build_resource,
 )
+from angee.resources.mixins import ResourceLoadMixin
 
 
 class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
@@ -176,7 +176,11 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         try:
             reason = "resources.validate" if dry_run else "resources.load"
             with system_context(reason=reason), transaction.atomic(using=using):
-                resource_classes = {getattr(group.model, "resource_class", AngeeResource) for group, _ in loaded_groups}
+                resource_classes = {
+                    group.model.resource_class
+                    for group, _ in loaded_groups
+                    if issubclass(group.model, ResourceLoadMixin) and group.model.resource_class is not None
+                }
                 for resource_class in sorted(resource_classes, key=lambda cls: (cls.__module__, cls.__qualname__)):
                     resource_class.lock_imports(loaded_groups, using=using)
                 for entry in entries:

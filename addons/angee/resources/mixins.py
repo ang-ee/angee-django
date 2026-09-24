@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import TYPE_CHECKING, ClassVar
 
 from django.db import models
+
+if TYPE_CHECKING:
+    from angee.resources.loader import AngeeResource
 
 
 class ResourceLoadMixin(models.Model):
@@ -14,6 +18,13 @@ class ResourceLoadMixin(models.Model):
     same batch and options. A skipped local action still delegates; an exception
     aborts the chain and the loader's transaction. Shared abstract ancestry lets
     Python invoke each participant once on the final concrete model.
+    """
+
+    resource_class: ClassVar[type[AngeeResource] | None] = None
+    """Optional native import adapter, validated by build_resource before loading.
+
+    None uses AngeeResource. Custom adapters and batch lock hooks require this
+    mixin, so the loader and its lock preflight consume the same declaration.
     """
 
     class Meta:

@@ -7,7 +7,6 @@ ONLY_SIGN_IN_METHOD = "only_sign_in_method"
 
 _PUBLIC_MESSAGES = {
     IDENTITY_RESOLUTION_FAILED: "The sign-in identity could not be resolved.",
-    ONLY_SIGN_IN_METHOD: "This is your only sign-in method.",
 }
 
 

@@ -20,6 +20,7 @@ from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
 from angee.resources.loader import AngeeResource, build_resource
+from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.models import Resource
 from angee.resources.tiers import ResourceTier
 from angee.resources.widgets import (
@@ -2422,7 +2423,7 @@ def test_resource_factory_defaults_and_model_declared_native_subclass(tmp_path: 
         class Meta:
             abstract = True
 
-    class SelectedModel(DefaultModel):
+    class SelectedModel(ResourceLoadMixin, DefaultModel):
         resource_class = CustomResource
 
         class Meta:
@@ -2439,7 +2440,7 @@ def test_resource_factory_defaults_and_model_declared_native_subclass(tmp_path: 
     assert selected.fields["_xref"].readonly
     assert selected._meta.store_instance and selected._meta.report_skipped
 
-    class InvalidModel(DefaultModel):
+    class InvalidModel(ResourceLoadMixin, DefaultModel):
         resource_class = object
 
         class Meta:

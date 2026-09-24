@@ -357,6 +357,12 @@ class AngeeModel(TimestampMixin, RebacMixin):
         the instance temporarily pinned to the operation alias and must bind
         any queries they own to that alias; validation restores the caller's
         database state even when it raises.
+
+        Upstream gap: Django 6.0 ``Model.full_clean`` and ``Field.validate``
+        accept no ``using`` argument. FK existence and unique checks choose
+        routers independently, while only ``BaseConstraint.validate`` exposes
+        an alias. Keep default-alias parity tests when upgrading Django; retire
+        this adapter when native validation can bind the complete operation.
         """
 
         if using == DEFAULT_DB_ALIAS:

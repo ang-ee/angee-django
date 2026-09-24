@@ -13,7 +13,13 @@ from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
 from angee.base.db import get_write_alias, related_on
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin
+from angee.base.mixins import (
+    ArchiveMixin,
+    ArchiveQuerySet,
+    AuditMixin,
+    ConditionalSharedReaderMixin,
+    ConditionalSharedReaderQuerySet,
+)
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.permissions import require_authorization_database
 from angee.resources.mixins import ResourceLoadMixin
@@ -381,7 +387,7 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
                 _invalid_query(f"{path}.source.refresh.seconds", "interval must be from 5 to 3600 seconds")
 
 
-class DashboardQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+class DashboardQuerySet(ConditionalSharedReaderQuerySet[Any], ArchiveQuerySet[Any], AngeeQuerySet[Any]):
     """Archive scopes layered over actor-scoped dashboard reads."""
 
 
@@ -389,20 +395,15 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
     """Own target resolution and snapshot writes, including CAS and child diffs."""
 
     def for_target(self, owner: Any, scope: str, scope_key: str | None) -> Any | None:
-        """Return the actor-readable authored target, then the system-read installed baseline."""
+        """Return the readable target, preferring the actor's authored snapshot."""
 
         if scope == "personal":
             raise ValueError("Personal dashboards resolve by public id.")
-        authored = self.filter(owner=owner, scope=scope, scope_key=scope_key).first()
-        if authored is not None:
-            return authored
-        with system_context(reason="dashboards.resolve installed target"):
-            return (
-                cast(Any, self.model)
-                .system_queryset()
-                .filter(owner__isnull=True, scope=scope, scope_key=scope_key)
-                .first()
-            )
+        return (
+            self.filter(models.Q(owner=owner) | models.Q(owner__isnull=True), scope=scope, scope_key=scope_key)
+            .order_by(models.F("owner").desc(nulls_last=True))
+            .first()
+        )
 
     def create_personal(
         self,
@@ -598,11 +599,12 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
 DashboardObjects = DashboardManager()
 
 
-class Dashboard(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
+class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
     """One installed baseline or actor-owned complete dashboard snapshot."""
 
     runtime = True
     sqid_prefix = "dsh_"
+    shared_reader_policy_fields = ("owner",)
     rebac_grantable = {"viewer": "share", "editor": "share"}
 
     class Scope(models.TextChoices):
@@ -674,6 +676,12 @@ class Dashboard(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
     def __str__(self) -> str:
         return self.name
 
+    @property
+    def shared_reader_eligible(self) -> bool:
+        """Installed baselines are readable by every authenticated actor."""
+
+        return self.owner_id is None
+
     def set_personal_archived(
         self, *, archived: bool, expected_revision: int, using: str | None = None
     ) -> Any:
@@ -701,10 +709,6 @@ class Dashboard(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
     def snapshot(self) -> dict[str, Any]:
         """Return the complete persisted snapshot in the public wire shape."""
 
-        widget_model = self._meta.get_field("widgets").related_model
-        widget_rows = (
-            widget_model.system_queryset().filter(dashboard=self) if self.owner_id is None else self.widgets.all()
-        )
         widgets = [
             {
                 "schemaVersion": widget.spec_version,
@@ -721,7 +725,7 @@ class Dashboard(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
                 "h": widget.h,
                 "isArchived": widget.is_archived,
             }
-            for widget in widget_rows.order_by("sequence", "sqid")
+            for widget in self.widgets.order_by("sequence", "sqid")
         ]
         return {"schemaVersion": self.spec_version, "columns": self.columns, "widgets": widgets}
 
@@ -749,11 +753,13 @@ class Dashboard(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
         source: str,
         publish: bool = False,
     ) -> None:
-        """Validate complete installed snapshots after every resource write."""
+        """Reconcile readers and validate snapshots, including unchanged resource rows."""
 
         loaded = tuple(instances)
-        for dashboard in loaded:
-            cast("Dashboard", dashboard).validate_installed_snapshot()
+        for instance in loaded:
+            dashboard = cast("Dashboard", instance)
+            dashboard.reconcile_shared_reader()
+            dashboard.validate_installed_snapshot()
         super().after_resource_load(loaded, tier=tier, source=source, publish=publish)
 
 
@@ -822,6 +828,6 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataMode
         loaded = tuple(instances)
         dashboard_model = cls._meta.get_field("dashboard").remote_field.model
         dashboard_ids = sorted({cast("DashboardWidget", widget).dashboard_id for widget in loaded})
-        for dashboard in dashboard_model.system_queryset().filter(pk__in=dashboard_ids, owner__isnull=True):
+        for dashboard in dashboard_model.objects.filter(pk__in=dashboard_ids, owner__isnull=True):
             dashboard.validate_installed_snapshot()
         super().after_resource_load(loaded, tier=tier, source=source, publish=publish)

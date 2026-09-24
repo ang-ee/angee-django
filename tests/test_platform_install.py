@@ -227,6 +227,19 @@ def test_preview_revision_binds_every_change_decision() -> None:
     assert len(set(alternatives)) == len(alternatives)
 
 
+def test_dependants_canonicalize_aliases_without_duplicate_reverse_edges() -> None:
+    """Preview and catalogue share sorted reverse edges for authored app aliases."""
+
+    manifests = (
+        AddonManifest(name="example.zebra", depends_on=("example.base",)),
+        AddonManifest(name="example.alpha", depends_on=("example.BaseConfig", "example.base")),
+    )
+
+    assert Addon.objects._dependants(manifests, aliases={"example.BaseConfig": "example.base"}) == {
+        "example.base": ["example.alpha", "example.zebra"]
+    }
+
+
 def test_data_inventory_lists_donor_fields_separately(monkeypatch: pytest.MonkeyPatch) -> None:
     """A disabled donor reports copied fields without claiming ownership of the target model."""
 

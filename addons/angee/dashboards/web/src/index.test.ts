@@ -15,8 +15,8 @@ describe("dashboards addon seams", () => {
 
   test("composes an addon-owned widget kind into the dashboard registry", () => {
     const kind = {
-      id: "arp.pending-decisions",
-      contributionId: "arp.accounting-intake.pending-decisions",
+      id: "example.pending-decisions",
+      contributionId: "example.review.pending-decisions",
       version: 1,
       label: "Pending decisions",
       shape: "rows" as const,
@@ -25,7 +25,7 @@ describe("dashboards addon seams", () => {
       Component: () => null,
     };
     const contributor = defineAddon({
-      id: "arp-accounting-intake",
+      id: "example-review",
       dashboardWidgetKinds: [kind],
     });
 

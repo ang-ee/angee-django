@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import system_context
 
-from angee.iam_integrate_oidc.errors import ONLY_SIGN_IN_METHOD, IdentityFlowError
+from angee.base.db import refresh_deferred, related_on
+from angee.iam_integrate_oidc.errors import ONLY_SIGN_IN_METHOD
 from angee.integrate.credentials import CredentialKind
 
 if TYPE_CHECKING:
@@ -30,26 +32,35 @@ class CredentialOidc(models.Model):
 
         super().check_disconnect()
         credential = cast("Credential", self)
+        using = credential._state.db
+        assert using is not None, "Disconnect requires a persisted credential."
+        refresh_deferred(credential, using=using, fields=("kind",))
         if credential.kind != CredentialKind.OAUTH:
             return
-        oauth_client = credential.oauth_client
-        if oauth_client is None or not oauth_client.login_enabled or credential.user.has_usable_password():
+        oauth_client = related_on(credential, "oauth_client", using=using)
+        if oauth_client is None or not oauth_client.login_enabled:
+            return
+        user = related_on(credential, "user", using=using)
+        assert user is not None
+        if user.has_usable_password():
             return
         with system_context(reason="iam_integrate_oidc.unlink.guard"):
             account_count = (
                 type(credential)
-                .objects.filter(
-                    user=credential.user,
+                .objects.db_manager(using)
+                .filter(
+                    user_id=credential.user_id,
                     kind=CredentialKind.OAUTH,
                     oauth_client__login_enabled=True,
                     external_account__isnull=False,
                 )
+                .order_by()
                 .values("external_account_id")
                 .distinct()
                 .count()
             )
         if account_count <= 1:
-            raise IdentityFlowError(ONLY_SIGN_IN_METHOD, 409)
+            raise ValidationError("This is your only sign-in method.", code=ONLY_SIGN_IN_METHOD)
 
 
 class OAuthClientOidc(models.Model):

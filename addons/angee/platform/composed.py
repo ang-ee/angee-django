@@ -11,7 +11,7 @@ import inspect
 from typing import Any
 
 from django.apps import AppConfig, apps
-from django.db import DatabaseError, router
+from django.db import connections, router
 from django.db.models import Model
 from pydantic import BaseModel, PrivateAttr
 
@@ -286,7 +286,8 @@ def resource_counts(*, using: str | None = None) -> dict[str, int]:
 
     The ``resources`` addon owns the ledger and its rollup; ask it rather than
     re-querying its model here. During migration, a routed-away or not-yet-created
-    ledger has no counts to project.
+    ledger has no counts to project. Other database failures propagate; probing
+    table existence avoids leaving an enclosing transaction broken.
     """
 
     try:
@@ -294,13 +295,11 @@ def resource_counts(*, using: str | None = None) -> dict[str, int]:
     except LookupError:
         return {}
     alias = get_read_alias(resource, using=using, bound=resource.objects)
-    ledger = resource.objects.using(alias)
     if not router.allow_migrate_model(alias, resource):
         return {}
-    try:
-        return ledger.counts_by_addon()
-    except DatabaseError:
+    if resource._meta.db_table not in connections[alias].introspection.table_names():
         return {}
+    return resource.objects.using(alias).counts_by_addon()
 
 
 def model_rows() -> list[PlatformModelRow]:

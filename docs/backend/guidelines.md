@@ -929,7 +929,8 @@ and current contracts before applying a historical example to a new deployment.
   `audit_set_null` FK policy to materialize the collector selection and schedule
   Django's native `UpdateQuery.update_batch` path for actor deletion.
   Never replace these rules with a database trigger or function.
-- **Resource imports use the native import-export lifecycle.** Models may declare
+- **Resource imports use the native import-export lifecycle.** Models composing
+  [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) may declare
   an `AngeeResource` subclass through `resource_class`; [`build_resource`](../../addons/angee/resources/loader.py)
   composes it with native identity loading, validation, row results and the single
   ledger hook. Domain adapters may defer persistence to a manager without
@@ -1020,8 +1021,10 @@ and current contracts before applying a historical example to a new deployment.
   instance to the manager's `insert()` (or native insert-only save when absent).
   Factory invariants needed by both ORM and GraphQL creation belong on the
   queryset's cooperative `insert()`, which ordinary `create()` also composes.
-  Model-owned required defaults must exist before field validation as well as
-  before saving; see [`Cadence`](../../addons/angee/nexus/models.py).
+  Model-owned defaults belong in `clean()` and `save()`; see
+  [`Cadence`](../../addons/angee/nexus/models.py). A required field defaulted by
+  `clean()` uses `blank=True` so Django's preceding field validation can defer
+  the missing value to that owner; the database column remains non-null.
   Two input traps follow. (1) A `JSONField(default=dict)`
   (or `default=list`) needs `blank=True`: Django counts `{}`/`[]` as blank, so a
   `blank=False` container default fails `full_clean` ("cannot be blank") on every
