@@ -149,13 +149,13 @@ def test_map_expansion_uses_declared_bound_input_instead_of_routing_predecessor(
         return result
 
     monkeypatch.setattr(engine, "_prepare_attempt_input", prepare)
-    item = {"invoice_id": "invoice-1"}
+    item = {"document_id": "document-1"}
     workflow = workflow_with_steps(
         name="Bound Map input",
         steps=(
             {
                 "key": "materialize",
-                "config": {"output": {"invoice_review_items": [item]}},
+                "config": {"output": {"document_review_items": [item]}},
             },
             {
                 "key": "prepare",
@@ -171,7 +171,7 @@ def test_map_expansion_uses_declared_bound_input_instead_of_routing_predecessor(
                 "step_class": "map",
                 "config": {
                     "target_step": "body",
-                    "items": "input.invoice_review_items",
+                    "items": "input.document_review_items",
                 },
                 "input_binding": {
                     "kind": "step_output",
@@ -197,7 +197,7 @@ def test_map_expansion_uses_declared_bound_input_instead_of_routing_predecessor(
     expected_input = {
         "key": "materialize",
         "input": {},
-        "invoice_review_items": [item],
+        "document_review_items": [item],
     }
     assert run.status == RunStatus.SUCCEEDED
     assert prepared_maps == [controller.pk]

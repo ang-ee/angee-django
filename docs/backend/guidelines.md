@@ -621,7 +621,7 @@ data through REBAC, never a queryset bypass.
   table) plus that const admin, and keep an `| angee/role:admin#member` arm in
   `member` or `rebac.W004` fires.
 - **Const-backing is the one canon for tuple-free role reach.** A resource that
-  grants a *named* role (e.g. `storage_admin`, `accounting_admin`) declares a
+  grants a *named* role (e.g. `storage_admin`, `document_reviewer`) declares a
   const-backed relation to the role namespace and arrows through
   `effective_member`: `relation manager: storage/role // rebac:const=storage_admin`
   with `permission … = manager->effective_member` (mirror of `admin->member`).
@@ -657,7 +657,7 @@ data through REBAC, never a queryset bypass.
   addon (`@rebac_schema_revision` in its fragment, echoed into the merged file's
   `@rebac_extended_by`), so the base addon does **not** bump its revision for an
   additive extension. **Editing a framework/base-addon `permissions.zed` to name
-  a domain role (`accountant`, `salesperson`, …) is a bug** — the vocabulary
+  a domain role (`document_reviewer`, `record_editor`, …) is a bug** — the vocabulary
   belongs in the consumer addon that owns the concern.
 - There is no `rebac_roles` command. Grant writable role memberships through
   `rebac.memberships`; change derived membership at its model field. Bulk-created

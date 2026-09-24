@@ -37,24 +37,24 @@ def disabled_app(tmp_path, monkeypatch):
     """A real disabled app whose label and default selection belong to Django."""
 
     for name in tuple(sys.modules):
-        if name == "arp" or name.startswith("arp."):
+        if name == "example" or name.startswith("example."):
             monkeypatch.delitem(sys.modules, name)
-    package = tmp_path / "arp" / "base"
+    package = tmp_path / "example" / "base"
     package.mkdir(parents=True)
     (package.parent / "__init__.py").write_text("")
     (package / "__init__.py").write_text("")
-    (package / "addon.toml").write_text('[addon]\nname = "arp.base"\ndepends_on = ["example.loaded"]\n')
+    (package / "addon.toml").write_text('[addon]\nname = "example.base"\ndepends_on = ["example.loaded"]\n')
     (package / "models.py").write_text('raise AssertionError("disabled models imported")\n')
     (package / "apps.py").write_text(
         "from django.apps import AppConfig\n"
         "class BaseConfig(AppConfig):\n"
-        "    name = 'arp.base'\n"
-        "    label = 'arp'\n"
+        "    name = 'example.base'\n"
+        "    label = 'example'\n"
         "    default = True\n"
         "    def ready(self):\n"
         "        raise AssertionError('disabled ready called')\n"
         "class SelectedConfig(BaseConfig):\n"
-        "    label = 'arp_selected'\n"
+        "    label = 'example_selected'\n"
         "    default = False\n"
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -62,7 +62,7 @@ def disabled_app(tmp_path, monkeypatch):
         yield package
     finally:
         for name in tuple(sys.modules):
-            if name == "arp" or name.startswith("arp."):
+            if name == "example" or name.startswith("example."):
                 sys.modules.pop(name)
 
 
@@ -219,9 +219,9 @@ def test_installed_discovery_keeps_native_origins_and_precedence(tmp_path, monke
 @pytest.mark.parametrize(
     ("declaration", "label"),
     [
-        ("arp.base", "arp"),
-        ("arp.base.apps.BaseConfig", "arp"),
-        ("arp.base.apps.SelectedConfig", "arp_selected"),
+        ("example.base", "example"),
+        ("example.base.apps.BaseConfig", "example"),
+        ("example.base.apps.SelectedConfig", "example_selected"),
     ],
 )
 def test_disabled_app_identity_uses_native_config_without_population(disabled_app, declaration, label) -> None:
@@ -230,10 +230,10 @@ def test_disabled_app_identity_uses_native_config_without_population(disabled_ap
     config = resolve_app_config(declaration)
 
     assert config is not None
-    assert (config.name, config.label, config.path) == ("arp.base", label, str(disabled_app))
+    assert (config.name, config.label, config.path) == ("example.base", label, str(disabled_app))
     assert config.apps is None
     assert config.models is None
-    assert "arp.base.models" not in sys.modules
+    assert "example.base.models" not in sys.modules
     assert tuple(apps.get_app_configs()) == before
 
 
@@ -271,9 +271,9 @@ def test_disabled_config_failure_is_reported_without_breaking_discovery(
     (disabled_app / "apps.py").write_text(source)
     before = tuple(apps.get_app_configs())
 
-    assert resolve_app_config("arp.base") is None
+    assert resolve_app_config("example.base") is None
 
-    assert "arp.base" in caplog.text
+    assert "example.base" in caplog.text
     assert diagnostic in caplog.text
     assert tuple(apps.get_app_configs()) == before
 
@@ -281,7 +281,7 @@ def test_disabled_config_failure_is_reported_without_breaking_discovery(
 def test_discovery_cannot_claim_another_apps_identity(disabled_app) -> None:
     del disabled_app
     with pytest.raises(ImproperlyConfigured, match="disagrees with AppConfig.name"):
-        resolve_app_config("arp.base", expected_name="example.other")
+        resolve_app_config("example.base", expected_name="example.other")
 
 
 @pytest.mark.parametrize(
@@ -291,7 +291,7 @@ def test_discovery_cannot_claim_another_apps_identity(disabled_app) -> None:
         (
             "from django.apps import AppConfig\n"
             "class FirstConfig(AppConfig):\n"
-            "    name = 'arp.base'\n"
+            "    name = 'example.base'\n"
             "    default = True\n"
             "class SecondConfig(FirstConfig):\n"
             "    default = True\n",
@@ -304,7 +304,7 @@ def test_app_identity_does_not_hide_application_errors(disabled_app, source, dia
 
     (disabled_app / "apps.py").write_text(source)
     with pytest.raises(RuntimeError, match=diagnostic):
-        resolve_app_config("arp.base")
+        resolve_app_config("example.base")
 
 
 def test_manifest_root_resolution_uses_exact_app_config_aliases() -> None:
@@ -330,24 +330,27 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
     with monkeypatch.context() as patch:
         del platform_tables
         addon = apps.get_model("platform", "Addon")
-        line = apps.get_model("linesdemo", "SaleLine")
+        line = apps.get_model("linesdemo", "DocumentLine")
         loaded = make_addon(name="example.loaded", path=tmp_path / "loaded", depends_on=("django.contrib.auth",))
         loaded.apps = apps
-        loaded.models = {"saleline": line}
+        loaded.models = {"documentline": line}
         loaded.angee_addon_root = True
         loaded.angee_forced = False
         installed_manifest = addon_module.parse_manifest(disabled_app / "addon.toml")
-        local_manifest = AddonManifest(name="example.unavailable", depends_on=("arp.base",))
+        local_manifest = AddonManifest(name="example.unavailable", depends_on=("example.base",))
         available = {
             loaded.name: (addon_manifest(loaded), Path(loaded.path)),
-            "arp.base": (installed_manifest, EntryPoint(name="arp.base", value="arp.base", group="angee.addons")),
+            "example.base": (
+                installed_manifest,
+                EntryPoint(name="example.base", value="example.base", group="angee.addons"),
+            ),
             local_manifest.name: (local_manifest, tmp_path / "unavailable"),
         }
         count_aliases = []
 
         def resource_counts(*, using):
             count_aliases.append(using)
-            return {loaded.name: 7, "arp.base": 99}
+            return {loaded.name: 7, "example.base": 99}
 
         patch.setattr(platform_models, "available_addons", lambda _dirs: available)
         patch.setattr(platform_models.composed, "addons", lambda: [loaded])
@@ -355,7 +358,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         patch.setattr(platform_models.composed, "resource_counts", resource_counts)
         with system_context(reason="test.platform.reconcile-native-facts"):
             addon.objects.create(
-                name="arp.base",
+                name="example.base",
                 state=addon.State.ENABLED,
                 forced=True,
                 pending=True,
@@ -388,7 +391,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             addon.objects.reconcile_from_registry("default", desired=frozenset({loaded.name}))
 
             enabled = addon.objects.get(name=loaded.name)
-            disabled = addon.objects.get(name="arp.base")
+            disabled = addon.objects.get(name="example.base")
             historical.refresh_from_db()
             remote.refresh_from_db()
             materialised.refresh_from_db()
@@ -399,14 +402,14 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             addon.Kind.CONSUMER,
         )
         assert enabled.depends_on == ["django.contrib.auth"]
-        assert enabled.depended_by == ["arp.base"]
+        assert enabled.depended_by == ["example.base"]
         assert enabled.forced is False
         assert enabled.pending is False
         assert (enabled.model_count, enabled.resource_count) == (1, 7)
         assert enabled.field_count == len(line._meta.fields) + len(line._meta.many_to_many)
         assert enabled.model_labels == [line._meta.label_lower]
         assert (disabled.state, disabled.source, disabled.label) == (
-            addon.State.DISABLED, addon.Source.INSTALLED, "arp"
+            addon.State.DISABLED, addon.Source.INSTALLED, "example"
         )
         assert disabled.depends_on == [loaded.name]
         assert disabled.depended_by == [local_manifest.name]
@@ -427,14 +430,14 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             addon.State.DISABLED,
             "",
         )
-        assert materialised.depends_on == ["arp.base"]
+        assert materialised.depends_on == ["example.base"]
         assert materialised.vcs_path == "addons/unavailable"
         assert str(materialised) == local_manifest.name
 
 
 @pytest.mark.parametrize(
     ("declaration", "label"),
-    [("arp.base", "arp"), ("arp.base.apps.SelectedConfig", "arp_selected")],
+    [("example.base", "example"), ("example.base.apps.SelectedConfig", "example_selected")],
 )
 def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
     platform_tables, disabled_app, tmp_path, settings, monkeypatch, declaration, label
@@ -468,7 +471,7 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
         assert [(impact.name, impact.label, impact.root) for impact in preview.addons_to_enable] == [
             (manifest.name, label, True)
         ]
-        assert "arp.base.models" not in sys.modules
+        assert "example.base.models" not in sys.modules
         assert tuple(apps.get_app_configs()) == before
 
         with system_context(reason="test.platform.unknown-desired-preserves-pending"):

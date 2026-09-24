@@ -37,7 +37,7 @@ rows:
       stage: work.eng_triage
       project: projects.neighborhood_garden
       title: Confirm raised-bed delivery access
-      note: Validate the delivery route before the supplier books a vehicle.
+      note: Validate the delivery route before the counterparty books a vehicle.
       assignee: iam.user_alice
       priority: urgent
       estimate: 2.0

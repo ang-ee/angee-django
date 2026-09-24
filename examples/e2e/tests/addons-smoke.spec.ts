@@ -32,7 +32,7 @@ const ROUTES: readonly AddonRouteCase[] = [
   { addon: "integrate_vcs", path: "/integrate/repositories", expectText: "angee-django" },
   { addon: "integrate_vcs", path: "/integrate/sources", expectText: "template" },
   { addon: "integrate_vcs", path: "/integrate/templates", expectText: "workspace" },
-  { addon: "integrate", path: "/integrate/providers", expectText: "Apexive SSO" },
+  { addon: "integrate", path: "/integrate/providers", expectText: "Example SSO" },
   { addon: "integrate", path: "/integrate/accounts", expectText: "Provider Label" },
   { addon: "integrate", path: "/integrate/credentials", expectText: "local-templates" },
 

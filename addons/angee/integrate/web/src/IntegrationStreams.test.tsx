@@ -52,12 +52,12 @@ import {
   integrationSyncCursorWidget,
 } from "./IntegrationStreams";
 
-const ODOO_MODEL = "integrate_odoo.OdooInstance";
-const resources = [...[INTEGRATION_MODEL, "messaging.Channel", ODOO_MODEL].map((modelLabel) =>
+const CHILD_MODEL = "example.RecordBridge";
+const resources = [...[INTEGRATION_MODEL, "messaging.Channel", CHILD_MODEL].map((modelLabel) =>
   testDataResource(modelLabel, {
     canonicalLabel: INTEGRATION_MODEL,
     recordRepresentation: "display_name",
-    fields: ["id", "display_name", ...(modelLabel === ODOO_MODEL ? [] : ["stream_count"])].map((name) => ({
+    fields: ["id", "display_name", ...(modelLabel === CHILD_MODEL ? [] : ["stream_count"])].map((name) => ({
       name,
       kind: "scalar" as const,
       scalar: name === "stream_count" ? "Int" : "String",
@@ -163,8 +163,8 @@ describe("Integration Streams contribution", () => {
   });
 
   test.each([2, 0, null])("reads stream presence from Integration when the child omits it (%s)", async (count) => {
-    const { requests } = renderIntegration(ODOO_MODEL, count);
-    const childResource = refineResourceName(resources.find((item) => item.modelLabel === ODOO_MODEL)!);
+    const { requests } = renderIntegration(CHILD_MODEL, count);
+    const childResource = refineResourceName(resources.find((item) => item.modelLabel === CHILD_MODEL)!);
     const parentResource = refineResourceName(resources.find((item) => item.modelLabel === INTEGRATION_MODEL)!);
     await screen.findByDisplayValue("Calendar bridge");
     await waitFor(() => expect(requests).toContainEqual({

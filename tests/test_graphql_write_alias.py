@@ -20,7 +20,7 @@ from angee.base.scoping import write_scoped_queryset
 from angee.graphql.actions import action_target, authorized_action_target, resolve_action_target
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.writes import instance_for_write
-from tests.linesdemo.models import SaleDoc
+from tests.linesdemo.models import Document
 from tests.test_transitions import TransitionRouter
 
 
@@ -104,13 +104,13 @@ def test_write_queryset_keeps_native_rebac_scope_when_bound(
     """Native cloning keeps the actor/action or elevation and disables only field redaction."""
 
     actor = SubjectRef.of("auth/user", "scope-owner")
-    source = SaleDoc.objects.with_actor(actor).with_action("write").filter(title="visible")
+    source = Document.objects.with_actor(actor).with_action("write").filter(title="visible")
     if scope == "system":
         source = source.system_context(reason="tests.write_alias.scope")
-    monkeypatch.setattr(type(SaleDoc._default_manager), "get_queryset", lambda manager: source)
+    monkeypatch.setattr(type(Document._default_manager), "get_queryset", lambda manager: source)
     routing = TransitionRouter("writer")
     monkeypatch.setattr(router, "routers", [routing])
-    selected = write_scoped_queryset(SaleDoc)
+    selected = write_scoped_queryset(Document)
     assert selected._db == "writer"
     assert selected.actor() == source.actor()
     assert selected.is_sudo() == source.is_sudo()

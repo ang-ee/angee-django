@@ -86,7 +86,7 @@ describe("group operation codegen", () => {
     const generated = generateActions(SAVE_METADATA);
 
     expect(generated).toMatch(
-      /"value": "product"[\s\S]{0,2000}"value": "id"[\s\S]{0,2000}"value": "name"/,
+      /"value": "item"[\s\S]{0,2000}"value": "id"[\s\S]{0,2000}"value": "name"/,
     );
   });
 
@@ -152,7 +152,7 @@ const SDL = `
     close_round(round: ID!, outcome: RoundOutcome!, accepted: [ID!]!): ActionResult!
     optional_action(id: ID!, note: String): ActionResult!
     defaulted_action(id: ID!, note: String! = ""): ActionResult!
-    order_save(pk: ID!, lines: [OrderLineInput!]): OrderType!
+    document_save(pk: ID!, lines: [DocumentLineInput!]): DocumentType!
   }
   enum RoundOutcome { AWARDED NO_AWARD }
   type ActionResult {
@@ -184,10 +184,10 @@ const SDL = `
   type notes_group { key: NoteGroupKey!, aggregate: NoteAggregate! }
   type NoteGroupKey { status: String }
   type NoteAggregate { count: Int! }
-  input OrderLineInput { product: ID }
-  type ProductType { id: ID!, name: String! }
-  type OrderLineType { id: ID!, product: ProductType! }
-  type OrderType { id: ID!, owner: ID, lines: [OrderLineType!]! }
+  input DocumentLineInput { item: ID }
+  type ItemType { id: ID!, name: String! }
+  type DocumentLineType { id: ID!, item: ItemType! }
+  type DocumentType { id: ID!, owner: ID, lines: [DocumentLineType!]! }
 `;
 
 const METADATA = {
@@ -217,11 +217,11 @@ const METADATA = {
 const SAVE_METADATA = {
   angee: {
     resources: [
-      testDataResource("sales.Order", {
+      testDataResource("example.Document", {
         query: testResourceQuery({ identity: { field: "id" }, fields: { "owner": testQueryField("owner", { scalar: "ID", kind: "relation", filter: null, relation: { model: "accounts.User", identityPath: "owner" }, row: { path: "owner", paths: ["owner"] } }),
                 "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
 
-        roots: { save: "order_save" },
+        roots: { save: "document_save" },
         fields: [
           resourceField({
             name: "owner",
@@ -234,20 +234,20 @@ const SAVE_METADATA = {
 
         linesResource: {
           field: "lines",
-          modelLabel: "sales.OrderLine",
-          inputType: "OrderLineInput",
+          modelLabel: "example.DocumentLine",
+          inputType: "DocumentLineInput",
           fields: [
             resourceField({
-              name: "product",
+              name: "item",
               kind: "relation",
               readable: true,
-              relationModelLabel: "catalog.Product",
+              relationModelLabel: "example.Item",
               relationObject: true,
             }),
           ],
         },
       }),
-      testDataResource("catalog.Product", {
+      testDataResource("example.Item", {
         recordRepresentation: "name",
         roots: {},
         fields: [

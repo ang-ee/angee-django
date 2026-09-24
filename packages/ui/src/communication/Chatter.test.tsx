@@ -140,7 +140,7 @@ describe("Chatter", () => {
       <PublishedContent content={{
         tabs: [
           { id: "workflow", label: "Workflow", children: <label>Reason<input aria-label="Reason" defaultValue="" /></label> },
-          { id: "records", label: "Records", children: <MountProbe onMount={recordsMounted}>Invoice evidence</MountProbe> },
+          { id: "records", label: "Records", children: <MountProbe onMount={recordsMounted}>Document evidence</MountProbe> },
         ],
       }} />,
       "workflow",
@@ -149,10 +149,10 @@ describe("Chatter", () => {
     const input = await screen.findByRole("textbox", { name: "Reason" });
     fireEvent.change(input, { target: { value: "keep this draft" } });
     expect(recordsMounted).not.toHaveBeenCalled();
-    expect(screen.queryByText("Invoice evidence")).toBeNull();
+    expect(screen.queryByText("Document evidence")).toBeNull();
 
     fireEvent.click(screen.getByRole("tab", { name: "Records" }));
-    expect(await screen.findByText("Invoice evidence")).toBeTruthy();
+    expect(await screen.findByText("Document evidence")).toBeTruthy();
     expect(recordsMounted).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("tab", { name: "Workflow" }));
     expect((screen.getByRole("textbox", { name: "Reason" }) as HTMLInputElement).value).toBe("keep this draft");
@@ -180,7 +180,7 @@ describe("Chatter", () => {
       composer: <button type="button">Add comment</button>,
     } satisfies ChatterContent;
     const peek = {
-      tabs: [{ id: "records", label: "Records", children: "Invoice evidence" }],
+      tabs: [{ id: "records", label: "Records", children: "Document evidence" }],
     } satisfies ChatterContent;
     renderChatterContent(
       <CompositionHarness base={base} peek={peek} />,
@@ -202,7 +202,7 @@ describe("Chatter", () => {
     const seen = vi.fn();
     const CanonicalForm = (props: RegisteredFormProps) => {
       seen(props);
-      return <p>Canonical supplier details</p>;
+      return <p>Canonical counterparty details</p>;
     };
     render(chatterContentView(<RecordPeekHarness />, "comments", {
       forms: { "parties.Party": registerForm("parties.Party", CanonicalForm) },
@@ -210,8 +210,8 @@ describe("Chatter", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Review note" }), {
       target: { value: "Retain this review" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Inspect supplier" }));
-    expect(await screen.findByText("Canonical supplier details")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect counterparty" }));
+    expect(await screen.findByText("Canonical counterparty details")).toBeTruthy();
     expect(seen).toHaveBeenCalledWith(expect.objectContaining({
       resource: "parties.Party", id: "pty_1", readOnly: true, hideRecordChrome: true,
     }));
@@ -248,7 +248,7 @@ function RecordPeekHarness(): React.ReactElement {
   return <>
     <input aria-label="Review note" />
     <button type="button" onClick={() => open({ model: "parties.Party", id: "pty_1" })}>
-      Inspect supplier
+      Inspect counterparty
     </button>
   </>;
 }

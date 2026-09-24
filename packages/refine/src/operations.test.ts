@@ -101,7 +101,7 @@ describe("Hasura custom operations", () => {
       definitions: [],
     } as unknown as DocumentNode;
     const request = saveRequest(
-      target("sale_docs_save"),
+      target("documents_save"),
       {
         pk: "doc_1",
         patch: { note: "confirmed" },
@@ -114,7 +114,7 @@ describe("Hasura custom operations", () => {
     );
 
     expect(request.dataProviderName).toBe("console");
-    expect(request.root).toBe("sale_docs_save");
+    expect(request.root).toBe("documents_save");
     expect(request.meta.gqlVariables).toEqual({
       pk: "doc_1",
       patch: { note: "confirmed" },
@@ -132,7 +132,7 @@ describe("Hasura custom operations", () => {
       definitions: [],
     } as unknown as DocumentNode;
     const request = saveRequest(
-      target("sale_docs_save"),
+      target("documents_save"),
       { pk: "doc_1" },
       { document },
     );
@@ -141,11 +141,11 @@ describe("Hasura custom operations", () => {
   });
 
   test("extracts the saved row from a save response", () => {
-    const row = { id: "doc_1", title: "Order", lines: [{ id: "ln_1" }] };
+    const row = { id: "doc_1", title: "Record", lines: [{ id: "ln_1" }] };
     expect(
-      extractSaveResult({ sale_docs_save: row }, "sale_docs_save"),
+      extractSaveResult({ documents_save: row }, "documents_save"),
     ).toEqual(row);
-    expect(extractSaveResult({}, "sale_docs_save")).toBeNull();
+    expect(extractSaveResult({}, "documents_save")).toBeNull();
   });
 
   test("builds an authored revisions request with a generated document", () => {
@@ -265,16 +265,16 @@ describe("Hasura custom operations", () => {
   test("carries the created record id a create-and-return verb populates", () => {
     const created = extractActionOutcome(
       {
-        register_payment: { ok: true, message: "Payment registered.", id: "pay_1" },
+        register_review: { ok: true, message: "Review registered.", id: "review_1" },
       },
-      "register_payment",
+      "register_review",
     );
-    expect(created).toEqual({ ok: true, message: "Payment registered.", id: "pay_1" });
+    expect(created).toEqual({ ok: true, message: "Review registered.", id: "review_1" });
 
     // A verb that only mutates leaves `id` null on the wire; the outcome omits it.
     const mutated = extractActionOutcome(
-      { confirm_order: { ok: true, message: "Confirmed.", id: null } },
-      "confirm_order",
+      { confirm_record: { ok: true, message: "Confirmed.", id: null } },
+      "confirm_record",
     );
     expect(mutated).toEqual({ ok: true, message: "Confirmed." });
   });
@@ -282,18 +282,18 @@ describe("Hasura custom operations", () => {
   test("carries the in-band snake_case validation_errors as a camelCase field map", () => {
     const failure = extractActionOutcome(
       {
-        register_payment: {
+        register_review: {
           ok: false,
           message: "Fix the amount.",
-          validation_errors: { amount: ["Amount exceeds the balance."] },
+          validation_errors: { amount: ["Amount exceeds the limit."] },
         },
       },
-      "register_payment",
+      "register_review",
     );
     expect(failure).toEqual({
       ok: false,
       message: "Fix the amount.",
-      validationErrors: { amount: ["Amount exceeds the balance."] },
+      validationErrors: { amount: ["Amount exceeds the limit."] },
     });
   });
 

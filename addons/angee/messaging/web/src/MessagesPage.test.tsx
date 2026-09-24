@@ -47,7 +47,7 @@ vi.mock("@angee/refine", () => ({
   useAuthoredQuery: () => ({
     data: { messages: [{ id: "msg-1", parts: [
       { id: "part-body", fragment: { text: "The complete retained message body." } },
-      { id: "part-file", file: { filename: "invoice.pdf" } },
+      { id: "part-file", file: { filename: "document.pdf" } },
     ] }] },
     error: null,
     isFetching: false,
@@ -126,6 +126,6 @@ describe("MessagesPage", () => {
     const formExtras = pageMocks.formProps?.formExtras as ((context: { recordId: string }) => React.ReactNode);
     render(<>{formExtras({ recordId: "msg-1" })}</>);
     expect(screen.getByText("The complete retained message body.")).toBeTruthy();
-    expect(screen.getByText("invoice.pdf")).toBeTruthy();
+    expect(screen.getByText("document.pdf")).toBeTruthy();
   });
 });

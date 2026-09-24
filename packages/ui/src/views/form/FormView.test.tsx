@@ -333,7 +333,7 @@ describe("FormView", () => {
         resource="notes.Note"
         id="note-1"
         fields={fields}
-        title={() => "Draft Invoice"}
+        title={() => "Draft Document"}
         formExtras={() => <p>No readable documents attached</p>}
       />,
     );
@@ -341,7 +341,7 @@ describe("FormView", () => {
     expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(screen.getAllByText("Loading…").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Draft Invoice")).toBeNull();
+    expect(screen.queryByText("Draft Document")).toBeNull();
     expect(screen.queryByText("No readable documents attached")).toBeNull();
 
     await waitFor(() => expect(sdkMocks.getOne).toHaveBeenCalledOnce());
@@ -349,7 +349,7 @@ describe("FormView", () => {
       data: { id: "note-1", title: "Loaded", status: "ACTIVE" },
     }));
 
-    expect(await screen.findByText("Draft Invoice")).toBeTruthy();
+    expect(await screen.findByText("Draft Document")).toBeTruthy();
     expect(await screen.findByText("No readable documents attached")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Reminder" })).toBeTruthy();
   });
@@ -630,7 +630,7 @@ describe("FormView", () => {
     sdkMocks.record = {
       id: "client-1",
       displayName: "Acme",
-      vendor: { id: "vendor-1", displayName: "Vendor One" },
+      reviewer: { id: "reviewer-1", displayName: "Reviewer One" },
     };
     const submit = vi.fn(
       async (data: Record<string, unknown>, context: FormSubmitContext) => ({
@@ -642,13 +642,13 @@ describe("FormView", () => {
     const relationFields = [
       { name: "displayName", label: "Display Name", title: true },
       {
-        name: "vendor",
-        label: "Vendor",
+        name: "reviewer",
+        label: "Reviewer",
         widget: "many2one",
         omittable: true,
         options: [
-          { value: "vendor-1", label: "Vendor One" },
-          { value: "vendor-2", label: "Vendor Two" },
+          { value: "reviewer-1", label: "Reviewer One" },
+          { value: "reviewer-2", label: "Reviewer Two" },
         ],
       },
     ] satisfies readonly FormField[];
@@ -663,17 +663,17 @@ describe("FormView", () => {
     );
 
     // The widget resolves the nested {id} record to the flat option id, so the
-    // option label renders — proof the form holds "vendor-1", not the object.
+    // option label renders — proof the form holds "reviewer-1", not the object.
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Vendor/ }).textContent).toContain(
-        "Vendor One",
+      expect(screen.getByRole("button", { name: /Reviewer/ }).textContent).toContain(
+        "Reviewer One",
       ),
     );
-    fireEvent.click(screen.getByRole("button", { name: /Vendor/ }));
-    fireEvent.click(await screen.findByText("Vendor Two"));
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }));
+    fireEvent.click(await screen.findByText("Reviewer Two"));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Vendor/ }).textContent).toContain(
-        "Vendor Two",
+      expect(screen.getByRole("button", { name: /Reviewer/ }).textContent).toContain(
+        "Reviewer Two",
       ),
     );
     fireEvent.change(screen.getByLabelText("Display Name"), {
@@ -684,7 +684,7 @@ describe("FormView", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
     // The current scalar identity wins over the saved expanded relation.
     expect(submit).toHaveBeenCalledWith(
-      { displayName: "Acme Renamed", vendor: "vendor-2" },
+      { displayName: "Acme Renamed", reviewer: "reviewer-2" },
       expect.objectContaining({ id: "client-1", isCreate: false }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Not set" }));
@@ -824,26 +824,26 @@ describe("FormView", () => {
   });
 
   test("folds the related label into the read and defers the option list to first open", async () => {
-    // The detail read folds the related record's label (`vendor.display_name`),
+    // The detail read folds the related record's label (`reviewer.display_name`),
     // so the picker shows it with no option query. The list carries a DISTINCT
     // label, proving the read path uses the record's own label and never fetches
     // the 200-row option list until the picker is first opened.
     sdkMocks.record = {
       id: "provider-1",
       name: "Anthropic",
-      vendor: { id: "vnd_1", display_name: "Anthropic Vendor" },
+      reviewer: { id: "rev_1", display_name: "Primary Reviewer" },
     };
-    sdkMocks.listRows = [{ id: "vnd_1", display_name: "Vendor From List" }];
+    sdkMocks.listRows = [{ id: "rev_1", display_name: "Reviewer From List" }];
     const metadata: TestSchemaMetadata = {
       types: {
         InferenceProviderType: {
           ...defaultModel("InferenceProviderType", "agents.InferenceProvider"),
           fields: {
             name: { name: "name", kind: "scalar", scalar: "String" },
-            vendor: {
-              name: "vendor",
+            reviewer: {
+              name: "reviewer",
               kind: "relation",
-              relationModelLabel: "Vendor",
+              relationModelLabel: "Reviewer",
             },
           },
           resource: {
@@ -855,8 +855,8 @@ describe("FormView", () => {
             },
           },
         },
-        VendorType: {
-          ...defaultModel("VendorType", "Vendor"),
+        ReviewerType: {
+          ...defaultModel("ReviewerType", "Reviewer"),
           fields: {
             display_name: {
               name: "display_name",
@@ -865,9 +865,9 @@ describe("FormView", () => {
             },
           },
           resource: {
-            ...defaultResource("VendorType", "Vendor"),
+            ...defaultResource("ReviewerType", "Reviewer"),
             recordRepresentation: "display_name",
-            roots: { list: "vendors", detail: "vendor" },
+            roots: { list: "reviewers", detail: "reviewer" },
           },
         },
       },
@@ -880,8 +880,8 @@ describe("FormView", () => {
         fields={[
           { name: "name", label: "Name", title: true },
           {
-            name: "vendor",
-            label: "Vendor",
+            name: "reviewer",
+            label: "Reviewer",
             filters: [{ field: "company", operator: "eq", value: "cmp_1" }],
           },
         ]}
@@ -893,27 +893,27 @@ describe("FormView", () => {
     // list has NOT fired on the editable-form mount (the headline guarantee).
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Vendor: Anthropic Vendor" }),
+        screen.getByRole("button", { name: "Reviewer: Primary Reviewer" }),
       ).toBeTruthy(),
     );
     expect(sdkMocks.getList).not.toHaveBeenCalled();
-    expect(sdkMocks.recordSelection).toContain("vendor");
-    expect(sdkMocks.recordSelection).not.toContain("vendor.id");
-    expect(sdkMocks.recordSelection).not.toContain("vendor.display_name");
+    expect(sdkMocks.recordSelection).toContain("reviewer");
+    expect(sdkMocks.recordSelection).not.toContain("reviewer.id");
+    expect(sdkMocks.recordSelection).not.toContain("reviewer.display_name");
 
     // Opening the picker fires the option list once; its fresh label then wins.
     fireEvent.click(
-      screen.getByRole("button", { name: "Vendor: Anthropic Vendor" }),
+      screen.getByRole("button", { name: "Reviewer: Primary Reviewer" }),
     );
     await waitFor(() => expect(sdkMocks.getList).toHaveBeenCalledWith(
       expect.objectContaining({
-        resource: "vendors",
+        resource: "reviewers",
         filters: [{ field: "company", operator: "eq", value: "cmp_1" }],
       }),
     ));
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Vendor: Vendor From List" }),
+        screen.getByRole("button", { name: "Reviewer: Reviewer From List" }),
       ).toBeTruthy(),
     );
   });
@@ -1230,7 +1230,7 @@ describe("FormView", () => {
           ...defaultModel("IntegrationType", "integrate.Integration"),
           fields: {
             displayName: { name: "displayName", kind: "scalar", scalar: "String" },
-            vendor: { name: "vendor", kind: "relation", relationModelLabel: "Vendor" },
+            reviewer: { name: "reviewer", kind: "relation", relationModelLabel: "Reviewer" },
             owner: { name: "owner", kind: "relation", relationModelLabel: "iam.User" },
             credential: {
               name: "credential",
@@ -1248,14 +1248,14 @@ describe("FormView", () => {
               ...defaultResource("IntegrationType", "integrate.Integration").roots,
               create: "createIntegration",
             },
-            createFields: ["vendor", "owner", "credential", "implClass", "config"],
+            createFields: ["reviewer", "owner", "credential", "implClass", "config"],
           },
         },
       },
     };
     const integrationFields = [
       { name: "displayName", label: "Display Name", title: true },
-      { name: "vendor", label: "Vendor" },
+      { name: "reviewer", label: "Reviewer" },
       { name: "owner", label: "Owner" },
       { name: "credential", label: "Credential" },
       {
@@ -1277,7 +1277,7 @@ describe("FormView", () => {
         resource="integrate.Integration"
         fields={integrationFields}
         defaultValues={{
-          vendor: "vendor-1",
+          reviewer: "reviewer-1",
           owner: "user-1",
           credential: "credential-1",
         }}
@@ -1293,7 +1293,7 @@ describe("FormView", () => {
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: {
-        vendor: "vendor-1",
+        reviewer: "reviewer-1",
         owner: "user-1",
         credential: "credential-1",
         implClass: "github.vcs",
@@ -1381,12 +1381,12 @@ describe("FormView", () => {
             name: "providerType",
             label: "Provider Type",
             prefill: (value) => value === "second"
-              ? { displayName: "Second preset", vendor: "vendor-2", privateConfig: "second-private" }
-              : { displayName: "First preset", vendor: "vendor-1", privateConfig: "first-private" },
+              ? { displayName: "Second preset", reviewer: "reviewer-2", privateConfig: "second-private" }
+              : { displayName: "First preset", reviewer: "reviewer-1", privateConfig: "first-private" },
             prefillPreserveDirty: true,
             prefillReplace: ["privateConfig"],
           },
-          { name: "vendor", label: "Vendor" },
+          { name: "reviewer", label: "Reviewer" },
           { name: "privateConfig", label: "Private Config" },
         ]}
       />,
@@ -1402,7 +1402,7 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: {
       displayName: "",
       providerType: "second",
-      vendor: "vendor-2",
+      reviewer: "reviewer-2",
       privateConfig: "second-private",
     } });
   });
@@ -1415,23 +1415,23 @@ describe("FormView", () => {
           {
             name: "providerType",
             label: "Provider Type",
-            prefill: () => ({ vendor: "vendor-2", privateConfig: "private" }),
+            prefill: () => ({ reviewer: "reviewer-2", privateConfig: "private" }),
             prefillPreserveDirty: true,
             prefillReplace: ["privateConfig"],
           },
-          { name: "vendor", label: "Vendor" },
+          { name: "reviewer", label: "Reviewer" },
           { name: "privateConfig", label: "Private Config" },
         ]}
       />,
     );
     fireEvent.change(screen.getByLabelText("Provider Type"), { target: { value: "second" } });
-    expect((screen.getByLabelText("Vendor") as HTMLInputElement).value).toBe("vendor-2");
+    expect((screen.getByLabelText("Reviewer") as HTMLInputElement).value).toBe("reviewer-2");
     expect((screen.getByLabelText("Private Config") as HTMLInputElement).value).toBe("private");
 
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
 
     expect((screen.getByLabelText("Provider Type") as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText("Vendor") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Reviewer") as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("Private Config") as HTMLInputElement).value).toBe("");
   });
 
@@ -1714,7 +1714,7 @@ describe("FormView", () => {
   test("lets an impl entry beat the own-model entry, which beats the canonical one", async () => {
     // The three tiers of the record-verb key, resolved by declared specificity:
     // canonical MTI parent → own model → own model + the row's impl key. This is
-    // what lets one vendor's addon specialize a verb for its own rows without
+    // what lets one backend's addon specialize a verb for its own rows without
     // naming — or displacing it on — a model it does not own.
     sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP" };
     renderWithProviders(
@@ -1873,7 +1873,7 @@ describe("FormView", () => {
     expect(await screen.findByRole("button", { name: "Pair WhatsApp" })).toBeTruthy();
   });
 
-  test("composes two vendors' entries on one model without a collision", async () => {
+  test("composes two backends' entries on one model without a collision", async () => {
     // The cap the model-scoped key imposed: a second backend contributing the same
     // verb id for the same model hit the `uniqueKind` throw at boot. Distinct impl
     // keys make them siblings, and each row resolves only its own.
@@ -1907,7 +1907,7 @@ describe("FormView", () => {
   test("orders the merged record verbs by sequence across specificity tiers", async () => {
     // `sequence` stays the ordering contract once a subtype specializes: merging
     // two already-sorted groups by concatenation put the specialized verb's whole
-    // group last, so a vendor's Connect(10) landed after the inherited Pause(11).
+    // group last, so a backend's Connect(10) landed after the inherited Pause(11).
     sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP" };
     renderWithProviders(
       <FormView resource="notes.Note" id="note-1">
@@ -2120,25 +2120,25 @@ describe("FormView", () => {
   test("honors a custom relation widget in the overview and saves its selected id", async () => {
     sdkMocks.record = {
       id: "client-1", displayName: "Acme",
-      vendor: { id: "vendor-1", displayName: "Vendor One" },
+      reviewer: { id: "reviewer-1", displayName: "Reviewer One" },
     };
     const custom = {
-      read: () => <span>Custom vendor display</span>,
+      read: () => <span>Custom reviewer display</span>,
       edit: ({ value, onChange }: { value?: unknown; onChange?: (value: unknown) => void }) => (
-        <input aria-label="Custom vendor" value={String(value ?? "")} onChange={(event) => onChange?.(event.target.value)} />
+        <input aria-label="Custom reviewer" value={String(value ?? "")} onChange={(event) => onChange?.(event.target.value)} />
       ),
     };
     renderWithProviders(
       <FormView resource="OAuthClient" id="client-1" fields={[
         { name: "displayName", label: "Name", title: true },
-        { name: "vendor", label: "Vendor", widget: "test.vendor" },
+        { name: "reviewer", label: "Reviewer", widget: "test.reviewer" },
       ]} />,
       { types: {
         OAuthClientType: {
           ...defaultModel("OAuthClientType", "OAuthClient"),
           fields: {
             displayName: { name: "displayName", kind: "scalar", scalar: "String" },
-            vendor: { name: "vendor", kind: "relation", relationModelLabel: "Widget", relationObject: true },
+            reviewer: { name: "reviewer", kind: "relation", relationModelLabel: "Widget", relationObject: true },
           },
         },
         WidgetType: {
@@ -2147,30 +2147,30 @@ describe("FormView", () => {
           resource: { ...defaultResource("WidgetType", "Widget"), recordRepresentation: "displayName" },
         },
       } }, undefined,
-      { widgets: { ...defaultWidgets, "test.vendor": custom } },
+      { widgets: { ...defaultWidgets, "test.reviewer": custom } },
     );
-    const input = await screen.findByRole("textbox", { name: "Custom vendor" });
-    expect(screen.queryByRole("button", { name: "Vendor" })).toBeNull();
-    fireEvent.change(input, { target: { value: "vendor-2" } });
+    const input = await screen.findByRole("textbox", { name: "Custom reviewer" });
+    expect(screen.queryByRole("button", { name: "Reviewer" })).toBeNull();
+    fireEvent.change(input, { target: { value: "reviewer-2" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { id: "client-1", vendor: "vendor-2" } }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { id: "client-1", reviewer: "reviewer-2" } }));
   });
 
   test("reads many2one record ids and writes the flat relation field", async () => {
     sdkMocks.record = {
       id: "client-1",
       displayName: "Acme",
-      vendor: { id: "vendor-1", displayName: "Vendor One" },
+      reviewer: { id: "reviewer-1", displayName: "Reviewer One" },
     };
     const relationFields = [
       { name: "displayName", label: "Display Name", title: true },
       {
-        name: "vendor",
-        label: "Vendor",
+        name: "reviewer",
+        label: "Reviewer",
         widget: "many2one",
         options: [
-          { value: "vendor-1", label: "Vendor One" },
-          { value: "vendor-2", label: "Vendor Two" },
+          { value: "reviewer-1", label: "Reviewer One" },
+          { value: "reviewer-2", label: "Reviewer Two" },
         ],
       },
     ] satisfies readonly FormField[];
@@ -2184,8 +2184,8 @@ describe("FormView", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Vendor/ }).textContent).toContain(
-        "Vendor One",
+      expect(screen.getByRole("button", { name: /Reviewer/ }).textContent).toContain(
+        "Reviewer One",
       ),
     );
     fireEvent.change(screen.getByLabelText("Display Name"), {
@@ -2205,14 +2205,14 @@ describe("FormView", () => {
       <FormView
         resource="OAuthClient"
         fields={relationFields}
-        defaultValues={{ vendor: "vendor-2" }}
+        defaultValues={{ reviewer: "reviewer-2" }}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
-      data: { displayName: "", vendor: "vendor-2" },
+      data: { displayName: "", reviewer: "reviewer-2" },
     });
   });
 
@@ -2714,10 +2714,10 @@ describe("FormView", () => {
           fields: {
             username: { name: "username", kind: "scalar", scalar: "String" },
             email: { name: "email", kind: "scalar", scalar: "String" },
-            vendor: {
-              name: "vendor",
+            reviewer: {
+              name: "reviewer",
               kind: "relation",
-              relationModelLabel: "Vendor",
+              relationModelLabel: "Reviewer",
             },
           },
           resource: {
@@ -2736,7 +2736,7 @@ describe("FormView", () => {
         fields={[
           { name: "username", label: "Username", title: true },
           { name: "email", label: "Email" },
-          { name: "vendor", label: "Vendor", widget: "many2one" },
+          { name: "reviewer", label: "Reviewer", widget: "many2one" },
           { name: "password", label: "Password", createOnly: true },
         ]}
       />,
@@ -2748,8 +2748,8 @@ describe("FormView", () => {
     expect(selection).toContain("id");
     expect(selection).toContain("username");
     expect(selection).toContain("email");
-    expect(selection).toContain("vendor"); // scalar-id relation → bare leaf
-    expect(selection).not.toContain("vendor.id");
+    expect(selection).toContain("reviewer"); // scalar-id relation → bare leaf
+    expect(selection).not.toContain("reviewer.id");
     expect(selection).not.toContain("password"); // write-only → never read back
   });
 

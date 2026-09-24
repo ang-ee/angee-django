@@ -399,16 +399,16 @@ def test_embedded_rfc822_message_lands_as_attachment_bytes() -> None:
     """A forwarded message keeps raw provenance and bounded nested evidence."""
 
     inner = (
-        b"From: supplier@example.com\r\n"
-        b"To: billing@example.com\r\n"
+        b"From: sender@example.com\r\n"
+        b"To: reviewer@example.com\r\n"
         b"Subject: Inner report\r\n"
         b"Message-ID: <inner@example.com>\r\n"
         b"MIME-Version: 1.0\r\n"
         b'Content-Type: multipart/mixed; boundary="INNER"\r\n\r\n'
         b"--INNER\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
-        b"<p>Invoice INV-42 is attached.</p>\r\n"
+        b"<p>Document DOC-42 is attached.</p>\r\n"
         b"--INNER\r\nContent-Type: application/pdf\r\n"
-        b"Content-Disposition: attachment; filename=invoice.pdf\r\n"
+        b"Content-Disposition: attachment; filename=document.pdf\r\n"
         b"Content-Transfer-Encoding: base64\r\n\r\nJVBERi0xLjQK\r\n"
         b"--INNER--\r\n"
     )
@@ -468,17 +468,17 @@ def test_delivery_report_keeps_status_blocks_and_expands_attached_message() -> N
     """A DSN report is not mislabeled as an empty attached email."""
 
     attached = (
-        b"From: supplier@example.com\r\nSubject: Invoice\r\nMessage-ID: <invoice@example.com>\r\n"
+        b"From: sender@example.com\r\nSubject: Document\r\nMessage-ID: <document@example.com>\r\n"
         b"MIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
-        b"<p>Invoice INV-42 is attached.</p>\r\n"
+        b"<p>Document DOC-42 is attached.</p>\r\n"
     )
     raw = (
-        b"From: postmaster@example.com\r\nTo: billing@example.com\r\nSubject: Delivery report\r\n"
+        b"From: postmaster@example.com\r\nTo: reviewer@example.com\r\nSubject: Delivery report\r\n"
         b"Message-ID: <dsn@example.com>\r\nMIME-Version: 1.0\r\n"
         b'Content-Type: multipart/report; boundary="REPORT"; report-type=delivery-status\r\n\r\n'
         b"--REPORT\r\nContent-Type: text/plain\r\n\r\nDelivery was delayed.\r\n"
         b"--REPORT\r\nContent-Type: message/delivery-status\r\n\r\n"
-        b"Reporting-MTA: dns; example.com\r\n\r\nFinal-Recipient: rfc822; billing@example.com\r\n"
+        b"Reporting-MTA: dns; example.com\r\n\r\nFinal-Recipient: rfc822; reviewer@example.com\r\n"
         b"Action: delayed\r\nStatus: 4.0.0\r\n\r\n"
         b"--REPORT\r\nContent-Type: message/rfc822\r\n\r\n" + attached + b"\r\n--REPORT--\r\n"
     )

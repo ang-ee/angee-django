@@ -152,15 +152,15 @@ async function fixture(options: {
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
 
 test("new documents render Add line and create their draft lines in one native nested insert", async () => {
-  const saved = { id: "doc-new", title: "Quotation", lines: [{ id: "line-new", label: "Lamp", quantity: 1, position: 0 }] };
+  const saved = { id: "doc-new", title: "Draft document", lines: [{ id: "line-new", label: "Lamp", quantity: 1, position: 0 }] };
   const f = await fixture({ isCreate: true, publicView: true, create: async () => ({ data: saved }) });
   expect(f.surface().linesActive).toBe(true);
-  edit("Title", "Quotation");
+  edit("Title", "Draft document");
   fireEvent.click(screen.getByRole("button", { name: "Add line" }));
   edit("Label", "Lamp");
   fireEvent.click(screen.getByRole("button", { name: "Create" }));
   await waitFor(() => expect(f.provider.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-    variables: { title: "Quotation", lines: { data: [{ label: "Lamp", position: 0 }] } },
+    variables: { title: "Draft document", lines: { data: [{ label: "Lamp", position: 0 }] } },
   })));
   expect(f.provider.update).not.toHaveBeenCalled();
   expect(f.custom).not.toHaveBeenCalled();
@@ -284,11 +284,11 @@ test("maps a line save validation error to its rendered row", async () => {
 
 test("failed nested creation preserves the header and lines for retry", async () => {
   const f = await fixture({ isCreate: true, create: async () => { throw new Error("Line rejected"); } });
-  edit("title", "Quotation");
+  edit("title", "Draft document");
   f.append({ label: "Lamp", quantity: "1" });
   await act(async () => f.surface().submitForm());
   expect(f.provider.create).toHaveBeenCalledTimes(1);
-  expect(f.surface().form.getValues("title")).toBe("Quotation");
+  expect(f.surface().form.getValues("title")).toBe("Draft document");
   expect(f.surface().form.getValues("lines")).toMatchObject([{ label: "Lamp", quantity: "1" }]);
   expect(f.surface().formIsDirty).toBe(true);
   expect(f.surface().form.formState.errors.root?.server?.message).toBe("Line rejected");

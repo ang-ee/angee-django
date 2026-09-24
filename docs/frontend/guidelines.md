@@ -569,7 +569,7 @@ Hard-won traps — the wise learn from others' mistakes
   on an existing row (the honest "cleared" value); only a String-scalar cell's
   `""` is a real wire value and ships verbatim.
 - **An M2M line cell is a relation multi-select, not a `tagInput`** — a `kind:"list"`
-  child field that carries a relation target (an M2M, e.g. a line's `taxes`) renders
+  child field that carries a relation target (an M2M, e.g. a line's `tags`) renders
   through `relationListFieldInfo` + `RelationMultiFieldWidget` (fetched options,
   chips) and reads/writes an array of public sqids; the diff serializes it via
   `relationIdList`. A `kind:"list"` field with *no* relation target (a plain string

@@ -14,7 +14,7 @@ const rows = [
     title: "Permission model notes",
     tags: ["architecture", "iam"],
     status: "ACTIVE",
-    owner: "Alexis",
+    owner: "Alex",
     words: 1840,
     updatedAt: "2026-06-04T12:00:00Z",
   },

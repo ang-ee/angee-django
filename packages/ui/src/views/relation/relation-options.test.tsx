@@ -25,7 +25,7 @@ const sdkMocks = vi.hoisted(() => ({
     meta?: { fields?: unknown };
   } | null,
   rows: [
-    { id: "vnd_1", display_name: "Acme" },
+    { id: "rev_1", display_name: "Acme" },
   ] as Record<string, unknown>[],
   refetch: vi.fn(),
 }));
@@ -60,7 +60,7 @@ afterEach(() => {
   cleanup();
   sdkMocks.useListOptions = null;
   sdkMocks.rows = [
-    { id: "vnd_1", display_name: "Acme" },
+    { id: "rev_1", display_name: "Acme" },
   ];
   sdkMocks.refetch.mockClear();
 });
@@ -69,14 +69,14 @@ describe("useRelationOptions", () => {
   test("requests public id with the label field so rows become selectable options", () => {
     render(
       <ModelMetadataProvider metadata={metadata}>
-        <RelationOptionsProbe relation={vendorRelation} />
+        <RelationOptionsProbe relation={reviewerRelation} />
       </ModelMetadataProvider>,
     );
 
-    expect(sdkMocks.useListOptions?.resource).toBe("vendors");
+    expect(sdkMocks.useListOptions?.resource).toBe("reviewers");
     expect(sdkMocks.useListOptions?.dataProviderName).toBe("console");
     expect(sdkMocks.useListOptions?.meta?.fields).toEqual(["id", "display_name"]);
-    expect(screen.getByText("vnd_1: Acme")).toBeTruthy();
+    expect(screen.getByText("rev_1: Acme")).toBeTruthy();
   });
 
   test("returns relation options in server order without client label sorting", () => {
@@ -110,7 +110,7 @@ describe("useRelationOptions", () => {
   test("searches a declared text field when the computed label is not filterable", () => {
     render(
       <ModelMetadataProvider metadata={metadata}>
-        <RelationOptionsProbe relation={vendorRelation} searchText="admin" />
+        <RelationOptionsProbe relation={reviewerRelation} searchText="admin" />
       </ModelMetadataProvider>,
     );
 
@@ -215,8 +215,8 @@ function RelationOptionsProbe({
   );
 }
 
-const vendorRelation: RelationFieldInfo = {
-  resource: "integrate.Vendor",
+const reviewerRelation: RelationFieldInfo = {
+  resource: "example.Reviewer",
   labelField: "display_name",
   canCreate: false,
 };
@@ -249,7 +249,7 @@ const searchableField = (name: string) => testQueryField(name, {
 });
 
 const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
-  testDataResource("integrate.Vendor", {
+  testDataResource("example.Reviewer", {
     recordRepresentation: "display_name",
     recordSearchFields: ["username"],
     query: testResourceQuery({

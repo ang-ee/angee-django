@@ -22,11 +22,11 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const Overview: Story = { args: { related: { target: "file:fil_invoice", origin: "msg_anna_d1" } } };
+export const Overview: Story = { args: { related: { target: "file:fil_document", origin: "msg_anna_d1" } } };
 export const AllConversations: Story = { args: { sender: "" } };
-export const ReadingMessage: Story = { args: { message: "msg_anna_d1", related: { target: "file:fil_invoice", origin: "msg_anna_d1" } } };
-export const SearchResults: Story = { args: { sender: "", search: "invoice" } };
-export const RelatedFile: Story = { args: { coverage: { platform: "email" }, related: { target: "file:fil_invoice", origin: "msg_mail3" } } };
-export const CrossAccountReading: Story = { args: { coverage: { platform: "email" }, message: "msg_anna_d1", related: { target: "file:fil_invoice", origin: "msg_mail3" } } };
-export const FullConversation: Story = { args: { thread: "thr_family", message: "msg_fam3", search: "invoice" } };
+export const ReadingMessage: Story = { args: { message: "msg_anna_d1", related: { target: "file:fil_document", origin: "msg_anna_d1" } } };
+export const SearchResults: Story = { args: { sender: "", search: "document" } };
+export const RelatedFile: Story = { args: { coverage: { platform: "email" }, related: { target: "file:fil_document", origin: "msg_mail3" } } };
+export const CrossAccountReading: Story = { args: { coverage: { platform: "email" }, message: "msg_anna_d1", related: { target: "file:fil_document", origin: "msg_mail3" } } };
+export const FullConversation: Story = { args: { thread: "thr_family", message: "msg_fam3", search: "document" } };
 export const SuggestedIdentity: Story = { args: { sender: "hdl_sofia", message: "msg_sofia_tg" } };

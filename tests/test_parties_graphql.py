@@ -426,13 +426,13 @@ def test_party_handle_display_name_projects_only_readable_components(parties_tab
     full_reader = User.objects.create_user(username="party-handle-label-full-reader")
     with system_context(reason="test.parties.party_handle_label.seed"):
         party = messaging_models.Party.objects.create(
-            display_name="Readable supplier",
+            display_name="Readable counterparty",
             created_by_id=admin.pk,
         )
         handle = Handle.objects.create(
             platform="email",
-            value="billing@example.com",
-            normalized_value="billing@example.com",
+            value="contact@example.com",
+            normalized_value="contact@example.com",
             created_by_id=admin.pk,
         )
         link = PartyHandle.objects.link(
@@ -457,10 +457,10 @@ def test_party_handle_display_name_projects_only_readable_components(parties_tab
     fully_readable = _data(execute_schema(schema, query, user=full_reader))["party_handles"]
 
     assert link_only == [{"id": link.sqid, "display_name": "Contact association"}]
-    assert party_only == [{"id": link.sqid, "display_name": "Readable supplier"}]
-    assert handle_only == [{"id": link.sqid, "display_name": "billing@example.com"}]
+    assert party_only == [{"id": link.sqid, "display_name": "Readable counterparty"}]
+    assert handle_only == [{"id": link.sqid, "display_name": "contact@example.com"}]
     assert fully_readable == [
-        {"id": link.sqid, "display_name": "Readable supplier — billing@example.com"}
+        {"id": link.sqid, "display_name": "Readable counterparty — contact@example.com"}
     ]
 
 

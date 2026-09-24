@@ -23,8 +23,7 @@ export const STATUS_TONES: ToneValueBuckets = {
     "active", "connected", "published", "approved", "live", "open", "done",
     "running", "ready", "up", "online", "healthy", "completed",
     "succeeded", "won", "ok", "on_track", "complete",
-    // Document lifecycle (accounting/sales): a posted/paid/confirmed/invoiced
-    // document has reached its healthy terminal state.
+    // Document lifecycle: healthy terminal states.
     "posted", "paid", "confirmed", "invoiced",
   ],
   warning: [
@@ -32,7 +31,7 @@ export const STATUS_TONES: ToneValueBuckets = {
     "provisioning", "deprovisioning", "starting", "connecting",
     "closed", "warning", "degraded", "waiting", "wait", "suspend",
     "at_risk", "escalated",
-    // Document lifecycle: awaiting money or an invoice — in-flight, needs attention.
+    // Document lifecycle: in-flight states that need attention.
     "not_paid", "partial", "to_invoice",
   ],
   danger: ["error", "failed", "denied", "lost", "down", "crashed", "off_track"],
@@ -41,8 +40,7 @@ export const STATUS_TONES: ToneValueBuckets = {
     "archived", "deleted", "disabled", "disconnected", "rejected", "blocked",
     "stopped", "deprovisioned", "idle", "inactive", "offline", "unknown", "default",
     "scheduled", "canceled", "skipped",
-    // Document lifecycle: cancelled (British spelling used by the ledger enums),
-    // and "nothing to invoice" — an inert, no-action state.
+    // Document lifecycle: cancelled or inert states with no action required.
     "cancelled", "nothing",
   ],
 };

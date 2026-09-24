@@ -33,14 +33,14 @@ const project = {
   title: "PM suite launch",
   body: "A bounded launch project for the personal planning floor.",
   status: "ACTIVE",
-  lead: "usr_alexis",
+  lead: "usr_alex",
   start_date: "2026-08-18",
   target_date: "2026-09-04",
   updated_at: "2026-08-22T11:30:00Z",
 };
 
 const users = [
-  { id: "usr_alexis", username: "alexis" },
+  { id: "usr_alex", username: "alex" },
   { id: "usr_sofia", username: "sofia" },
   { id: "usr_mina", username: "mina" },
 ] as const;

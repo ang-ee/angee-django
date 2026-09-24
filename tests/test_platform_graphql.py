@@ -113,7 +113,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(platform_table
     del platform_tables
     admin = _platform_admin("explorer-admin")
     config = apps.get_app_config("linesdemo")
-    line = apps.get_model("linesdemo", "SaleLine")
+    line = apps.get_model("linesdemo", "DocumentLine")
     tag = apps.get_model("linesdemo", "Tag")
     line_row = composed.PlatformModelRow.from_model(config, line)
     tag_row = composed.PlatformModelRow.from_model(config, tag)
@@ -150,13 +150,13 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(platform_table
                     models { label fields { name relation_target } }
                     edges { id source target kind field_name }
                   }
-                  platform_models_by_pk(id: "linesdemo.saleline") {
+                  platform_models_by_pk(id: "linesdemo.documentline") {
                     id
                     label
                     field_count
                     relation_count
                   }
-                  platform_fields_by_pk(id: "linesdemo.saleline.tags") {
+                  platform_fields_by_pk(id: "linesdemo.documentline.tags") {
                     id
                     name
                     model

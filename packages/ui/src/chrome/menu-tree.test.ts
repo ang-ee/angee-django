@@ -42,19 +42,19 @@ describe("resolveMenuRouteTargets", () => {
       resolveMenuRouteTargets(
         [
           {
-            id: "accounts-payable",
+            id: "review-queue",
             route: "dashboards.addon",
-            params: { key: "arp.accounting_intake/accounts payable" },
+            params: { key: "example.document_review/review queue" },
           },
         ],
         routeHref,
       ),
     ).toEqual([
       {
-        id: "accounts-payable",
+        id: "review-queue",
         route: "dashboards.addon",
-        params: { key: "arp.accounting_intake/accounts payable" },
-        to: "/dashboards/addon/arp.accounting_intake%2Faccounts%20payable",
+        params: { key: "example.document_review/review queue" },
+        to: "/dashboards/addon/example.document_review%2Freview%20queue",
         children: undefined,
       },
     ]);

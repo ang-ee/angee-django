@@ -151,7 +151,7 @@ def test_join_continuation_accepts_one_exact_successful_recovery(
     workflow, step = _draft(name="Recovered continuation", owner=actor)
     parent_workflow, starter_step = _draft(name="Continuation parent", owner=actor)
     actor_ref = str(to_subject_ref(actor))
-    frozen_input = {"invoice": "retained"}
+    frozen_input = {"document": "retained"}
     with system_context(reason="continuation completion source fixture"):
         parent = WorkflowRun.objects.create(
             workflow=parent_workflow,
@@ -237,7 +237,7 @@ def test_join_continuation_accepts_one_exact_successful_recovery(
             admitted_actor_ref=actor_ref,
             created_by=actor,
             input_present=True,
-            input={"invoice": "changed"},
+            input={"document": "changed"},
         )
         conflicting.mark_succeeded(outcome="deferred", output={"status": "deferred"})
     with pytest.raises(ValidationError, match="conflicting retained facts"):

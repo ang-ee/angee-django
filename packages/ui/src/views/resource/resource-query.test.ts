@@ -31,24 +31,24 @@ test("resource search expands its semantic term across backend-authored fields",
       operators: ["exact", "iContains"],
     },
   });
-  const resource = testDataResource("accounting.Invoice", {
+  const resource = testDataResource("example.Document", {
     recordRepresentation: "title",
-    recordSearchFields: ["supplier_reference", "title", "number"],
+    recordSearchFields: ["counterparty_reference", "title", "number"],
     query: testResourceQuery({ fields: {
       kind: searchable("kind"),
       number: searchable("number"),
-      supplier_reference: searchable("supplier_reference"),
+      counterparty_reference: searchable("counterparty_reference"),
       title: testQueryField("title"),
     } }),
   });
   const metadata = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
   expect(filterForResourceTextSearch(metadata, {
-    kind: { exact: "VENDOR_BILL" },
-    supplier_reference: { iContains: "S-1MX0XZ7140-2405" },
+    kind: { exact: "REVIEW_RECORD" },
+    counterparty_reference: { iContains: "S-1MX0XZ7140-2405" },
   })).toEqual({
-    kind: { exact: "VENDOR_BILL" },
+    kind: { exact: "REVIEW_RECORD" },
     OR: [
-      { supplier_reference: { iContains: "S-1MX0XZ7140-2405" } },
+      { counterparty_reference: { iContains: "S-1MX0XZ7140-2405" } },
       { number: { iContains: "S-1MX0XZ7140-2405" } },
     ],
   });

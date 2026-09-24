@@ -14,10 +14,7 @@ on the [Angee platform](https://angee.ai).**
 
 > **For developers, not end users.** This repository is the framework source for
 > teams building Angee applications and addons. If you want a product to use,
-> start with a derivative distribution built on Angee:
-> [ARP](https://github.com/ang-ee/arp-angee) (open-source agentic ERP / aERP),
-> [fyltr.ai](https://fyltr.ai/) (personal AI), [SmartOPS Aero](https://smartops.aero/)
-> (aviation operations), or another product-specific Angee distribution.
+> start with a product-specific distribution built on Angee.
 
 > **Public alpha / active refactor.** Angee is being opened while major addon,
 > API, and UI surfaces are still moving. Use it for exploration and feedback,

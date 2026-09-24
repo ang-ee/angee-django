@@ -334,7 +334,7 @@ def test_schema_owner_requires_object_root() -> None:
 
 def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -> None:
     response = ModelResponse(
-        parts=[TextPart('{"number":"INV-42"}')],
+        parts=[TextPart('{"number":"DOC-42"}')],
         provider_response_id="response-1",
     )
     requested = {}
@@ -352,7 +352,7 @@ def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -
         ),
         infer=infer,
     )
-    part = DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-42", "native", "hash")
+    part = DocumentPart(0, None, "text/plain", "native_text", "Document DOC-42", "native", "hash")
 
     result = InferenceMappingEngine().map_text_parts(
         (part,),
@@ -362,7 +362,7 @@ def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -
         timeout=5,
     )
 
-    assert result.value == {"number": "INV-42"}
+    assert result.value == {"number": "DOC-42"}
     assert result.claims["/number"][0]["part_position"] == 0
     assert result.engine_metadata["usage"] == {
         "input_tokens": 23,
@@ -381,7 +381,7 @@ def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -
 
 
 def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -> None:
-    raw_output = "invoice data, but not JSON"
+    raw_output = "document data, but not JSON"
     response = ModelResponse(
         parts=[TextPart(raw_output)],
         provider_response_id="response-invalid",
@@ -395,7 +395,7 @@ def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -
             {"input_tokens": 31, "output_tokens": 9, "tokens": 40, "requests": 1},
         ),
     )
-    part = DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-42", "native", "hash")
+    part = DocumentPart(0, None, "text/plain", "native_text", "Document DOC-42", "native", "hash")
 
     with pytest.raises(DocumentPipelineError) as raised:
         InferenceMappingEngine().map_text_parts((part,), SCHEMA, model=model, config={}, timeout=5)
@@ -420,8 +420,8 @@ def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -
 
 def test_inference_mapping_consumes_native_structured_tool_result() -> None:
     response = ModelResponse(parts=[
-        TextPart("The structured invoice facts follow."),
-        ToolCallPart("inference_output", {"number": "INV-43"}, "call-1"),
+        TextPart("The structured document facts follow."),
+        ToolCallPart("inference_output", {"number": "DOC-43"}, "call-1"),
     ])
     model = SimpleNamespace(
         status="available",
@@ -433,21 +433,21 @@ def test_inference_mapping_consumes_native_structured_tool_result() -> None:
     )
 
     result = InferenceMappingEngine().map_text_parts(
-        (DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-43", "native", "hash"),),
+        (DocumentPart(0, None, "text/plain", "native_text", "Document DOC-43", "native", "hash"),),
         SCHEMA,
         model=model,
         config={},
         timeout=5,
     )
 
-    assert result.value == {"number": "INV-43"}
+    assert result.value == {"number": "DOC-43"}
     assert isinstance(result, MappingResult)
 
 
 def test_inference_mapping_consumes_text_with_non_output_tool_call() -> None:
     response = ModelResponse(parts=[
-        TextPart('{"number":"INV-43"}'),
-        ToolCallPart("lookup_invoice", {"number": "INV-44"}, "call-1"),
+        TextPart('{"number":"DOC-43"}'),
+        ToolCallPart("lookup_document", {"number": "DOC-44"}, "call-1"),
     ])
     model = SimpleNamespace(
         status="available",
@@ -456,21 +456,21 @@ def test_inference_mapping_consumes_text_with_non_output_tool_call() -> None:
     )
 
     result = InferenceMappingEngine().map_text_parts(
-        (DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-43", "native", "hash"),),
+        (DocumentPart(0, None, "text/plain", "native_text", "Document DOC-43", "native", "hash"),),
         SCHEMA,
         model=model,
         config={},
         timeout=5,
     )
 
-    assert result.value == {"number": "INV-43"}
+    assert result.value == {"number": "DOC-43"}
 
 
 def test_inference_mapping_rejects_multiple_output_tool_calls() -> None:
     response = ModelResponse(parts=[
-        TextPart('{"number":"INV-43"}'),
-        ToolCallPart("inference_output", {"number": "INV-43"}, "call-1"),
-        ToolCallPart("inference_output", {"number": "INV-44"}, "call-2"),
+        TextPart('{"number":"DOC-43"}'),
+        ToolCallPart("inference_output", {"number": "DOC-43"}, "call-1"),
+        ToolCallPart("inference_output", {"number": "DOC-44"}, "call-2"),
     ])
     model = SimpleNamespace(
         status="available",
@@ -480,7 +480,7 @@ def test_inference_mapping_rejects_multiple_output_tool_calls() -> None:
 
     with pytest.raises(DocumentPipelineError) as raised:
         InferenceMappingEngine().map_text_parts(
-            (DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-43", "native", "hash"),),
+            (DocumentPart(0, None, "text/plain", "native_text", "Document DOC-43", "native", "hash"),),
             SCHEMA,
             model=model,
             config={},
@@ -509,7 +509,7 @@ def test_inference_model_roles_and_retired_status_share_the_execution_validator(
 def test_inference_recognition_carries_native_image_and_zero_temperature() -> None:
     requested: dict[str, object] = {}
     response = SimpleNamespace(
-        text="Invoice INV-44",
+        text="Document DOC-44",
         provider_response_id="recognition-1",
         finish_reason="stop",
     )
@@ -527,7 +527,7 @@ def test_inference_recognition_carries_native_image_and_zero_temperature() -> No
         timeout=5,
     )
 
-    assert result.text == "Invoice INV-44"
+    assert result.text == "Document DOC-44"
     assert requested["settings"] == {"timeout": 5, "max_tokens": 256, "temperature": 0}
     images = requested["images"]
     assert isinstance(images, tuple)
@@ -588,7 +588,7 @@ def test_inference_engine_preserves_retryable_provider_failures(operation: str) 
             engine.recognize_page(_page(0, 0), model=model, config={}, timeout=5)
         else:
             engine.map_text_parts(
-                (DocumentPart(0, None, "text/plain", "native_text", "Invoice", "native", "hash"),),
+                (DocumentPart(0, None, "text/plain", "native_text", "Document", "native", "hash"),),
                 SCHEMA,
                 model=model,
                 config={},
@@ -607,7 +607,7 @@ def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures(
         acquire_native_parts((acquired, failed))
     assert [part.value for part in error.value.parts] == ["retained"]
 
-    nul_text = DocumentSource(0, "c" * 64, "text/plain", b"invoice\x00text")
+    nul_text = DocumentSource(0, "c" * 64, "text/plain", b"document\x00text")
     with pytest.raises(DocumentPipelineError, match="acquisition failed"):
         acquire_native_parts((nul_text,))
 
@@ -620,18 +620,18 @@ def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures(
     assert (empty.value.stage, empty.value.code) == ("acquisition", "empty_source")
 
 
-def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_vendor_error():
+def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_provider_error():
     def fail(*args, **kwargs):
-        raise RuntimeError("private vendor response")
+        raise RuntimeError("private provider response")
 
     model = SimpleNamespace(status="available", model_use="chat", infer=fail)
     with pytest.raises(DocumentPipelineError) as failure:
         InferenceMappingEngine().map_text_parts(
-            (DocumentPart(0, None, "text/plain", "native_text", "Invoice DOC-1", "native", "b" * 64),),
+            (DocumentPart(0, None, "text/plain", "native_text", "Document DOC-1", "native", "b" * 64),),
             SCHEMA,
             model=model,
             config={},
             timeout=10,
         )
-    assert failure.value.parts[0].value == "Invoice DOC-1"
+    assert failure.value.parts[0].value == "Document DOC-1"
     assert "private" not in str(failure.value)

@@ -711,11 +711,11 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
 
       },
     },
-    SaleType: {
+    RecordType: {
       fields: {},
-      resource: testDataResource("sales.Sale", {
-        roots: { detail: "sale", list: "sales" },
-        typeNames: { node: "SaleType" },
+      resource: testDataResource("example.Record", {
+        roots: { detail: "record", list: "records" },
+        typeNames: { node: "RecordType" },
       }),
     },
   },
@@ -1583,7 +1583,7 @@ describe("ResourceList", () => {
       <TestUrlState>
         <NoDeleteMetadata>
           <ResourceList
-            resource="sales.Sale"
+            resource="example.Record"
             columns={columns}
             recordId="note-2"
             placement="inline"
@@ -2495,28 +2495,28 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
     <ModelMetadataProvider
       metadata={withTestResourceInventory({
         types: {
-          SaleType: {
+          RecordType: {
             fields: {},
             resource: {
               query: testResourceQuery({ identity: { field: "id" }, fields: { "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
 
               schemaName: "public",
-              modelLabel: "sales.Sale",
-              appLabel: "sales",
-              modelName: "sale",
+              modelLabel: "example.Record",
+              appLabel: "example",
+              modelName: "record",
 
               roots: {
-                list: "sales",
-                detail: "sale",
-                create: "insert_sales_one",
-                update: "update_sales_by_pk",
-                aggregate: "saleAggregate",
+                list: "records",
+                detail: "record",
+                create: "insert_records_one",
+                update: "update_records_by_pk",
+                aggregate: "recordAggregate",
               },
               typeNames: {
-                node: "SaleType",
-                filter: "SaleFilter",
-                order: "SaleOrder",
-                aggregate: "SaleAggregate",
+                node: "RecordType",
+                filter: "RecordFilter",
+                order: "RecordOrder",
+                aggregate: "RecordAggregate",
               },
               capabilities: ["list", "aggregate", "detail"],
               fields: [],

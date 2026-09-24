@@ -212,7 +212,7 @@ def test_deliver_event_signs_and_posts_only_matching_subscriptions(
             target_url="https://hooks-impl.example.test/events",
             secret="impl-secret",
             event_kinds=[EventKind.BRIDGE_SYNCED.value],
-            impl_app_filter=["billing"],
+            impl_app_filter=["records"],
         )
         wrong_account = WebhookSubscription.objects.create(
             owner=user,

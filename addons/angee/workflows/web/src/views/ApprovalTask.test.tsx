@@ -122,20 +122,20 @@ const correctionActionSchema: JsonValue = {
       { value: "reject", label: "Reject document", verdict: "REJECT" },
     ] },
     note: { type: "string", label: "Review explanation", minLength: 1 },
-    currency: { type: ["string", "null"], label: "Invoice currency", omittable: true },
-    invoice_date: { type: ["string", "null"], label: "Invoice date", widget: "date", omittable: true },
-    vendor_name: { type: ["string", "null"], label: "Supplier name", omittable: true },
+    currency: { type: ["string", "null"], label: "Document currency", omittable: true },
+    document_date: { type: ["string", "null"], label: "Document date", widget: "date", omittable: true },
+    counterparty_name: { type: ["string", "null"], label: "Counterparty name", omittable: true },
   },
   oneOf: [
     { type: "object", required: ["action", "note"], properties: {
       action: { const: "correct" }, note: { type: "string", label: "Review explanation", minLength: 1 },
-      currency: { type: ["string", "null"], label: "Invoice currency", omittable: true },
-      invoice_date: { type: ["string", "null"], label: "Invoice date", widget: "date", omittable: true },
-      vendor_name: { type: ["string", "null"], label: "Supplier name", omittable: true },
+      currency: { type: ["string", "null"], label: "Document currency", omittable: true },
+      document_date: { type: ["string", "null"], label: "Document date", widget: "date", omittable: true },
+      counterparty_name: { type: ["string", "null"], label: "Counterparty name", omittable: true },
     }, anyOf: [
       { required: ["currency"], properties: { currency: { type: "string", minLength: 1 } } },
-      { required: ["invoice_date"], properties: { invoice_date: { type: "string", minLength: 1 } } },
-      { required: ["vendor_name"], properties: { vendor_name: { type: "string", minLength: 1 } } },
+      { required: ["document_date"], properties: { document_date: { type: "string", minLength: 1 } } },
+      { required: ["counterparty_name"], properties: { counterparty_name: { type: "string", minLength: 1 } } },
     ], additionalProperties: false },
     { type: "object", required: ["action", "note"], properties: {
       action: { const: "reject" }, note: { type: "string", label: "Review explanation", minLength: 1 },
@@ -395,7 +395,7 @@ describe("ApprovalTask", () => {
     const documents: JsonValue = {
       type: "array", widget: "rows", label: "Documents", ...(parentMessage ? { maxItems: 0 } : {}), items: {
         type: "object", widget: "object", properties: {
-          party_name: { type: "string", label: "Supplier name" },
+          party_name: { type: "string", label: "Counterparty name" },
           lines: { type: "array", widget: "list", items: {
             type: "object", widget: "object", properties: {
               label: { type: "string", label: "Description", minLength: 1 },
@@ -435,7 +435,7 @@ describe("ApprovalTask", () => {
         <span data-testid="line-label-errors">
           {messagesForDottedPath(lineMessages, "documents.0.lines.0.label").join(" ")}
         </span>
-        <span data-testid="supplier-errors">
+        <span data-testid="counterparty-errors">
           {messagesForDottedPath(messages, "documents.0.party_name").join(" ")}
         </span>
       </>;
@@ -463,7 +463,7 @@ describe("ApprovalTask", () => {
       .toBe(`documents.0.lines.0.label: ${message}`));
     expect(screen.getByTestId("line-label-errors").textContent).toBe(message);
     expect(screen.getByTestId("documents-errors").textContent).toBe(parentMessage);
-    expect(screen.getByTestId("supplier-errors").textContent).toBe("");
+    expect(screen.getByTestId("counterparty-errors").textContent).toBe("");
     expect(mocks.decide).toHaveBeenCalledTimes(source === "server" ? 1 : 0);
   });
 
@@ -530,11 +530,11 @@ describe("ApprovalTask", () => {
       slot: WORKFLOW_DECISION_CONTENT_SLOT, model: "workflows.Decision", impl: "review",
       id: "test.context-only-fragment", content: Specialized,
     }] }}><ApprovalTask approval={{ ...approval,
-      payload: { record: { model: "storage.File", id: "fil_source", label: "Frozen invoice A" } },
+      payload: { record: { model: "storage.File", id: "fil_source", label: "Frozen document A" } },
       decision_schema: schema,
     }} onResolved={() => undefined} /></AppRuntimeProvider>);
 
-    expect(await screen.findByText("Frozen invoice A")).toBeTruthy();
+    expect(await screen.findByText("Frozen document A")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Reject source" }));
     fireEvent.change(screen.getByLabelText("Review note"), { target: { value: "Wrong source" } });
     fireEvent.click((await screen.findAllByRole("button", { name: "Reject source" }))[1]!);
@@ -549,20 +549,20 @@ describe("ApprovalTask", () => {
     }} onResolved={() => undefined} /></AppRuntimeProvider>);
 
     fireEvent.click(screen.getByRole("button", { name: "Correct source facts" }));
-    expect(screen.getByLabelText("Invoice currency")).toBeTruthy();
-    expect(screen.getByLabelText("Invoice date")).toBeTruthy();
-    expect(screen.getByLabelText("Supplier name")).toBeTruthy();
+    expect(screen.getByLabelText("Document currency")).toBeTruthy();
+    expect(screen.getByLabelText("Document date")).toBeTruthy();
+    expect(screen.getByLabelText("Counterparty name")).toBeTruthy();
     expect(screen.queryByText("Set value")).toBeNull();
     expect(screen.queryByText("Not set")).toBeNull();
     fireEvent.click(screen.getAllByRole("button", { name: "Correct source facts" })[1]!);
     expect(await screen.findByText("Review explanation must contain at least 1 character.")).toBeTruthy();
-    expect(screen.getByText("Complete at least one of: Invoice currency, Invoice date, or Supplier name.")).toBeTruthy();
+    expect(screen.getByText("Complete at least one of: Document currency, Document date, or Counterparty name.")).toBeTruthy();
     expect(mocks.decide).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText("Review explanation"), { target: { value: "Browser form validation only." } });
     fireEvent.click(screen.getAllByRole("button", { name: "Correct source facts" })[1]!);
     expect(screen.queryByText("Review explanation must contain at least 1 character.")).toBeNull();
-    expect(screen.getByText("Complete at least one of: Invoice currency, Invoice date, or Supplier name.")).toBeTruthy();
+    expect(screen.getByText("Complete at least one of: Document currency, Document date, or Counterparty name.")).toBeTruthy();
     expect(mocks.decide).not.toHaveBeenCalled();
   });
 
@@ -723,12 +723,12 @@ describe("ApprovalTask", () => {
       ...approval,
       verdict: "COMPLETED",
       resolved_by: "workflows/cancel",
-      payload: { review_context: { label: "Retained supplier context" } },
+      payload: { review_context: { label: "Retained counterparty context" } },
       resolution: { action: "record", title: "Retained history" },
       decision_schema: obsoleteHistoricalSchema,
     }} onResolved={() => undefined} /></AppRuntimeProvider>);
 
-    expect(screen.getByText("Retained supplier context · record · Retained history")).toBeTruthy();
+    expect(screen.getByText("Retained counterparty context · record · Retained history")).toBeTruthy();
     expect(screen.queryByText("Default title")).toBeNull();
     expect(screen.queryByText(enWorkflowsMessages["inbox.validation.invalidSchema"]!)).toBeNull();
     expect(screen.queryByRole("button", { name: "Record decision" })).toBeNull();

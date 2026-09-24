@@ -48,7 +48,7 @@ def test_field_rows_project_directly_without_model_rows(monkeypatch: Any) -> Non
 def test_native_relation_cardinality_and_target_survive_projection() -> None:
     """Many-to-many relation fields preserve exact graph semantics and IDs."""
 
-    line = apps.get_model("linesdemo", "SaleLine")
+    line = apps.get_model("linesdemo", "DocumentLine")
     tags = line._meta.get_field("tags")
 
     row = composed.PlatformFieldRow.from_field(line, tags)

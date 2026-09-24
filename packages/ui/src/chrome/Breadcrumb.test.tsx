@@ -72,14 +72,14 @@ describe("Breadcrumb", () => {
       { label: "Show" },
     ];
 
-    renderBreadcrumb({ leafLabel: "alexis-profile.jpg" });
+    renderBreadcrumb({ leafLabel: "alex-profile.jpg" });
 
     const breadcrumb = await screen.findByRole("navigation", {
       name: "Breadcrumb",
     });
     expect(within(breadcrumb).getByText("Files").closest("a")?.getAttribute("href"))
       .toBe("/storage");
-    expect((await within(breadcrumb).findByText("alexis-profile.jpg")).getAttribute("aria-current"))
+    expect((await within(breadcrumb).findByText("alex-profile.jpg")).getAttribute("aria-current"))
       .toBe("page");
     expect(within(breadcrumb).queryByText("Show")).toBeNull();
   });

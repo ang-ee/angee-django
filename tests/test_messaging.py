@@ -2115,10 +2115,10 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
 
     with system_context(reason="test claimed sender proposal fixtures"):
         owner = channel.owner
-        party = Party._base_manager.create(display_name="Invoice sender", created_by=owner)
+        party = Party._base_manager.create(display_name="Document sender", created_by=owner)
         handle = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
-            value="billing@example.test",
+            value="contact@example.test",
             created_by=owner,
         )
         messages = [
@@ -2186,8 +2186,8 @@ def test_claimed_sender_assessment_reports_hidden_confirmed_other_without_disclo
         email="foreign-handle-owner@example.test",
     )
     with system_context(reason="test hidden sender association fixtures"):
-        candidate = Party._base_manager.create(display_name="Candidate supplier", created_by=actor)
-        other = Party._base_manager.create(display_name="Private supplier", created_by=foreign)
+        candidate = Party._base_manager.create(display_name="Candidate counterparty", created_by=actor)
+        other = Party._base_manager.create(display_name="Private counterparty", created_by=foreign)
         handle = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="private-owner@example.test",
@@ -2928,7 +2928,7 @@ def test_tracked_field_log_lands_without_post_access(messaging_tables: None) -> 
     user_model = get_user_model()
     with system_context(reason="test.chatterdemo.part1.seed"):
         writer = user_model.objects.create_user(username="cdc-writer", email="cdc-writer@example.com")
-        doc = ChatterDoc.objects.create(title="Order 1", status="open")
+        doc = ChatterDoc.objects.create(title="Document 1", status="open")
     _grant(doc, "writer", writer)
 
     with actor_context(writer):
@@ -2959,7 +2959,7 @@ def test_user_authored_post_still_denied_without_post_access(messaging_tables: N
     user_model = get_user_model()
     with system_context(reason="test.chatterdemo.part1b.seed"):
         writer = user_model.objects.create_user(username="cdc-writer2", email="cdc-writer2@example.com")
-        doc = ChatterDoc.objects.create(title="Order 2", status="open")
+        doc = ChatterDoc.objects.create(title="Document 2", status="open")
     _grant(doc, "writer", writer)
 
     with actor_context(writer):

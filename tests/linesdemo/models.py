@@ -1,7 +1,6 @@
 """Demo document + lines models for the F6 editable-lines Hasura tests.
 
-A ``SaleDoc`` document owns ordered ``SaleLine`` children — the framework
-stand-in for the arpee SalesOrder/Invoice document-with-lines shape (§3.14).
+A ``Document`` owns ordered ``DocumentLine`` children.
 The parent is a REBAC resource (``linesdemo/document``, owner-gated write); the
 child carries no row policy of its own — its rows are created, updated, and
 deleted under the parent's authorization (the §3.4 elevation the write backend
@@ -18,7 +17,7 @@ from angee.base.fields import StateField
 from angee.base.models import AngeeDataModel
 
 
-class SaleDoc(AngeeDataModel):
+class Document(AngeeDataModel):
     """An owner-gated document whose lines are edited transactionally."""
 
     sqid_prefix = "sdc_"
@@ -60,8 +59,7 @@ class Product(AngeeDataModel):
 class Tag(AngeeDataModel):
     """A free vocabulary row a line references through an M2M (no row policy).
 
-    Stands in for the arpee ``accounting.Tax`` M2M a document line carries: the
-    child's ``tags`` decodes/persists as public sqids, and the F6 lines metadata
+    The child's ``tags`` decodes/persists as public sqids, and the F6 lines metadata
     projects it as a ``kind="list"`` relation the frontend renders as a
     multi-select. Non-REBAC (read-all) so the M2M decode is not the concern under
     test — the relation round-trip is.
@@ -79,8 +77,8 @@ class Tag(AngeeDataModel):
         db_table = "test_linesdemo_tag"
 
 
-class SaleLine(AngeeDataModel):
-    """One ordered child line of a :class:`SaleDoc` (no row policy of its own)."""
+class DocumentLine(AngeeDataModel):
+    """One ordered child line of a :class:`Document` (no row policy of its own)."""
 
     sqid_prefix = "sln_"
 
@@ -91,7 +89,7 @@ class SaleLine(AngeeDataModel):
         SERVICE = "service", "Service"
 
     document = models.ForeignKey(
-        SaleDoc,
+        Document,
         on_delete=models.CASCADE,
         related_name="lines",
     )

@@ -209,12 +209,10 @@ renegotiating a single contract.
 That generality is deliberate, because one substrate is meant to carry more than
 one future:
 
-- **ARP — Agentic Resource Planning.** ERP re-cut for the era where some of your
-  team are not human: invoicing, accounting, procurement, CRM, HR as composable
-  addons over shared primitives, every line item permissioned and agent-addressable.
-- **ACM — Agentic Company Management.** A control plane for running a company
-  where agents are real members of the org chart — with identities, permissions,
-  and audit.
+- **Document review.** Composable addons over shared primitives, with every
+  record permissioned and agent-addressable.
+- **Team coordination.** A control plane where agents are real members of the
+  team — with identities, permissions, and audit.
 - **Sovereign, personal AI.** Personal AI you actually own, running on substrate
   you control.
 

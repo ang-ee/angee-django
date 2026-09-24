@@ -31,7 +31,7 @@ test("a followed Run without a Decision does not expose an older pending task", 
 });
 
 test("a Decision target opens the shared Workflows chatter tab", () => {
-  expect(decisionHref("/accounting/entries/entry-1", "decision-1")).toBe(
-    "/accounting/entries/entry-1?chatterTab=workflows&decision=decision-1",
+  expect(decisionHref("/example/entries/entry-1", "decision-1")).toBe(
+    "/example/entries/entry-1?chatterTab=workflows&decision=decision-1",
   );
 });

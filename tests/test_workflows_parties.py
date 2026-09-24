@@ -151,8 +151,8 @@ def test_party_handle_review_delivers_exact_nonterminal_artifact_runs(
     del workflows_parties_tables, no_workflow_queue
     operator = User.objects.create_user(username="handle-reviewer")
     with system_context(reason="test handle review fixtures"):
-        party = Party._base_manager.create(display_name="Claimed supplier", created_by=operator)
-        handle = Handle._base_manager.create(platform="email", value="billing@example.test", created_by=operator)
+        party = Party._base_manager.create(display_name="Claimed counterparty", created_by=operator)
+        handle = Handle._base_manager.create(platform="email", value="contact@example.test", created_by=operator)
         link = PartyHandle._base_manager.create(
             party=party,
             handle=handle,
@@ -243,7 +243,7 @@ def test_party_handle_delete_notifies_stable_handle_after_resolution(
     del workflows_parties_tables, no_workflow_queue
     operator = User.objects.create_user(username="handle-delete-reviewer")
     with system_context(reason="test handle delete fixture"):
-        party = Party._base_manager.create(display_name="Deleted supplier", created_by=operator)
+        party = Party._base_manager.create(display_name="Deleted counterparty", created_by=operator)
         handle = Handle._base_manager.create(platform="email", value="delete@example.test", created_by=operator)
         link = PartyHandle.objects.link(
             party,
@@ -277,16 +277,16 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
     del workflows_parties_tables, no_workflow_queue
     operator = User.objects.create_user(username="identity-reviewer")
     with system_context(reason="test identity fixture"):
-        party = Party._base_manager.create(display_name="Old Supplier", created_by=operator)
+        party = Party._base_manager.create(display_name="Old Counterparty", created_by=operator)
     proposal = {
         "party_id": str(party.sqid),
         "proposed": {
-            "name": "Example Supplier",
+            "name": "Example Counterparty",
             "address": {"street": "10 Example Road", "city": "Exampleton", "country": "GB"},
             "handle": {},
         },
-        "evidence": [{"label": "Printed supplier", "source_model": "storage.File", "source_id": "fil_example"}],
-        "context": {"invoice_id": "inv_example", "draft_revision": 2},
+        "evidence": [{"label": "Printed counterparty", "source_model": "storage.File", "source_id": "fil_example"}],
+        "context": {"document_id": "doc_example", "draft_revision": 2},
     }
     workflow = _identity_workflow()
     run = engine.start(workflow, party, admit_workflow_actor(workflow, operator), input=JsonPresence(True, proposal))
@@ -325,14 +325,14 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
         "handle_action": "keep",
     }
     assert engine.decide(decision, "complete", payload=resolution, actor=operator).validation_error is None
-    with system_context(reason="fixture completed supplier selection"):
+    with system_context(reason="fixture completed counterparty selection"):
         decision.refresh_from_db()
     run_to_terminal(run)
     with system_context(reason="test identity result"):
         assert step_run_for(run, "apply").error == "", step_run_for(run, "apply").input
         party.refresh_from_db()
         address = Address._base_manager.get(party=party)
-    assert party.display_name == "Example Supplier"
+    assert party.display_name == "Example Counterparty"
     assert (address.street, address.city, address.country) == ("10 Example Road", "Exampleton", "GB")
     assert step_run_for(run, "apply").output["context"] == proposal["context"]
 
@@ -352,7 +352,7 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
     unchanged_proposal = {
         **proposal,
         "proposed": {
-            "name": "Example Supplier",
+            "name": "Example Counterparty",
             "address": {
                 "street": "10 Example Road",
                 "city": "Exampleton",
@@ -378,7 +378,7 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
     equivalent_country = {
         **proposal,
         "proposed": {
-            "name": "Example Supplier",
+            "name": "Example Counterparty",
             "address": {
                 "street": "10 Example Road",
                 "city": "Exampleton",
@@ -393,7 +393,7 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
     changed_country = {
         **proposal,
         "proposed": {
-            "name": "Example Supplier",
+            "name": "Example Counterparty",
             "address": {
                 "street": "10 Example Road",
                 "city": "Exampleton",
@@ -683,7 +683,7 @@ def test_identity_owner_checks_basis_and_rolls_back_all_changes(
     with system_context(reason="identity operation fixture"):
         party = Party.objects.create(display_name="Original", created_by=actor)
     _, current = Party.objects.identity_snapshot(str(party.sqid), actor=actor)
-    proposed = {"name": "Replacement", "address": {"label": "Billing", "street": "Main 1"}, "handle": {}}
+    proposed = {"name": "Replacement", "address": {"label": "Contact", "street": "Main 1"}, "handle": {}}
     choices = {"name_action": "replace", "address_action": "add", "handle_action": "keep"}
     outcome, _ = Party.objects.apply_identity(
         party_id=str(party.sqid),

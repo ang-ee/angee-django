@@ -894,7 +894,7 @@ describe("createApp route menu refs", () => {
 
   test("resolves a menu route with its declared params", async () => {
     const captured = await captureChrome({
-      path: "/dashboards/addon/arp.accounting_intake.accounts_payable",
+      path: "/dashboards/addon/example.document_review.overview",
       addons: [
         {
           id: "dashboard-menu",
@@ -908,9 +908,9 @@ describe("createApp route menu refs", () => {
           ],
           menus: [
             {
-              id: "accounts-payable",
+              id: "review-queue",
               route: "dashboards.addon",
-              params: { key: "arp.accounting_intake.accounts_payable" },
+              params: { key: "example.document_review.overview" },
             },
           ],
         },
@@ -919,7 +919,7 @@ describe("createApp route menu refs", () => {
 
     try {
       expect(captured.props().menus[0]?.to).toBe(
-        "/dashboards/addon/arp.accounting_intake.accounts_payable",
+        "/dashboards/addon/example.document_review.overview",
       );
     } finally {
       captured.cleanup();

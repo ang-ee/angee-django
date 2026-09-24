@@ -13,10 +13,10 @@ test("renders labeled before/after rows and associated evidence details", () => 
     beforeLabel="Before"
     afterLabel="After"
     rows={[{
-      key: "supplier",
-      label: "Supplier",
-      before: "Old supplier",
-      after: "New supplier",
+      key: "counterparty",
+      label: "Counterparty",
+      before: "Old counterparty",
+      after: "New counterparty",
       changed: true,
       details: <a href="/evidence/1">Source evidence</a>,
     }]}
@@ -24,8 +24,8 @@ test("renders labeled before/after rows and associated evidence details", () => 
 
   const table = screen.getByRole("table");
   expect(within(table).getByRole("columnheader", { name: "Before" })).toBeTruthy();
-  expect(within(table).getByText("Old supplier")).toBeTruthy();
-  expect(within(table).getByText("New supplier")).toBeTruthy();
+  expect(within(table).getByText("Old counterparty")).toBeTruthy();
+  expect(within(table).getByText("New counterparty")).toBeTruthy();
   expect(within(table).getByRole("link", { name: "Source evidence" })).toBeTruthy();
-  expect(within(table).getByText("Supplier").closest("tr")?.dataset.changed).toBe("true");
+  expect(within(table).getByText("Counterparty").closest("tr")?.dataset.changed).toBe("true");
 });
