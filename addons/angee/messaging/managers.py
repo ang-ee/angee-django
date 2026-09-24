@@ -1631,7 +1631,10 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             body = activity.completion_message()
             if feedback:
                 body = f"{body}\n\n{feedback}"
-            attachment: Any = activity.attachment
+            attachment_field = activity._meta.get_field("attachment")
+            attachment = attachment_field.related_model._base_manager.select_related(
+                "content_type", "thread"
+            ).get(pk=activity.attachment_id)
             model_class = attachment.content_type.model_class()
             message_model = apps.get_model("messaging", "Message")
             message_model.objects.post_to_thread(
@@ -3253,6 +3256,7 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
                 file = file_field.get_cached_value(part, default=None)
                 mime_type = mime_field.get_cached_value(file, default=None) if file is not None else None
                 if (
+                    # Reject incomplete prefetches so the fallback batches all navigation reads.
                     any(row.get_deferred_fields() for row in (part, fragment, file, mime_type) if row is not None)
                     or (part.fragment_id is not None and fragment is None)
                     or (part.file_id is not None and file is None)

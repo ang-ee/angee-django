@@ -840,6 +840,9 @@ class ImplDefaultsMixin(models.Model):
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField) or not field.create_only:
                 continue
+            # A deferred selector omitted from the write keeps Django's loaded-field save semantics.
+            if not self._state.adding and updated is None and field.attname not in self.__dict__:
+                continue
             if field.attname not in loaded:
                 if updated is not None and field.name not in updated and field.attname not in updated:
                     continue
@@ -884,9 +887,9 @@ class ImplDefaultsMixin(models.Model):
 
         if not self._state.adding and update_fields is not None and "config" not in update_fields:
             return
-        if "config" not in self.get_deferred_fields() and not hasattr(self, "config"):
+        # Do not load and rewrite deferred config on an unrelated model save.
+        if "config" not in self.__dict__ and (update_fields is None or "config" not in update_fields):
             return
-        self._refresh_impl_config_fields()
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField):
                 continue
@@ -897,16 +900,6 @@ class ImplDefaultsMixin(models.Model):
             if isinstance(impl, type) and issubclass(impl, ImplBase) and impl.config_model is not None:
                 normalized = impl.normalize_config(self.config)
                 setattr(self, "config", normalized)
-
-    def _refresh_impl_config_fields(self) -> None:
-        """Load deferred config and implementation selectors together."""
-
-        fields = self.get_deferred_fields() & {
-            "config",
-            *(field.attname for field in self._meta.get_fields() if isinstance(field, ImplClassField)),
-        }
-        if fields:
-            self.refresh_from_db(fields=sorted(fields))
 
     def set_impl_key(self, field_name: str, value: Any, *, default: str | None = None) -> bool:
         """Assign an impl key and return whether the stored key changed."""

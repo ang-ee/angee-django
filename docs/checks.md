@@ -40,10 +40,9 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python types | `uv run --locked python -m mypy angee addons` |
 | Dead-code review | `uv run --locked python -m vulture` |
 
-[[`tests/test_layering.py`](../tests/test_layering.py) guards framework import
-boundaries and optional state-field declarations. Django owns database routing;
-REBAC's default-database requirement is checked through the GraphQL addon's
-system-check registry.
+[`tests/test_layering.py`](../tests/test_layering.py) guards framework import
+boundaries and optional state-field declarations. See the
+[Database routing rule](backend/guidelines.md#rules) for persistence checks.
 
 PostgreSQL concurrency behavior also needs the database-backed lane in
 [reusable checks](../.github/workflows/reusable-checks.yml). SQLite results do not

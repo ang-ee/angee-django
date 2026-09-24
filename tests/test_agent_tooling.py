@@ -415,7 +415,7 @@ def test_resync_preserves_independent_direct_grants(
         subject=agent.principal_subject(), action="use", resource=grant_ref
     ).allowed
 
-    monkeypatch.setattr(grants_module, "sync_builtin_tool_catalogue", lambda *, using: 0)
+    monkeypatch.setattr(grants_module, "sync_builtin_tool_catalogue", lambda: 0)
     resync_tool_grants()
     assert backend().check_access(
         subject=agent.principal_subject(), action="use", resource=grant_ref
@@ -458,7 +458,7 @@ def test_resync_migrates_toolrole_and_group_memberships_to_service_user(
             subject_id="research",
             optional_subject_relation="agent_member",
         )
-    monkeypatch.setattr(grants_module, "sync_builtin_tool_catalogue", lambda *, using: 0)
+    monkeypatch.setattr(grants_module, "sync_builtin_tool_catalogue", lambda: 0)
 
     assert resync_tool_grants() == 3
 

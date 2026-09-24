@@ -188,7 +188,7 @@ class StagedModelMixin(models.Model):
         self.validate_stage_scope()
 
     def _stage_container(self) -> models.Model | None:
-        """Return the declared container object, failing fast on a bad convention."""
+        """Return the native (possibly cached) container, including unsaved field edits."""
 
         if not self.stage_container_field_name:
             raise ImproperlyConfigured(f"{self._meta.label} must declare stage_container_field_name.")

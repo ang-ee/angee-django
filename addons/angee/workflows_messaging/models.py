@@ -85,9 +85,7 @@ class MessageTrigger(models.Model):
                 raise ValidationError({"message_channel": "Select the channel that publishes Messages."})
             if self.enabled:
                 with system_context(reason="workflows_messaging.trigger.publication"):
-                    published = (
-                        type(self.workflow).objects.db_manager(self._state.db).current_published_for(self.workflow)
-                    )
+                    published = type(self.workflow).objects.current_published_for(self.workflow)
                 if published is None or published.subject_declaration != declaration.model:
                     raise ValidationError(
                         {"workflow": "A message-ingested trigger requires a published messaging.Message workflow."}

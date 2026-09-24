@@ -31,16 +31,16 @@ class CredentialOidc(models.Model):
 
         super().check_disconnect()
         credential = cast("Credential", self)
-        assert not credential._state.adding, "Disconnect requires a persisted credential."
-        if "kind" in credential.get_deferred_fields():
-            credential.refresh_from_db(fields=["kind"])
         if credential.kind != CredentialKind.OAUTH:
             return
-        oauth_client = credential.oauth_client
+        oauth_field = credential._meta.get_field("oauth_client")
+        # Disconnect must honor current login policy rather than a cached related row.
+        oauth_client = oauth_field.related_model._base_manager.filter(pk=credential.oauth_client_id).first()
         if oauth_client is None or not oauth_client.login_enabled:
             return
-        user = credential.user
-        assert user is not None
+        user_field = credential._meta.get_field("user")
+        # A password may have changed since this credential cached its user.
+        user = user_field.related_model._base_manager.get(pk=credential.user_id)
         if user.has_usable_password():
             return
         with system_context(reason="iam_integrate_oidc.unlink.guard"):

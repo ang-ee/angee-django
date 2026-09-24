@@ -268,8 +268,6 @@ class StateTransitions:
         persist = kwargs.pop("persist", None)
         if persist is not None and spec.on_success is None:
             raise ImproperlyConfigured("A composed transition save requires an explicit success hook.")
-        if self.field.attname in instance.get_deferred_fields():
-            instance.refresh_from_db(fields=[self.field.attname])
         source = self.field.to_python(getattr(instance, self.field.attname))
         target = self.field.to_python(spec.target)
         source_key = self._state_key(source)
@@ -314,8 +312,6 @@ class StateTransitions:
 
         if not str(reason).strip():
             raise ValueError("StateTransitions.force_state() requires a reason.")
-        if self.field.attname in instance.get_deferred_fields():
-            instance.refresh_from_db(fields=[self.field.attname])
         source = self.field.to_python(getattr(instance, self.field.attname))
         target_value = self.field.to_python(target)
         self._write_target(instance, target_value)

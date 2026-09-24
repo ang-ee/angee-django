@@ -1,7 +1,7 @@
 """Tests for the GitHub VCS backend — REST shape, stubbing the network.
 
 The backend reads over the shared SSRF-pinned client (``self.http``); these tests
-supply a credential stub and replace ``HttpClient.get`` so no DB or live network is touched.
+stub transport calls; a database regression pins the credential and OAuth-client join.
 """
 
 from __future__ import annotations
@@ -15,9 +15,12 @@ from typing import Any
 
 import httpx
 import pytest
+from django.contrib.auth import get_user_model
+from rebac import system_context
 
 from angee.integrate.http import HttpClient
 from angee.integrate_github import backend as gh
+from tests.conftest import Credential, OAuthClient, VcsBridge
 
 
 def _patch_get(monkeypatch: pytest.MonkeyPatch, fake_http_get: Any) -> None:
@@ -37,7 +40,9 @@ def _integration(*, api_base: str = "") -> Any:
 
     credential = SimpleNamespace(auth_headers=lambda: {"Authorization": "Bearer token"})
     config = {"github_api_base": api_base} if api_base else {}
-    return SimpleNamespace(credential=credential, config=config)
+    bridge = VcsBridge(config=config)
+    bridge._meta.get_field("credential").set_cached_value(bridge, credential)
+    return bridge
 
 
 def _repo(full_name: str, *, private: bool = False) -> dict[str, Any]:
@@ -55,6 +60,30 @@ def _repo(full_name: str, *, private: bool = False) -> dict[str, Any]:
         "html_url": f"https://github.com/{full_name}",
         "archived": False,
     }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_headers_fetch_credential_and_oauth_client_in_one_query(
+    record_sync_tables: None, django_assert_num_queries: Any
+) -> None:
+    """Uncached authentication loads the credential and its provider together."""
+
+    del record_sync_tables
+    with system_context(reason="test github credential query count"):
+        user = get_user_model().objects.create_user(username="github-query")
+        oauth_client = OAuthClient.objects.create(slug="github-query", client_id="github-client")
+        credential = Credential.objects.upsert_for_user(
+            user, oauth_client, "oauth", {"access_token": "github-token"}
+        )
+        bridge = VcsBridge(credential_id=credential.pk, config={})
+        backend = gh.GitHubBackend(bridge)
+
+        with django_assert_num_queries(1):
+            headers = backend._headers()
+            assert bridge.credential.oauth_client.client_id == "github-client"
+        assert headers["Authorization"] == "Bearer github-token"
+        with django_assert_num_queries(0):
+            assert backend._headers() == headers
 
 
 def test_ls_repos_pages_through_every_repository(monkeypatch: pytest.MonkeyPatch) -> None:

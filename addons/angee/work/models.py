@@ -254,8 +254,6 @@ class Queue(models.Model, metaclass=RebacModelBase):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the queue and atomically provision its stage/numbering substrate."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         adding = self._state.adding
         self.key = self.key.strip().upper()
         self._validate_default_stage()
@@ -271,8 +269,6 @@ class Queue(models.Model, metaclass=RebacModelBase):
 
     def ensure_task_sequence(self) -> models.Model:
         """Return this queue's task-number sequence, creating it if absent."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         sequence_model = apps.get_model("sequence", "Sequence")
         with system_context(reason="work.queue.ensure_task_sequence"):
@@ -290,8 +286,6 @@ class Queue(models.Model, metaclass=RebacModelBase):
 
     def next_task_number(self) -> int:
         """Draw the next gapless task number inside the caller's transaction."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         self.ensure_task_sequence()
         sequence_model = apps.get_model("sequence", "Sequence")
@@ -372,36 +366,23 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
             ),
         )
 
-    @classmethod
-    def from_db(cls, db: Any, field_names: Sequence[str], values: Sequence[Any]) -> Stage:
-        """Load a row and remember facts that identify a system stage."""
-
-        instance = super().from_db(db, field_names, values)
-        instance._loaded_name = instance.name if "name" in field_names else None
-        instance._loaded_category = instance.category if "category" in field_names else None
-        return cast(Stage, instance)
-
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Prevent user creation or renaming of triage/duplicate system stages."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         if not is_sudo():
-            loaded_category = getattr(self, "_loaded_category", None)
-            if self.category in self.SYSTEM_CATEGORIES and (self._state.adding or loaded_category != self.category):
+            persisted = None
+            if not self._state.adding:
+                # Compare persisted identity without loading unrelated deferred columns.
+                persisted = type(self)._base_manager.filter(pk=self.pk).values_list("name", "category").first()
+            previous_category = persisted[1] if persisted is not None else None
+            if self.category in self.SYSTEM_CATEGORIES and previous_category != self.category:
                 raise ValidationError({"category": "Triage and duplicate stages are system-provisioned."})
-            if loaded_category in self.SYSTEM_CATEGORIES and (
-                self.name != getattr(self, "_loaded_name", self.name) or self.category != loaded_category
-            ):
+            if previous_category in self.SYSTEM_CATEGORIES and persisted != (self.name, self.category):
                 raise ValidationError({"name": "System-provisioned stages cannot be renamed or recategorized."})
         super().save(*args, **kwargs)
-        self._loaded_name = self.name
-        self._loaded_category = self.category
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Prevent users from deleting the two system-provisioned stages."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         if not is_sudo() and self.category in self.SYSTEM_CATEGORIES:
             raise ValidationError({"category": "System-provisioned stages cannot be deleted."})
@@ -565,8 +546,6 @@ class Cycle(AuditMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist while keeping close timestamp and snapshot immutable."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         if self.starts_on is not None and self.ends_on is not None and self.ends_on < self.starts_on:
             raise ValidationError({"ends_on": "Cycle end must be on or after its start."})
         if self.pk is not None and not self._state.adding:
@@ -647,6 +626,7 @@ class Cycle(AuditMixin, AngeeDataModel):
             locked.sudo(reason="work.cycle.close.snapshot").save(
                 update_fields=("completed_at", "uncompleted_upon_close", "updated_at")
             )
+        # Return the committed state written through the separately locked row.
         self.refresh_from_db()
         return self
 
@@ -829,8 +809,7 @@ class TaskWork(StagedModelMixin):
         else:
             # Still deferred means never assigned: the lazy load below IS the
             # loaded value (and no longer recurses, per _work_snapshot_loaded_ids).
-            self.refresh_from_db(fields=[attname])
-            value = self.__dict__[attname]
+            value = getattr(self, attname)
         object.__setattr__(self, f"_work_loaded_{attname}", value)
         return value
 
@@ -864,8 +843,6 @@ class TaskWork(StagedModelMixin):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist stage projection and queue numbering in one transaction."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         self._reject_direct_status_write()
         update_fields = set(kwargs["update_fields"]) if kwargs.get("update_fields") is not None else None
         with transaction.atomic():
@@ -893,8 +870,6 @@ class TaskWork(StagedModelMixin):
     def complete(self) -> Any:
         """Move to the first completed stage, or use the base verb without a queue."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         if self.queue_id is None:
             return self._base_verb("complete")
         self.stage = self._stage_for_category("completed")
@@ -903,8 +878,6 @@ class TaskWork(StagedModelMixin):
 
     def drop(self, reason: Any) -> Any:
         """Move to duplicate/canceled according to the base dropped reason."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         try:
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
@@ -921,8 +894,6 @@ class TaskWork(StagedModelMixin):
     def reopen(self) -> Any:
         """Move to the queue-owned default stage, or use the base verb without a queue."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         if self.queue_id is None:
             return self._base_verb("reopen")
         stage = self.resolve_default_stage()
@@ -934,8 +905,6 @@ class TaskWork(StagedModelMixin):
 
     def accept(self, stage: models.Model | None = None) -> Any:
         """Leave triage for a same-queue, non-system stage, idempotently."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         if self.queue_id is None:
             raise ValidationError({"queue": "A queued task is required for triage."})
@@ -964,8 +933,6 @@ class TaskWork(StagedModelMixin):
 
     def decline(self, reason: Any) -> Any:
         """Leave triage for the canceled stage with a closed dropped reason."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         try:
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
@@ -996,8 +963,6 @@ class TaskWork(StagedModelMixin):
 
     def snooze(self, until: datetime) -> Any:
         """Snooze a triage task until an inclusive instant or new chatter activity."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         if timezone.is_naive(until):
             raise ValidationError({"until": "Snooze time must include a timezone."})
@@ -1068,8 +1033,6 @@ class TaskWork(StagedModelMixin):
         by every deterministic ``ANGEE_WORK_MERGE_CONTRIBUTORS`` mover. Any
         failure rolls every one of those writes back.
         """
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         if self.pk is None or canonical.pk is None:
             raise ValidationError("Both duplicate and canonical tasks must be saved.")
@@ -1157,6 +1120,7 @@ class TaskWork(StagedModelMixin):
             source._move_links_to(canonical)
             source._move_followers_to(canonical)
             run_task_merge_contributors(source, canonical)
+        # Return the committed state written through the separately locked row.
         self.refresh_from_db()
         return self
 

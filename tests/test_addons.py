@@ -12,12 +12,11 @@ import sys
 from importlib.machinery import ModuleSpec
 from importlib.metadata import EntryPoint
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
-from django.db import DatabaseError, connection
+from django.db import DatabaseError, connection, connections
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from hatch_angee import AddonManifest
 from rebac import system_context
@@ -522,9 +521,9 @@ def test_resource_counts_tolerate_uncreated_ledger(monkeypatch, resource_model) 
 
     monkeypatch.setattr(queryset_type, "counts_by_addon", unavailable)
     monkeypatch.setattr(
-        platform_models.composed,
-        "connection",
-        SimpleNamespace(introspection=SimpleNamespace(table_names=lambda: [])),
+        connections[resource.objects.db].introspection,
+        "table_names",
+        lambda: [],
     )
 
     assert platform_models.composed.resource_counts() == {}
@@ -541,9 +540,9 @@ def test_resource_counts_propagate_database_failures(monkeypatch, resource_model
 
     monkeypatch.setattr(type(resource.objects.all()), "counts_by_addon", unavailable)
     monkeypatch.setattr(
-        platform_models.composed,
-        "connection",
-        SimpleNamespace(introspection=SimpleNamespace(table_names=lambda: [resource._meta.db_table])),
+        connections[resource.objects.db].introspection,
+        "table_names",
+        lambda: [resource._meta.db_table],
     )
 
     with pytest.raises(DatabaseError, match="ledger unavailable"):

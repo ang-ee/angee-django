@@ -343,8 +343,6 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Require target authority before a folder edit can widen project access."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         update_fields = kwargs.get("update_fields")
         folder_is_written = update_fields is None or bool({"folder", "folder_id"}.intersection(update_fields))
         previous: Any = None
@@ -370,28 +368,20 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
     def pause(self) -> Project:
         """Pause this project, idempotently."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         return self._set_status(str(self.ProjectStatus.PAUSED))
 
     def resume(self) -> Project:
         """Return this project to open work, idempotently."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         return self._set_status(str(self.ProjectStatus.OPEN))
 
     def complete(self) -> Project:
         """Complete this project, idempotently."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         return self._set_status(str(self.ProjectStatus.DONE))
 
     def drop(self) -> Project:
         """Drop this project, idempotently."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         return self._set_status(str(self.ProjectStatus.DROPPED))
 
@@ -569,7 +559,6 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
         for field_name in ("sort_order", "sub_sort_order"):
             field = cast(FractionalRankField, self._meta.get_field(field_name))
-            self.refresh_from_db(fields=sorted(self.get_deferred_fields().intersection((field.attname,))))
             if getattr(self, field.attname) is None:
                 setattr(self, field.attname, field.get_append_rank_for_instance(self))
 
@@ -582,8 +571,6 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Authorize project attachment on insert and revalidate mutable structure."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         if self._state.adding and self.project_id is not None:
             actor, bypass = self.effective_actor(strict=True)
@@ -606,8 +593,6 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
     def complete(self) -> Task:
         """Mark this task done, idempotently preserving its first completion time."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
             return self
         cast(Any, self).status = str(self.TaskStatus.DONE)
@@ -619,8 +604,6 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
     def drop(self, reason: str | TaskDroppedReason) -> Task:
         """Drop this task for ``reason``, idempotently preserving the drop time."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         try:
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
@@ -637,8 +620,6 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
     def reopen(self) -> Task:
         """Return a done or dropped task to the open state, idempotently."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         if (
             self.status == self.TaskStatus.OPEN
@@ -759,8 +740,6 @@ class TaskRelation(AuditMixin, AngeeDataModel):
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist symmetric relations in deterministic endpoint order."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         swapped = self._canonicalize_symmetric_pair()
         update_fields = kwargs.get("update_fields")
@@ -913,8 +892,6 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Canonicalize every persisted target through the projects binding owner."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         target = self.target
         if target is None:
             raise ValidationError({"target": "A project binding target is required."})
@@ -949,8 +926,6 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Require canonical unbind authority for direct instance deletion."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         target = self.target
         if target is None:

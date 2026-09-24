@@ -184,9 +184,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Discover folders and seed per-collection policy on their first epoch."""
 
-        self.bridge.refresh_from_db(
-            fields=sorted(self.bridge.get_deferred_fields().intersection(("config", "owner_id")))
-        )
         folders = apps.get_model("parties", "Folder").objects
         policies = self.bridge.config.get("streams", {}).get("contacts", {})
         for book in sorted(self.discover(), key=lambda item: item.href):
@@ -232,7 +229,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     def _prepare_contact(self, parsed: ParsedContact) -> ParsedContact:
         """Store fetched media before the driver's page transaction begins."""
 
-        self.bridge.refresh_from_db(fields=sorted(self.bridge.get_deferred_fields().intersection(("owner_id",))))
         return apps.get_model("parties", "Party").objects.prepare_contact(parsed, created_by_id=self.bridge.owner_id)
 
     def _links(self, stream: Any) -> tuple[Any, ...]:
@@ -397,7 +393,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         digest; ApplyResult's defaults are the evidence actually applied.
         """
 
-        self.bridge.refresh_from_db(fields=sorted(self.bridge.get_deferred_fields().intersection(("owner_id",))))
         parties = apps.get_model("parties", "Party").objects
         if record.source_payload.get("error"):
             raise SemanticError(record.source_payload["error"])

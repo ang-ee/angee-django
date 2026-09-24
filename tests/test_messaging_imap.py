@@ -11,6 +11,7 @@ re-sync, and the crash-safe cursor contract.
 from __future__ import annotations
 
 import ssl
+from collections import deque
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -702,6 +703,11 @@ class _BridgeStub:
         self.cursor: dict[str, Any] = {}
         self.credential = credential
         self._state = SimpleNamespace(adding=False, db="default")
+
+    def fresh_credential(self) -> Any:
+        """Supply the integration credential contract without a database."""
+
+        return self.credential
 
 
 class _BasicCredentialStub:
@@ -1585,6 +1591,41 @@ def _imap_channel(**config: Any) -> Any:
         backend_class="imap",
         config={"host": "192.0.2.10", **config},
     )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("change", ["rotate", "repoint"])
+def test_extract_reloads_credential_between_pages(imap_tables: None, change: str) -> None:
+    """A reused backend observes another worker's secret or credential-FK edit."""
+
+    with system_context(reason="tests.imap.credential_freshness"):
+        channel = _imap_channel()
+        backend = ImapChannelBackend(channel)
+        stream = SimpleNamespace(partition="INBOX", generation=1)
+        backend._stream_identity = (stream.partition, stream.generation)
+        backend._work = deque()
+        assert backend.extract(stream, 1).exhausted
+        cached = backend.bridge.credential
+        assert cached.reveal()["password"] == "pw"
+
+        credentials = type(cached).objects
+        if change == "rotate":
+            current = credentials.get(pk=cached.pk)
+            current.update_material(password="rotated-password")
+        else:
+            current = credentials.create_local_credential(
+                channel.owner,
+                kind=CredentialKind.BASIC_AUTH,
+                name="Replacement IMAP credential",
+                material={"username": "ada@example.com", "password": "rotated-password"},
+            )
+            Channel._base_manager.filter(pk=channel.pk).update(credential=current)
+        assert backend.bridge.credential is cached
+        assert cached.reveal()["password"] == "pw"
+
+        assert backend.extract(stream, 1).exhausted
+        assert backend._credential.pk == current.pk
+        assert backend._credential.reveal()["password"] == "rotated-password"
 
 
 def _wire_fake(monkeypatch: pytest.MonkeyPatch, account: FakeImapAccount) -> None:

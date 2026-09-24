@@ -18,6 +18,7 @@ import os
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection, models, transaction
+from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
@@ -257,6 +258,35 @@ def test_deferred_load_reparent_still_repaths() -> None:
     assert moved.parent_id == home.pk
     assert moved.path.startswith(home.path)
     assert child.path.startswith(moved.path)
+
+
+@pytest.mark.django_db
+def test_deferred_save_does_not_overwrite_a_concurrent_reparent() -> None:
+    """Saving a loaded name preserves tree columns moved during the save."""
+
+    with system_context(reason="test hierarchy concurrent deferred save"):
+        first = HierNode.objects.create(name="first")
+        second = HierNode.objects.create(name="second")
+        node = HierNode.objects.create(name="child", parent=first)
+        deferred = HierNode.objects.only("name").get(pk=node.pk)
+        deferred.name = "renamed"
+
+        def reparent_before_update(sender, instance, **kwargs) -> None:
+            if instance is deferred:
+                node.parent = second
+                node.save()
+
+        pre_save.connect(reparent_before_update, sender=HierNode)
+        try:
+            deferred.save()
+        finally:
+            pre_save.disconnect(reparent_before_update, sender=HierNode)
+        assert "path" not in deferred.__dict__
+        stored = HierNode.objects.get(pk=node.pk)
+
+    assert stored.name == "renamed"
+    assert stored.parent_id == second.pk
+    assert stored.path.startswith(second.path)
 
 
 @pytest.mark.django_db

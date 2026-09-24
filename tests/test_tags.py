@@ -279,6 +279,7 @@ def test_deferred_scope_source_field_stays_deferred_on_load(tags_tables: None) -
             loaded = ScopeFlagTag.objects.defer("shared_marker").get(pk=tag.pk)
 
     assert len(ctx.captured_queries) == 1
+    # Pin native deferred loading without evaluating the reader policy.
     assert loaded.get_deferred_fields() == {"shared_marker"}
 
 

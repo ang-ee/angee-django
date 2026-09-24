@@ -782,7 +782,6 @@ class Step(ResourceLoadMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
 
         if not self._state.adding and update_fields is not None and "config" not in update_fields:
             return
-        self._refresh_impl_config_fields()
         if not isinstance(self.config, Mapping):
             raise ValidationError({"config": "Step config must be an object."})
         impl = cast(type[StepImpl], self.resolve_impl("step_class"))
@@ -2201,11 +2200,6 @@ class StepRun(AuditMixin, AngeeDataModel):
         if fields - self.projection_field_names - {"updated_at"}:
             raise TypeError("The attempt operation can persist only StepRun projection fields.")
         attnames = {type(self)._meta.get_field(name).attname for name in fields - {"updated_at"}}
-        self.refresh_from_db(
-            fields=sorted(
-                self.get_deferred_fields() & {"run_id", "step_id", "map_index", "current_attempt_id", *attnames}
-            )
-        )
         loaded = (
             system_queryset(type(self), lock=None)
             .values(
@@ -2288,7 +2282,6 @@ class StepRun(AuditMixin, AngeeDataModel):
         scheduler of implementation work.
         """
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields() & {"status"}))
         if self.status != StepRunStatus.WAITING:
             raise TransitionNotAllowed(f"StepRun.wake requires status={StepRunStatus.WAITING}; found {self.status}.")
         self.wait_until = at

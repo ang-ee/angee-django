@@ -213,9 +213,9 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._external_account: Any = None
 
     def _load_credentials(self) -> None:
-        """Load the channel credentials and their external account."""
+        """Reload transport authentication for each extraction page or preview."""
 
-        self._credential = self.bridge.credential
+        self._credential = self.bridge.fresh_credential()
         self._external_account = self._credential.external_account if self._credential is not None else None
 
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:

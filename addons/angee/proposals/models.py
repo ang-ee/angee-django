@@ -151,13 +151,12 @@ class ImmutableFieldsMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist after comparing immutable facts with the committed row."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         allowed = set(getattr(self, "_proposals_allowed_immutable_fields", set()))
         try:
             if self.pk is not None and not self._state.adding:
                 checked = tuple(name for name in self.immutable_fields if name not in allowed)
                 if checked:
+                    # Compare committed identities without loading unrelated deferred columns.
                     with system_context(reason=f"proposals.{self._meta.model_name}.immutable_fields"):
                         persisted = type(self)._base_manager.filter(pk=self.pk).values(*checked).first()
                     if persisted is not None:
@@ -311,11 +310,10 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist while keeping target/deadline and opened-policy facts coherent."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         self._validate_target()
         self._validate_dates()
         if self.pk is not None and not self._state.adding:
+            # Opening-policy immutability depends on the committed lifecycle state.
             with system_context(reason="proposals.round.opening_policy"):
                 persisted = type(self)._base_manager.filter(pk=self.pk).values("status", "opening_policy").first()
             if (
@@ -328,8 +326,6 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
 
     def deletion_error(self) -> str | None:
         """Return why this Round cannot be deleted under the untouched-draft rule."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         if self.status != RoundStatus.COLLECTING or self.outcome is not None:
             return "Only a collecting round can be deleted."
@@ -756,8 +752,6 @@ class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the normalized stable key."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         self.key = str(self.key or "").strip().lower()
         if not self.key:
             raise ValidationError({"key": "Topic key is required."})
@@ -966,7 +960,8 @@ class ProposalManager(AngeeManager):
         handle: Any = message.sender
         if handle.party_id is None:
             apps.get_model("parties", "PartyHandle").objects.suggest_for(handle)
-            handle.refresh_from_db(fields=("party",))
+            # Matching may assign the party through another Handle instance.
+            handle.refresh_from_db(fields=["party"])
         return handle.party
 
     def _payload_hash(self, message: models.Model) -> str:
@@ -1161,8 +1156,6 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Create shells only while collecting and reconcile lifecycle tuples."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         if not self._state.adding:
             super().save(*args, **kwargs)
             self._reconcile_shell_access()
@@ -1182,8 +1175,6 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
 
     def deletion_error(self) -> str | None:
         """Return why this Proposal is no longer an untouched draft."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         if self.state != ProposalState.DRAFT or self.submitted_at is not None or self.decided_at is not None:
             return "Only an untouched draft proposal can be deleted."
@@ -1625,8 +1616,6 @@ class TaskProposalAccess(models.Model):
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Reject shared queues for tasks on an unpublished proposal track."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         try:
             queue_field = self._meta.get_field("queue")

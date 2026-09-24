@@ -224,6 +224,22 @@ def drive(tmp_path: Path, storage_tables: None) -> Any:
     return row
 
 
+@pytest.mark.django_db(transaction=True)
+def test_file_storage_fetches_uncached_drive_and_backend_in_one_query(
+    drive: Any, django_assert_num_queries: Any
+) -> None:
+    """First storage access joins both owners; subsequent access reuses their caches."""
+
+    row = File(drive_id=drive.pk)
+    with system_context(reason="test file storage query count"):
+        with django_assert_num_queries(1):
+            backend = row.storage
+            assert row.drive.backend.pk == drive.backend_id
+        with django_assert_num_queries(0):
+            assert row.storage is backend
+            assert backend is drive.storage
+
+
 def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
     """Run the draft → push → finalize cycle as the drive owner."""
 

@@ -198,12 +198,49 @@ def test_base_validation_refreshes_and_normalizes_deferred_config() -> None:
         record = DeferredConfigRecord.objects.create(adapter="typed", config={"retries": 1})
         DeferredConfigRecord.objects.filter(pk=record.pk).update(config={"retries": "3"})
         deferred = DeferredConfigRecord.objects.only("pk").get(pk=record.pk)
+        # Pin the deferred setup whose explicit config write must still validate.
         assert deferred.get_deferred_fields() == {"adapter", "config"}
 
         deferred.save(update_fields={"config"})
         stored = DeferredConfigRecord.objects.get(pk=record.pk)
 
         assert stored.config == {"endpoint": "https://example.test", "retries": 3}
+    finally:
+        with connection.schema_editor() as editor:
+            editor.delete_model(DeferredConfigRecord)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
+def test_impl_save_leaves_untouched_config_and_selector_deferred(django_assert_num_queries) -> None:
+    """An unrelated save neither reads nor rewrites the deferred config and selector."""
+
+    class DeferredConfigRecord(ImplDefaultsMixin):
+        adapter = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_TEST_IMPLS", create_only=True)
+        config = models.JSONField(default=dict)
+        label = models.CharField(max_length=50)
+
+        class Meta:
+            app_label = "tests"
+
+    with connection.schema_editor() as editor:
+        editor.create_model(DeferredConfigRecord)
+    try:
+        record = DeferredConfigRecord.objects.create(adapter="typed", config={"retries": 1}, label="before")
+        deferred = DeferredConfigRecord.objects.only("label").get(pk=record.pk)
+        DeferredConfigRecord.objects.filter(pk=record.pk).update(config={"retries": 7})
+        deferred.label = "after"
+
+        with django_assert_num_queries(1):
+            deferred.save()
+
+        assert "config" not in deferred.__dict__
+        assert "adapter" not in deferred.__dict__
+        stored = DeferredConfigRecord.objects.get(pk=record.pk)
+        assert stored.label == "after"
+        assert stored.config == {"retries": 7}
+        assert stored.adapter == "typed"
     finally:
         with connection.schema_editor() as editor:
             editor.delete_model(DeferredConfigRecord)

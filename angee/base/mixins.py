@@ -726,20 +726,14 @@ class HierarchyMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row, maintaining ``path`` on create and reparent."""
 
-        deferred = self.get_deferred_fields() & {
-            "parent_id",
-            "path",
-            *(self._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
-        }
-        if deferred:
-            self.refresh_from_db(fields=sorted(deferred))
         if self._state.adding:
             self._save_created(*args, **kwargs)
         elif self._hierarchy_needs_repath():
             self._save_reparented(*args, **kwargs)
         else:
             super().save(*args, **kwargs)
-        self._hierarchy_saved_parent_id = self.parent_id
+        if "parent_id" in self.__dict__:
+            self._hierarchy_saved_parent_id = self.parent_id
 
     def _save_created(self, *args: Any, **kwargs: Any) -> None:
         """Insert the row, then derive its ``path`` from the parent's committed path."""
@@ -842,8 +836,11 @@ class HierarchyMixin(models.Model):
     def _hierarchy_needs_repath(self) -> bool:
         """Return whether an existing row's ``parent`` moved (or its path is unset)."""
 
-        if not self.path:
+        # An unrelated deferred save must not load tree columns into its UPDATE.
+        if "path" in self.__dict__ and not self.path:
             return True
+        if "parent_id" not in self.__dict__:
+            return False
         if hasattr(self, "_hierarchy_saved_parent_id"):
             return self._hierarchy_saved_parent_id != self.parent_id
         # A deferred load (``.only(...)`` excluding ``parent``) carries no baseline,
@@ -862,14 +859,7 @@ class HierarchyMixin(models.Model):
 
         if self.parent_id is None:
             return None
-        parent = self.parent
-        deferred = parent.get_deferred_fields() & {
-            "path",
-            *(parent._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
-        }
-        if deferred:
-            parent.refresh_from_db(fields=sorted(deferred))
-        return cast("HierarchyMixin", parent)
+        return cast("HierarchyMixin", self.parent)
 
     def _hierarchy_path(self, parent: HierarchyMixin | None) -> str:
         """Return this node's derived path under ``parent`` (a root when ``None``)."""

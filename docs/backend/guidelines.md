@@ -144,8 +144,8 @@ Use these owners instead of maintaining another contract in an addon:
   read-only external import source may select its database explicitly.
   Multi-database support extends Django with a router for static model placement;
   add operation scoping only for a concrete need. REBAC-managed models must write
-  to the default database; the GraphQL addon's
-  [system check](../../addons/angee/graphql/checks.py) validates configured routers
+  to the default database, together with the relationship and resource stores; the
+  [base system check](../../angee/base/checks.py) validates configured routers
   against that requirement.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
@@ -1176,7 +1176,7 @@ from the composition addon to both owners; integrate never imports workflows.
 - **Admission retains one cycle.** Use `admit_bridge_cycle` with the concrete
   Bridge subject, its queued cadence token and active Integration owner. The
   native start manager owns publication/input validation and exact deduplication;
-  Deferred input invokes an optional database-only `prepare(using)` after the
+  Deferred input invokes an optional database-only `prepare()` after the
   workflow and retained Run locks, then locks Bridge before constructing its
   input. Input construction can lock downstream scope rows. `validate_new`
   rejects another active cycle under that Bridge lock. The
@@ -1184,7 +1184,7 @@ from the composition addon to both owners; integrate never imports workflows.
   Bridge and immutable facts through `sync_workflow_input`; no secondary schedule.
 - **Stream stages are STANDARD.** Delegate one page to `advance_stream` outside
   the workflow finalization transaction. The driver atomically commits records,
-  discrepancies and cursor on the selected alias. Retrying a crash between the
+  discrepancies and cursor. Retrying a crash between the
   page commit and workflow finalization reads that cursor. Renew the retained
   lease during long pages. Resume state retains stream correlation and the sum
   of reported page counts; the terminal output carries that stage total. It must

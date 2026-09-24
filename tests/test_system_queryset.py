@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from django.core.exceptions import FieldError
@@ -106,6 +107,39 @@ def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model:
     else:
         assert isinstance(manager, AngeeUnscopedManager)
         assert isinstance(queryset, AngeeUnscopedQuerySet)
+
+
+@pytest.mark.parametrize("queryset_class", [AngeeQuerySet, AngeeUnscopedQuerySet])
+@pytest.mark.parametrize("supports_lock, supports_of", [(False, False), (True, False), (True, True)])
+def test_lock_capability_check_precedes_native_select_for_update(
+    monkeypatch: pytest.MonkeyPatch, queryset_class: Any, supports_lock: bool, supports_of: bool
+) -> None:
+    """Unsupported backends never receive lock calls; the original queryset remains unchanged."""
+
+    instance = SystemQueryThing(name="pending")
+    original = queryset_class(model=SystemQueryThing, hints={"instance": instance}).filter(name="pending")
+    monkeypatch.setattr(connection.features, "has_select_for_update", supports_lock)
+    monkeypatch.setattr(connection.features, "has_select_for_update_of", supports_of)
+    native_select_for_update = models.QuerySet.select_for_update
+    lock_calls = []
+
+    def select_for_update(queryset: Any, **kwargs: Any) -> Any:
+        assert supports_lock, "Unsupported backends must not call select_for_update."
+        lock_calls.append(kwargs)
+        return native_select_for_update(queryset, **kwargs)
+
+    monkeypatch.setattr(models.QuerySet, "select_for_update", select_for_update)
+
+    locked = original.lock_if_supported(of=("self",))
+
+    assert type(locked) is queryset_class
+    assert locked is not original
+    assert locked.query.where == original.query.where
+    assert locked._hints == original._hints
+    assert original._for_write is False
+    assert original.query.select_for_update is False
+    assert locked.query.select_for_update is supports_lock
+    assert lock_calls == ([{"of": ("self",)}] if supports_of else [{}] if supports_lock else [])
 
 
 @pytest.fixture

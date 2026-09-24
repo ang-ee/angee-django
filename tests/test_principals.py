@@ -138,8 +138,7 @@ def test_agent_create_rolls_back_when_service_user_sync_fails(
 
     owner = User.objects.create_user(username="principal-owner-rollback", email="principal-rollback@example.com")
 
-    def fail_sync(manager: Any, agent: object, *, using: str | None = None) -> object:
-        assert using == "default"
+    def fail_sync(manager: Any, agent: object) -> object:
         raise RuntimeError("sync failed")
 
     monkeypatch.setattr(type(Agent.objects), "sync_service_user", fail_sync)

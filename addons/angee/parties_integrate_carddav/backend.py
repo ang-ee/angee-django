@@ -206,7 +206,6 @@ class CardDavDirectoryBackend(DirectoryBackend):
     def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
         """Preserve unmapped vCard properties and fence every write by its ETag."""
 
-        link.refresh_from_db(fields=sorted(link.get_deferred_fields()))
         stream = link.stream
         if stream is None:
             raise CardDavError("A CardDAV record link must belong to a stream.")

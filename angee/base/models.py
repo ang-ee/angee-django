@@ -74,14 +74,15 @@ class _AngeeQuerySetMixin(Generic[_ModelT]):
     def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:
         """Apply a self-scoped row lock only on database backends that support it."""
 
-        queryset = cast(models.QuerySet[_ModelT], self)
-        queryset = queryset.select_for_update()
+        queryset = cast(models.QuerySet[_ModelT], self).all()
+        # Native write intent must precede feature checks, including on backends without row locks.
+        queryset._for_write = True
         features = connections[queryset.db].features
         if features.has_select_for_update:
             if of and features.has_select_for_update_of:
                 return cast(Self, queryset.select_for_update(of=of))
-            return cast(Self, queryset)
-        return cast(Self, self)
+            return cast(Self, queryset.select_for_update())
+        return cast(Self, queryset)
 
     def locked_get(self, *args: Any, **kwargs: Any) -> _ModelT:
         """Return one row under a database row lock when the backend supports it."""

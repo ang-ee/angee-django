@@ -95,7 +95,6 @@ class Mount(Bridge):
     def sync(self) -> int | SyncDispatch:
         """Reconcile the external source into this mount's storage drive."""
 
-        self.refresh_from_db(fields=list(self.get_deferred_fields()))
         dispatched = self.dispatch_sync()
         if dispatched is not None:
             return dispatched

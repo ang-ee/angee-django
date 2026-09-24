@@ -23,11 +23,8 @@ that owner checks the admission actor's model access, deployment approval and
 capability, classifies provider failures, and debits the run once. Agents owns
 provider selection and structured-output decoding.
 
-Every nested operation receives the selected database alias. Document processing
-and workflow inference require the default database because the authorization backend cannot
-bind access checks to another alias; extraction and the generic inference step
-share that fail-closed boundary. Invalid or exhausted request timeouts fail before
-provider invocation and are never transient failures.
+Invalid or exhausted request timeouts fail before provider invocation and are
+never transient failures.
 
 `Extraction.awaiting_correspondence` identifies a retained candidate whose document
 or line identities need review. Callers use that property; retained writes use

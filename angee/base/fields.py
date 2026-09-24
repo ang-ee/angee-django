@@ -318,9 +318,6 @@ class FractionalRankField(models.FloatField):
 
         model = type(instance)
         context_fields = self._unique_context_fields(model)
-        deferred = instance.get_deferred_fields() & {field.attname for field in context_fields}
-        if deferred:
-            instance.refresh_from_db(fields=sorted(deferred))
         context = {
             context_field.attname: getattr(instance, context_field.attname)
             for context_field in context_fields

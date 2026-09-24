@@ -57,7 +57,11 @@ class AddonCatalogManager(AngeeManager):
         """
 
         addon = apps.get_model("platform", "Addon")
-        repository: Any = source.repository
+        repository_field = source._meta.get_field("repository")
+        repository = repository_field.related_model._base_manager.select_related(
+            "vcs_bridge__credential__oauth_client"
+        ).get(pk=source.repository_id)
+        source.repository = repository
         vcs_bridge = repository.vcs_bridge
         descriptors = vcs_bridge.discover(source, marker="addon.toml", parse=parse_addon_meta)
         available = available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ()))

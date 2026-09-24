@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import connection, connections, transaction
 from django.db.models.signals import m2m_changed
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -69,6 +69,71 @@ def test_previous_edge_write_rolls_back_with_transaction(workflow_engine_tables:
             StepRun.objects.update_previous(target, [previous])
             raise RuntimeError("Abort previous edges")
         assert not StepRun.previous.through._base_manager.filter(from_steprun_id=target.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_previous_add_and_set_preserve_native_signals(
+    workflow_engine_tables: None,
+) -> None:
+    """Native M2M changes preserve deduplication, cache invalidation, and existing edge identity."""
+
+    del workflow_engine_tables
+    workflow = workflow_with_steps(
+        steps=tuple(({"key": key} for key in ("a", "b", "c", "target"))),
+        edges=(("a", "b", "done"), ("b", "c", "done"), ("c", "target", "done")),
+    )
+    with system_context(reason="previous edge semantics setup"):
+        run = WorkflowRun.objects.create(workflow=workflow, status=workflow_models.RunStatus.RUNNING)
+        rows = {step.key: StepRun.objects.create(run=run, step=step) for step in Step.objects.filter(workflow=workflow)}
+        a, b, c, target = (rows[key] for key in ("a", "b", "c", "target"))
+        with transaction.atomic():
+            StepRun.objects.update_previous(target, [a, b])
+            StepRun.objects.update_previous(a, [b])
+        target = StepRun.objects.prefetch_related("previous").get(pk=target.pk)
+        through = StepRun.previous.through
+        retained_pk = through._base_manager.get(from_steprun_id=target.pk, to_steprun_id=b.pk).pk
+    observed: list[tuple[str, set[int]]] = []
+
+    def observe(sender: Any, *, action: str, pk_set: set[int], **kwargs: Any) -> None:
+        assert sender is through
+        assert kwargs["instance"] is target
+        assert kwargs["model"] is StepRun
+        assert kwargs["reverse"] is False
+        assert kwargs["using"] == target._state.db
+        assert connections[kwargs["using"]].in_atomic_block
+        observed.append((action, set(pk_set)))
+
+    m2m_changed.connect(observe)
+    try:
+        with system_context(reason="previous edge semantics"):
+            with transaction.atomic():
+                owner = StepRun.objects
+                owner.update_previous(target, [b, c, c])
+                owner.update_previous(target, [c])
+                assert "previous" not in target._prefetched_objects_cache
+                owner.update_previous(target, [b, c], replace=True)
+                edges = through._base_manager.filter(from_steprun_id=target.pk)
+                assert set(edges.values_list("to_steprun_id", flat=True)) == {b.pk, c.pk}
+                assert edges.get(to_steprun_id=b.pk).pk == retained_pk
+                owner.update_previous(target, [b, c], replace=True)
+                owner.update_previous(target, [b, b, c], replace=True)
+                owner.update_previous(target, [], replace=True)
+                assert not edges.exists()
+                assert through._base_manager.filter(from_steprun_id=a.pk, to_steprun_id=b.pk).exists()
+    finally:
+        m2m_changed.disconnect(observe)
+    assert observed == [
+        ("pre_add", {c.pk}),
+        ("post_add", {c.pk}),
+        ("pre_add", set()),
+        ("post_add", set()),
+        ("pre_remove", {a.pk}),
+        ("post_remove", {a.pk}),
+        ("pre_add", set()),
+        ("post_add", set()),
+        ("pre_remove", {b.pk, c.pk}),
+        ("post_remove", {b.pk, c.pk}),
+    ]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -289,7 +354,7 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     assert (absent.input_present, absent.input) == (False, None)
     assert (present_null.input_present, present_null.input) == (True, None)
     assert (present_value.input_present, present_value.input) == (True, {"value": [1]})
-    assert publish_requests == [("workflows.publish_dispatches", None)] * 3
+    assert publish_requests == [("workflows.publish_dispatches", {})] * 3
     with system_context(reason="verify initial workflow dispatches"):
         assert WorkflowDispatch.objects.filter(run__in=[absent, present_null, present_value]).count() == 3
     present_value.input = {"changed": True}

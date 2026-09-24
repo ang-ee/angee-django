@@ -70,7 +70,7 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, role_anchor
 from angee.base.refs import RecordRefMixin, canonical_record_target
-from angee.base.scoping import elevated
+from angee.base.scoping import elevated, system_queryset
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -516,9 +516,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
             raise ValidationError({"drive": "A folder requires a drive."})
         if not self.parent_id:
             return
-        queryset = type(self)._base_manager.all()
-        if lock:
-            queryset = queryset.select_for_update()
+        queryset = system_queryset(type(self), lock=() if lock else None)
         ancestor_id = self.parent_id
         visited: set[Any] = {self.pk} if self.pk is not None else set()
         while ancestor_id is not None:
@@ -1233,11 +1231,17 @@ class File(SqidMixin, AuditMixin, AngeeModel):
     def storage(self) -> StorageBackend:
         """Return the resolved backend for this row's drive.
 
-        Resolve the drive and backend under elevation; the backend instance
+        Resolve an uncached drive and its backend in one elevated query; the backend instance
         comes from the per-``(row, config)`` cache.
         """
 
         with elevated(reason="storage.file.storage"):
+            drive_field = self._meta.get_field("drive")
+            if not drive_field.is_cached(self):
+                drive_field.set_cached_value(
+                    self,
+                    drive_field.related_model._base_manager.select_related("backend").get(pk=self.drive_id),
+                )
             drive: Any = self.drive
             return drive.storage
 

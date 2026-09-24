@@ -7,8 +7,9 @@ from typing import Any
 
 import pytest
 from django.apps import apps
-from django.db import connection
+from django.db import connection, models
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from django.utils import timezone
 from rebac import (
     ObjectRef,
@@ -21,6 +22,7 @@ from rebac import (
     write_relationships,
 )
 
+from angee.proposals.models import TaskProposalAccess
 from tests.conftest import _clear_model_tables, _create_missing_tables, create_platform_admin
 from tests.projects_models import PROJECT_TEST_MODELS, Project, Task
 from tests.proposals_models import PROPOSAL_TEST_MODELS, Answer, Proposal, Round, Topic
@@ -227,3 +229,87 @@ def test_proposals_follow_invitation_and_scope_hierarchy(
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created):
                     schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("model_name", ("round", "topic", "proposal"))
+def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
+    proposal_schema: None,
+    model_name: str,
+) -> None:
+    """Invariant checks must preserve Django's loaded-fields-only UPDATE."""
+
+    del proposal_schema
+    test_models = (*PROJECT_TEST_MODELS, *PROPOSAL_TEST_MODELS)
+    created = _create_missing_tables(test_models)
+    try:
+        with system_context(reason="tests.proposals.deferred_save"):
+            user = apps.get_model("iam", "User").objects.create_user(username="proposal-deferred-owner")
+            project = Project.objects.create(title="Deferred proposal target")
+            now = timezone.now()
+            round = Round.objects.create(
+                project=project,
+                facilitator=user,
+                name="Original round",
+                last_call_at=now,
+                submission_deadline=now + timedelta(days=7),
+            )
+            topic = Topic.objects.create(round=round, key="scope", name="Original topic", sort_order=1024.0)
+            proposal = Proposal.objects.create(round=round, responder=user)
+            row, field = {
+                "round": (round, "name"),
+                "topic": (topic, "name"),
+                "proposal": (proposal, "staffing"),
+            }[model_name]
+            deferred = type(row)._base_manager.defer("created_at").get(pk=row.pk)
+            original_created_at = row.created_at
+            assert "created_at" not in deferred.__dict__
+            setattr(deferred, field, "Changed value")
+            with CaptureQueriesContext(connection) as queries:
+                deferred.save()
+            updates = [
+                query["sql"] for query in queries
+                if query["sql"].startswith(f'UPDATE "{row._meta.db_table}"')
+            ]
+            assert len(updates) == 1
+            assert '"created_at" =' not in updates[0]
+            stored = type(row)._base_manager.get(pk=row.pk)
+            assert getattr(stored, field) == "Changed value"
+            assert stored.created_at == original_created_at
+    finally:
+        _clear_model_tables(test_models)
+        if created:
+            with connection.schema_editor() as editor:
+                for model in reversed(created):
+                    editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+@isolate_apps()
+def test_task_proposal_donor_preserves_deferred_save() -> None:
+    """The optional queue guard must not load other columns on an unrelated save."""
+
+    class DeferredTask(TaskProposalAccess, models.Model):
+        title = models.CharField(max_length=80)
+        body = models.TextField()
+
+        class Meta:
+            app_label = "tests"
+
+    with connection.schema_editor() as editor:
+        editor.create_model(DeferredTask)
+    try:
+        row = DeferredTask.objects.create(title="Original", body="Retained")
+        deferred = DeferredTask.objects.only("pk", "title").get(pk=row.pk)
+        deferred.title = "Changed"
+        with CaptureQueriesContext(connection) as queries:
+            deferred.save()
+        updates = [query["sql"] for query in queries if query["sql"].startswith("UPDATE ")]
+        assert len(updates) == 1
+        assert '"body" =' not in updates[0]
+        stored = DeferredTask.objects.get(pk=row.pk)
+        assert stored.title == "Changed"
+        assert stored.body == "Retained"
+    finally:
+        with connection.schema_editor() as editor:
+            editor.delete_model(DeferredTask)

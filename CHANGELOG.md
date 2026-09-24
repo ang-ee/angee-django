@@ -11,7 +11,9 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
-- Remove write-alias threading and custom `using=` parameters; Django routers own database routing.
+- Remove write-alias threading and custom `using=` parameters, including the
+  `using` payload on `change_published` and `file_finalized`; Django routers own
+  database routing. Frozen migration helpers retain Django's connection alias.
 
 - Existing stacks must build and migrate on the previous release line first,
   at least through source revision `0a55a6fb`. Framework runtime history is

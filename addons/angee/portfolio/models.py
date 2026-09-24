@@ -259,8 +259,6 @@ class Initiative(WorkspaceVisibleMixin, HierarchyMixin, AuditMixin, AngeeDataMod
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the Initiative, rejecting ancestry-unsafe subtree moves."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         parent_changed = False
         saved_parent_id = None
         saved_path = self.path
@@ -356,8 +354,6 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist only after serializing the ancestry-path validation."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         with transaction.atomic():
             self._validate_ancestry(lock=True)
@@ -522,8 +518,6 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the report, its target relation, and the latest-health denorm."""
 
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
-
         if self.health in (None, ""):
             raise ValidationError({"health": "A portfolio update must assert health."})
         if self.target is None:
@@ -558,8 +552,6 @@ class Update(WorkspaceVisibleMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Delete the report and restore its target's surviving latest health."""
-
-        self.refresh_from_db(fields=sorted(self.get_deferred_fields()))
 
         target = self.target
         content_type_id = self.content_type_id

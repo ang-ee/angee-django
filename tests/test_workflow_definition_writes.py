@@ -23,6 +23,7 @@ def test_step_config_hook_reads_deferred_fields(workflow_tables: None) -> None:
             workflow=workflow, key="entry", name="Entry", step_class="fixture", config={"retained": 3},
         )
         deferred = Step.objects.only("pk").get(pk=step.pk)
+    # Confirm lazy-loading is exercised for both the config and its implementation selector.
     assert {"config", "step_class"} <= deferred.get_deferred_fields()
 
     with system_context(reason="step deferred config validation"):

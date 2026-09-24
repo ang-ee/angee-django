@@ -1597,6 +1597,13 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         credential = getattr(self, "credential", None)
         return "" if credential is None else str(getattr(credential, "status", "") or "")
 
+    def fresh_credential(self) -> Credential | None:
+        """Reload the attached credential, including changes to its FK or material."""
+
+        # Workers must observe credential rotation or repointing between operations.
+        self.refresh_from_db(fields=["credential"])
+        return cast(Credential | None, self.credential)
+
     def concrete_capability(self) -> Integration:
         """Return the installed concrete child row for this integration, or itself.
 
@@ -2245,8 +2252,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         if type(run_id) is not int or run_id <= 0:
             raise ValueError("A positive run identity is required.")
-        if "sync_run_id" in self.get_deferred_fields():
-            self.refresh_from_db(fields=["sync_run_id"])
         expected_run_id = self.sync_run_id
         with system_context(reason="integrate.bridge.claim_dispatch"), transaction.atomic():
             row = type(self).objects.lock_if_supported().get(pk=self.pk)
@@ -3002,8 +3007,6 @@ class SyncStreamManager(AngeeManager):
     def _lock_latest(self, stream: Any) -> Any:
         """Lock the integration and its latest epoch in generation-change order."""
 
-        if fields := stream.get_deferred_fields() & {"integration_id", "key", "partition"}:
-            stream.refresh_from_db(fields=sorted(fields))
         integration = apps.get_model("integrate", "Integration")
         integration.objects.filter(pk=stream.integration_id).lock_if_supported().get()
         return (
@@ -3073,8 +3076,6 @@ class SyncStream(SqidMixin, AuditMixin, AngeeModel):
         retains an earlier completion even while its own baseline is unfinished.
         """
 
-        if fields := self.get_deferred_fields() & {"integration_id", "key", "partition", "generation"}:
-            self.refresh_from_db(fields=sorted(fields))
         return (
             type(self)
             .unscoped_objects.filter(

@@ -1258,6 +1258,46 @@ def test_credential_disconnect_preserves_other_sign_in_methods(oidc_tables: None
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("changed_field", ["password", "login_enabled"])
+@pytest.mark.parametrize("previous", [False, True])
+def test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relations(
+    oidc_tables: None, changed_field: str, previous: bool
+) -> None:
+    """Password and provider-policy changes supersede the credential's cached rows."""
+
+    del oidc_tables
+    user = get_user_model().objects.create_user(
+        username="disconnect-stale-cache",
+        password="old-password" if changed_field == "password" and previous else None,
+    )
+    client = _oauth_client(oidc=previous if changed_field == "login_enabled" else True)
+    account = ExternalAccount.objects.link(client, "stale-cache-subject", owner=user)
+    credential = Credential.objects.upsert_for_user(
+        user, client, "oauth", {"access_token": "token"}, external_account=account
+    )
+    with system_context(reason="test oidc cached sign-in facts"):
+        cached = Credential._base_manager.select_related("user", "oauth_client").get(pk=credential.pk)
+        if changed_field == "password":
+            assert cached.user.has_usable_password() is previous
+            user.set_password("new-password" if not previous else None)
+            user.save(update_fields=["password"])
+            permitted = not previous
+        else:
+            assert cached.oauth_client.login_enabled is previous
+            client.login_enabled = not previous
+            client.save(update_fields=["login_enabled"])
+            permitted = previous
+
+        if permitted:
+            cached.check_disconnect()
+        else:
+            with pytest.raises(ValidationError) as exc_info:
+                cached.check_disconnect()
+            assert exc_info.value.code == "only_sign_in_method"
+            assert exc_info.value.messages == ["This is your only sign-in method."]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_low_level_credential_delete_does_not_run_disconnect_guard(
     oidc_tables: None,
 ) -> None:

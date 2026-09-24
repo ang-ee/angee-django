@@ -816,6 +816,7 @@ def begin_stream_cycle(
             links = (
                 _manager("RecordLink")
                 .filter(stream=stream, pk__in=[row.link_id for row in due])
+                .select_related("parent")
                 .order_by("external_key")
             )
             keys, reapply = set(force_apply), set()

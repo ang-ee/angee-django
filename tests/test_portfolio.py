@@ -100,9 +100,12 @@ def test_workspace_reader_is_proposed_and_reconciled_without_granting_write() ->
             row = WorkspaceRow.objects.create(name="Shared")
             assert row.proposed_relationships()["reader"]
             row.save()
-            assert active_relationship_model().objects.filter(
-                resource_type="tests/workspace_row", resource_id=str(row.pk), relation="reader"
-            ).count() == 1
+            assert (
+                active_relationship_model()
+                .objects.filter(resource_type="tests/workspace_row", resource_id=str(row.pk), relation="reader")
+                .count()
+                == 1
+            )
         with actor_context(reader):
             readable = WorkspaceRow.objects.get(pk=row.pk)
             assert readable.name == "Shared"

@@ -3008,7 +3008,10 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
         *,
         replace: bool = False,
     ) -> None:
-        """Atomically add or replace previous edges through Django's relation owner."""
+        """Atomically add or replace previous edges through Django's relation owner.
+
+        Callers must hold ``system_context`` so replacement sees every old edge.
+        """
 
         previous = tuple(previous)
         if instance.pk is None or any(row.pk is None for row in previous):
@@ -5899,6 +5902,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                         error=f"Decision resolution failed validation: {error}",
                     )
                     self._expire_pending_slots(decision, resolved_by="workflows/invalid_resolution", at=at)
+                    # Slot expiration persists resolution through a separate locked instance.
                     decision.refresh_from_db(fields=["verdict", "resolution", "resolved_by", "resolved_at"])
                 else:
                     self._schedule_timers(decision)
@@ -6121,10 +6125,8 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
     ) -> tuple[tuple[Any, ...], tuple[DecisionTimerIntent, ...]]:
         """Create one validated, ordered batch for an applicable suspension.
 
-        ORM and relationship rows share rollback on the current host's default
-        database with REBAC's transactional local backend. Other aliases and
-        remote backends require a durable relationship-intent contract before
-        retained Decision creation can support them.
+        ORM and relationship rows share rollback through REBAC's transactional
+        local backend.
 
         The admitted run actor retains evidence-sharing authority as issuer,
         independently of the requester's separation-of-duties restriction.

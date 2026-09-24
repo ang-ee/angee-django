@@ -13,10 +13,8 @@ from angee.workflows.attempts import AttemptInput, AttemptResult, AttemptResultK
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.states import RunOrigin, StepRunStatus
 from tests.test_workflow_test_snapshots import _draft, _ReconcilingTestStep
-from tests.test_workflows_gates import _decision_for, _gate_config, _open_gate_run
 from tests.test_workflows_triggers import _schedule_trigger
 from tests.workflows import (
-    Decision,
     Step,
     StepAttempt,
     StepRun,
@@ -25,7 +23,6 @@ from tests.workflows import (
     WorkflowDispatch,
     WorkflowRun,
     admit_workflow_actor,
-    workflow_with_steps,
 )
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -121,23 +118,3 @@ def test_schedule_maintenance_primes_claims_and_starts(
         assert WorkflowDispatch.objects.filter(run_id=run.pk).exists()
     assert claimed.hourly_fire_count == 1
     assert started.hourly_fire_count == 1
-
-
-def test_raw_delete_preserves_actor_hidden_retained_decision(
-    workflow_engine_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Raw delete preserves actor hidden retained decision."""
-    assignee = get_user_model().objects.create_user(username="raw-delete-assignee")
-    stranger = get_user_model().objects.create_user(username="raw-delete-hidden-stranger")
-    workflow = workflow_with_steps(
-        steps=({"key": "gate", "step_class": "gate", "config": _gate_config([assignee], None, [])},), edges=()
-    )
-    decision = _decision_for(_open_gate_run(workflow), "gate")
-    hidden = Decision.objects.with_actor(stranger).filter(pk=decision.pk).scoped()
-    assert not hidden.exists()
-    with pytest.raises(TypeError, match="Retained workflow Decisions"):
-        hidden._raw_delete(using="default")
-    with system_context(reason="actor-hidden raw-delete retention assertion"):
-        retained = Decision.objects.get(pk=decision.pk)
-    assert retained.suspension_attempt_id is not None
-    assert retained.declaration_index is not None

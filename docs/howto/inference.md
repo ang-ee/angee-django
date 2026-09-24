@@ -68,9 +68,8 @@ callers can declare their own accepted `uses`. An absent
 unrestricted by deployment policy; actor read access remains required. Once
 configured, missing roles and exact deployment-identity mismatches are rejected.
 The effective endpoint comes from `InferenceBackend.endpoint` for both SDK
-clients and deployment approval. Authorization is limited to the default
-database because REBAC's field-backed checks do not accept a database alias.
-Django routers own provider and credential database routing.
+clients and deployment approval. Provider and credential persistence follows the
+[Database routing rule](../backend/guidelines.md#rules).
 
 Provider success returns the serialized native `ModelResponse`, decoded
 `output`, and usage and routes `completed`. A terminal provider failure returns

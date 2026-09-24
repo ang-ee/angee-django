@@ -22,7 +22,7 @@ class _ExitDuringPairingSession(LiveSession):
             subscription_state={},
             sqid="fixture",
         )
-        super().__init__(bridge, reporter=SimpleNamespace(using="default"), stop_event=threading.Event())  # type: ignore[arg-type]
+        super().__init__(bridge, reporter=SimpleNamespace(), stop_event=threading.Event())  # type: ignore[arg-type]
         self.requested_stop = requested_stop
         self.release_connection = threading.Event()
         self.vendor_thread: threading.Thread | None = None

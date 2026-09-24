@@ -145,6 +145,7 @@ class SlackChannelBackend(ChannelBackend):
     def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Read one conversation page; its cursor commits with the ingested messages."""
 
+        self._load_credentials()
         identity = (stream.partition, stream.generation)
         if self._stream_identity != identity:
             if stream.partition not in self._conversations:
@@ -181,7 +182,7 @@ class SlackChannelBackend(ChannelBackend):
     def _discover_conversations(self, *, deadline: float | None = None) -> dict[str, dict[str, Any]]:
         """List all visible conversations once for this serial backend instance."""
 
-        self._credential = self.bridge.credential
+        self._load_credentials()
         conversations: dict[str, dict[str, Any]] = {}
         cursor = ""
         while True:
@@ -557,6 +558,13 @@ class SlackChannelBackend(ChannelBackend):
             threads = {}
             self._cursor["threads"] = threads
         return threads
+
+    def _load_credentials(self) -> None:
+        """Reload authentication and update the reused client before each page."""
+
+        self._credential = self.bridge.fresh_credential()
+        if self._client is not None:
+            self._client.token = self._token()
 
     def _client_or_create(self) -> WebClient:
         """Return the token-authenticated official Slack client."""

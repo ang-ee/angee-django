@@ -319,6 +319,7 @@ def _persist_turn_outcome(step_run: Any, session: Any, turn: Any, outcome: TurnO
             return StepResult.done(output={"session": locked_session.sqid}, outcome="canceled")
 
         locked_run.debit_budget(outcome.usage)
+        # Budget debit saves a separate locked run; copy its committed value into the session.
         locked_run.refresh_from_db(fields=["budget_spent"])
         locked_session.replay_state = outcome.replay_state
         locked_session.usage = dict(locked_run.budget_spent or {})

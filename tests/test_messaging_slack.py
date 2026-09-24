@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -45,6 +46,11 @@ class _BridgeStub:
         self.credential = _CredentialStub()
         self._state = SimpleNamespace(adding=False, db="default")
         self.subscription_state = {"team_id": "T1", "own_id": "U0"}
+
+    def fresh_credential(self) -> Any:
+        """Supply the integration credential contract without a database."""
+
+        return self.credential
 
 
 class FakeWebClient:
@@ -699,6 +705,44 @@ def _slack_channel(slug: str = "slack") -> Any:
         backend_class="slack",
         subscription_state={"team_id": "T1", "own_id": "U0"},
     )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("change", ["rotate", "repoint"])
+def test_extract_reloads_credential_and_reused_client_between_pages(slack_tables: None, change: str) -> None:
+    """Secret rotation and credential replacement both update the retained client."""
+
+    with system_context(reason="tests.slack.credential_freshness"):
+        channel = _slack_channel("slack-freshness")
+        backend = SlackChannelBackend(channel)
+        stream = SimpleNamespace(partition="C1", generation=1)
+        backend._stream_identity = (stream.partition, stream.generation)
+        backend._work = deque()
+        assert backend.extract(stream, 1).exhausted
+        cached = backend.bridge.credential
+        client = backend._client_or_create()
+        assert client.token == "xoxp-user-token"
+
+        if change == "rotate":
+            current = Credential.objects.get(pk=cached.pk)
+            current.update_material(api_key="xoxp-rotated-token")
+        else:
+            current = Credential.objects.create_local_credential(
+                channel.owner,
+                kind=CredentialKind.STATIC_TOKEN,
+                name="Replacement Slack credential",
+                material={"api_key": "xoxp-rotated-token"},
+            )
+            Channel._base_manager.filter(pk=channel.pk).update(credential=current)
+        assert backend.bridge.credential is cached
+        assert cached.secret_value() == "xoxp-user-token"
+        assert client.token == "xoxp-user-token"
+
+        assert backend.extract(stream, 1).exhausted
+        assert backend._credential.pk == current.pk
+        assert backend._credential.secret_value() == "xoxp-rotated-token"
+        assert backend._client_or_create() is client
+        assert client.token == "xoxp-rotated-token"
 
 
 @pytest.mark.django_db(transaction=True)

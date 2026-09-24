@@ -1060,9 +1060,7 @@ def test_predecessor_lookup_recovers_the_exact_transitive_gate_source(
             raise RuntimeError("Recover this gate application from its retained source.")
         if step_run.step.key != "apply":
             return fixture_run(self, step_run, now=now)
-        with monkeypatch.context() as read_router:
-            read_router.setattr("django.db.router.db_for_read", lambda model, **hints: "missing-read-replica")
-            selected = Decision.objects.predecessor_decision(step_run, GateStep)
+        selected = Decision.objects.predecessor_decision(step_run, GateStep)
         with Decision.objects.locked_resolution(
             selected.pk,
             actor=assignee,
@@ -3236,6 +3234,33 @@ def test_decide_hides_unreachable_and_missing_decisions_alike(
                 "code": "VALIDATION", "validationErrors": {}, "formErrors": [message],
             },
         }]
+
+
+def test_raw_delete_rejects_actor_hidden_retained_decision(
+    workflow_gate_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Raw SQL cannot evade retention through an actor scope that hides the row."""
+
+    del workflow_gate_tables, no_workflow_queue
+    assignee = User.objects.create_user(username="raw-delete-assignee")
+    stranger = User.objects.create_user(username="raw-delete-hidden-stranger")
+    workflow = workflow_with_steps(
+        steps=({"key": "gate", "step_class": "gate", "config": _gate_config([assignee], None, [])},),
+        edges=(),
+    )
+    decision = _decision_for(_open_gate_run(workflow), "gate")
+    hidden = Decision.objects.with_actor(stranger).filter(pk=decision.pk).scoped()
+    assert not hidden.exists()
+    with pytest.raises(TypeError, match="Retained workflow Decisions"):
+        hidden._raw_delete(using=hidden.db)
+
+    with system_context(reason="actor-hidden raw-delete retention assertion"):
+        retained = Decision.objects.get(pk=decision.pk)
+    assert retained.suspension_attempt_id == decision.suspension_attempt_id
+    assert retained.suspension_attempt_id is not None
+    assert retained.declaration_index == decision.declaration_index
+    assert retained.declaration_index is not None
 
 
 def test_retained_decision_rejects_every_public_and_collector_delete(

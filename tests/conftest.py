@@ -372,7 +372,7 @@ class StubInferenceBackend(InferenceBackend):
     ``stub_models`` (a list of ``InferenceModelSpec`` kwargs) through the provider config.
     """
 
-    def list_models(self, *, using: str | None = None) -> list[InferenceModelSpec]:
+    def list_models(self) -> list[InferenceModelSpec]:
         """Return the models configured on the provider's ``config``."""
 
         return [InferenceModelSpec(**spec) for spec in self.provider.config.get("stub_models", [])]

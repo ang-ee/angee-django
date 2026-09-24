@@ -23,7 +23,7 @@ def connect() -> None:
     post_migrate.connect(_reconcile_addons, dispatch_uid="angee.platform.reconcile_addons")
 
 
-def _reconcile_addons(*, app_config: object, **kwargs: object) -> None:
+def _reconcile_addons(*, app_config: object, using: str, **kwargs: object) -> None:
     """Converge the Addon table after migrations create/alter the platform app."""
 
     if getattr(app_config, "label", "") != "platform":
@@ -32,10 +32,12 @@ def _reconcile_addons(*, app_config: object, **kwargs: object) -> None:
         addon_model = apps.get_model("platform", "Addon")
     except LookupError:
         return
-    database = str(kwargs["using"])
-    if not router.allow_migrate_model(database, addon_model):
+    # This signal describes one migration connection; reconcile only its routed model.
+    if using != router.db_for_write(addon_model):
         return
-    if not _table_exists(connections[database], addon_model._meta.db_table):
+    if not router.allow_migrate_model(using, addon_model):
+        return
+    if not _table_exists(connections[using], addon_model._meta.db_table):
         return  # not yet created (e.g. migrating back past the Addon migration)
     with system_context(reason="platform.reconcile_addons"):
         addon_model.objects.reconcile_loaded_registry()

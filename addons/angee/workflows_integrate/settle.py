@@ -38,7 +38,7 @@ def settle_bridge_run(run: Any) -> None:
         return
     with system_context(reason="workflows_integrate.settle"):
         try:
-            bridge = content_type.get_object_for_this_type( pk=run.subject_object_id)
+            bridge = content_type.get_object_for_this_type(pk=run.subject_object_id)
         except model.DoesNotExist:
             return
         if run.status == RunStatus.SUCCEEDED:

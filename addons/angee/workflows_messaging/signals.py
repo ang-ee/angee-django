@@ -27,15 +27,15 @@ def connect() -> None:
         )
 
 
-def protect_retained_source(sender: Any, instance: Any, **kwargs: Any) -> None:
+def protect_retained_source(sender: Any, instance: Any, *, using: str, **kwargs: Any) -> None:
     """Prevent deletion of messaging rows retained as native workflow evidence."""
 
-    using = kwargs.get("using") or instance._state.db
+    del using, kwargs
     if instance.pk is None:
         return
     artifact_model = apps.get_model("workflows", "StepArtifact")
     run_model = apps.get_model("workflows", "WorkflowRun")
-    target_types = ContentType.objects.db_manager(using).get_for_models(
+    target_types = ContentType.objects.get_for_models(
         apps.get_model("messaging", "Message"),
         apps.get_model("messaging", "Part"),
         apps.get_model("messaging", "Thread"),
@@ -45,25 +45,25 @@ def protect_retained_source(sender: Any, instance: Any, **kwargs: Any) -> None:
     if sender._meta.model_name == "thread":
         message_model = apps.get_model("messaging", "Message")
         part_model = apps.get_model("messaging", "Part")
-        message_ids = message_model._base_manager.using(using).filter(thread_id=instance.pk).values("pk")
-        part_ids = part_model._base_manager.using(using).filter(message__thread_id=instance.pk).values("pk")
-        retained = artifact_model._base_manager.using(using).filter(
+        message_ids = message_model._base_manager.filter(thread_id=instance.pk).values("pk")
+        part_ids = part_model._base_manager.filter(message__thread_id=instance.pk).values("pk")
+        retained = artifact_model._base_manager.filter(
             models.Q(target_content_type=target_types[message_model], target_object_id__in=message_ids)
             | models.Q(target_content_type=target_types[part_model], target_object_id__in=part_ids)
             | models.Q(target_content_type=target_types[sender], target_object_id=instance.pk)
         )
-        retained_runs = run_model._base_manager.using(using).filter(
+        retained_runs = run_model._base_manager.filter(
             models.Q(subject_content_type=target_types[message_model], subject_object_id__in=message_ids)
             | models.Q(subject_content_type=target_types[part_model], subject_object_id__in=part_ids)
             | models.Q(subject_content_type=target_types[sender], subject_object_id=instance.pk)
         )
     else:
         content_type, object_id = targets[0]
-        retained = artifact_model._base_manager.using(using).filter(
+        retained = artifact_model._base_manager.filter(
             target_content_type=content_type,
             target_object_id=object_id,
         )
-        retained_runs = run_model._base_manager.using(using).filter(
+        retained_runs = run_model._base_manager.filter(
             subject_content_type=content_type,
             subject_object_id=object_id,
         )
@@ -84,7 +84,7 @@ def deliver_message_event(sender: Any, instance: Any, **kwargs: Any) -> None:
         return
     trigger_model = apps.get_model("workflows", "Trigger")
     triggers = (
-        trigger_model._base_manager.using(instance._state.db)
+        trigger_model._base_manager
         .filter(
             kind=TriggerKind.EVENT,
             enabled=True,
@@ -103,7 +103,7 @@ def deliver_message_event(sender: Any, instance: Any, **kwargs: Any) -> None:
                 raise ValidationError("Message workflow admission requires an execution actor.")
             if not trigger.condition_matches(type(instance), instance):
                 continue
-            trigger_model.objects.db_manager(instance._state.db).start_event(
+            trigger_model.objects.start_event(
                 trigger.pk,
                 subject=instance,
                 occurrence_id=f"message-ingested:{instance.pk}",

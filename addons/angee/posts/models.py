@@ -106,7 +106,6 @@ class Feed(Bridge):
         does not mint spurious email ``quote`` edges.
         """
 
-        self.refresh_from_db(fields=list(self.get_deferred_fields()))
         dispatched = self.dispatch_sync()
         if dispatched is not None:
             return dispatched
