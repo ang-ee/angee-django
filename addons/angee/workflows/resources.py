@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import functools
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -240,12 +241,19 @@ class WorkflowDefinitionResource(AngeeResource):
             raise ResourceLoadError(f"Unsupported workflow declaration fields: {', '.join(sorted(unsupported))}")
 
     def import_instance(self, instance: Any, row: Mapping[str, Any], **kwargs: Any) -> None:
-        """Apply native field cleaning after the model-owned omission defaults."""
+        """Clean fields, patch nonempty config at the top level, and let ``{}`` clear it."""
 
         if row["_xref"] in self._hash_skips:
             return
         step_model = self.workflow_model._meta.get_field("steps").related_model
         old_class = instance.step_class if isinstance(instance, step_model) else None
+        old_config = (
+            copy.deepcopy(instance.config)
+            if isinstance(instance, step_model)
+            and not instance._state.adding
+            and isinstance(instance.config, Mapping)
+            else None
+        )
         defaults = self._meta.model()
         retained = {"config", "key"} if self._meta.model is self.workflow_model else {"config"}
         for name in self.declaration_fields - set(row) - retained:
@@ -256,6 +264,17 @@ class WorkflowDefinitionResource(AngeeResource):
             changed_class = instance.step_class != old_class
             if "config" not in row and changed_class:
                 instance.config = defaults.config
+            elif (
+                "config" in row
+                and not changed_class
+                and old_config is not None
+                and isinstance(instance.config, Mapping)
+                and instance.config
+            ):
+                # A nonempty resource config is a top-level patch, matching the
+                # row's omitted-field contract. Operator-authored keys survive
+                # declaration updates; an explicit empty object still clears.
+                instance.config = {**old_config, **instance.config}
             if instance._state.adding or "config" in row or changed_class:
                 instance.validate_impl_configs()
 

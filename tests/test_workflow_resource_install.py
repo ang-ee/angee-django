@@ -238,6 +238,32 @@ def test_installer_retains_omitted_same_impl_config_and_patches_only_changed_fie
     assert entry.config == config
 
 
+def test_installer_patches_declared_config_without_erasing_operator_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A source-owned config change retains omitted operator-owned policy."""
+
+    addon = _addon(tmp_path)
+    original = {
+        "engine": {"prompt": "v1"},
+        "operator_policy": {"reviewers": ["auth/user:reviewer"]},
+    }
+    _install(addon, entry_config=original)
+    entry = Step.system_queryset().get(key="entry")
+    edits = _capture_edits(monkeypatch, passthrough=True)
+
+    _install(addon, entry_config={"engine": {"prompt": "v2"}})
+
+    expected = {
+        "engine": {"prompt": "v2"},
+        "operator_policy": original["operator_policy"],
+    }
+    entry.refresh_from_db()
+    assert edits == [DefinitionEdit(node_patches=(NodePatch(entry.pk, {"config": expected}),))]
+    assert entry.config == expected
+
+
 def test_installer_emits_refs_for_edge_endpoint_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
