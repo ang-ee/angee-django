@@ -1,7 +1,7 @@
 """Tests for the GitHub VCS backend — REST shape, stubbing the network.
 
 The backend reads over the shared SSRF-pinned client (``self.http``); these tests
-replace the credential lookup and ``HttpClient.get`` so no DB or live network is touched.
+supply a credential stub and replace ``HttpClient.get`` so no DB or live network is touched.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _integration(*, api_base: str = "") -> Any:
 
     credential = SimpleNamespace(auth_headers=lambda: {"Authorization": "Bearer token"})
     config = {"github_api_base": api_base} if api_base else {}
-    return SimpleNamespace(credential=credential, config=config, _state=SimpleNamespace(db="default", adding=False))
+    return SimpleNamespace(credential=credential, config=config)
 
 
 def _repo(full_name: str, *, private: bool = False) -> dict[str, Any]:

@@ -458,7 +458,7 @@ class ProjectTaskActionMutation:
 
         target_model = Link.objects.target_model(target.model_label)
         target_record = authorized_action_target(info, target_model, target.record_id, "write")
-        link = Link.objects.db_manager(target_record._state.db).upsert(
+        link = Link.objects.upsert(
             target=target_record,
             url=url,
             title=title,
@@ -480,9 +480,7 @@ class ProjectTaskActionMutation:
         target_model = model_for_resource_type(target.resource_type)
         if target_model is None:
             raise ValueError(f"Unknown resource type {target.resource_type!r}.")
-        target_record = authorized_action_target(
-            info, target_model, target.record_id, "write", using=project._state.db
-        )
+        target_record = authorized_action_target(info, target_model, target.record_id, "write")
         binding = bind(project=project, target=target_record)
         return ActionResult(ok=True, message="Resource bound to project.", id=binding.sqid)
 
@@ -500,9 +498,7 @@ class ProjectTaskActionMutation:
         target_model = model_for_resource_type(target.resource_type)
         if target_model is None:
             raise ValueError(f"Unknown resource type {target.resource_type!r}.")
-        target_record = authorized_action_target(
-            info, target_model, target.record_id, "write", using=project._state.db
-        )
+        target_record = authorized_action_target(info, target_model, target.record_id, "write")
         unbind(project=project, target=target_record)
         return ActionResult(ok=True, message="Resource unbound from project.", id=project.sqid)
 

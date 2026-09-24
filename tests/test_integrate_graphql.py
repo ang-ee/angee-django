@@ -307,11 +307,11 @@ def test_sync_actions_dispatch_managers_and_refuse_non_admins(
         discrepancy = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="invalid")
     target = stream if model is SyncStream else discrepancy
     original = getattr(type(model.objects), verb)
-    calls: list[tuple[int, str]] = []
+    calls: list[int] = []
 
-    def tracked(manager: Any, row: Any, *, using: str, **kwargs: Any) -> Any:
-        calls.append((row.pk, using))
-        return original(manager, row, using=using, **kwargs)
+    def tracked(manager: Any, row: Any, **kwargs: Any) -> Any:
+        calls.append(row.pk)
+        return original(manager, row, **kwargs)
 
     monkeypatch.setattr(type(model.objects), verb, tracked)
     schema = _schema()
@@ -322,7 +322,7 @@ def test_sync_actions_dispatch_managers_and_refuse_non_admins(
     assert calls == []
     before = timezone.now()
     assert _data(_execute(schema, query, {"id": _public_id(target)}, user=admin))[mutation]["ok"]
-    assert calls == [(target.pk, "default")]
+    assert calls == [target.pk]
     with system_context(reason="test sync action outcome"):
         target.refresh_from_db()
         if verb == "request_resync":
@@ -1186,7 +1186,7 @@ def test_sync_integration_queues_bridge_for_an_admin(
     bridge = make_integration("sync-queue", backend_class="stub", model=VcsBridge)
     queued: list[tuple[int, Any]] = []
 
-    def fake_queue_bridge_sync(queued_bridge: VcsBridge, *, now: Any = None, using: str | None = None) -> None:
+    def fake_queue_bridge_sync(queued_bridge: VcsBridge, *, now: Any = None) -> None:
         queued.append((queued_bridge.pk, now))
         queued_bridge.sync_stage = queued_bridge.SyncStage.QUEUED
         queued_bridge.sync_error = ""
@@ -1562,7 +1562,7 @@ def test_model_save_rejects_backend_switch_and_scopes_partial_config_validation(
 
         reconstructed = VcsBridge(pk=bridge.pk, backend_class="local")
         with pytest.raises(ValidationError, match="Implementation selection is create-only"):
-            reconstructed.save(using="default")
+            reconstructed.save()
 
         unpersisted = VcsBridge.objects.get(pk=bridge.pk)
         unpersisted.backend_class = "local"
@@ -1781,10 +1781,10 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
         discrepancy = SyncDiscrepancy.objects.record(
             stream, link=link, kind=DiscrepancyKind.CONFLICT, code="both_changed"
         )
-    calls: list[tuple[int, str, str]] = []
+    calls: list[tuple[int, str]] = []
 
-    def resolve(manager: Any, row: Any, *, keep: str, using: str) -> Any:
-        calls.append((row.pk, keep, using))
+    def resolve(manager: Any, row: Any, *, keep: str) -> Any:
+        calls.append((row.pk, keep))
         return row
 
     monkeypatch.setattr(type(SyncDiscrepancy.objects), "resolve_conflict", resolve)
@@ -1793,7 +1793,7 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
     }"""
     result = _data(_execute(_schema(), query, {"id": _public_id(discrepancy), "keep": keep.upper()}, user=admin))
     assert result["resolveSyncDiscrepancy"]["ok"]
-    assert calls == [(discrepancy.pk, keep, "default")]
+    assert calls == [(discrepancy.pk, keep)]
     invalid = _execute(_schema(), query, {"id": _public_id(discrepancy), "keep": "TYPO"}, user=admin)
     assert invalid.errors and "ConflictKeep" in invalid.errors[0].message
     assert len(calls) == 1

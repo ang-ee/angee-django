@@ -108,7 +108,7 @@ def test_native_httpx_multistatus_and_case_insensitive_redirect() -> None:
                 return httpx.Response(302, headers={"LoCaTiOn": "/addressbooks/"})
             return httpx.Response(207, content=b"<d:multistatus xmlns:d='DAV:'/>")
 
-    response = _backend_with_http(FakeHttp())._request("PROPFIND", "https://dav.example/root", "", using="default")
+    response = _backend_with_http(FakeHttp())._request("PROPFIND", "https://dav.example/root", "")
 
     assert response.status_code == 207
     assert calls == ["https://dav.example/root", "https://dav.example/addressbooks/"]
@@ -130,9 +130,7 @@ def test_photo_download_is_capped_and_uses_the_collection_origin() -> None:
         display_name="One",
         photo=ParsedPhoto(uri="https://dav.example/books/photo.jpg", mime="image/jpeg"),
     )
-    resolved = _backend_with_http(FakeHttp())._resolve_photo(
-        contact, collection="https://dav.example/books/", using="default"
-    )
+    resolved = _backend_with_http(FakeHttp())._resolve_photo(contact, collection="https://dav.example/books/")
 
     assert resolved.photo == ParsedPhoto(data=b"photo", mime="image/jpeg")
 
@@ -163,8 +161,8 @@ def test_connect_probe_failure_writes_no_rows(
     del carddav_connect_tables
     probe_atomic_states: list[bool] = []
 
-    def reject_probe(backend: CardDavDirectoryBackend, *, using: str | None = None) -> None:
-        del backend, using
+    def reject_probe(backend: CardDavDirectoryBackend) -> None:
+        del backend
         probe_atomic_states.append(connection.in_atomic_block)
         raise CardDavError("CardDAV probe rejected")
 
@@ -192,8 +190,8 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
     probe_atomic_states: list[bool] = []
     write_atomic_states: list[bool] = []
 
-    def accept_probe(backend: CardDavDirectoryBackend, *, using: str | None = None) -> None:
-        del backend, using
+    def accept_probe(backend: CardDavDirectoryBackend) -> None:
+        del backend
         probe_atomic_states.append(connection.in_atomic_block)
 
     manager_type = type(Handle.objects)

@@ -12,7 +12,6 @@ from django.apps import apps
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.db import get_write_alias
 from angee.jobs.locks import LockKey, task_lock
 
 
@@ -25,8 +24,6 @@ from angee.jobs.locks import LockKey, task_lock
 def refresh_handle_suggestions(
     timestamp: int | None = None,
     lookback_hours: float | None = 2.0,
-    *,
-    using: str | None = None,
 ) -> int:
     """Refresh parties-owned suggestions from current handle and signature evidence.
 
@@ -45,37 +42,33 @@ def refresh_handle_suggestions(
     """
 
     del timestamp
-    alias = get_write_alias(apps.get_model("parties", "PartyHandle"), using=using)
     with task_lock(LockKey("parties", ("refresh_handle_suggestions",))) as acquired:
         if not acquired:
             return 0
-        return _refresh_handle_suggestions(lookback_hours, using=alias)
+        return _refresh_handle_suggestions(lookback_hours)
 
 
-def _refresh_handle_suggestions(lookback_hours: float | None, *, using: str) -> int:
+def _refresh_handle_suggestions(lookback_hours: float | None) -> int:
     """Run the three suggester passes under the already-held task lock."""
 
-    party_handles = apps.get_model("parties", "PartyHandle").objects.db_manager(using)
+    party_handles = apps.get_model("parties", "PartyHandle").objects
     with system_context(reason="parties.tasks.refresh_handle_suggestions"):
-        handles = apps.get_model("parties", "Handle").objects.db_manager(using)
+        handles = apps.get_model("parties", "Handle").objects
         changed = int(handles.renormalize_phone_values())
         created = int(party_handles.suggest_from_display_names())
         if not apps.is_installed("angee.messaging"):
             return changed + created
 
         part_model = apps.get_model("messaging", "Part")
-        signature_parts = part_model._base_manager.using(using).filter(
+        signature_parts = part_model._base_manager.filter(
             role="signature",
             fragment__isnull=False,
             message__sender__party__isnull=False,
         )
         if lookback_hours is not None:
-            signature_parts = signature_parts.filter(
-                created_at__gte=timezone.now() - timedelta(hours=lookback_hours)
-            )
+            signature_parts = signature_parts.filter(created_at__gte=timezone.now() - timedelta(hours=lookback_hours))
         rows = (
-            signature_parts
-            .order_by(
+            signature_parts.order_by(
                 "message__sender__party__created_by_id",
                 "fragment_id",
                 "message__sender__party_id",

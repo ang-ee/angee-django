@@ -232,7 +232,7 @@ class Replica:
     stream: Any
 
     def pull(self) -> Any:
-        result = advance_stream(self.stream, self.backend, using="default")
+        result = advance_stream(self.stream, self.backend)
         self.stream = result.stream
         return result
 
@@ -244,7 +244,7 @@ class Replica:
     def reconcile(self, *, page_bound: int = 100) -> int:
         absent = 0
         for _ in range(20):
-            absent += reconcile_stream(self.stream, self.backend, page_bound=page_bound, using="default")
+            absent += reconcile_stream(self.stream, self.backend, page_bound=page_bound)
             self.stream.refresh_from_db()
             if not self.stream.reconcile_state:
                 return absent
@@ -275,7 +275,7 @@ def replica(transactional_db: Any) -> Iterator[Replica]:
             server = FakeDav()
             backend = CardDavDirectoryBackend(directory)
             backend.__dict__["http"] = server
-            definitions = tuple(backend.streams(using="default"))
+            definitions = tuple(backend.streams())
             assert len(definitions) == 1
             definition = definitions[0]
             assert (definition.key, definition.partition, definition.kind, definition.direction) == (
@@ -284,7 +284,7 @@ def replica(transactional_db: Any) -> Iterator[Replica]:
                 StreamKind.RECORD_REPLICA,
                 StreamDirection.BIDIRECTIONAL,
             )
-            stream = SyncStream.objects.current(directory, **asdict(definition), using="default")
+            stream = SyncStream.objects.current(directory, **asdict(definition))
             yield Replica(directory, backend, server, stream)
             backend.close()
     finally:
@@ -323,12 +323,12 @@ def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
     }
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper", notes="Remote Grace"))
     if reset_before_baseline:
-        replica.stream = SyncStream.objects.bump_generation(replica.stream, using="default")
+        replica.stream = SyncStream.objects.bump_generation(replica.stream)
     assert not RecordRevision.objects.exists()
     replica.server.requests.clear()
 
     for index, (uid, person) in enumerate(existing.items(), start=1):
-        result = advance_stream(replica.stream, replica.backend, page_bound=1, using="default")
+        result = advance_stream(replica.stream, replica.backend, page_bound=1)
         replica.stream = result.stream
 
         assert result.count == 1
@@ -353,7 +353,7 @@ def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
 
     assert Person.objects.count() == RecordLink.objects.count() == 2
     assert not SyncDiscrepancy.objects.exists()
-    assert push_stream(replica.stream, replica.backend, using="default").count == 0
+    assert push_stream(replica.stream, replica.backend).count == 0
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
 
 
@@ -373,17 +373,17 @@ def test_local_only_contact_waits_until_first_baseline_completes(
     monkeypatch.setattr(CardDavDirectoryBackend, "http", property(lambda self: replica.server))
     replica.server.requests.clear()
 
-    assert push_stream(replica.stream, replica.backend, using="default").count == 0
+    assert push_stream(replica.stream, replica.backend).count == 0
     assert not RecordLink.objects.exists()
     assert not replica.server.requests
 
     if bounded:
-        replica.stream = advance_stream(replica.stream, replica.backend, using="default").stream
+        replica.stream = advance_stream(replica.stream, replica.backend).stream
         assert set(replica.server.cards) == {_HREF}
         assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
-        assert push_stream(replica.stream, replica.backend, using="default").count == 1
+        assert push_stream(replica.stream, replica.backend).count == 1
     else:
-        assert sync_bridge(replica.directory, using="default") == 2
+        assert sync_bridge(replica.directory) == 2
 
     replica.stream.refresh_from_db()
     assert replica.stream.phase == StreamPhase.DELTA
@@ -400,7 +400,7 @@ def test_local_only_contact_waits_until_first_baseline_completes(
     assert not SyncDiscrepancy.objects.exists()
     replica.server.requests.clear()
 
-    assert sync_bridge(replica.directory, using="default") == 0
+    assert sync_bridge(replica.directory) == 0
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
 
 
@@ -422,7 +422,7 @@ def test_local_edit_conditional_put_updates_version_and_both_bases(replica: Repl
     old_version, old_remote, old_local = link.remote_version, link.remote_base_hash, link.local_base_hash
     person.notes = "Local edit"
     person.save(update_fields=["notes"])
-    result = push_stream(replica.stream, replica.backend, using="default")
+    result = push_stream(replica.stream, replica.backend)
     link.refresh_from_db()
     puts = [request for request in replica.server.requests if request[0] == "PUT"]
     assert result.count == len(puts) == 1
@@ -472,15 +472,15 @@ def test_selected_push_projects_only_requested_contacts(
     manager_class = type(Party.objects)
     project_contacts = manager_class.project_contacts
 
-    def capture_projection(self: Any, people: Any, *, using: str | None = None) -> Any:
+    def capture_projection(self: Any, people: Any) -> Any:
         people = tuple(people)
         projected.update(person.pk for person in people)
-        return project_contacts(self, people, using=using)
+        return project_contacts(self, people)
 
     monkeypatch.setattr(manager_class, "project_contacts", capture_projection)
     replica.server.requests.clear()
 
-    result = push_stream(replica.stream, replica.backend, external_keys=keys, using="default")
+    result = push_stream(replica.stream, replica.backend, external_keys=keys)
 
     assert projected == expected
     assert result.count == len(expected)
@@ -527,7 +527,7 @@ def test_put_etag_mismatch_records_conflict_without_local_overwrite(replica: Rep
     person.notes = "Keep local edit"
     person.save(update_fields=["notes"])
     replica.server.store(_HREF, _card(notes="Concurrent remote edit"))
-    result = push_stream(replica.stream, replica.backend, using="default")
+    result = push_stream(replica.stream, replica.backend)
     person.refresh_from_db()
     link.refresh_from_db()
     assert result.count == 0
@@ -547,14 +547,14 @@ def test_etag_conflict_resolution_re_reads_before_keeping_a_side(
     person.notes = "Chosen local edit"
     person.save(update_fields=["notes"])
     remote_version = replica.server.store(_HREF, _card(notes="Concurrent remote edit"))
-    assert push_stream(replica.stream, replica.backend, using="default").count == 0
+    assert push_stream(replica.stream, replica.backend).count == 0
     failed_put = [request for request in replica.server.requests if request[0] == "PUT"][-1]
     assert failed_put[2]["if-match"] == original_version
     discrepancy = SyncDiscrepancy.objects.get(link=link)
     monkeypatch.setattr(CardDavDirectoryBackend, "http", property(lambda self: replica.server))
     replica.server.requests.clear()
 
-    resolved = SyncDiscrepancy.objects.resolve_conflict(discrepancy, keep=keep, using="default")
+    resolved = SyncDiscrepancy.objects.resolve_conflict(discrepancy, keep=keep)
 
     person.refresh_from_db()
     link.refresh_from_db()
@@ -569,7 +569,7 @@ def test_etag_conflict_resolution_re_reads_before_keeping_a_side(
         assert person.notes == "Concurrent remote edit"
         assert not puts
     assert link.remote_version == replica.server.cards[_HREF][1]
-    assert push_stream(replica.stream, replica.backend, using="default").count == 0
+    assert push_stream(replica.stream, replica.backend).count == 0
 
 
 @pytest.mark.parametrize("policy", ["retain", "propagate"])
@@ -584,7 +584,7 @@ def test_removed_member_tombstones_link_and_obeys_local_policy(replica: Replica,
     assert link.status == LinkStatus.TOMBSTONE
     assert link.tombstoned_at is not None
     assert Party.objects.filter(pk=person.pk).exists() is (policy == "retain")
-    assert push_stream(replica.stream, replica.backend, using="default").count == 0
+    assert push_stream(replica.stream, replica.backend).count == 0
     assert not [request for request in replica.server.requests if request[0] == "PUT"]
 
 
@@ -594,7 +594,7 @@ def test_local_delete_requires_explicit_propagation(replica: Replica, policy: st
     replica.stream.config = {**replica.stream.config, "local_delete": policy}
     replica.stream.save(update_fields=["config"])
     person.delete()
-    result = push_stream(replica.stream, replica.backend, using="default")
+    result = push_stream(replica.stream, replica.backend)
     link.refresh_from_db()
     if policy == "conflict":
         assert result.discrepancy_ids
@@ -622,7 +622,7 @@ def test_unchanged_token_does_not_ingest_put_or_change_cursor(
     monkeypatch.setattr(type(Party.objects), "ingest_contact", unexpected_ingest)
     replica.server.requests.clear()
     result = replica.pull()
-    pushed = push_stream(replica.stream, replica.backend, using="default")
+    pushed = push_stream(replica.stream, replica.backend)
     person.refresh_from_db()
     assert result.count == pushed.count == 0
     assert replica.stream.cursor == old_cursor
@@ -665,7 +665,7 @@ def test_new_local_person_is_created_conditionally_then_recognized(replica: Repl
         folder=folder,
         created_by_id=replica.directory.owner_id,
     )
-    result = push_stream(replica.stream, replica.backend, using="default")
+    result = push_stream(replica.stream, replica.backend)
     link = RecordLink.objects.get(stream=replica.stream, target_id=str(person.pk))
     puts = [request for request in replica.server.requests if request[0] == "PUT"]
     assert result.count == 1
@@ -675,9 +675,9 @@ def test_new_local_person_is_created_conditionally_then_recognized(replica: Repl
     # A new outbound identity has its locator in the applied revision before a
     # pull can populate link metadata; both locator consumers must retain it.
     assert not link.metadata.get("href")
-    assert set(replica.backend.enumerate_keys(replica.stream, using="default")) == {"ada", link.external_key}
+    assert set(replica.backend.enumerate_keys(replica.stream)) == {"ada", link.external_key}
     cursor = dict(replica.stream.cursor)
-    requested = replica.backend.read_keys(replica.stream, (link.external_key,), using="default")
+    requested = replica.backend.read_keys(replica.stream, (link.external_key,))
     assert [record.external_key for record in requested] == [link.external_key]
     assert requested[0].metadata["href"] == puts[-1][1]
     assert requested[0].remote_version == link.remote_version
@@ -701,7 +701,7 @@ def test_successful_own_write_is_applied_on_next_pull(replica: Replica) -> None:
     person, link = replica.baseline()
     person.notes = "Written here"
     person.save(update_fields=["notes"])
-    assert push_stream(replica.stream, replica.backend, using="default").count == 1
+    assert push_stream(replica.stream, replica.backend).count == 1
     link.refresh_from_db()
     bases = link.remote_base_hash, link.local_base_hash, link.remote_version
     local_updated_at = person.updated_at
@@ -756,7 +756,7 @@ def test_bounded_baseline_commits_each_identity_and_replays_concurrent_edit(repl
     grace_href = f"{_BOOK}grace.vcf"
     replica.server.store(grace_href, _card(uid="grace", name="Grace Hopper"))
     baseline_token = replica.server.token
-    first = advance_stream(replica.stream, replica.backend, page_bound=1, using="default")
+    first = advance_stream(replica.stream, replica.backend, page_bound=1)
     assert first.count == 1
     assert not first.exhausted
     assert first.stream.cursor["sync_token"] == ""
@@ -766,7 +766,7 @@ def test_bounded_baseline_commits_each_identity_and_replays_concurrent_edit(repl
     ada_link = RecordLink.objects.get(stream=first.stream, external_key="ada")
 
     replica.server.store(_HREF, _card(notes="Edited during the baseline"))
-    second = advance_stream(first.stream, replica.backend, page_bound=1, using="default")
+    second = advance_stream(first.stream, replica.backend, page_bound=1)
     assert second.count == 1
     assert second.exhausted
     assert second.stream.cursor == {"sync_token": baseline_token}
@@ -776,7 +776,7 @@ def test_bounded_baseline_commits_each_identity_and_replays_concurrent_edit(repl
     }
     assert Person.objects.count() == 2
 
-    delta = advance_stream(second.stream, replica.backend, page_bound=1, using="default")
+    delta = advance_stream(second.stream, replica.backend, page_bound=1)
     ada.refresh_from_db()
     assert delta.count == 1
     assert delta.exhausted
@@ -833,7 +833,7 @@ def test_conditional_put_preserves_unmapped_vcard_extensions_and_departments(rep
     prior_version = link.remote_version
     person.notes = "Changed locally"
     person.save(update_fields=["notes"])
-    assert push_stream(replica.stream, replica.backend, using="default").count == 1
+    assert push_stream(replica.stream, replica.backend).count == 1
 
     written = vobject.readOne(replica.server.cards[_HREF][0])
     assert written.note.value == "Changed locally"
@@ -851,7 +851,7 @@ def test_propagated_local_delete_round_trip_keeps_local_tombstone(replica: Repli
     replica.stream.config = {**replica.stream.config, "local_delete": "propagate"}
     replica.stream.save(update_fields=["config"])
     person.delete()
-    assert push_stream(replica.stream, replica.backend, using="default").count == 1
+    assert push_stream(replica.stream, replica.backend).count == 1
     link.refresh_from_db()
     assert (link.status, link.origin) == (LinkStatus.TOMBSTONE, "local")
     assert _HREF not in replica.server.cards
@@ -860,7 +860,7 @@ def test_propagated_local_delete_round_trip_keeps_local_tombstone(replica: Repli
     replica.server.requests.clear()
     result = replica.pull()
     assert result.count == 0
-    assert push_stream(replica.stream, replica.backend, using="default").count == 0
+    assert push_stream(replica.stream, replica.backend).count == 0
     link.refresh_from_db()
     assert (link.status, link.origin) == (LinkStatus.TOMBSTONE, "local")
     assert link.tombstoned_at is not None
@@ -907,7 +907,7 @@ def test_same_origin_private_photo_is_refused_by_pinned_client(
     replica.backend.__dict__["http"] = HttpClient()
     contact = ParsedContact(photo=ParsedPhoto(uri="http://private.example/avatar.png", mime="image/png"))
     with pytest.raises(CardDavError) as rejected:
-        replica.backend._resolve_photo(contact, collection="http://private.example/book/", using="default")
+        replica.backend._resolve_photo(contact, collection="http://private.example/book/")
     assert isinstance(rejected.value.__cause__, ValidationError)
 
 
@@ -915,7 +915,7 @@ def test_photo_download_uses_shared_cap_and_disallows_private_addresses(replica:
     uri = f"{_BASE}avatar.png"
     replica.server.photos[uri] = b"ABC"
     contact = ParsedContact(photo=ParsedPhoto(uri=uri, mime="image/png"))
-    resolved = replica.backend._resolve_photo(contact, collection=_BOOK, using="default")
+    resolved = replica.backend._resolve_photo(contact, collection=_BOOK)
     assert resolved.photo is not None
     assert resolved.photo.data == b"ABC"
     assert len(replica.server.downloads) == 1
@@ -927,7 +927,7 @@ def test_photo_download_uses_shared_cap_and_disallows_private_addresses(replica:
 
     replica.server.photos[uri] = b"x" * (options["cap"] + 1)
     with pytest.raises(CardDavError):
-        replica.backend._resolve_photo(contact, collection=_BOOK, using="default")
+        replica.backend._resolve_photo(contact, collection=_BOOK)
 
 
 def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
@@ -948,15 +948,13 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
         *,
         filename: str,
         owner_id: Any = None,
-        using: str | None = None,
         **kwargs: Any,
     ) -> Any:
         del kwargs
-        assert using == "default"
         assert not connection.in_atomic_block
         assert content == b"ABC"
         phases.append("extract")
-        stored, _ = manager.db_manager(using).get_or_create(
+        stored, _ = manager.get_or_create(
             drive=drive,
             content_hash=hashlib.sha256(content).hexdigest(),
             defaults={
@@ -976,13 +974,13 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
 
     original_apply = replica.backend.apply_record
 
-    def apply_after_intake(stream: Any, record: Any, *, using: str | None = None) -> Any:
+    def apply_after_intake(stream: Any, record: Any) -> Any:
         assert connection.in_atomic_block
         assert phases == ["extract"]
         assert File.objects.get(content_hash=digest).upload_state == UploadState.READY
         assert record.source_payload["contact"]["photo"] == {"hash": digest, "mime": "image/png"}
         phases.append("apply")
-        return original_apply(stream, record, using=using)
+        return original_apply(stream, record)
 
     monkeypatch.setattr(type(File.objects), "ingest_bytes", ingest_bytes)
     monkeypatch.setattr(File, "open_stream", unexpected_open)
@@ -992,7 +990,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     stored = File.objects.get(content_hash=digest)
     assert phases == ["extract", "apply"]
     assert person.avatar_id == stored.pk
-    assert tuple(replica.backend.local_changes(replica.stream, using="default")) == ()
+    assert tuple(replica.backend.local_changes(replica.stream)) == ()
     assert phases == ["extract", "apply"]
     revisions = list(RecordRevision.objects.filter(link=link))
     assert revisions
@@ -1010,7 +1008,7 @@ def test_duplicate_uid_quarantines_one_resource_and_commits_the_rest(replica: Re
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
     landed = 0
     for _ in range(3):
-        result = advance_stream(replica.stream, replica.backend, page_bound=page_bound, using="default")
+        result = advance_stream(replica.stream, replica.backend, page_bound=page_bound)
         replica.stream = result.stream
         landed += result.count
         if result.exhausted:
@@ -1087,7 +1085,7 @@ def test_due_read_keys_redrives_only_discrepant_hrefs_without_advancing_cursor(r
     old_generation, old_advanced_at = replica.stream.generation, replica.stream.last_advanced_at
     replica.server.requests.clear()
 
-    replica.stream = begin_stream_cycle(replica.stream, replica.backend, using="default")
+    replica.stream = begin_stream_cycle(replica.stream, replica.backend)
 
     discrepancy.refresh_from_db()
     link.refresh_from_db()
@@ -1110,9 +1108,9 @@ def test_due_read_keys_redrives_only_discrepant_hrefs_without_advancing_cursor(r
 def test_read_keys_returns_tombstone_for_missing_unbound_href(replica: Replica, linked: bool) -> None:
     missing_href = f"{_BOOK}missing.vcf"
     if linked:
-        RecordLink.objects.observe(replica.stream, missing_href, using="default")
+        RecordLink.objects.observe(replica.stream, missing_href)
 
-    records = replica.backend.read_keys(replica.stream, [missing_href], using="default")
+    records = replica.backend.read_keys(replica.stream, [missing_href])
 
     assert len(records) == 1
     assert records[0].external_key == missing_href
@@ -1202,7 +1200,7 @@ def test_sweep_imported_identity_survives_remote_href_relocation(replica: Replic
     person.save(update_fields=["notes"])
     replica.server.requests.clear()
 
-    assert push_stream(replica.stream, replica.backend, using="default").count == 1
+    assert push_stream(replica.stream, replica.backend).count == 1
 
     puts = [request for request in replica.server.requests if request[0] == "PUT"]
     assert len(puts) == 1
@@ -1225,7 +1223,7 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     replica.server.store(_HREF, _card(uid="zulu", notes="First committed page"))
     replica.server.store(second_href, _card(uid="alpha", name="Grace Hopper", notes="Second page"))
     replica.server.store(unseen_href, _card(uid="beta", name="Katherine Johnson"))
-    assert reconcile_stream(replica.stream, replica.backend, page_bound=1, using="default") == 0
+    assert reconcile_stream(replica.stream, replica.backend, page_bound=1) == 0
     replica.stream.refresh_from_db()
     committed_cursor = dict(replica.stream.cursor)
     committed_reconcile_state = dict(replica.stream.reconcile_state)
@@ -1233,8 +1231,8 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     assert Person.objects.get(source_uid="zulu").notes == "First committed page"
     original_apply = replica.backend.apply_record
 
-    def crash_after_apply(stream: Any, record: Any, *, using: str | None = None) -> Any:
-        outcome = original_apply(stream, record, using=using)
+    def crash_after_apply(stream: Any, record: Any) -> Any:
+        outcome = original_apply(stream, record)
         assert record.external_key == "alpha"
         assert Person.objects.get(source_uid="alpha").notes == "Second page"
         assert outcome
@@ -1242,7 +1240,7 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
 
     monkeypatch.setattr(replica.backend, "apply_record", crash_after_apply)
     with pytest.raises(RuntimeError, match="Interrupted CardDAV sweep apply"):
-        reconcile_stream(replica.stream, replica.backend, page_bound=1, using="default")
+        reconcile_stream(replica.stream, replica.backend, page_bound=1)
     replica.stream.refresh_from_db()
     assert replica.stream.cursor == committed_cursor
     assert replica.stream.reconcile_state == committed_reconcile_state
@@ -1283,7 +1281,7 @@ def test_generation_bump_deepcopies_nested_config(replica: Replica, monkeypatch:
         return row
 
     monkeypatch.setattr(SyncStream, "from_db", classmethod(capture_previous))
-    successor = SyncStream.objects.bump_generation(replica.stream, using="default")
+    successor = SyncStream.objects.bump_generation(replica.stream)
     assert previous
     assert successor.config == replica.stream.config
     successor.config["policy"]["fields"].append("photo")
@@ -1304,9 +1302,9 @@ def test_cross_origin_redirect_refuses_to_forward_basic_auth(
         return httpx.Response(302, headers={"Location": "https://attacker.example/collect"})
 
     monkeypatch.setattr(replica.server, "request", redirect)
-    monkeypatch.setattr(replica.backend, "_auth", lambda *, using: {"Authorization": "Basic dXNlcjpwYXNz"})
+    monkeypatch.setattr(replica.backend, "_auth", lambda: {"Authorization": "Basic dXNlcjpwYXNz"})
     with pytest.raises(CardDavError):
-        replica.backend._request("PROPFIND", _BOOK, "<propfind/>", using="default")
+        replica.backend._request("PROPFIND", _BOOK, "<propfind/>")
     assert len(sent) == 1
     assert sent[0][0] == _BOOK
     assert sent[0][1]["headers"]["Authorization"] == "Basic dXNlcjpwYXNz"

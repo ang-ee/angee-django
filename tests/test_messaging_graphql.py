@@ -369,10 +369,12 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
                 message=message, position=4, type="text/plain", disposition="attachment", file=file, created_by=admin
             )
             # The helper inserts in depth-first order; the attachment is the last root.
-            expected.append({
-                "id": str(message.sqid),
-                "parts": [{"id": str(part.sqid)} for part in message.parts.order_by("pk")],
-            })
+            expected.append(
+                {
+                    "id": str(message.sqid),
+                    "parts": [{"id": str(part.sqid)} for part in message.parts.order_by("pk")],
+                }
+            )
 
     # IDs alone must not incidentally request the structural/content fields
     # whose deferral would make the manager reject the optimizer's prefetch.
@@ -398,11 +400,9 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     reading_order = manager_type.reading_order_for_message
     visited: list[str] = []
 
-    def read_prefetched(
-        manager: Any, message: messaging_models.Message, *, using: str | None = None
-    ) -> list[messaging_models.Part]:
+    def read_prefetched(manager: Any, message: messaging_models.Message) -> list[messaging_models.Part]:
         with django_assert_num_queries(0):
-            parts = reading_order(manager, message, using=using)
+            parts = reading_order(manager, message)
         visited.append(str(message.sqid))
         return parts
 
@@ -423,10 +423,7 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
         assert visited == [row["id"] for row in page]
         # Data loads project the owning table first. The first FROM can instead
         # belong to Message's title subquery, so it cannot identify the outer read.
-        mime_queries = tuple(
-            sum(item["sql"].startswith(f"SELECT {table}.") for item in captured)
-            for table in tables
-        )
+        mime_queries = tuple(sum(item["sql"].startswith(f"SELECT {table}.") for item in captured) for table in tables)
         assert mime_queries == expected_mime_queries, captured.captured_queries
         counts.append(len(captured))
     assert counts[0] == counts[1], f"{surface} transcript SQL grew at 3/6 messages: {counts}"
@@ -3165,8 +3162,6 @@ def _storage_drive(tmp_path: Path, *, owner: Any) -> Any:
         prefix="assets",
         created_by=owner,
     )
-
-
 
 
 def _request(user: Any) -> Any:

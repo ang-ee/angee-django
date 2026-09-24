@@ -44,11 +44,9 @@ def test_spawned_result_waits_for_native_cleanup_and_process_reaping(monkeypatch
         "delayed_exit",
         {"ready": str(tmp_path / "ready"), "completed": str(completed)},
         stop_event=threading.Event(),
-        using="writer",
     ).run()
 
     assert result["ok"] is True
-    assert result["using"] == "writer"
     assert result["pid"] != os.getpid()
     assert completed.read_text() == "native cleanup completed"
     assert_reaped(result["pid"])
@@ -59,7 +57,7 @@ def test_native_exit_without_result_is_reaped_and_reported(monkeypatch, tmp_path
     monkeypatch.setattr(session_process, "run_session_child", fake_session_child)
     ready = tmp_path / "ready"
     with pytest.raises(SessionProcessError) as error:
-        BridgeSessionProcess(mode, {"ready": str(ready)}, stop_event=threading.Event(), using="writer").run()
+        BridgeSessionProcess(mode, {"ready": str(ready)}, stop_event=threading.Event()).run()
 
     assert error.value.exitcode == exitcode
     assert_reaped(int(ready.read_text()))
@@ -71,15 +69,11 @@ def test_native_crash_leaves_another_session_running(monkeypatch, tmp_path):
     crash_ready = tmp_path / "crash"
     stop = threading.Event()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        survivor = executor.submit(
-            BridgeSessionProcess("healthy", {"ready": str(survivor_ready)}, stop_event=stop, using="writer").run
-        )
+        survivor = executor.submit(BridgeSessionProcess("healthy", {"ready": str(survivor_ready)}, stop_event=stop).run)
         try:
             first_report = wait_for_file(survivor_ready)
             with pytest.raises(SessionProcessError) as error:
-                BridgeSessionProcess(
-                    "crash", {"ready": str(crash_ready)}, stop_event=threading.Event(), using="writer"
-                ).run()
+                BridgeSessionProcess("crash", {"ready": str(crash_ready)}, stop_event=threading.Event()).run()
             assert error.value.exitcode == 86
             assert not survivor.done()
             survivor_pid = int(first_report.split(":")[0])
@@ -106,9 +100,7 @@ def test_stubborn_child_is_killed_and_reaped_within_shutdown_bound(monkeypatch, 
     ready = tmp_path / "ready"
     stop = threading.Event()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        child = executor.submit(
-            BridgeSessionProcess("stubborn", {"ready": str(ready)}, stop_event=stop, using="writer").run
-        )
+        child = executor.submit(BridgeSessionProcess("stubborn", {"ready": str(ready)}, stop_event=stop).run)
         try:
             pid = int(wait_for_file(ready))
             stop.set()
@@ -124,7 +116,7 @@ def test_stubborn_child_is_killed_and_reaped_within_shutdown_bound(monkeypatch, 
 def test_daemonic_worker_rejects_process_hosting_before_spawning(monkeypatch):
     monkeypatch.setattr(session_process.multiprocessing, "current_process", lambda: SimpleNamespace(daemon=True))
     with pytest.raises(ImproperlyConfigured, match="non-daemonic worker"):
-        BridgeSessionProcess("unused", 1, stop_event=threading.Event(), using="writer").run()
+        BridgeSessionProcess("unused", 1, stop_event=threading.Event()).run()
 
 
 def test_production_child_receives_stop_and_returns_job_outcome(monkeypatch, tmp_path):
@@ -132,9 +124,7 @@ def test_production_child_receives_stop_and_returns_job_outcome(monkeypatch, tmp
     ready = tmp_path / "ready"
     stop = threading.Event()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        child = executor.submit(
-            BridgeSessionProcess("cooperative", {"ready": str(ready)}, stop_event=stop, using="writer").run
-        )
+        child = executor.submit(BridgeSessionProcess("cooperative", {"ready": str(ready)}, stop_event=stop).run)
         try:
             wait_for_file(ready)
         finally:
@@ -156,7 +146,6 @@ def test_production_child_watchdog_exits_stuck_job_on_stop_or_parent_eof(tmp_pat
     process = context.Process(
         target=isolated_session_child,
         args=(child, "stuck", {"ready": str(ready)}),
-        kwargs={"using": "writer"},
     )
     process.start()
     child.close()
@@ -181,7 +170,7 @@ def test_production_child_job_exception_has_no_success_result(monkeypatch, tmp_p
     monkeypatch.setattr(session_process, "run_session_child", isolated_session_child)
     ready = tmp_path / "ready"
     with pytest.raises(SessionProcessError) as error:
-        BridgeSessionProcess("failure", {"ready": str(ready)}, stop_event=threading.Event(), using="writer").run()
+        BridgeSessionProcess("failure", {"ready": str(ready)}, stop_event=threading.Event()).run()
 
     assert error.value.exitcode == 1
     assert_reaped(int(ready.read_text()))
@@ -194,9 +183,7 @@ def test_production_child_watchdog_bounds_stuck_teardown_without_parent_stop(mon
     ready = tmp_path / "ready"
     stop = threading.Event()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        child = executor.submit(
-            BridgeSessionProcess("teardown-stuck", {"ready": str(ready)}, stop_event=stop, using="writer").run
-        )
+        child = executor.submit(BridgeSessionProcess("teardown-stuck", {"ready": str(ready)}, stop_event=stop).run)
         try:
             with pytest.raises(SessionProcessError) as error:
                 child.result(timeout=5.0)

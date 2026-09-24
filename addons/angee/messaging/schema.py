@@ -24,7 +24,6 @@ from graphql import GraphQLError
 from rebac import PermissionDenied
 from strawberry import auto
 
-from angee.base.db import get_write_alias
 from angee.base.identity import instance_from_public_id
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import (
@@ -175,12 +174,10 @@ class MessagingPairingMutation:
     def resume_channel_pairing(self, id: PublicID) -> ActionResult:
         """Resume retained pairing material or start a new pairing session."""
 
-        using = get_write_alias(Channel)
-
         with action_target(
-            Channel, id, queryset=Channel.objects.using(using), reason="messaging.graphql.resume_channel_pairing"
+            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.resume_channel_pairing"
         ) as channel:
-            _pairing_result(connect.resume_channel_pairing, channel, using=using)
+            _pairing_result(connect.resume_channel_pairing, channel)
         return ActionResult(ok=True, message="Channel connection started.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -188,48 +185,40 @@ class MessagingPairingMutation:
     def submit_channel_password(self, id: PublicID, password: str) -> ActionResult:
         """Submit one consume-once account password to the live channel session."""
 
-        using = get_write_alias(Channel)
-
         with action_target(
-            Channel, id, queryset=Channel.objects.using(using), reason="messaging.graphql.submit_channel_password"
+            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.submit_channel_password"
         ) as channel:
-            _pairing_result(connect.submit_channel_password, channel, password, using=using)
+            _pairing_result(connect.submit_channel_password, channel, password)
         return ActionResult(ok=True, message="Password submitted.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
     def skip_channel_password(self, id: PublicID) -> ActionResult:
         """Skip one optional consume-once secret round."""
 
-        using = get_write_alias(Channel)
-
         with action_target(
-            Channel, id, queryset=Channel.objects.using(using), reason="messaging.graphql.skip_channel_password"
+            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.skip_channel_password"
         ) as channel:
-            _pairing_result(connect.skip_channel_password, channel, using=using)
+            _pairing_result(connect.skip_channel_password, channel)
         return ActionResult(ok=True, message="Password skipped.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
     def reset_channel_pairing(self, id: PublicID) -> ActionResult:
         """Wipe released pairing material and restart with a fresh session."""
 
-        using = get_write_alias(Channel)
-
         with action_target(
-            Channel, id, queryset=Channel.objects.using(using), reason="messaging.graphql.reset_channel_pairing"
+            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.reset_channel_pairing"
         ) as channel:
-            _pairing_result(connect.reset_channel_pairing, channel, using=using)
+            _pairing_result(connect.reset_channel_pairing, channel)
         return ActionResult(ok=True, message="Pairing reset; link the channel again.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
     def disconnect_channel(self, id: PublicID) -> ActionResult:
         """Stop the live session while retaining reusable pairing material."""
 
-        using = get_write_alias(Channel)
-
         with action_target(
-            Channel, id, queryset=Channel.objects.using(using), reason="messaging.graphql.disconnect_channel"
+            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.disconnect_channel"
         ) as channel:
-            _pairing_result(connect.disconnect_channel, channel, using=using)
+            _pairing_result(connect.disconnect_channel, channel)
         return ActionResult(ok=True, message="Disconnected channel.")
 
 
@@ -256,13 +245,12 @@ class MessagingChannelMutation:
         preview rather than a raw error.
         """
 
-        using = get_write_alias(Channel)
-        with transaction.atomic(using=using):
-            channel = require_instance_for_id(Channel, str(id), queryset=write_queryset(Channel).using(using))
-            preview = DeletePreview.from_counts(channel, Channel.objects.db_manager(using).inventory(channel))
+        with transaction.atomic():
+            channel = require_instance_for_id(Channel, str(id), queryset=write_queryset(Channel))
+            preview = DeletePreview.from_counts(channel, Channel.objects.inventory(channel))
             if confirm:
                 try:
-                    Channel.objects.db_manager(using).purge(channel, using=using)
+                    Channel.objects.purge(channel)
                 except (ProtectedError, RestrictedError) as error:
                     preview = DeletePreview.blocked_from_error(channel, error)
                 else:
@@ -1342,11 +1330,8 @@ class MessagingMutation:
         user = _request_user(info)
         if user is None:
             raise PermissionDenied("authentication required")
-        using = get_write_alias(Message)
-        message = Message.objects.db_manager(using).all().explorer().message(str(id))
-        apps.get_model("messaging", "MessageStar").objects.db_manager(using).set_starred(
-            message, user=user, starred=starred, using=using
-        )
+        message = Message.objects.all().explorer().message(str(id))
+        apps.get_model("messaging", "MessageStar").objects.set_starred(message, user=user, starred=starred)
         return cast(MessageType, message)
 
     @strawberry.mutation(name="post_record_message")
@@ -1354,23 +1339,20 @@ class MessagingMutation:
         """Post an internal comment to the record's chatter thread."""
 
         try:
-            record = _threaded_record(input, for_write=True)
-            using = record._state.db if record is not None else None
+            record = _threaded_record(input)
         except ValueError as error:
             return RecordMessagePostPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
             return RecordMessagePostPayload(error="record not found", error_code="NOT_FOUND")
         try:
-            attachments = _storage_files(input.attachment_ids, using=using)
-            recipient_user_ids = tuple(
-                user.pk for user in _users_from_public_ids(input.recipient_user_ids, using=using)
-            )
-            parent = _message(input.parent_message_id, using=using) if input.parent_message_id is not None else None
+            attachments = _storage_files(input.attachment_ids)
+            recipient_user_ids = tuple(user.pk for user in _users_from_public_ids(input.recipient_user_ids))
+            parent = _message(input.parent_message_id) if input.parent_message_id is not None else None
             kind = _record_message_post_kind(input.kind)
             if kind == "note":
                 if recipient_user_ids or input.autofollow_recipients:
                     raise ValueError("Internal notes cannot target recipients.")
-                message = cast(Any, record).message_log(input.body, attachments=attachments, parent=parent, using=using)
+                message = cast(Any, record).message_log(input.body, attachments=attachments, parent=parent)
             else:
                 message = cast(Any, record).message_post(
                     input.body,
@@ -1378,11 +1360,10 @@ class MessagingMutation:
                     recipient_user_ids=recipient_user_ids,
                     autofollow_recipients=input.autofollow_recipients,
                     parent=parent,
-                    using=using,
                 )
         except (PermissionDenied, ValueError) as error:
             return RecordMessagePostPayload.from_error(error, invalid_code="BAD_MESSAGE")
-        payload = _record_thread_payload(record, info, role=input.role, using=using)
+        payload = _record_thread_payload(record, info, role=input.role)
         return RecordMessagePostPayload.from_thread_state(
             payload,
             message=message,
@@ -1400,18 +1381,17 @@ class MessagingMutation:
         if _request_user(info) is None:
             return RecordMessageUpdatePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input, for_write=True)
-            using = record._state.db if record is not None else None
-            message = _message(input.message_id, using=using)
+            record = _threaded_record(input)
+            message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageUpdatePayload(error=str(error), error_code="BAD_MESSAGE")
         if record is None:
             return RecordMessageUpdatePayload(error="record not found", error_code="NOT_FOUND")
         try:
-            message = cast(Any, record).message_update_content(message, body=input.body, using=using)
+            message = cast(Any, record).message_update_content(message, body=input.body)
         except (PermissionDenied, ValueError) as error:
             return RecordMessageUpdatePayload.from_error(error, invalid_code="BAD_MESSAGE")
-        payload = _record_thread_payload(record, info, role=input.role, using=using)
+        payload = _record_thread_payload(record, info, role=input.role)
         return RecordMessageUpdatePayload.from_thread_state(
             payload,
             message=message,
@@ -1429,19 +1409,18 @@ class MessagingMutation:
         if _request_user(info) is None:
             return RecordMessageDeletePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input, for_write=True)
-            using = record._state.db if record is not None else None
-            message = _message(input.message_id, using=using)
+            record = _threaded_record(input)
+            message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageDeletePayload(error=str(error), error_code="BAD_MESSAGE")
         if record is None:
             return RecordMessageDeletePayload(error="record not found", error_code="NOT_FOUND")
         deleted_message_id = input.message_id
         try:
-            thread = cast(Any, record).message_unlink(message, using=using)
+            thread = cast(Any, record).message_unlink(message)
         except (PermissionDenied, ValueError) as error:
             return RecordMessageDeletePayload.from_error(error, invalid_code="BAD_MESSAGE")
-        payload = _record_thread_payload(record, info, role=input.role, using=using)
+        payload = _record_thread_payload(record, info, role=input.role)
         return RecordMessageDeletePayload.from_thread_state(
             payload,
             deleted_message_id=deleted_message_id,
@@ -1462,22 +1441,21 @@ class MessagingMutation:
         if user is None:
             return RecordMessageReactionPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input, for_write=True)
-            using = record._state.db if record is not None else None
-            message = _message(input.message_id, using=using)
+            record = _threaded_record(input)
+            message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageReactionPayload(error=str(error), error_code="BAD_MESSAGE")
         if record is None:
             return RecordMessageReactionPayload(error="record not found", error_code="NOT_FOUND")
         try:
             message = cast(Any, record).message_reaction(
-                message, reaction=input.reaction, action=input.action, user=user, using=using
+                message, reaction=input.reaction, action=input.action, user=user
             )
         except (PermissionDenied, ValueError) as error:
             return RecordMessageReactionPayload.from_error(error, invalid_code="BAD_REACTION")
         return RecordMessageReactionPayload(
             message=message,
-            reaction_groups=_record_message_reaction_groups(message, user, using=using),
+            reaction_groups=_record_message_reaction_groups(message, user),
         )
 
     @strawberry.mutation(name="set_record_message_starred")
@@ -1492,15 +1470,14 @@ class MessagingMutation:
         if user is None:
             return RecordMessageStarPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input, for_write=True)
-            using = record._state.db if record is not None else None
-            message = _message(input.message_id, using=using)
+            record = _threaded_record(input)
+            message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageStarPayload(error=str(error), error_code="BAD_MESSAGE")
         if record is None:
             return RecordMessageStarPayload(error="record not found", error_code="NOT_FOUND")
         try:
-            starred = cast(Any, record).message_set_starred(message, user=user, starred=input.starred, using=using)
+            starred = cast(Any, record).message_set_starred(message, user=user, starred=input.starred)
         except (PermissionDenied, ValueError) as error:
             return RecordMessageStarPayload.from_error(error, invalid_code="BAD_MESSAGE")
         return RecordMessageStarPayload(message=message, starred=starred)
@@ -1517,18 +1494,17 @@ class MessagingMutation:
         if user is None:
             return RecordMessageDonePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input, for_write=True)
-            using = record._state.db if record is not None else None
-            message = _message(input.message_id, using=using)
+            record = _threaded_record(input)
+            message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageDonePayload(error=str(error), error_code="BAD_MESSAGE")
         if record is None:
             return RecordMessageDonePayload(error="record not found", error_code="NOT_FOUND")
         try:
-            cast(Any, record).message_set_done(message, user=user, using=using)
+            cast(Any, record).message_set_done(message, user=user)
         except (PermissionDenied, ValueError) as error:
             return RecordMessageDonePayload.from_error(error, invalid_code="BAD_MESSAGE")
-        payload = _record_thread_payload(record, info, role=input.role, using=using)
+        payload = _record_thread_payload(record, info, role=input.role)
         return RecordMessageDonePayload(
             message=next(
                 (candidate for candidate in payload.messages if cast(Any, candidate).pk == message.pk),
@@ -1548,8 +1524,7 @@ class MessagingMutation:
         if user is None:
             return RecordFollowPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input, for_write=True)
-            using = record._state.db if record is not None else None
+            record = _threaded_record(input)
         except ValueError as error:
             return RecordFollowPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1560,14 +1535,13 @@ class MessagingMutation:
                     user=user,
                     notification_policy=input.notification_policy,
                     subtype_keys=tuple(input.subtype_keys),
-                    using=using,
                 )
             else:
-                cast(Any, record).message_unsubscribe(user=user, using=using)
+                cast(Any, record).message_unsubscribe(user=user)
                 follower = None
         except ValueError as error:
             return RecordFollowPayload(error=str(error), error_code="BAD_FOLLOWER")
-        payload = _record_thread_payload(record, info, role=input.role, using=using)
+        payload = _record_thread_payload(record, info, role=input.role)
         return RecordFollowPayload(
             follower=follower,
             thread=payload.thread,
@@ -1588,9 +1562,8 @@ class MessagingMutation:
         if current_user is None:
             return RecordActivityPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input, for_write=True)
-            using = record._state.db if record is not None else None
-            assigned_user = _user_from_public_id(input.user_id, using=using) if input.user_id else current_user
+            record = _threaded_record(input)
+            assigned_user = _user_from_public_id(input.user_id) if input.user_id else current_user
         except ValueError as error:
             return RecordActivityPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1602,11 +1575,10 @@ class MessagingMutation:
                 note=input.note,
                 due_date=input.due_date,
                 activity_type=input.activity_type,
-                using=using,
             )
         except (PermissionDenied, ValueError) as error:
             return RecordActivityPayload.from_error(error, invalid_code="BAD_ACTIVITY")
-        payload = _record_thread_payload(record, info, role=input.role, using=using)
+        payload = _record_thread_payload(record, info, role=input.role)
         return RecordActivityPayload(
             activity=activity,
             thread=payload.thread,
@@ -1624,22 +1596,21 @@ class MessagingMutation:
 
         if _request_user(info) is None:
             return RecordActivityPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
-        using = get_write_alias(ThreadActivity)
         try:
-            activity = _thread_activity(input.activity_id, using=using)
+            activity = _thread_activity(input.activity_id)
         except ValueError as error:
             return RecordActivityPayload(error=str(error), error_code="BAD_ACTIVITY")
         record = activity.attachment.target
         if record is None or not isinstance(record, ThreadedModelMixin):
             return RecordActivityPayload(error="activity target is not threaded", error_code="BAD_RECORD")
-        record = _readable_record(record, using=using)
+        record = _readable_record(record)
         if record is None:
             return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
         try:
-            activity = cast(Any, record).activity_feedback(activity, feedback=input.feedback, using=using)
+            activity = cast(Any, record).activity_feedback(activity, feedback=input.feedback)
         except PermissionDenied as error:
             return RecordActivityPayload(error=str(error), error_code="PERMISSION_DENIED")
-        payload = _record_thread_payload(record, info, using=using)
+        payload = _record_thread_payload(record, info)
         return RecordActivityPayload(
             activity=activity,
             thread=payload.thread,
@@ -1657,22 +1628,21 @@ class MessagingMutation:
 
         if _request_user(info) is None:
             return RecordActivityPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
-        using = get_write_alias(ThreadActivity)
         try:
-            activity = _thread_activity(input.activity_id, using=using)
+            activity = _thread_activity(input.activity_id)
         except ValueError as error:
             return RecordActivityPayload(error=str(error), error_code="BAD_ACTIVITY")
         record = activity.attachment.target
         if record is None or not isinstance(record, ThreadedModelMixin):
             return RecordActivityPayload(error="activity target is not threaded", error_code="BAD_RECORD")
-        record = _readable_record(record, using=using)
+        record = _readable_record(record)
         if record is None:
             return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
         try:
-            activity = cast(Any, record).activity_unlink(activity, using=using)
+            activity = cast(Any, record).activity_unlink(activity)
         except PermissionDenied as error:
             return RecordActivityPayload(error=str(error), error_code="PERMISSION_DENIED")
-        payload = _record_thread_payload(record, info, using=using)
+        payload = _record_thread_payload(record, info)
         return RecordActivityPayload(
             activity=activity,
             thread=payload.thread,
@@ -1688,14 +1658,13 @@ class MessagingMutation:
         if user is None:
             return RecordThreadPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input, for_write=True)
-            using = record._state.db if record is not None else None
+            record = _threaded_record(input)
         except ValueError as error:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
             return RecordThreadPayload(error="record not found", error_code="NOT_FOUND")
-        ThreadFollower.objects.db_manager(using).mark_read_for_record(record, user=user, role=input.role)
-        return _record_thread_payload(record, info, role=input.role, using=using)
+        ThreadFollower.objects.mark_read_for_record(record, user=user, role=input.role)
+        return _record_thread_payload(record, info, role=input.role)
 
 
 def _thread_inbox_queryset(info: strawberry.Info) -> Any:
@@ -1771,9 +1740,8 @@ class _ChannelWriteBackend(AngeeHasuraWriteBackend):
 
         del info
         queryset = self.write_target_queryset()
-        using = get_write_alias(Channel, bound=queryset)
-        channel = require_instance_for_id(Channel, str(pk), queryset=queryset.using(using))
-        Channel.objects.db_manager(using).purge(channel, using=using)
+        channel = require_instance_for_id(Channel, str(pk), queryset=queryset)
+        Channel.objects.purge(channel)
         return channel
 
 
@@ -2061,7 +2029,7 @@ schemas = {
 }
 
 
-def _threaded_record(input: RecordReferenceInput, *, for_write: bool = False) -> Any | None:
+def _threaded_record(input: RecordReferenceInput) -> Any | None:
     """Return the record addressed by ``input`` when its model opts into chatter."""
 
     try:
@@ -2072,8 +2040,6 @@ def _threaded_record(input: RecordReferenceInput, *, for_write: bool = False) ->
         raise ValueError(f"{model._meta.label} does not inherit ThreadedModelMixin.")
     try:
         queryset = model._default_manager.all()
-        if for_write:
-            queryset = queryset.using(get_write_alias(model, bound=queryset))
         return instance_from_public_id(model, str(input.record_id), queryset=queryset)
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
@@ -2122,12 +2088,7 @@ def _message_reaction_groups(message: Any, user: Any | None) -> list[MessageReac
     ]
 
 
-def _record_message_reaction_groups(
-    message: Any,
-    user: Any | None,
-    *,
-    using: str | None = None,
-) -> list[RecordMessageReactionGroupType]:
+def _record_message_reaction_groups(message: Any, user: Any | None) -> list[RecordMessageReactionGroupType]:
     """Project model-owned reaction groups without generic handle backedges."""
 
     return [
@@ -2137,7 +2098,7 @@ def _record_message_reaction_groups(
             self_reacted=group.self_reacted,
             handles=list(group.handles),
         )
-        for group in message.reaction_groups(user, using=using)
+        for group in message.reaction_groups(user)
     ]
 
 
@@ -2195,13 +2156,12 @@ def _record_thread_payload(
     after: strawberry.ID | None = None,
     around: strawberry.ID | None = None,
     message_types: tuple[str, ...] = (),
-    using: str | None = None,
 ) -> RecordThreadPayload:
     """Return a record thread payload with follower state for the request user."""
 
-    thread = cast(Any, record).message_thread(create=False, using=using)
+    thread = cast(Any, record).message_thread(create=False)
     messages, message_result_count = (
-        Message.objects.db_manager(using).for_record(
+        Message.objects.for_record(
             record,
             role=role,
             search=search,
@@ -2214,16 +2174,10 @@ def _record_thread_payload(
         if thread is not None
         else ([], 0)
     )
-    followers = (
-        list(cast(Any, record).message_followers(using=using).select_related("user")) if thread is not None else []
-    )
-    activities = list(cast(Any, record).activity_ids(using=using).select_related("user")) if thread is not None else []
+    followers = list(cast(Any, record).message_followers().select_related("user")) if thread is not None else []
+    activities = list(cast(Any, record).activity_ids().select_related("user")) if thread is not None else []
     attachment_count = (
-        apps.get_model("messaging", "Part")
-        .objects.db_manager(using)
-        .filter(message__thread=thread)
-        .attachments()
-        .count()
+        apps.get_model("messaging", "Part").objects.filter(message__thread=thread).attachments().count()
         if thread is not None
         else 0
     )
@@ -2238,22 +2192,21 @@ def _record_thread_payload(
         for suggestion in cast(Any, record).message_suggested_recipients(
             role=role,
             user=user,
-            using=using,
         )
     ]
     self_follower = next((follower for follower in followers if follower.user_id == user_id), None)
     is_following = self_follower is not None
     notifications = (
         list(
-            ThreadNotification.objects.db_manager(using)
-            .for_record(record, user=user, role=role)
-            .select_related("thread", "attachment", "follower", "message", "message__subtype", "user")[:50]
+            ThreadNotification.objects.for_record(record, user=user, role=role).select_related(
+                "thread", "attachment", "follower", "message", "message__subtype", "user"
+            )[:50]
         )
         if thread is not None and user is not None
         else []
     )
     unread_count = (
-        ThreadFollower.objects.db_manager(using).unread_count_for_record(record, user=user, role=role)
+        ThreadFollower.objects.unread_count_for_record(record, user=user, role=role)
         if thread is not None and user is not None
         else 0
     )
@@ -2267,15 +2220,14 @@ def _record_thread_payload(
         # One receipt-anchored scan primes the page's needaction flags — the same
         # unread set the badge counts, restricted to the rows on this page.
         needaction_message_ids = set(
-            ThreadFollower.objects.db_manager(using)
-            .unread_messages(thread, user=user)
+            ThreadFollower.objects.unread_messages(thread, user=user)
             .filter(pk__in=[message.pk for message in messages])
             .values_list("pk", flat=True)
         )
         for message in messages:
             setattr(message, "_current_user_needaction", message.pk in needaction_message_ids)
     message_has_error_counter = (
-        ThreadNotification.objects.db_manager(using).error_count_for_record(record, user=user, role=role)
+        ThreadNotification.objects.error_count_for_record(record, user=user, role=role)
         if thread is not None and user is not None
         else 0
     )
@@ -2286,9 +2238,7 @@ def _record_thread_payload(
         followers=followers,
         self_follower=self_follower,
         suggested_recipients=suggested_recipients,
-        subtypes=[
-            MessageSubtypeOptionType(**option) for option in message_subtype_options(record._meta.label, using=using)
-        ],
+        subtypes=[MessageSubtypeOptionType(**option) for option in message_subtype_options(record._meta.label)],
         follower_count=len(followers),
         is_following=is_following,
         notifications=notifications,
@@ -2314,7 +2264,7 @@ def _request_user(info: strawberry.Info | None) -> Any | None:
     return user
 
 
-def _user_from_public_id(user_id: strawberry.ID | None, *, using: str | None = None) -> Any:
+def _user_from_public_id(user_id: strawberry.ID | None) -> Any:
     """Return a user by public id for activity assignment."""
 
     if user_id is None:
@@ -2323,14 +2273,14 @@ def _user_from_public_id(user_id: strawberry.ID | None, *, using: str | None = N
         return require_instance_for_id(
             get_user_model(),
             user_id,
-            queryset=get_user_model()._default_manager.using(using),
+            queryset=get_user_model()._default_manager.all(),
             not_found="assigned user not found",
         )
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
 
 
-def _users_from_public_ids(user_ids: list[strawberry.ID], *, using: str | None = None) -> tuple[Any, ...]:
+def _users_from_public_ids(user_ids: list[strawberry.ID]) -> tuple[Any, ...]:
     """Return users addressed by public id for direct chatter recipients."""
 
     try:
@@ -2338,7 +2288,7 @@ def _users_from_public_ids(user_ids: list[strawberry.ID], *, using: str | None =
             require_instance_for_id(
                 get_user_model(),
                 user_id,
-                queryset=get_user_model()._default_manager.using(using),
+                queryset=get_user_model()._default_manager.all(),
                 not_found="recipient user not found",
             )
             for user_id in user_ids
@@ -2347,7 +2297,7 @@ def _users_from_public_ids(user_ids: list[strawberry.ID], *, using: str | None =
         raise ValueError(str(error)) from error
 
 
-def _thread_activity(activity_id: strawberry.ID, *, using: str | None = None) -> Any:
+def _thread_activity(activity_id: strawberry.ID) -> Any:
     """Return a scheduled record activity by public id, decoded elevated.
 
     The decode intentionally bypasses the activity's own read scope: authorization
@@ -2361,16 +2311,14 @@ def _thread_activity(activity_id: strawberry.ID, *, using: str | None = None) ->
         return require_instance_for_id(
             ThreadActivity,
             activity_id,
-            queryset=ThreadActivity.system_queryset(using=using).select_related(
-                "attachment", "attachment__content_type"
-            ),
+            queryset=ThreadActivity.system_queryset().select_related("attachment", "attachment__content_type"),
             not_found="activity not found",
         )
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
 
 
-def _readable_record(record: Any, *, using: str | None = None) -> Any | None:
+def _readable_record(record: Any) -> Any | None:
     """Return ``record`` re-resolved under the request actor's read scope, else None.
 
     The ``record_thread`` gate: record chatter — its thread, messages, and
@@ -2381,21 +2329,21 @@ def _readable_record(record: Any, *, using: str | None = None) -> Any | None:
     which the caller surfaces as ``NOT_FOUND``.
     """
 
-    return type(record)._default_manager.db_manager(using).filter(pk=record.pk).first()
+    return type(record)._default_manager.filter(pk=record.pk).first()
 
 
-def _message(message_id: strawberry.ID, *, using: str | None = None) -> Any:
+def _message(message_id: strawberry.ID) -> Any:
     """Return a message by public id."""
 
     try:
         return require_instance_for_id(
-            Message, message_id, queryset=Message.objects.using(using), not_found="message not found"
+            Message, message_id, queryset=Message.objects.all(), not_found="message not found"
         )
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
 
 
-def _storage_files(file_ids: list[strawberry.ID], *, using: str | None = None) -> tuple[Any, ...]:
+def _storage_files(file_ids: list[strawberry.ID]) -> tuple[Any, ...]:
     """Return readable storage files addressed by public id."""
 
     files = []
@@ -2403,7 +2351,7 @@ def _storage_files(file_ids: list[strawberry.ID], *, using: str | None = None) -
         file = require_instance_for_id(
             File,
             file_id,
-            queryset=File.objects.using(using),
+            queryset=File.objects.all(),
             not_found="attachment not found",
         )
         files.append(file)

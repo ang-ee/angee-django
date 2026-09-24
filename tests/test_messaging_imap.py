@@ -745,9 +745,6 @@ def _backend(
     monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
     monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
     bridge = _BridgeStub(config=config, credential=credential or _BasicCredentialStub())
-    monkeypatch.setattr(
-        "angee.messaging_integrate_imap.backend.related_on", lambda obj, field_name, **kwargs: getattr(obj, field_name)
-    )
     backend = ImapChannelBackend(bridge)
     backend.test_pages = AdapterPages(backend)
     return backend
@@ -1641,7 +1638,7 @@ def test_legacy_future_only_policy_survives_a_stream_reset(imap_tables: None, mo
     with system_context(reason="test imap legacy future-only policy"):
         backend = channel.backend
         try:
-            backend.streams(using="default")
+            backend.streams()
             identity = backend._source_identity_digest()
         finally:
             backend.close()
@@ -1738,41 +1735,34 @@ def test_legacy_imap_seed_hooks_only_translate_state() -> None:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("existing_policy", [{}, {"delivery_mode": "new_only", "source_identity": "configured"}])
-def test_legacy_imap_cutover_uses_one_alias_and_preserves_config(
-    imap_tables: None, database_alias: Any, existing_policy: dict[str, Any]
-) -> None:
+def test_legacy_imap_cutover_preserves_config(imap_tables: None, existing_policy: dict[str, Any]) -> None:
     channel = _imap_channel(**existing_policy)
     original_config = dict(channel.config)
-    with system_context(reason="test imap cutover alias setup"):
+    with system_context(reason="test imap cutover setup"):
         channel.cursor = {
             "delivery_mode": "new_only",
             "source_identity": "legacy",
             "mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}},
         }
         channel.save(update_fields=["cursor"])
-    with database_alias("imap_cutover") as using, system_context(reason="test imap cutover alias"):
+    with system_context(reason="test imap cutover"):
         stream = open_stream(
             channel,
             "messages",
             "INBOX",
             channel.backend,
             definition=StreamDefinition(key="messages", partition="INBOX"),
-            using=using,
         )
-        saved = Channel._base_manager.using(using).get(pk=channel.pk)
+        saved = Channel._base_manager.get(pk=channel.pk)
         assert saved.config == {
             **original_config,
             "delivery_mode": "new_only",
             "source_identity": existing_policy.get("source_identity", "legacy"),
             "mailbox_selection": ["INBOX"],
         }
-        assert stream._state.db == using
         assert stream.cursor == {"uidvalidity": 100, "last_uid": 1}
         assert stream.config == {}
         assert saved.cursor == channel.cursor == {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
-        assert Channel._base_manager.using("default").get(pk=channel.pk).cursor["delivery_mode"] == "new_only"
-        assert Channel._base_manager.using("default").get(pk=channel.pk).config == original_config
-        assert not SyncStream._base_manager.using("default").filter(integration_id=channel.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1787,7 +1777,7 @@ def test_new_mail_boundary_preserves_legacy_exclusion(imap_tables: None, monkeyp
     with system_context(reason="test imap legacy boundary replay"):
         backend = channel.backend
         try:
-            backend.streams(using="default")
+            backend.streams()
             identity = backend._source_identity_digest()
         finally:
             backend.close()
@@ -1797,7 +1787,7 @@ def test_new_mail_boundary_preserves_legacy_exclusion(imap_tables: None, monkeyp
             "mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}},
         }
         channel.save(update_fields=["cursor"])
-        boundary = backend.prepare_new_mail_boundary(using="default")
+        boundary = backend.prepare_new_mail_boundary()
         assert not boundary.changed
         assert boundary.cursors == {"INBOX": {"uidvalidity": 100, "last_uid": 1}}
         channel.refresh_from_db()
@@ -1827,7 +1817,7 @@ def test_channel_sync_partitions_mailboxes(
     with system_context(reason="test imap partition drain"):
         backend = channel.backend
         try:
-            definitions = backend.streams(using=channel._state.db)
+            definitions = backend.streams()
             assert {definition.partition for definition in definitions} == {"INBOX", "Archive"}
             stream = SyncStream.objects.current(channel, "messages", "Archive")
             result = advance_stream(stream, backend)

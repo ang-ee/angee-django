@@ -8,13 +8,12 @@ from typing import Any
 from anymail.exceptions import AnymailAPIError
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import connections, transaction
+from django.db import transaction
 from django.utils import timezone
 from rebac import system_context
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import Timeout as RequestsTimeout
 
-from angee.base.db import get_write_alias
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import record_lock_key, task_lock
 
@@ -28,7 +27,7 @@ class TransientDeliveryError(Exception):
     """A network failure or ESP 5xx response that Celery may retry."""
 
 
-def queue_message_delivery(message: Any, *, using: str | None = None) -> bool:
+def queue_message_delivery(message: Any) -> bool:
     """Persist ``queued`` and enqueue one delivery task; return whether queued.
 
     ``external_id`` is the stable delivery token. A terminal ``sent`` row is a
@@ -36,38 +35,30 @@ def queue_message_delivery(message: Any, *, using: str | None = None) -> bool:
     or explicitly retry a failed attempt.
     """
 
-    using = get_write_alias(type(message), using=using, instance=message)
     if message.pk is None:
         raise ValidationError("Cannot deliver an unsaved message.")
-    with system_context(reason="messaging.delivery.queue"), transaction.atomic(using=using):
-        row = (
-            type(message)
-            .objects.db_manager(using)
-            .sudo(reason="messaging.delivery.queue")
-            .lock_if_supported()
-            .get(pk=message.pk)
-        )
+    with system_context(reason="messaging.delivery.queue"), transaction.atomic():
+        row = type(message).objects.sudo(reason="messaging.delivery.queue").lock_if_supported().get(pk=message.pk)
         _validate_outbound(row)
         if str(row.status) == str(row.MessageStatus.SENT):
             message.status = row.status
             return False
         row.status = row.MessageStatus.QUEUED
-        row.save(using=using, update_fields=("status", "updated_at"))
+        row.save(update_fields=("status", "updated_at"))
         model_label = row._meta.label_lower
         pk = row.pk
         external_id = str(row.external_id)
         transaction.on_commit(
             lambda: enqueue_task(
                 DELIVER_MESSAGE_TASK,
-                kwargs={"model_label": model_label, "pk": pk, "external_id": external_id, "using": using},
+                kwargs={"model_label": model_label, "pk": pk, "external_id": external_id},
             ),
-            using=using,
         )
     message.status = message.MessageStatus.QUEUED
     return True
 
 
-def run_message_delivery(model_label: str, pk: Any, external_id: str, *, using: str | None = None) -> dict[str, Any]:
+def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[str, Any]:
     """Run one at-least-once delivery attempt under the shared record lock.
 
     Lost acknowledgements can transmit twice; dedup is receiver-side best effort
@@ -77,15 +68,13 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str, *, using: 
     """
 
     model = apps.get_model(model_label)
-    using = get_write_alias(model, using=using)
-    connections[using]
     with (
         system_context(reason="messaging.delivery.run"),
         task_lock(record_lock_key(model_label, pk, "deliver")) as acquired,
     ):
         if not acquired:
             return {"ok": True, "skipped": True, "reason": "delivery-already-running"}
-        message = _claim(model, pk, external_id, using=using)
+        message = _claim(model, pk, external_id)
         if message is None:
             return {"ok": True, "skipped": True, "reason": "missing-or-stale"}
         if str(message.status) == str(message.MessageStatus.SENT):
@@ -93,13 +82,12 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str, *, using: 
         try:
             channel = (
                 apps.get_model("messaging", "Channel")
-                .objects.db_manager(using)
-                .sudo(reason="messaging.delivery.channel")
+                .objects.sudo(reason="messaging.delivery.channel")
                 .get(pk=message.channel_id)
             )
             delivered = channel.backend.deliver(message)
         except Exception as error:
-            _record_status(model, pk, external_id, status="failed", using=using)
+            _record_status(model, pk, external_id, status="failed")
             if _is_transient(error):
                 logger.exception("Transient outbound delivery failure for %s:%s.", model_label, pk)
                 raise TransientDeliveryError(f"Transient outbound delivery failure for {model_label}:{pk}.") from error
@@ -111,9 +99,9 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str, *, using: 
                 "error": type(error).__name__,
             }
         if not delivered:
-            _record_status(model, pk, external_id, status="failed", using=using)
+            _record_status(model, pk, external_id, status="failed")
             return {"ok": False, "delivered": False, "external_id": external_id}
-        sent_at = _record_status(model, pk, external_id, status="sent", using=using)
+        sent_at = _record_status(model, pk, external_id, status="sent")
         return {
             "ok": True,
             "delivered": True,
@@ -122,11 +110,10 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str, *, using: 
         }
 
 
-def _claim(model: Any, pk: Any, external_id: str, *, using: str) -> Any | None:
-    with system_context(reason="messaging.delivery.claim"), transaction.atomic(using=using):
+def _claim(model: Any, pk: Any, external_id: str) -> Any | None:
+    with system_context(reason="messaging.delivery.claim"), transaction.atomic():
         message = (
-            model.objects.db_manager(using)
-            .sudo(reason="messaging.delivery.claim")
+            model.objects.sudo(reason="messaging.delivery.claim")
             .lock_if_supported()
             .filter(pk=pk, external_id=external_id)
             .select_related("sender", "thread")
@@ -137,15 +124,14 @@ def _claim(model: Any, pk: Any, external_id: str, *, using: str) -> Any | None:
         _validate_outbound(message)
         if str(message.status) != str(message.MessageStatus.SENT):
             message.status = message.MessageStatus.QUEUED
-            message.save(using=using, update_fields=("status", "updated_at"))
+            message.save(update_fields=("status", "updated_at"))
         return message
 
 
-def _record_status(model: Any, pk: Any, external_id: str, *, status: str, using: str) -> Any | None:
-    with system_context(reason=f"messaging.delivery.{status}"), transaction.atomic(using=using):
+def _record_status(model: Any, pk: Any, external_id: str, *, status: str) -> Any | None:
+    with system_context(reason=f"messaging.delivery.{status}"), transaction.atomic():
         message = (
-            model.objects.db_manager(using)
-            .sudo(reason=f"messaging.delivery.{status}")
+            model.objects.sudo(reason=f"messaging.delivery.{status}")
             .lock_if_supported()
             .filter(pk=pk, external_id=external_id)
             .first()
@@ -157,7 +143,7 @@ def _record_status(model: Any, pk: Any, external_id: str, *, status: str, using:
         if status == str(message.MessageStatus.SENT) and message.sent_at is None:
             message.sent_at = timezone.now()
             update_fields.append("sent_at")
-        message.save(using=using, update_fields=tuple(update_fields))
+        message.save(update_fields=tuple(update_fields))
         return message.sent_at
 
 

@@ -28,7 +28,6 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.db import get_write_alias
 from angee.base.identity import public_id_of
 from angee.graphql.actions import (
     ActionResult,
@@ -649,21 +648,20 @@ _CREDENTIAL_RESOURCE = hasura_model_resource(
 )
 
 
-def _oauth_client_from_id(oauth_client_id: PublicID, *, using: str | None = None) -> Any:
+def _oauth_client_from_id(oauth_client_id: PublicID) -> Any:
     """Return the OAuth client addressed by one public GraphQL id."""
 
     return resolve_action_target(
         OAuthClient,
         oauth_client_id,
         reason="integrate.graphql.oauth_client.lookup",
-        queryset=OAuthClient.objects.using(using) if using is not None else None,
     )
 
 
-def _enabled_oauth_client_from_id(oauth_client_id: PublicID, *, using: str | None = None) -> Any:
+def _enabled_oauth_client_from_id(oauth_client_id: PublicID) -> Any:
     """Return the enabled OAuth client addressed by one public GraphQL id."""
 
-    oauth_client = _oauth_client_from_id(oauth_client_id, using=using)
+    oauth_client = _oauth_client_from_id(oauth_client_id)
     if not oauth_client.is_enabled:
         raise ValueError("OAuth client is not enabled.")
     return oauth_client
@@ -684,18 +682,13 @@ def integration_create_attrs(
     data: Any,
     *,
     reason: str,
-    using: str | None = None,
 ) -> dict[str, Any]:
     """Resolve inherited ``Integration`` create fields from GraphQL public ids."""
-
-    using = get_write_alias(Integration, using=using)
 
     credential = (
         None
         if data.credential is None
-        else resolve_action_target(
-            Credential, data.credential, reason=f"{reason}.credential", queryset=Credential.objects.using(using)
-        )
+        else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
     )
     account = (
         strawberry.UNSET
@@ -703,16 +696,12 @@ def integration_create_attrs(
         else (
             None
             if data.account is None
-            else resolve_action_target(
-                ExternalAccount, data.account, reason=f"{reason}.account", queryset=ExternalAccount.objects.using(using)
-            )
+            else resolve_action_target(ExternalAccount, data.account, reason=f"{reason}.account")
         )
     )
     attrs: dict[str, Any] = {
-        "vendor": resolve_action_target(
-            Vendor, data.vendor, reason=f"{reason}.vendor", queryset=Vendor.objects.using(using)
-        ),
-        "owner": _user_from_public_id(data.owner, using=using),
+        "vendor": resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor"),
+        "owner": _user_from_public_id(data.owner),
     }
     if hasattr(data, "display_name"):
         attrs["display_name"] = data.display_name
@@ -731,7 +720,6 @@ def apply_integration_patch_fields(
     *,
     reason: str,
     ignore_null_lifecycle: bool = False,
-    using: str | None = None,
 ) -> set[str]:
     """Apply inherited ``Integration`` patch fields and return caller-save names.
 
@@ -740,37 +728,28 @@ def apply_integration_patch_fields(
     returned set so child update callers do not re-emit the state write.
     """
 
-    using = get_write_alias(type(target), using=using, instance=target)
-    target._state.db = using
-
     provided: set[str] = set()
     if hasattr(data, "display_name") and data.display_name is not strawberry.UNSET:
         target.display_name = data.display_name or ""
         provided.add("display_name")
     if data.vendor is not strawberry.UNSET:
-        target.vendor = resolve_action_target(
-            Vendor, data.vendor, reason=f"{reason}.vendor", queryset=Vendor.objects.using(using)
-        )
+        target.vendor = resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor")
         provided.add("vendor")
     if data.owner is not strawberry.UNSET:
-        target.owner = _user_from_public_id(data.owner, using=using)
+        target.owner = _user_from_public_id(data.owner)
         provided.add("owner")
     if data.credential is not strawberry.UNSET:
         target.credential = (
             None
             if data.credential is None
-            else resolve_action_target(
-                Credential, data.credential, reason=f"{reason}.credential", queryset=Credential.objects.using(using)
-            )
+            else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
         )
         provided.add("credential")
     if data.account is not strawberry.UNSET:
         target.account = (
             None
             if data.account is None
-            else resolve_action_target(
-                ExternalAccount, data.account, reason=f"{reason}.account", queryset=ExternalAccount.objects.using(using)
-            )
+            else resolve_action_target(ExternalAccount, data.account, reason=f"{reason}.account")
         )
         provided.add("account")
     if data.lifecycle is not strawberry.UNSET and (data.lifecycle is not None or not ignore_null_lifecycle):
@@ -778,14 +757,11 @@ def apply_integration_patch_fields(
     return provided
 
 
-def save_provided_fields(target: Any, provided: set[str], *, using: str | None = None) -> None:
+def save_provided_fields(target: Any, provided: set[str]) -> None:
     """Persist provided fields once, skipping the save when a transition already did all work."""
 
-    using = get_write_alias(type(target), using=using, instance=target)
-    target._state.db = using
-
     if provided:
-        target.save(update_fields={*provided, "updated_at"}, using=using)
+        target.save(update_fields={*provided, "updated_at"})
 
 
 def _concrete_integration_target(info: strawberry.Info, user: Any, resource: str, id: PublicID) -> Any:
@@ -810,26 +786,19 @@ def _concrete_integration_target(info: strawberry.Info, user: Any, resource: str
     return target
 
 
-def _attach_completed_integration(
-    info: strawberry.Info,
-    integration_sqid: str,
-    user: Any,
-    credential: Any,
-    *,
-    using: str,
-) -> None:
+def _attach_completed_integration(info: strawberry.Info, integration_sqid: str, user: Any, credential: Any) -> None:
     """Attach a freshly connected credential to the integration named in OAuth state."""
 
     if not integration_sqid:
         return
     with system_context(reason="integrate.graphql.connect_integration.complete"):
-        integration = Integration.objects.db_manager(using).filter(sqid=integration_sqid).first()
+        integration = Integration.objects.filter(sqid=integration_sqid).first()
     if integration is None or integration.owner_id != user.pk:
         raise OAuthFlowError(INVALID_STATE, 400)
     if credential.user_id != user.pk:
         raise PermissionDenied("Credential does not belong to the current user.")
     exposed = _exposed_model_labels(info)
-    integrity, _authorized = integration.concrete_children(actor=user, exposed_model_labels=exposed, using=using)
+    integrity, _authorized = integration.concrete_children(actor=user, exposed_model_labels=exposed)
     if len(integrity) != 1:
         raise OAuthFlowError(INVALID_STATE, 400)
     child = integrity[0]
@@ -837,7 +806,6 @@ def _attach_completed_integration(
         target = _concrete_integration_target(info, user, child._meta.label, PublicID(public_id_of(child)))
     except (PermissionDenied, ValueError) as error:
         raise OAuthFlowError(INVALID_STATE, 400) from error
-    target._state.db = using
     target.attach_credential(credential)
 
 
@@ -848,17 +816,13 @@ def connect_integration_target(
     *,
     redirect_uri: str,
     next_path: str,
-    using: str | None = None,
 ) -> ConnectIntegrationResult:
     """Attach the user's live credential to an integration-like MTI row or start OAuth."""
-
-    using = get_write_alias(type(integration), using=using, instance=integration)
-    integration._state.db = using
 
     user = _session_user(info)
     if integration.owner_id != user.pk:
         raise PermissionDenied("Integration does not belong to the current user.")
-    credential = Credential.objects.db_manager(using).live_oauth_for_user(user, oauth_client)
+    credential = Credential.objects.live_oauth_for_user(user, oauth_client)
     if credential is not None:
         if credential.user_id != user.pk:
             raise PermissionDenied("Credential does not belong to the current user.")
@@ -881,7 +845,6 @@ def connect_integration_target(
         next_path=flow.coerce_next_path(next_path, request),
         flow=state.StateFlow.CONNECT,
         integration_id=str(integration.sqid),
-        using=using,
     )
     return ConnectIntegrationResult(
         integration=cast("ConnectedIntegrationType", integration),
@@ -919,15 +882,12 @@ class ConnectionMutation:
     ) -> ConnectIntegrationResult:
         """Attach OAuth to one explicit authorized concrete integration child."""
 
-        using = get_write_alias(Integration, using=None)
-
         user = _session_user(info)
         try:
             integration = _concrete_integration_target(info, user, resource, id)
-            integration._state.db = using
             oauth_client = integration.capability_impl.connect_oauth_client(integration.integration_kind_value())
             return connect_integration_target(
-                info, integration, oauth_client, redirect_uri=redirect_uri, next_path=next, using=using
+                info, integration, oauth_client, redirect_uri=redirect_uri, next_path=next
             )
         except OAuthFlowError as error:
             return ConnectIntegrationResult(error=error.public_message, error_code=error.code)
@@ -942,12 +902,10 @@ class ConnectionMutation:
     ) -> OAuthStartPayload:
         """Start an authenticated OAuth account-connect flow."""
 
-        using = get_write_alias(OAuthClient, using=None)
-
         user = _session_user(info)
         request = _request(info)
         try:
-            oauth_client = _enabled_oauth_client_from_id(id, using=using)
+            oauth_client = _enabled_oauth_client_from_id(id)
             if oauth_client.configuration_state != "ready":
                 # Enabled but missing a client_id/endpoints would otherwise build an
                 # authorize URL the provider rejects opaquely; surface it as a typed
@@ -964,7 +922,6 @@ class ConnectionMutation:
                 user_id=str(user.pk),
                 next_path=flow.coerce_next_path(next, request),
                 flow=state.StateFlow.CONNECT,
-                using=using,
             )
         except OAuthFlowError as error:
             return OAuthStartPayload(error=error.public_message, error_code=error.code)
@@ -979,13 +936,10 @@ class ConnectionMutation:
         the operator never types them by hand. Requires a discovery URL on the row.
         """
 
-        using = get_write_alias(OAuthClient, using=None)
-
         with action_target(
             OAuthClient,
             id,
             reason="integrate.graphql.discover_oauth_endpoints",
-            queryset=OAuthClient.objects.using(using),
         ) as oauth_client:
             if not str(getattr(oauth_client, "discovery_url", "") or ""):
                 return ActionResult(ok=False, message="Set a discovery URL first.")
@@ -995,7 +949,7 @@ class ConnectionMutation:
                 return ActionResult(ok=False, message=error.public_message)
             except Exception:  # noqa: BLE001 — provider diagnostics stay outside the action payload.
                 return ActionResult(ok=False, message="Provider discovery failed.")
-            oauth_client.save(using=using)
+            oauth_client.save()
         issuer = discovery.get("issuer") if isinstance(discovery, dict) else None
         return ActionResult(ok=True, message=f"Discovered endpoints for {issuer or 'provider'}.")
 
@@ -1013,11 +967,10 @@ class ConnectionMutation:
         _session_user(info)
         try:
             oauth_client = flow.remembered_oauth_client(request, state)
-            using = get_write_alias(type(oauth_client), instance=oauth_client)
             result = _connect.complete_account_connect(
-                oauth_client, code=code, state_token=state, redirect_uri=redirect_uri, using=using
+                oauth_client, code=code, state_token=state, redirect_uri=redirect_uri
             )
-            _attach_completed_integration(info, result.integration_id, result.user, result.credential, using=using)
+            _attach_completed_integration(info, result.integration_id, result.user, result.credential)
         except OAuthFlowError as error:
             return ConnectAccountResult(error=error.public_message, error_code=error.code)
         return ConnectAccountResult(
@@ -1042,26 +995,21 @@ class ConnectionMutation:
         as a typed error rather than a 500.
         """
 
-        using = get_write_alias(Credential, using=None)
-
         user = _session_user(info)
         try:
             with system_context(reason="integrate.graphql.disconnect_account.lookup"):
                 credential = (
-                    Credential.objects.db_manager(using)
-                    .select_related("oauth_client", "external_account")
+                    Credential.objects.select_related("oauth_client", "external_account")
                     .filter(user=user, external_account__sqid=external_account_sqid)
                     .first()
                 )
             if credential is None:
                 return UnlinkAccountResult(ok=False)
             external_account = credential.external_account
-            with system_context(reason="integrate.graphql.disconnect_account"), transaction.atomic(using=using):
-                Credential.objects.db_manager(using).prepare_disconnect(credential)
-                ExternalAccount.objects.db_manager(using).revoke_owner(external_account, user)
-                deleted, _details = (
-                    Credential.objects.db_manager(using).filter(pk=credential.pk).with_action("delete").delete()
-                )
+            with system_context(reason="integrate.graphql.disconnect_account"), transaction.atomic():
+                Credential.objects.prepare_disconnect(credential)
+                ExternalAccount.objects.revoke_owner(external_account, user)
+                deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
             return UnlinkAccountResult(ok=deleted > 0)
         except ValidationError as error:
             return UnlinkAccountResult(ok=False, error="; ".join(error.messages), error_code=error.code)
@@ -1075,11 +1023,9 @@ class IntegrateExternalAccountMutation:
     def create_external_account(self, data: ExternalAccountInput) -> ExternalAccountType:
         """Create or update one external account via the account manager owner."""
 
-        using = get_write_alias(ExternalAccount, using=None)
-
-        oauth_client = _oauth_client_from_id(data.oauth_client, using=using)
+        oauth_client = _oauth_client_from_id(data.oauth_client)
         owner = _user_principal(data.owner) if data.owner is not None else None
-        account = ExternalAccount.objects.db_manager(using).link(
+        account = ExternalAccount.objects.link(
             oauth_client,
             data.external_id,
             owner=owner,
@@ -1094,21 +1040,19 @@ class IntegrateExternalAccountMutation:
     def delete_external_account(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Revoke the owner grant, then delete the account (owner is a REBAC tuple)."""
 
-        using = get_write_alias(ExternalAccount)
-
         def revoke(account: Any) -> None:
-            owner = ExternalAccount.objects.db_manager(using).owner_for(account)
+            owner = ExternalAccount.objects.owner_for(account)
             if owner is not None:
-                ExternalAccount.objects.db_manager(using).revoke_owner(account, owner)
+                ExternalAccount.objects.revoke_owner(account, owner)
 
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             return delete_by_public_id(
                 ExternalAccount,
                 str(id),
                 reason="integrate.graphql.external_account.delete",
                 confirm=confirm,
                 before_delete=revoke,
-                queryset=write_queryset(ExternalAccount).using(using),
+                queryset=write_queryset(ExternalAccount),
             )
 
 
@@ -1147,13 +1091,10 @@ class IntegrateCredentialMutation:
         reason to reconnect, rather than silently swallowing a dead refresh token.
         """
 
-        using = get_write_alias(Credential, using=None)
-
         with action_target(
             Credential,
             id,
             reason=f"integrate.graphql.credential.refresh:{str(id)}",
-            queryset=Credential.objects.using(using),
         ) as credential:
             try:
                 credential.refresh_now()
@@ -1167,10 +1108,8 @@ class IntegrateCredentialMutation:
     def create_credential(self, info: strawberry.Info, data: CredentialInput) -> CredentialType:
         """Create one provider-less credential, dispatching material by ``kind``."""
 
-        using = get_write_alias(Credential, using=None)
-
-        user = _session_user(info) if data.user is None else _user_from_public_id(data.user, using=using)
-        credential = Credential.objects.db_manager(using).create_local_credential(
+        user = _session_user(info) if data.user is None else _user_from_public_id(data.user)
+        credential = Credential.objects.create_local_credential(
             user, kind=data.kind, name=data.name, material=_credential_material(data)
         )
         return cast(CredentialType, credential)
@@ -1179,19 +1118,17 @@ class IntegrateCredentialMutation:
     def delete_credential(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Delete the credential, then best-effort revoke remotely after commit."""
 
-        using = get_write_alias(Credential)
-
         def prepare_delete(credential: Any) -> None:
-            Credential.objects.db_manager(using).prepare_disconnect(credential)
+            Credential.objects.prepare_disconnect(credential)
 
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             return delete_by_public_id(
                 Credential,
                 str(id),
                 reason="integrate.graphql.credential.delete",
                 confirm=confirm,
                 before_delete=prepare_delete,
-                queryset=write_queryset(Credential).using(using),
+                queryset=write_queryset(Credential),
             )
 
 
@@ -1609,13 +1546,12 @@ class SyncRecordActionMutation:
     ) -> ActionResult:
         """Dispatch resolution through the discrepancy manager after row authorization."""
 
-        using = get_write_alias(SyncDiscrepancy)
-        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write", using=using)
-        manager = SyncDiscrepancy.objects.db_manager(using)
+        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write")
+        manager = SyncDiscrepancy.objects
         if keep is None:
-            manager.resolve(discrepancy, using=using)
+            manager.resolve(discrepancy)
         else:
-            manager.resolve_conflict(discrepancy, keep=keep, using=using)
+            manager.resolve_conflict(discrepancy, keep=keep)
         return ActionResult(ok=True, message=_("Discrepancy resolved."))
 
     @strawberry.mutation(name="retrySyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -1623,9 +1559,8 @@ class SyncRecordActionMutation:
     def retry_sync_discrepancy(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Make quarantine due now through its retained-history owner."""
 
-        using = get_write_alias(SyncDiscrepancy)
-        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write", using=using)
-        SyncDiscrepancy.objects.db_manager(using).retry(discrepancy, using=using)
+        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write")
+        SyncDiscrepancy.objects.retry(discrepancy)
         return ActionResult(ok=True, message=_("Discrepancy retry requested."))
 
     @strawberry.mutation(name="resyncSyncStream", permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -1633,9 +1568,8 @@ class SyncRecordActionMutation:
     def resync_sync_stream(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Request the driver-owned baseline transition without running a cycle."""
 
-        using = get_write_alias(SyncStream)
-        stream = authorized_action_target(info, SyncStream, id, "write", using=using)
-        SyncStream.objects.db_manager(using).request_resync(stream, using=using)
+        stream = authorized_action_target(info, SyncStream, id, "write")
+        SyncStream.objects.request_resync(stream)
         return ActionResult(ok=True, message=_("Stream resync requested."))
 
 
@@ -1727,16 +1661,12 @@ class IntegrationCredentialMutation:
     ) -> ConnectedIntegrationType:
         """Attach an owned credential without creating a neutral parent row."""
 
-        using = get_write_alias(Integration, using=None)
-
         user = _session_user(info)
         target = _concrete_integration_target(info, user, resource, id)
-        target._state.db = using
         owned_credential = resolve_action_target(
             Credential,
             credential,
             reason="integrate.graphql.attach_integration_credential.credential",
-            queryset=Credential.objects.using(using),
         )
         if owned_credential.user_id != user.pk:
             raise PermissionDenied("Credential does not belong to the current user.")
@@ -1754,13 +1684,10 @@ class IntegrationActionMutation:
     def mark_integration_connected(self, id: PublicID) -> ActionResult:
         """Move an integration to CONNECTED through its guarded transition."""
 
-        using = get_write_alias(Integration, using=None)
-
         with action_target(
             Integration,
             id,
             reason="integrate.graphql.mark_integration_connected",
-            queryset=Integration.objects.using(using),
         ) as integration:
             integration.connect()
         return ActionResult(ok=True, message="Connected integration.")
@@ -1769,11 +1696,7 @@ class IntegrationActionMutation:
     def pause_integration(self, id: PublicID) -> ActionResult:
         """Move an integration to PAUSED through its guarded transition."""
 
-        using = get_write_alias(Integration, using=None)
-
-        with action_target(
-            Integration, id, reason="integrate.graphql.pause_integration", queryset=Integration.objects.using(using)
-        ) as integration:
+        with action_target(Integration, id, reason="integrate.graphql.pause_integration") as integration:
             integration.pause()
         return ActionResult(ok=True, message="Paused integration.")
 
@@ -1781,13 +1704,10 @@ class IntegrationActionMutation:
     def mark_integration_disconnected(self, id: PublicID) -> ActionResult:
         """Move an integration to DISCONNECTED through its guarded transition."""
 
-        using = get_write_alias(Integration, using=None)
-
         with action_target(
             Integration,
             id,
             reason="integrate.graphql.mark_integration_disconnected",
-            queryset=Integration.objects.using(using),
         ) as integration:
             integration.disconnect()
         return ActionResult(ok=True, message="Disconnected integration.")
@@ -1796,16 +1716,12 @@ class IntegrationActionMutation:
     def sync_integration(self, id: PublicID) -> ActionResult:
         """Queue every bridge of one integration for sync now."""
 
-        using = get_write_alias(Integration, using=None)
-
         queued = 0
-        with action_target(
-            Integration, id, reason="integrate.graphql.sync_integration", queryset=Integration.objects.using(using)
-        ) as integration:
+        with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
             now = timezone.now()
             for model in models_with(base=Bridge):
-                for bridge in model._default_manager.db_manager(using).filter(pk=integration.pk).order_by("pk"):
-                    queue_bridge_sync(bridge, now=now, using=using)
+                for bridge in model._default_manager.filter(pk=integration.pk).order_by("pk"):
+                    queue_bridge_sync(bridge, now=now)
                     queued += 1
         if queued == 0:
             return ActionResult(ok=True, message="No bridges to sync.")
@@ -1822,13 +1738,9 @@ class IntegrationActionMutation:
         failure is logged here and projected to a bounded message.
         """
 
-        using = get_write_alias(Integration, using=None)
-
-        with action_target(
-            Integration, id, reason="integrate.graphql.test_connection", queryset=Integration.objects.using(using)
-        ) as integration:
+        with action_target(Integration, id, reason="integrate.graphql.test_connection") as integration:
             try:
-                message = integration.concrete_capability(using=using).test_connection()
+                message = integration.concrete_capability().test_connection()
             except IntegrationError as error:
                 return ActionResult(ok=False, message=error.public_message)
             except Exception:  # noqa: BLE001 — vendor diagnostics stay in the log, outside the action payload.
@@ -1845,13 +1757,10 @@ class WebhookActionMutation:
     def test_webhook_delivery(self, id: PublicID) -> ActionResult:
         """Send a test event to one subscription and report the delivery outcome."""
 
-        using = get_write_alias(WebhookSubscription, using=None)
-
         with action_target(
             WebhookSubscription,
             id,
             reason="integrate.graphql.test_webhook_delivery",
-            queryset=WebhookSubscription.objects.using(using),
         ) as subscription:
             ok, message = subscription.deliver_test()
         return ActionResult(ok=ok, message=message)
@@ -1860,13 +1769,10 @@ class WebhookActionMutation:
     def rotate_webhook_secret(self, id: PublicID) -> RotatedSecret:
         """Roll one subscription's signing secret and return the new value once."""
 
-        using = get_write_alias(WebhookSubscription, using=None)
-
         with action_target(
             WebhookSubscription,
             id,
             reason="integrate.graphql.rotate_webhook_secret",
-            queryset=WebhookSubscription.objects.using(using),
         ) as subscription:
             secret = subscription.rotate_secret()
         return RotatedSecret(ok=True, secret=secret)

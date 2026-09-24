@@ -15,7 +15,6 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rebac import system_context
 
-from angee.base.db import get_write_alias
 from angee.messaging.ingress import (
     AnonymousIngressPolicy,
     AnonymousIngressRateLimit,
@@ -70,8 +69,7 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
         return JsonResponse({"submission_id": submission_id}, status=202)
 
     channel_model = apps.get_model("messaging", "Channel")
-    using = get_write_alias(channel_model)
-    channel = _published_webform(slug, using=using)
+    channel = _published_webform(slug)
     if checked.body_size > int(channel.max_body_bytes):
         return _ingress_error(
             AnonymousIngressTooLarge(f"Request body exceeds this form's {channel.max_body_bytes}-byte limit.")
@@ -97,10 +95,9 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
 
     channel_model = apps.get_model("messaging", "Channel")
     message_model = apps.get_model("messaging", "Message")
-    with system_context(reason=f"public form {slug}"), transaction.atomic(using=using):
+    with system_context(reason=f"public form {slug}"), transaction.atomic():
         locked = (
-            channel_model.objects.db_manager(using)
-            .select_for_update()
+            channel_model.objects.select_for_update()
             .filter(
                 pk=channel.pk,
                 slug=slug,
@@ -121,7 +118,7 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
                 {"error": "form_changed", "message": "The form changed; reload and submit again."},
                 status=409,
             )
-        message_model.objects.db_manager(using).ingest(
+        message_model.objects.ingest(
             [parsed],
             channel=locked,
             quote_edges=False,
@@ -129,12 +126,11 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
     return JsonResponse({"submission_id": submission_id}, status=202)
 
 
-def _published_webform(slug: str, *, using: str | None = None) -> Any:
+def _published_webform(slug: str) -> Any:
     channel_model = apps.get_model("messaging", "Channel")
     with system_context(reason=f"public form {slug}.resolve"):
         channel = (
-            channel_model.objects.db_manager(using)
-            .filter(
+            channel_model.objects.filter(
                 slug=slug,
                 is_published=True,
                 backend_class="webform",

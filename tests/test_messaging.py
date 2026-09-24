@@ -2335,12 +2335,12 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
 ) -> None:
     """One post-commit pass deduplicates unresolved handles across the ingest batch."""
 
-    callbacks: list[tuple[Any, str]] = []
+    callbacks: list[Any] = []
     suggested: list[Any] = []
     monkeypatch.setattr(
         messaging_managers.transaction,
         "on_commit",
-        lambda callback, *, using: callbacks.append((callback, using)),
+        lambda callback: callbacks.append(callback),
     )
     monkeypatch.setattr(
         type(PartyHandle.objects),
@@ -2365,8 +2365,7 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
     assert len(landed) == 2
     assert suggested == []
     assert len(callbacks) == 1
-    callback, using = callbacks[0]
-    assert using == channel._state.db
+    callback = callbacks[0]
     callback()
     assert suggested == [Handle._base_manager.get(value="shared@example.com").pk]
 

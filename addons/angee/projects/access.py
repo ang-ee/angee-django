@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from rebac import (
     ObjectRef,
@@ -21,8 +21,7 @@ from rebac import (
 from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter
 
-from angee.base.db import get_write_alias, related_on
-from angee.base.permissions import effective_rebac_definition, require_authorization_database
+from angee.base.permissions import effective_rebac_definition
 from angee.base.refs import CanonicalRecordTarget, canonical_record_model, canonical_record_target
 
 PROJECT_RELATION = "project"
@@ -53,21 +52,18 @@ def _target_binding_permission(model: type[Any]) -> str:
     return "write"
 
 
-def bind(*, target: Any, project: Any, using: str | None = None) -> Any:
+def bind(*, target: Any, project: Any) -> Any:
     """Idempotently persist one canonical project-container binding."""
 
     binding_model = apps.get_model("projects", "ProjectBinding")
-    using = get_write_alias(binding_model, using=using, instance=project)
-    require_authorization_database(using, operation="Project binding", error_class=ImproperlyConfigured)
-    project._state.db = target._state.db = using
     if project.pk is None or target.pk is None:
         raise ValidationError("A project binding requires saved project and target rows.")
     require_binding_access(project=project, target=target)
     binding_model.validate_target(target)
-    canonical = canonical_record_target(target, using=using)
-    with transaction.atomic(using=using):
+    canonical = canonical_record_target(target)
+    with transaction.atomic():
         with system_context(reason="projects.binding.bind"):
-            binding, _ = binding_model._base_manager.db_manager(using).get_or_create(
+            binding, _ = binding_model._base_manager.get_or_create(
                 project=project,
                 content_type=canonical.content_type,
                 object_id=canonical.object_id,
@@ -75,19 +71,16 @@ def bind(*, target: Any, project: Any, using: str | None = None) -> Any:
     return binding
 
 
-def unbind(*, target: Any, project: Any, using: str | None = None) -> None:
+def unbind(*, target: Any, project: Any) -> None:
     """Remove one explicit binding while preserving every other evidence row."""
 
     binding_model = apps.get_model("projects", "ProjectBinding")
-    using = get_write_alias(binding_model, using=using, instance=project)
-    require_authorization_database(using, operation="Project unbinding", error_class=ImproperlyConfigured)
-    project._state.db = target._state.db = using
     require_binding_access(project=project, target=target)
     binding_model.validate_target(target)
-    canonical = canonical_record_target(target, using=using)
-    with transaction.atomic(using=using):
+    canonical = canonical_record_target(target)
+    with transaction.atomic():
         with system_context(reason="projects.binding.unbind"):
-            binding_model._base_manager.db_manager(using).filter(
+            binding_model._base_manager.filter(
                 project=project,
                 content_type=canonical.content_type,
                 object_id=canonical.object_id,
@@ -99,21 +92,17 @@ def reconcile_on_commit(
     project_pk: Any,
     project_ref: Any,
     target: CanonicalRecordTarget | None,
-    using: str,
 ) -> None:
     """Reconcile one project-target tuple from committed binding evidence."""
 
     if target is None:
         return
-    require_authorization_database(using, operation="Project access reconciliation", error_class=ImproperlyConfigured)
     transaction.on_commit(
         lambda: _reconcile(
             project_pk=project_pk,
             project_ref=project_ref,
             target=target,
-            using=using,
         ),
-        using=using,
     )
 
 
@@ -122,20 +111,19 @@ def _reconcile(
     project_pk: Any,
     project_ref: Any,
     target: CanonicalRecordTarget,
-    using: str,
 ) -> None:
     """Write or remove the tuple after checking every projects-owned evidence row."""
 
     with system_context(reason="projects.access.reconcile"):
         project_model = apps.get_model("projects", "Project")
         binding_model = apps.get_model("projects", "ProjectBinding")
-        project_exists = project_model._base_manager.using(using).filter(pk=project_pk).exists()
+        project_exists = project_model._base_manager.filter(pk=project_pk).exists()
         direct_folder = (
             target.content_type.app_label == "storage"
             and target.content_type.model == "folder"
-            and project_model._base_manager.using(using).filter(pk=project_pk, folder_id=target.object_id).exists()
+            and project_model._base_manager.filter(pk=project_pk, folder_id=target.object_id).exists()
         )
-        explicit_binding = binding_model._base_manager.using(using).filter(
+        explicit_binding = binding_model._base_manager.filter(
             project_id=project_pk,
             content_type_id=target.content_type.pk,
             object_id=target.object_id,
@@ -147,7 +135,7 @@ def _reconcile(
             delete_relationship(relationship)
 
 
-def resync_project_access(*, using: str | None = None) -> int:
+def resync_project_access() -> int:
     """Backfill every committed Project.folder and ProjectBinding tuple.
 
     Run after ``rebac sync`` has loaded the projects schema revision that defines
@@ -156,18 +144,14 @@ def resync_project_access(*, using: str | None = None) -> int:
     """
 
     project_model = apps.get_model("projects", "Project")
-    using = get_write_alias(project_model, using=using)
-    require_authorization_database(using, operation="Project access resync", error_class=ImproperlyConfigured)
     binding_model = apps.get_model("projects", "ProjectBinding")
     relationships: dict[str, RelationshipTuple] = {}
-    with system_context(reason="projects.access.resync"), transaction.atomic(using=using):
-        for project in project_model._base_manager.db_manager(using).filter(folder__isnull=False).order_by("pk"):
-            folder = related_on(project, "folder", using=using)
-            relationship = _relationship(to_object_ref(project), canonical_record_target(folder, using=using))
+    with system_context(reason="projects.access.resync"), transaction.atomic():
+        for project in project_model._base_manager.filter(folder__isnull=False).order_by("pk"):
+            folder = project.folder
+            relationship = _relationship(to_object_ref(project), canonical_record_target(folder))
             relationships[str(relationship)] = relationship
-        for binding in (
-            binding_model._base_manager.db_manager(using).select_related("project", "content_type").order_by("pk")
-        ):
+        for binding in binding_model._base_manager.select_related("project", "content_type").order_by("pk"):
             relationship = _relationship(
                 to_object_ref(binding.project),
                 CanonicalRecordTarget(binding.content_type, binding.object_id),

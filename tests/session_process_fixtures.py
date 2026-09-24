@@ -12,7 +12,7 @@ from types import ModuleType
 from typing import Any
 
 
-def fake_session_child(control: Connection, mode: str, options: dict[str, Any], using: str) -> None:
+def fake_session_child(control: Connection, mode: str, options: dict[str, Any]) -> None:
     """Run a small process with observable completion, crash, and stop behavior."""
 
     ready = Path(options["ready"])
@@ -24,7 +24,7 @@ def fake_session_child(control: Connection, mode: str, options: dict[str, Any], 
     if mode == "empty":
         return
     if mode == "delayed_exit":
-        control.send({"ok": True, "pid": os.getpid(), "using": using})
+        control.send({"ok": True, "pid": os.getpid()})
         time.sleep(0.3)
         Path(options["completed"]).write_text("native cleanup completed")
         return
@@ -38,10 +38,10 @@ def fake_session_child(control: Connection, mode: str, options: dict[str, Any], 
         next_report.write_text(f"{os.getpid()}:{ticks}")
         next_report.replace(ready)
     assert control.recv() == "stop"
-    control.send({"ok": True, "pid": os.getpid(), "ticks": ticks, "using": using})
+    control.send({"ok": True, "pid": os.getpid(), "ticks": ticks})
 
 
-def isolated_session_child(control: Connection, mode: str, options: dict[str, Any], using: str) -> None:
+def isolated_session_child(control: Connection, mode: str, options: dict[str, Any]) -> None:
     """Exercise the production child bootstrap with an isolated fake session job."""
 
     import django
@@ -67,7 +67,6 @@ def isolated_session_child(control: Connection, mode: str, options: dict[str, An
             assert kwargs["stop_event"].wait(3.0), "The parent stop never reached the session job."
         return {
             "ok": True,
-            "using": kwargs["using"],
             "pid": os.getpid(),
             "in_child": kwargs["in_child"],
             "has_shutdown": kwargs["on_shutdown"] == kwargs["stop_event"].set,
@@ -77,4 +76,4 @@ def isolated_session_child(control: Connection, mode: str, options: dict[str, An
 
     runner.run_bridge_session_job = run_job
     sys.modules[runner.__name__] = runner
-    session_process.run_session_child(control, mode, options, using=using)
+    session_process.run_session_child(control, mode, options)

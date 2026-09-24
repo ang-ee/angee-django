@@ -19,7 +19,6 @@ from django.contrib.auth.base_user import AbstractBaseUser
 from django.db import models, transaction
 from rebac import system_context
 
-from angee.base.db import get_write_alias
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -49,7 +48,6 @@ def enabled_oauth_client_from_hint(
     owner_label: str,
     reason: str,
     vendor_slug: str = "",
-    using: str | None = None,
 ) -> Any:
     """Resolve an enabled OAuth client from a backend-declared client hint."""
 
@@ -63,7 +61,7 @@ def enabled_oauth_client_from_hint(
     slug = raw_hint.format(vendor=vendor_slug)
     OAuthClient = cast(Any, apps.get_model("integrate", "OAuthClient"))
     with system_context(reason=reason):
-        oauth_client = OAuthClient.objects.db_manager(using).enabled_for_slug(slug)
+        oauth_client = OAuthClient.objects.enabled_for_slug(slug)
     if oauth_client is None:
         raise OAuthFlowError(
             "oauth_client_not_connectable",
@@ -79,7 +77,6 @@ def complete_account_connect(
     code: str,
     state_token: str,
     redirect_uri: str,
-    using: str | None = None,
 ) -> AccountConnectCompletion:
     """Complete an authenticated OAuth account-connect redirect.
 
@@ -88,14 +85,13 @@ def complete_account_connect(
     under ``(user, provider)``.
     """
 
-    using = get_write_alias(type(oauth_client), using=using, instance=oauth_client)
     record = flow.consume_validated_state(
         oauth_client,
         state_token,
         redirect_uri,
         expected_flow=StateFlow.CONNECT,
     )
-    user = _state_user(record, using=using)
+    user = _state_user(record)
     protocol = OAuthClientProtocol(oauth_client)
     tokens = protocol.exchange_code(
         code=code,
@@ -125,7 +121,6 @@ def complete_account_connect(
         next_path=record.next_path or "/",
         integration_id=record.integration_id,
         reason="integrate.oauth.connect",
-        using=using,
     )
 
 
@@ -139,21 +134,19 @@ def complete_external_account_link(
     next_path: str = "/",
     integration_id: str = "",
     reason: str = "integrate.oauth.connect",
-    using: str | None = None,
 ) -> AccountConnectCompletion:
     """Link an external account to ``user`` and store its OAuth credential."""
 
-    using = get_write_alias(type(oauth_client), using=using, instance=oauth_client)
     email = oauth_client.email_from_claims(claims) or ""
     Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
     Credential = cast(Any, apps.get_model("integrate", "Credential"))
-    with system_context(reason=reason), transaction.atomic(using=using):
-        account = Account.objects.db_manager(using).filter(oauth_client=oauth_client, external_id=external_id).first()
+    with system_context(reason=reason), transaction.atomic():
+        account = Account.objects.filter(oauth_client=oauth_client, external_id=external_id).first()
         if account is not None:
-            owner = Account.objects.db_manager(using).owner_for(account)
+            owner = Account.objects.owner_for(account)
             if owner is not None and owner.pk != user.pk:
                 raise OAuthFlowError("account_already_linked", 409)
-        account = Account.objects.db_manager(using).link(
+        account = Account.objects.link(
             oauth_client,
             external_id,
             owner=user,
@@ -162,7 +155,7 @@ def complete_external_account_link(
             display_name=oauth_client.display_name_from_claims(claims, email),
             avatar_url=oauth_client.avatar_url_from_claims(claims),
         )
-        credential = Credential.objects.db_manager(using).upsert_for_user(
+        credential = Credential.objects.upsert_for_user(
             user,
             oauth_client,
             CredentialKind.OAUTH,
@@ -170,7 +163,7 @@ def complete_external_account_link(
             external_account=account,
         )
         account.credential = credential
-        account.save(using=using, update_fields=["credential", "updated_at"])
+        account.save(update_fields=["credential", "updated_at"])
     return AccountConnectCompletion(
         account=cast(models.Model, account),
         credential=cast(models.Model, credential),
@@ -181,7 +174,7 @@ def complete_external_account_link(
     )
 
 
-def _state_user(record: StateRecord, *, using: str) -> AbstractBaseUser:
+def _state_user(record: StateRecord) -> AbstractBaseUser:
     """Return the user captured when the authenticated connect flow started."""
 
     if not record.user_id:
@@ -189,7 +182,7 @@ def _state_user(record: StateRecord, *, using: str) -> AbstractBaseUser:
     user_model = get_user_model()
     with system_context(reason="integrate.oauth.connect.user"):
         try:
-            user = cast(Any, user_model.objects.db_manager(using)).get(pk=record.user_id)
+            user = cast(Any, user_model.objects).get(pk=record.user_id)
         except user_model.DoesNotExist as exc:
             raise OAuthFlowError(INVALID_STATE, 400) from exc
     return cast(AbstractBaseUser, user)

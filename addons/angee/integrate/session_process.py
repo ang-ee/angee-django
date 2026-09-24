@@ -37,10 +37,9 @@ class SessionProcessError(RuntimeError):
 class BridgeSessionProcess:
     """Host one session in a spawned interpreter and return only after reaping it."""
 
-    def __init__(self, model_label: str, pk: Any, *, stop_event: threading.Event, using: str | None = None) -> None:
+    def __init__(self, model_label: str, pk: Any, *, stop_event: threading.Event) -> None:
         self.model_label = model_label
         self.pk = pk
-        self.using = using
         self.stop_event = stop_event
 
     def run(self) -> dict[str, Any]:
@@ -55,7 +54,6 @@ class BridgeSessionProcess:
         process = context.Process(
             target=run_session_child,
             args=(child, self.model_label, self.pk),
-            kwargs={"using": self.using},
             name=f"bridge-{self.model_label}-{self.pk}",
         )
         result: dict[str, Any] | None = None
@@ -119,7 +117,7 @@ def exit_stalled_session() -> NoReturn:
     os._exit(70)
 
 
-def run_session_child(control: Connection, model_label: str, pk: Any, *, using: str | None = None) -> NoReturn:
+def run_session_child(control: Connection, model_label: str, pk: Any) -> NoReturn:
     """Bootstrap Django after spawn and retain supervision during native calls."""
 
     stop_event = threading.Event()
@@ -152,7 +150,6 @@ def run_session_child(control: Connection, model_label: str, pk: Any, *, using: 
             model_label,
             pk,
             stop_event=stop_event,
-            using=using,
             in_child=True,
             on_shutdown=stop_event.set,
             on_stalled_shutdown=exit_stalled_session,

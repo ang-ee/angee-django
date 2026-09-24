@@ -150,9 +150,6 @@ def _backend(
     config: dict[str, Any] | None = None,
 ) -> SlackChannelBackend:
     monkeypatch.setattr(SlackChannelBackend, "client_class", client_class)
-    monkeypatch.setattr(
-        "angee.messaging_integrate_slack.backend.related_on", lambda obj, field_name, **kwargs: getattr(obj, field_name)
-    )
     backend = SlackChannelBackend(bridge or _BridgeStub(config=config))
     backend.test_pages = AdapterPages(backend)
     return backend
@@ -226,7 +223,7 @@ def test_extract_persists_page_resume_before_history_watermark(monkeypatch: pyte
     assert history_cursor["last_ts"] == "104.000001"
 
     resumed_backend = _backend(monkeypatch, bridge=bridge)
-    page = resumed_backend.extract(stream, 200, using="default")
+    page = resumed_backend.extract(stream, 200)
     second = page.records
 
     assert [message.external_id for message in second] == ["C1/100.000001"]
@@ -268,24 +265,23 @@ def test_invalid_history_cursor_retains_watermarks_across_generation(
         "threads": {"99.000001": "101.000001"},
     }
     with system_context(reason="test slack invalid page cursor"):
-        stream = SyncStream.objects.current(channel, "messages", "C1", cursor=cursor, using="default")
+        stream = SyncStream.objects.current(channel, "messages", "C1", cursor=cursor)
         other = SyncStream.objects.current(
             channel,
             "messages",
             "D1",
             cursor={"conversation": {"last_ts": "200.000001"}, "threads": {"199.000001": "201.000001"}},
-            using="default",
         )
         other_cursor = other.cursor
         backend = SlackChannelBackend(channel)
         try:
-            reset = advance_stream(stream, backend, using="default")
+            reset = advance_stream(stream, backend)
             assert reset.stream.generation == stream.generation + 1
             assert reset.stream.cursor == {
                 "conversation": {"last_ts": "100.000001"},
                 "threads": {"99.000001": "101.000001"},
             }
-            resumed = advance_stream(reset.stream, backend, using="default")
+            resumed = advance_stream(reset.stream, backend)
             assert resumed.exhausted is True
             assert resumed.stream.cursor == reset.stream.cursor
         finally:
@@ -321,7 +317,7 @@ def test_media_bounded_history_slice_resumes_on_a_fresh_adapter(monkeypatch: pyt
     assert [message.external_id for message in first] == ["C1/101.000001"]
     assert stream.cursor["conversation"]["history"]["after_ts"] == "101.000001"
     resumed = _backend(monkeypatch, MediaPageClient, bridge=backend.bridge)
-    page = resumed.extract(stream, 200, using="default")
+    page = resumed.extract(stream, 200)
     assert [message.external_id for message in page.records] == ["C1/102.000001"]
 
 
@@ -542,7 +538,7 @@ def test_rate_limit_stops_before_the_sync_deadline(monkeypatch: pytest.MonkeyPat
         if discovery:
             backend.test_pages.next_batch(deadline=monotonic() + 1)
         else:
-            backend.extract(stream, 200, deadline=monotonic() + 1, using="default")
+            backend.extract(stream, 200, deadline=monotonic() + 1)
     assert delays == []
 
 
@@ -558,15 +554,11 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
     edge_batches: list[list[Any]] = []
 
     class IngestManager:
-        def db_manager(self, using: str) -> IngestManager:
-            assert using == "default"
-            return self
-
         def ingest(self, batch: list[ParsedMessage], **kwargs: Any) -> list[ParsedMessage]:
             calls.append(kwargs)
             return batch
 
-        def resolve_ingest_edges(self, messages: list[Any], *, using: str | None = None) -> None:
+        def resolve_ingest_edges(self, messages: list[Any]) -> None:
             edge_batches.append(messages)
 
     message_model = SimpleNamespace(objects=IngestManager())
@@ -575,9 +567,9 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
     def drain(backend_class: type[ChannelBackend]) -> None:
         backend = backend_class(_BridgeStub())
         page = StreamPage(records=[ParsedMessage(external_id="one", platform="test", body=body_part("one"))], cursor={})
-        outcomes = tuple(backend.apply_record(None, record, using="default") for record in page.records)
+        outcomes = tuple(backend.apply_record(None, record) for record in page.records)
         assert len(outcomes) == 1
-        backend.finish_page(None, page, outcomes, using="default")
+        backend.finish_page(None, page, outcomes)
 
     drain(SlackChannelBackend)
     drain(ImapChannelBackend)
@@ -615,7 +607,7 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
     session.landed = 0
     session.pairing = PairingState.PAIRED
 
-    assert session._ingest([(ParsedMessage(external_id="live", platform="test"), None)], using="default") is True
+    assert session._ingest([(ParsedMessage(external_id="live", platform="test"), None)]) is True
     assert calls[0]["quote_edges"] is True
     assert "message_kind" not in calls[0]
 

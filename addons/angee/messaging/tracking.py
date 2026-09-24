@@ -22,8 +22,6 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from django.utils.text import capfirst
 
-from angee.base.db import get_write_alias
-
 
 @dataclass(frozen=True)
 class TrackingChange:
@@ -54,40 +52,30 @@ class FieldTracker:
         self._instance = instance
         self._field_names = field_names
 
-    def snapshot(
-        self, update_fields: Iterable[str] | None = None, *, using: str | None = None
-    ) -> tuple[dict[str, Any], ...]:
+    def snapshot(self, update_fields: Iterable[str] | None = None) -> tuple[dict[str, Any], ...]:
         """Return the pre-save old values for the tracked fields, before ``save``."""
 
         instance = self._instance
-        using = get_write_alias(type(instance), using=using, instance=instance)
         if instance._state.adding or instance.pk is None:
             return ()
         fields = self._fields(update_fields)
         if not fields:
             return ()
-        row = (
-            type(instance)
-            ._base_manager.db_manager(using)
-            .filter(pk=instance.pk)
-            .values(*(field.attname for field in fields))
-            .first()
-        )
+        row = type(instance)._base_manager.filter(pk=instance.pk).values(*(field.attname for field in fields)).first()
         if row is None:
             return ()
         return tuple(
             {
                 "field": field,
                 "old_value": row[field.attname],
-                "old_display": self._display(field, row[field.attname], using=using),
+                "old_display": self._display(field, row[field.attname]),
             }
             for field in fields
         )
 
-    def changes(self, snapshot: tuple[dict[str, Any], ...], *, using: str | None = None) -> tuple[TrackingChange, ...]:
+    def changes(self, snapshot: tuple[dict[str, Any], ...]) -> tuple[TrackingChange, ...]:
         """Return the tracked fields whose value changed since ``snapshot``."""
 
-        using = get_write_alias(type(self._instance), using=using, instance=self._instance)
         changes: list[TrackingChange] = []
         for item in snapshot:
             field = cast(models.Field, item["field"])
@@ -103,15 +91,14 @@ class FieldTracker:
                     old_value=old_value,
                     new_value=new_value,
                     old_display=str(item["old_display"]),
-                    new_display=self._display(field, new_value, using=using),
+                    new_display=self._display(field, new_value),
                 )
             )
         return tuple(changes)
 
-    def create_changes(self, *, using: str | None = None) -> tuple[TrackingChange, ...]:
+    def create_changes(self) -> tuple[TrackingChange, ...]:
         """Return the tracked initial (non-default) values for the record's first save."""
 
-        using = get_write_alias(type(self._instance), using=using, instance=self._instance)
         changes: list[TrackingChange] = []
         for field in self._fields(None):
             new_value = getattr(self._instance, field.attname)
@@ -127,7 +114,7 @@ class FieldTracker:
                     old_value=None,
                     new_value=new_value,
                     old_display="",
-                    new_display=self._display(field, new_value, using=using),
+                    new_display=self._display(field, new_value),
                 )
             )
         return tuple(changes)
@@ -156,7 +143,7 @@ class FieldTracker:
             fields.append(field)
         return tuple(fields)
 
-    def _display(self, field: models.Field[Any, Any], value: Any, *, using: str) -> str:
+    def _display(self, field: models.Field[Any, Any], value: Any) -> str:
         """Return the human display value for one tracked field value."""
 
         if value in (None, ""):
@@ -164,6 +151,6 @@ class FieldTracker:
         if field.choices:
             return str(dict(field.flatchoices).get(value, value))
         if isinstance(field, models.ForeignKey):
-            related = field.remote_field.model._base_manager.db_manager(using).filter(pk=value).first()
+            related = field.remote_field.model._base_manager.filter(pk=value).first()
             return str(related) if related is not None else str(value)
         return str(value)

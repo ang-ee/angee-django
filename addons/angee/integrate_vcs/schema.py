@@ -13,7 +13,6 @@ from rebac import system_context
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.db import get_write_alias
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
@@ -273,9 +272,8 @@ class VcsBridgeCreateMutation:
     def create_vcs_bridge(self, data: VcsBridgeInput) -> VcsBridgeType:
         """Create a VCS child row directly."""
 
-        using = get_write_alias(VcsBridge)
         attrs = {
-            **integration_create_attrs(data, reason="integrate.graphql.vcs_bridge.create", using=using),
+            **integration_create_attrs(data, reason="integrate.graphql.vcs_bridge.create"),
             "backend_class": VcsBridge.impl_key_for(
                 "backend_class",
                 None if data.backend_class is strawberry.UNSET else data.backend_class,
@@ -285,8 +283,8 @@ class VcsBridgeCreateMutation:
         }
         if data.config is not strawberry.UNSET:
             attrs["config"] = data.config
-        with system_context(reason="integrate.graphql.vcs_bridge.create"), transaction.atomic(using=using):
-            bridge = VcsBridge.objects.using(using).create(**attrs)
+        with system_context(reason="integrate.graphql.vcs_bridge.create"), transaction.atomic():
+            bridge = VcsBridge.objects.create(**attrs)
         return cast(VcsBridgeType, bridge)
 
 
@@ -298,15 +296,13 @@ class VcsBridgeUpdateMutation:
     def update_vcs_bridge(self, data: VcsBridgePatch) -> VcsBridgeType:
         """Update a VCS child row, merging supplied config keys."""
 
-        using = get_write_alias(VcsBridge)
         with (
             action_target(
                 VcsBridge,
                 data.id,
-                using=using,
                 reason="integrate.graphql.vcs_bridge.update",
             ) as bridge,
-            transaction.atomic(using=using),
+            transaction.atomic(),
         ):
             if data.backend_class is not strawberry.UNSET:
                 bridge.set_impl_key("backend_class", data.backend_class, default="local")
@@ -360,24 +356,35 @@ class VCSActionMutation:
         return ActionResult(ok=True, message=f"Synced {count} item(s).")
 
 
-
 _CONSOLE_TYPES: list[object] = [
-    VcsBridgeType, *_VCS_BRIDGE_RESOURCE.types,
-    RepositoryType, *_REPOSITORY_RESOURCE.types,
-    SourceType, *_SOURCE_RESOURCE.types,
-    TemplateType, *_TEMPLATE_RESOURCE.types, RepoCandidate,
+    VcsBridgeType,
+    *_VCS_BRIDGE_RESOURCE.types,
+    RepositoryType,
+    *_REPOSITORY_RESOURCE.types,
+    SourceType,
+    *_SOURCE_RESOURCE.types,
+    TemplateType,
+    *_TEMPLATE_RESOURCE.types,
+    RepoCandidate,
 ]
 
 schemas = {
     "console": {
         "query": [
-            _VCS_BRIDGE_RESOURCE.query, _REPOSITORY_RESOURCE.query,
-            _SOURCE_RESOURCE.query, _TEMPLATE_RESOURCE.query, VCSConsoleQuery,
+            _VCS_BRIDGE_RESOURCE.query,
+            _REPOSITORY_RESOURCE.query,
+            _SOURCE_RESOURCE.query,
+            _TEMPLATE_RESOURCE.query,
+            VCSConsoleQuery,
         ],
         "mutation": [
-            _VCS_BRIDGE_RESOURCE.mutation, _REPOSITORY_RESOURCE.mutation,
-            _SOURCE_RESOURCE.mutation, _TEMPLATE_RESOURCE.mutation,
-            VcsBridgeCreateMutation, VcsBridgeUpdateMutation, VCSActionMutation,
+            _VCS_BRIDGE_RESOURCE.mutation,
+            _REPOSITORY_RESOURCE.mutation,
+            _SOURCE_RESOURCE.mutation,
+            _TEMPLATE_RESOURCE.mutation,
+            VcsBridgeCreateMutation,
+            VcsBridgeUpdateMutation,
+            VCSActionMutation,
         ],
         "subscription": [changes(VcsBridge, field="vcsBridgeChanged")],
         "types": _CONSOLE_TYPES,
