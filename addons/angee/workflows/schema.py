@@ -34,6 +34,7 @@ from angee.graphql.data import (
     hasura_model_resource,
     public_pk_decoder,
 )
+from angee.graphql.field_types import blank_state_field
 from angee.graphql.ids import PublicID, instance_for_id, to_public_id
 from angee.graphql.impl import ImplChoice as GraphQLImplChoice
 from angee.graphql.node import AngeeNode
@@ -985,8 +986,8 @@ class StepAttemptType(AngeeNode):
     started_at: auto
     heartbeat_at: auto
     lease_revoked_at: auto
-    lease_revocation_reason: auto
-    result_kind: auto
+    lease_revocation_reason = blank_state_field(StepAttempt._meta.get_field("lease_revocation_reason"))
+    result_kind = blank_state_field(StepAttempt._meta.get_field("result_kind"))
     result_recorded_at: auto
     output_present: auto
     output: JSON | None

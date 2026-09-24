@@ -29,6 +29,7 @@ from angee.base.models import AngeeModel
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
+from angee.graphql.field_types import blank_state_field
 from angee.graphql.revisions import revisions
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
@@ -118,6 +119,19 @@ class WorkflowItem(models.Model):
     class Meta:
         """Django model options for the enum-label test model."""
 
+        app_label = "tests"
+
+
+class BlankWorkflowItem(models.Model):
+    """Blank state with enum metadata supplied by its owning declaration."""
+
+    @strawberry.enum(name="OptionalWorkflowState", description="An explicitly named state.")
+    class State(models.TextChoices):
+        ENABLED = "enabled", "Enabled"
+
+    state = StateField(choices_enum=State, blank=True)
+
+    class Meta:
         app_label = "tests"
 
 
@@ -881,6 +895,30 @@ def test_state_field_accepts_graphql_enum_member_names() -> None:
     assert field.to_python("draft") == WorkflowItem.State.DRAFT
     with pytest.raises(ValidationError):
         field.to_python("MISSING")
+
+
+@pytest.mark.parametrize(("state", "expected"), [("", None), ("enabled", "ENABLED")])
+def test_blank_state_field_preserves_native_enum_across_schema_builds(state: str, expected: str | None) -> None:
+    """Null projection preserves declared enum metadata and remains reusable."""
+
+    @strawberry_django.type(BlankWorkflowItem)
+    class BlankWorkflowItemType:
+        state = blank_state_field(BlankWorkflowItem._meta.get_field("state"))
+
+    @strawberry.type
+    class Query:
+        @strawberry.field(graphql_type=BlankWorkflowItemType)
+        def item(self) -> Any:
+            return BlankWorkflowItem(state=state)
+
+    for _ in range(2):
+        schema = strawberry.Schema(query=Query)
+        enum = schema._schema.get_type("OptionalWorkflowState")
+        assert isinstance(enum, GraphQLEnumType)
+        assert enum.description == "An explicitly named state."
+        result = schema.execute_sync("{ item { state } }")
+        assert result.errors is None
+        assert result.data == {"item": {"state": expected}}
 
 
 def test_revisions_query_surface_exposes_revision_mixin_versions() -> None:

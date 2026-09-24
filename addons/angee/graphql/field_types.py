@@ -21,11 +21,49 @@ from __future__ import annotations
 
 from typing import Any
 
+import strawberry
+import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from strawberry.extensions.field_extension import FieldExtension
+from strawberry.types.base import StrawberryOptional
+from strawberry.types.field import StrawberryField
 from strawberry_django.fields.types import field_type_map
 
-from angee.base.fields import FractionalRankField
+from angee.base.fields import FractionalRankField, StateField
+
+
+class _BlankStateExtension(FieldExtension):
+    """Make the natively inferred enum nullable after its Django type is bound."""
+
+    def apply(self, field: StrawberryField) -> None:
+        if not isinstance(field.type, StrawberryOptional):
+            field.type = StrawberryOptional(field.type)
+
+
+def blank_state_field(model_field: models.Field[Any, Any]) -> Any:
+    """Project a blank-compatible state as its native enum, with absence as null.
+
+    Pass the composed model's field. ``StateField`` preserves an empty string
+    for non-null blank columns; GraphQL enums cannot represent that sentinel.
+    The native field keeps its model name and optimizer hint, while its enum
+    comes from the same choices owner as Strawberry-Django's ``auto`` mapping.
+    """
+
+    if not isinstance(model_field, StateField) or not model_field.blank:
+        raise ImproperlyConfigured("blank_state_field requires a blank-compatible StateField.")
+
+    def resolve(root: models.Model) -> Any:
+        value = model_field.value_from_object(root)
+        return None if value == "" else value
+
+    return strawberry_django.field(
+        resolver=resolve,
+        field_name=model_field.name,
+        graphql_type=strawberry.auto,
+        extensions=[_BlankStateExtension()],
+        only=[model_field.name],
+    )
 
 
 def register_field_type(field_class: type[models.Field[Any, Any]], wire_type: type) -> None:

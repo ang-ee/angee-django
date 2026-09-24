@@ -269,6 +269,10 @@ _FK_RELOAD_EXEMPTIONS = {
         "addons/angee/workflows/engine.py", "_expand_retained_map_step", "objects",
         "apps.get_model('workflows', 'Step')", "plan.target_id",
     ): "MapExpansionPlan is a frozen definition result, not the owner of a target FK.",
+    (
+        "addons/angee/workflows_integrate/settle.py", "settle_bridge_run", "objects",
+        "model", "run.subject_object_id",
+    ): "The subject is a generic relation resolved by content type, not a forward FK supported by related_on.",
 }
 
 

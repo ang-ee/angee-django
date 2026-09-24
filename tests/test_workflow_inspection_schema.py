@@ -10,15 +10,17 @@ from unittest.mock import Mock
 import pytest
 import strawberry
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from graphql import parse, validate
 from rebac import system_context
 from strawberry.schema.config import StrawberryConfig
 
 from angee.workflows import engine
+from angee.workflows.attempts import AttemptResult, AttemptResultKind, LeaseRevocationReason
 from angee.workflows.steps import StepResult
 from tests.conftest import execute_schema, result_data
 from tests.test_workflows import _console_schema, _published_workflow
-from tests.workflows import FixtureStep, Workflow, WorkflowDispatch, advance_once
+from tests.workflows import FixtureStep, StepAttempt, Workflow, WorkflowDispatch, advance_once
 
 User = get_user_model()
 # Schema resolves concrete workflow models registered by the fixture imports above.
@@ -98,7 +100,7 @@ def test_attempt_resource_lists_bounded_summary_and_reads_selected_payload(
           order_by: [{ordinal: asc}]
           limit: 1
         ) {
-          id ordinal status cause result_kind
+          id ordinal status cause result_kind lease_revocation_reason
         }
       }
     """
@@ -111,7 +113,8 @@ def test_attempt_resource_lists_bounded_summary_and_reads_selected_payload(
             "ordinal": attempt.ordinal,
             "status": "claimed",
             "cause": "initial",
-            "result_kind": "",
+            "result_kind": None,
+            "lease_revocation_reason": None,
         }
     ]
 
@@ -134,6 +137,43 @@ def test_attempt_resource_lists_bounded_summary_and_reads_selected_payload(
     assert detail["checkpoint_present"] is False
     assert detail["error"] in (None, "")
     assert detail["stacktrace"] in (None, "")
+
+    StepAttempt.objects.revoke(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        reason=LeaseRevocationReason.SUPERSEDED,
+        at=timezone.now(),
+    )
+    StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(AttemptResultKind.ERROR, error="late result"),
+        recorded_at=timezone.now(),
+    )
+    retained = result_data(execute_schema(schema, """
+      query ReturnedAttempts($stepRun: String!) {
+        workflow_step_attempts(
+          where: {step_run: {_eq: $stepRun}, result_kind: {_eq: "error"}}
+          limit: 1
+        ) { id result_kind lease_revocation_reason }
+      }
+    """, {"stepRun": step_run.sqid}, user=owner))["workflow_step_attempts"]
+    assert retained == [{
+        "id": attempt.sqid,
+        "result_kind": "ERROR",
+        "lease_revocation_reason": "SUPERSEDED",
+    }]
+
+    resource = next(item for item in schema.angee_resources if item.model_label == "workflows.StepAttempt")
+    for name in ("result_kind", "lease_revocation_reason"):
+        display = next(field for field in resource.fields if field.name == name)
+        assert display.kind == "enum"
+        assert display.model_field_name == name
+        assert resource.query.fields[name].nullable is True
+    result_filter = resource.query.fields["result_kind"].filter
+    assert result_filter is not None
+    assert result_filter.scalar == "String"
+    assert ("ERROR", "error") in {(entry.from_value, entry.to_value) for entry in result_filter.value_map}
 
 
 @pytest.mark.django_db(transaction=True)
