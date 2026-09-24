@@ -9,7 +9,6 @@ import pytest
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.identity import public_id_of
 from angee.integrate.sync import BridgeProgressReporter
 from angee.workflows import engine
@@ -46,10 +45,9 @@ class SettlementStream(BoundedStreamStage):
 
     config_model = SettlementStreamConfig
 
-    def run(self, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del self, now
-        using = get_write_alias(type(step_run), using=using, instance=step_run)
-        step = related_on(step_run, "step", using=using)
+        step = step_run.step
         assert step is not None
         if step.config.get("mode") == "failure":
             raise RuntimeError("private provider response must stay in workflow evidence")
@@ -84,7 +82,7 @@ def settlement_bridge(
 
 def _admit(bridge: Channel, *, occurrence: str, mode: str = "success") -> Any:
     with system_context(reason="test Bridge cycle publication"):
-        actor = related_on(bridge, "owner", using="default")
+        actor = bridge.owner
     config: dict[str, Any] = {"mode": mode}
     if mode == "retry_exhaustion":
         config["retry"] = {"max_attempts": 2, "backoff": {"wait": 7}}
@@ -128,8 +126,8 @@ def _finish(run: Any, *, mode: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     else:
         if mode == "retry_exhaustion":
 
-            def fail(self: SettlementStream, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
-                del self, step_run, now, using
+            def fail(self: SettlementStream, step_run: Any, *, now: datetime) -> StepResult:
+                del self, step_run, now
                 raise TransientStepError("private retry response")
 
             monkeypatch.setattr(SettlementStream, "run", fail)
@@ -174,13 +172,13 @@ def test_each_terminal_path_settles_once_and_clears_busy_stage(
     calls: list[str] = []
     native_success, native_error = Channel.record_sync, Channel.record_sync_error
 
-    def record_sync(self: Channel, result: int, *, now: datetime, using: str | None = None) -> None:
+    def record_sync(self: Channel, result: int, *, now: datetime) -> None:
         calls.append("success")
-        native_success(self, result, now=now, using=using)
+        native_success(self, result, now=now)
 
-    def record_sync_error(self: Channel, error: Exception, *, now: datetime, using: str | None = None) -> None:
+    def record_sync_error(self: Channel, error: Exception, *, now: datetime) -> None:
         calls.append("error")
-        native_error(self, error, now=now, using=using)
+        native_error(self, error, now=now)
 
     monkeypatch.setattr(Channel, "record_sync", record_sync)
     monkeypatch.setattr(Channel, "record_sync_error", record_sync_error)
@@ -233,7 +231,7 @@ def test_late_terminal_delivery_cannot_settle_a_newer_bridge_cycle(
     assert bridge.last_sync_status == ""
 
     with system_context(reason="test current cycle owner"):
-        actor = related_on(bridge, "owner", using="default")
+        actor = bridge.owner
     engine.cancel(new_run, actor=actor)
     with system_context(reason="test current cycle cancellation intent"):
         dispatch = WorkflowDispatch.objects.get(run=new_run, kind=WorkflowDispatchKind.RUN_SETTLE)

@@ -140,11 +140,11 @@ def test_map_expansion_uses_declared_bound_input_instead_of_routing_predecessor(
     prepare_input = engine._prepare_attempt_input
     prepared_maps: list[int] = []
 
-    def prepare(run: Any, step_run: Any, *, source_rows: Any, alias: str) -> Any:
+    def prepare(run: Any, step_run: Any, *, source_rows: Any) -> Any:
         if step_run.step.key != "map":
-            return prepare_input(run, step_run, source_rows=source_rows, alias=alias)
-        with django_assert_num_queries(0, using=alias):
-            result = prepare_input(run, step_run, source_rows=source_rows, alias=alias)
+            return prepare_input(run, step_run, source_rows=source_rows)
+        with django_assert_num_queries(0):
+            result = prepare_input(run, step_run, source_rows=source_rows)
         prepared_maps.append(step_run.pk)
         return result
 

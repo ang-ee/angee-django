@@ -24,13 +24,13 @@ class Handle(models.Model):
     class Meta:
         abstract = True
 
-    def _party_links_resolved(self, *, using: str) -> None:
+    def _party_links_resolved(self) -> None:
         """Retain delivery only after the parties owner completes resolution."""
 
         from angee.workflows import engine
 
-        super()._party_links_resolved(using=using)
-        engine.schedule_artifact_delivery(self, using=using)
+        super()._party_links_resolved()
+        engine.schedule_artifact_delivery(self)
 
 
 class PartyHandle(models.Model):
@@ -42,11 +42,11 @@ class PartyHandle(models.Model):
     class Meta:
         abstract = True
 
-    def _resolve_link(self, *, using: str) -> None:
+    def _resolve_link(self) -> None:
         """Resolve derived authority, then retain this exact link transition."""
 
         from angee.workflows import engine
 
-        with transaction.atomic(using=using):
-            super()._resolve_link(using=using)
-            engine.schedule_artifact_delivery(self, using=using)
+        with transaction.atomic():
+            super()._resolve_link()
+            engine.schedule_artifact_delivery(self)

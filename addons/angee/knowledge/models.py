@@ -34,11 +34,9 @@ from rebac import (
 from rebac.backends import backend as rebac_backend
 from rebac.resources import model_resource_type
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
-from angee.base.permissions import require_authorization_database
 from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target
 from angee.knowledge.retrieval import RetrievalBackend
 
@@ -90,21 +88,19 @@ def parse_wikilinks(body: str) -> dict[str, str]:
 class VaultManager(AngeeManager):
     """Factories for actor-owned vault writes."""
 
-    def create_for(self, owner: Any, *, using: str | None = None, **fields: Any) -> Any:
+    def create_for(self, owner: Any, **fields: Any) -> Any:
         """Create a vault owned by ``owner`` after the REBAC create preflight.
 
         ``owner`` must be the acting user — ownership on behalf of someone
         else is refused so the row the gate authorized is the row written.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self)
-        require_authorization_database(using, operation="Knowledge vault creation authorization")
         actor = self.check_create()
         if owner is None or to_subject_ref(owner) != actor:
             raise PermissionDenied(f"Denied: {actor} cannot create a vault owned by {owner!r}")
         vault = self.model(owner=owner, **fields)
-        vault.full_clean_for_write(using=using)
-        vault.sudo(reason="knowledge.vault.create").save(using=using)
+        vault.full_clean()
+        vault.sudo(reason="knowledge.vault.create").save()
         return vault.with_actor(actor)
 
 
@@ -178,7 +174,7 @@ class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
 class PageManager(AngeeManager):
     """Factories for actor-scoped page writes."""
 
-    def create_in(self, vault: Any, *, using: str | None = None, **fields: Any) -> Any:
+    def create_in(self, vault: Any, **fields: Any) -> Any:
         """Create a page in ``vault`` after the REBAC create preflight.
 
         The preflight evaluates the schema's ``create = vault->write`` with
@@ -188,8 +184,6 @@ class PageManager(AngeeManager):
         parent would extend ``parent->read``/``parent->write`` across it.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=vault)
-        require_authorization_database(using, operation="Knowledge page creation authorization")
         parent = fields.get("parent")
         if parent is not None and parent.vault_id != vault.pk:
             raise ValueError("Page parent must belong to the same vault.")
@@ -198,8 +192,8 @@ class PageManager(AngeeManager):
             relationships["parent"] = (parent,)
         actor = self.check_create(relationships)
         page = self.model(vault=vault, **fields)
-        page.full_clean_for_write(using=using)
-        page.sudo(reason="knowledge.page.create").save(using=using)
+        page.full_clean()
+        page.sudo(reason="knowledge.page.create").save()
         return page.with_actor(actor)
 
 
@@ -295,14 +289,11 @@ class RecordBindingManager(AngeeManager):
         page: models.Model | None = None,
         vault: models.Model | None = None,
         role: str = DEFAULT_ROLE,
-        using: str | None = None,
     ) -> models.Model:
         """Return one binding per knowledge owner, canonical target, and role."""
 
         knowledge, owner_field = self._knowledge_owner(page=page, vault=vault)
-        using = get_write_alias(self.model, using=using, bound=self, instance=knowledge)
-        require_authorization_database(using, operation="Knowledge binding authorization")
-        canonical = canonical_record_target(self._saved(target, "target"), using=using)
+        canonical = canonical_record_target(self._saved(target, "target"))
         self._require_access(knowledge, "write", "Write access to the knowledge owner is required.")
         self._require_target_access(
             canonical,
@@ -317,8 +308,8 @@ class RecordBindingManager(AngeeManager):
             "object_id": canonical.object_id,
             "role": role,
         }
-        with system_context(reason="knowledge.record_binding.upsert"), transaction.atomic(using=using):
-            binding, _created = self.model._base_manager.db_manager(using).get_or_create(**lookup)
+        with system_context(reason="knowledge.record_binding.upsert"), transaction.atomic():
+            binding, _created = self.model._base_manager.get_or_create(**lookup)
         return binding.with_actor(actor)
 
     def unbind(
@@ -328,14 +319,11 @@ class RecordBindingManager(AngeeManager):
         page: models.Model | None = None,
         vault: models.Model | None = None,
         role: str = DEFAULT_ROLE,
-        using: str | None = None,
     ) -> int:
         """Delete one role-keyed binding after both owners authorize the write."""
 
         knowledge, owner_field = self._knowledge_owner(page=page, vault=vault)
-        using = get_write_alias(self.model, using=using, bound=self, instance=knowledge)
-        require_authorization_database(using, operation="Knowledge unbinding authorization")
-        canonical = canonical_record_target(self._saved(target, "target"), using=using)
+        canonical = canonical_record_target(self._saved(target, "target"))
         self._require_access(knowledge, "write", "Write access to the knowledge owner is required.")
         self._require_target_access(
             canonical,
@@ -343,7 +331,7 @@ class RecordBindingManager(AngeeManager):
             "Write access to the target is required to unbind knowledge.",
         )
         with system_context(reason="knowledge.record_binding.unbind"):
-            deleted, _by_model = self.model._base_manager.using(using).filter(
+            deleted, _by_model = self.model._base_manager.filter(
                 **{
                     owner_field: knowledge,
                     "content_type": canonical.content_type,
@@ -353,7 +341,7 @@ class RecordBindingManager(AngeeManager):
             ).delete()
         return deleted
 
-    def teardown_for_record(self, record: models.Model, *, using: str | None = None) -> None:
+    def teardown_for_record(self, record: models.Model) -> None:
         """Delete every binding to ``record`` before the target row disappears.
 
         Canonical targets have no reverse ``GenericRelation`` because knowledge can
@@ -365,17 +353,16 @@ class RecordBindingManager(AngeeManager):
 
         if record.pk is None:
             return
-        using = get_write_alias(self.model, using=using, bound=self, instance=record)
-        content_type, object_id = canonical_record_target(record, using=using)
+        content_type, object_id = canonical_record_target(record)
         # object_id is an integer column, so a row with a non-integer primary
         # key (django Session's string key, for one) can never carry bindings —
         # and coercing its pk into the filter raises on every such delete.
         if not isinstance(object_id, int):
             return
-        bindings = self.model._base_manager.using(using).filter(content_type=content_type, object_id=object_id)
+        bindings = self.model._base_manager.filter(content_type=content_type, object_id=object_id)
         if not bindings.exists():
             return
-        with system_context(reason="knowledge.record_binding.teardown"), transaction.atomic(using=using):
+        with system_context(reason="knowledge.record_binding.teardown"), transaction.atomic():
             bindings.delete()
 
     def for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
@@ -578,15 +565,13 @@ class RecordBinding(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         super().clean()
         if (self.page_id is None) == (self.vault_id is None):
             raise ValidationError("Exactly one of page or vault is required.")
-        using = get_write_alias(type(self), using=self._state.db, instance=self)
-        content_type = cast(ContentType, related_on(self, "content_type", using=using))
+        content_type = cast(ContentType, self.content_type)
         _canonical_object_ref(content_type, self.object_id)
 
-    def change_read_resource(self, *, using: str | None = None) -> ObjectRef:
-        """Gate binding changes on the target resolved from the operation database."""
+    def change_read_resource(self) -> ObjectRef:
+        """Gate binding changes on the canonical target's read permission."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        content_type = cast(ContentType, related_on(self, "content_type", using=using))
+        content_type = cast(ContentType, self.content_type)
         return _canonical_object_ref(content_type, self.object_id)
 
     def __str__(self) -> str:
@@ -638,9 +623,7 @@ class AmbiguousMatchError(StructuredEditError):
 class MarkdownPageManager(AngeeManager):
     """Factories for actor-scoped markdown body writes."""
 
-    def write_body(
-        self, page: Any, body: str, *, expected_hash: str | None = None, using: str | None = None
-    ) -> Any:
+    def write_body(self, page: Any, body: str, *, expected_hash: str | None = None) -> Any:
         """Create or update ``page``'s markdown body, last-write-wins.
 
         ``expected_hash`` is an optimistic-concurrency token: when supplied
@@ -648,32 +631,30 @@ class MarkdownPageManager(AngeeManager):
         :class:`StaleBodyError` so the caller can reload and retry.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=page)
-        require_authorization_database(using, operation="Knowledge body write authorization")
         if page.kind not in self.model.page_kinds:
             raise UnsupportedPageKindError(f"Pages of kind {page.kind!r} carry no markdown body.")
-        with transaction.atomic(using=using):
-            markdown = self.using(using).select_for_update().filter(page=page).first()
+        with transaction.atomic():
+            markdown = self.select_for_update().filter(page=page).first()
             if markdown is None:
-                markdown = self._create_body(page, body, using=using)
+                markdown = self._create_body(page, body)
                 if markdown is not None:
                     return markdown
                 # A concurrent first writer won the insert race; lock its row.
-                markdown = self.using(using).select_for_update().get(page=page)
+                markdown = self.select_for_update().get(page=page)
             if expected_hash is not None and expected_hash != markdown.body_hash:
                 raise StaleBodyError("Body hash is stale; reload the page and retry.")
             markdown.body = body
-            markdown.save(using=using, update_fields=("body",))
+            markdown.save(update_fields=("body",))
             return markdown
 
-    def _create_body(self, page: Any, body: str, *, using: str) -> Any:
+    def _create_body(self, page: Any, body: str) -> Any:
         """Insert the first body row, or ``None`` when a concurrent writer won."""
 
         actor = self.check_create({"page": (page,)})
         markdown = self.model(page=page, body=body)
         try:
-            with transaction.atomic(using=using):
-                markdown.sudo(reason="knowledge.markdown_page.create").save(using=using)
+            with transaction.atomic():
+                markdown.sudo(reason="knowledge.markdown_page.create").save()
         except IntegrityError:
             return None
         return markdown.with_actor(actor)
@@ -694,7 +675,6 @@ class MarkdownPageManager(AngeeManager):
         content: str,
         *,
         expected_hash: str | None = None,
-        using: str | None = None,
     ) -> Any:
         """Replace/append/prepend the section at ``heading_path`` and write the body.
 
@@ -702,10 +682,8 @@ class MarkdownPageManager(AngeeManager):
         :class:`SectionNotFoundError`/:class:`AmbiguousMatchError` before any write.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=page)
-        new_body = self.model.spliced_section(self._current_body(page, using=using), heading_path, op, content)
-        page._state.db = using
-        return self.db_manager(using).write_body(page, new_body, expected_hash=expected_hash)
+        new_body = self.model.spliced_section(self._current_body(page), heading_path, op, content)
+        return self.write_body(page, new_body, expected_hash=expected_hash)
 
     def replace_unique(
         self,
@@ -714,7 +692,6 @@ class MarkdownPageManager(AngeeManager):
         new: str,
         *,
         expected_hash: str | None = None,
-        using: str | None = None,
     ) -> Any:
         """Replace the single occurrence of ``old`` with ``new`` and write the body.
 
@@ -722,32 +699,22 @@ class MarkdownPageManager(AngeeManager):
         enforced), so a non-unique or absent target fails fast before any write.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=page)
-        new_body = self.model.spliced_unique(self._current_body(page, using=using), old, new)
-        page._state.db = using
-        return self.db_manager(using).write_body(page, new_body, expected_hash=expected_hash)
+        new_body = self.model.spliced_unique(self._current_body(page), old, new)
+        return self.write_body(page, new_body, expected_hash=expected_hash)
 
-    def append(
-        self, page: Any, content: str, *, expected_hash: str | None = None, using: str | None = None
-    ) -> Any:
+    def append(self, page: Any, content: str, *, expected_hash: str | None = None) -> Any:
         """Append ``content`` to the end of ``page``'s body and write it."""
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=page)
-        new_body = self.model.appended(self._current_body(page, using=using), content)
-        page._state.db = using
-        return self.db_manager(using).write_body(page, new_body, expected_hash=expected_hash)
+        new_body = self.model.appended(self._current_body(page), content)
+        return self.write_body(page, new_body, expected_hash=expected_hash)
 
-    def prepend(
-        self, page: Any, content: str, *, expected_hash: str | None = None, using: str | None = None
-    ) -> Any:
+    def prepend(self, page: Any, content: str, *, expected_hash: str | None = None) -> Any:
         """Prepend ``content`` to the start of ``page``'s body and write it."""
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=page)
-        new_body = self.model.prepended(self._current_body(page, using=using), content)
-        page._state.db = using
-        return self.db_manager(using).write_body(page, new_body, expected_hash=expected_hash)
+        new_body = self.model.prepended(self._current_body(page), content)
+        return self.write_body(page, new_body, expected_hash=expected_hash)
 
-    def _current_body(self, page: Any, *, using: str) -> str:
+    def _current_body(self, page: Any) -> str:
         """Return ``page``'s current body as the actor can read it, or ``""``.
 
         This read is unlocked, so the splice is computed against a body the locking
@@ -757,7 +724,7 @@ class MarkdownPageManager(AngeeManager):
         authority — this read only computes candidate text, never the checked hash.
         """
 
-        markdown = self.using(using).filter(page=page).first()
+        markdown = self.filter(page=page).first()
         return "" if markdown is None else markdown.body
 
 
@@ -1029,7 +996,7 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
 class LinkManager(AngeeManager):
     """Owns the wikilink edge set derived from page bodies."""
 
-    def rebuild_for(self, markdown: Any, *, using: str | None = None) -> None:
+    def rebuild_for(self, markdown: Any) -> None:
         """Replace the source page's outgoing links from its current body.
 
         The indexer is the author: it resolves ``[[title]]`` targets against
@@ -1039,13 +1006,12 @@ class LinkManager(AngeeManager):
         created after the link still resolves on the source page's next save.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=markdown)
-        page = related_on(markdown, "page", using=using)
+        page = markdown.page
         assert page is not None
         wanted = parse_wikilinks(markdown.body)
-        pages = type(page)._base_manager.db_manager(using)
-        links = self.model._base_manager.db_manager(using)
-        with system_context(reason="knowledge.backlinks"), transaction.atomic(using=using):
+        pages = type(page)._base_manager
+        links = self.model._base_manager
+        with system_context(reason="knowledge.backlinks"), transaction.atomic():
             resolved = dict(pages.filter(vault_id=page.vault_id).exclude(pk=page.pk).values_list("title", "pk"))
             links.filter(source_page=page).delete()
             links.bulk_create(

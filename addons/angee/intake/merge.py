@@ -7,10 +7,8 @@ from typing import Any
 from django.apps import apps
 from django.utils import timezone
 
-from angee.base.db import get_write_alias
 
-
-def move_task_needs(source: Any, canonical: Any, *, using: str | None = None) -> int:
+def move_task_needs(source: Any, canonical: Any) -> int:
     """Move source-task Needs to ``canonical`` with source provenance.
 
     Work invokes this inside its row-locked atomic merge. The mover touches only
@@ -18,10 +16,9 @@ def move_task_needs(source: Any, canonical: Any, *, using: str | None = None) ->
     rows, making it an exact no-op.
     """
 
-    using = get_write_alias(type(source), using=using, instance=source)
     need_model = apps.get_model("intake", "Need")
     return int(
-        need_model._base_manager.using(using).filter(task_id=source.pk).update(
+        need_model._base_manager.filter(task_id=source.pk).update(
             task_id=canonical.pk,
             project_id=canonical.project_id,
             targets_project=False,

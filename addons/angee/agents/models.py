@@ -46,12 +46,10 @@ from angee.agents.backends import InferenceBackend
 from angee.agents.deployments import InferenceDeploymentIdentity
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, role_anchor
-from angee.base.permissions import require_authorization_database
 from angee.base.transitions import StateTransitions, save_state, transition
 
 
@@ -331,12 +329,11 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         backend_class = cast(type[InferenceBackend], self.resolve_impl("backend_class"))
         return backend_class(self)
 
-    def refresh_models(self, *, using: str | None = None) -> int:
+    def refresh_models(self) -> int:
         """Re-list this provider's models into :class:`InferenceModel` rows."""
 
         model = apps.get_model("agents", "InferenceModel")
-        using = get_write_alias(type(self), using=using, instance=self)
-        return int(model.objects.db_manager(using).sync_from_provider(self, using=using))
+        return int(model.objects.sync_from_provider(self))
 
     def chat(
         self,
@@ -346,12 +343,9 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
         model_settings: ModelSettings | None = None,
         model_request_parameters: ModelRequestParameters | None = None,
         credential: Any | None = None,
-        using: str | None = None,
     ) -> ModelResponse:
         """Send one request using Pydantic AI's native message/settings contract."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        refresh_deferred(self, using=using)
         backend = self.backend
         return backend.chat(
             model,
@@ -359,29 +353,24 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
             model_settings=model_settings,
             model_request_parameters=model_request_parameters,
             credential=credential,
-            using=using,
         )
 
 
 class InferenceModelManager(AngeeManager):
     """Manager owning the upsert of model rows from a provider's catalogue."""
 
-    def sync_from_provider(self, provider: Any, *, using: str | None = None) -> int:
+    def sync_from_provider(self, provider: Any) -> int:
         """Upsert one row per model the provider advertises (non-destructive).
 
         Missing handles are left in place, not pruned, so an agent's ``model`` FK is
         never broken by a transient provider response; deprecation is a status edit.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=provider)
-        refresh_deferred(provider, using=using)
         backend = provider.backend
-        specs = list(backend.list_models(using=using))
-        with system_context(reason="agents.inference_model.sync"), transaction.atomic(using=using):
+        specs = list(backend.list_models())
+        with system_context(reason="agents.inference_model.sync"), transaction.atomic():
             for spec in specs:
-                self.db_manager(using).update_or_create(
-                    provider_id=provider.pk, name=spec.handle, defaults=spec.upsert_defaults()
-                )
+                self.update_or_create(provider_id=provider.pk, name=spec.handle, defaults=spec.upsert_defaults())
         return len(specs)
 
 
@@ -448,21 +437,17 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
 
         return self.provider.credential
 
-    def bind(self, *, credential: Any | None = None, using: str | None = None) -> AbstractAsyncContextManager[Model]:
+    def bind(self, *, credential: Any | None = None) -> AbstractAsyncContextManager[Model]:
         """Bind this catalogue model's native adapter and own its client lifetime."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        refresh_deferred(self, using=using, fields=("config", "name"))
-        provider: Any = related_on(self, "provider", using=using)
+        provider: Any = self.provider
         backend = provider.backend
-        return backend.model(self.provider_model_name, credential=credential, using=using)
+        return backend.model(self.provider_model_name, credential=credential)
 
-    def deployment_identity(self, *, using: str | None = None) -> InferenceDeploymentIdentity:
+    def deployment_identity(self) -> InferenceDeploymentIdentity:
         """Return the non-secret endpoint binding used by role approval policy."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        refresh_deferred(self, using=using, fields=("config", "name"))
-        provider: Any = related_on(self, "provider", using=using)
+        provider: Any = self.provider
         backend = provider.backend
         return {
             "model": str(self.sqid),
@@ -472,7 +457,7 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
             "endpoint": backend.endpoint,
         }
 
-    def require_approved(self, role: str, *, using: str | None = None) -> None:
+    def require_approved(self, role: str) -> None:
         """Enforce this deployment's exact identity in the configured role allowlist.
 
         An absent policy leaves the catalogue unrestricted. A configured policy
@@ -488,7 +473,7 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         approved = policy.get(role, [])
         if not isinstance(approved, (list, tuple)) or not all(isinstance(item, Mapping) for item in approved):
             raise ValueError(f"The inference {role} deployment approval policy is invalid.")
-        identity = self.deployment_identity(using=using)
+        identity = self.deployment_identity()
         if not any(dict(item) == identity for item in approved):
             raise PermissionDenied(f"The configured {role} model deployment is not approved.")
 
@@ -506,20 +491,12 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         role: str,
         *,
         uses: Collection[InferenceModelUse],
-        using: str | None = None,
     ) -> None:
-        """Require actor read access, role approval and a declared model capability.
+        """Require actor read access, role approval and a declared model capability."""
 
-        REBAC's field-backed checks currently have no database-alias contract,
-        so authorization fails closed before reads on non-default databases.
-        """
-
-        using = get_write_alias(type(self), using=using, instance=self)
-        require_authorization_database(using, operation="Inference model authorization")
-        refresh_deferred(self, using=using, fields=("status", "model_use"))
         if not self.with_actor(actor).has_access("read"):
             raise PermissionDenied("You cannot read the configured inference model.")
-        self.require_approved(role, using=using)
+        self.require_approved(role)
         self.require_capability(uses)
 
     def chat(
@@ -529,20 +506,16 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         model_settings: ModelSettings | None = None,
         model_request_parameters: ModelRequestParameters | None = None,
         credential: Any | None = None,
-        using: str | None = None,
     ) -> ModelResponse:
         """Make one native request using this catalogue model's provider handle."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        refresh_deferred(self, using=using, fields=("config", "name"))
-        provider: Any = related_on(self, "provider", using=using)
+        provider: Any = self.provider
         return provider.chat(
             model=self.provider_model_name,
             messages=messages,
             model_settings=model_settings,
             model_request_parameters=model_request_parameters,
             credential=credential,
-            using=using,
         )
 
     def infer(
@@ -553,7 +526,6 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         images: Sequence[BinaryContent] = (),
         settings: ModelSettings | None = None,
         credential: Any | None = None,
-        using: str | None = None,
     ) -> InferenceResult:
         """Make one request and expose native response, usage and structured output.
 
@@ -563,7 +535,6 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         native function tools; no tool is executed by this one-shot call.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
         request_messages = list(messages)
         image_parts = list(images)
         if not all(isinstance(image, BinaryContent) for image in image_parts):
@@ -575,7 +546,6 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
             model_settings=settings,
             model_request_parameters=inference_request_parameters(output_schema),
             credential=credential,
-            using=using,
         )
         usage = normalize_inference_usage(response.usage)
         try:
@@ -588,20 +558,16 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
 class SkillManager(AngeeManager):
     """Manager owning the reconcile of skill rows from a skill source."""
 
-    def sync_from_source(self, source: Any, *, using: str | None = None) -> int:
+    def sync_from_source(self, source: Any) -> int:
         """Walk the source for ``SKILL.md`` and upsert/prune :class:`Skill` rows."""
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=source)
-        repository: Any = related_on(
-            source, "repository", using=using, select_related=("vcs_bridge__credential__oauth_client",)
-        )
-        source._meta.get_field("repository").set_cached_value(source, repository)
+        repository: Any = source.repository
         vcs_bridge = repository.vcs_bridge
         descriptors = vcs_bridge.discover(source, marker="SKILL.md", parse=parse_skill_meta)
         seen: set[Any] = set()
-        with system_context(reason="agents.skill.sync"), transaction.atomic(using=using):
+        with system_context(reason="agents.skill.sync"), transaction.atomic():
             for descriptor in descriptors:
-                skill, _created = self.db_manager(using).update_or_create(
+                skill, _created = self.update_or_create(
                     source_id=source.pk,
                     path=str(descriptor.get("path", "")),
                     defaults={
@@ -611,9 +577,9 @@ class SkillManager(AngeeManager):
                     },
                 )
                 seen.add(skill.pk)
-            self.db_manager(using).filter(source=source).exclude(pk__in=seen).delete()
+            self.filter(source=source).exclude(pk__in=seen).delete()
             source.last_synced_at = timezone.now()
-            source.save(using=using, update_fields=["last_synced_at", "updated_at"])
+            source.save(update_fields=["last_synced_at", "updated_at"])
         return len(descriptors)
 
 
@@ -845,7 +811,7 @@ class AgentManager(AngeeManager):
 
         return f"agent-{agent.sqid}"
 
-    def sync_service_user(self, agent: Any, *, using: str | None = None) -> Any:
+    def sync_service_user(self, agent: Any) -> Any:
         """Create or update ``agent``'s non-login service user.
 
         The service row is system-owned attribution state, not actor-authored
@@ -855,7 +821,6 @@ class AgentManager(AngeeManager):
 
         if agent.pk is None:
             raise ValueError("Agent must be saved before syncing its service user.")
-        using = get_write_alias(self.model, using=using, bound=self, instance=agent)
         user_model = get_user_model()
         username = self.service_username(agent)
         defaults = {
@@ -864,34 +829,29 @@ class AgentManager(AngeeManager):
             "email": "",
             "kind": "service",
         }
-        with system_context(reason="agents.service_user.sync"), transaction.atomic(using=using):
+        with system_context(reason="agents.service_user.sync"), transaction.atomic():
             if agent.user_id:
-                user: Any = related_on(agent, "user", using=using)
+                user: Any = agent.user
                 changed: set[str] = set()
                 for field, value in {"username": username, **defaults}.items():
                     if getattr(user, field) != value:
                         setattr(user, field, value)
                         changed.add(field)
                 if changed:
-                    user.save(using=using, update_fields=changed)
-                agent._meta.get_field("user").set_cached_value(agent, user)
+                    user.save(update_fields=changed)
                 return user
-            user, _created = user_model._base_manager.db_manager(using).update_or_create(
-                username=username, defaults=defaults
-            )
-            agent.user_id = user.pk
-            agent._meta.get_field("user").set_cached_value(agent, user)
-            type(agent)._base_manager.using(using).filter(pk=agent.pk).update(user_id=user.pk)
+            user, _created = user_model._base_manager.update_or_create(username=username, defaults=defaults)
+            agent.user = user
+            type(agent)._base_manager.filter(pk=agent.pk).update(user_id=user.pk)
             return user
 
-    def deactivate_service_user(self, agent: Any, *, using: str | None = None) -> None:
+    def deactivate_service_user(self, agent: Any) -> None:
         """Deactivate ``agent``'s linked service user, leaving attribution FKs intact."""
 
         if not agent.user_id:
             return
-        using = get_write_alias(self.model, using=using, bound=self, instance=agent)
         user_model = get_user_model()
-        manager = user_model._base_manager.db_manager(using)
+        manager = user_model._base_manager
         with system_context(reason="agents.service_user.deactivate"):
             manager.filter(pk=agent.user_id).update(is_active=False)
 
@@ -1024,43 +984,37 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         the manager performs the system-owned dependent write.
         """
 
-        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
-        kwargs["using"] = using
         creating = self._state.adding
         update_fields = kwargs.get("update_fields")
         should_check_name = creating or update_fields is None or "name" in _update_field_names(update_fields)
         persisted_name = None
         if not creating and should_check_name:
-            persisted_name = (
-                type(self)._base_manager.using(using).filter(pk=self.pk).values_list("name", flat=True).first()
-            )
-        with transaction.atomic(using=using):
+            persisted_name = type(self)._base_manager.filter(pk=self.pk).values_list("name", flat=True).first()
+        with transaction.atomic():
             super().save(*args, **kwargs)
             if creating or (should_check_name and persisted_name != self.name):
-                type(self).objects.db_manager(using).sync_service_user(self, using=using)
+                type(self).objects.sync_service_user(self)
 
-    def principal_subject(self, *, using: str | None = None) -> SubjectRef:
+    def principal_subject(self) -> SubjectRef:
         """Return the service user's REBAC subject for actions this agent performs.
 
         This is distinct from :attr:`owner`: the owner manages the agent definition,
         while the linked non-login user represents the running agent as an actor.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
         if self.user_id is None:
             raise ValueError("Agent has no service user and cannot act.")
-        user: Any = related_on(self, "user", using=using)
+        user: Any = self.user
         return to_subject_ref(user)
 
-    def is_transient_inference_error(self, error: Exception, *, using: str | None = None) -> bool:
+    def is_transient_inference_error(self, error: Exception) -> bool:
         """Classify with the bound inference provider, if this agent has a model."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
         with system_context(reason="agents.agent.inference_error"):
-            model: Any = related_on(self, "model", using=using, required=False)
+            model: Any = self.model
             if model is None:
                 return False
-            provider: Any = related_on(model, "provider", using=using)
+            provider: Any = model.provider
             return bool(provider.backend.is_transient_error(error))
 
     @property
@@ -1131,7 +1085,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         target=AgentLifecycle.PROVISIONING,
         on_success=save_state,
     )
-    def mark_provisioning(self, *, using: str | None = None) -> None:
+    def mark_provisioning(self) -> None:
         """Enter the provision flow: lifecycle provisioning, run state reset to stopped."""
 
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
@@ -1144,7 +1098,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         target=AgentLifecycle.PROVISIONING,
         on_success=save_state,
     )
-    def mark_workspace_provisioned(self, *, workspace: str, using: str | None = None) -> None:
+    def mark_workspace_provisioned(self, *, workspace: str) -> None:
         """Record the workspace as soon as the operator creates it."""
 
         self.workspace = workspace
@@ -1157,7 +1111,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         target=AgentLifecycle.PROVISIONING,
         on_success=save_state,
     )
-    def mark_service_provisioned(self, *, service: str, using: str | None = None) -> None:
+    def mark_service_provisioned(self, *, service: str) -> None:
         """Record the service as soon as the operator creates it."""
 
         self.service = service
@@ -1170,7 +1124,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         target=AgentLifecycle.READY,
         on_success=save_state,
     )
-    def mark_provisioned(self, *, workspace: str, service: str = "", using: str | None = None) -> None:
+    def mark_provisioned(self, *, workspace: str, service: str = "") -> None:
         """Record the operator instance the provision flow rendered for this agent.
 
         The daemon owns the workspace/service lifecycle; the server-side provision
@@ -1191,7 +1145,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         target=AgentLifecycle.DEPROVISIONED,
         on_success=save_state,
     )
-    def mark_deprovisioned(self, *, using: str | None = None) -> None:
+    def mark_deprovisioned(self) -> None:
         """Clear the operator instance after teardown: lifecycle deprovisioned, run state stopped."""
 
         self.workspace = ""
@@ -1212,14 +1166,14 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         target=AgentLifecycle.DEPROVISIONING,
         on_success=save_state,
     )
-    def mark_deprovisioning(self, *, using: str | None = None) -> None:
+    def mark_deprovisioning(self) -> None:
         """Mark the agent as tearing down through the operator teardown flow."""
 
         self.last_error = ""
         self._transition_fields = {"last_error"}
 
     def mark_provision_failed(
-        self, message: str, *, clear_instances: bool = False, clear_service: bool = False, using: str | None = None
+        self, message: str, *, clear_instances: bool = False, clear_service: bool = False
     ) -> None:
         """Record a failed operation: run state ``ERROR`` (the red dot), reason kept.
 
@@ -1235,7 +1189,6 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         not a user-visible lifecycle action.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
         transition_fields = {"runtime_status", "last_error"}
         if clear_instances:
             self.workspace = ""
@@ -1251,10 +1204,9 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             self,
             cast(AgentLifecycle, AgentLifecycle.READY if self.workspace else AgentLifecycle.DRAFT),
             reason="agent provision failure reconciles lifecycle from persisted operator instance names",
-            using=using,
         )
 
-    def provision_workspace_inputs(self, *, using: str | None = None) -> dict[str, str]:
+    def provision_workspace_inputs(self) -> dict[str, str]:
         """Resolve the ``agent-default`` workspace template inputs from this agent.
 
         The structured fields (name, instructions, MCP servers) are the source of
@@ -1263,8 +1215,6 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         and the daemon take string answers.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
         structured = {
             "agent_name": self.name,
             "instructions": self.instructions,
@@ -1276,7 +1226,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     _SERVICE_ENV_INDENT = "      "
     """Indent for spliced ``env:`` lines — must match the service templates' ``env:`` block."""
 
-    def provision_service_inputs(self, *, using: str | None = None) -> dict[str, str]:
+    def provision_service_inputs(self) -> dict[str, str]:
         """Resolve the structured service-template inputs from this agent.
 
         Carries the runtime model handle plus the runtime-owned auth env block. The
@@ -1287,11 +1237,9 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         (``permission_mode`` etc.) and loses to the structured keys.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
         structured: dict[str, str] = {}
         runtime = self.runtime_backend
-        model: Any = related_on(self, "model", using=using, select_related=("provider",))
+        model: Any = self.model
         if model is not None:
             structured["model"] = runtime.model_handle(model)
         # Advertise auth only when the runtime renders a service and there is a usable secret
@@ -1312,7 +1260,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         # under the service env and ``.mcp.json`` reads via ``${ANGEE_MCP_BEARER_<…>}``.
         mcp_env = {
             self.mcp_bearer_env(server): operator_secret_ref(secret_name)
-            for server, secret_name in self._addressable_mcp_servers(using=using)
+            for server, secret_name in self._addressable_mcp_servers()
             if secret_name
         }
         if mcp_env:
@@ -1337,7 +1285,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         model = getattr(self, "model", None)
         return self.runtime_backend.model_handle(model) if model is not None else ""
 
-    def mcp_config(self, *, using: str | None = None) -> dict[str, Any]:
+    def mcp_config(self) -> dict[str, Any]:
         """Return the ``.mcp.json`` document for this agent's reachable MCP servers.
 
         Each server renders its own entry (:meth:`MCPServer.config_entry`); this supplies
@@ -1347,14 +1295,13 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         rides the container env, never the file or the browser. See :meth:`mcp_secrets`.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
         servers = {
             server.name: server.config_entry(self.mcp_bearer_env(server) if secret_name else None)
-            for server, secret_name in self._addressable_mcp_servers(using=using)
+            for server, secret_name in self._addressable_mcp_servers()
         }
         return {"mcpServers": servers}
 
-    def _addressable_mcp_servers(self, *, using: str) -> Iterator[tuple[MCPServer, str]]:
+    def _addressable_mcp_servers(self) -> Iterator[tuple[MCPServer, str]]:
         """Yield ``(server, secret_name)`` for each addressable MCP server, in row order.
 
         The single owner of "which servers this agent exposes, and the operator secret
@@ -1363,7 +1310,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         drift. ``secret_name`` is ``""`` for an uncredentialed server.
         """
 
-        for server in self.mcp_servers.using(using).select_related("credential"):
+        for server in self.mcp_servers.select_related("credential"):
             if not server.is_addressable:
                 continue
             yield server, (self.mcp_secret_name(server) if server.credential_id else "")
@@ -1391,7 +1338,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         return f"ANGEE_MCP_BEARER_{server.credential.sqid.upper()}"
 
-    def mcp_secrets(self, *, using: str | None = None) -> dict[str, str]:
+    def mcp_secrets(self) -> dict[str, str]:
         """Return ``{secret_name: bearer_value}`` for every credentialed MCP server.
 
         The bearer is whatever this agent presents to the server (:meth:`MCPServer.bearer_for`):
@@ -1401,9 +1348,8 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         resolves in the container; the raw internal-server secret never reaches a container.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
         secrets: dict[str, str] = {}
-        for server, secret_name in self._addressable_mcp_servers(using=using):
+        for server, secret_name in self._addressable_mcp_servers():
             if not secret_name:
                 continue
             server.credential.ensure_fresh()
@@ -1419,7 +1365,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         return f"agent-{self.sqid}-inference"
 
-    def inference_secret(self, *, using: str | None = None) -> str:
+    def inference_secret(self) -> str:
         """Return the inference credential's secret value (API key or OAuth token), or ``""``.
 
         Server-side only — the value is pushed to the operator secret store under
@@ -1428,15 +1374,13 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         frozen into the provisioned service has its full lifetime ahead of it.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
         credential = self.inference_credential_for_runtime()
         if credential is None:
             return ""
         credential.ensure_fresh()
         return str(credential.secret_value())
 
-    def provision_inference_secret(self, *, using: str | None = None) -> str:
+    def provision_inference_secret(self) -> str:
         """Return the runtime-shaped inference secret payload synced to the operator store.
 
         The value the provision flow stores under :meth:`inference_secret_name`, that the
@@ -1450,8 +1394,6 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         is synced (kept in step with :meth:`provision_service_inputs`' auth-env block).
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
         runtime = self.runtime_backend
         if not runtime.renders_service:
             return ""
@@ -1461,7 +1403,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         credential.ensure_fresh()
         return runtime.auth_secret_value(credential)
 
-    def inference_credential_ready(self, *, using: str | None = None) -> bool:
+    def inference_credential_ready(self) -> bool:
         """Whether this agent can be provisioned with working inference auth.
 
         A model-less agent needs no inference credential, so it is always ready. A
@@ -1471,30 +1413,26 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         unworkable pairing is refused here rather than degrading silently at run time.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
         if self.model_id is None:
             return True
         credential = self.inference_credential_for_runtime()
         runtime = self.runtime_backend
         if credential is None:
-            model: Any = related_on(self, "model", using=using, select_related=("provider",))
+            model: Any = self.model
             return not model.provider.backend.requires_credential and not runtime.renders_service
         if not self.inference_secret():
             return False
         return not runtime.renders_service or runtime.supports_credential(credential)
 
-    def inference_model(self, *, using: str | None = None) -> AbstractAsyncContextManager[Model]:
+    def inference_model(self) -> AbstractAsyncContextManager[Model]:
         """Bind the native model using this agent's credential override."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
         if self.model_id is None:
             raise ValueError("An in-process agent requires an inference model.")
-        model: Any = related_on(self, "model", using=using)
-        return model.bind(credential=self.inference_credential_for_runtime(using=using), using=using)
+        model: Any = self.model
+        return model.bind(credential=self.inference_credential_for_runtime())
 
-    def inference_credential_for_runtime(self, *, using: str | None = None) -> Any:
+    def inference_credential_for_runtime(self) -> Any:
         """Return the ``integrate.Credential`` backing this agent's inference, or ``None``.
 
         A per-agent ``inference_credential`` override wins (e.g. a connected Anthropic OAuth
@@ -1503,12 +1441,11 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         than walked here.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
         if self.inference_credential_id is not None:
-            return related_on(self, "inference_credential", using=using, select_related=("oauth_client",))
+            return self.inference_credential
         if self.model_id is None:
             return None
-        model: Any = related_on(self, "model", using=using, select_related=("provider__credential__oauth_client",))
+        model: Any = self.model
         return model.credential
 
 
@@ -1572,7 +1509,7 @@ class AgentSession(SqidMixin, AuditMixin, AngeeModel):
         target=SessionStatus.RUNNING,
         on_success=save_state,
     )
-    def mark_running(self, *, using: str | None = None) -> None:
+    def mark_running(self) -> None:
         """Project active turn execution onto the session."""
 
         self.last_error = ""
@@ -1584,7 +1521,7 @@ class AgentSession(SqidMixin, AuditMixin, AngeeModel):
         target=SessionStatus.IDLE,
         on_success=save_state,
     )
-    def mark_idle(self, *, using: str | None = None) -> None:
+    def mark_idle(self) -> None:
         """Project a parked session awaiting its next user turn."""
 
         self.last_error = ""
@@ -1596,7 +1533,7 @@ class AgentSession(SqidMixin, AuditMixin, AngeeModel):
         target=SessionStatus.AWAITING_APPROVAL,
         on_success=save_state,
     )
-    def mark_awaiting_approval(self, *, using: str | None = None) -> None:
+    def mark_awaiting_approval(self) -> None:
         """Project a suspended tool approval onto the session."""
 
     @transition(
@@ -1605,7 +1542,7 @@ class AgentSession(SqidMixin, AuditMixin, AngeeModel):
         target=SessionStatus.CLOSED,
         on_success=save_state,
     )
-    def close(self, *, using: str | None = None) -> None:
+    def close(self) -> None:
         """Close the conversation so its workflow step can finish."""
 
     @transition(
@@ -1614,7 +1551,7 @@ class AgentSession(SqidMixin, AuditMixin, AngeeModel):
         target=SessionStatus.ERROR,
         on_success=save_state,
     )
-    def mark_error(self, message: str, *, using: str | None = None) -> None:
+    def mark_error(self, message: str) -> None:
         """Project a session-level runtime error."""
 
         self.last_error = message[:2000]
@@ -1672,7 +1609,7 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
         target=TurnStatus.RUNNING,
         on_success=save_state,
     )
-    def mark_running(self, *, using: str | None = None) -> None:
+    def mark_running(self) -> None:
         """Claim or resume this turn for runtime execution."""
 
         self.error = ""
@@ -1684,7 +1621,7 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
         target=TurnStatus.AWAITING_APPROVAL,
         on_success=save_state,
     )
-    def mark_awaiting_approval(self, *, using: str | None = None) -> None:
+    def mark_awaiting_approval(self) -> None:
         """Suspend this turn for deferred tool approval."""
 
     @transition(
@@ -1693,7 +1630,7 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
         target=TurnStatus.COMPLETED,
         on_success=save_state,
     )
-    def mark_completed(self, *, text: str, usage: Mapping[str, int], using: str | None = None) -> None:
+    def mark_completed(self, *, text: str, usage: Mapping[str, int]) -> None:
         """Persist the final response projection for a completed turn."""
 
         self.text = text
@@ -1707,7 +1644,7 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
         target=TurnStatus.FAILED,
         on_success=save_state,
     )
-    def mark_failed(self, message: str, *, using: str | None = None) -> None:
+    def mark_failed(self, message: str) -> None:
         """Persist a terminal failure for this turn."""
 
         self.error = message[:2000]
@@ -1719,20 +1656,19 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
         target=TurnStatus.CANCELED,
         on_success=save_state,
     )
-    def cancel(self, *, using: str | None = None) -> None:
+    def cancel(self) -> None:
         """Cancel this turn without deleting its audit trail."""
 
 
 def _deactivate_agent_service_user(
     sender: type[models.Model],
     instance: models.Model,
-    using: str,
     **kwargs: Any,
 ) -> None:
     """Deactivate an agent service user after every delete path Django supports."""
 
     del sender, kwargs
-    type(instance).objects.deactivate_service_user(instance, using=using)
+    type(instance).objects.deactivate_service_user(instance)
 
 
 def _connect_agent_lifecycle(sender: type[models.Model], **kwargs: Any) -> None:

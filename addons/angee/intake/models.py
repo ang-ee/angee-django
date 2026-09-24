@@ -25,11 +25,9 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import current_actor, system_context
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager
-from angee.base.permissions import require_authorization_database
 from angee.base.scoping import bind_actor
 
 
@@ -73,7 +71,6 @@ class NeedManager(AngeeManager):
         body: str,
         party: models.Model | None = None,
         importance: str = "normal",
-        using: str | None = None,
     ) -> models.Model:
         """Capture one exact manual request onto ``target`` under its write lock.
 
@@ -85,8 +82,6 @@ class NeedManager(AngeeManager):
         provides the single-writer boundary through database-level serialization.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=target)
-        require_authorization_database(using, operation="Intake capture authorization")
         if target.pk is None:
             raise ValidationError({"target": "A saved project or task is required."})
         body = str(body or "").strip()
@@ -104,14 +99,11 @@ class NeedManager(AngeeManager):
         else:
             target_filter["targets_project"] = False
         actor = current_actor()
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             with system_context(reason="intake.need.capture.lookup"):
-                locked_target = (
-                    type(target).objects.db_manager(using).sudo(reason="intake.need.capture.target")
-                    .locked_get(pk=target.pk)
-                )
+                locked_target = type(target).objects.sudo(reason="intake.need.capture.target").locked_get(pk=target.pk)
                 existing = (
-                    self.model._base_manager.using(using).filter(
+                    self.model._base_manager.filter(
                         **target_filter,
                         party_id=None if party is None else party.pk,
                         body=body,
@@ -132,42 +124,37 @@ class NeedManager(AngeeManager):
                 body=body,
                 importance=importance_value,
             )
-            need._state.db = using
-            need.full_clean_for_write(using=using, validate_unique=False, validate_constraints=False)
-            need.sudo(reason="intake.need.capture.create").save(using=using)
+            need.full_clean(validate_unique=False, validate_constraints=False)
+            need.sudo(reason="intake.need.capture.create").save()
             bind_actor(need, verified_actor)
             return need
 
-    def capture_from_message(
-        self, message: models.Model, *, queue: models.Model, using: str | None = None
-    ) -> models.Model:
+    def capture_from_message(self, message: models.Model, *, queue: models.Model) -> models.Model:
         """Capture one message into triage; its clean replay no-op is SELECT-FOR-UPDATE-backed."""
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=message)
         if message.pk is None or queue.pk is None:
             raise ValidationError("A saved message and intake queue are required.")
         message_model = type(message)
-        with system_context(reason="intake.need.capture_message"), transaction.atomic(using=using):
+        with system_context(reason="intake.need.capture_message"), transaction.atomic():
             locked_message = (
-                message_model.objects.db_manager(using).sudo(reason="intake.need.capture_message.message")
+                message_model.objects.sudo(reason="intake.need.capture_message.message")
                 .lock_if_supported()
                 .select_related("sender", "thread__title")
                 .get(pk=message.pk)
             )
             existing = (
-                self.model._base_manager.using(using).select_related("task").filter(source_message_id=locked_message.pk).first()
+                self.model._base_manager.select_related("task").filter(source_message_id=locked_message.pk).first()
             )
             if existing is not None:
                 return existing
 
-            party_id = self._resolved_sender_party_id(locked_message, using=using)
+            party_id = self._resolved_sender_party_id(locked_message)
             title = self._message_title(locked_message)
             task = self._create_triage_task(
                 queue=queue,
                 title=title,
                 note=str(locked_message.preview or ""),
                 created_by_id=locked_message.created_by_id,
-                using=using,
             )
             need = self.model(
                 task=task,
@@ -177,11 +164,10 @@ class NeedManager(AngeeManager):
                 created_by_id=locked_message.created_by_id,
                 updated_by_id=locked_message.updated_by_id,
             )
-            need._state.db = using
-            need.full_clean_for_write(using=using, validate_unique=False, validate_constraints=False)
-            need.sudo(reason="intake.need.capture_message.create").save(using=using)
+            need.full_clean(validate_unique=False, validate_constraints=False)
+            need.sudo(reason="intake.need.capture_message.create").save()
             attachment_model = apps.get_model("messaging", "ThreadAttachment")
-            attachment_model.objects.db_manager(using).bind_source_thread(task, locked_message.thread)
+            attachment_model.objects.bind_source_thread(task, locked_message.thread)
             return need
 
     def _create_triage_task(
@@ -192,12 +178,11 @@ class NeedManager(AngeeManager):
         note: str,
         project: models.Model | None = None,
         created_by_id: Any = None,
-        using: str,
     ) -> models.Model:
         """Create one task in ``queue``'s system triage stage."""
 
         stage_model = apps.get_model("work", "Stage")
-        triage = stage_model._base_manager.using(using).filter(queue_id=queue.pk, category="triage").first()
+        triage = stage_model._base_manager.filter(queue_id=queue.pk, category="triage").first()
         if triage is None:
             raise ValidationError({"queue": "The intake queue has no triage stage."})
         task_model = apps.get_model("projects", "Task")
@@ -212,11 +197,10 @@ class NeedManager(AngeeManager):
             created_by_id=created_by_id,
             updated_by_id=created_by_id,
         )
-        task._state.db = using
         task.allocate_ordering_ranks()
         with task._work_verb_write():
-            task.full_clean_for_write(using=using, validate_unique=False, validate_constraints=False)
-            task.sudo(reason="intake.need.create_triage_task").save(using=using)
+            task.full_clean(validate_unique=False, validate_constraints=False)
+            task.sudo(reason="intake.need.create_triage_task").save()
         return task
 
     @staticmethod
@@ -231,16 +215,16 @@ class NeedManager(AngeeManager):
         return str(title or "Captured message")
 
     @staticmethod
-    def _resolved_sender_party_id(message: models.Model, *, using: str) -> Any | None:
+    def _resolved_sender_party_id(message: models.Model) -> Any | None:
         """Resolve the sender through parties' matching owner and return its party id."""
 
-        sender = related_on(message, "sender", using=using)
+        sender = message.sender
         if sender is None:
             return None
         if sender.party_id is None:
             party_handle_model = apps.get_model("parties", "PartyHandle")
-            party_handle_model.objects.db_manager(using).suggest_for(sender)
-            sender.refresh_from_db(using=using, fields=("party",))
+            party_handle_model.objects.suggest_for(sender)
+            sender.refresh_from_db(fields=("party",))
         return sender.party_id
 
 
@@ -372,19 +356,16 @@ class Need(AuditMixin, AngeeDataModel):
     def clean(self) -> None:
         """Normalize task-project context and reject missing or double-authored targets."""
 
-        using = get_write_alias(type(self), using=self._state.db, instance=self)
-        self._normalize_target(using=using)
+        self._normalize_target()
         super().clean()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist with target semantics and task-project context kept coherent."""
 
-        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
-        kwargs["using"] = using
         update_fields = kwargs.get("update_fields")
         target_fields = {"task", "task_id", "project", "project_id", "targets_project"}
         if self._state.adding or update_fields is None or target_fields.intersection(update_fields):
-            self._normalize_target(using=using)
+            self._normalize_target()
             if update_fields is not None:
                 kwargs["update_fields"] = {
                     *update_fields,
@@ -394,17 +375,16 @@ class Need(AuditMixin, AngeeDataModel):
         super().save(*args, **kwargs)
         object.__setattr__(self, "_intake_project_assigned", False)
 
-    def convert_to_task(self, queue: models.Model, *, using: str | None = None) -> models.Model:
+    def convert_to_task(self, queue: models.Model) -> models.Model:
         """Return this need's task; its clean concurrent no-op is SELECT-FOR-UPDATE-backed."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
         if self.pk is None or queue.pk is None:
             raise ValidationError("A saved need and queue are required for conversion.")
         actor = current_actor()
-        with system_context(reason="intake.need.convert_to_task"), transaction.atomic(using=using):
+        with system_context(reason="intake.need.convert_to_task"), transaction.atomic():
             locked = (
                 type(self)
-                .objects.db_manager(using).sudo(reason="intake.need.convert_to_task.need")
+                .objects.sudo(reason="intake.need.convert_to_task.need")
                 .lock_if_supported()
                 .select_related("task", "project", "source_message")
                 .get(pk=self.pk)
@@ -413,22 +393,21 @@ class Need(AuditMixin, AngeeDataModel):
                 task = locked.task
             else:
                 title = locked.body or getattr(locked.source_message, "preview", "")
-                task = type(self).objects.db_manager(using)._create_triage_task(
+                task = type(self).objects._create_triage_task(
                     queue=queue,
                     project=locked.project,
                     title=title,
                     note=locked.body,
                     created_by_id=locked.created_by_id,
-                    using=using,
                 )
                 locked.task = task
                 object.__setattr__(locked, "_intake_project_assigned", False)
-                locked.save(using=using, update_fields=("task", "project", "targets_project", "updated_at"))
+                locked.save(update_fields=("task", "project", "targets_project", "updated_at"))
         bind_actor(task, actor)
-        self.refresh_from_db(using=using)
+        self.refresh_from_db()
         return task
 
-    def _normalize_target(self, *, using: str) -> None:
+    def _normalize_target(self) -> None:
         """Resolve the semantic target and project task context on this instance."""
 
         if self.task_id is None:
@@ -438,7 +417,7 @@ class Need(AuditMixin, AngeeDataModel):
             return
         if getattr(self, "_intake_project_assigned", False):
             raise ValidationError({"project": "Choose either a task or a project, not both."})
-        task = related_on(self, "task", using=using)
+        task = self.task
         assert task is not None
         object.__setattr__(self, "_intake_internal_target", True)
         try:
@@ -499,18 +478,13 @@ class ChannelIntake(models.Model):
             case _:
                 raise ValidationError({"intake_trigger": "Unknown intake trigger."})
 
-    def capture_ingested_message(self, message: models.Model, *, using: str | None = None) -> models.Model | None:
+    def capture_ingested_message(self, message: models.Model) -> models.Model | None:
         """Dispatch an accepted ingested message to the Need write owner."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
-        message._state.db = using
         if not self.should_capture_message(message):
             return None
         need_model = apps.get_model("intake", "Need")
-        return need_model.objects.db_manager(using).capture_from_message(
-            message, queue=related_on(self, "intake_queue", using=using)
-        )
+        return need_model.objects.capture_from_message(message, queue=self.intake_queue)
 
 
 class TaskIntake(models.Model):
@@ -529,15 +503,13 @@ class TaskIntake(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the task, then reconcile task-target Need project context once."""
 
-        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
-        kwargs["using"] = using
         adding = self._state.adding
         update_fields = kwargs.get("update_fields")
         project_may_change = update_fields is None or bool({"project", "project_id"}.intersection(update_fields))
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             super().save(*args, **kwargs)
             if not adding and project_may_change:
                 need_model = apps.get_model("intake", "Need")
-                need_model._base_manager.using(using).filter(task_id=self.pk).exclude(project_id=self.project_id).update(
+                need_model._base_manager.filter(task_id=self.pk).exclude(project_id=self.project_id).update(
                     project_id=self.project_id, updated_at=timezone.now()
                 )

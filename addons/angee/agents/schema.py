@@ -30,7 +30,6 @@ from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus, SessionStatus
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, related_on
 from angee.base.identity import public_subject_ref
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -500,10 +499,9 @@ _INFERENCE_MODEL_RESOURCE = hasura_model_resource(
 )
 
 
-def _provider_oauth_client(provider: Any, *, using: str) -> Any:
+def _provider_oauth_client(provider: Any) -> Any:
     """Return the OAuth client selected by this provider's backend."""
 
-    provider._state.db = using
     return provider.backend.connect_oauth_client("Inference provider")
 
 
@@ -515,9 +513,8 @@ class InferenceProviderCreateMutation:
     def create_inference_provider(self, data: InferenceProviderInput) -> InferenceProviderType:
         """Create an inference provider directly."""
 
-        using = get_write_alias(InferenceProvider)
         attrs = {
-            **integration_create_attrs(data, reason="agents.graphql.inference_provider.create", using=using),
+            **integration_create_attrs(data, reason="agents.graphql.inference_provider.create"),
             "backend_class": InferenceProvider.impl_key_for(
                 "backend_class",
                 None if data.backend_class is strawberry.UNSET else data.backend_class,
@@ -525,15 +522,15 @@ class InferenceProviderCreateMutation:
             ),
         }
         if data.account is strawberry.UNSET and (credential := attrs.get("credential")) is not None:
-            attrs["account"] = related_on(credential, "external_account", using=using)
+            attrs["account"] = credential.external_account
         if data.name:
             attrs["name"] = data.name
         if data.base_url:
             attrs["base_url"] = data.base_url
         if data.config is not strawberry.UNSET:
             attrs["config"] = data.config
-        with system_context(reason="agents.graphql.inference_provider.create"), transaction.atomic(using=using):
-            provider = InferenceProvider.objects.db_manager(using).create(**attrs)
+        with system_context(reason="agents.graphql.inference_provider.create"), transaction.atomic():
+            provider = InferenceProvider.objects.create(**attrs)
         return cast(InferenceProviderType, provider)
 
 
@@ -551,19 +548,17 @@ class InferenceProviderConnectMutation:
     ) -> ConnectIntegrationResult:
         """Attach the current user's OAuth credential to this inference provider."""
 
-        using = get_write_alias(InferenceProvider)
         try:
             provider = resolve_action_target(
                 InferenceProvider,
                 id,
                 reason="agents.graphql.connect_inference_provider",
-                queryset=InferenceProvider._default_manager.using(using).select_related("vendor"),
+                queryset=InferenceProvider._default_manager.select_related("vendor"),
             )
             return connect_integration_target(
                 info,
                 provider,
-                _provider_oauth_client(provider, using=using),
-                using=using,
+                _provider_oauth_client(provider),
                 redirect_uri=redirect_uri,
                 next_path=next,
             )
@@ -579,15 +574,13 @@ class InferenceProviderUpdateMutation:
     def update_inference_provider(self, data: InferenceProviderPatch) -> InferenceProviderType:
         """Update a provider, merging supplied config keys."""
 
-        using = get_write_alias(InferenceProvider)
         with (
             action_target(
                 InferenceProvider,
                 data.id,
                 reason="agents.graphql.inference_provider.update",
-                queryset=InferenceProvider._default_manager.using(using),
             ) as provider,
-            transaction.atomic(using=using),
+            transaction.atomic(),
         ):
             if data.backend_class is not strawberry.UNSET:
                 provider.set_impl_key("backend_class", data.backend_class, default="manual")
@@ -596,7 +589,6 @@ class InferenceProviderUpdateMutation:
                 data,
                 reason="agents.graphql.inference_provider.update",
                 ignore_null_lifecycle=True,
-                using=using,
             )
             if data.name is not strawberry.UNSET:
                 provider.name = data.name or ""
@@ -606,7 +598,7 @@ class InferenceProviderUpdateMutation:
                 provided.add("base_url")
             if data.config is not strawberry.UNSET:
                 provided.update(provider.apply_config_patch(data.config))
-            save_provided_fields(provider, provided, using=using)
+            save_provided_fields(provider, provided)
         return cast(InferenceProviderType, provider)
 
 
@@ -715,14 +707,11 @@ class InferenceActionMutation:
     def refresh_provider_models(self, id: PublicID) -> ActionResult:
         """Re-list one provider's models into the catalogue now."""
 
-        using = get_write_alias(InferenceProvider)
         with action_target(
             InferenceProvider,
             id,
             reason="agents.graphql.refresh_provider_models",
-            queryset=InferenceProvider._default_manager.using(using).select_related(
-                "credential__oauth_client", "vendor"
-            ),
+            queryset=InferenceProvider._default_manager.select_related("credential__oauth_client", "vendor"),
         ) as provider:
             try:
                 count = provider.refresh_models()

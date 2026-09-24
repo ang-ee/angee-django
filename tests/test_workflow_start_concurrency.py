@@ -120,7 +120,7 @@ def test_failure_path_and_direct_start_share_parent_first_lock_order(
             locked_step = StepRun.objects.lock_if_supported().get(pk=parent_step.pk)
             parent_locked.set()
             assert direct_waiting_for_parent.wait(timeout=5)
-            engine._start_error_workflow(locked_run, failed_step_run=locked_step, alias="default")
+            engine._start_error_workflow(locked_run, failed_step_run=locked_step)
 
     def direct_start() -> int:
         assert parent_locked.wait(timeout=5)

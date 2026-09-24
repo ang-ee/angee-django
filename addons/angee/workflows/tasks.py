@@ -10,7 +10,6 @@ from celery import shared_task
 from django.apps import apps
 from django.utils import timezone
 
-from angee.base.db import get_write_alias
 from angee.jobs.enqueue import enqueue_task
 from angee.workflows import dispatch as workflow_dispatch
 from angee.workflows import engine, triggers
@@ -81,7 +80,6 @@ def consume_workflow_dispatch(
     target_id: int,
     generation: int | None = None,
     lease_token: str | None = None,
-    using: str | None = None,
 ) -> None:
     """Consume one identifier-only durable workflow envelope."""
 
@@ -89,31 +87,27 @@ def consume_workflow_dispatch(
     parsed = WorkflowDispatchKind(kind)
     parsed_lease = uuid.UUID(lease_token) if lease_token is not None else None
     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-    alias = get_write_alias(dispatch_model, using=using)
     supplied = WorkflowDispatchEnvelope(dispatch_id, parsed, target_id, generation, parsed_lease)
-    dispatch_model.objects.db_manager(alias).deliver(dispatch_id, supplied_envelope=supplied)
+    dispatch_model.objects.deliver(dispatch_id, supplied_envelope=supplied)
 
 
 @shared_task(bind=True, name="workflows.publish_dispatches")
-def publish_workflow_dispatches(self: Any, timestamp: int | None = None, using: str | None = None) -> None:
+def publish_workflow_dispatches(self: Any, timestamp: int | None = None) -> None:
     """Publish one bounded batch of due durable workflow intents."""
 
     del self
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowDispatch"), using=using)
     workflow_dispatch.publish_due(
-        lambda envelope: _send_dispatch(envelope, using=alias),
+        _send_dispatch,
         now=_periodic_timestamp(timestamp),
         limit=100,
-        using=alias,
     )
 
 
-def _send_dispatch(envelope: WorkflowDispatchEnvelope, *, using: str) -> None:
+def _send_dispatch(envelope: WorkflowDispatchEnvelope) -> None:
     enqueue_task(
         "workflows.dispatch",
         kwargs={
             "dispatch_id": envelope.dispatch_id,
-            "using": using,
             "kind": envelope.kind.value,
             "target_id": envelope.target_id,
             "generation": envelope.generation,

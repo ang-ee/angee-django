@@ -4,17 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
-from functools import wraps
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import connection, connections, models, router
+from django.db import connection
 from rebac import RelationshipTuple, system_context, to_subject_ref, write_relationships
-from rebac.backends.local import LocalBackend
-from rebac.models import PermissionAuditEvent
 from rebac.resources import to_object_ref
 
 from angee.workflows import engine
@@ -39,89 +35,6 @@ from angee.workflows.testing import run_to_terminal as run_to_terminal
 from angee.workflows.testing import start_run as start_workflow_run
 from angee.workflows.testing import step_run_for as step_run_for
 from tests.conftest import _clear_model_tables, _create_missing_tables
-from tests.test_transitions import TransitionRouter
-
-_native_authorization = ContextVar("workflow_test_native_authorization", default=False)
-
-
-def reject_default_domain_query(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
-    """Permit only the documented native REBAC audit insert on a conflicting DB."""
-
-    audit_table = connection.ops.quote_name(PermissionAuditEvent._meta.db_table)
-    if sql.startswith(f"INSERT INTO {audit_table} "):
-        return execute(sql, params, many, context)
-    raise AssertionError(f"Workflow operation queried the conflicting default alias: {sql}")
-
-
-class WorkflowWriteRouter(TransitionRouter):
-    """Reject unbound workflow reads, preserving the documented REBAC frontier."""
-
-    def db_for_read(self, model: type[models.Model], **hints: Any) -> str:
-        if model._meta.app_label == "rebac" or _native_authorization.get():
-            return "default"
-        return super().db_for_read(model, **hints)
-
-    def db_for_write(self, model: type[models.Model], **hints: Any) -> str:
-        if model._meta.app_label == "rebac":
-            return "default"
-        return super().db_for_write(model, **hints)
-
-    def allow_relation(self, obj1: models.Model, obj2: models.Model, **hints: Any) -> bool | None:
-        """Permit fixture aliases of the same physical database to share FKs."""
-
-        if obj1._state.db is None or obj2._state.db is None:
-            return None
-        left = connections[obj1._state.db].settings_dict
-        right = connections[obj2._state.db].settings_dict
-        return all(left[key] == right[key] for key in ("ENGINE", "NAME", "HOST", "PORT"))
-
-
-@pytest.fixture
-def workflow_authorization_frontier(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep native admission's unbound field reads on its documented default DB."""
-
-    def native_entry(operation: Any) -> Any:
-        @wraps(operation)
-        def native_check(*args: Any, **kwargs: Any) -> Any:
-            token = _native_authorization.set(True)
-            try:
-                return operation(*args, **kwargs)
-            finally:
-                _native_authorization.reset(token)
-
-        return native_check
-
-    for name in ("check_access", "accessible"):
-        monkeypatch.setattr(LocalBackend, name, native_entry(getattr(LocalBackend, name)))
-
-
-@pytest.fixture
-def workflow_audit_frontier(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]]:
-    """Observe native default-only audit emissions while SQLite's writer is locked.
-
-    Native REBAC audit persistence has no operation-alias contract. Its second
-    connection cannot write the same SQLite file during a workflow transaction;
-    these alias tests retain complete emissions at that documented frontier.
-    """
-
-    manager_type = type(PermissionAuditEvent.objects)
-    create = manager_type.create
-    emitted: list[dict[str, Any]] = []
-
-    def retain_audit(manager: Any, **kwargs: Any) -> Any:
-        if manager.model is not PermissionAuditEvent:
-            return create(manager, **kwargs)
-        assert manager._db is None
-        assert router.db_for_write(PermissionAuditEvent) == "default"
-        assert set(kwargs) == {
-            "kind", "actor_subject_type", "actor_subject_id", "target_repr", "before", "after", "reason",
-        }
-        emitted.append(dict(kwargs))
-        return PermissionAuditEvent(**kwargs)
-
-    monkeypatch.setattr(manager_type, "create", retain_audit)
-    yield emitted
-    assert any(event["kind"] == PermissionAuditEvent.KIND_SUDO_BYPASS for event in emitted)
 
 
 class Workflow(AbstractWorkflow):

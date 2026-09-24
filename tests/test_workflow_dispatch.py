@@ -39,9 +39,9 @@ def run(workflow_engine_tables: None) -> WorkflowRun:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_artifact_facade_accepts_a_canonical_target_without_an_explicit_alias(run: WorkflowRun) -> None:
+def test_artifact_facade_accepts_a_canonical_target(run: WorkflowRun) -> None:
     with system_context(reason="canonical artifact delivery"), transaction.atomic():
-        target = canonical_record_target(run, using="default")
+        target = canonical_record_target(run)
         dispatch = engine.schedule_artifact_delivery(target)
     assert dispatch._state.db == "default"
     assert dispatch.artifact_content_type_id == target.content_type.pk
@@ -74,12 +74,12 @@ def test_advance_error_is_visible_until_the_exact_durable_intent_retries(run: Wo
     route = engine._route_completed_steps
     failed = False
 
-    def fail_once(active_run: WorkflowRun, *, alias: str) -> None:
+    def fail_once(active_run: WorkflowRun) -> None:
         nonlocal failed
         if not failed:
             failed = True
             raise ValidationError("Map evidence is structurally invalid.")
-        route(active_run, alias=alias)
+        route(active_run)
 
     with patch.object(engine, "_route_completed_steps", side_effect=fail_once):
         with pytest.raises(ValidationError, match="Map evidence is structurally invalid"):
@@ -184,8 +184,8 @@ def test_transport_envelope_is_validated_after_owner_locks(
     lock_target = manager_type._lock_target
     locked: list[int] = []
 
-    def observe_lock(manager: Any, intent: Any, *, using: str) -> DispatchTarget:
-        target = lock_target(manager, intent, using=using)
+    def observe_lock(manager: Any, intent: Any) -> DispatchTarget:
+        target = lock_target(manager, intent)
         locked.append(target.row.pk)
         return target
 
@@ -452,7 +452,7 @@ def test_failed_consume_cannot_commit_owner_changes(run: WorkflowRun) -> None:
 
     def mutate(target: DispatchTarget, *, at: datetime) -> bool:
         target.row.deliveries += 1
-        target.row.save(using=target.row._state.db, update_fields=["deliveries", "updated_at"])
+        target.row.save(update_fields=["deliveries", "updated_at"])
         return True
 
     with (
@@ -513,7 +513,7 @@ def test_owner_preflight_rejects_ancestry_drift_during_locking(run: WorkflowRun)
         if model is WorkflowRun and kwargs.get("lock") == ("self",) and not drifted:
             drifted = True
             models.QuerySet.update(
-                native_system_queryset(StepRun, using="default", lock=None).filter(pk=step_run.pk),
+                native_system_queryset(StepRun,  lock=None).filter(pk=step_run.pk),
                 run_id=other_run.pk,
             )
         return native_system_queryset(model, **kwargs)
@@ -593,10 +593,10 @@ def test_replacing_kind_spec_changes_constraints_envelope_and_delivery(
     assert dispatch.envelope.target_id == dispatch.pk
     constraints = dispatch_constraints()
     with system_context(reason="validate declared dispatch shape and uniqueness"):
-        constraints[0].validate(WorkflowDispatch, dispatch, using="default")
+        constraints[0].validate(WorkflowDispatch, dispatch)
         unique = next(constraint for constraint in constraints if constraint.name == "uniq_wfd_advance")
         with pytest.raises(ValidationError):
-            unique.validate(WorkflowDispatch, dispatch, using="default")
+            unique.validate(WorkflowDispatch, dispatch)
     assert WorkflowDispatch.objects.deliver(
         dispatch.pk,
         expected_target_id=dispatch.pk,

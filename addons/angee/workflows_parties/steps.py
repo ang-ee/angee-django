@@ -21,7 +21,6 @@ from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 from rebac import system_context
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.identity import canonical_subject_ref
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows import engine
@@ -156,17 +155,15 @@ class DedupeScanStepImpl(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Emit the proposed pair rows, routing ``found`` or ``empty``."""
-        alias = get_write_alias(type(step_run), instance=step_run)
-        step = related_on(step_run, "step", using=alias)
+        step = step_run.step
         if step is None:
             raise apps.get_model("workflows", "Step").DoesNotExist("StepRun has no step.")
-        step_run.step = step
 
         del now
         limit = positive_int(step_run.step.config.get("limit", 50), "Dedupe scan limit")
         party_model = apps.get_model("parties", "Party")
         with system_context(reason="workflows_parties.dedupe_scan"):
-            candidates = party_model.objects.db_manager(alias).duplicate_candidates(limit=limit)
+            candidates = party_model.objects.duplicate_candidates(limit=limit)
             pairs = [_pair_row(candidate) for candidate in candidates]
         if not pairs:
             return StepResult.done(output={"pairs": []}, outcome="empty")
@@ -277,28 +274,25 @@ class DedupeExecuteStepImpl(DecisionApplyStep):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Prepare the confirmed verb list or apply one pair verb."""
-        alias = get_write_alias(type(step_run), instance=step_run)
-        step = related_on(step_run, "step", using=alias)
+        step = step_run.step
         if step is None:
             raise apps.get_model("workflows", "Step").DoesNotExist("StepRun has no step.")
-        step_run.step = step
 
         mode = str(step_run.step.config.get("mode") or "")
         if mode == "prepare":
             return super().run(step_run, now=now)
         return StepResult.done(
-            output=_apply_unit(step_run, using=alias),
+            output=_apply_unit(step_run),
             outcome="completed",
         )
 
     def invoke_command(self, step_run: Any, *, decision_id: int, actor: Any, now: datetime) -> StepResult:
         """Prepare plain pair values from a locked, validated workflow resolution."""
-        alias = get_write_alias(type(step_run), instance=step_run)
 
         del now
         with (
             apps.get_model("workflows", "Decision")
-            .objects.db_manager(alias)
+            .objects
             .locked_resolution(
                 decision_id,
                 actor=actor,
@@ -307,7 +301,7 @@ class DedupeExecuteStepImpl(DecisionApplyStep):
         ):
             rows = (
                 apps.get_model("parties", "Party")
-                .objects.db_manager(alias)
+                .objects
                 .prepare_duplicate_pairs(
                     decision.payload.get("pairs"),
                     decision.resolution.get("pairs"),
@@ -339,19 +333,17 @@ class IdentityReviewStepImpl(GateStep):
     config_model = IdentityReviewConfig
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        alias = get_write_alias(type(step_run), instance=step_run)
-        step = related_on(step_run, "step", using=alias)
+        step = step_run.step
         if step is None:
             raise apps.get_model("workflows", "Step").DoesNotExist("StepRun has no step.")
-        step_run.step = step
-        run: Any = related_on(step_run, "run", using=alias)
+        run: Any = step_run.run
         del now
         config = type(self).normalize_config(step_run.step.config)
         proposal = _identity_input(step_run.input, default_address_label=config["default_address_label"])
-        actor = engine.resolve_workflow_actor(run, using=alias).subject
+        actor = engine.resolve_workflow_actor(run).subject
         party, current = (
             apps.get_model("parties", "Party")
-            .objects.db_manager(alias)
+            .objects
             .identity_snapshot(
                 proposal["party_id"],
                 actor=actor,
@@ -404,7 +396,7 @@ class IdentityReviewStepImpl(GateStep):
             )
         assignee = str(
             engine.resolve_workflow_actor(
-                proposal.get("assignee") or config.get("assignee") or run, using=alias
+                proposal.get("assignee") or config.get("assignee") or run
             ).subject
         )
         review = _identity_review_action(payload=payload, facts=facts, party_label=config["party_label"])
@@ -451,17 +443,16 @@ class IdentityApplyStepImpl(DecisionApplyStep):
     gate_step_class = IdentityReviewStepImpl
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        alias = get_write_alias(type(step_run), instance=step_run)
-        run: Any = related_on(step_run, "run", using=alias)
+        run: Any = step_run.run
         value = _identity_apply_input(step_run.input)
         passthrough = _unchanged_identity_input(value)
         if passthrough is not None:
             _, current = (
                 apps.get_model("parties", "Party")
-                .objects.db_manager(alias)
+                .objects
                 .identity_snapshot(
                     passthrough["party_id"],
-                    actor=engine.resolve_workflow_actor(run, using=alias).subject,
+                    actor=engine.resolve_workflow_actor(run).subject,
                 )
             )
             if canonical_json_sha256(current) != passthrough["facts_hash"]:
@@ -483,12 +474,11 @@ class IdentityApplyStepImpl(DecisionApplyStep):
 
     def invoke_command(self, step_run: Any, *, decision_id: int, actor: Any, now: datetime) -> StepResult:
         """Compose workflow validation with the parties-owned identity operation."""
-        alias = get_write_alias(type(step_run), instance=step_run)
 
         del now
         with (
             apps.get_model("workflows", "Decision")
-            .objects.db_manager(alias)
+            .objects
             .locked_resolution(
                 decision_id,
                 actor=actor,
@@ -500,7 +490,7 @@ class IdentityApplyStepImpl(DecisionApplyStep):
                 raise ValidationError({"party_id": "Identity review does not target its retained Party."})
             outcome, results = (
                 apps.get_model("parties", "Party")
-                .objects.db_manager(alias)
+                .objects
                 .apply_identity(
                     party_id=decision.target_id,
                     expected_facts_hash=payload["facts_hash"],
@@ -737,16 +727,16 @@ def _input_pairs(value: Any) -> list[dict[str, str]]:
     return [dict(row) for row in pairs]
 
 
-def _apply_unit(step_run: Any, *, using: str) -> dict[str, str]:
+def _apply_unit(step_run: Any) -> dict[str, str]:
     """Revalidate the retained pair resolution before calling the domain command."""
 
     unit = DedupeUnitInput.model_validate(step_run.input)
-    decisions = apps.get_model("workflows", "Decision").objects.db_manager(using)
+    decisions = apps.get_model("workflows", "Decision").objects
     with system_context(reason="workflows_parties.dedupe_resolver"):
         decision = decisions.get(pk=unit.decision_id)
     actor = decision.resolution_actor_subject()
     with decisions.locked_resolution(unit.decision_id, actor=actor, consumer_step_run_id=step_run.pk) as decision:
-        parties = apps.get_model("parties", "Party").objects.db_manager(using)
+        parties = apps.get_model("parties", "Party").objects
         pairs = parties.prepare_duplicate_pairs(decision.payload.get("pairs"), decision.resolution.get("pairs"))
         if unit.pair_index < 0 or unit.pair_index >= len(pairs):
             raise ValidationError({"pair_index": "The reviewed pair is unavailable."})

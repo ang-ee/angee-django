@@ -15,6 +15,40 @@ User = get_user_model()
 
 
 @pytest.mark.django_db(transaction=True)
+def test_step_config_hook_reads_deferred_fields(workflow_tables: None) -> None:
+    del workflow_tables
+    with system_context(reason="step deferred config setup"):
+        workflow = Workflow.objects.create(name="Deferred config")
+        step = Step.objects.create(
+            workflow=workflow, key="entry", name="Entry", step_class="fixture", config={"retained": 3},
+        )
+        deferred = Step.objects.only("pk").get(pk=step.pk)
+    assert {"config", "step_class"} <= deferred.get_deferred_fields()
+
+    with system_context(reason="step deferred config validation"):
+        deferred.validate_impl_configs()
+        assert deferred.config == {"retained": 3}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_edge_save_rejects_stale_cached_endpoint_ancestry(workflow_tables: None) -> None:
+    """Moving a cached endpoint cannot bypass its persisted workflow ownership."""
+
+    del workflow_tables
+    with system_context(reason="definition stale endpoint validation"):
+        original = Workflow.objects.create(name="Original")
+        replacement = Workflow.objects.create(name="Replacement")
+        source = Step.objects.create(workflow=original, key="source", name="Source", step_class="fixture")
+        target = Step.objects.create(workflow=original, key="target", name="Target", step_class="fixture")
+        edge = Edge(workflow=original, source=source, target=target)
+        moved = Step.objects.get(pk=source.pk)
+        moved.workflow = replacement
+        moved.save()
+        with pytest.raises(ValidationError, match="source must belong"):
+            edge.save()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_input_binding_is_versioned_and_copied_with_the_definition(workflow_tables: None) -> None:
     del workflow_tables
     binding = {"kind": "workflow_input", "path": []}
@@ -52,7 +86,7 @@ def test_definition_rows_advance_revision_once_per_locked_batch(workflow_tables:
     del workflow_tables
     with system_context(reason="test definition revision batch"):
         workflow = Workflow.objects.create(name="Batch")
-        with Workflow.objects._definition_write((workflow.pk,), using="default") as session:
+        with Workflow.objects._definition_write((workflow.pk,)) as session:
             first = Step(workflow=workflow, key="first", name="First", step_class="fixture", is_entry=True)
             first.save(session=session)
             second = Step(workflow=workflow, key="second", name="Second", step_class="fixture")
@@ -62,7 +96,7 @@ def test_definition_rows_advance_revision_once_per_locked_batch(workflow_tables:
         workflow.refresh_from_db()
         assert workflow.draft_revision == 1
 
-        with Workflow.objects._definition_write((workflow.pk,), using="default") as session:
+        with Workflow.objects._definition_write((workflow.pk,)) as session:
             first.save(update_fields={"name"}, session=session)
             second.save(update_fields={"position"}, session=session)
         workflow.refresh_from_db()
@@ -269,7 +303,7 @@ def test_failed_batch_rolls_back_rows_and_revision(workflow_tables: None) -> Non
         workflow = Workflow.objects.create(name="Rollback")
         other = Workflow.objects.create(name="Other")
         with pytest.raises(ValidationError, match="same workflow"):
-            with Workflow.objects._definition_write((workflow.pk, other.pk), using="default") as session:
+            with Workflow.objects._definition_write((workflow.pk, other.pk)) as session:
                 source = Step(workflow=workflow, key="source", name="Source", step_class="fixture")
                 source.save(session=session)
                 target = Step(workflow=other, key="target", name="Target", step_class="fixture")
@@ -387,7 +421,7 @@ def test_publication_inside_changed_batch_records_pending_revision(workflow_tabl
     del workflow_tables
     with system_context(reason="test pending publication revision"):
         workflow = Workflow.objects.create(name="Pending publication")
-        with Workflow.objects._definition_write((workflow.pk,), using="default") as session:
+        with Workflow.objects._definition_write((workflow.pk,)) as session:
             Step(
                 workflow=workflow,
                 key="wait",
@@ -473,7 +507,7 @@ def test_explicit_definition_session_cannot_expand_the_locked_lineage(workflow_t
     with system_context(reason="test explicit definition session scope"):
         first = Workflow.objects.create(name="Locked")
         second = Workflow.objects.create(name="Unrelated")
-        with Workflow.objects._definition_write((first.pk,), using="default") as session:
+        with Workflow.objects._definition_write((first.pk,)) as session:
             with pytest.raises(RuntimeError, match="cannot expand"):
                 Step(workflow=second, key="late", name="Late", step_class="fixture").save(session=session)
         second.refresh_from_db()
@@ -489,7 +523,7 @@ def test_definition_session_does_not_reopen_an_immutable_parent(workflow_tables:
         Step.objects.create(workflow=draft, key="entry", name="Entry", step_class="agent_session", is_entry=True)
         published = draft.publish()
         with Workflow.objects._definition_write(
-            (published.pk,), _allow_status_transition=True, using="default"
+            (published.pk,), _allow_status_transition=True
         ) as session:
             with pytest.raises(ValidationError, match="immutable"):
                 Step(workflow=published, key="late", name="Late", step_class="fixture").save(session=session)
@@ -500,7 +534,7 @@ def test_definition_session_requires_its_lexical_transaction(workflow_tables: No
     del workflow_tables
     with system_context(reason="test explicit session transaction scope"):
         draft = Workflow.objects.create(name="Lexical")
-        with Workflow.objects._definition_write((draft.pk,), using="default") as session:
+        with Workflow.objects._definition_write((draft.pk,)) as session:
             pass
         with pytest.raises(RuntimeError, match="manager's transaction"):
             Step(workflow=draft, key="late", name="Late", step_class="fixture").save(session=session)

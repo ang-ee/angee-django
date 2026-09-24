@@ -14,7 +14,6 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection
-from django.test import override_settings
 from django.utils import timezone
 from rebac import PermissionDenied, system_context
 
@@ -48,7 +47,6 @@ from tests.workflows import (
     StepAttempt,
     StepRun,
     WorkflowDispatch,
-    WorkflowWriteRouter,
     admit_workflow_actor,
     advance_once,
     execute_started,
@@ -57,7 +55,6 @@ from tests.workflows import (
     workflow_table_setup,
     workflow_with_steps,
 )
-from tests.workflows import workflow_authorization_frontier as workflow_authorization_frontier
 
 POSTGRES_IDENTITY = pytest.mark.skipif(
     connection.vendor != "postgresql",
@@ -257,9 +254,9 @@ def test_party_handle_delete_notifies_stable_handle_after_resolution(
         )
     delivered: list[tuple[str, int | None, int | None]] = []
 
-    def record_delivery(resource: Any, *, using: str | None = None) -> None:
+    def record_delivery(resource: Any) -> None:
         if isinstance(resource, Handle):
-            resource.refresh_from_db(using=using)
+            resource.refresh_from_db()
             delivered.append((resource._meta.label, resource.pk, resource.party_id))
         else:
             delivered.append((resource._meta.label, resource.pk, None))
@@ -727,28 +724,6 @@ def test_identity_owner_checks_basis_and_rolls_back_all_changes(
     assert party.display_name == "Original"
 
 
-@pytest.mark.django_db(transaction=True)
-def test_identity_apply_uses_the_write_router_for_its_complete_lock_set(
-    workflows_parties_tables: None,
-    workflow_authorization_frontier: None,
-) -> None:
-    del workflows_parties_tables
-    actor = User.objects.create_user(username="identity-write-router")
-    with system_context(reason="identity router fixture"):
-        party = Party.objects.create(display_name="Original", created_by=actor)
-    _, current = Party.objects.identity_snapshot(str(party.sqid), actor=actor)
-
-    with override_settings(DATABASE_ROUTERS=[WorkflowWriteRouter("default")]):
-        outcome, results = Party.objects.apply_identity(
-            party_id=str(party.sqid),
-            expected_facts_hash=canonical_json_sha256(current),
-            proposed={"name": "Original", "address": {}, "handle": {}},
-            choices={"name_action": "keep", "address_action": "keep", "handle_action": "keep"},
-            actor=actor,
-        )
-
-    assert outcome == "unchanged"
-    assert set(results.values()) == {"kept"}
 
 
 @POSTGRES_IDENTITY
@@ -774,7 +749,7 @@ def test_identity_confirmation_and_competing_admission_share_total_lock_order(
     def confirm() -> None:
         close_old_connections()
         start.wait(timeout=5)
-        PartyHandle.objects._transition(link, action="confirm", actor=actor, using="default")
+        PartyHandle.objects._transition(link, action="confirm", actor=actor)
         close_old_connections()
 
     def admit_competitor() -> None:
@@ -818,7 +793,7 @@ def test_identity_suggestion_and_transition_share_total_lock_order(
     def confirm() -> None:
         close_old_connections()
         start.wait(timeout=5)
-        PartyHandle.objects._transition(link, action="confirm", actor=actor, using="default")
+        PartyHandle.objects._transition(link, action="confirm", actor=actor)
         close_old_connections()
 
     def suggest() -> None:
@@ -830,7 +805,6 @@ def test_identity_suggestion_and_transition_share_total_lock_order(
             confidence=0.3,
             metadata={"evidence": {"kind": "race"}},
             created_by_id=actor.pk,
-            using="default",
         )
         close_old_connections()
 
@@ -877,7 +851,7 @@ def test_identity_delete_repair_and_transition_do_not_reverse_lock_order(
     def confirm_remaining() -> None:
         close_old_connections()
         start.wait(timeout=5)
-        PartyHandle.objects._transition(remaining, action="confirm", actor=actor, using="default")
+        PartyHandle.objects._transition(remaining, action="confirm", actor=actor)
         close_old_connections()
 
     with ThreadPoolExecutor(max_workers=2) as pool:

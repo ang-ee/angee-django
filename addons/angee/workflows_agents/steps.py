@@ -14,7 +14,7 @@ from typing import Annotated, Any, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, transaction
+from django.db import transaction
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelResponse
@@ -25,7 +25,6 @@ from angee.agents.models import (
     TurnStatus,
 )
 from angee.agents.runners import TurnOutcome
-from angee.base.db import get_write_alias
 from angee.workflows import engine
 from angee.workflows.decision_actions import ReviewAction, ReviewFact, build_decision_action
 from angee.workflows.models import RunStatus, StepRunStatus
@@ -159,16 +158,8 @@ class AgentSessionStepImpl(StepImpl):
     deterministic = False
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Run on default until session and provider owners support alias binding."""
+        """Claim and execute the session's next turn."""
 
-        alias = get_write_alias(type(step_run), instance=step_run)
-        if alias != DEFAULT_DB_ALIAS:
-            raise ValidationError(
-                {
-                    "using": "Workflow agent sessions require the default database until agents session and "
-                    "provider owners support the operation's database alias."
-                }
-            )
         del now
         with system_context(reason="workflows_agents.session_step.claim"), transaction.atomic():
             session = _session_for_step(step_run)
@@ -214,7 +205,7 @@ class AgentSessionStepImpl(StepImpl):
                 replay_state=session.replay_state,
             )
         except Exception as error:  # noqa: BLE001 - provider/runtime failures become turn outcomes.
-            if _attempts_remaining(step_run) and session.agent.is_transient_inference_error(error, using=alias):
+            if _attempts_remaining(step_run) and session.agent.is_transient_inference_error(error):
                 raise TransientStepError(str(error)) from error
             outcome = TurnOutcome(
                 kind="failed",

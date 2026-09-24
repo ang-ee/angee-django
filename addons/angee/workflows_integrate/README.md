@@ -47,35 +47,28 @@ keepalive covers recognition, staging and execution; extractors can also pulse
 the reporter's heartbeat during ingest, and native Map results retain partial
 failures. Repeated imports converge through the target domain's ingest identity.
 
-Archive execution currently requires the default database because Decision
-authorization and external backup ingest owners do not yet carry a complete
-database-alias contract. Entry checks reject other aliases before reading an
-archive or calling an importer. Framework relation reads and reporter heartbeats
-use the selected write alias; the reporter exposes it as `using`.
-
 ## Admission
 
 A Bridge subclass declares `sync_workflow_key: ClassVar[str] = "consumer-cycle"`.
 The normal queue token remains the cadence occurrence. `Bridge.sync()` composes
 its `dispatch_sync()` hook, contributed through `ANGEE_BRIDGE_SYNC_DISPATCH`,
 and returns `SyncDispatch.DISPATCHED`. Direct bridges keep returning an integer.
-Override `sync_workflow_input(*, using=None)` to add immutable admitted facts to
+Override `sync_workflow_input()` to add immutable admitted facts to
 the default `{ "bridge": { "model": "app.model", "id": "public-id" } }` input.
-Overrides receive a Bridge pinned to the selected write database. A connector
-that overrides `sync()` must compose `super().sync()` to select this behavior.
+A connector that overrides `sync()` must compose `super().sync()` to select this behavior.
 
 The public admission function is:
 
 ```python
 admit_bridge_cycle(
     bridge, *, workflow, occurrence_key, actor, input=None,
-    prepare=None, available_at=None, using=None,
+    prepare=None, available_at=None,
 )
 ```
 
 Explicit `input` is the native `JsonPresence(present=True, value=...)` envelope;
 omission snapshots the locked Bridge through `sync_workflow_input`. The optional
-database-only `prepare(using)` runs after native workflow/retained-run locks,
+database-only `prepare()` runs after native workflow/retained-run locks,
 before Bridge is locked and input is constructed. Consumers acquire upstream
 scope locks in preparation and downstream scope locks during input construction.
 `dispatch_bridge_cycle` forwards the same optional preparation hook. `workflow`
@@ -85,8 +78,7 @@ publication and exact frozen input, even after a later publication. A conflictin
 identity raises. The subject is the concrete Bridge, and cycle identity exists
 only in `dedup_key = "bridge-sync:{content_type_id}:{bridge.pk}:{occurrence_key}"`.
 The actor must be the active Integration owner. Admission refuses ownerless
-platform installs and non-default databases at the existing authorization
-frontier; it never substitutes the workflow author.
+platform installs; it never substitutes the workflow author.
 
 The manager's `validate_new` runs under the Bridge lock and rejects another non-terminal
 run for that subject, including another workflow lineage. Admission claims the

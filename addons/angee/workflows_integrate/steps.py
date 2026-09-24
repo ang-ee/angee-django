@@ -15,7 +15,6 @@ from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import system_context
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.identity import instance_from_public_id, public_id_of
 from angee.integrate.impl import AdapterContractError
 from angee.integrate.models import Bridge
@@ -120,20 +119,19 @@ class BoundedStreamStage(StepImpl):
     replay_mode = RecoveryMode.FRESH
     deterministic = False
 
-    def run(self, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Resolve the admitted partition and delegate exactly one page to its owner."""
 
-        alias = get_write_alias(type(step_run), using=using, instance=step_run)
         value = self.validate_input(step_run.input)
         with system_context(reason="workflows_integrate.stream.resolve"):
-            bridge = bridge_for_step(step_run, value.bridge, using=alias)
+            bridge = bridge_for_step(step_run, value.bridge)
         try:
             with (
-                self.heartbeat_during(step_run, using=alias),
+                self.heartbeat_during(step_run),
                 closing(bridge.backend) as adapter,
                 system_context(reason="workflows_integrate.stream"),
             ):
-                stream = open_stream(bridge, value.key, value.partition, adapter, using=alias)
+                stream = open_stream(bridge, value.key, value.partition, adapter)
                 # The page commits its timestamp with its cursor. Preparation
                 # repeats safely before that first commit, including a crashed
                 # first attempt, but never rescans a page this stage committed.
@@ -142,8 +140,8 @@ class BoundedStreamStage(StepImpl):
                 if not step_run.resume_state and (
                     stream.last_advanced_at is None or stream.last_advanced_at < step_run.created_at
                 ):
-                    stream = begin_stream_cycle(stream, adapter, using=alias)
-                page = advance_stream(stream, adapter, page_bound=value.page_bound, using=alias)
+                    stream = begin_stream_cycle(stream, adapter)
+                page = advance_stream(stream, adapter, page_bound=value.page_bound)
                 cycle_items = step_run.resume_state.get("cycle_items", 0) + page.count
                 if not page.exhausted:
                     return StepResult.wait(
@@ -156,7 +154,7 @@ class BoundedStreamStage(StepImpl):
                     )
                 discrepancies = list(
                     apps.get_model("integrate", "SyncDiscrepancy")
-                    .objects.db_manager(alias)
+                    .objects
                     .unresolved()
                     .filter(stream=page.stream)
                     .order_by("pk")
@@ -200,21 +198,19 @@ class CoverageGate(GateStep):
     deterministic = False
     outcomes = ()
 
-    def run(self, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Compose native gate admission, then keep acceptance tied to data truth."""
 
-        alias = get_write_alias(type(step_run), using=using, instance=step_run)
         value = self.validate_input(step_run.input)
         with system_context(reason="workflows_integrate.coverage"):
-            bridge = bridge_for_step(step_run, value.bridge, using=alias)
-            step_run.step = related_on(step_run, "step", using=alias)
+            bridge = bridge_for_step(step_run, value.bridge)
             config = CoverageConfig.model_validate(step_run.step.config)
-            manager = apps.get_model("integrate", "SyncStream").objects.db_manager(alias)
+            manager = apps.get_model("integrate", "SyncStream").objects
             streams = [
-                manager.current_for_bridge(bridge, reference.key, using=alias).get(partition=reference.partition)
+                manager.current_for_bridge(bridge, reference.key).get(partition=reference.partition)
                 for reference in value.streams
             ]
-            discrepancy_manager = apps.get_model("integrate", "SyncDiscrepancy").objects.db_manager(alias)
+            discrepancy_manager = apps.get_model("integrate", "SyncDiscrepancy").objects
             discrepancies = list(discrepancy_manager.unresolved().filter(stream__in=streams).order_by("pk"))
             state = step_run.resume_state.get("state", step_run.resume_state)
             index = state.get("rescan_index", 0) % len(streams)
@@ -224,12 +220,12 @@ class CoverageGate(GateStep):
                 or any(row.link_id is not None and row.kind != DiscrepancyKind.CONFLICT for row in discrepancies)
             ):
                 try:
-                    with self.heartbeat_during(step_run, using=alias), closing(bridge.backend) as adapter:
+                    with self.heartbeat_during(step_run), closing(bridge.backend) as adapter:
                         stream = streams[index]
                         if baseline != public_id_of(stream):
-                            stream = begin_stream_cycle(stream, adapter, page_bound=config.rescan_bound, using=alias)
+                            stream = begin_stream_cycle(stream, adapter, page_bound=config.rescan_bound)
                         if baseline or stream.resync_required:
-                            page = advance_stream(stream, adapter, page_bound=config.rescan_bound, using=alias)
+                            page = advance_stream(stream, adapter, page_bound=config.rescan_bound)
                             stream = page.stream
                             baseline = "" if page.exhausted else public_id_of(stream)
                         streams[index] = stream
@@ -253,7 +249,7 @@ class CoverageGate(GateStep):
                         evidence=[_evidence(stream) for stream in streams],
                     ).model_dump(mode="json")
                 )
-            decisions = apps.get_model("workflows", "Decision").objects.db_manager(alias)
+            decisions = apps.get_model("workflows", "Decision").objects
             reviewed = {
                 payload.get("discrepancy")
                 for payload in decisions.filter(step_run=step_run).values_list("payload", flat=True)
@@ -264,7 +260,7 @@ class CoverageGate(GateStep):
                 if row.kind == DiscrepancyKind.CONFLICT and public_id_of(row) not in reviewed
             ]
             if conflicts:
-                run = related_on(step_run, "run", using=alias)
+                run = step_run.run
                 if run is None:
                     raise ValidationError({"run": "Coverage review requires an admitted workflow run."})
                 actor = run.admission_actor_subject()
@@ -301,17 +297,17 @@ class CoverageGate(GateStep):
             )
 
 
-def bridge_for_step(step_run: Any, reference: BridgeReference, *, using: str) -> Any:
+def bridge_for_step(step_run: Any, reference: BridgeReference) -> Any:
     """Resolve only the Bridge that was admitted as this run's subject."""
 
-    run = related_on(step_run, "run", using=using)
+    run = step_run.run
     if run is None:
         raise ValidationError({"run": "The stage requires an admitted workflow run."})
-    content_type = related_on(run, "subject_content_type", using=using)
+    content_type = run.subject_content_type
     model = content_type.model_class() if content_type is not None else None
     if model is None or not issubclass(model, Bridge) or model._meta.label_lower != reference.model.lower():
         raise ValidationError({"bridge": "The stage bridge must be the workflow run's concrete Bridge subject."})
-    bridge = instance_from_public_id(model, reference.id, queryset=model._base_manager.using(using).all())
+    bridge = instance_from_public_id(model, reference.id, queryset=model._base_manager.all())
     if bridge is None or bridge.pk != run.subject_object_id:
         raise ValidationError({"bridge": "The stage bridge must match the admitted workflow subject."})
     return bridge

@@ -13,11 +13,10 @@ from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connections, models
+from django.db import connection, models
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
-from angee.base.db import get_write_alias, related_on
 from angee.jobs.enqueue import enqueue_task
 from angee.workflows.states import Verdict
 
@@ -100,7 +99,7 @@ class DispatchKindSpec:
         if self.lease_field is not None:
             lease_token = getattr(dispatch, "_dispatch_lease_token", models.DEFERRED)
             if lease_token is models.DEFERRED:
-                attempt = related_on(dispatch, self.lease_field, using=dispatch._state.db)
+                attempt = getattr(dispatch, self.lease_field)
                 if attempt is None:
                     raise ValueError("Execution dispatch requires its retained attempt.")
                 lease_token = attempt.lease_token
@@ -220,11 +219,11 @@ class WorkflowDispatchEnvelope:
 DispatchSender = Callable[[WorkflowDispatchEnvelope], None]
 
 
-def enqueue_dispatch_publisher(*, using: str | None = None) -> None:
+def enqueue_dispatch_publisher() -> None:
     """Request one immediate publication pass; periodic recovery remains authoritative."""
 
     try:
-        enqueue_task("workflows.publish_dispatches", kwargs={"using": using})
+        enqueue_task("workflows.publish_dispatches")
     except Exception:  # noqa: BLE001 - the durable intent remains for periodic recovery.
         return
 
@@ -234,7 +233,6 @@ def publish_due(
     *,
     now: datetime | None = None,
     limit: int = 100,
-    using: str | None = None,
 ) -> dict[str, int]:
     """Publish a bounded due batch outside database locks and record telemetry.
 
@@ -246,9 +244,8 @@ def publish_due(
         raise ValueError("Workflow dispatch publication limit must be positive.")
     timestamp = now or timezone.now()
     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-    alias = get_write_alias(dispatch_model, using=using)
-    manager = dispatch_model.objects.db_manager(alias)
-    if connections[alias].in_atomic_block:
+    manager = dispatch_model.objects
+    if connection.in_atomic_block:
         raise RuntimeError("Workflow dispatch publication cannot run inside a database transaction.")
     envelopes = manager.due_envelopes(now=timestamp, limit=limit)
     sent = 0

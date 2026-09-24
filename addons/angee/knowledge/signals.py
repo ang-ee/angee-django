@@ -16,8 +16,6 @@ from typing import Any
 from django.apps import apps
 from django.db.models.signals import post_save, pre_delete
 
-from angee.base.db import get_write_alias
-
 _MARKDOWN_LABEL = "knowledge.markdownpage"
 
 
@@ -33,8 +31,6 @@ def rebuild_backlinks(
     instance: Any,
     raw: bool = False,
     update_fields: Iterable[str] | None = None,
-    *,
-    using: str | None = None,
     **_: Any,
 ) -> None:
     """Rebuild a page's outgoing wikilinks when its markdown body changes."""
@@ -44,17 +40,11 @@ def rebuild_backlinks(
     if update_fields is not None and "body" not in update_fields:
         return
     link_model = apps.get_model(instance._meta.app_label, "Link")
-    using = get_write_alias(type(instance), using=using, instance=instance)
-    instance._state.db = using
-    link_model._default_manager.db_manager(using).rebuild_for(instance)
+    link_model._default_manager.rebuild_for(instance)
 
 
-def teardown_record_bindings(
-    sender: type[Any], instance: Any, *, using: str | None = None, **kwargs: Any
-) -> None:
+def teardown_record_bindings(sender: type[Any], instance: Any, **kwargs: Any) -> None:
     """Delete bindings to the canonical target before any model row is deleted."""
 
     del sender, kwargs
-    using = get_write_alias(type(instance), using=using, instance=instance)
-    instance._state.db = using
-    apps.get_model("knowledge", "RecordBinding").objects.db_manager(using).teardown_for_record(instance)
+    apps.get_model("knowledge", "RecordBinding").objects.teardown_for_record(instance)

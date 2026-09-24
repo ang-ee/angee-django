@@ -74,7 +74,7 @@ def test_two_consumers_commit_one_domain_effect(
 
     def apply(target: DispatchTarget, *, at: datetime) -> bool:
         target.row.deliveries += 1
-        target.row.save(using=target.row._state.db, update_fields=["deliveries", "updated_at"])
+        target.row.save(update_fields=["deliveries", "updated_at"])
         target.result["claimed"] = 1
         return True
 

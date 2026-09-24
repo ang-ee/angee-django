@@ -61,18 +61,18 @@ class ExtractionLineage(AngeeModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         raise ValueError("The extraction lineage head changes only during retention.")
 
-    def allocate(self, *, using: str) -> None:
+    def allocate(self) -> None:
         """Create the lineage lock row before allocating its first revision."""
 
-        super().save(using=using, force_insert=True)
+        super().save( force_insert=True)
 
-    def advance_head(self, extraction: Any, *, using: str) -> None:
+    def advance_head(self, extraction: Any) -> None:
         """Project the newly retained revision under the manager's lineage lock."""
 
         if extraction.lineage_key != self.pk:
             raise ValueError("An extraction head must belong to its lineage.")
         self.head = extraction
-        super().save(using=using, update_fields=("head",))
+        super().save( update_fields=("head",))
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("The extraction lineage is retained and cannot be deleted.")
@@ -131,10 +131,10 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         raise ValueError("Extraction evidence is immutable; use the retention owner.")
 
-    def retain(self, *, using: str) -> None:
+    def retain(self) -> None:
         """Insert one immutable revision; the manager retains its children and head."""
 
-        super().save(using=using, force_insert=True)
+        super().save( force_insert=True)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("Extraction evidence is retained and cannot be deleted.")

@@ -10,7 +10,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
-from django.test import override_settings
+from django.db.models.signals import m2m_changed
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
@@ -40,7 +40,6 @@ from tests.workflows import (
     Workflow,
     WorkflowDispatch,
     WorkflowRun,
-    WorkflowWriteRouter,
     admit_workflow_actor,
     advance_once,
     execute_started,
@@ -52,31 +51,126 @@ from tests.workflows import (
     workflow_actor,
     workflow_with_steps,
 )
-from tests.workflows import workflow_authorization_frontier as workflow_authorization_frontier
 
 User = get_user_model()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_start_uses_the_write_router_for_the_complete_operation(
-    workflow_engine_tables: None,
-    no_workflow_queue: None,
-    workflow_authorization_frontier: None,
+def test_previous_edge_write_rolls_back_with_transaction(workflow_engine_tables: None) -> None:
+    del workflow_engine_tables
+    workflow = workflow_with_steps(steps=({"key": "entry"},), edges=())
+    with system_context(reason="previous rollback setup"):
+        run = WorkflowRun.objects.create(workflow=workflow, status=workflow_models.RunStatus.RUNNING)
+        previous = StepRun.objects.create(run=run, system_kind="previous")
+        target = StepRun.objects.create(run=run, system_kind="target")
+
+    with system_context(reason="previous rollback"):
+        with pytest.raises(RuntimeError, match="Abort previous edges"), transaction.atomic():
+            StepRun.objects.update_previous(target, [previous])
+            raise RuntimeError("Abort previous edges")
+        assert not StepRun.previous.through._base_manager.filter(from_steprun_id=target.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("failure_action", ["post_remove", "post_add"])
+def test_previous_replacement_rolls_back_when_receiver_fails_without_outer_transaction(
+    workflow_engine_tables: None, failure_action: str,
+) -> None:
+    del workflow_engine_tables
+    workflow = workflow_with_steps(steps=({"key": "entry"},), edges=())
+    with system_context(reason="previous receiver rollback setup"):
+        run = WorkflowRun.objects.create(workflow=workflow, status=workflow_models.RunStatus.RUNNING)
+        previous = StepRun.objects.create(run=run, system_kind="previous")
+        replacement = StepRun.objects.create(run=run, system_kind="replacement")
+        target = StepRun.objects.create(run=run, system_kind="target")
+        StepRun.objects.update_previous(target, [previous])
+        through = StepRun.previous.through
+        original_pk = through._base_manager.get(from_steprun_id=target.pk).pk
+    failures: list[str] = []
+
+    def reject_change(sender: Any, *, action: str, **kwargs: Any) -> None:
+        if action != failure_action:
+            return
+        assert sender is through
+        assert kwargs["instance"] is target
+        assert connection.in_atomic_block
+        previous_ids = set(
+            through._base_manager.filter(from_steprun_id=target.pk).values_list("to_steprun_id", flat=True)
+        )
+        assert previous_ids == (set() if action == "post_remove" else {replacement.pk})
+        failures.append(action)
+        raise RuntimeError("Reject previous edge change")
+
+    m2m_changed.connect(reject_change, sender=through)
+    try:
+        with system_context(reason="previous receiver rollback"):
+            assert not connection.in_atomic_block
+            with pytest.raises(RuntimeError, match="Reject previous edge change"):
+                StepRun.objects.update_previous(target, [replacement], replace=True)
+            assert not connection.in_atomic_block
+            assert list(
+                through._base_manager.filter(from_steprun_id=target.pk).values_list("pk", "to_steprun_id")
+            ) == [(original_pk, previous.pk)]
+    finally:
+        m2m_changed.disconnect(reject_change, sender=through)
+
+    assert failures == [failure_action]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_deferred_wake_preserves_checkpoint(
+    workflow_engine_tables: None, no_workflow_queue: None,
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
-    actor = User.objects.create_user(username="workflow-start-write-router")
-    workflow = workflow_with_steps(
-        actor=actor,
-        steps=({"key": "start", "step_class": "fixture", "config": {}},),
-        edges=(),
+    workflow = workflow_with_steps(steps=({"key": "entry"},), edges=())
+    run = start_run(workflow)
+    now = timezone.now()
+    with system_context(reason="deferred wake fixture"):
+        step_run = StepRun.objects.get(run=run)
+    attempt = StepAttempt.objects.claim(step_run, claimed_at=now).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=now)
+    StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.WAIT,
+            checkpoint_present=True,
+            checkpoint={"cursor": 7},
+            waiting_kind="external",
+            requested_until=now + timedelta(hours=1),
+        ),
+        recorded_at=now,
     )
+    with system_context(reason="deferred wake source"):
+        step_run = StepRun.objects.only("pk").get(pk=step_run.pk)
+        step_run.wake(at=now)
+        stored = StepRun.objects.get(pk=step_run.pk)
 
-    with override_settings(DATABASE_ROUTERS=[WorkflowWriteRouter("default")]):
-        run = engine.start(workflow, subject=workflow, actor=actor)
+    assert stored.status == workflow_models.StepRunStatus.WAITING
+    assert stored.wait_until == now
+    assert stored.resume_state == {"cursor": 7}
+    assert stored.current_attempt_id == attempt.pk
 
-    assert run._state.db == "default"
-    with system_context(reason="write router start assertion"):
-        assert WorkflowRun.objects.using("default").filter(pk=run.pk).exists()
+
+@pytest.mark.django_db(transaction=True)
+def test_partial_save_does_not_publish_unpersisted_terminal_status(
+    workflow_engine_tables: None, no_workflow_queue: None,
+) -> None:
+    del workflow_engine_tables, no_workflow_queue
+    workflow = workflow_with_steps(steps=({"key": "entry"},), edges=())
+    run = start_run(workflow)
+    with system_context(reason="terminal partial save"):
+        names = [field.attname for field in WorkflowRun._meta.concrete_fields]
+        stale = WorkflowRun.from_db(
+            run._state.db,
+            names,
+            [workflow_models.RunStatus.SUCCEEDED if name == "status" else getattr(run, name) for name in names],
+        )
+        stale.save(update_fields=["wake_at"])
+        assert WorkflowRun.objects.get(pk=run.pk).status == workflow_models.RunStatus.PENDING
+        assert not WorkflowDispatch.objects.filter(
+            kind=WorkflowDispatchKind.ARTIFACT_DELIVERY, artifact_object_id=run.pk
+        ).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -175,7 +269,7 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     monkeypatch.setattr(
         dispatch,
         "enqueue_task",
-        lambda name, *, kwargs: publish_requests.append((name, kwargs)),
+        lambda name, *, kwargs=None: publish_requests.append((name, kwargs)),
     )
     workflow = workflow_with_steps(
         steps=({"key": "start", "step_class": "wait", "config": {"until": "2099-01-01T00:00:00Z"}},),
@@ -195,7 +289,7 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     assert (absent.input_present, absent.input) == (False, None)
     assert (present_null.input_present, present_null.input) == (True, None)
     assert (present_value.input_present, present_value.input) == (True, {"value": [1]})
-    assert publish_requests == [("workflows.publish_dispatches", {"using": "default"})] * 3
+    assert publish_requests == [("workflows.publish_dispatches", None)] * 3
     with system_context(reason="verify initial workflow dispatches"):
         assert WorkflowDispatch.objects.filter(run__in=[absent, present_null, present_value]).count() == 3
     present_value.input = {"changed": True}
@@ -415,34 +509,11 @@ def test_execute_started_selects_one_exact_step_key(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_testing_helpers_forward_non_default_database_objects(
-    workflow_engine_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The harness forwards the persisted alias to the mutating engine owner."""
-
-    del workflow_engine_tables
-    from angee.workflows.testing import start_run as harness_start
-
-    workflow = workflow_with_steps(
-        steps=({"key": "work", "config": {"outcome": "done"}},),
-        edges=(),
-    )
-    workflow._state.db = "other"
-    selected = []
-    monkeypatch.setattr(engine, "start", lambda *args, **kwargs: selected.append(kwargs["using"]))
-
-    harness_start(workflow, actor=object())
-
-    assert selected == ["other"]
-
-
-@pytest.mark.django_db(transaction=True)
 def test_testing_helpers_reject_unretained_objects_before_engine_mutation(
     workflow_engine_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unknown database provenance cannot reach mutating engine entrypoints."""
+    """Unretained objects cannot reach mutating engine entrypoints."""
 
     del workflow_engine_tables
     workflow = workflow_with_steps(
@@ -457,11 +528,11 @@ def test_testing_helpers_reject_unretained_objects_before_engine_mutation(
     workflow.pk = None
     workflow._state.adding = True
     workflow._state.db = None
-    with pytest.raises(ValueError, match="workflow uses None"):
+    with pytest.raises(ValueError, match="workflow is not persisted"):
         start_run(workflow)
 
-    run._state.db = None
-    with pytest.raises(ValueError, match="run uses None"):
+    run._state.adding = True
+    with pytest.raises(ValueError, match="run is not persisted"):
         advance_once(run)
 
     assert engine_calls == []

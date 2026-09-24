@@ -5,12 +5,11 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import connections
+from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.db import related_on
 from angee.integrate.models import Bridge
 from angee.integrate.sync import SyncDispatch
 from angee.workflows import managers as workflow_managers
@@ -26,7 +25,7 @@ def cycle(record_sync_tables: None, workflow_engine_tables: None, no_workflow_qu
     with system_context(reason="test bridge admission"):
         bridge = make_integration("cycle-admission", model=Channel)
         bridge.mark_sync_queued(now=timezone.now())
-        owner = related_on(bridge, "owner", using="default")
+        owner = bridge.owner
         publication = workflow_with_steps(
             key="test-bridge-cycle",
             steps=({"key": "start", "step_class": "fixture"},),
@@ -44,7 +43,6 @@ def _admit(cycle: tuple[Any, Any, Any, str], *, input: Any = None, **kwargs: Any
         occurrence_key=occurrence,
         actor=owner,
         input=JsonPresence(True, input),
-        using="default",
         **kwargs,
     )
 
@@ -101,25 +99,23 @@ def test_prepare_runs_after_workflow_locks_before_bridge_and_frozen_input(
     queryset_class = type(Channel.objects.get_queryset())
     native_lock = queryset_class.lock_if_supported
 
-    def system_queryset(model: Any, *, using: str, **kwargs: Any) -> Any:
+    def system_queryset(model: Any, **kwargs: Any) -> Any:
         if kwargs.get("lock"):
             events.append(model._meta.model_name)
-        return native_queryset(model, using=using, **kwargs)
+        return native_queryset(model,  **kwargs)
 
     def lock_bridge(queryset: Any, *args: Any, **kwargs: Any) -> Any:
         if queryset.model is Channel:
             events.append("bridge")
         return native_lock(queryset, *args, **kwargs)
 
-    def prepare(using: str) -> None:
-        assert using == "default"
-        assert connections[using].in_atomic_block
+    def prepare() -> None:
+        assert connection.in_atomic_block
         assert "workflow" in events and "workflowrun" in events
         assert "bridge" not in events
         events.append("prepare")
 
-    def sync_input(current: Channel, *, using: str | None = None) -> dict[str, str]:
-        assert current._state.db == using == "default"
+    def sync_input(current: Channel) -> dict[str, str]:
         assert events[-2:] == ["prepare", "bridge"]
         events.append("input")
         return snapshot
@@ -130,7 +126,7 @@ def test_prepare_runs_after_workflow_locks_before_bridge_and_frozen_input(
 
     def admit() -> Any:
         return admit_bridge_cycle(
-            bridge, workflow=workflow, occurrence_key=occurrence, actor=owner, prepare=prepare, using="default"
+            bridge, workflow=workflow, occurrence_key=occurrence, actor=owner, prepare=prepare
         )
 
     first = admit()
@@ -155,7 +151,6 @@ def test_validate_new_rejects_second_active_cycle_even_on_another_lineage(cycle:
             occurrence_key=occurrence + "-next",
             actor=owner,
             input=JsonPresence(True, None),
-            using="default",
         )
 
 
@@ -164,7 +159,7 @@ def test_actor_is_active_integration_owner_never_workflow_author(cycle: tuple[An
     assert workflow.created_by_id != owner.pk
     run = _admit(cycle)
     assert run.created_by_id == owner.pk
-    author = related_on(workflow, "created_by", using="default")
+    author = workflow.created_by
     with pytest.raises(PermissionDenied, match="Integration owner"):
         admit_bridge_cycle(
             bridge,
@@ -172,7 +167,6 @@ def test_actor_is_active_integration_owner_never_workflow_author(cycle: tuple[An
             occurrence_key=occurrence,
             actor=author,
             input=JsonPresence(True, None),
-            using="default",
         )
     with system_context(reason="test inactive Integration owner"):
         owner.is_active = False
@@ -181,17 +175,6 @@ def test_actor_is_active_integration_owner_never_workflow_author(cycle: tuple[An
         _admit(cycle)
 
 
-def test_nondefault_authorization_fails_before_admission(cycle: tuple[Any, Any, Any, str]) -> None:
-    bridge, workflow, owner, occurrence = cycle
-    with pytest.raises(ValidationError, match="default"):
-        admit_bridge_cycle(
-            bridge,
-            workflow=workflow,
-            occurrence_key=occurrence,
-            actor=owner,
-            input=JsonPresence(),
-            using="secondary",
-        )
 
 
 def test_declared_key_dispatches_without_early_settlement(cycle: tuple[Any, Any, Any, str], monkeypatch: Any) -> None:
@@ -200,9 +183,9 @@ def test_declared_key_dispatches_without_early_settlement(cycle: tuple[Any, Any,
     starts: list[int] = []
     native_start = Channel.mark_sync_started
 
-    def mark_sync_started(self: Channel, *, now: Any, using: str | None = None) -> None:
+    def mark_sync_started(self: Channel, *, now: Any) -> None:
         starts.append(self.pk)
-        native_start(self, now=now, using=using)
+        native_start(self, now=now)
 
     monkeypatch.setattr(Channel, "mark_sync_started", mark_sync_started)
     with override_settings(ANGEE_BRIDGE_SYNC_DISPATCH="angee.workflows_integrate.admission.dispatch_bridge_cycle"):

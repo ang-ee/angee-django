@@ -21,9 +21,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 from rebac import system_context
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
-from angee.base.permissions import require_authorization_database
 from angee.workflows import engine
 from angee.workflows.attempts import DecisionGateOutput, validate_json_value
 from angee.workflows.configs import NonBlankString, WorkflowStepConfig
@@ -154,12 +152,11 @@ class ArchiveExecutionReporter:
 
     step: StepImpl
     step_run: Any
-    using: str | None = None
 
     def heartbeat(self, *, at: datetime | None = None) -> None:
         """Refresh the mapped step-run heartbeat."""
 
-        self.step.heartbeat(self.step_run, at=at, using=self.using)
+        self.step.heartbeat(self.step_run, at=at)
 
 
 class ArchiveExtractor(ImplBase, ABC):
@@ -174,10 +171,7 @@ class ArchiveExtractor(ImplBase, ABC):
     ``execute(subject, target_pk, reporter)`` must land content via the target
     domain's own idempotent ingest API and return JSON-safe journal output.
     Vendor parsing and target-domain identity rules stay on the concrete
-    extractor and its owning addon. Subjects are pinned to the operation's
-    database, also exposed as ``reporter.using``. Archive workflows currently
-    require the default database: Decision authorization and external backup
-    ingest owners do not yet support a complete multi-database operation.
+    extractor and its owning addon.
     """
 
     target_resource: ClassVar[str] = ""
@@ -250,15 +244,14 @@ class ArchiveProbeStepImpl(StepImpl):
     idempotent = True
     deterministic = False
 
-    def run(self, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Return stable extractor proposals or the routable ``failed`` outcome."""
 
         del now
-        alias = _archive_alias(step_run, using=using)
-        subject = _subject_container(step_run, using=alias)
+        subject = _subject_container(step_run)
         subject_resource = subject._meta.label
         proposals: list[ArchiveProposal] = []
-        with self.heartbeat_during(step_run, using=alias):
+        with self.heartbeat_during(step_run):
             for extractor_class in archive_extractor_classes():
                 if extractor_class.subject_resource != subject_resource:
                     continue
@@ -291,14 +284,10 @@ class ArchiveGateStepImpl(GateStep):
     output_model = ArchiveGateOutput
     outcomes = (*GateStep.outcomes, StepOutcome("failed", "Unsupported archive"))
 
-    def run(self, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Route unsupported mixed-resource proposals before using the built-in gate."""
 
         del now
-        alias = _archive_alias(step_run, using=using)
-        with system_context(reason="workflows_integrate.archive_gate"):
-            step_run.step = related_on(step_run, "step", using=alias)
-            step_run.run = related_on(step_run, "run", using=alias)
         value = self.validate_input(step_run.input)
         proposals = value.proposals
         _validate_proposals(proposals)
@@ -330,9 +319,9 @@ class ArchiveGateStepImpl(GateStep):
     ) -> Mapping[str, Any]:
         """Author one built-in gate config from the admitted probe output."""
 
-        alias = get_write_alias(type(step_run), instance=step_run)
-        config = cls.normalize_config(step_run.step.config)
-        assignee = str(engine.resolve_workflow_actor(config["assignee"] or step_run.run, using=alias).subject)
+        with system_context(reason="workflows_integrate.archive_gate"):
+            config = cls.normalize_config(step_run.step.config)
+            assignee = str(engine.resolve_workflow_actor(config["assignee"] or step_run.run).subject)
         mappings = [
             {
                 "extractor": proposal.extractor,
@@ -387,13 +376,11 @@ class ArchiveExecuteStepImpl(DecisionApplyStep):
     idempotent = True
     gate_step_class = ArchiveGateStepImpl
 
-    def run(self, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Prepare confirmed mappings or execute the mapped extractor unit."""
 
-        alias = _archive_alias(step_run, using=using)
         with system_context(reason="workflows_integrate.archive_execute"):
-            step_run.step = related_on(step_run, "step", using=alias)
-        config = self.normalize_config(step_run.step.config)
+            config = self.normalize_config(step_run.step.config)
         value = self.validate_input(step_run.input).root
         mode = config["mode"]
         if mode == "prepare":
@@ -403,13 +390,13 @@ class ArchiveExecuteStepImpl(DecisionApplyStep):
 
         if not isinstance(value, ArchiveMappingUnit):
             raise ValidationError({"input": "Archive execute unit requires extractor and target."})
-        subject = _subject_container(step_run, using=alias)
+        subject = _subject_container(step_run)
         extractor_key, target_pk = value.extractor, value.target
         extractor_class = archive_extractor_class(extractor_key)
         if extractor_class.subject_resource != subject._meta.label:
             raise ValidationError({"subject": "Archive extractor does not accept this storage container."})
-        reporter = ArchiveExecutionReporter(step=self, step_run=step_run, using=alias)
-        with self.heartbeat_during(step_run, using=alias):
+        reporter = ArchiveExecutionReporter(step=self, step_run=step_run)
+        with self.heartbeat_during(step_run):
             result = extractor_class().execute(subject, target_pk, reporter)
         return StepResult.done(
             output={
@@ -424,10 +411,9 @@ class ArchiveExecuteStepImpl(DecisionApplyStep):
         """Prepare mapping values only from a locked, validated Decision resolution."""
 
         del now
-        alias = get_write_alias(type(step_run), instance=step_run)
         with (
             apps.get_model("workflows", "Decision")
-            .objects.db_manager(alias)
+            .objects
             .locked_resolution(
                 decision_id,
                 actor=actor,
@@ -495,32 +481,21 @@ def _proposal(extractor: type[ArchiveExtractor]) -> ArchiveProposal:
     )
 
 
-def _archive_alias(step_run: Any, *, using: str | None) -> str:
-    """Pin the operation and fail before entering default-only review and ingest owners."""
-
-    alias = get_write_alias(type(step_run), using=using, instance=step_run)
-    require_authorization_database(
-        alias,
-        operation="Archive workflows and their external ingest owners",
-        error_field="using",
-    )
-    step_run._state.db = alias
-    return alias
 
 
-def _subject_container(step_run: Any, *, using: str) -> Any:
-    """Load the File or Drive subject through Django's generic relation on the write alias."""
+def _subject_container(step_run: Any) -> Any:
+    """Load the File or Drive subject through Django's generic relation."""
 
     with system_context(reason="workflows_integrate.archive_subject"):
-        run = related_on(step_run, "run", using=using)
+        run = step_run.run
         if run is None:
             raise ValidationError({"subject": "Archive steps require a workflow run."})
-        content_type = related_on(run, "subject_content_type", using=using)
+        content_type = run.subject_content_type
         file_model = apps.get_model("storage", "File")
         drive_model = apps.get_model("storage", "Drive")
         if content_type is None or content_type.model_class() not in (file_model, drive_model):
             raise ValidationError({"subject": "Archive workflow runs require a storage.File or storage.Drive subject."})
-        return content_type.get_object_for_this_type(using=using, pk=run.subject_object_id)
+        return content_type.get_object_for_this_type( pk=run.subject_object_id)
 
 
 def _validate_proposals(proposals: list[ArchiveProposal]) -> None:

@@ -6,7 +6,6 @@ from typing import Any
 
 from rebac import system_context
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.impl import resolve_all_impl_classes
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import Bridge
@@ -23,16 +22,15 @@ def _stream_step_keys() -> tuple[str, ...]:
     )
 
 
-def settle_bridge_run(run: Any, *, using: str | None = None) -> None:
+def settle_bridge_run(run: Any) -> None:
     """Project the terminal outcome through Bridge's expected-run settlement.
 
     Never copy untrusted workflow/provider error text into integration telemetry.
     """
 
-    using = get_write_alias(type(run), using=using, instance=run)
     if not run.is_terminal:
         return
-    content_type = related_on(run, "subject_content_type", using=using)
+    content_type = run.subject_content_type
     if content_type is None:
         return
     model = content_type.model_class()
@@ -40,13 +38,13 @@ def settle_bridge_run(run: Any, *, using: str | None = None) -> None:
         return
     with system_context(reason="workflows_integrate.settle"):
         try:
-            bridge = content_type.get_object_for_this_type(using=using, pk=run.subject_object_id)
+            bridge = content_type.get_object_for_this_type( pk=run.subject_object_id)
         except model.DoesNotExist:
             return
         if run.status == RunStatus.SUCCEEDED:
             steps = run._meta.apps.get_model("workflows", "StepRun")
             outputs = (
-                steps.objects.db_manager(using)
+                steps.objects
                 .filter(
                     run_id=run.pk,
                     status=StepRunStatus.SUCCEEDED,
@@ -55,7 +53,7 @@ def settle_bridge_run(run: Any, *, using: str | None = None) -> None:
                 .values_list("output", flat=True)
             )
             items = sum(StreamStageOutput.model_validate(output).counts["cycle_items"] for output in outputs)
-            bridge.settle_dispatch(run.pk, result=items, using=using)
+            bridge.settle_dispatch(run.pk, result=items)
         else:
             message = "Sync workflow was canceled." if run.status == RunStatus.CANCELED else "Sync workflow failed."
-            bridge.settle_dispatch(run.pk, error=IntegrationError(message), using=using)
+            bridge.settle_dispatch(run.pk, error=IntegrationError(message))
