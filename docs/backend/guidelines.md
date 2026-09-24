@@ -768,6 +768,10 @@ and current contracts before applying a historical example to a new deployment.
 
 ### Migrations and runtime
 
+- **Review local-only rows before upgrading pull-only record sync.** The
+  [record-sync driver](../../addons/angee/integrate/README.md) may create them
+  remotely as soon as the first baseline completes. Remove rows that must remain
+  local from the synchronized scope before enabling two-way sync.
 - [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its
   subclasses from historical models because their expressions belong to the live
   row. Its `ModelHistory` owner allocates a separate nullable text change-reason

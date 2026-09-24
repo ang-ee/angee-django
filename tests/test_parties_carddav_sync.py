@@ -38,7 +38,7 @@ from angee.integrate.states import (
     StreamKind,
     StreamPhase,
 )
-from angee.integrate.streams import advance_stream, begin_stream_cycle, push_stream, reconcile_stream
+from angee.integrate.streams import advance_stream, begin_stream_cycle, push_stream, reconcile_stream, sync_bridge
 from angee.parties.backends import (
     CONTACT_FIELDS,
     ParsedAddress,
@@ -304,6 +304,104 @@ def test_new_remote_contact_uses_ingest_identity_and_both_bases(replica: Replica
     assert link.local_base_hash == canonical_json_sha256(contact_projection(Party.objects.project_contact(person)))
     assert link.origin == "remote"
     assert replica.stream.cursor == {"sync_token": replica.server.token}
+
+
+@pytest.mark.parametrize("reset_before_baseline", [False, True])
+def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
+    replica: Replica, reset_before_baseline: bool
+) -> None:
+    folder = Folder.objects.get(directory=replica.directory, source_href=_BOOK)
+    existing = {
+        uid: Person.objects.create(
+            display_name=f"Local {uid}",
+            notes="Pre-existing local notes",
+            source_uid=uid,
+            folder=folder,
+            created_by_id=replica.directory.owner_id,
+        )
+        for uid in ("ada", "grace")
+    }
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper", notes="Remote Grace"))
+    if reset_before_baseline:
+        replica.stream = SyncStream.objects.bump_generation(replica.stream, using="default")
+    assert not RecordRevision.objects.exists()
+    replica.server.requests.clear()
+
+    for index, (uid, person) in enumerate(existing.items(), start=1):
+        result = advance_stream(replica.stream, replica.backend, page_bound=1, using="default")
+        replica.stream = result.stream
+
+        assert result.count == 1
+        assert not result.discrepancy_ids
+        assert result.exhausted is (index == 2)
+        assert replica.stream.phase == (StreamPhase.DELTA if result.exhausted else StreamPhase.BASELINE)
+        person.refresh_from_db()
+        href = f"{_BOOK}{uid}.vcf"
+        raw, etag = replica.server.cards[href]
+        remote = _parse_vcard(vobject.readOne(raw), etag=etag, href=href, raw=raw)
+        projection = contact_projection(Party.objects.project_contact(person))
+        assert projection == contact_projection(remote)
+        link = RecordLink.objects.get(stream=replica.stream, external_key=uid)
+        assert link.target_id == str(person.pk)
+        assert link.status == LinkStatus.CURRENT
+        assert link.origin == "remote"
+        assert link.local_base_hash == canonical_json_sha256(projection)
+        assert link.remote_base_hash == canonical_json_sha256(contact_projection(remote))
+        assert link.remote_version == etag
+        assert RecordRevision.objects.filter(link=link, applied_at__isnull=False).count() == 1
+        assert RecordRevision.objects.count() == index
+
+    assert Person.objects.count() == RecordLink.objects.count() == 2
+    assert not SyncDiscrepancy.objects.exists()
+    assert push_stream(replica.stream, replica.backend, using="default").count == 0
+    assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_local_only_contact_waits_until_first_baseline_completes(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, bounded: bool
+) -> None:
+    folder = Folder.objects.get(directory=replica.directory, source_href=_BOOK)
+    person = Person.objects.create(
+        display_name="Grace Hopper",
+        given_name="Grace",
+        family_name="Hopper",
+        source_uid="grace",
+        folder=folder,
+        created_by_id=replica.directory.owner_id,
+    )
+    monkeypatch.setattr(CardDavDirectoryBackend, "http", property(lambda self: replica.server))
+    replica.server.requests.clear()
+
+    assert push_stream(replica.stream, replica.backend, using="default").count == 0
+    assert not RecordLink.objects.exists()
+    assert not replica.server.requests
+
+    if bounded:
+        replica.stream = advance_stream(replica.stream, replica.backend, using="default").stream
+        assert set(replica.server.cards) == {_HREF}
+        assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
+        assert push_stream(replica.stream, replica.backend, using="default").count == 1
+    else:
+        assert sync_bridge(replica.directory, using="default") == 2
+
+    replica.stream.refresh_from_db()
+    assert replica.stream.phase == StreamPhase.DELTA
+    assert Person.objects.filter(pk=person.pk).exists()
+    link = RecordLink.objects.get(stream=replica.stream, target_id=str(person.pk))
+    puts = [request for request in replica.server.requests if request[0] == "PUT"]
+    assert len(puts) == 1
+    assert puts[0][2]["if-none-match"] == "*"
+    assert link.external_key == "grace"
+    assert link.remote_version == replica.server.cards[puts[0][1]][1]
+    assert link.remote_base_hash and link.local_base_hash
+    assert link.origin == "local"
+    assert vobject.readOne(replica.server.cards[puts[0][1]][0]).fn.value == "Grace Hopper"
+    assert not SyncDiscrepancy.objects.exists()
+    replica.server.requests.clear()
+
+    assert sync_bridge(replica.directory, using="default") == 0
+    assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
 
 
 def test_remote_edit_updates_same_party_through_adapter(replica: Replica) -> None:

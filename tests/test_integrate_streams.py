@@ -218,6 +218,119 @@ def test_three_way_classification(
     )
 
 
+@pytest.mark.parametrize(
+    "completed,prior_revision,tombstone,direction,adopted",
+    [
+        (False, False, False, StreamDirection.BIDIRECTIONAL, True),
+        (True, False, False, StreamDirection.BIDIRECTIONAL, False),
+        (False, True, False, StreamDirection.BIDIRECTIONAL, False),
+        (False, False, True, StreamDirection.BIDIRECTIONAL, False),
+        (False, False, False, StreamDirection.PULL, False),
+    ],
+)
+def test_baseline_adoption_preserves_established_bases_and_delete_conflicts(
+    stream_bridge: Channel,
+    completed: bool,
+    prior_revision: bool,
+    tombstone: bool,
+    direction: StreamDirection,
+    adopted: bool,
+) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, direction=direction)
+    row = AppliedRecord.objects.create(key="one", payload={"name": "local"})
+    if prior_revision:
+        link = RecordLink.objects.observe(stream, "one", target=row)
+        RecordLink.objects.promote(
+            link, source_payload={}, source_hash="base", mapped_payload={}, local_hash="base", remote_version="v1"
+        )
+    if completed:
+        SyncStream.objects.advance(stream, {}, exhausted=True)
+    stream = reset_stream(stream, cursor={}).stream
+    record = RecordChange(
+        "one", {"name": "remote"}, "" if tombstone else "remote", "local", "v2", target=row, tombstone=tombstone
+    )
+    adapter = MemoryAdapter(pages=[StreamPage((record,), {})])
+
+    result = advance_stream(stream, adapter)
+
+    row.refresh_from_db()
+    assert result.count == int(adopted)
+    assert row.payload == {"name": "remote" if adopted else "local"}
+    assert not adapter.written
+    if adopted:
+        assert not result.discrepancy_ids
+        link = RecordLink.objects.get(stream=stream, external_key="one")
+        assert (link.local_base_hash, link.remote_base_hash, link.remote_version) == ("remote", "remote", "v2")
+    else:
+        discrepancy = SyncDiscrepancy.objects.get(pk=result.discrepancy_ids[0])
+        assert (discrepancy.kind, discrepancy.code) == (DiscrepancyKind.CONFLICT, "both_changed")
+
+
+@pytest.mark.parametrize("tombstone", [False, True])
+def test_repeated_page_identity_uses_earlier_revision_or_conflict(stream_bridge: Channel, tombstone: bool) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
+    )
+    row = AppliedRecord.objects.create(key="one", payload={"name": "local"})
+    first = RecordChange(
+        "one", {"name": "remote"}, "" if tombstone else "remote", "local", target=row, tombstone=tombstone
+    )
+    second = RecordChange("one", {"name": "newer"}, "newer", "local", target=row)
+    adapter = MemoryAdapter(pages=[StreamPage((first, second), {})])
+
+    result = advance_stream(stream, adapter)
+
+    row.refresh_from_db()
+    assert result.count == int(not tombstone)
+    assert row.payload == {"name": "local" if tombstone else "remote"}
+    assert RecordRevision.objects.count() == int(not tombstone)
+    conflict = SyncDiscrepancy.objects.get(kind=DiscrepancyKind.CONFLICT)
+    assert conflict.attempts == 1
+    assert set(result.discrepancy_ids) == {conflict.pk}
+    assert not adapter.written
+
+
+def test_baseline_completion_during_extraction_retries_without_adopting(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
+    )
+    row = AppliedRecord.objects.create(key="one", payload={"name": "local"})
+    record = RecordChange("one", {"name": "remote"}, "remote", "local", "v1", target=row)
+    page = StreamPage((record,), {})
+    adapter = MemoryAdapter(pages=[page, page])
+    has_completed_baseline = stream.has_completed_baseline
+
+    def complete_on_another_handle(*, using: str | None = None) -> bool:
+        completed = has_completed_baseline(using=using)
+        peer = SyncStream.objects.db_manager(using).get(pk=stream.pk)
+        SyncStream.objects.advance(peer, peer.cursor, exhausted=True, using=using)
+        return completed
+
+    with monkeypatch.context() as patch:
+        patch.setattr(stream, "has_completed_baseline", complete_on_another_handle)
+        with pytest.raises(RuntimeError, match="Stream state changed during extraction; retry the page"):
+            advance_stream(stream, adapter)
+
+    row.refresh_from_db()
+    assert row.payload == {"name": "local"}
+    assert not adapter.applied and not adapter.written
+    assert not RecordLink.objects.exists()
+    assert not RecordRevision.objects.exists()
+    assert not SyncDiscrepancy.objects.exists()
+    stream.refresh_from_db()
+    assert stream.phase == StreamPhase.DELTA
+    assert stream.cursor == {}
+
+    result = advance_stream(stream, adapter)
+
+    assert result.count == 0
+    assert not adapter.applied and not adapter.written
+    conflict = SyncDiscrepancy.objects.get(pk=result.discrepancy_ids[0])
+    assert (conflict.kind, conflict.code) == (DiscrepancyKind.CONFLICT, "both_changed")
+
+
 @pytest.mark.parametrize("reconcile", [False, True])
 @pytest.mark.parametrize(
     "page,message",
@@ -259,6 +372,7 @@ def test_invalid_write_result_never_promotes_record_bases(stream_bridge: Channel
     RecordLink.objects.promote(
         link, source_payload={}, source_hash="base", mapped_payload={}, local_hash="base", remote_version="v1"
     )
+    SyncStream.objects.advance(stream, {}, exhausted=True)
     adapter = InvalidWriteAdapter(
         pages=[StreamPage((RecordChange("person:1", {}, "base", "changed", "v1"),), {"offset": 1})],
         candidates=(LocalChange("person:1", {}, "changed"),),
@@ -953,6 +1067,37 @@ def test_both_changed_conflict_requires_resolution_before_pull_or_push(stream_br
         SyncDiscrepancy.objects.resolve(discrepancy)
 
 
+def test_page_reloads_conflicts_recorded_during_conditional_write(stream_bridge: Channel) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
+    )
+    link = RecordLink.objects.observe(stream, "one")
+    RecordLink.objects.promote(link, source_payload={}, source_hash="base", mapped_payload={}, local_hash="base")
+    SyncStream.objects.advance(stream, {}, exhausted=True)
+
+    class RacingAdapter(MemoryAdapter):
+        def write_back(
+            self, link: Any, projection: Any, *, expected_version: str, using: str | None = None
+        ) -> WriteBackResult:
+            SyncDiscrepancy.objects.record(
+                stream, link=link, kind=DiscrepancyKind.CONFLICT, code="concurrent_conflict", using=using
+            )
+            return super().write_back(link, projection, expected_version=expected_version, using=using)
+
+    adapter = RacingAdapter(pages=[StreamPage((RecordChange("one", {}, "base", "local"),), {})])
+
+    result = advance_stream(stream, adapter)
+
+    assert result.count == 0
+    assert len(adapter.written) == 1
+    assert RecordRevision.objects.count() == 1
+    conflict = SyncDiscrepancy.objects.get(pk=result.discrepancy_ids[0])
+    assert conflict.code == "concurrent_conflict"
+    assert conflict.status == DiscrepancyStatus.OPEN
+    link.refresh_from_db()
+    assert (link.local_base_hash, link.remote_base_hash) == ("base", "base")
+
+
 def test_write_back_origin_is_recognized_on_next_pull(stream_bridge: Channel) -> None:
     stream = SyncStream.objects.current(
         stream_bridge,
@@ -1249,6 +1394,7 @@ def test_failed_conflict_reread_keeps_quarantine(
     stream = SyncStream.objects.current(
         stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
     )
+    SyncStream.objects.advance(stream, {}, exhausted=True)
     link = RecordLink.objects.observe(stream, "one")
     discrepancy = SyncDiscrepancy.objects.record(stream, link=link, kind=DiscrepancyKind.CONFLICT, code="both_changed")
 
@@ -1297,6 +1443,7 @@ def test_conflict_choice_requires_a_completed_apply_or_conditional_write(
         code="both_changed",
         source_hash="base",
     )
+    SyncStream.objects.advance(stream, {}, exhausted=True)
 
     class RejectedAdapter(ReadKeysAdapter):
         def write_back(
@@ -1315,6 +1462,7 @@ def test_conflict_choice_requires_a_completed_apply_or_conditional_write(
         old = RecordLink.objects.observe(stream, "expired")
         RecordLink.objects.tombstone(old)
         RecordLink.objects.filter(pk=old.pk).update(tombstoned_at=timezone.now() - timedelta(days=2))
+        SyncStream.objects.filter(pk=stream.pk).update(last_advanced_at=timezone.now() - timedelta(days=2))
     with pytest.raises(ValidationError):
         SyncDiscrepancy.objects.resolve_conflict(discrepancy, keep=keep)
     assert SyncDiscrepancy.objects.unresolved().filter(link=link).count() == 1

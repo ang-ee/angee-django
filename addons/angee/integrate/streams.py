@@ -286,8 +286,18 @@ def reset_stream(stream: Any, *, cursor: dict[str, Any], using: str | None = Non
     return PageResult(stream, reset=True)
 
 
-def _decision(link: Any, record: RecordChange, *, using: str) -> ChangeKind:
-    revision = _manager("RecordRevision", using=using).latest_for(link).first()
+def _baseline_adoption(stream: Any, *, using: str) -> bool:
+    """Two-way replicas adopt existing identities until their first baseline completes."""
+    return (
+        stream.kind == StreamKind.RECORD_REPLICA
+        and stream.direction == StreamDirection.BIDIRECTIONAL
+        and not stream.has_completed_baseline(using=using)
+    )
+
+
+def _decision(link: Any, record: RecordChange, *, revision: Any, adopting: bool) -> ChangeKind:
+    if adopting and revision is None and record.target is not None and not record.tombstone:
+        return ChangeKind.APPLY
     return classify_change(
         remote_hash=record.source_hash,
         local_hash=record.local_hash,
@@ -402,19 +412,33 @@ def _apply_page(
     """Apply page or identity observations through the same fenced transaction."""
 
     page = replace(page, cursor=_validated_cursor(page.cursor))
+    adopting = _baseline_adoption(stream, using=using)
+    links = _manager("RecordLink", using=using)
+    evidence_rows = None
+    if stream.kind == StreamKind.RECORD_REPLICA:
+        if any(not isinstance(record, RecordChange) for record in page.records):
+            raise AdapterContractError("Replica pages must contain RecordChange values.")
+        evidence_rows = links.filter(
+            stream=stream, external_key__in=[record.external_key for record in page.records]
+        ).with_sync_evidence(using=using)
     # Conditional remote writes precede the transaction. Compare link bases
     # again before reflecting the response; a later local edit remains dirty.
     written: dict[str, tuple[tuple[str, str, str], WriteBackResult | SemanticError]] = {}
-    if stream.kind == StreamKind.RECORD_REPLICA and stream.direction != StreamDirection.PULL:
+    if evidence_rows is not None and stream.direction != StreamDirection.PULL:
+        evidence = {link.external_key: link for link in evidence_rows}
         for record in page.records:
-            if not isinstance(record, RecordChange):
-                raise AdapterContractError("Replica pages must contain RecordChange values.")
-            link = _manager("RecordLink", using=using).filter(stream=stream, external_key=record.external_key).first()
+            link = evidence.get(record.external_key)
             if (
                 link is not None
                 and record.external_key not in force_apply
-                and not _has_conflict(link, using=using)
-                and _decision(link, record, using=using) == ChangeKind.WRITE_BACK
+                and not link.open_conflicts
+                and _decision(
+                    link,
+                    record,
+                    revision=next(iter(link.latest_revisions), None),
+                    adopting=adopting,
+                )
+                == ChangeKind.WRITE_BACK
             ):
                 bases = (link.remote_base_hash, link.local_base_hash, link.remote_version)
                 result: WriteBackResult | SemanticError
@@ -432,46 +456,52 @@ def _apply_page(
         locked = _manager("SyncStream", using=using).lock_current(stream, using=using)
         if (
             locked.cursor != original_cursor
+            or locked.phase != stream.phase
             or locked.reconcile_state != stream.reconcile_state
             or locked.resync_required
         ):
             raise RuntimeError("Stream state changed during extraction; retry the page.")
         adapter.prepare_page(locked, page, using=using)
+        evidence = (
+            {}
+            if evidence_rows is None
+            else {link.external_key: link for link in evidence_rows.order_by("pk").lock_if_supported()}
+        )
+        seen: set[str] = set()
         for record in page.records:
             link = None
+            revision = None
             try:
                 with transaction.atomic(using=using):
-                    if locked.kind == StreamKind.RECORD_REPLICA:
-                        if not isinstance(record, RecordChange):
-                            raise AdapterContractError("Replica pages must contain RecordChange values.")
-                        link = _manager("RecordLink", using=using).observe(
+                    if evidence_rows is not None:
+                        # Repeated identities must see earlier writes and refusals in this page.
+                        observed = (
+                            evidence_rows.filter(external_key=record.external_key).first()
+                            if record.external_key in seen
+                            else evidence.get(record.external_key)
+                        )
+                        seen.add(record.external_key)
+                        link = links.observe(
                             locked,
                             record.external_key,
                             metadata=record.metadata or None,
                             using=using,
                         )
-                        if _has_conflict(link, using=using):
-                            discrepancies.extend(
-                                _manager("SyncDiscrepancy", using=using)
-                                .unresolved()
-                                .filter(
-                                    link=link,
-                                    kind=DiscrepancyKind.CONFLICT,
-                                )
-                                .values_list("pk", flat=True)
-                            )
+                        if observed is not None and observed.open_conflicts:
+                            discrepancies.extend(conflict.pk for conflict in observed.open_conflicts)
                             continue
+                        revision = next(iter(observed.latest_revisions), None) if observed is not None else None
                         decision = (
                             ChangeKind.APPLY
                             if record.external_key in force_apply
-                            else _decision(link, record, using=using)
+                            else _decision(link, record, revision=revision, adopting=adopting)
                         )
                         if decision == ChangeKind.UNCHANGED and record.external_key in reapply:
                             decision = ChangeKind.APPLY
                         if decision == ChangeKind.CONFLICT:
                             raise SemanticError("both_changed", kind=DiscrepancyKind.CONFLICT)
                         if decision == ChangeKind.UNCHANGED:
-                            revision = _manager("RecordRevision", using=using).latest_for(link).first()
+                            assert revision is not None
                             _promote(
                                 link,
                                 replace(record, source_payload=revision.source_payload),
@@ -505,13 +535,11 @@ def _apply_page(
                             _resolve_applied(locked, record, using=using)
                             count += 1
                             continue
-                    revisions = _manager("RecordRevision", using=using)
-                    prior = revisions.latest_for(link).first() if link is not None else None
                     outcome = adapter.apply_record(locked, record, using=using)
                     if not isinstance(outcome, ApplyResult):
                         raise AdapterContractError("apply_record must return ApplyResult.")
                     if link is not None:
-                        if revisions.latest_for(link).first() != prior:
+                        if _manager("RecordRevision", using=using).latest_for(link).first() != revision:
                             raise AdapterContractError(
                                 "Adapters return ApplyResult; only the driver promotes the primary link."
                             )
@@ -555,7 +583,7 @@ def push_stream(
     deadline: float | None = None,
     using: str | None = None,
 ) -> PageResult:
-    """Compare local candidates to their bases and conditionally write changed rows."""
+    """Conditionally write local candidates after a two-way replica's first baseline."""
 
     using = get_write_alias(type(stream), using=using, instance=stream)
     if connections[using].in_atomic_block:
@@ -565,6 +593,8 @@ def push_stream(
     count = 0
     discrepancies: list[int] = []
     with system_context(reason="integrate.stream.push"):
+        if _baseline_adoption(stream, using=using):
+            return PageResult(stream, exhausted=True)
         for candidate in adapter.local_changes(stream, keys=external_keys, using=using):
             if deadline is not None and monotonic() >= deadline:
                 return PageResult(stream, count, discrepancy_ids=tuple(discrepancies))

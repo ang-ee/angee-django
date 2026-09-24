@@ -48,6 +48,18 @@ conditional deletion returns `WriteBackResult(tombstone=True)` so the driver
 retains the link's deletion and local origin. [Directory](../parties/README.md)
 composes this protocol for bidirectional CardDAV contacts.
 
+Before a two-way replica completes its first baseline, an adapter's identity
+match between a live remote record and an existing local row with no link revision
+is adopted with remote wins.
+The driver applies the remote projection and records its version and both applied
+bases without a conflict or write-back. Each identity can be adopted across
+baseline pages and cursor resets; retained revisions still use ordinary
+three-way comparison. `push_stream` suppresses local pushes only until that first
+baseline completes. Local-only rows can then be created remotely, including
+during the same sync call that completes the baseline. Before upgrading pull-only
+sync to two-way sync, remove any local-only rows that must not reach the remote
+from the synchronized scope.
+
 Changes to mapping version or dependency digest also require application. The
 adapter returns applied evidence in `ApplyResult`; only the driver promotes the
 primary link. `apply_record` returns one result for one record. An adapter promotion of that link aborts the page. Optional

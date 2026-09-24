@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from django.apps import apps
@@ -3278,6 +3278,28 @@ class SyncStream(SqidMixin, AuditMixin, AngeeModel):
     objects = SyncStreamManager()
     unscoped_objects = AngeeUnscopedManager()
 
+    def has_completed_baseline(self, *, using: str | None = None) -> bool:
+        """Read completion across retained epochs, including this persisted row.
+
+        Cursor seeds and interrupted baselines are not completion. A later epoch
+        retains an earlier completion even while its own baseline is unfinished.
+        """
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        refresh_deferred(self, using=using, fields=("integration_id", "key", "partition", "generation"))
+        return (
+            type(self)
+            .unscoped_objects.db_manager(using)
+            .filter(
+                integration_id=self.integration_id,
+                key=self.key,
+                partition=self.partition,
+                generation__lte=self.generation,
+                phase=StreamPhase.DELTA,
+            )
+            .exists()
+        )
+
     class Meta:
         abstract = True
         base_manager_name = "unscoped_objects"
@@ -3291,7 +3313,34 @@ class SyncStream(SqidMixin, AuditMixin, AngeeModel):
         )
 
 
-class RecordLinkManager(AngeeManager):
+class RecordLinkQuerySet(AngeeQuerySet[Any]):
+    """Load comparison evidence for a bounded collection of replica identities."""
+
+    def with_sync_evidence(self, *, using: str | None = None) -> Self:
+        """Prefetch each link's latest revision and open conflicts on one alias.
+
+        The driver reloads under stream and link locks before applying.
+        Empty lists represent identities without revisions or open conflicts.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self)
+        revisions = apps.get_model("integrate", "RecordRevision").objects.db_manager(using)
+        conflicts = apps.get_model("integrate", "SyncDiscrepancy").objects.db_manager(using)
+        return self.using(using).prefetch_related(
+            Prefetch(
+                "revisions",
+                queryset=revisions.filter(pk=Subquery(revisions.latest_for(OuterRef("link_id")).values("pk"))),
+                to_attr="latest_revisions",
+            ),
+            Prefetch(
+                "discrepancies",
+                queryset=conflicts.unresolved().filter(kind=DiscrepancyKind.CONFLICT).order_by("pk"),
+                to_attr="open_conflicts",
+            ),
+        )
+
+
+class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type: ignore[misc]
     """Own replica identity, applied bases and count-based absence policy."""
 
     def observe(
@@ -3715,6 +3764,8 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
                     raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
                 if keep == ConflictKeep.LOCAL and stream.direction == StreamDirection.PULL:
                     raise ValidationError("A pull-only stream cannot keep local changes remotely.")
+                if keep == ConflictKeep.LOCAL and not stream.has_completed_baseline(using=using):
+                    raise ValidationError("Complete the stream baseline before resolving its conflict.")
                 bases = (owner.remote_base_hash, owner.local_base_hash, owner.remote_version)
                 remote = (
                     read_stream_keys(adapter, stream, tuple(keys), using=using)[0]

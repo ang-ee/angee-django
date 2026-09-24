@@ -3,17 +3,28 @@
 from collections.abc import Iterator
 from datetime import timedelta
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connections, models, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.base.models import AngeeQuerySet, AngeeUnscopedQuerySet
-from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, LinkStatus, StreamKind, StreamPhase
+from angee.integrate.impl import BridgeImpl
+from angee.integrate.states import (
+    ConflictKeep,
+    DiscrepancyKind,
+    DiscrepancyStatus,
+    LinkStatus,
+    StreamDirection,
+    StreamKind,
+    StreamPhase,
+)
 from tests.conftest import make_integration
 from tests.integrate_models import Integration, RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from tests.messaging_models import Channel
@@ -105,6 +116,138 @@ def test_resync_request_follows_latest_epoch_and_leaves_bump_to_driver(replica: 
     fresh = SyncStream.objects.bump_generation(requested)
     assert fresh.generation == successor.generation + 1
     assert fresh.phase == StreamPhase.BASELINE and not fresh.resync_required
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_baseline_completion_survives_epochs_and_reads_persisted_progress(replica: Any, exhausted: bool) -> None:
+    # Another partition's completed baseline never enables this one's pushes.
+    other = SyncStream.objects.create(
+        integration_id=replica.integration_id,
+        key=replica.key,
+        partition="other-book",
+        kind=replica.kind,
+        direction=replica.direction,
+        phase=StreamPhase.DELTA,
+    )
+    assert other.has_completed_baseline()
+    assert not replica.has_completed_baseline()
+    fresh = SyncStream.objects.get(pk=replica.pk)
+    SyncStream.objects.advance(fresh, {"page": 1}, exhausted=exhausted)
+    assert replica.phase == StreamPhase.BASELINE
+    assert replica.has_completed_baseline() is exhausted
+    successor = SyncStream.objects.bump_generation(replica)
+    assert successor.phase == StreamPhase.BASELINE
+    assert successor.has_completed_baseline() is exhausted
+
+
+def test_baseline_completion_reads_deferred_identity_on_operation_alias(replica: Any, database_alias: Any) -> None:
+    deferred = SyncStream.objects.only("pk").get(pk=replica.pk)
+
+    def reject_default_query(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Baseline completion must read only the operation alias.")
+
+    with database_alias("baseline_completion") as alias:
+        other = SyncStream.objects.using(alias).get(pk=replica.pk)
+        SyncStream.objects.db_manager(alias).advance(other, {}, exhausted=True, using=alias)
+        with connections["default"].execute_wrapper(reject_default_query):
+            assert deferred.has_completed_baseline(using=alias)
+    assert not replica.has_completed_baseline()
+
+
+def test_baseline_completion_is_independent_of_actor_visibility(record_sync_tables: None) -> None:
+    del record_sync_tables
+    call_command("rebac", "sync", verbosity=0)
+    with system_context(reason="test baseline completion authorization"):
+        bridge = make_integration("baseline-completion-rebac", model=Channel)
+        other = get_user_model().objects.create_user(username="baseline-completion-other")
+        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        SyncStream.objects.advance(stream, {}, exhausted=True)
+        successor = SyncStream.objects.bump_generation(stream)
+        deferred = SyncStream.objects.only("pk").get(pk=successor.pk)
+
+    with actor_context(other):
+        assert not SyncStream.objects.filter(integration=bridge).exists()
+        assert stream.has_completed_baseline()
+        assert successor.has_completed_baseline()
+        assert deferred.has_completed_baseline()
+
+
+def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    replica.direction = StreamDirection.BIDIRECTIONAL
+    replica.save(update_fields=["direction"])
+    link = RecordLink.objects.observe(replica, "person:deleted", target=replica)
+    conflict = SyncDiscrepancy.objects.record(
+        replica, link=link, kind=DiscrepancyKind.CONFLICT, code="both_changed", source_hash=""
+    )
+    retained_conflict = SyncDiscrepancy.objects.filter(pk=conflict.pk).values().get()
+    retained_link = RecordLink.objects.filter(pk=link.pk).values().get()
+    adapter = Mock(spec=BridgeImpl, supports_identity_reads=True)
+    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+
+    with pytest.raises(ValidationError, match="Complete the stream baseline before resolving its conflict\\."):
+        SyncDiscrepancy.objects.resolve_conflict(conflict, keep=ConflictKeep.LOCAL)
+
+    assert list(SyncDiscrepancy.objects.filter(link=link).values()) == [retained_conflict]
+    assert RecordLink.objects.filter(pk=link.pk).values().get() == retained_link
+    assert not RecordRevision.objects.filter(link=link).exists()
+    adapter.read_keys.assert_not_called()
+    adapter.write_back.assert_not_called()
+    adapter.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("count", [1, 8])
+def test_record_link_sync_evidence_uses_bounded_queries_on_operation_alias(
+    replica: Any, database_alias: Any, count: int
+) -> None:
+    expected: dict[str, tuple[list[int], list[int]]] = {}
+    for index in range(count):
+        link = RecordLink.objects.observe(replica, f"person:{index}")
+        revisions = []
+        if index % 3 != 2:
+            for number in (1, 2):
+                revision = RecordRevision.objects.append(
+                    link, source_payload={"version": number}, source_hash=str(number), mapping_version=number
+                )
+            revisions = [revision.pk]
+        conflicts = []
+        for status in DiscrepancyStatus.values:
+            discrepancy = SyncDiscrepancy.objects.create(
+                stream=replica,
+                link=link,
+                kind=DiscrepancyKind.CONFLICT,
+                code=f"both_changed-{index}-{status}",
+                status=status,
+            )
+            if status != DiscrepancyStatus.RESOLVED:
+                conflicts.append(discrepancy.pk)
+        SyncDiscrepancy.objects.record(replica, link=link, kind=DiscrepancyKind.SEMANTIC, code=f"semantic-{index}")
+        expected[link.external_key] = (revisions, conflicts)
+    RecordLink.objects.observe(replica, "outside-page")
+
+    def reject_default_query(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Page comparison evidence must read only the operation alias.")
+
+    with database_alias("sync_evidence") as alias:
+        # Materialize the isolated database before refusing default reads.
+        SyncStream.objects.using(alias).get(pk=replica.pk)
+        with (
+            connections["default"].execute_wrapper(reject_default_query),
+            CaptureQueriesContext(connections[alias]) as queries,
+        ):
+            links = list(
+                RecordLink.objects.filter(stream=replica, external_key__in=[*expected, "missing"])
+                .with_sync_evidence(using=alias)
+                .order_by("pk")
+            )
+            actual = {
+                link.external_key: (
+                    [revision.pk for revision in link.latest_revisions],
+                    [conflict.pk for conflict in link.open_conflicts],
+                )
+                for link in links
+            }
+        assert len(queries) == 3
+    assert actual == expected
 
 
 def test_sweep_absence_unavailable_then_tombstone_and_reappearance(replica: Any) -> None:
