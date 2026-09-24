@@ -8,13 +8,13 @@ import {
 import {
   refineFieldsFromPaths, } from "@angee/refine";
 import {
-  DISABLED_RESOURCE, refineResourceName, } from "@angee/metadata";
+  refineResourceName, } from "@angee/metadata";
 import {
   useModelMetadata, } from "@angee/metadata";
 import { Skeleton, SkeletonStatus, textRoleVariants } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
-import { agentLifecycle, agentRuntime, stringField } from "./agent-record";
+import { agentLifecycle, agentRuntime, booleanField, stringField } from "./agent-record";
 
 const AGENT_MODEL = "agents.Agent";
 
@@ -25,7 +25,7 @@ const PROVISION_FIELDS = [
   "last_error",
   "workspace",
   "service",
-  "runtime_class",
+  "expects_service",
   "workspace_template.path",
 ] as const;
 
@@ -35,7 +35,7 @@ interface AgentProvisionRecord extends Row {
   last_error?: string | null;
   workspace?: string | null;
   service?: string | null;
-  runtime_class?: string | null;
+  expects_service?: boolean | null;
   workspace_template?: { path?: string | null } | null;
 }
 
@@ -60,7 +60,7 @@ export function AgentProvisioning({
     [],
   );
   const run = useOne<RowRecord, HttpError>({
-    resource: resource ? refineResourceName(resource) : DISABLED_RESOURCE,
+    resource: refineResourceName(resource),
     id: agentId,
     dataProviderName: resource?.schemaName,
     meta: { fields },
@@ -75,8 +75,7 @@ export function AgentProvisioning({
   const service = stringField(agent, "service");
   const lifecycle = agentLifecycle(agent);
   const active = isLifecycleActive(lifecycle);
-  // The "none" runtime renders no service; any other runtime does.
-  const expectsService = agent?.runtime_class != null && agent.runtime_class !== "NONE";
+  const expectsService = booleanField(agent, "expects_service");
   const missingRenderedInstances =
     agentRuntime(agent) === "RUNNING" && (!workspace || (expectsService && !service));
   const showRuntime = active || Boolean(workspace) || missingRenderedInstances;

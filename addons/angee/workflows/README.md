@@ -200,8 +200,9 @@ authorized Decisions; journal references retain independent read checks.
 Frontend review content composes `WorkflowDecisionScaffold` for a domain-owned
 frozen schema or `NativeWorkflowDecisionScaffold` for native facts and references.
 The native scaffold parses and renders the retained context, selects the initial
-peek, and keeps correction controls available when context is missing. Consumers
-supply summaries and reference presentation through its callbacks.
+peek, and keeps correction controls available when context is missing. Its
+memoized `select` callback supplies one domain value to summaries and reference
+presentation; keep the selector stable to reuse its parse across renders.
 `ApprovalTask` owns action selection and submission. A content component may
 localize action labels with `actionPresentation: { namespace, keyPrefix }`;
 `${keyPrefix}.${action}` resolves against the addon's composed i18n bundle.

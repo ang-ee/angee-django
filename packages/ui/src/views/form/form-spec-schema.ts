@@ -44,34 +44,36 @@ const RelationSchema = v.object({
     title: v.optional(NonEmptyString),
   })),
 });
-const FieldBaseSchema = v.object({
+const FieldKeywordSchema = v.object({
   type: v.optional(JsonFieldTypeSchema),
   required: v.optional(v.array(v.string())),
-  propertyOrder: v.optional(v.array(NonEmptyString)),
-  widget: v.optional(NonEmptyString),
-  label: v.optional(NonEmptyString),
-  addLabel: v.optional(NonEmptyString),
-  removeLabel: v.optional(NonEmptyString),
   description: v.optional(NonEmptyString),
-  placeholder: v.optional(NonEmptyString),
   readOnly: v.optional(v.boolean()),
-  hidden: v.optional(v.boolean()),
-  layout: v.optional(FieldLayoutSchema),
   nullable: v.optional(v.boolean()),
-  omittable: v.optional(v.boolean()),
-  presenceRequired: v.optional(v.boolean()),
   minimum: v.optional(v.pipe(v.number(), v.finite())),
   maximum: v.optional(v.pipe(v.number(), v.finite())),
   minLength: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
   maxLength: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
   minItems: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
   maxItems: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
-  defaultValue: v.optional(JsonValueSchema),
   default: v.optional(JsonValueSchema),
   const: v.optional(JsonValueSchema),
   format: v.optional(NonEmptyString),
   pattern: v.optional(v.string()),
   enum: v.optional(v.array(v.string("form-spec select values must be strings."))),
+});
+const FieldAnnotationSchema = v.object({
+  propertyOrder: v.optional(v.array(NonEmptyString)),
+  widget: v.optional(NonEmptyString),
+  label: v.optional(NonEmptyString),
+  addLabel: v.optional(NonEmptyString),
+  removeLabel: v.optional(NonEmptyString),
+  placeholder: v.optional(NonEmptyString),
+  hidden: v.optional(v.boolean()),
+  layout: v.optional(FieldLayoutSchema),
+  omittable: v.optional(v.boolean()),
+  presenceRequired: v.optional(v.boolean()),
+  defaultValue: v.optional(JsonValueSchema),
   // Option annotations are an extension seam. The generic form owner consumes
   // only value/label/disabled and preserves domain annotations for its caller.
   options: v.optional(v.array(v.looseObject({
@@ -83,6 +85,10 @@ const FieldBaseSchema = v.object({
     disabled: v.optional(v.boolean()),
   }))),
   relation: v.optional(RelationSchema),
+});
+const FieldBaseSchema = v.object({
+  ...FieldKeywordSchema.entries,
+  ...FieldAnnotationSchema.entries,
 });
 /** Only recursive edges need an annotation; scalar facts are inferred. */
 export type FormSpecWire = v.InferOutput<typeof FieldBaseSchema> & {
@@ -136,11 +142,5 @@ export function parseFormSpecPayload(payload: unknown): Record<string, unknown> 
   return result.success ? result.output : {};
 }
 
-const JSON_SCHEMA_KEYWORDS = new Set([
-  "type", "required", "description", "readOnly", "nullable", "minimum", "maximum",
-  "minLength", "maxLength", "minItems", "maxItems", "default", "const", "format", "pattern", "enum",
-]);
-
 /** Every non-standard field entry is an annotation for full JSON Schema validators. */
-export const FORM_SPEC_ANNOTATIONS: readonly string[] = Object.keys(FieldBaseSchema.entries)
-  .filter((keyword) => !JSON_SCHEMA_KEYWORDS.has(keyword));
+export const FORM_SPEC_ANNOTATIONS: readonly string[] = Object.keys(FieldAnnotationSchema.entries);

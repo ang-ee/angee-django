@@ -61,11 +61,11 @@ export function useBulkDelete(
   const metadata = useModelMetadata(resource);
   const dataResource = metadata?.resource ?? null;
   const deletePreviewOperation = useDeletePreviewOperation(dataResource);
-  const refineResource = dataResource ? refineResourceName(dataResource) : undefined;
+  const refineResource = refineResourceName(dataResource);
   const deleteAccess = useCan({
     resource: refineResource,
     action: "delete",
-    queryOptions: { enabled: Boolean(refineResource) },
+    queryOptions: { enabled: Boolean(dataResource) },
   });
   const canDelete =
     (rootFields === null || Boolean(rootFields.deletePreview))

@@ -36,7 +36,7 @@ export {
   DECISION_SEARCH_KEY,
   decisionHref,
   decisionSearchPatch,
-  workflowSubjectActionSearch,
+  workflowSubjectActionSearchPatch,
 } from "./decision-navigation";
 
 const WORKFLOWS_ID = "workflows";

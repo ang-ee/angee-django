@@ -86,7 +86,7 @@ export class ResourceQuery {
         ? supportedSearchFields
         : representationFields.length > 0
           ? representationFields
-          : executableTextSearchFields(contract, Object.keys(contract.fields)),
+          : executableTextSearchFields(contract, Object.keys(contract.fields)).slice(0, 1),
     );
     ResourceQuery.cache.set(data, query);
     return query;
@@ -128,7 +128,7 @@ export class ResourceQuery {
   /**
    * Keep declared order while admitting only executable text comparisons.
    * Resource defaults prefer declared search fields, then the representation,
-   * then every field supporting iContains. Explicit fields never broaden.
+   * then the first field supporting iContains. Explicit fields never broaden.
    */
   textSearchFields(fields?: readonly string[]): readonly string[] {
     return fields === undefined

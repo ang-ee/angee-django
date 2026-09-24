@@ -65,8 +65,9 @@ export function refineResourcesFromDataResources(
     .map((resource) => refineResourceFromDataResource(resource, options));
 }
 
-export function refineResourceName(resource: DataResourceMetadata): string {
-  return requiredRoot(resource, "list");
+/** Use the declared list root, or disable route fallback when metadata is absent. */
+export function refineResourceName(resource: DataResourceMetadata | null | undefined): string {
+  return resource ? requiredRoot(resource, "list") : DISABLED_RESOURCE;
 }
 
 /**

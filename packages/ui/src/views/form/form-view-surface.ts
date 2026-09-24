@@ -1,6 +1,5 @@
 import * as React from "react";
 import {
-  DISABLED_RESOURCE,
   lineReadSelectionPaths,
   refineResourceName,
   useModelMetadata,
@@ -461,7 +460,7 @@ export function useFormViewSurface({
     [canonicalTabFields],
   );
   const canonicalRead = useOne({
-    resource: canonicalMetadata ? refineResourceName(canonicalMetadata.resource) : DISABLED_RESOURCE,
+    resource: refineResourceName(canonicalMetadata?.resource),
     id: id ?? undefined,
     dataProviderName: canonicalMetadata?.resource.schemaName,
     meta: { fields: canonicalTabSelection },

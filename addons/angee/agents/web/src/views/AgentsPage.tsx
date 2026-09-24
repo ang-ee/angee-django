@@ -8,7 +8,6 @@ import {
 import {
   useModelMetadata,
   useResourceInvalidates,
-  DISABLED_RESOURCE,
 } from "@angee/metadata";
 import {
   refineFieldsFromPaths,
@@ -60,7 +59,7 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
     [],
   );
   const run = useOne<RowRecord, HttpError>({
-    resource: resource ? refineResourceName(resource) : DISABLED_RESOURCE,
+    resource: refineResourceName(resource),
     id: agentId,
     dataProviderName: resource?.schemaName,
     meta: { fields },

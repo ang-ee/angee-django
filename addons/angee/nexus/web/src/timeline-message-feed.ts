@@ -37,5 +37,5 @@ export function useTimelineMessageFeed(scopeId: string, circle: boolean) {
         return messageFeedRevalidation(page);
       },
     },
-  });
+  }).query;
 }

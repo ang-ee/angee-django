@@ -35,7 +35,7 @@ function ImportImapSampleDialog(): React.ReactElement | null {
   const [previewStarted, setPreviewStarted] = React.useState(false);
   const [outcome, setOutcome] = React.useState<Outcome | null>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
-  const previewFeed = useSamplePreviewFeed({
+  const { query: previewFeed, restart } = useSamplePreviewFeed({
     id: recordId, mailbox: mailbox.trim(), since: allDates ? null : since,
     before: allDates ? null : before, allDates, limit,
   });
@@ -75,7 +75,7 @@ function ImportImapSampleDialog(): React.ReactElement | null {
     }
     clearSelectedIds(); setPage(1); setPreviewStarted(true);
     try {
-      await previewFeed.restart();
+      await restart();
     } catch { /* Native query state renders the server error. */ }
   };
 

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { DISABLED_RESOURCE, ResourceQuery, refineResourceName, type DataResourceMetadata } from "@angee/metadata";
+import { ResourceQuery, refineResourceName, type DataResourceMetadata } from "@angee/metadata";
 import { useList, type HttpError } from "@refinedev/core";
 import { listQueryMeta } from "@angee/refine";
 import { listBatchTarget } from "../resource-operations";
@@ -26,7 +26,7 @@ export function useResourceListQuery({
     }
   }, [resource, scope?.filter, scope?.order, fields]);
   const result = useList<RowRecord, HttpError, RowRecord>({
-    resource: resource ? refineResourceName(resource) : DISABLED_RESOURCE,
+    resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     pagination: { mode: "server", currentPage: scope?.page ?? 1, pageSize: scope?.pageSize ?? 1 },
     filters: [], sorters: [], meta: request.meta,

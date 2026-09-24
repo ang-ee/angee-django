@@ -29,5 +29,5 @@ export function useThreadMessageFeed(threadId: string, anchor = "") {
       variables: (ids) => ({ threadId, ids }),
       select: (data) => messageFeedRevalidation(data.thread_message_feed_revalidate),
     },
-  });
+  }).query;
 }

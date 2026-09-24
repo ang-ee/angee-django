@@ -197,6 +197,7 @@ class AgentType(AngeeNode):
     lifecycle: auto
     runtime_status: auto
     last_error: auto
+    expects_service: bool = strawberry_django.field(only=["runtime_class"])
     can_chat: bool = strawberry_django.field(only=["runtime_status", "runtime_class", "service"])
     can_provision: bool
     can_deprovision: bool

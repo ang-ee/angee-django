@@ -945,6 +945,12 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         return runtime_class()
 
     @property
+    def expects_service(self) -> bool:
+        """Whether this agent's runtime renders an operator service."""
+
+        return self.runtime_backend.renders_service
+
+    @property
     def can_chat(self) -> bool:
         """Whether the running agent has an in-process runtime or a rendered service."""
 

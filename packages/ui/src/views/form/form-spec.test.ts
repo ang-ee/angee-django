@@ -1,11 +1,19 @@
 import { describe, expect, test } from "vitest";
 
 import { defaultWidgets } from "../../widgets";
+import { FORM_SPEC_ANNOTATIONS } from "./form-spec-schema";
 import {
   deserializeFormSpec,
   formSpecInitialValues,
   normalizeFormSpecValues,
 } from "./form-spec";
+
+test("FormSpec registers only its presentation annotations with JSON Schema validators", () => {
+  expect(FORM_SPEC_ANNOTATIONS).toEqual([
+    "propertyOrder", "widget", "label", "addLabel", "removeLabel", "placeholder",
+    "hidden", "layout", "omittable", "presenceRequired", "defaultValue", "options", "relation",
+  ]);
+});
 
 describe("deserializeFormSpec", () => {
   test("retains hidden schema fields through initialization and normalized submission", () => {

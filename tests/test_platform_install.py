@@ -87,13 +87,15 @@ def project_settings_yaml(tmp_path: Path, settings: Any) -> Path:
     return path
 
 
-def test_change_impact_uses_canonical_label_for_unresolved_addon(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Preview labels stay usable before an available addon has a Django config."""
+@pytest.mark.parametrize("label", [None, "", "remote_label"])
+def test_change_impact_uses_addon_display_label(label: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Preview and catalogue labels agree for resolved and unresolved addons."""
 
     name = "example.remote"
-    monkeypatch.setattr(platform_models, "resolve_app_config", lambda *_args, **_kwargs: None)
+    config = SimpleNamespace(label=label) if label is not None else None
+    monkeypatch.setattr(platform_models, "resolve_app_config", lambda *_args, **_kwargs: config)
     impacts = Addon.objects._change_impacts([name], {name: AddonManifest(name=name)}, [name], {}, {})
-    assert impacts[0].label == name
+    assert impacts[0].label == (label or name)
 
 
 def test_install_appends_the_root_and_reflects_pending(

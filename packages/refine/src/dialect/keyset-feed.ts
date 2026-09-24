@@ -242,9 +242,9 @@ export function useAuthoredKeysetFeed<
   TRow extends KeysetRow,
   TWindow extends AuthoredDocument,
   TRevalidation extends AuthoredDocument,
->(options: AuthoredKeysetFeedOptions<TRow, TWindow, TRevalidation>): UseInfiniteQueryResult<
-  InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>, Error
-> & {
+>(options: AuthoredKeysetFeedOptions<TRow, TWindow, TRevalidation>): {
+  /** Native tracked result; read only the properties the consumer needs. */
+  query: UseInfiniteQueryResult<InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>, Error>;
   /** Discard loaded history and explicitly fetch the first page, including disabled/static feeds. */
   restart: () => Promise<void>;
 } {
@@ -284,7 +284,7 @@ export function useAuthoredKeysetFeed<
     meta: sharedAuthoredMeta(client, queryKey, models, [], [], options.queryOptions),
   });
   const { refetch } = result;
-  // Callers commonly recreate variables; native key equality preserves callback identity.
+  // Track queryKey through hashKey intentionally: TanStack treats equal hashes as the same query.
   const queryHash = hashKey(queryKey);
   const restart = useCallback(async () => {
     if (!actor) return;
@@ -292,5 +292,5 @@ export function useAuthoredKeysetFeed<
     // Native reset refetches active queries, but skips disabled/static observers.
     if (client.getQueryData(queryKey) === undefined) await refetch({ throwOnError: true });
   }, [actor, client, queryHash, refetch]);
-  return { ...result, restart };
+  return { query: result, restart };
 }

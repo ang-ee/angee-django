@@ -243,8 +243,8 @@ class AddonManager(AngeeManager):
                 configs[config.name] = config
         return aliases, configs
 
-    @staticmethod
     def _change_impacts(
+        self,
         names: Iterable[str],
         manifests: Mapping[str, AddonManifest],
         roots: Iterable[str],
@@ -258,7 +258,7 @@ class AddonManager(AngeeManager):
             impacts.append(
                 AddonChangeImpact(
                     name=name,
-                    label=config.label if config is not None else name,
+                    label=self.model(name=name, label=config.label if config is not None else "").get_display_label(),
                     root=name in declarations,
                     depends_on=manifests[name].depends_on,
                 )

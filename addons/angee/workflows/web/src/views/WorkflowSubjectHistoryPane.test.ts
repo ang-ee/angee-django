@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
+import { updateRouteSearch } from "@angee/ui";
 
-import { decisionHref, subjectDecisionRunId, subjectPendingDecision, workflowSubjectActionSearch } from "../decision-navigation";
+import { decisionHref, decisionSearchPatch, subjectDecisionRunId, subjectPendingDecision, workflowSubjectActionSearchPatch } from "../decision-navigation";
 
 test("admits a Decision only from the canonical direct or artifact-related subject history", () => {
   const runs = [{ id: "direct-run" }, { id: "artifact-related-run" }];
@@ -10,8 +11,16 @@ test("admits a Decision only from the canonical direct or artifact-related subje
 });
 
 test("a successful subject action clears stale Decision selection and follows its WorkflowRun", () => {
-  expect(workflowSubjectActionSearch({ decision: "old", page: 2 }, "run-new")).toEqual({
-    chatterTab: "workflows", page: 2, workflowRun: "run-new",
+  expect(updateRouteSearch(workflowSubjectActionSearchPatch("run-new"))({ decision: "old", page: 2 })).toEqual({
+    chatterTab: "workflows", decision: undefined, page: 2, workflowRun: "run-new",
+  });
+});
+
+test("Decision selection and clearing use the same route-search patch convention", () => {
+  const selected = updateRouteSearch(decisionSearchPatch("decision-new"))({ workflowRun: "old", page: 2 });
+  expect(selected).toEqual({ chatterTab: "workflows", decision: "decision-new", workflowRun: undefined, page: 2 });
+  expect(updateRouteSearch(decisionSearchPatch(null))(selected)).toEqual({
+    chatterTab: undefined, decision: undefined, workflowRun: undefined, page: 2,
   });
 });
 

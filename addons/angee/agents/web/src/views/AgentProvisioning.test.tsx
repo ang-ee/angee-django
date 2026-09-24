@@ -33,7 +33,7 @@ const mocks = vi.hoisted(() => ({
     workspace: "",
     service: "",
     workspace_template: { path: "workspaces/agent-default" },
-    runtime_class: "CLAUDE_CODE",
+    expects_service: true,
   },
   workspaceStatus: null as {
     error?: string | null;
@@ -119,6 +119,7 @@ beforeEach(() => {
     "operator POST workspaces: HTTP 409: workspace demo-agent conflicts: already exists";
   mocks.record.workspace = "";
   mocks.record.service = "";
+  mocks.record.expects_service = true;
   mocks.workspaceStatus = null;
 });
 
@@ -147,6 +148,22 @@ describe("AgentProvisioning", () => {
     expect(screen.getByTestId("service-row").textContent).toBe("agent-demo-agent");
     expect(screen.queryByText("Service actions")).toBeNull();
     expect(screen.getByText(logsTitle)).toBeTruthy();
+  });
+
+  test.each([
+    [false, "provisioning.none"],
+    [true, "provisioning.activityWaitingService"],
+  ] as const)("reads the backend service expectation (%s)", (expectsService, messageKey) => {
+    mocks.record.lifecycle = "READY";
+    mocks.record.runtime_status = "RUNNING";
+    mocks.record.last_error = "";
+    mocks.record.workspace = "agent-demo-workspace";
+    mocks.record.expects_service = expectsService;
+
+    renderProvisioning(<AgentProvisioning agentId="agent-1" pane="service" />);
+
+    expect(screen.getByText(enAgentsMessages[messageKey] ?? messageKey)).toBeTruthy();
+    expect(screen.queryByTestId("service-row")).toBeNull();
   });
 
   test("renders the workspace row and source git status without workspace logs", () => {

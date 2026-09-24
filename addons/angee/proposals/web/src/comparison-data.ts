@@ -1,8 +1,6 @@
 import {
-  DISABLED_RESOURCE,
   refineResourceName,
   useModelMetadata,
-  type DataResourceMetadata,
   type Row,
 } from "@angee/metadata";
 import { refineFieldsFromPaths } from "@angee/refine";
@@ -109,14 +107,14 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
   );
 
   const roundRun = useOne<RowRecord, HttpError>({
-    resource: resourceName(roundResource),
+    resource: refineResourceName(roundResource),
     id: roundId,
     dataProviderName: roundResource?.schemaName,
     meta: { fields: roundFields },
     queryOptions: { enabled: Boolean(roundId) && roundResource !== null },
   });
   const topicRun = useList<RowRecord, HttpError>({
-    resource: resourceName(topicResource),
+    resource: refineResourceName(topicResource),
     dataProviderName: topicResource?.schemaName,
     pagination: { mode: "off" },
     filters: [{ field: "round", operator: "eq", value: roundId }],
@@ -128,7 +126,7 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
     queryOptions: { enabled: Boolean(roundId) && topicResource !== null },
   });
   const proposalRun = useList<RowRecord, HttpError>({
-    resource: resourceName(proposalResource),
+    resource: refineResourceName(proposalResource),
     dataProviderName: proposalResource?.schemaName,
     pagination: { mode: "off" },
     filters: [{ field: "round", operator: "eq", value: roundId }],
@@ -148,7 +146,7 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
     [proposals],
   );
   const answerRun = useList<RowRecord, HttpError>({
-    resource: resourceName(answerResource),
+    resource: refineResourceName(answerResource),
     dataProviderName: answerResource?.schemaName,
     pagination: { mode: "off" },
     filters: [{ field: "proposal", operator: "in", value: proposalIds }],
@@ -175,8 +173,4 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
       ?? answerRun.query.error
       ?? null,
   };
-}
-
-function resourceName(resource: DataResourceMetadata | null): string {
-  return resource ? refineResourceName(resource) : DISABLED_RESOURCE;
 }

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { DISABLED_RESOURCE, ResourceQuery, refineResourceName, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
+import { ResourceQuery, refineResourceName, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
 import {
   useList,
   useOne,
@@ -81,7 +81,7 @@ export function useRelationSelectedOption(
     [labelField],
   );
   const read = useOne<RowRecord, HttpError>({
-    resource: resource ? refineResourceName(resource) : DISABLED_RESOURCE,
+    resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     id: value ?? "",
     meta: { fields },
@@ -191,7 +191,7 @@ export function useRelationOptions(
     [extraFields, labelField],
   );
   const run = useList<RowRecord, HttpError>({
-    resource: resource ? refineResourceName(resource) : DISABLED_RESOURCE,
+    resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     pagination: {
       mode: "server",
