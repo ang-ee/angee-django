@@ -9,8 +9,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
-from copy import copy, deepcopy
-from dataclasses import asdict, dataclass, field, is_dataclass, replace
+from copy import copy
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from itertools import islice
@@ -23,10 +23,11 @@ from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connections, transaction
 from django.db.models import Q
 from django.utils import timezone
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 from rebac import system_context
 
 from angee.base.db import get_write_alias, related_on
-from angee.base.serialization import canonical_json_sha256, json_safe
+from angee.base.serialization import canonical_json_sha256
 from angee.integrate.records import (
     UNSET,
     DiscrepancyKind,
@@ -38,6 +39,10 @@ from angee.integrate.records import (
 )
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
 from angee.jobs.autoconfig import SETTINGS as JOB_SETTINGS
+
+_CURSOR: TypeAdapter[dict[str, Any]] = TypeAdapter(
+    dict[str, JsonValue], config=ConfigDict(strict=True, allow_inf_nan=False)
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +62,7 @@ class StreamDefinition:
 
 @dataclass(frozen=True, slots=True)
 class StreamPage:
-    """An extracted page and the opaque position covering all its records."""
+    """An extracted page and the plain JSON cursor covering all its records."""
 
     records: Sequence[Any]
     cursor: dict[str, Any]
@@ -260,33 +265,16 @@ def _manager(name: str, *, using: str) -> Any:
     return apps.get_model("integrate", name).objects.db_manager(using)
 
 
-def _source_hash(record: Any) -> str:
-    if isinstance(record, RecordChange):
-        return record.source_hash
-    if is_dataclass(record) and not isinstance(record, type):
-        record = asdict(record)
-    return canonical_json_sha256(json_safe(record))
-
-
-def _unresolved(stream: Any, record: Any, *, using: str) -> Any:
-    return _manager("SyncDiscrepancy", using=using).filter(
-        stream=stream,
-        source_hash=_source_hash(record),
-        mapping_version=record.mapping_version if isinstance(record, RecordChange) else 1,
-        status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
-    )
-
-
 def _resolve_applied(stream: Any, record: Any, *, using: str) -> None:
+    # Event feeds retain stream-level refusals; only their domain owner knows
+    # event identity. A healthy event cannot resolve another event's failure.
+    if stream.kind != StreamKind.RECORD_REPLICA:
+        return
     manager = _manager("SyncDiscrepancy", using=using)
-    rows = (
-        manager.filter(
-            stream=stream,
-            link__external_key=record.external_key,
-            status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
-        )
-        if isinstance(record, RecordChange)
-        else _unresolved(stream, record, using=using)
+    rows = manager.filter(
+        stream=stream,
+        link__external_key=record.external_key,
+        status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
     )
     for discrepancy in rows.exclude(kind=DiscrepancyKind.CONFLICT):
         manager.resolve(discrepancy, using=using)
@@ -312,7 +300,7 @@ def _retry_at(stream: Any, attempts: int) -> datetime:
 
 
 def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = None, using: str) -> Any:
-    replica = isinstance(record, RecordChange)
+    replica = stream.kind == StreamKind.RECORD_REPLICA and isinstance(record, RecordChange)
     details = dict(error.details)
     if replica:
         details["external_key"] = record.external_key
@@ -323,7 +311,7 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
             link=link,
             kind=error.kind,
             code=error.code,
-            source_hash=_source_hash(record),
+            source_hash=record.source_hash if replica else "",
             mapping_version=record.mapping_version if replica else 1,
             details=details,
             using=using,
@@ -341,6 +329,7 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
 
 
 def _reset(stream: Any, *, cursor: dict[str, Any], using: str) -> PageResult:
+    cursor = _CURSOR.validate_python(cursor)
     manager = _manager("SyncStream", using=using)
     with transaction.atomic(using=using):
         stream = manager.bump_generation(stream, using=using)
@@ -420,7 +409,7 @@ def advance_stream(
         stream.refresh_from_db(using=using)
         if stream.resync_required or (stream.cursor_expires_at and stream.cursor_expires_at <= timezone.now()):
             return _reset(stream, cursor={}, using=using)
-        original_cursor = deepcopy(stream.cursor)
+        original_cursor = _CURSOR.validate_python(stream.cursor)
         try:
             page = (
                 StreamPage((), original_cursor)
@@ -449,6 +438,7 @@ def _apply_page(
 ) -> PageResult:
     """Apply page or identity observations through the same fenced transaction."""
 
+    page = replace(page, cursor=_CURSOR.validate_python(page.cursor))
     # Conditional remote writes precede the transaction. Compare link bases
     # again before reflecting the response; a later local edit remains dirty.
     written: dict[str, tuple[tuple[str, str, str], WriteBackResult | SemanticError]] = {}
@@ -566,7 +556,7 @@ def _apply_page(
                     count += outcomes[0].count
             except (SemanticError, ValidationError) as error:
                 # The record savepoint rolled back, including a new identity.
-                if isinstance(record, RecordChange):
+                if locked.kind == StreamKind.RECORD_REPLICA and isinstance(record, RecordChange):
                     link = _manager("RecordLink", using=using).observe(
                         locked,
                         record.external_key,
@@ -590,9 +580,8 @@ def _apply_page(
                 cursor_expires_at=page.cursor_expires_at,
                 using=using,
             )
-    progress = canonical_json_sha256(
-        [locked.generation, page.cursor, [_source_hash(record) for record in page.records]]
-    )
+    hashes = [record.source_hash for record in page.records] if locked.kind == StreamKind.RECORD_REPLICA else []
+    progress = canonical_json_sha256([locked.generation, page.cursor, hashes])
     return PageResult(locked, count, page.exhausted, tuple(discrepancies), progress=progress)
 
 
@@ -693,7 +682,10 @@ def reconcile_stream(stream: Any, adapter: StreamAdapter, *, page_bound: int = 1
         read_keys = getattr(adapter, "read_keys", None)
         with transaction.atomic(using=using):
             locked = manager.lock_current(stream, using=using)
-            state = deepcopy(locked.cursor.get(_RECONCILE))
+            cursor = _CURSOR.validate_python(locked.cursor)
+            state: dict[str, Any] | None = (
+                _CURSOR.validate_python(cursor[_RECONCILE]) if _RECONCILE in cursor else None
+            )
             if state is None:
                 now = timezone.now()
                 if locked.last_reconciled_at and locked.last_reconciled_at + locked.reconcile_interval > now:
@@ -705,7 +697,7 @@ def reconcile_stream(stream: Any, adapter: StreamAdapter, *, page_bound: int = 1
                     "after": None,
                 }
                 _save_reconcile(locked, state, using=using)
-            original_cursor = deepcopy(locked.cursor)
+            original_cursor = _CURSOR.validate_python(locked.cursor)
         if state["phase"] == "extract":
             baseline = copy(locked)
             baseline.cursor = state.get("cursor", {})
@@ -861,7 +853,7 @@ def begin_stream_cycle(
                 force_apply.add(owner.external_key)
             if not keys:
                 return stream
-            original_cursor = deepcopy(stream.cursor)
+            original_cursor = _CURSOR.validate_python(stream.cursor)
         records = _read_keys(adapter, stream, tuple(sorted(keys)), using=using)
         return _apply_page(
             stream,
@@ -884,7 +876,7 @@ def open_stream(bridge: Any, definition: StreamDefinition, *, using: str | None 
         definition.partition,
         kind=definition.kind,
         direction=definition.direction,
-        cursor=definition.cursor,
+        cursor=_CURSOR.validate_python(definition.cursor),
         reconcile_interval=definition.reconcile_interval,
         absence_threshold=definition.absence_threshold,
         tombstone_retention=definition.tombstone_retention,

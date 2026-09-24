@@ -44,7 +44,6 @@ class SettlementStreamConfig(WorkflowStepConfig):
 class SettlementStream(BoundedStreamStage):
     """Exercise stream output settlement without performing a transport page."""
 
-    key = "settlement_stream"
     config_model = SettlementStreamConfig
 
     def run(self, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
@@ -78,7 +77,7 @@ def settlement_bridge(
     }
     settings.ANGEE_WORKFLOW_STEP_CLASSES = {
         **settings.ANGEE_WORKFLOW_STEP_CLASSES,
-        "settlement_stream": f"{__name__}.SettlementStream",
+        SettlementStream.key: f"{__name__}.SettlementStream",
     }
     return make_integration("workflow-settlement", model=Channel)
 
@@ -95,7 +94,7 @@ def _admit(bridge: Channel, *, occurrence: str, mode: str = "success") -> Any:
         steps=(
             {
                 "key": "stream",
-                "step_class": "settlement_stream",
+                "step_class": SettlementStream.key,
                 "config": config,
                 "input_binding": {
                     "kind": "constant",
@@ -153,9 +152,8 @@ def _finish(run: Any, *, mode: str, monkeypatch: pytest.MonkeyPatch) -> Any:
             clock[0] += timedelta(seconds=7)
             execute_started(run, now=clock[0])
         advance_once(run, now=clock[0])
-        if mode == "success":
-            execute_started(run, now=clock[0], key="unrelated")
-            advance_once(run, now=clock[0])
+        execute_started(run, now=clock[0], key="unrelated")
+        advance_once(run, now=clock[0])
     with system_context(reason="test Bridge terminal intent"):
         run.refresh_from_db()
         assert run.is_terminal
@@ -173,7 +171,8 @@ def test_each_terminal_path_settles_once_and_clears_busy_stage(
     bridge = settlement_bridge
     run = _admit(bridge, occurrence="first", mode=mode)
     pointer = public_id_for(type(run), run.pk)
-    BridgeProgressReporter(bridge).report(stage, details={"run": pointer})
+    with system_context(reason="test Bridge busy stage before settlement"):
+        BridgeProgressReporter(bridge).report(stage, details={"run": pointer})
     calls: list[str] = []
     native_success, native_error = Channel.record_sync, Channel.record_sync_error
 

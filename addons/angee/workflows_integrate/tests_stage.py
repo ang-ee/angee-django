@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.db import related_on
 from angee.base.identity import public_id_of
 from angee.integrate.records import DiscrepancyKind, DiscrepancyStatus, StreamKind
 from angee.integrate.streams import RecordChange, StreamAdapter, StreamDefinition, StreamPage, open_stream
@@ -38,20 +36,6 @@ from tests.workflows import no_workflow_queue as no_workflow_queue
 from tests.workflows import workflow_engine_tables as workflow_engine_tables
 
 pytestmark = pytest.mark.django_db(transaction=True)
-
-
-@pytest.fixture(autouse=True)
-def stage_registry() -> Iterator[None]:
-    """Compose these operations through the same registry used by installed addons."""
-
-    with override_settings(
-        ANGEE_WORKFLOW_STEP_CLASSES={
-            **settings.ANGEE_WORKFLOW_STEP_CLASSES,
-            "integrate_stream": "angee.workflows_integrate.steps.BoundedStreamStage",
-            "integrate_coverage": "angee.workflows_integrate.steps.CoverageGate",
-        }
-    ):
-        yield
 
 
 def _start_stage(
@@ -118,7 +102,8 @@ def test_stage_retains_cycle_total_through_wait_and_retry(
         assert step_run.status == StepRunStatus.STARTED
         assert step_run.resume_state["cycle_items"] == 1
         with system_context(reason="test stream cycle total retry"):
-            successor = StepAttempt.objects.get(pk=step_run.current_attempt_id)
+            successor = related_on(step_run, "current_attempt", using="default")
+        assert successor is not None
         execute_started(run, now=successor.available_at)
         step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.SUCCEEDED
@@ -178,7 +163,8 @@ def test_infrastructure_failure_raises_and_engine_retains_declared_retry(
 
     monkeypatch.setattr(BoundedStreamStage, "run", capture_error)
     with system_context(reason="test original stream attempt"):
-        original = StepAttempt.objects.get(pk=step_run.current_attempt_id)
+        original = related_on(step_run, "current_attempt", using="default")
+    assert original is not None
 
     execute_started(run)
 
@@ -188,7 +174,8 @@ def test_infrastructure_failure_raises_and_engine_retains_declared_retry(
     assert original.result_kind == AttemptResultKind.TRANSIENT_ERROR
     assert step_run.status == StepRunStatus.STARTED
     with system_context(reason="test retained stream retry"):
-        successor = StepAttempt.objects.get(pk=step_run.current_attempt_id)
+        successor = related_on(step_run, "current_attempt", using="default")
+        assert successor is not None
         dispatch = WorkflowDispatch.objects.get(step_attempt=successor)
         assert SyncStream.objects.get().cursor == {}
     assert successor.retry_of_id == original.pk
@@ -229,6 +216,10 @@ def test_crash_after_commit_replays_from_stream_cursor(
         assert SyncStream.objects.get().cursor == {"offset": 1}
     step_run.refresh_from_db()
     assert step_run.resume_state == {}
+    with system_context(reason="test replay retains admitted stream input"):
+        attempt = related_on(step_run, "current_attempt", using="default")
+    assert attempt is not None and attempt.input_present
+    step_run.input = attempt.input
 
     result = BoundedStreamStage().run(step_run, now=timezone.now())
 
@@ -269,7 +260,8 @@ def test_retry_prepares_cycle_when_first_attempt_never_reached_first_page(
     execute_started(run)
     step_run.refresh_from_db()
     with system_context(reason="test unprepared cycle retry"):
-        successor = StepAttempt.objects.get(pk=step_run.current_attempt_id)
+        successor = related_on(step_run, "current_attempt", using="default")
+    assert successor is not None
 
     execute_started(run, now=successor.available_at)
 
@@ -297,6 +289,10 @@ def test_stage_rejects_a_bridge_other_than_the_admitted_subject(
     no_workflow_queue: None,
 ) -> None:
     _, step_run = _start_stage(stream_bridge)
+    with system_context(reason="test admitted stream input subject binding"):
+        attempt = related_on(step_run, "current_attempt", using="default")
+    assert attempt is not None and attempt.input_present
+    step_run.input = attempt.input
     step_run.input["bridge"]["id"] = "unknown-bridge"
     with pytest.raises(ValidationError, match="admitted workflow subject"):
         BoundedStreamStage().run(step_run, now=timezone.now())
@@ -433,6 +429,10 @@ def test_coverage_raises_one_native_decision_per_conflict(
     assert step_run.resume_state["_resume_after_decisions"] is True
     # Re-evaluating the data predicate cannot recreate those Decisions or accept
     # an unresolved row merely because the operator has already reviewed it.
+    with system_context(reason="test recheck retains admitted coverage input"):
+        attempt = related_on(step_run, "current_attempt", using="default")
+    assert attempt is not None and attempt.input_present
+    step_run.input = attempt.input
     result = CoverageGate().run(step_run, now=timezone.now())
     assert result.kind == "wait"
     assert result.decisions == ()

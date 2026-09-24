@@ -1152,7 +1152,21 @@ protocol. Backends declare independently ordered stream partitions; domain
 managers retain identity and ingest policy. Event feeds are append-only and
 idempotent by domain identity, so they never create replica links. Mutable record
 replicas retain a remote and local comparison base on each link.
+Replica hashes come from adapters; event feeds deduplicate through domain
+identity and are never payload-hashed. Cursors contain plain finite JSON,
+validated at the driver boundary.
 
+- **External field ownership is a static model contract.** Models receiving
+  `apply_external` or `claim_external_ownership` compose the
+  [`ExternalOwnershipMixin`](../../addons/angee/integrate/ownership.py), its
+  manager/queryset and an `ExternalOwnershipDeclaration`. The source addon may
+  supply these through an `extends` donor and add child/overlay policy through
+  `ExternalOwnershipContribution`; export every donor from that addon's
+  `models.py` so the composer discovers it. A contribution augments a complete
+  declaration; it does not replace provenance or the guarded write owners.
+  Fully bidirectional contact fields remain locally editable and use the
+  stream's comparison/conflict policy. A source-specific guard therefore belongs
+  to the importing addon's donor, rather than every installation of parties.
 - **The cursor commits with the records it covers.** Extract outside the database
   transaction; commit the applied page, its quarantine and the stream cursor in
   one transaction on the operation's write alias. Semantic record failures use

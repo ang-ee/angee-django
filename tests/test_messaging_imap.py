@@ -1961,7 +1961,7 @@ def test_failed_second_record_rolls_back_the_whole_page(
 
     monkeypatch.setattr(manager_type, "ingest", fail_second)
     with system_context(reason="test imap page rollback"), pytest.raises(RuntimeError, match="second record"):
-        channel.run_sync()
+        channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
     assert Message._base_manager.count() == 0
     assert SyncStream.objects.current(channel, "messages", "INBOX").cursor == {}
 
@@ -1986,7 +1986,7 @@ def test_page_closure_resolves_quotes_of_a_later_record(
     _wire_fake(monkeypatch, account)
     channel = _imap_channel(batch_size=2)
     with system_context(reason="test imap page quotation closure"):
-        assert channel.run_sync() == 2
+        assert channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC)) == 2
     original = Message._base_manager.get(external_id="original@x")
     quoted = Message._base_manager.get(external_id="quoted@x")
     assert Part._base_manager.filter(message=quoted, role=Part.PartRole.QUOTED).exists()

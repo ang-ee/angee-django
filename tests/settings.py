@@ -9,6 +9,7 @@ import environ
 from django.apps import AppConfig
 
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
+from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
 
 
 class BareComposeConfig(AppConfig):
@@ -167,6 +168,8 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "join_continuation": "angee.workflows.steps.JoinContinuation",
     "emit": "angee.workflows.steps.EmitStep",
     "fixture": "tests.workflows.FixtureStep",
+    "integrate_stream": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.integrate_stream"],
+    "integrate_coverage": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.integrate_coverage"],
     "infer": "angee.workflows_agents.steps.InferStepImpl",
     "agent_session": "angee.workflows_agents.steps.AgentSessionStepImpl",
     "parties_dedupe_scan": "angee.workflows_parties.steps.DedupeScanStepImpl",

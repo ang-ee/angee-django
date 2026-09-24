@@ -25,7 +25,7 @@ from rebac import system_context
 from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import StateField
 from angee.base.mixins import AppendOnlyQuerySet, AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import RecordRefMixin
 
 UNSET = object()
@@ -300,9 +300,11 @@ class SyncStream(SqidMixin, AuditMixin, AngeeModel):
     absence_threshold = models.PositiveIntegerField(default=2)
     tombstone_retention = models.DurationField(null=True, blank=True)
     objects = SyncStreamManager()
+    unscoped_objects = AngeeUnscopedManager()
 
     class Meta:
         abstract = True
+        base_manager_name = "unscoped_objects"
         rebac_resource_type = "integrate/sync_stream"
         rebac_id_attr = "pk"
         constraints = (
@@ -528,6 +530,7 @@ class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
     metadata = models.JSONField(default=dict, blank=True)
     tombstoned_at = models.DateTimeField(null=True, blank=True)
     objects = RecordLinkManager()
+    unscoped_objects = AngeeUnscopedManager()
 
     @classmethod
     def _record_ref_content_type_field_name(cls) -> str:
@@ -539,6 +542,7 @@ class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
 
     class Meta:
         abstract = True
+        base_manager_name = "unscoped_objects"
         rebac_resource_type = "integrate/record_link"
         rebac_id_attr = "pk"
         constraints = (models.UniqueConstraint(fields=("stream", "external_key"), name="uniq_stream_record_key"),)
@@ -769,9 +773,11 @@ class SyncDiscrepancy(SqidMixin, AuditMixin, AngeeModel):
     retry_at = models.DateTimeField(null=True, blank=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
     objects = SyncDiscrepancyManager()
+    unscoped_objects = AngeeUnscopedManager()
 
     class Meta:
         abstract = True
+        base_manager_name = "unscoped_objects"
         rebac_resource_type = "integrate/sync_discrepancy"
         rebac_id_attr = "pk"
         constraints = (

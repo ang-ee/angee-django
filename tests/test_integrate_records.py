@@ -8,10 +8,11 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import transaction
+from django.db import connections, transaction
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.models import AngeeQuerySet, AngeeUnscopedQuerySet
 from angee.integrate.records import DiscrepancyKind, DiscrepancyStatus, LinkStatus, StreamKind, StreamPhase
 from tests.conftest import make_integration
 from tests.integrate_models import Integration, RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
@@ -26,6 +27,39 @@ def replica(record_sync_tables: None) -> Iterator[Any]:
     with system_context(reason="test record protocol"):
         bridge = make_integration("record-protocol", model=Channel)
         yield SyncStream.objects.current(bridge, "contacts", "book", kind=StreamKind.RECORD_REPLICA)
+
+
+def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None:
+    """Public, base and related managers keep locks through bound queryset chains."""
+
+    link = RecordLink.objects.observe(replica, "person:locked")
+    revision = RecordLink.objects.promote(
+        link, source_payload={}, source_hash="remote", mapped_payload={}, local_hash="local"
+    )
+    discrepancy = SyncDiscrepancy.objects.record(
+        replica, link=link, kind=DiscrepancyKind.SEMANTIC, code="lock-regression"
+    )
+    using = replica._state.db
+    features = connections[using].features
+    with transaction.atomic(using=using):
+        for row in (replica, link, revision, discrepancy):
+            model = type(row)
+            assert model._default_manager is model.objects
+            for manager in (model.objects, model._base_manager):
+                queryset = manager.db_manager(using).filter(pk=row.pk).order_by("pk").lock_if_supported()
+                expected = (
+                    AngeeUnscopedQuerySet
+                    if manager is model._base_manager and model is not RecordRevision
+                    else AngeeQuerySet
+                )
+                assert isinstance(queryset, expected)
+                assert queryset.db == using
+                assert queryset.query.select_for_update is features.has_select_for_update
+                assert list(queryset) == [row]
+        for manager, row in ((replica.links, link), (replica.discrepancies, discrepancy), (link.revisions, revision)):
+            queryset = manager.db_manager(using).filter(pk=row.pk).lock_if_supported()
+            assert isinstance(queryset, AngeeQuerySet)
+            assert list(queryset) == [row]
 
 
 def test_epoch_retains_links_revisions_and_quarantine(replica: Any) -> None:

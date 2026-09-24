@@ -27,6 +27,7 @@ class SyncStream(AbstractSyncStream):
         abstract = False
         app_label = "integrate"
         db_table = "test_integrate_sync_stream"
+        rebac_resource_type = "integrate/sync_stream"
 
 
 class RecordLink(AbstractRecordLink):
@@ -36,6 +37,7 @@ class RecordLink(AbstractRecordLink):
         abstract = False
         app_label = "integrate"
         db_table = "test_integrate_record_link"
+        rebac_resource_type = "integrate/record_link"
 
 
 class RecordRevision(AbstractRecordRevision):
@@ -45,6 +47,7 @@ class RecordRevision(AbstractRecordRevision):
         abstract = False
         app_label = "integrate"
         db_table = "test_integrate_record_revision"
+        rebac_resource_type = "integrate/record_revision"
 
 
 class SyncDiscrepancy(AbstractSyncDiscrepancy):
@@ -54,6 +57,7 @@ class SyncDiscrepancy(AbstractSyncDiscrepancy):
         abstract = False
         app_label = "integrate"
         db_table = "test_integrate_sync_discrepancy"
+        rebac_resource_type = "integrate/sync_discrepancy"
 
 
 RECORD_SYNC_TEST_MODELS = (SyncStream, RecordLink, RecordRevision, SyncDiscrepancy)

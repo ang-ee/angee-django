@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
-from datetime import timedelta
+from datetime import datetime, timedelta, tzinfo
 from threading import Barrier, Lock
 from typing import Any
 
@@ -36,10 +36,12 @@ from angee.integrate.streams import (
     advance_stream,
     begin_stream_cycle,
     classify_change,
+    open_stream,
     push_stream,
     reconcile_stream,
     sync_bridge,
 )
+from angee.messaging.backends import ParsedMessage
 from tests.conftest import _create_missing_tables, make_integration
 from tests.integrate_models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from tests.messaging_models import Channel
@@ -636,6 +638,7 @@ def test_semantic_failure_quarantines_one_row_and_continues_page(stream_bridge: 
     assert list(AppliedRecord.objects.values_list("key", flat=True)) == ["healthy"]
     discrepancy = SyncDiscrepancy.objects.get(pk=result.discrepancy_ids[0])
     assert (discrepancy.kind, discrepancy.code) == (DiscrepancyKind.SEMANTIC, "invalid_name")
+    assert (discrepancy.source_hash, discrepancy.status) == ("", DiscrepancyStatus.OPEN)
 
 
 @pytest.mark.parametrize("status", [DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY])
@@ -936,6 +939,70 @@ def test_event_feeds_apply_without_replica_links(stream_bridge: Channel) -> None
     assert AppliedRecord.objects.count() == 2
     assert not RecordLink.objects.exists()
     assert not RecordRevision.objects.exists()
+
+
+def test_event_feed_accepts_message_with_noncopyable_timezone(stream_bridge: Channel) -> None:
+    class RequiredOffset(tzinfo):
+        def __init__(self, minutes: int) -> None:
+            self.offset = timedelta(minutes=minutes)
+
+        def utcoffset(self, value: datetime | None) -> timedelta:
+            return self.offset
+
+        def dst(self, value: datetime | None) -> timedelta:
+            return timedelta(0)
+
+    message = ParsedMessage(
+        external_id="message:noncopyable-timezone",
+        platform="email",
+        sent_at=datetime(2026, 9, 24, 12, tzinfo=RequiredOffset(120)),
+    )
+
+    class MessageAdapter(MemoryAdapter):
+        def apply(self, stream: Any, page: StreamPage, *, using: str | None = None) -> Iterable[ApplyResult]:
+            assert connections[using].in_atomic_block
+            assert page.records == (message,)
+            assert message.sent_at is not None
+            row, _ = AppliedRecord.objects.db_manager(using).update_or_create(
+                key=message.external_id, defaults={"payload": {"sent_at": message.sent_at.isoformat()}}
+            )
+            return (ApplyResult(external_key=message.external_id, target=row),)
+
+    stream = SyncStream.objects.current(stream_bridge, "messages", "INBOX")
+    adapter = MessageAdapter(pages=[StreamPage((message,), {"uid": 1})])
+    assert advance_stream(stream, adapter).count == 1
+    stream.refresh_from_db()
+    assert stream.cursor == {"uid": 1}
+    assert AppliedRecord.objects.get().payload == {"sent_at": "2026-09-24T12:00:00+02:00"}
+    assert not RecordLink.objects.exists()
+    assert not RecordRevision.objects.exists()
+
+
+@pytest.mark.parametrize("boundary", ["page", "reset", "definition"])
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        {"nested": [ParsedMessage(external_id="message:1", platform="email")]},
+        {"nested": [datetime(2026, 9, 24)]},
+        {"tuple": (1, 2)},
+        {"number": float("nan")},
+        {1: "not a JSON object key"},
+    ],
+)
+def test_stream_rejects_non_json_cursors_before_applying(
+    stream_bridge: Channel, boundary: str, cursor: dict[Any, Any]
+) -> None:
+    stream = SyncStream.objects.current(stream_bridge, "events")
+    with pytest.raises(ValueError):
+        if boundary == "definition":
+            open_stream(stream_bridge, StreamDefinition("invalid", cursor=cursor))
+        else:
+            page = CursorInvalid(cursor=cursor) if boundary == "reset" else StreamPage(("message:1",), cursor)
+            advance_stream(stream, MemoryAdapter(pages=[page]))
+    stream.refresh_from_db()
+    assert stream.cursor == {}
+    assert SyncStream.objects.count() == 1
+    assert not AppliedRecord.objects.exists()
 
 
 @pytest.mark.parametrize("failed_partition", ["", "sent"])

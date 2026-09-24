@@ -467,6 +467,7 @@ def test_dispatch_kind_is_closed() -> None:
         "artifact_delivery",
         "child_cancel",
         "run_cancel",
+        "run_settle",
     }
 
 

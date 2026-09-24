@@ -7,9 +7,10 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models
 from django.db.models.signals import post_save, pre_delete
+from django.test.utils import isolate_apps
 from rebac import system_context
 
 from angee.base.fields import StateField
@@ -19,11 +20,16 @@ from angee.integrate.ownership import (
     ExternalOwnershipContribution,
     ExternalOwnershipDeclaration,
     ExternalOwnershipError,
+    ExternalOwnershipManager,
     ExternalOwnershipMixin,
+    ExternalOwnershipQuerySet,
     check_external_ownership_declarations,
     check_external_ownership_delete,
     run_external_transition,
 )
+from angee.parties.managers import PartyManager, PartyQuerySet
+from angee.parties.models import Party as AbstractParty
+from angee.parties.models import Person as AbstractPerson
 from tests.conftest import _create_missing_tables
 
 
@@ -333,7 +339,7 @@ def test_partial_identity_and_foreign_source_relationship_are_refused(ownership_
     with pytest.raises(ExternalOwnershipError, match="complete"):
         OwnedProjection.objects.create(name="incomplete", external_source_type="directory")
     row = projection()
-    with pytest.raises(ExternalOwnershipError, match="same source"):
+    with pytest.raises(ExternalOwnershipError, match="share source and company scope"):
         OwnedRelationship.objects.create(
             target=row,
             external_source_type="directory",
@@ -385,6 +391,61 @@ def test_static_contributions_keep_one_policy_and_reject_collisions() -> None:
     assert declaration.local_fields == {"note", "review"}
     with pytest.raises(ValueError, match="both source-owned and local"):
         ExternalOwnershipDeclaration(source_owned_fields={"name"}, local_fields={"name"})
+
+
+@isolate_apps()
+def test_source_addon_can_declare_party_ownership_and_person_overlay() -> None:
+    """A source donor supplies ownership while the native contact stays bidirectional."""
+
+    class SourcePartyQuerySet(ExternalOwnershipQuerySet, PartyQuerySet):
+        pass
+
+    class SourcePartyManager(PartyManager.from_queryset(SourcePartyQuerySet), ExternalOwnershipManager):
+        pass
+
+    class PartyOwnership(ExternalOwnershipMixin):
+        extends = "parties.Party"
+        external_ownership = ExternalOwnershipDeclaration(source_owned_fields={"display_name"}, local_fields={"notes"})
+        objects = SourcePartyManager()
+
+        class Meta:
+            abstract = True
+            app_label = "integrate"
+
+    class PersonOwnership(models.Model):
+        extends = "parties.Person"
+        external_ownership = ExternalOwnershipContribution(local_fields={"given_name"})
+
+        class Meta:
+            abstract = True
+            app_label = "integrate"
+
+    class Party(PartyOwnership, AbstractParty):
+        class Meta:
+            app_label = "parties"
+
+    class Person(PersonOwnership, AbstractPerson, Party):
+        class Meta:
+            app_label = "parties"
+
+    for model in (Party, Person):
+        declaration = ExternalOwnershipDeclaration.for_model(model)
+        assert declaration.source_owned_fields == {"display_name"}
+        assert "notes" in declaration.local_fields
+        assert isinstance(model.objects, ExternalOwnershipManager)
+        assert isinstance(model.objects.get_queryset(), SourcePartyQuerySet)
+        assert model._meta.get_field("external_source_key").model is Party
+        # The isolated registry contains only these models; load provenance without unrelated FK defaults.
+        row = model.from_db(
+            "default",
+            ["external_source_type", "external_source_id", "external_source_key"],
+            ["directory", "1", "contact-1"],
+        )
+        assert row.import_source(using="default") == ("directory", "1")
+    assert ExternalOwnershipDeclaration.for_model(Person).local_fields == {"notes", "given_name"}
+    assert not issubclass(AbstractParty, ExternalOwnershipMixin)
+    with pytest.raises(ImproperlyConfigured, match="must declare"):
+        ExternalOwnershipDeclaration.for_model(AbstractParty)
 
 
 def test_source_owned_many_to_many_requires_an_owned_through_model() -> None:
