@@ -9,7 +9,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, connections, models, transaction
+from django.db import IntegrityError, connection, models, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import actor_context, system_context
@@ -50,25 +50,23 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
     discrepancy = SyncDiscrepancy.objects.record(
         replica, link=link, kind=DiscrepancyKind.SEMANTIC, code="lock-regression"
     )
-    using = replica._state.db
-    features = connections[using].features
-    with transaction.atomic(using=using):
+    features = connection.features
+    with transaction.atomic():
         for row in (replica, link, revision, discrepancy):
             model = type(row)
             assert model._default_manager is model.objects
             for manager in (model.objects, model._base_manager):
-                queryset = manager.db_manager(using).filter(pk=row.pk).order_by("pk").lock_if_supported()
+                queryset = manager.filter(pk=row.pk).order_by("pk").lock_if_supported()
                 expected = (
                     AngeeUnscopedQuerySet
                     if manager is model._base_manager and model is not RecordRevision
                     else AngeeQuerySet
                 )
                 assert isinstance(queryset, expected)
-                assert queryset.db == using
                 assert queryset.query.select_for_update is features.has_select_for_update
                 assert list(queryset) == [row]
         for manager, row in ((replica.links, link), (replica.discrepancies, discrepancy), (link.revisions, revision)):
-            queryset = manager.db_manager(using).filter(pk=row.pk).lock_if_supported()
+            queryset = manager.filter(pk=row.pk).lock_if_supported()
             assert isinstance(queryset, AngeeQuerySet)
             assert list(queryset) == [row]
 
@@ -140,18 +138,13 @@ def test_baseline_completion_survives_epochs_and_reads_persisted_progress(replic
     assert successor.has_completed_baseline() is exhausted
 
 
-def test_baseline_completion_reads_deferred_identity_on_operation_alias(replica: Any, database_alias: Any) -> None:
+def test_baseline_completion_reads_deferred_identity(replica: Any) -> None:
     deferred = SyncStream.objects.only("pk").get(pk=replica.pk)
-
-    def reject_default_query(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("Baseline completion must read only the operation alias.")
-
-    with database_alias("baseline_completion") as alias:
-        other = SyncStream.objects.using(alias).get(pk=replica.pk)
-        SyncStream.objects.db_manager(alias).advance(other, {}, exhausted=True, using=alias)
-        with connections["default"].execute_wrapper(reject_default_query):
-            assert deferred.has_completed_baseline(using=alias)
     assert not replica.has_completed_baseline()
+    other = SyncStream.objects.get(pk=replica.pk)
+    SyncStream.objects.advance(other, {}, exhausted=True)
+    assert deferred.has_completed_baseline()
+    assert replica.has_completed_baseline()
 
 
 def test_baseline_completion_is_independent_of_actor_visibility(record_sync_tables: None) -> None:
@@ -196,9 +189,7 @@ def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monke
 
 
 @pytest.mark.parametrize("count", [1, 8])
-def test_record_link_sync_evidence_uses_bounded_queries_on_operation_alias(
-    replica: Any, database_alias: Any, count: int
-) -> None:
+def test_record_link_sync_evidence_uses_bounded_queries(replica: Any, count: int) -> None:
     expected: dict[str, tuple[list[int], list[int]]] = {}
     for index in range(count):
         link = RecordLink.objects.observe(replica, f"person:{index}")
@@ -224,29 +215,20 @@ def test_record_link_sync_evidence_uses_bounded_queries_on_operation_alias(
         expected[link.external_key] = (revisions, conflicts)
     RecordLink.objects.observe(replica, "outside-page")
 
-    def reject_default_query(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("Page comparison evidence must read only the operation alias.")
-
-    with database_alias("sync_evidence") as alias:
-        # Materialize the isolated database before refusing default reads.
-        SyncStream.objects.using(alias).get(pk=replica.pk)
-        with (
-            connections["default"].execute_wrapper(reject_default_query),
-            CaptureQueriesContext(connections[alias]) as queries,
-        ):
-            links = list(
-                RecordLink.objects.filter(stream=replica, external_key__in=[*expected, "missing"])
-                .with_sync_evidence(using=alias)
-                .order_by("pk")
+    with CaptureQueriesContext(connection) as queries:
+        links = list(
+            RecordLink.objects.filter(stream=replica, external_key__in=[*expected, "missing"])
+            .with_sync_evidence()
+            .order_by("pk")
+        )
+        actual = {
+            link.external_key: (
+                [revision.pk for revision in link.latest_revisions],
+                [conflict.pk for conflict in link.open_conflicts],
             )
-            actual = {
-                link.external_key: (
-                    [revision.pk for revision in link.latest_revisions],
-                    [conflict.pk for conflict in link.open_conflicts],
-                )
-                for link in links
-            }
-        assert len(queries) == 3
+            for link in links
+        }
+    assert len(queries) == 3
     assert actual == expected
 
 
@@ -399,7 +381,6 @@ def test_discrepancy_coalescing_rescan_and_resolution_history(replica: Any) -> N
 def test_open_discrepancy_unique_index_preserves_resolved_history(replica: Any, status: str) -> None:
     """The database enforces uniqueness through the generated openness column."""
 
-    using = replica._state.db
     identity = {
         "stream": replica,
         "kind": DiscrepancyKind.SEMANTIC,
@@ -407,22 +388,22 @@ def test_open_discrepancy_unique_index_preserves_resolved_history(replica: Any, 
         "source_hash": "same-version",
         "mapping_version": 1,
     }
-    first = SyncDiscrepancy.objects.db_manager(using).record(**identity)
+    first = SyncDiscrepancy.objects.record(**identity)
     if status == DiscrepancyStatus.RETRY:
-        first = SyncDiscrepancy.objects.db_manager(using).retry(first)
-    first.refresh_from_db(using=using)
+        first = SyncDiscrepancy.objects.retry(first)
+    first.refresh_from_db()
     assert first.is_open
 
     # Bypass manager coalescing so this exercises the native partial index.
-    with pytest.raises(IntegrityError), transaction.atomic(using=using):
-        SyncDiscrepancy.objects.db_manager(using).create(**identity, status=status)
+    with pytest.raises(IntegrityError), transaction.atomic():
+        SyncDiscrepancy.objects.create(**identity, status=status)
 
-    resolved = SyncDiscrepancy.objects.db_manager(using).resolve(first)
+    resolved = SyncDiscrepancy.objects.resolve(first)
     assert not resolved.is_open
-    replacement = SyncDiscrepancy.objects.db_manager(using).create(**identity, status=status)
-    replacement.refresh_from_db(using=using)
+    replacement = SyncDiscrepancy.objects.create(**identity, status=status)
+    replacement.refresh_from_db()
     assert replacement.is_open
-    assert set(SyncDiscrepancy.objects.db_manager(using).values_list("pk", "is_open")) == {
+    assert set(SyncDiscrepancy.objects.values_list("pk", "is_open")) == {
         (resolved.pk, False),
         (replacement.pk, True),
     }
@@ -531,15 +512,15 @@ def test_stream_uses_a_protected_integration_foreign_key(record_sync_tables: Non
     del record_sync_tables
     with system_context(reason="test stream bridge identity"):
         bridge = make_integration("stream-identity", model=Channel)
-        stream = SyncStream.objects.current(bridge, "messages", using="default")
-        stream.refresh_from_db(using="default")
+        stream = SyncStream.objects.current(bridge, "messages")
+        stream.refresh_from_db()
         assert stream.integration_id == bridge.pk
         assert stream.integration.concrete_capability() == bridge
         field = stream._meta.get_field("integration")
         assert isinstance(field, models.ForeignKey)
         assert field.remote_field.on_delete is models.PROTECT
         assert {"bridge_id", "bridge_ct_id"}.isdisjoint(field.column for field in stream._meta.concrete_fields)
-        successor = SyncStream.objects.bump_generation(stream, using="default")
+        successor = SyncStream.objects.bump_generation(stream)
         assert successor.integration_id == bridge.pk
         assert SyncStream.objects.filter(integration=bridge.pk).count() == 2
         with pytest.raises(models.ProtectedError):
@@ -551,7 +532,7 @@ def test_stream_rejects_an_integration_without_a_concrete_bridge(record_sync_tab
     with system_context(reason="test stream requires a bridge"):
         integration = make_integration("stream-no-bridge")
         with pytest.raises(ValidationError, match="concrete Integration child"):
-            SyncStream.objects.current(integration, "messages", using="default")
+            SyncStream.objects.current(integration, "messages")
         assert not SyncStream.objects.exists()
 
 

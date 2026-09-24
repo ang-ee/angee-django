@@ -90,7 +90,7 @@ view uses the backend `is_open` filter and offers explicit remote/local choices
 for conflicts.
 
 At cycle start, due non-conflict replica discrepancies with links are re-read
-through `read_keys(stream, keys, *, using)` when the adapter declares
+through `read_keys(stream, keys)` when the adapter declares
 `supports_identity_reads`. It
 returns one `RecordChange` for every requested external key, including a remote
 tombstone when that key no longer exists. Transport runs outside transactions;
@@ -115,7 +115,7 @@ carrying existing links and quarantine forward while retaining revision history.
 Inventory sweeps read and apply newly enumerated identities before incrementing
 absence counts. Each `reconcile_stream(..., page_bound=100)` call commits one
 bounded pulse; repeat while `SyncStream.reconcile_state` is nonempty.
-Adapters implement `enumerate_keys(..., after=None, using=None)` as a stable
+Adapters implement `enumerate_keys(..., after=None)` as a stable
 iterator with exclusive seek. The driver stores its checkpoint separately from
 the adapter-owned opaque cursor.
 `read_keys` handles unseen identities as well as existing links. Without that

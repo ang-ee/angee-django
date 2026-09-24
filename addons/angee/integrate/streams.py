@@ -20,14 +20,13 @@ from typing import Any
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import close_old_connections, connections, transaction
+from django.db import close_old_connections, connection, connections, transaction
 from django.db.models import Q
 from django.utils import timezone
 from pydantic import ConfigDict, JsonValue, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import UNSET, DiscrepancyKind, LinkStatus, StreamDirection, StreamKind, StreamPhase
@@ -77,8 +76,8 @@ class RecordChange:
     """Remote observation and the adapter's current local mapped projection.
 
     Hashes describe snapshots on their respective sides, never timestamps. A
-    missing local target has local_hash="". The adapter reloads any target on the
-    operation alias. Remote deletion uses tombstone=True and source_hash="".
+    missing local target has local_hash="". Remote deletion uses tombstone=True
+    and source_hash="".
     """
 
     external_key: str
@@ -211,27 +210,27 @@ class PageResult:
     progress: str = ""
 
 
-def _manager(name: str, *, using: str) -> Any:
-    return apps.get_model("integrate", name).objects.db_manager(using)
+def _manager(name: str) -> Any:
+    return apps.get_model("integrate", name).objects
 
 
-def _resolve_applied(stream: Any, record: Any, *, using: str) -> None:
+def _resolve_applied(stream: Any, record: Any) -> None:
     # Event feeds retain stream-level refusals; only their domain owner knows
     # event identity. A healthy event cannot resolve another event's failure.
     if stream.kind != StreamKind.RECORD_REPLICA:
         return
-    manager = _manager("SyncDiscrepancy", using=using)
+    manager = _manager("SyncDiscrepancy")
     rows = manager.unresolved().filter(
         stream=stream,
         link__external_key=record.external_key,
     )
     for discrepancy in rows.exclude(kind=DiscrepancyKind.CONFLICT):
-        manager.resolve(discrepancy, using=using)
+        manager.resolve(discrepancy)
 
 
-def _has_conflict(link: Any, *, using: str) -> bool:
+def _has_conflict(link: Any) -> bool:
     return (
-        _manager("SyncDiscrepancy", using=using)
+        _manager("SyncDiscrepancy")
         .unresolved()
         .filter(
             link=link,
@@ -248,13 +247,13 @@ def _retry_at(stream: Any, attempts: int) -> datetime:
     return timezone.now() + min(timedelta(minutes=2 ** min(max(0, attempts - 1), 11)), cap)
 
 
-def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = None, using: str) -> Any:
+def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = None) -> Any:
     replica = stream.kind == StreamKind.RECORD_REPLICA and isinstance(record, RecordChange)
     details = dict(error.details)
     if replica:
         details["external_key"] = record.external_key
-    manager = _manager("SyncDiscrepancy", using=using)
-    with transaction.atomic(using=using):
+    manager = _manager("SyncDiscrepancy")
+    with transaction.atomic():
         row = manager.record(
             stream,
             link=link,
@@ -263,11 +262,10 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
             source_hash=record.source_hash if replica else "",
             mapping_version=record.mapping_version if replica else 1,
             details=details,
-            using=using,
         )
         if row.kind != DiscrepancyKind.CONFLICT:
             row.retry_at = _retry_at(stream, row.attempts)
-            row.save(using=using, update_fields=["retry_at", "updated_at"])
+            row.save(update_fields=["retry_at", "updated_at"])
             if link is not None:
                 # Older failed source versions must not bypass this identity's
                 # backoff when its newly read payload also fails semantically.
@@ -277,21 +275,20 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
         return row
 
 
-def reset_stream(stream: Any, *, cursor: dict[str, Any], using: str | None = None) -> PageResult:
+def reset_stream(stream: Any, *, cursor: dict[str, Any]) -> PageResult:
     """Retire an epoch and seed its replacement through the stream manager."""
-    using = get_write_alias(type(stream), using=using, instance=stream)
     cursor = _validated_cursor(cursor)
-    manager = _manager("SyncStream", using=using)
-    stream = manager.bump_generation(stream, cursor=cursor, using=using)
+    manager = _manager("SyncStream")
+    stream = manager.bump_generation(stream, cursor=cursor)
     return PageResult(stream, reset=True)
 
 
-def _baseline_adoption(stream: Any, *, using: str) -> bool:
+def _baseline_adoption(stream: Any) -> bool:
     """Two-way replicas adopt existing identities until their first baseline completes."""
     return (
         stream.kind == StreamKind.RECORD_REPLICA
         and stream.direction == StreamDirection.BIDIRECTIONAL
-        and not stream.has_completed_baseline(using=using)
+        and not stream.has_completed_baseline()
     )
 
 
@@ -311,8 +308,8 @@ def _decision(link: Any, record: RecordChange, *, revision: Any, adopting: bool)
     )
 
 
-def _promote(link: Any, record: RecordChange, outcome: ApplyResult, *, origin: str, using: str) -> None:
-    manager = _manager("RecordLink", using=using)
+def _promote(link: Any, record: RecordChange, outcome: ApplyResult, *, origin: str) -> None:
+    manager = _manager("RecordLink")
     manager.promote(
         link,
         source_payload=record.source_payload,
@@ -324,16 +321,15 @@ def _promote(link: Any, record: RecordChange, outcome: ApplyResult, *, origin: s
         target=outcome.target,
         remote_version=record.remote_version,
         origin=origin,
-        using=using,
     )
     if record.tombstone:
-        manager.tombstone(link, using=using)
+        manager.tombstone(link)
 
 
-def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult, *, using: str) -> None:
+def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult) -> None:
     if not isinstance(result, WriteBackResult):
         raise AdapterContractError("write_back must return WriteBackResult.")
-    _manager("RecordLink", using=using).promote(
+    _manager("RecordLink").promote(
         link,
         source_payload=result.source_payload,
         source_hash=result.source_hash,
@@ -344,17 +340,14 @@ def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult, *, 
         mapping_version=record.mapping_version,
         dependency_digest=record.dependency_digest,
         origin="local",
-        using=using,
     )
     if result.tombstone:
-        _manager("RecordLink", using=using).tombstone(link, using=using)
+        _manager("RecordLink").tombstone(link)
 
 
-def _extract_page(
-    adapter: BridgeImpl, stream: Any, page_bound: int, *, deadline: float | None, using: str
-) -> StreamPage:
+def _extract_page(adapter: BridgeImpl, stream: Any, page_bound: int, *, deadline: float | None) -> StreamPage:
     """Validate extracted page evidence before either advancement or reconciliation."""
-    page = adapter.extract(stream, page_bound, deadline=deadline, using=using)
+    page = adapter.extract(stream, page_bound, deadline=deadline)
     if not isinstance(page, StreamPage):
         raise AdapterContractError("extract must return StreamPage.")
     if not isinstance(page.records, Sequence):
@@ -365,7 +358,7 @@ def _extract_page(
 
 
 def advance_stream(
-    stream: Any, adapter: BridgeImpl, *, page_bound: int = 100, deadline: float | None = None, using: str | None = None
+    stream: Any, adapter: BridgeImpl, *, page_bound: int = 100, deadline: float | None = None
 ) -> PageResult:
     """Extract and commit one page; compose from a STANDARD workflow stage.
 
@@ -374,27 +367,26 @@ def advance_stream(
     transaction. Stream state is fenced after extraction.
     """
 
-    using = get_write_alias(type(stream), using=using, instance=stream)
-    if connections[using].in_atomic_block:
+    if connection.in_atomic_block:
         raise RuntimeError("Stream extraction must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
     with system_context(reason="integrate.stream.advance"):
-        stream.refresh_from_db(using=using)
+        stream.refresh_from_db()
         if stream.resync_required or (stream.cursor_expires_at and stream.cursor_expires_at <= timezone.now()):
-            return reset_stream(stream, cursor={}, using=using)
+            return reset_stream(stream, cursor={})
         original_cursor = _validated_cursor(stream.cursor)
         try:
             page = (
                 StreamPage((), original_cursor)
                 if stream.direction == StreamDirection.PUSH
-                else _extract_page(adapter, stream, page_bound, deadline=deadline, using=using)
+                else _extract_page(adapter, stream, page_bound, deadline=deadline)
             )
         except CursorInvalid as error:
-            return reset_stream(stream, cursor=error.cursor, using=using)
+            return reset_stream(stream, cursor=error.cursor)
         if page.resync_required:
-            return reset_stream(stream, cursor={}, using=using)
-        return _apply_page(stream, adapter, page, original_cursor=original_cursor, using=using)
+            return reset_stream(stream, cursor={})
+        return _apply_page(stream, adapter, page, original_cursor=original_cursor)
 
 
 def _apply_page(
@@ -407,20 +399,19 @@ def _apply_page(
     reconcile_state: dict[str, Any] | None = None,
     force_apply: frozenset[str] = frozenset(),
     reapply: frozenset[str] = frozenset(),
-    using: str,
 ) -> PageResult:
     """Apply page or identity observations through the same fenced transaction."""
 
     page = replace(page, cursor=_validated_cursor(page.cursor))
-    adopting = _baseline_adoption(stream, using=using)
-    links = _manager("RecordLink", using=using)
+    adopting = _baseline_adoption(stream)
+    links = _manager("RecordLink")
     evidence_rows = None
     if stream.kind == StreamKind.RECORD_REPLICA:
         if any(not isinstance(record, RecordChange) for record in page.records):
             raise AdapterContractError("Replica pages must contain RecordChange values.")
         evidence_rows = links.filter(
             stream=stream, external_key__in=[record.external_key for record in page.records]
-        ).with_sync_evidence(using=using)
+        ).with_sync_evidence()
     # Conditional remote writes precede the transaction. Compare link bases
     # again before reflecting the response; a later local edit remains dirty.
     written: dict[str, tuple[tuple[str, str, str], WriteBackResult | SemanticError]] = {}
@@ -443,17 +434,15 @@ def _apply_page(
                 bases = (link.remote_base_hash, link.local_base_hash, link.remote_version)
                 result: WriteBackResult | SemanticError
                 try:
-                    result = adapter.write_back(
-                        link, record.projection, expected_version=link.remote_version, using=using
-                    )
+                    result = adapter.write_back(link, record.projection, expected_version=link.remote_version)
                 except RemoteRejected as error:
                     result = error
                 written[record.external_key] = (bases, result)
     count = 0
     discrepancies: list[int] = []
     applied: list[ApplyResult] = []
-    with transaction.atomic(using=using):
-        locked = _manager("SyncStream", using=using).lock_current(stream, using=using)
+    with transaction.atomic():
+        locked = _manager("SyncStream").lock_current(stream)
         if (
             locked.cursor != original_cursor
             or locked.phase != stream.phase
@@ -461,7 +450,7 @@ def _apply_page(
             or locked.resync_required
         ):
             raise RuntimeError("Stream state changed during extraction; retry the page.")
-        adapter.prepare_page(locked, page, using=using)
+        adapter.prepare_page(locked, page)
         evidence = (
             {}
             if evidence_rows is None
@@ -472,7 +461,7 @@ def _apply_page(
             link = None
             revision = None
             try:
-                with transaction.atomic(using=using):
+                with transaction.atomic():
                     if evidence_rows is not None:
                         # Repeated identities must see earlier writes and refusals in this page.
                         observed = (
@@ -485,7 +474,6 @@ def _apply_page(
                             locked,
                             record.external_key,
                             metadata=record.metadata or None,
-                            using=using,
                         )
                         if observed is not None and observed.open_conflicts:
                             discrepancies.extend(conflict.pk for conflict in observed.open_conflicts)
@@ -514,11 +502,10 @@ def _apply_page(
                                     count=0,
                                 ),
                                 origin=link.origin or "remote",
-                                using=using,
                             )
                             if not record.tombstone:
-                                adapter.on_revalidated(locked, (link,), using=using)
-                            _resolve_applied(locked, record, using=using)
+                                adapter.on_revalidated(locked, (link,))
+                            _resolve_applied(locked, record)
                             continue
                         if decision == ChangeKind.WRITE_BACK:
                             if locked.direction == StreamDirection.PULL:
@@ -531,44 +518,42 @@ def _apply_page(
                                 raise RuntimeError("Record bases changed during extraction; retry the page.")
                             if isinstance(result, SemanticError):
                                 raise result
-                            _reflect_write(link, record, result, using=using)
-                            _resolve_applied(locked, record, using=using)
+                            _reflect_write(link, record, result)
+                            _resolve_applied(locked, record)
                             count += 1
                             continue
-                    outcome = adapter.apply_record(locked, record, using=using)
+                    outcome = adapter.apply_record(locked, record)
                     if not isinstance(outcome, ApplyResult):
                         raise AdapterContractError("apply_record must return ApplyResult.")
                     if link is not None:
-                        if _manager("RecordRevision", using=using).latest_for(link).first() != revision:
+                        if _manager("RecordRevision").latest_for(link).first() != revision:
                             raise AdapterContractError(
                                 "Adapters return ApplyResult; only the driver promotes the primary link."
                             )
-                        _promote(link, record, outcome, origin="remote", using=using)
+                        _promote(link, record, outcome, origin="remote")
                     applied.append(outcome)
-                    _resolve_applied(locked, record, using=using)
+                    _resolve_applied(locked, record)
                     count += outcome.count
             except (SemanticError, ValidationError) as error:
                 # The record savepoint rolled back, including a new identity.
                 if locked.kind == StreamKind.RECORD_REPLICA and isinstance(record, RecordChange):
-                    link = _manager("RecordLink", using=using).observe(
+                    link = _manager("RecordLink").observe(
                         locked,
                         record.external_key,
                         metadata=record.metadata or None,
-                        using=using,
                     )
                 refusal = error if isinstance(error, SemanticError) else SemanticError("invalid_record")
-                discrepancies.append(_quarantine(locked, record, refusal, link=link, using=using).pk)
-        adapter.finish_page(locked, page, applied, using=using)
+                discrepancies.append(_quarantine(locked, record, refusal, link=link).pk)
+        adapter.finish_page(locked, page, applied)
         if reconcile_state is not None:
             locked.reconcile_state = reconcile_state
-            locked.save(using=using, update_fields=["reconcile_state", "updated_at"])
+            locked.save(update_fields=["reconcile_state", "updated_at"])
         if advance_cursor:
-            _manager("SyncStream", using=using).advance(
+            _manager("SyncStream").advance(
                 locked,
                 page.cursor,
                 exhausted=page.exhausted,
                 cursor_expires_at=page.cursor_expires_at,
-                using=using,
             )
     hashes = [record.source_hash for record in page.records] if locked.kind == StreamKind.RECORD_REPLICA else []
     progress = canonical_json_sha256([locked.generation, page.cursor, hashes])
@@ -581,30 +566,28 @@ def push_stream(
     *,
     external_keys: frozenset[str] | None = None,
     deadline: float | None = None,
-    using: str | None = None,
 ) -> PageResult:
     """Conditionally write local candidates after a two-way replica's first baseline."""
 
-    using = get_write_alias(type(stream), using=using, instance=stream)
-    if connections[using].in_atomic_block:
+    if connection.in_atomic_block:
         raise RuntimeError("Remote writes must run outside a database transaction.")
     if stream.kind != StreamKind.RECORD_REPLICA or stream.direction == StreamDirection.PULL:
         return PageResult(stream, exhausted=True)
     count = 0
     discrepancies: list[int] = []
     with system_context(reason="integrate.stream.push"):
-        if _baseline_adoption(stream, using=using):
+        if _baseline_adoption(stream):
             return PageResult(stream, exhausted=True)
-        for candidate in adapter.local_changes(stream, keys=external_keys, using=using):
+        for candidate in adapter.local_changes(stream, keys=external_keys):
             if deadline is not None and monotonic() >= deadline:
                 return PageResult(stream, count, discrepancy_ids=tuple(discrepancies))
-            links = _manager("RecordLink", using=using)
+            links = _manager("RecordLink")
             link = links.filter(stream=stream, external_key=candidate.external_key).first()
             if link is None:
-                link = links.observe(stream, candidate.external_key, using=using)
-            if _has_conflict(link, using=using) or candidate.local_hash == link.local_base_hash:
+                link = links.observe(stream, candidate.external_key)
+            if _has_conflict(link) or candidate.local_hash == link.local_base_hash:
                 continue
-            revision = _manager("RecordRevision", using=using).latest_for(link).first()
+            revision = _manager("RecordRevision").latest_for(link).first()
             record = RecordChange(
                 candidate.external_key,
                 None,
@@ -618,25 +601,23 @@ def push_stream(
             )
             bases = (link.remote_base_hash, link.local_base_hash, link.remote_version)
             try:
-                result = adapter.write_back(
-                    link, candidate.projection, expected_version=link.remote_version, using=using
-                )
+                result = adapter.write_back(link, candidate.projection, expected_version=link.remote_version)
             except RemoteRejected as error:
-                discrepancies.append(_quarantine(stream, record, error, link=link, using=using).pk)
+                discrepancies.append(_quarantine(stream, record, error, link=link).pk)
                 continue
-            with transaction.atomic(using=using):
-                _manager("SyncStream", using=using).lock_current(stream, using=using)
+            with transaction.atomic():
+                _manager("SyncStream").lock_current(stream)
                 locked = links.lock_if_supported().get(pk=link.pk)
                 if (locked.remote_base_hash, locked.local_base_hash, locked.remote_version) != bases:
                     raise RuntimeError("Record bases changed during write-back; reconcile before retrying.")
-                _reflect_write(locked, record, result, using=using)
+                _reflect_write(locked, record, result)
             count += 1
     return PageResult(stream, count, True, tuple(discrepancies))
 
 
-def read_stream_keys(adapter: BridgeImpl, stream: Any, keys: Sequence[str], *, using: str) -> tuple[RecordChange, ...]:
+def read_stream_keys(adapter: BridgeImpl, stream: Any, keys: Sequence[str]) -> tuple[RecordChange, ...]:
     """Read a bounded identity set and enforce the declared adapter contract."""
-    records = tuple(islice(adapter.read_keys(stream, keys, using=using), len(keys) + 1))
+    records = tuple(islice(adapter.read_keys(stream, keys), len(keys) + 1))
     if (
         any(not isinstance(record, RecordChange) for record in records)
         or len(records) != len(keys)
@@ -648,16 +629,14 @@ def read_stream_keys(adapter: BridgeImpl, stream: Any, keys: Sequence[str], *, u
     return records
 
 
-def _save_reconcile(stream: Any, state: dict[str, Any] | None, *, using: str) -> None:
+def _save_reconcile(stream: Any, state: dict[str, Any] | None) -> None:
     if state is None:
         stream.last_reconciled_at = timezone.now()
     stream.reconcile_state = state or {}
-    stream.save(using=using, update_fields=["reconcile_state", "last_reconciled_at", "updated_at"])
+    stream.save(update_fields=["reconcile_state", "last_reconciled_at", "updated_at"])
 
 
-def reconcile_stream(
-    stream: Any, adapter: BridgeImpl, *, page_bound: int = 100, deadline: float | None = None, using: str | None = None
-) -> int:
+def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100, deadline: float | None = None) -> int:
     """Commit one bounded sweep pulse, returning the number of absence observations.
 
     Continue while stream.reconcile_state is nonempty. Enumeration seeks after
@@ -666,18 +645,17 @@ def reconcile_stream(
     baseline precedes enumeration. The adapter cursor remains opaque.
     """
 
-    using = get_write_alias(type(stream), using=using, instance=stream)
-    if connections[using].in_atomic_block:
+    if connection.in_atomic_block:
         raise RuntimeError("Remote enumeration must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
     if stream.kind != StreamKind.RECORD_REPLICA or stream.reconcile_interval is None:
         return 0
     with system_context(reason="integrate.stream.reconcile"):
-        manager = _manager("SyncStream", using=using)
+        manager = _manager("SyncStream")
         identity_reads = adapter.supports_identity_reads
-        with transaction.atomic(using=using):
-            locked = manager.lock_current(stream, using=using)
+        with transaction.atomic():
+            locked = manager.lock_current(stream)
             state = _validated_cursor(locked.reconcile_state) or None
             if state is None:
                 now = timezone.now()
@@ -689,14 +667,14 @@ def reconcile_stream(
                     "phase": "enumerate" if identity_reads else "extract",
                     "after": None,
                 }
-                _save_reconcile(locked, state, using=using)
+                _save_reconcile(locked, state)
             original_cursor = _validated_cursor(locked.cursor)
             original_reconcile = dict(locked.reconcile_state)
         if state["phase"] == "extract":
             baseline = copy(locked)
             baseline.cursor = state.get("cursor", {})
             baseline.phase = StreamPhase.BASELINE
-            page = _extract_page(adapter, baseline, page_bound, deadline=deadline, using=using)
+            page = _extract_page(adapter, baseline, page_bound, deadline=deadline)
             if page.resync_required:
                 raise CursorInvalid()
             if not page.exhausted and page.cursor == baseline.cursor:
@@ -709,10 +687,9 @@ def reconcile_stream(
                 original_cursor=original_cursor,
                 advance_cursor=False,
                 reconcile_state=state,
-                using=using,
             ).stream
         elif state["phase"] == "enumerate":
-            keys = tuple(islice(adapter.enumerate_keys(locked, after=state["after"], using=using), page_bound))
+            keys = tuple(islice(adapter.enumerate_keys(locked, after=state["after"]), page_bound))
             if any(not isinstance(key, str) or not key for key in keys) or len(keys) != len(set(keys)):
                 raise AdapterContractError("enumerate_keys must yield unique nonempty external keys.")
             if state["after"] in keys:
@@ -721,9 +698,7 @@ def reconcile_stream(
             if not keys:
                 next_state["phase"] = "roots"
             if identity_reads and keys:
-                page = StreamPage(
-                    read_stream_keys(adapter, locked, keys, using=using), original_cursor, exhausted=False
-                )
+                page = StreamPage(read_stream_keys(adapter, locked, keys), original_cursor, exhausted=False)
                 locked = _apply_page(
                     locked,
                     adapter,
@@ -731,25 +706,24 @@ def reconcile_stream(
                     original_cursor=original_cursor,
                     advance_cursor=False,
                     reconcile_state=next_state,
-                    using=using,
                 ).stream
             else:
-                with transaction.atomic(using=using):
-                    locked = manager.lock_current(locked, using=using)
+                with transaction.atomic():
+                    locked = manager.lock_current(locked)
                     if locked.cursor != original_cursor or locked.reconcile_state != original_reconcile:
                         raise RuntimeError("Stream state changed during enumeration; retry the sweep pulse.")
-                    links = _manager("RecordLink", using=using)
+                    links = _manager("RecordLink")
                     for key in keys:
                         if not links.filter(stream=locked, external_key=key).exists():
                             raise AdapterContractError("The extraction baseline omitted an enumerated identity.")
-                        links.observe(locked, key, using=using)
-                    _save_reconcile(locked, next_state, using=using)
+                        links.observe(locked, key)
+                    _save_reconcile(locked, next_state)
         else:
-            with transaction.atomic(using=using):
-                locked = manager.lock_current(locked, using=using)
+            with transaction.atomic():
+                locked = manager.lock_current(locked)
                 if locked.cursor != original_cursor or locked.reconcile_state != original_reconcile:
                     raise RuntimeError("Stream state changed during the sweep pulse.")
-                links = _manager("RecordLink", using=using)
+                links = _manager("RecordLink")
                 started = datetime.fromisoformat(state["started_at"])
                 rows = links.filter(stream=locked).exclude(status=LinkStatus.TOMBSTONE)
                 if state["phase"] == "roots":
@@ -764,7 +738,7 @@ def reconcile_stream(
                 if state["after"] is not None:
                     rows = rows.filter(pk__gt=state["after"])
                 batch = tuple(rows.order_by("pk").lock_if_supported()[:page_bound])
-                changed = links.mark_absent(locked, [link.external_key for link in batch], using=using)
+                changed = links.mark_absent(locked, [link.external_key for link in batch])
                 previous = {link.pk: link.status for link in batch}
                 transitions = tuple(
                     link
@@ -773,13 +747,13 @@ def reconcile_stream(
                     and link.status in (LinkStatus.UNAVAILABLE, LinkStatus.TOMBSTONE)
                 )
                 if transitions:
-                    adapter.on_absent(locked, transitions, using=using)
+                    adapter.on_absent(locked, transitions)
                 if batch:
-                    _save_reconcile(locked, {**state, "after": batch[-1].pk}, using=using)
+                    _save_reconcile(locked, {**state, "after": batch[-1].pk})
                 elif state["phase"] == "roots":
-                    _save_reconcile(locked, {**state, "phase": "children", "after": None}, using=using)
+                    _save_reconcile(locked, {**state, "phase": "children", "after": None})
                 else:
-                    _save_reconcile(locked, None, using=using)
+                    _save_reconcile(locked, None)
                 stream.reconcile_state, stream.last_reconciled_at = locked.reconcile_state, locked.last_reconciled_at
                 return changed
         stream.reconcile_state, stream.last_reconciled_at = locked.reconcile_state, locked.last_reconciled_at
@@ -792,7 +766,6 @@ def begin_stream_cycle(
     *,
     page_bound: int = 100,
     force_apply: frozenset[str] = frozenset(),
-    using: str | None = None,
 ) -> Any:
     """Re-read due replica identities, or request a logged baseline fallback.
 
@@ -802,25 +775,24 @@ def begin_stream_cycle(
     Conflicts require explicit resolution. Event feeds have no replica rescan.
     """
 
-    using = get_write_alias(type(stream), using=using, instance=stream)
-    if connections[using].in_atomic_block:
+    if connection.in_atomic_block:
         raise RuntimeError("Stream rescan must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
     with system_context(reason="integrate.stream.cycle"):
-        manager = _manager("SyncStream", using=using)
-        discrepancies = _manager("SyncDiscrepancy", using=using)
+        manager = _manager("SyncStream")
+        discrepancies = _manager("SyncDiscrepancy")
         identity_reads = adapter is not None and adapter.supports_identity_reads
-        with transaction.atomic(using=using):
-            stream = manager.lock_current(stream, using=using)
+        with transaction.atomic():
+            stream = manager.lock_current(stream)
             if stream.kind == StreamKind.EVENT_FEED:
                 return stream
-            due = discrepancies.rescan(stream, limit=page_bound, using=using)
+            due = discrepancies.rescan(stream, limit=page_bound)
             retention = stream.tombstone_retention
             retry = False
             if retention and (stream.last_advanced_at is None or stream.last_advanced_at + retention < timezone.now()):
                 retry = (
-                    _manager("RecordLink", using=using)
+                    _manager("RecordLink")
                     .filter(
                         stream=stream,
                         status=LinkStatus.TOMBSTONE,
@@ -835,27 +807,27 @@ def begin_stream_cycle(
                 for row in due:
                     row.details = {**row.details, "rescan": "baseline", "reason": "read_keys_unavailable"}
                     row.retry_at = _retry_at(stream, row.attempts)
-                    row.save(using=using, update_fields=["details", "retry_at", "updated_at"])
+                    row.save(update_fields=["details", "retry_at", "updated_at"])
             if retry:
                 manager.filter(pk=stream.pk).update(resync_required=True)
                 stream.resync_required = True
             if stream.resync_required or (not due and not force_apply) or adapter is None:
                 return stream
             links = (
-                _manager("RecordLink", using=using)
+                _manager("RecordLink")
                 .filter(stream=stream, pk__in=[row.link_id for row in due])
                 .order_by("external_key")
             )
             keys, reapply = set(force_apply), set()
             for link in links:
-                parent = related_on(link, "parent", required=False, using=using)
+                parent = link.parent
                 owner = parent if parent is not None else link
                 keys.add(owner.external_key)
                 reapply.add(owner.external_key)
             if not keys:
                 return stream
             original_cursor = _validated_cursor(stream.cursor)
-        records = read_stream_keys(adapter, stream, tuple(sorted(keys)), using=using)
+        records = read_stream_keys(adapter, stream, tuple(sorted(keys)))
         return _apply_page(
             stream,
             adapter,
@@ -864,7 +836,6 @@ def begin_stream_cycle(
             advance_cursor=False,
             force_apply=force_apply,
             reapply=frozenset(reapply),
-            using=using,
         ).stream
 
 
@@ -876,7 +847,6 @@ def open_stream(
     *,
     definition: StreamDefinition | None = None,
     deadline: float | None = None,
-    using: str | None = None,
 ) -> Any:
     """Open a partition, seeding legacy progress only on its first epoch.
 
@@ -885,17 +855,15 @@ def open_stream(
     Without a definition, an existing partition is reused without rediscovery.
     """
 
-    using = get_write_alias(type(bridge), using=using, instance=bridge)
-    bridge._state.db = using
-    manager = _manager("SyncStream", using=using)
+    manager = _manager("SyncStream")
     with system_context(reason="integrate.stream.open"):
         stream = None
         if definition is None:
-            stream = manager.current_for_bridge(bridge, key, using=using).filter(partition=partition).first()
+            stream = manager.current_for_bridge(bridge, key).filter(partition=partition).first()
             if stream is None:
                 definitions = [
                     item
-                    for item in adapter.streams(deadline=deadline, using=using)
+                    for item in adapter.streams(deadline=deadline)
                     if (item.key, item.partition) == (key, partition)
                 ]
                 if len(definitions) != 1:
@@ -915,13 +883,12 @@ def open_stream(
                 absence_threshold=definition.absence_threshold,
                 tombstone_retention=definition.tombstone_retention,
                 config=definition.config,
-                using=using,
             )
         assert stream is not None
         if stream.generation == 1 and not stream.cursor and bridge.cursor:
-            with transaction.atomic(using=using):
-                locked_bridge = type(bridge).objects.db_manager(using).filter(pk=bridge.pk).lock_if_supported().get()
-                stream = manager.lock_current(stream, using=using)
+            with transaction.atomic():
+                locked_bridge = type(bridge).objects.filter(pk=bridge.pk).lock_if_supported().get()
+                stream = manager.lock_current(stream)
                 if not stream.cursor and stream.last_advanced_at is None:
                     seeded_config, legacy_cursor = adapter.seed_config(locked_bridge.cursor)
                     config = {**seeded_config, **locked_bridge.config}
@@ -929,10 +896,10 @@ def open_stream(
                     if config != locked_bridge.config or legacy_cursor != locked_bridge.cursor:
                         locked_bridge.config = config
                         locked_bridge.cursor = legacy_cursor
-                        locked_bridge.save(using=using, update_fields=["config", "cursor", "updated_at"])
+                        locked_bridge.save(update_fields=["config", "cursor", "updated_at"])
                     cursor = adapter.seed_cursor(stream, locked_bridge.cursor)
                     # A no-op seed is still a completed cutover attempt.
-                    manager.advance(stream, _validated_cursor({} if cursor is None else cursor), using=using)
+                    manager.advance(stream, _validated_cursor({} if cursor is None else cursor))
                 bridge.config = adapter.bridge.config = locked_bridge.config
                 bridge.cursor = adapter.bridge.cursor = locked_bridge.cursor
         return stream
@@ -944,20 +911,17 @@ def _report(bridge: Any, message: str, **details: Any) -> None:
         reporter.report(str(bridge.SyncStage.SYNCING), message=message, details=details)
 
 
-def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadline: float, *, using: str) -> int:
+def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadline: float) -> int:
     stream = begin_stream_cycle(
-        open_stream(
-            bridge, definition.key, definition.partition, adapter, definition=definition, deadline=deadline, using=using
-        ),
+        open_stream(bridge, definition.key, definition.partition, adapter, definition=definition, deadline=deadline),
         adapter,
-        using=using,
     )
     landed, resets = 0, 0
     page_bound = max(1, int(bridge.config.get("sync_page_bound", 100)))
     exhausted = False
     previous = None
     while monotonic() < deadline:
-        result = advance_stream(stream, adapter, page_bound=page_bound, deadline=deadline, using=using)
+        result = advance_stream(stream, adapter, page_bound=page_bound, deadline=deadline)
         stream, exhausted = result.stream, result.exhausted
         landed += result.count
         resets += int(result.reset)
@@ -977,9 +941,9 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
         )
         if exhausted:
             if monotonic() < deadline:
-                landed += push_stream(stream, adapter, deadline=deadline, using=using).count
+                landed += push_stream(stream, adapter, deadline=deadline).count
                 while monotonic() < deadline:
-                    reconcile_stream(stream, adapter, page_bound=page_bound, deadline=deadline, using=using)
+                    reconcile_stream(stream, adapter, page_bound=page_bound, deadline=deadline)
                     if not stream.reconcile_state:
                         break
             break
@@ -995,53 +959,47 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
     return landed
 
 
-def _drain_partition(bridge: Any, definition: StreamDefinition, deadline: float, *, using: str) -> int:
+def _drain_partition(bridge: Any, definition: StreamDefinition, deadline: float) -> int:
     close_old_connections()
     try:
         with system_context(reason="integrate.stream.partition"):
-            row = type(bridge)._base_manager.db_manager(using).get(pk=bridge.pk)
+            row = type(bridge)._base_manager.get(pk=bridge.pk)
             adapter = row.backend
             try:
-                with bridge_progress_context(row, using=using):
-                    return _drain(row, adapter, definition, deadline, using=using)
+                with bridge_progress_context(row):
+                    return _drain(row, adapter, definition, deadline)
             finally:
                 adapter.close()
     finally:
         connections.close_all()
 
 
-def sync_bridge(bridge: Any, *, using: str | None = None) -> int:
+def sync_bridge(bridge: Any) -> int:
     """Drive declared partitions within the existing bridge task's time budget."""
 
-    using = get_write_alias(type(bridge), using=using, instance=bridge)
-    bridge._state.db = using
     config = bridge.config
     soft_limit = float(settings.CELERY_TASK_SOFT_TIME_LIMIT)
     deadline = monotonic() + max(0.0, float(config.get("sync_time_budget", max(60.0, soft_limit - 60.0))))
     adapter = bridge.backend
     try:
         with system_context(reason="integrate.bridge.streams"):
-            definitions = tuple(
-                sorted(adapter.streams(deadline=deadline, using=using), key=lambda item: (item.key, item.partition))
-            )
+            definitions = tuple(sorted(adapter.streams(deadline=deadline), key=lambda item: (item.key, item.partition)))
             identities = [(item.key, item.partition) for item in definitions]
             if len(identities) != len(set(identities)):
                 raise AdapterContractError("A backend declared the same stream partition twice.")
             parallelism = max(1, int(config.get("sync_parallelism", 4)))
             if adapter.sync_parallelism is not None:
                 parallelism = min(parallelism, adapter.sync_parallelism)
-            if connections[using].vendor != "postgresql":
+            if connection.vendor != "postgresql":
                 parallelism = 1
             if parallelism <= 1 or len(definitions) <= 1:
-                return sum(_drain(bridge, adapter, definition, deadline, using=using) for definition in definitions)
+                return sum(_drain(bridge, adapter, definition, deadline) for definition in definitions)
             failures, landed = [], 0
             with ThreadPoolExecutor(
                 max_workers=min(parallelism, len(definitions)), thread_name_prefix="bridge-sync"
             ) as pool:
                 futures = {
-                    pool.submit(
-                        copy_context().run, _drain_partition, bridge, definition, deadline, using=using
-                    ): definition
+                    pool.submit(copy_context().run, _drain_partition, bridge, definition, deadline): definition
                     for definition in definitions
                 }
                 for future in as_completed(futures):

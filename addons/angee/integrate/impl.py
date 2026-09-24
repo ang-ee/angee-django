@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.impl import ImplBase
 from angee.integrate.connect import enabled_oauth_client_from_hint
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
@@ -45,7 +44,7 @@ class IntegrationImpl(ImplBase):
 
         self.integration = integration
 
-    def connect_oauth_client(self, owner_label: str, *, using: str | None = None) -> Any:
+    def connect_oauth_client(self, owner_label: str) -> Any:
         """Return the enabled OAuth client this integration connects through.
 
         Falls back to the bound integration's vendor slug when the implementation
@@ -53,9 +52,7 @@ class IntegrationImpl(ImplBase):
         ``{vendor}`` template.
         """
 
-        using = get_write_alias(type(self.integration), using=using, instance=self.integration)
-        self.integration._state.db = using
-        vendor = related_on(self.integration, "vendor", using=using, required=False)
+        vendor = self.integration.vendor
         vendor_slug = str(getattr(vendor, "slug", "") or "")
         hint = str(self.oauth_client or "")
         return enabled_oauth_client_from_hint(
@@ -63,7 +60,6 @@ class IntegrationImpl(ImplBase):
             owner_label=owner_label,
             reason="integrate.graphql.connect_integration.oauth_client",
             vendor_slug=vendor_slug,
-            using=using,
         )
 
 
@@ -82,7 +78,7 @@ class BridgeImpl(IntegrationImpl):
     supports_identity_reads: ClassVar[bool] = False
     """Declare identity reads; otherwise retries request a fresh baseline."""
 
-    def streams(self, *, deadline: float | None = None, using: str | None = None) -> Iterable[StreamDefinition]:
+    def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare each independently ordered partition exactly once."""
         raise AdapterContractError("Stream adapters must declare their partitions.")
 
@@ -99,17 +95,15 @@ class BridgeImpl(IntegrationImpl):
         """Translate a legacy bridge position once when opening its first empty epoch."""
         return None
 
-    def extract(
-        self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
-    ) -> StreamPage:
+    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Fetch at most page_bound records outside transactions within the deadline."""
         raise AdapterContractError("Stream adapters must extract bounded pages.")
 
-    def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
+    def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
         """Read every requested identity exactly once, including missing-key tombstones."""
         raise AdapterContractError("This adapter does not support identity reads.")
 
-    def apply_record(self, stream: Any, record: Any, *, using: str | None = None) -> ApplyResult:
+    def apply_record(self, stream: Any, record: Any) -> ApplyResult:
         """Apply one record using database work only; return its applied evidence.
 
         The driver owns primary link promotion. Record-local refusals raise
@@ -126,7 +120,7 @@ class BridgeImpl(IntegrationImpl):
 
         return self.integration
 
-    def enumerate_keys(self, stream: Any, *, after: str | None = None, using: str | None = None) -> Iterable[str]:
+    def enumerate_keys(self, stream: Any, *, after: str | None = None) -> Iterable[str]:
         """Yield unique remote identities in stable order, resuming after a key.
 
         Seek directly past ``after`` instead of materializing the inventory or
@@ -135,34 +129,28 @@ class BridgeImpl(IntegrationImpl):
 
         raise AdapterContractError("Replica adapters must enumerate remote keys.")
 
-    def prepare_page(self, stream: Any, page: StreamPage, *, using: str | None = None) -> None:
+    def prepare_page(self, stream: Any, page: StreamPage) -> None:
         """Lock the page's complete identity/target set before record savepoints.
 
         This optional hook runs inside the page transaction: database work only,
         in a canonical order. Fetch all remote facts during extraction.
         """
 
-    def on_revalidated(self, stream: Any, links: Sequence[Any], *, using: str | None = None) -> None:
+    def on_revalidated(self, stream: Any, links: Sequence[Any]) -> None:
         """Restore native projection visibility after unchanged-row revalidation."""
 
-    def on_absent(self, stream: Any, links: Sequence[Any], *, using: str | None = None) -> None:
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
         """Withdraw native projection visibility when absence changes link status."""
 
-    def finish_page(
-        self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult], *, using: str | None = None
-    ) -> None:
+    def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
         """Finish domain batch relationships before the page cursor commits."""
 
-    def local_changes(
-        self, stream: Any, *, keys: frozenset[str] | None = None, using: str | None = None
-    ) -> Iterable[LocalChange]:
+    def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
         """Project only selected local identities, or all candidates when keys is None."""
 
         raise AdapterContractError("Push adapters must project local changes.")
 
-    def write_back(
-        self, link: Any, projection: Any, *, expected_version: str, using: str | None = None
-    ) -> WriteBackResult:
+    def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
         """Conditionally write a remote record or raise RemoteRejected."""
 
         raise AdapterContractError("Push adapters must implement conditional write-back.")
@@ -191,7 +179,7 @@ class LiveBridgeImpl(BridgeImpl):
             raise TypeError(f"{type(self).__name__}.session_class must resolve to a class.")
         return resolved
 
-    def start_live(self, *, using: str | None = None) -> None:
+    def start_live(self) -> None:
         """Dispatch this bridge's live session to its dedicated queue.
 
         Safe to repeat: the session task's non-blocking advisory-lock acquire
@@ -199,8 +187,6 @@ class LiveBridgeImpl(BridgeImpl):
         undelivered start from outliving the next reconciler tick.
         """
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self.bridge._state.db = using
         if not self.session_queue:
             raise ImproperlyConfigured(
                 f"{type(self).__name__} must define session_queue; a long-lived session on the "
@@ -208,7 +194,7 @@ class LiveBridgeImpl(BridgeImpl):
             )
         enqueue_task(
             RUN_SESSION_TASK,
-            kwargs={"model_label": self.bridge._meta.label_lower, "pk": self.bridge.pk, "using": using},
+            kwargs={"model_label": self.bridge._meta.label_lower, "pk": self.bridge.pk},
             queue=self.session_queue,
             expires=SESSION_START_EXPIRES,
         )
@@ -225,7 +211,7 @@ class LiveBridgeImpl(BridgeImpl):
         with self.bridge.live_account_lock(self.key, self.normalize_account_id(external_id)) as acquired:
             yield acquired
 
-    def claim_account(self, external_id: str, *, using: str | None = None) -> bool:
+    def claim_account(self, external_id: str) -> bool:
         """Record ``external_id`` as this bridge's durable account identity.
 
         Returns whether the claim landed: ``False`` means another bridge already
@@ -242,15 +228,13 @@ class LiveBridgeImpl(BridgeImpl):
         the process-local lock floor two workers can both pass the ``SELECT``.
         """
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self.bridge._state.db = using
         return self.bridge.claim_live_account(
             self.key,
             self.normalize_account_id(external_id),
             identity_key=self.state_identity_key,
         )
 
-    def mark_disconnected(self, *, clear_identity: bool, using: str | None = None) -> None:
+    def mark_disconnected(self, *, clear_identity: bool) -> None:
         """Record the operator's disconnect: lifecycle released, identity optional.
 
         The operator declares the lifecycle, so this write moves it through the
@@ -258,11 +242,9 @@ class LiveBridgeImpl(BridgeImpl):
         the claimed account and pairing report when the operator chose a wipe.
         """
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self.bridge._state.db = using
         self.bridge.disconnect_live_account(identity_key=self.state_identity_key, clear_identity=clear_identity)
 
-    def release_account(self, *, desired: Any, using: str | None = None) -> None:
+    def release_account(self, *, desired: Any) -> None:
         """Record a void claim: drop account identity and live desire, never lifecycle.
 
         The worker's release. A runtime handshake that proved this row's account
@@ -271,8 +253,6 @@ class LiveBridgeImpl(BridgeImpl):
         signal the live task and reconciler both read.
         """
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self.bridge._state.db = using
         self.bridge.release_live_account(identity_key=self.state_identity_key, desired=desired)
 
     def pairing(self) -> PairingProjection:

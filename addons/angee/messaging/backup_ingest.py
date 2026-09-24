@@ -41,7 +41,6 @@ from django.apps import apps
 from django.db.models import Max
 from rebac import system_context
 
-from angee.base.db import get_write_alias
 from angee.messaging.backends import ParsedMessage, ParsedPart
 
 _THREAD_KEY_PREFIX = "chat:{channel_pk}:"
@@ -93,7 +92,7 @@ class ContentKeyCounter:
         return f"{identity[0]}:{identity[1]}:{identity[2]}:{digest}:{occurrence}"
 
 
-def thread_watermarks(channel: Any, *, reason: str, using: str | None = None) -> dict[str, datetime]:
+def thread_watermarks(channel: Any, *, reason: str) -> dict[str, datetime]:
     """Return each chat thread's newest already-imported instant, keyed by store key.
 
     The map is empty for a first import. Keyed by the store's raw thread key —
@@ -106,14 +105,12 @@ def thread_watermarks(channel: Any, *, reason: str, using: str | None = None) ->
     neutral).
     """
 
-    using = get_write_alias(type(channel), using=using, instance=channel)
     message_model = apps.get_model("messaging", "Message")
     prefix = _THREAD_KEY_PREFIX.format(channel_pk=channel.pk)
     watermarks: dict[str, datetime] = {}
     with system_context(reason=reason):
         rows = (
-            message_model._base_manager.db_manager(using)
-            .filter(thread__channel=channel, sent_at__isnull=False)
+            message_model._base_manager.filter(thread__channel=channel, sent_at__isnull=False)
             .values("thread__external_id")
             .annotate(latest=Max("sent_at"))
         )
@@ -136,7 +133,6 @@ def batch_ingest(
     max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
     dry_run: bool = False,
     on_batch: Callable[[int], None] | None = None,
-    using: str | None = None,
 ) -> int:
     """Drive a store's messages through the shared ingest path in batches; return the total.
 
@@ -148,7 +144,6 @@ def batch_ingest(
     live message events and party suggestions through the shared ingest owner.
     """
 
-    using = get_write_alias(type(channel), using=using, instance=channel)
     message_model = apps.get_model("messaging", "Message")
     batch_size = max(1, int(batch_size))
     max_batch_bytes = max(1, int(max_batch_bytes))
@@ -162,7 +157,7 @@ def batch_ingest(
             return
         if not dry_run:
             with system_context(reason=reason):
-                message_model.objects.db_manager(using).ingest(
+                message_model.objects.ingest(
                     batch,
                     channel=channel,
                     quote_edges=False,

@@ -36,7 +36,6 @@ from typing import Any, ClassVar, TypeVar
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from angee.base.db import get_write_alias, related_on
 from angee.integrate.streams import CursorInvalid, StreamDefinition, StreamPage
 from angee.messaging.backends import ChannelBackend, MediaItem, ParsedMessage
 from angee.messaging_integrate_slack.identity import parsed_message, response_data
@@ -128,11 +127,10 @@ class SlackChannelBackend(ChannelBackend):
         self._page_bound = _PAGE_LIMIT
         self._credential: Any = None
 
-    def streams(self, *, deadline: float | None = None, using: str | None = None) -> tuple[StreamDefinition, ...]:
+    def streams(self, *, deadline: float | None = None) -> tuple[StreamDefinition, ...]:
         """Discover conversations once for this serial backend."""
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self._conversations = self._discover_conversations(using=using, deadline=deadline)
+        self._conversations = self._discover_conversations(deadline=deadline)
         return tuple(StreamDefinition(key="messages", partition=key) for key in sorted(self._conversations))
 
     def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
@@ -144,16 +142,13 @@ class SlackChannelBackend(ChannelBackend):
             return None
         return {"conversation": deepcopy(conversation or {}), "threads": deepcopy(threads or {})}
 
-    def extract(
-        self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
-    ) -> StreamPage:
+    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Read one conversation page; its cursor commits with the ingested messages."""
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
         identity = (stream.partition, stream.generation)
         if self._stream_identity != identity:
             if stream.partition not in self._conversations:
-                self._conversations = self._discover_conversations(using=using, deadline=deadline)
+                self._conversations = self._discover_conversations(deadline=deadline)
             self._stream_identity = identity
             self._cursor = deepcopy(stream.cursor)
             self._work = deque([self._conversation_work(self._conversations[stream.partition])])
@@ -183,10 +178,10 @@ class SlackChannelBackend(ChannelBackend):
             self._queue_reply(work, parent_ts, threads[parent_ts])
         return work
 
-    def _discover_conversations(self, *, using: str, deadline: float | None = None) -> dict[str, dict[str, Any]]:
+    def _discover_conversations(self, *, deadline: float | None = None) -> dict[str, dict[str, Any]]:
         """List all visible conversations once for this serial backend instance."""
 
-        self._credential = related_on(self.bridge, "credential", using=using, required=False)
+        self._credential = self.bridge.credential
         conversations: dict[str, dict[str, Any]] = {}
         cursor = ""
         while True:

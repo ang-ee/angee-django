@@ -23,7 +23,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_read_alias, get_write_alias
 
 
 class InboxCoverage(BaseModel):
@@ -169,9 +168,7 @@ class MessageInbox:
     def parts_for(self, messages: Any) -> Any:
         """Readable parts of an already authorized eligible message population."""
 
-        return self.collection("messaging", "Part").filter(
-            message_id__in=Subquery(messages.order_by().values("pk"))
-        )
+        return self.collection("messaging", "Part").filter(message_id__in=Subquery(messages.order_by().values("pk")))
 
     def accounts(self) -> Any:
         """Readable accounts projected from eligible messages without full-row deduplication."""
@@ -223,8 +220,7 @@ class MessageInbox:
         # earlier sender/circle predicates when an exact-handle filter is added.
         authored = self.messages.filter(sender_id__in=Subquery(ids)).order_by().values("pk")
         addressed = (
-            self.messages.filter(pk__in=Subquery(recipients.order_by().values("message_id")))
-            .order_by().values("pk")
+            self.messages.filter(pk__in=Subquery(recipients.order_by().values("message_id"))).order_by().values("pk")
         )
         return rows.filter(pk__in=Subquery(authored.union(addressed)))
 
@@ -271,16 +267,12 @@ class MessageInbox:
     def matching(self, rows: Any, search: InboxSearch) -> Any:
         """Search readable part uses with native Postgres full text and filename matching."""
 
-        alias = (
-            get_write_alias(rows.model, bound=rows) if rows._for_write else get_read_alias(rows.model, bound=rows)
-        )
-        rows = rows.using(alias)
         if search.direction:
             if search.direction not in ("inbound", "outbound"):
                 raise ValueError("Unknown message direction.")
             rows = rows.filter(direction=search.direction)
         if search.handle:
-            handle = self.handles.using(alias).from_public_id(search.handle)
+            handle = self.handles.from_public_id(search.handle)
             if handle is None:
                 raise ValueError("Handle unavailable.")
             rows = self.involving_handles(rows, self.handles.filter(pk=handle.pk))
@@ -307,7 +299,7 @@ class MessageInbox:
                         term, search_type="phrase"
                     )
                 )
-                if connections[alias].vendor == "postgresql"
+                if connections[rows.db].vendor == "postgresql"
                 else Q(fragment__text__icontains=term)
             )
             # Independent candidate paths let PostgreSQL start at the fragment

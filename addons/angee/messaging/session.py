@@ -51,10 +51,10 @@ class LiveChannelSession(LiveSession):
         """Land messaging batches and ignore other implementation-specific events."""
 
         if kind == "messages":
-            return self._ingest(payload, using=self.using)
+            return self._ingest(payload)
         return self._still_wanted()
 
-    def _ingest(self, batch: list[tuple[Any, Any]], *, using: str) -> bool:
+    def _ingest(self, batch: list[tuple[Any, Any]]) -> bool:
         """Land one queued batch in bounded chunks, checking liveness between them."""
 
         message_model = apps.get_model("messaging", "Message")
@@ -63,7 +63,7 @@ class LiveChannelSession(LiveSession):
             parsed = [
                 self.live_impl.parse_live_message(self._with_media(message, payload)) for message, payload in chunk
             ]
-            landed = message_model.objects.db_manager(using).ingest(
+            landed = message_model.objects.ingest(
                 parsed,
                 channel=self.bridge,
                 quote_edges=self.live_impl.quote_edges,
@@ -224,7 +224,7 @@ class AsyncioLiveSession(LiveChannelSession, ABC):
         """Persist the shared initial-history gate; delegate vendor events."""
 
         if kind == "history_seeded":
-            self.bridge.merge_subscription_state(history_seeded=True, using=self.using)
+            self.bridge.merge_subscription_state(history_seeded=True)
             return self._still_wanted()
         return super()._handle(kind, payload)
 

@@ -13,7 +13,6 @@ from __future__ import annotations
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 
-from angee.base.db import get_write_alias
 from angee.base.fields import StateField
 
 
@@ -68,40 +67,37 @@ class ScoredLinkMixin(models.Model):
 
         abstract = True
 
-    def confirm(self, *, using: str | None = None) -> None:
+    def confirm(self) -> None:
         """Accept this link at full confidence, then re-resolve any derived owner.
 
         Confirmation is the strongest signal, so the link also takes full confidence
         and the ``manual`` source — a later sync must not out-score a human decision.
         """
 
-        alias = get_write_alias(type(self), using=using, instance=self)
-        with transaction.atomic(using=alias):
+        with transaction.atomic():
             self.confidence = 1.0
             self.source = LinkSource.MANUAL  # type: ignore[assignment]  # TextChoices member unmodeled without django-stubs
             self.is_confirmed = True
             self.is_dismissed = False
             self.save(
-                using=alias,
                 update_fields=["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"],
             )
-            self._resolve_link(using=alias)
+            self._resolve_link()
 
-    def dismiss(self, *, using: str | None = None) -> None:
+    def dismiss(self) -> None:
         """Reject this link — the durable anti-link — then re-resolve any derived owner.
 
         A dismissed link survives as a row so the same match is never re-proposed
         (suggesters key on the pair and skip an existing link); resolution ignores it.
         """
 
-        alias = get_write_alias(type(self), using=using, instance=self)
-        with transaction.atomic(using=alias):
+        with transaction.atomic():
             self.is_dismissed = True
             self.is_confirmed = False
-            self.save(using=alias, update_fields=["is_dismissed", "is_confirmed", "updated_at"])
-            self._resolve_link(using=alias)
+            self.save(update_fields=["is_dismissed", "is_confirmed", "updated_at"])
+            self._resolve_link()
 
-    def _resolve_link(self, *, using: str) -> None:
+    def _resolve_link(self) -> None:
         """Re-derive any owner pointer this link feeds, after a review decision.
 
         The default is a no-op — a link whose confirm/dismiss materialises a derived

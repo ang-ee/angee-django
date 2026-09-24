@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from django.db import connection, router, transaction
+from django.db import connection, transaction
 from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
@@ -17,24 +17,19 @@ from angee.integrate import queue as integrate_queue
 from angee.integrate import scheduler as integrate_scheduler
 from angee.integrate import sync_runner as integrate_sync_runner
 from angee.integrate import tasks as integrate_tasks
-from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
-from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.registry import models_with
 from angee.integrate.scheduler import enqueue_due_bridges
 from angee.integrate.sync import BridgeProgressReporter, current_bridge_progress
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
-    Credential,
     Integration,
-    OAuthClient,
     _create_missing_tables,
     make_integration,
 )
-from tests.test_transitions import TransitionRouter
 
 
 class SchedulerBridge(Bridge, Integration):
@@ -101,9 +96,7 @@ def _enqueue_and_run_due(*, now: datetime) -> dict[str, int]:
     errors = 0
     original = integrate_scheduler.queue_bridge_sync
 
-    def run_queued(
-        bridge: SchedulerBridge, *, now: datetime | None = None, persist: bool = True, using: str | None = None
-    ) -> None:
+    def run_queued(bridge: SchedulerBridge, *, now: datetime | None = None, persist: bool = True) -> None:
         nonlocal ran, errors
         assert persist is False
         assert now is not None
@@ -113,7 +106,6 @@ def _enqueue_and_run_due(*, now: datetime) -> dict[str, int]:
                 bridge.pk,
                 now.isoformat(),
                 require_queue_token=True,
-                using=using,
             )
         except Exception:
             ran += 1
@@ -710,7 +702,6 @@ def test_queue_bridge_sync_marks_queued_and_defers_task(
                 "model_label": SchedulerBridge._meta.label_lower,
                 "pk": bridge.pk,
                 "timestamp": now.isoformat(),
-                "using": "default",
             },
         )
     ]
@@ -845,7 +836,6 @@ def test_enqueue_due_bridges_claims_and_queues_rows(
         *,
         now: datetime | None = None,
         persist: bool = True,
-        using: str | None = None,
     ) -> None:
         assert persist is False
         enqueued.append((bridge.pk, now))
@@ -940,174 +930,3 @@ def test_scheduler_claims_a_row_before_running_it(
 
     assert counters == {"ran": 1, "errors": 0}
     assert observed == [now + timedelta(seconds=120)]
-
-
-@pytest.fixture
-def scheduler_alias(
-    scheduler_tables: None, database_alias: Callable[[str], AbstractContextManager[str]]
-) -> Iterator[str]:
-    """Expose the scheduler schema through the shared connection factory."""
-
-    with database_alias("integrate_writer") as alias:
-        yield alias
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("selection", ["persisted", "explicit"])
-@pytest.mark.parametrize("mode", ["success", "error"])
-def test_bridge_queue_worker_and_outcome_keep_the_write_alias(
-    scheduler_alias: str,
-    monkeypatch: pytest.MonkeyPatch,
-    selection: str,
-    mode: str,
-) -> None:
-    """Queue payload, worker reload, progress lock, refresh and outcome share one alias."""
-
-    with system_context(reason="test integrate routed sync setup"):
-        bridge = make_integration(
-            f"routed-{selection}-{mode}",
-            model=SchedulerBridge,
-            config={"items": 3, "progress": True, "mode": mode},
-        )
-        bridge = SchedulerBridge.objects.using(scheduler_alias).get(pk=bridge.pk)
-    payloads: list[dict[str, Any]] = []
-    monkeypatch.setattr(integrate_queue, "enqueue_task", lambda _name, *, kwargs: payloads.append(kwargs))
-    using = scheduler_alias if selection == "explicit" else None
-    if selection == "explicit":
-        bridge._state.db = "wrong_instance"
-    routing = TransitionRouter("wrong_writer")
-    with monkeypatch.context() as patch, system_context(reason="test integrate routed sync"):
-        patch.setattr(router, "routers", [routing])
-        integrate_queue.queue_bridge_sync(bridge, using=using)
-        assert payloads[0]["using"] == scheduler_alias
-        if mode == "error":
-            with pytest.raises(RuntimeError, match="vendor unavailable"):
-                integrate_tasks.sync_bridge_now(**payloads[0])
-        else:
-            assert integrate_tasks.sync_bridge_now(**payloads[0])["items"] == 3
-        stored = SchedulerBridge.objects.using(scheduler_alias).get(pk=bridge.pk)
-        assert stored.last_sync_status == ("error" if mode == "error" else "ok")
-        assert stored.sync_stage == (Bridge.SyncStage.FAILED if mode == "error" else Bridge.SyncStage.COMPLETED)
-        if mode == "success":
-            assert stored.cursor == {"seen": 3}
-            assert stored.sync_progress["details"]["items"] == 3
-    assert routing.writes == []
-
-
-@pytest.mark.django_db(transaction=True)
-def test_due_scan_and_failed_dispatch_reset_keep_the_write_alias(
-    scheduler_alias: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The scheduler's recovery lock and state reset retain its selected alias."""
-
-    now = timezone.now()
-    with system_context(reason="test routed scheduler setup"):
-        bridge = make_integration("routed-dispatch-failure", model=SchedulerBridge, next_sync_at=now)
-
-    def fail_enqueue(_name: str, *, kwargs: dict[str, Any]) -> None:
-        assert kwargs["using"] == scheduler_alias
-        raise RuntimeError("queue unavailable")
-
-    monkeypatch.setattr(integrate_queue, "enqueue_task", fail_enqueue)
-    routing = TransitionRouter("wrong_writer")
-    with monkeypatch.context() as patch, system_context(reason="test routed scheduler reset"):
-        patch.setattr(router, "routers", [routing])
-        with pytest.raises(RuntimeError, match="queue unavailable"):
-            enqueue_due_bridges(now=now, using=scheduler_alias)
-        stored = SchedulerBridge.objects.using(scheduler_alias).get(pk=bridge.pk)
-        assert stored.sync_stage == Bridge.SyncStage.IDLE
-        assert stored.next_sync_at == now
-    assert routing.writes == []
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("failure", [False, True])
-def test_credential_refresh_keeps_lock_upsert_and_reload_on_the_write_alias(
-    scheduler_alias: str,
-    monkeypatch: pytest.MonkeyPatch,
-    failure: bool,
-) -> None:
-    """Refresh completion and failure bookkeeping run beyond the admission lock."""
-
-    with system_context(reason="test routed credential setup"):
-        bridge = make_integration(
-            f"routed-credential-{failure}",
-            model=SchedulerBridge,
-            kind=CredentialKind.OAUTH,
-            material={"access_token": "old", "refresh_token": "refresh"},
-        )
-        credential = Credential.objects.using(scheduler_alias).get(pk=bridge.credential_id)
-        OAuthClient.objects.using(scheduler_alias).filter(pk=credential.oauth_client_id).update(supports_refresh=True)
-
-    def refresh_token(_protocol: Any, *, refresh_token: str) -> dict[str, Any]:
-        assert refresh_token == "refresh"
-        if failure:
-            raise ValueError("refresh refused")
-        return {"access_token": "new", "refresh_token": "rotated", "expires_in": 3600}
-
-    monkeypatch.setattr(OAuthClientProtocol, "refresh_token", refresh_token)
-    credential._state.db = "wrong_instance"
-    routing = TransitionRouter("wrong_writer")
-    with monkeypatch.context() as patch, system_context(reason="test routed credential refresh"):
-        patch.setattr(router, "routers", [routing])
-        if failure:
-            with pytest.raises(ValueError, match="refresh refused"):
-                credential.refresh_now(using=scheduler_alias)
-        else:
-            credential.refresh_now(using=scheduler_alias)
-        stored = Credential.objects.using(scheduler_alias).get(pk=credential.pk)
-        assert stored.last_refresh_status == ("failed" if failure else "ok")
-        assert stored.reveal()["access_token"] == ("old" if failure else "new")
-        if not failure:
-            assert credential.reveal()["refresh_token"] == "rotated"
-    assert routing.writes == []
-
-
-@pytest.mark.django_db(transaction=True)
-def test_local_credential_create_and_material_merge_keep_bound_manager_alias(
-    scheduler_alias: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A manager binding covers insert, subsequent row lock, merge and refresh."""
-
-    with system_context(reason="test routed local credential setup"):
-        bridge = make_integration("routed-local-owner", model=SchedulerBridge)
-        owner = bridge.owner
-    routing = TransitionRouter("wrong_writer")
-    with monkeypatch.context() as patch, system_context(reason="test routed local credential writes"):
-        patch.setattr(router, "routers", [routing])
-        credential = Credential.objects.db_manager(scheduler_alias).create_local_credential(
-            owner,
-            kind=CredentialKind.STATIC_TOKEN,
-            name="Local routed",
-            material={"api_key": "old"},
-        )
-        credential.update_material(api_key="new")
-        assert credential.reveal() == {"api_key": "new"}
-        assert Credential.objects.using(scheduler_alias).get(pk=credential.pk).reveal() == {"api_key": "new"}
-    assert routing.writes == []
-
-
-@pytest.mark.django_db(transaction=True)
-def test_integration_attachment_and_transition_keep_explicit_alias(
-    scheduler_alias: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Explicit routing survives FK attachment, guarded transition and telemetry."""
-
-    with system_context(reason="test routed attachment setup"):
-        bridge = make_integration("routed-attachment", model=SchedulerBridge)
-        credential = Credential.objects.using(scheduler_alias).get(pk=bridge.credential_id)
-    bridge._state.db = "wrong_instance"
-    routing = TransitionRouter("wrong_writer")
-    with monkeypatch.context() as patch, system_context(reason="test routed attachment"):
-        patch.setattr(router, "routers", [routing])
-        bridge.attach_credential(credential, using=scheduler_alias)
-        bridge.set_lifecycle(IntegrationLifecycle.PAUSED, using=scheduler_alias)
-        bridge.report_status(IntegrationRuntimeStatus.ERROR, error="test error", using=scheduler_alias)
-        stored = SchedulerBridge.objects.using(scheduler_alias).get(pk=bridge.pk)
-        assert stored.credential_id == credential.pk
-        assert stored.lifecycle == IntegrationLifecycle.PAUSED
-        assert stored.runtime_status == IntegrationRuntimeStatus.ERROR
-    assert routing.writes == []

@@ -11,7 +11,6 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.fields import EncryptedField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
@@ -101,7 +100,7 @@ class VcsBridge(Bridge):
             descriptors.append(descriptor)
         return sorted(descriptors, key=_descriptor_key)
 
-    def sync(self, *, using: str | None = None) -> int:
+    def sync(self) -> int:
         """Refresh every inventoried repository's sources over REST (Bridge contract).
 
         Repository discovery (creating rows from the account) is the explicit
@@ -109,11 +108,10 @@ class VcsBridge(Bridge):
         content of already-inventoried repositories.
         """
 
-        using = get_write_alias(type(self), using=using, instance=self)
         source_model = apps.get_model("integrate_vcs", "Source")
         with system_context(reason="integrate.vcs_bridge.sync.sources"):
             sources = tuple(
-                source_model.objects.using(using).filter(repository__vcs_bridge=self)
+                source_model.objects.filter(repository__vcs_bridge=self)
                 .select_related("repository", "repository__vcs_bridge")
                 .order_by("repository_id", "pk")
             )
@@ -136,27 +134,23 @@ class VcsBridge(Bridge):
         backend = self.backend
         return backend.search_repos(query, org=backend.repository_search_scope())
 
-    def import_repository(self, name: str, *, using: str | None = None) -> Any:
+    def import_repository(self, name: str) -> Any:
         """Inventory one repository by its host ``name`` (a picked typeahead result)."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
         repository_model = apps.get_model("integrate_vcs", "Repository")
-        return repository_model.objects.db_manager(using).add(self, self.backend.get_repo(name))
+        return repository_model.objects.add(self, self.backend.get_repo(name))
 
-    def discover_repositories(self, *, org: str = "", using: str | None = None) -> int:
+    def discover_repositories(self, *, org: str = "") -> int:
         """Inventory every repository the account exposes (bulk import; prunes vanished)."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
         repository_model = apps.get_model("integrate_vcs", "Repository")
-        return repository_model.objects.db_manager(using).reconcile(self, self.backend.ls_repos(org=org))
+        return repository_model.objects.reconcile(self, self.backend.ls_repos(org=org))
 
 
 class RepositoryManager(AngeeManager):
     """Manager owning the upsert/reconcile of repository rows from a host listing."""
 
-    def reconcile(self, vcs_bridge: Any, descriptors: Iterable[Any], *, using: str | None = None) -> int:
+    def reconcile(self, vcs_bridge: Any, descriptors: Iterable[Any]) -> int:
         """Upsert one repository row per descriptor and prune rows that vanished.
 
         Bulk import for ``discoverRepositories``: prunes against the full listing,
@@ -164,12 +158,11 @@ class RepositoryManager(AngeeManager):
         pagination), never a partial page.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=vcs_bridge)
         descriptor_list = list(descriptors)
         descriptors_by_name = {str(descriptor.name): descriptor for descriptor in descriptor_list}
         now = timezone.now()
-        with system_context(reason="integrate.repository.reconcile"), transaction.atomic(using=using):
-            self.db_manager(using).bulk_create(
+        with system_context(reason="integrate.repository.reconcile"), transaction.atomic():
+            self.bulk_create(
                 [
                     self._row_from_descriptor(vcs_bridge, descriptor, now=now)
                     for descriptor in descriptors_by_name.values()
@@ -188,20 +181,19 @@ class RepositoryManager(AngeeManager):
                     "updated_at",
                 ],
             )
-            self.db_manager(using).filter(vcs_bridge=vcs_bridge).exclude(name__in=descriptors_by_name).delete()
+            self.filter(vcs_bridge=vcs_bridge).exclude(name__in=descriptors_by_name).delete()
         return len(descriptor_list)
 
-    def add(self, vcs_bridge: Any, descriptor: Any, *, using: str | None = None) -> Any:
+    def add(self, vcs_bridge: Any, descriptor: Any) -> Any:
         """Inventory one repository (no prune) — the typeahead "add this repo" path."""
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=vcs_bridge)
-        with system_context(reason="integrate.repository.add"), transaction.atomic(using=using):
-            return self._upsert(vcs_bridge, descriptor, using=using)
+        with system_context(reason="integrate.repository.add"), transaction.atomic():
+            return self._upsert(vcs_bridge, descriptor)
 
-    def _upsert(self, vcs_bridge: Any, descriptor: Any, *, using: str) -> Any:
+    def _upsert(self, vcs_bridge: Any, descriptor: Any) -> Any:
         """Create or update one repository row from a host descriptor."""
 
-        repository, _created = self.db_manager(using).update_or_create(
+        repository, _created = self.update_or_create(
             vcs_bridge_id=vcs_bridge.pk,
             name=descriptor.name,
             defaults={
@@ -348,12 +340,10 @@ class Source(SqidMixin, AuditMixin, AngeeModel):
         known = ", ".join(cls.available_kinds()) or "none registered"
         raise ValueError(f"No output model for source kind {kind!r} (known: {known}).")
 
-    def refresh(self, *, using: str | None = None) -> int:
+    def refresh(self) -> int:
         """Re-enumerate over REST into the kind's output rows; return the row count."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
-        return int(type(self).target_for_kind(self.kind).objects.db_manager(using).sync_from_source(self))
+        return int(type(self).target_for_kind(self.kind).objects.sync_from_source(self))
 
     def materialize_spec(self) -> dict[str, str]:
         """Return the operator handoff coordinates to clone and check out this source."""
@@ -370,28 +360,24 @@ class Source(SqidMixin, AuditMixin, AngeeModel):
 class TemplateManager(AngeeManager):
     """Manager owning the reconcile of template rows from a template source."""
 
-    def sync_from_source(self, source: Any, *, using: str | None = None) -> int:
+    def sync_from_source(self, source: Any) -> int:
         """Walk the source for ``copier.yml`` and upsert/prune ``Template`` rows."""
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=source)
-        repository: Any = related_on(
-            source, "repository", using=using, select_related=("vcs_bridge__credential__oauth_client",),
-        )
-        source._meta.get_field("repository").set_cached_value(source, repository)
+        repository: Any = source.repository
         vcs_bridge = repository.vcs_bridge
         descriptors = vcs_bridge.discover(source, marker="copier.yml", parse=parse_template_meta)
         descriptors_by_path = {str(descriptor.get("path", "")): descriptor for descriptor in descriptors}
         now = timezone.now()
-        with system_context(reason="integrate.template.sync"), transaction.atomic(using=using):
-            self.db_manager(using).bulk_create(
+        with system_context(reason="integrate.template.sync"), transaction.atomic():
+            self.bulk_create(
                 [self._row_from_descriptor(source, descriptor, now=now) for descriptor in descriptors_by_path.values()],
                 update_conflicts=True,
                 unique_fields=["source", "path"],
                 update_fields=["name", "kind", "inputs", "updated_at"],
             )
-            self.db_manager(using).filter(source=source).exclude(path__in=descriptors_by_path).delete()
+            self.filter(source=source).exclude(path__in=descriptors_by_path).delete()
             source.last_synced_at = now
-            source.save(using=using, update_fields=["last_synced_at", "updated_at"])
+            source.save(update_fields=["last_synced_at", "updated_at"])
         return len(descriptors)
 
     def _row_from_descriptor(self, source: Any, descriptor: dict[str, Any], *, now: datetime) -> Any:

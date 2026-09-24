@@ -13,7 +13,6 @@ from django.apps import apps
 from django.conf import settings
 from django.utils.html import strip_tags
 
-from angee.base.db import get_write_alias, related_on
 from angee.messaging.backends import ChannelBackend
 
 logger = logging.getLogger(__name__)
@@ -34,19 +33,15 @@ class AnymailEmailChannelBackend(ChannelBackend):
     label = "Email"
     icon = "mail"
 
-    def deliver(self, message: Any, *, using: str | None = None) -> bool:
+    def deliver(self, message: Any) -> bool:
         """Render and send ``message`` when an email transport is configured."""
 
-        using = get_write_alias(type(message), using=using, instance=message)
         if not bool(getattr(settings, "ANGEE_EMAIL_DELIVERY_CONFIGURED", False)):
             logger.warning(
                 "Outbound email delivery is not configured; message %s was not sent.",
                 getattr(message, "pk", None),
             )
             return False
-        if message._state.db != using:
-            message._prefetched_objects_cache = {}
-        message._state.db = using
         email = self.email_message(message)
         if not email.from_email or not (email.to or email.cc or email.bcc):
             logger.warning(
@@ -59,21 +54,12 @@ class AnymailEmailChannelBackend(ChannelBackend):
             logger.warning("The configured email backend declined message %s.", getattr(message, "pk", None))
         return bool(accepted)
 
-    def email_message(self, message: Any, *, using: str | None = None) -> AnymailMessage:
+    def email_message(self, message: Any) -> AnymailMessage:
         """Render a messaging ``Message`` into Anymail's provider-neutral message."""
 
-        using = get_write_alias(type(message), using=using, instance=message)
-        if message._state.db != using:
-            message._prefetched_objects_cache = {}
-        message._state.db = using
         part_model = apps.get_model("messaging", "Part")
-        parts = part_model.objects.db_manager(using).reading_order_for_message(message)
-        participants = list(message.participants.db_manager(using).select_related("handle").order_by("role", "pk"))
-        sender_field = message._meta.get_field("sender")
-        sender = sender_field.get_cached_value(message, default=None)
-        if message.sender_id is not None and (sender is None or sender._state.db != using):
-            sender = related_on(message, "sender", using=using)
-            sender_field.set_cached_value(message, sender)
+        parts = part_model.objects.reading_order_for_message(message)
+        participants = list(message.participants.select_related("handle").order_by("role", "pk"))
         sender = self._sender(message, participants)
         recipients = self._recipients(message, participants)
         subject = next(

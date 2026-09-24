@@ -7,6 +7,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -18,7 +19,7 @@ from rebac import system_context
 
 from angee.integrate.live import PairingState
 from angee.integrate.locks import bridge_advisory_lock
-from angee.integrate.models import IntegrationRuntimeStatus
+from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
 from angee.jobs.locks import task_lock_is_held
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
@@ -860,7 +861,7 @@ def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_que
     assert sent == [
         {
             "name": RUN_SESSION_TASK,
-            "kwargs": {"model_label": channel._meta.label_lower, "pk": channel.pk, "using": "default"},
+            "kwargs": {"model_label": channel._meta.label_lower, "pk": channel.pk},
             "queue": "fake-live",
             "expires": SESSION_START_EXPIRES,
         }
@@ -1394,3 +1395,18 @@ def test_reconciler_warns_about_crashed_startup(
     monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
     assert "active stage with no running session" in caplog.text
+
+
+def test_transport_only_live_session_accepts_report_only_reporter() -> None:
+    """Transport setup and reporting require no model state or reporter database API."""
+
+    reports: list[tuple[str, Any]] = []
+    bridge = SimpleNamespace(
+        live_impl=SimpleNamespace(state_identity_key="own_id"),
+        subscription_state={},
+        SyncStage=Bridge.SyncStage,
+    )
+    reporter = SimpleNamespace(report=lambda stage, *, details: reports.append((stage, details)))
+    session = LiveSession(bridge, reporter=reporter, stop_event=threading.Event())
+    session._report(PairingState.STARTING)
+    assert reports == [(Bridge.SyncStage.DISCOVERING, {"pairing": {"state": PairingState.STARTING}})]

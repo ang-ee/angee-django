@@ -23,7 +23,6 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from rebac import system_context
 
-from angee.base.db import get_write_alias
 from angee.parties.mixins import LinkSource
 
 
@@ -68,9 +67,7 @@ class ParsedConnection:
     provenance: str = ""
 
 
-def ingest_connections(
-    parsed_connections: Iterable[ParsedConnection], *, created_by_id: Any, using: str | None = None
-) -> list[Any]:
+def ingest_connections(parsed_connections: Iterable[ParsedConnection], *, created_by_id: Any) -> list[Any]:
     """Idempotently land parsed connections and return their Person rows.
 
     The batch entry point: the source user, its anchor Party, and each required
@@ -80,12 +77,11 @@ def ingest_connections(
     """
 
     party_model = apps.get_model("parties", "Party")
-    alias = get_write_alias(party_model, using=using)
     kind_model = apps.get_model("parties", "RelationshipKind")
     user_model = apps.get_model(settings.AUTH_USER_MODEL)
     with system_context(reason="parties.connection.ingest"):
-        user = user_model._base_manager.using(alias).get(pk=created_by_id)
-        owner_party = party_model.objects.db_manager(alias).for_user(user)
+        user = user_model._base_manager.get(pk=created_by_id)
+        owner_party = party_model.objects.for_user(user)
         kinds: dict[str, Any] = {}
         return [
             _ingest_one_connection(
@@ -94,18 +90,19 @@ def ingest_connections(
                 kind_model=kind_model,
                 kinds=kinds,
                 created_by_id=created_by_id,
-                using=alias,
             )
             for parsed in parsed_connections
         ]
 
 
 def ingest_connection(
-    parsed: ParsedConnection, *, created_by_id: Any, using: str | None = None,
+    parsed: ParsedConnection,
+    *,
+    created_by_id: Any,
 ) -> Any:
     """Idempotently land one parsed connection and return its Person."""
 
-    return ingest_connections([parsed], created_by_id=created_by_id, using=using)[0]
+    return ingest_connections([parsed], created_by_id=created_by_id)[0]
 
 
 def _ingest_one_connection(
@@ -115,7 +112,6 @@ def _ingest_one_connection(
     kind_model: Any,
     kinds: dict[str, Any],
     created_by_id: Any,
-    using: str,
 ) -> Any:
     """Land one parsed connection and return its Person.
 
@@ -133,8 +129,8 @@ def _ingest_one_connection(
     provenance = str(parsed.provenance or "social_takeout")
     link_metadata = {"provenance": provenance}
 
-    with transaction.atomic(using=using):
-        handle = handle_model.objects.db_manager(using).upsert(
+    with transaction.atomic():
+        handle = handle_model.objects.upsert(
             platform=parsed.handle.platform,
             value=parsed.handle.value,
             external_id=parsed.handle.external_id,
@@ -150,9 +146,8 @@ def _ingest_one_connection(
             display_name=parsed.handle.display_name or parsed.handle.value,
             person_model=person_model,
             created_by_id=created_by_id,
-            using=using,
         )
-        party_handle_model.objects.db_manager(using).link(
+        party_handle_model.objects.link(
             person,
             handle,
             confidence=1.0,
@@ -162,13 +157,13 @@ def _ingest_one_connection(
             created_by_id=created_by_id,
         )
         if parsed.email:
-            email = handle_model.objects.db_manager(using).upsert(
+            email = handle_model.objects.upsert(
                 platform=handle_model.Platform.EMAIL,
                 value=parsed.email,
                 display_name=person.display_name,
                 created_by_id=created_by_id,
             )
-            party_handle_model.objects.db_manager(using).link(
+            party_handle_model.objects.link(
                 person,
                 email,
                 confidence=1.0,
@@ -186,7 +181,6 @@ def _ingest_one_connection(
             kind_model=kind_model,
             kinds=kinds,
             created_by_id=created_by_id,
-            using=using,
         )
         _land_employment(
             person,
@@ -197,7 +191,6 @@ def _ingest_one_connection(
             kind_model=kind_model,
             kinds=kinds,
             created_by_id=created_by_id,
-            using=using,
         )
         return person
 
@@ -208,7 +201,6 @@ def _connection_person(
     display_name: str,
     person_model: Any,
     created_by_id: Any,
-    using: str,
 ) -> Any:
     """Return the handle's Person, filling a blank display name only.
 
@@ -217,29 +209,27 @@ def _connection_person(
     """
 
     if handle.party_id is not None:
-        person = person_model._base_manager.using(using).filter(pk=handle.party_id).first()
+        person = person_model._base_manager.filter(pk=handle.party_id).first()
         if person is not None:
             if display_name and not person.display_name:
                 person.display_name = display_name
-                person.save(using=using, update_fields=["display_name", "updated_at"])
+                person.save(update_fields=["display_name", "updated_at"])
             return person
-    return person_model.objects.db_manager(using).create(
+    return person_model.objects.create(
         display_name=display_name or person_model.PLACEHOLDER_NAME,
         created_by_id=created_by_id,
     )
 
 
-def _relationship_kind(kind_model: Any, slug: str, kinds: dict[str, Any], *, using: str) -> Any:
+def _relationship_kind(kind_model: Any, slug: str, kinds: dict[str, Any]) -> Any:
     """Return a required parties relationship kind, resolved once per batch."""
 
     if slug in kinds:
         return kinds[slug]
     try:
-        kinds[slug] = kind_model.objects.db_manager(using).get(slug=slug)
+        kinds[slug] = kind_model.objects.get(slug=slug)
     except kind_model.DoesNotExist as error:
-        raise ValidationError(
-            f"Social connection import requires the {slug!r} RelationshipKind master row."
-        ) from error
+        raise ValidationError(f"Social connection import requires the {slug!r} RelationshipKind master row.") from error
     return kinds[slug]
 
 
@@ -253,14 +243,13 @@ def _land_acquaintance(
     kind_model: Any,
     kinds: dict[str, Any],
     created_by_id: Any,
-    using: str,
 ) -> None:
     """Record the source account's idempotent connection to ``person``."""
 
     if owner_party.pk == person.pk:
         return
-    kind = _relationship_kind(kind_model, "acquaintance", kinds, using=using)
-    edge, created = relationship_model.objects.db_manager(using).get_or_create(
+    kind = _relationship_kind(kind_model, "acquaintance", kinds)
+    edge, created = relationship_model.objects.get_or_create(
         party=owner_party,
         other_party=person,
         kind=kind,
@@ -281,7 +270,7 @@ def _land_acquaintance(
     if dirty:
         for name in dirty:
             setattr(edge, name, values[name])
-        edge.save(using=using, update_fields=[*dirty, "updated_at"])
+        edge.save(update_fields=[*dirty, "updated_at"])
 
 
 def _land_employment(
@@ -294,15 +283,14 @@ def _land_employment(
     kind_model: Any,
     kinds: dict[str, Any],
     created_by_id: Any,
-    using: str,
 ) -> None:
     """Land the existing free-text employee relationship shape when present."""
 
     organization = str(organization or "").strip()
     if not organization:
         return
-    kind = _relationship_kind(kind_model, "employee", kinds, using=using)
-    edge, created = relationship_model.objects.db_manager(using).get_or_create(
+    kind = _relationship_kind(kind_model, "employee", kinds)
+    edge, created = relationship_model.objects.get_or_create(
         party=person,
         other_party=None,
         other_name=organization,
@@ -321,7 +309,7 @@ def _land_employment(
     if dirty:
         for name in dirty:
             setattr(edge, name, values[name])
-        edge.save(using=using, update_fields=[*dirty, "updated_at"])
+        edge.save(update_fields=[*dirty, "updated_at"])
 
 
 def _connection_date(value: date | datetime | None) -> date | None:

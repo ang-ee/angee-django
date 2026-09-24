@@ -24,7 +24,6 @@ from typing import Any, ClassVar
 
 from django.apps import apps
 
-from angee.base.db import get_write_alias
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
 from angee.integrate.streams import ApplyResult, SemanticError, StreamDefinition, StreamPage
@@ -205,39 +204,27 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     quote_edges: ClassVar[bool] = True
     """Whether ingest should build the email shared-fragment quotation graph."""
 
-    def streams(self, *, deadline: float | None = None, using: str | None = None) -> tuple[StreamDefinition, ...]:
+    def streams(self, *, deadline: float | None = None) -> tuple[StreamDefinition, ...]:
         """Declare pull streams; manual, live and outbound-only channels have none."""
 
         return ()
 
-    def apply_record(self, stream: Any, record: ParsedMessage, *, using: str | None = None) -> ApplyResult:
+    def apply_record(self, stream: Any, record: ParsedMessage) -> ApplyResult:
         """Compose messaging's idempotent ingest inside the driver's page transaction."""
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
         if not record.external_id:
             raise SemanticError("missing_external_id")
-        (message,) = (
-            apps.get_model("messaging", "Message")
-            .objects.db_manager(using)
-            .ingest([record], channel=self.bridge, quote_edges=False, using=using)
+        (message,) = apps.get_model("messaging", "Message").objects.ingest(
+            [record], channel=self.bridge, quote_edges=False
         )
         return ApplyResult(target=message)
 
-    def finish_page(
-        self,
-        stream: Any,
-        page: StreamPage,
-        outcomes: Sequence[ApplyResult],
-        *,
-        using: str | None = None,
-    ) -> None:
+    def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
         """Resolve email quotation links after the whole applied page is visible."""
 
         if self.quote_edges:
-            using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-            apps.get_model("messaging", "Message").objects.db_manager(using).resolve_ingest_edges(
+            apps.get_model("messaging", "Message").objects.resolve_ingest_edges(
                 [outcome.bound_target for outcome in outcomes if outcome.bound_target is not None],
-                using=using,
             )
 
     def test_connection(self) -> str:
@@ -267,7 +254,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         )
         return False
 
-    def start_live(self, *, using: str | None = None) -> None:
+    def start_live(self) -> None:
         """Dispatch this source's live ingest (start a session, renew a subscription).
 
         ``Channel.start_live`` owns the persisted desired-state and calls this
@@ -277,7 +264,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         to dispatch.
         """
 
-    def stop_live(self, *, using: str | None = None) -> None:
+    def stop_live(self) -> None:
         """Dispatch this source's live-ingest stop.
 
         The counterpart of :meth:`start_live`; ``Channel.stop_live`` persists the

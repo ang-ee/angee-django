@@ -10,7 +10,6 @@ from typing import Any
 
 from django.db import transaction
 
-from angee.base.db import get_write_alias
 from angee.graphql.publishing import publication_ingestion_context
 
 
@@ -37,10 +36,8 @@ _current_bridge_progress: ContextVar[BridgeProgressReporter | None] = ContextVar
 class BridgeProgressReporter:
     """Persist generic progress for the bridge currently being synchronized."""
 
-    def __init__(self, bridge: Any, *, using: str | None = None) -> None:
+    def __init__(self, bridge: Any) -> None:
         self.bridge = bridge
-        self.using = get_write_alias(type(bridge), using=using, instance=bridge)
-        self.bridge._state.db = self.using
 
     def report(
         self,
@@ -56,11 +53,10 @@ class BridgeProgressReporter:
         payload. A progress report preserves a queued stage until work starts.
         """
 
-        with transaction.atomic(using=self.using):
+        with transaction.atomic():
             row = (
                 type(self.bridge)
-                .objects.db_manager(self.using)
-                .sudo(reason="integrate.bridge.progress")
+                .objects.sudo(reason="integrate.bridge.progress")
                 .lock_if_supported()
                 .get(pk=self.bridge.pk)
             )
@@ -82,17 +78,17 @@ class BridgeProgressReporter:
             if not queue_pending and str(stage) in getattr(row.SyncStage, "values", ()):
                 row.sync_stage = str(stage)
                 update_fields.append("sync_stage")
-            row.save(using=self.using, update_fields=update_fields)
+            row.save(update_fields=update_fields)
         self.bridge.sync_progress = payload
         self.bridge.sync_stage = row.sync_stage
         return payload
 
 
 @contextmanager
-def bridge_progress_context(bridge: Any, *, using: str | None = None) -> Any:
+def bridge_progress_context(bridge: Any) -> Any:
     """Make ``bridge`` progress reporting available to nested sync code."""
 
-    reporter = BridgeProgressReporter(bridge, using=using)
+    reporter = BridgeProgressReporter(bridge)
     token = _current_bridge_progress.set(reporter)
     try:
         yield reporter

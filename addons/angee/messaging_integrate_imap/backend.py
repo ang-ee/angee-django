@@ -56,7 +56,6 @@ from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientAbortError, LoginError
 from pydantic import BaseModel, ConfigDict
 
-from angee.base.db import get_write_alias, related_on
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.net import is_unsafe_address, resolved_addresses
@@ -213,23 +212,16 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._credential: Any = None
         self._external_account: Any = None
 
-    def _load_credentials(self, *, using: str) -> None:
-        """Reload transport authentication through the operation's explicit alias."""
+    def _load_credentials(self) -> None:
+        """Load the channel credentials and their external account."""
 
-        self._credential = related_on(self.bridge, "credential", using=using, required=False)
-        self._external_account = (
-            related_on(self._credential, "external_account", using=using, required=False)
-            if self._credential is not None
-            else None
-        )
+        self._credential = self.bridge.credential
+        self._external_account = self._credential.external_account if self._credential is not None else None
 
-    def extract(
-        self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
-    ) -> StreamPage:
+    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
         """Fetch a bounded mailbox page without mutating its durable cursor."""
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self._load_credentials(using=using)
+        self._load_credentials()
         identity = (stream.partition, stream.generation)
         if self._stream_identity != identity:
             self._stream_identity = identity
@@ -271,7 +263,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             raise ValidationError("The mailbox UID identity changed. Preview the messages again.")
         return current
 
-    def preview_sample(self, request: ImapSamplePreviewRequest, *, using: str | None = None) -> ImapSamplePreview:
+    def preview_sample(self, request: ImapSamplePreviewRequest) -> ImapSamplePreview:
         """Read one page from a UID-frozen mailbox selection without moving its cursor."""
 
         if not 1 <= request.limit <= MAX_SAMPLE_MESSAGES:
@@ -304,8 +296,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             or request.total_count < 0
         ):
             raise ValidationError("Preview this mailbox scope again before loading its next page.")
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self._load_credentials(using=using)
+        self._load_credentials()
         try:
             current_uidvalidity = self._sample_mailbox(
                 request.mailbox,
@@ -383,7 +374,6 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         mailbox: str,
         uidvalidity: int,
         uids: list[int],
-        using: str | None = None,
     ) -> tuple[list[ParsedMessage], list[int], bool]:
         """Fetch the explicit UID set without touching the regular discovery/cursor path."""
 
@@ -394,8 +384,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         if len(set(uids)) != len(uids):
             raise ValidationError("Select each message UID once.")
         requested = sorted(uids)
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self._load_credentials(using=using)
+        self._load_credentials()
         try:
             self._sample_mailbox(mailbox, uidvalidity=uidvalidity)
             self._own_addresses = self._resolve_own_addresses()
@@ -417,11 +406,10 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         finally:
             self.close()
 
-    def streams(self, *, deadline: float | None = None, using: str | None = None) -> tuple[StreamDefinition, ...]:
+    def streams(self, *, deadline: float | None = None) -> tuple[StreamDefinition, ...]:
         """Declare one event-feed partition per mailbox."""
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self._load_credentials(using=using)
+        self._load_credentials()
         client = self._connect()
         names = sorted(self._select_mailboxes(client))
         return tuple(StreamDefinition(key="messages", partition=name) for name in names)
@@ -456,7 +444,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
     # --- discovery ---
 
-    def prepare_new_mail_boundary(self, *, using: str | None = None) -> ImapDeliveryBoundary:
+    def prepare_new_mail_boundary(self) -> ImapDeliveryBoundary:
         """Return a durable boundary that excludes every currently selected message.
 
         The read-only STATUS/SELECT pair pins each mailbox epoch and captures its
@@ -469,8 +457,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         all remote IO has finished before that transaction begins.
         """
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self._load_credentials(using=using)
+        self._load_credentials()
         try:
             client = self._connect()
             source_identity = self._source_identity_digest()
@@ -497,9 +484,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             self.close()
 
         try:
-            streams = tuple(
-                open_stream(self.bridge, "messages", partition, self, using=using) for partition in sorted(snapshot)
-            )
+            streams = tuple(open_stream(self.bridge, "messages", partition, self) for partition in sorted(snapshot))
         finally:
             self.close()
         retained = {stream.partition: stream.cursor for stream in streams}
@@ -511,14 +496,13 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         )
         return ImapDeliveryBoundary(source_identity, retained if same_epochs else snapshot, streams, not same_epochs)
 
-    def apply_new_mail_boundary(self, boundary: ImapDeliveryBoundary, *, using: str | None = None) -> None:
+    def apply_new_mail_boundary(self, boundary: ImapDeliveryBoundary) -> None:
         """Install mailbox boundaries through the driver's stream and epoch owners."""
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
         for stream in boundary.streams:
             cursor = boundary.cursors[stream.partition]
             if stream.cursor != cursor:
-                reset_stream(stream, cursor=cursor, using=using)
+                reset_stream(stream, cursor=cursor)
 
     def _discover(self, name: str) -> deque[_MailboxWork]:
         """Plan the selected partition after validating its mailbox epoch."""
@@ -789,7 +773,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
     # --- connection ---
 
-    def test_connection(self, *, using: str | None = None) -> str:
+    def test_connection(self) -> str:
         """Dial, secure, log in, and log out again — the operator's connection test.
 
         The same path a sync takes up to its first mailbox, so a wrong host,
@@ -798,8 +782,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         worker log after the next poll.
         """
 
-        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        self._load_credentials(using=using)
+        self._load_credentials()
         client = self._open()
         try:
             username = self._login(client)

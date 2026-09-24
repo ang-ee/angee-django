@@ -49,18 +49,13 @@ def test_batch_ingest_bounds_parsed_media_and_preserves_write_policy(
     """Neutral body bytes bound batches even when source records have no media DTO."""
 
     calls: list[dict[str, Any]] = []
-    aliases: list[str] = []
     progress: list[int] = []
 
     class Manager:
-        def db_manager(self, using: str) -> Manager:
-            aliases.append(using)
-            return self
-
         def ingest(self, messages: list[ParsedMessage], **kwargs: Any) -> None:
             calls.append({"messages": list(messages), **kwargs})
 
-    channel = SimpleNamespace(_state=SimpleNamespace(adding=False, db="import-db"))
+    channel = SimpleNamespace()
     monkeypatch.setattr(
         backup_ingest, "apps", SimpleNamespace(get_model=lambda *_args: SimpleNamespace(objects=Manager()))
     )
@@ -90,8 +85,6 @@ def test_batch_ingest_bounds_parsed_media_and_preserves_write_policy(
     assert progress == [2, 3]
     if dry_run:
         assert calls == []
-        assert aliases == []
     else:
-        assert aliases == ["import-db", "import-db"]
         assert [[message.external_id for message in call["messages"]] for call in calls] == [["1", "2"], ["3"]]
         assert all(call["channel"] is channel and call["historical"] and not call["quote_edges"] for call in calls)

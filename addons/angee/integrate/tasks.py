@@ -11,7 +11,6 @@ from celery.signals import worker_shutting_down
 from django.core.exceptions import ImproperlyConfigured
 from rebac import system_context
 
-from angee.base.db import get_write_alias
 from angee.integrate import scheduler
 from angee.integrate.constants import ENSURE_SESSIONS_TASK, RUN_SESSION_TASK
 from angee.integrate.impl import LiveBridgeImpl
@@ -39,12 +38,10 @@ def _flag_shutdown(**_kwargs: Any) -> None:
     retry_backoff=True,
     retry_kwargs={"max_retries": 3},
 )
-def sync_bridge_now(
-    model_label: str, pk: int, timestamp: str | None = None, *, using: str | None = None
-) -> dict[str, Any]:
+def sync_bridge_now(model_label: str, pk: int, timestamp: str | None = None) -> dict[str, Any]:
     """Run one queued bridge sync task."""
 
-    return run_bridge_sync_job(model_label, pk, timestamp, require_queue_token=True, using=using)
+    return run_bridge_sync_job(model_label, pk, timestamp, require_queue_token=True)
 
 
 @shared_task(
@@ -61,10 +58,10 @@ def sync_due_bridges(timestamp: int | None = None) -> None:
 
 
 @shared_task(name=RUN_SESSION_TASK, time_limit=None, soft_time_limit=None)
-def run_bridge_session(model_label: str, pk: Any, *, using: str | None = None) -> dict[str, Any]:
+def run_bridge_session(model_label: str, pk: Any) -> dict[str, Any]:
     """Run one bridge session using its implementation's isolation policy."""
 
-    return run_bridge_session_job(model_label, pk, stop_event=_shutdown, using=using)
+    return run_bridge_session_job(model_label, pk, stop_event=_shutdown)
 
 
 @shared_task(name=ENSURE_SESSIONS_TASK)
@@ -85,7 +82,6 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
     cross_process = task_locks_are_cross_process()
     with system_context(reason="integrate.ensure_bridge_sessions"):
         for model in models_with(base=Bridge):
-            using = get_write_alias(model)
             field = model.live_implementation_field()
             if field is None:
                 continue
@@ -104,15 +100,11 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
                     live_keys.append(key)
             if not live_keys:
                 continue
-            bridges = (
-                model._default_manager.db_manager(using)
-                .filter(
-                    **{f"{field.name}__in": live_keys},
-                    lifecycle=str(model.Lifecycle.CONNECTED),
-                    runtime_status=str(IntegrationRuntimeStatus.OK),
-                )
-                .order_by("pk")
-            )
+            bridges = model._default_manager.filter(
+                **{f"{field.name}__in": live_keys},
+                lifecycle=str(model.Lifecycle.CONNECTED),
+                runtime_status=str(IntegrationRuntimeStatus.OK),
+            ).order_by("pk")
             for bridge in bridges:
                 impl = bridge.live_impl
                 if not isinstance(impl, LiveBridgeImpl):

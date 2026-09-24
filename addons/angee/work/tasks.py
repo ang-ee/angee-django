@@ -9,8 +9,6 @@ from django.apps import apps
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.db import get_write_alias
-
 
 def _periodic_now(timestamp: int | None) -> datetime:
     """Return an aware instant from Celery's optional periodic timestamp."""
@@ -28,24 +26,22 @@ def wake_due_snoozes(timestamp: int | None = None) -> int:
 
 
 @shared_task(name="work.generate_cycles")
-def generate_cycles(timestamp: int | None = None, *, using: str | None = None) -> int:
+def generate_cycles(timestamp: int | None = None) -> int:
     """Maintain generated cadence and close every cycle whose end day passed."""
 
     now = _periodic_now(timestamp)
     as_of = timezone.localtime(now).date()
     queue_model = apps.get_model("work", "Queue")
     cycle_model = apps.get_model("work", "Cycle")
-    using = get_write_alias(queue_model, using=using)
     generated = 0
     with system_context(reason="work.tasks.generate_cycles"):
         queues = (
-            queue_model.objects.db_manager(using)
-            .sudo(reason="work.tasks.generate_cycles.queues")
+            queue_model.objects.sudo(reason="work.tasks.generate_cycles.queues")
             .filter(cycles_enabled=True)
             .order_by("pk")
         )
         for queue in queues:
-            before = cycle_model._base_manager.db_manager(using).filter(queue=queue).count()
-            cycle_model.objects.db_manager(using).generate_for_queue(queue, as_of=as_of, completed_at=now)
-            generated += cycle_model._base_manager.db_manager(using).filter(queue=queue).count() - before
+            before = cycle_model._base_manager.filter(queue=queue).count()
+            cycle_model.objects.generate_for_queue(queue, as_of=as_of, completed_at=now)
+            generated += cycle_model._base_manager.filter(queue=queue).count() - before
     return generated

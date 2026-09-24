@@ -97,13 +97,11 @@ class MemoryAdapter(BridgeImpl):
     closed: int = 0
     sync_parallelism: int | None = 1
 
-    def streams(self, *, deadline: float | None = None, using: str | None = None) -> Iterable[StreamDefinition]:
+    def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         return (StreamDefinition("records"),)
 
-    def extract(
-        self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
-    ) -> StreamPage:
-        assert not connections[using].in_atomic_block
+    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        assert not connection.in_atomic_block
         assert page_bound > 0
         self.extracted += 1
         page = self.pages.pop(0)
@@ -111,11 +109,11 @@ class MemoryAdapter(BridgeImpl):
             raise page
         return page
 
-    def apply_record(self, stream: Any, record: Any, *, using: str | None = None) -> ApplyResult:
-        assert connections[using].in_atomic_block
+    def apply_record(self, stream: Any, record: Any) -> ApplyResult:
+        assert connection.in_atomic_block
         key = record.external_key if isinstance(record, RecordChange) else record
         payload = record.source_payload if isinstance(record, RecordChange) else {"event": key}
-        row, _ = AppliedRecord.objects.db_manager(using).update_or_create(key=key, defaults={"payload": payload})
+        row, _ = AppliedRecord.objects.update_or_create(key=key, defaults={"payload": payload})
         self.applied.append(key)
         if key == self.semantic_key:
             raise SemanticError("invalid_name", details={"key": key})
@@ -129,18 +127,16 @@ class MemoryAdapter(BridgeImpl):
             dependency_digest=record.dependency_digest if isinstance(record, RecordChange) else "",
         )
 
-    def enumerate_keys(self, stream: Any, *, after: str | None = None, using: str | None = None) -> Iterable[str]:
-        assert not connections[using].in_atomic_block
+    def enumerate_keys(self, stream: Any, *, after: str | None = None) -> Iterable[str]:
+        assert not connection.in_atomic_block
         start = 0 if after is None else self.inventory.index(after) + 1
         yield from self.inventory[start:]
 
-    def finish_page(self, stream: Any, page: StreamPage, outcomes: Any, *, using: str | None = None) -> None:
-        assert connections[using].in_atomic_block
+    def finish_page(self, stream: Any, page: StreamPage, outcomes: Any) -> None:
+        assert connection.in_atomic_block
 
-    def local_changes(
-        self, stream: Any, *, keys: frozenset[str] | None = None, using: str | None = None
-    ) -> Iterable[LocalChange]:
-        assert not connections[using].in_atomic_block
+    def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
+        assert not connection.in_atomic_block
         return [candidate for candidate in self.candidates if keys is None or candidate.external_key in keys]
 
     def write_back(
@@ -149,9 +145,8 @@ class MemoryAdapter(BridgeImpl):
         projection: Any,
         *,
         expected_version: str,
-        using: str | None = None,
     ) -> WriteBackResult:
-        assert not connections[using].in_atomic_block
+        assert not connection.in_atomic_block
         self.written.append((link.external_key, projection, expected_version))
         return WriteBackResult("v2", "changed", projection)
 
@@ -167,8 +162,8 @@ class ReadKeysAdapter(MemoryAdapter):
     remote: dict[str, RecordChange] = field(default_factory=dict)
     reads: list[tuple[str, ...]] = field(default_factory=list)
 
-    def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
-        assert not connections[using].in_atomic_block
+    def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
+        assert not connection.in_atomic_block
         self.reads.append(tuple(keys))
         return tuple(self.remote[key] for key in sorted(keys))
 
@@ -302,10 +297,10 @@ def test_baseline_completion_during_extraction_retries_without_adopting(
     adapter = MemoryAdapter(pages=[page, page])
     has_completed_baseline = stream.has_completed_baseline
 
-    def complete_on_another_handle(*, using: str | None = None) -> bool:
-        completed = has_completed_baseline(using=using)
-        peer = SyncStream.objects.db_manager(using).get(pk=stream.pk)
-        SyncStream.objects.advance(peer, peer.cursor, exhausted=True, using=using)
+    def complete_on_another_handle() -> bool:
+        completed = has_completed_baseline()
+        peer = SyncStream.objects.get(pk=stream.pk)
+        SyncStream.objects.advance(peer, peer.cursor, exhausted=True)
         return completed
 
     with monkeypatch.context() as patch:
@@ -362,7 +357,7 @@ def test_extraction_contract_is_checked_before_page_application(
 @pytest.mark.parametrize("push", [False, True])
 def test_invalid_write_result_never_promotes_record_bases(stream_bridge: Channel, push: bool) -> None:
     class InvalidWriteAdapter(MemoryAdapter):
-        def write_back(self, link: Any, projection: Any, *, expected_version: str, using: str | None = None) -> Any:
+        def write_back(self, link: Any, projection: Any, *, expected_version: str) -> Any:
             return None
 
     stream = SyncStream.objects.current(
@@ -448,9 +443,9 @@ def test_single_promotion_retains_applied_evidence_and_revalidation_reuses_it(st
     stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
 
     class AppliedEvidenceAdapter(MemoryAdapter):
-        def apply_record(self, stream: Any, record: Any, *, using: str | None = None) -> ApplyResult:
+        def apply_record(self, stream: Any, record: Any) -> ApplyResult:
             return replace(
-                super().apply_record(stream, record, using=using),
+                super().apply_record(stream, record),
                 mapped_payload={"normalized": True},
                 dependency_digest="applied",
                 mapping_version=7,
@@ -508,16 +503,15 @@ def test_adapter_cannot_promote_before_the_driver(stream_bridge: Channel) -> Non
     stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
 
     class PromotingAdapter(MemoryAdapter):
-        def apply_record(self, stream: Any, record: Any, *, using: str | None = None) -> ApplyResult:
-            outcome = super().apply_record(stream, record, using=using)
-            link = RecordLink.objects.db_manager(using).get(stream=stream, external_key=record.external_key)
+        def apply_record(self, stream: Any, record: Any) -> ApplyResult:
+            outcome = super().apply_record(stream, record)
+            link = RecordLink.objects.get(stream=stream, external_key=record.external_key)
             RecordLink.objects.promote(
                 link,
                 source_payload=record.source_payload,
                 source_hash=record.source_hash,
                 mapped_payload={"intermediate": True},
                 local_hash=record.source_hash,
-                using=using,
             )
             return outcome
 
@@ -543,19 +537,19 @@ def test_sweep_imports_unseen_keys_and_resumes_after_failed_page(stream_bridge: 
     class ResumableAdapter(ReadKeysAdapter):
         fail = True
 
-        def enumerate_keys(self, stream: Any, *, after: str | None = None, using: str | None = None) -> Iterable[str]:
+        def enumerate_keys(self, stream: Any, *, after: str | None = None) -> Iterable[str]:
             starts.append(after)
             emitted = 0
-            for key in super().enumerate_keys(stream, after=after, using=using):
+            for key in super().enumerate_keys(stream, after=after):
                 emitted += 1
                 assert emitted <= 3, "The driver consumed beyond one bounded page plus lookahead."
                 yield key
 
-        def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
+        def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
             assert len(keys) <= 2
             if "3" in keys and self.fail:
                 raise OperationalError("inventory transport interrupted")
-            return super().read_keys(stream, keys, using=using)
+            return super().read_keys(stream, keys)
 
     starts: list[str | None] = []
     adapter = ResumableAdapter(
@@ -594,10 +588,8 @@ def test_sweep_without_read_keys_resumes_bounded_baseline_without_moving_delta_c
     class BaselineAdapter(MemoryAdapter):
         fail = True
 
-        def extract(
-            self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
-        ) -> StreamPage:
-            assert not connections[using].in_atomic_block
+        def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+            assert not connection.in_atomic_block
             assert page_bound == 1
             extracted_cursors.append(dict(stream.cursor))
             if not stream.cursor:
@@ -641,16 +633,16 @@ def test_visibility_hooks_run_in_transaction_once_per_status_transition(stream_b
     revalidated: list[tuple[str, str]] = []
 
     class VisibilityAdapter(ReadKeysAdapter):
-        def on_absent(self, stream: Any, links: Sequence[Any], *, using: str | None = None) -> None:
-            assert connections[using].in_atomic_block
+        def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
+            assert connection.in_atomic_block
             for link in links:
-                link.refresh_from_db(using=using)
+                link.refresh_from_db()
                 absent.append((link.external_key, link.status))
 
-        def on_revalidated(self, stream: Any, links: Sequence[Any], *, using: str | None = None) -> None:
-            assert connections[using].in_atomic_block
+        def on_revalidated(self, stream: Any, links: Sequence[Any]) -> None:
+            assert connection.in_atomic_block
             for link in links:
-                link.refresh_from_db(using=using)
+                link.refresh_from_db()
                 revalidated.append((link.external_key, link.status))
 
     record = RecordChange("person:1", {}, "source")
@@ -678,11 +670,11 @@ def test_absence_hook_failure_rolls_back_transition_and_cursor_before_retry(stre
     class FailingVisibilityAdapter(ReadKeysAdapter):
         fail = True
 
-        def on_absent(self, stream: Any, links: Sequence[Any], *, using: str | None = None) -> None:
-            assert connections[using].in_atomic_block
+        def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
+            assert connection.in_atomic_block
             for link in links:
                 calls.append((link.external_key, link.absence_count))
-                AppliedRecord.objects.db_manager(using).create(key=link.external_key, payload={"withdrawn": True})
+                AppliedRecord.objects.create(key=link.external_key, payload={"withdrawn": True})
             if self.fail:
                 raise OperationalError("visibility persistence interrupted")
 
@@ -762,19 +754,19 @@ def test_prepare_page_runs_once_before_record_savepoints_and_transport_is_refuse
     prepared_depth = -1
 
     class PreparedAdapter(MemoryAdapter):
-        def prepare_page(self, stream: Any, page: StreamPage, *, using: str | None = None) -> None:
+        def prepare_page(self, stream: Any, page: StreamPage) -> None:
             nonlocal prepared_depth
-            assert connections[using].in_atomic_block
-            prepared_depth = len(connections[using].savepoint_ids)
+            assert connection.in_atomic_block
+            prepared_depth = len(connection.savepoint_ids)
             assert page.records == ("first", "poison", "last")
             events.append("prepare")
             with pytest.raises(RuntimeError, match="outside a database transaction"):
-                advance_stream(stream, self, using=using)
+                advance_stream(stream, self)
 
-        def apply_record(self, stream: Any, record: Any, *, using: str | None = None) -> ApplyResult:
-            assert len(connections[using].savepoint_ids) > prepared_depth
+        def apply_record(self, stream: Any, record: Any) -> ApplyResult:
+            assert len(connection.savepoint_ids) > prepared_depth
             events.append(record)
-            return super().apply_record(stream, record, using=using)
+            return super().apply_record(stream, record)
 
     adapter = PreparedAdapter(pages=[StreamPage(("first", "poison", "last"), {})], semantic_key="poison")
     result = advance_stream(stream, adapter)
@@ -1076,13 +1068,9 @@ def test_page_reloads_conflicts_recorded_during_conditional_write(stream_bridge:
     SyncStream.objects.advance(stream, {}, exhausted=True)
 
     class RacingAdapter(MemoryAdapter):
-        def write_back(
-            self, link: Any, projection: Any, *, expected_version: str, using: str | None = None
-        ) -> WriteBackResult:
-            SyncDiscrepancy.objects.record(
-                stream, link=link, kind=DiscrepancyKind.CONFLICT, code="concurrent_conflict", using=using
-            )
-            return super().write_back(link, projection, expected_version=expected_version, using=using)
+        def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+            SyncDiscrepancy.objects.record(stream, link=link, kind=DiscrepancyKind.CONFLICT, code="concurrent_conflict")
+            return super().write_back(link, projection, expected_version=expected_version)
 
     adapter = RacingAdapter(pages=[StreamPage((RecordChange("one", {}, "base", "local"),), {})])
 
@@ -1175,11 +1163,11 @@ def test_event_feed_accepts_message_with_noncopyable_timezone(stream_bridge: Cha
     )
 
     class MessageAdapter(MemoryAdapter):
-        def apply_record(self, stream: Any, record: Any, *, using: str | None = None) -> ApplyResult:
-            assert connections[using].in_atomic_block
+        def apply_record(self, stream: Any, record: Any) -> ApplyResult:
+            assert connection.in_atomic_block
             assert record is message
             assert message.sent_at is not None
-            row, _ = AppliedRecord.objects.db_manager(using).update_or_create(
+            row, _ = AppliedRecord.objects.update_or_create(
                 key=message.external_id, defaults={"payload": {"sent_at": message.sent_at.isoformat()}}
             )
             return ApplyResult(target=row)
@@ -1228,17 +1216,17 @@ def test_seed_cutover_locks_bridge_before_stream(stream_bridge: Channel, monkeyp
             with (
                 system_context(reason="test competing bridge cutover"),
                 pytest.raises(DatabaseError) as denied,
-                transaction.atomic(using="default"),
+                transaction.atomic(),
             ):
-                Channel.objects.using("default").select_for_update(nowait=True).get(pk=stream_bridge.pk)
+                Channel.objects.select_for_update(nowait=True).get(pk=stream_bridge.pk)
             assert denied.value.__cause__.sqlstate == "55P03"
         finally:
             connections.close_all()
 
-    def verify_bridge_locked(manager: Any, stream: Any, *, using: str | None = None) -> Any:
+    def verify_bridge_locked(manager: Any, stream: Any) -> Any:
         with ThreadPoolExecutor(max_workers=1) as pool:
             pool.submit(try_bridge_lock).result(timeout=10)
-        return lock_current(manager, stream, using=using)
+        return lock_current(manager, stream)
 
     monkeypatch.setattr(manager_class, "lock_current", verify_bridge_locked)
     adapter = MemoryAdapter()
@@ -1266,9 +1254,7 @@ def test_stream_rejects_non_json_cursors_before_applying(
         if boundary == "definition":
 
             class InvalidDefinitionAdapter(MemoryAdapter):
-                def streams(
-                    self, *, deadline: float | None = None, using: str | None = None
-                ) -> Iterable[StreamDefinition]:
+                def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
                     return (StreamDefinition("invalid", cursor=cursor),)
 
             adapter = InvalidDefinitionAdapter()
@@ -1293,13 +1279,11 @@ def test_parallel_partitions_close_each_adapter_once_even_after_failure(
     ready = Barrier(2)
 
     class PartitionAdapter(MemoryAdapter):
-        def streams(self, *, deadline: float | None = None, using: str | None = None) -> Iterable[StreamDefinition]:
+        def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
             return tuple(StreamDefinition("messages", partition) for partition in ("inbox", "sent"))
 
-        def extract(
-            self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
-        ) -> StreamPage:
-            assert not connections[using].in_atomic_block
+        def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+            assert not connection.in_atomic_block
             ready.wait(timeout=10)
             if stream.partition == failed_partition:
                 raise OperationalError("partition unavailable")
@@ -1353,11 +1337,9 @@ def test_json_merge_preserves_concurrent_partition_writes(stream_bridge: Channel
         close_old_connections()
         try:
             with system_context(reason="test concurrent stream partition"):
-                stale = Channel.objects.db_manager("default").get(pk=stream_bridge.pk)
+                stale = Channel.objects.get(pk=stream_bridge.pk)
                 ready.wait(timeout=10)
-                merge_json_state(
-                    stale, "subscription_state", {"uid": uid}, path=("mailboxes", partition), using="default"
-                )
+                merge_json_state(stale, "subscription_state", {"uid": uid}, path=("mailboxes", partition))
         finally:
             connections.close_all()
 
@@ -1399,7 +1381,7 @@ def test_failed_conflict_reread_keeps_quarantine(
     discrepancy = SyncDiscrepancy.objects.record(stream, link=link, kind=DiscrepancyKind.CONFLICT, code="both_changed")
 
     class UnavailableAdapter(ReadKeysAdapter):
-        def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
+        def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
             raise OperationalError("remote offline")
 
     adapter = UnavailableAdapter()
@@ -1446,9 +1428,7 @@ def test_conflict_choice_requires_a_completed_apply_or_conditional_write(
     SyncStream.objects.advance(stream, {}, exhausted=True)
 
     class RejectedAdapter(ReadKeysAdapter):
-        def write_back(
-            self, link: Any, projection: Any, *, expected_version: str, using: str | None = None
-        ) -> WriteBackResult:
+        def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
             assert expected_version == "v2"
             raise RemoteRejected(details={"status": 412})
 
@@ -1488,9 +1468,9 @@ def test_reconcile_pulse_rejects_a_checkpoint_changed_during_transport(stream_br
     )
 
     class RacingAdapter(ReadKeysAdapter):
-        def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
-            SyncStream.objects.db_manager(using).filter(pk=stream.pk).update(reconcile_state={"newer": True})
-            return super().read_keys(stream, keys, using=using)
+        def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
+            SyncStream.objects.filter(pk=stream.pk).update(reconcile_state={"newer": True})
+            return super().read_keys(stream, keys)
 
     adapter = RacingAdapter(inventory=("one",), remote={"one": RecordChange("one", {}, "source")})
     with pytest.raises(RuntimeError, match="state changed"):

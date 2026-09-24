@@ -25,7 +25,7 @@ class AdapterPages:
                     cursor=spec.cursor,
                     config=spec.config,
                 )
-                for spec in self.backend.streams(deadline=deadline, using="default")
+                for spec in self.backend.streams(deadline=deadline)
             }
             for stream in self.rows.values():
                 if not stream.cursor and self.backend.bridge.cursor:
@@ -33,7 +33,7 @@ class AdapterPages:
             self.pending = deque(self.rows.values())
         while self.pending:
             stream = self.pending[0]
-            page = self.backend.extract(stream, 200, deadline=deadline, using="default")
+            page = self.backend.extract(stream, 200, deadline=deadline)
             stream.cursor = page.cursor
             if page.exhausted:
                 self.pending.popleft()
