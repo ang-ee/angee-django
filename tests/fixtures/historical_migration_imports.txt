@@ -1,5 +1,8 @@
 # Materialized runtime/*/migrations/*.py import census; no migration bodies or data.
 # Sources: ~/.angee (167 files), dsmile-angee (45), apexive-angee (153).
+# Import compatibility only: this census does not validate migration dependencies.
+# apexive-angee accounting/0003_initial depends on the absent workflows_ocr label;
+# it must stop at the upgrade floor in docs/backend/guidelines.md#migrations-and-runtime.
 # AST imports include deferred imports; multi-name headers are split by name.
 # Dotted attribute references include their parent chains and expand import aliases.
 # The optional Telegram module below is an origin supplement, not a direct import:

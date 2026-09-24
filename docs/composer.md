@@ -241,11 +241,8 @@ read-only filesystem probe. After a successful build, normal `makemigrations` ma
 generate any remaining lossless changes and Django handles the rest of the
 migration lifecycle.
 
-Framework upgrades carry materialized migration history forward; removing an
-addon declaration leaves its existing copies intact. Follow the [migration
-policy](backend/guidelines.md#migrations-and-runtime) for the upgrade floor and
-durable history. Consumer repositories own any reset policy for their own labels
-on rebuilt databases; composition does not authorize a framework history reset.
+Follow the [migration policy](backend/guidelines.md#migrations-and-runtime) for
+the upgrade floor, carried-forward history, and consumer reset authorization.
 
 [`angee provision`](../angee/compose/management/commands/angee.py) owns full
 runtime preparation. It builds in the initial process, then starts one fresh

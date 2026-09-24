@@ -144,21 +144,14 @@ def test_integrate_does_not_import_workflows() -> None:
     assert not {path: names for path, names in violations.items() if names}
 
 
-def test_historical_relationships_is_only_imported_by_migrations_and_tests() -> None:
-    """Frozen migration compatibility must never become a live relationship API."""
+def test_source_does_not_import_historical_relationships() -> None:
+    """Only external materialized history and tests may use the frozen API."""
 
     module = "angee.base.historical_relationships"
     violations = {}
     for directory in ("angee", "addons", "examples", "templates"):
         for path in sorted((PROJECT_ROOT / directory).rglob("*.py")):
             relative = path.relative_to(PROJECT_ROOT)
-            if (
-                {"migrations", "runtime_migrations", "tests"}.intersection(relative.parts)
-                or path.stem == "tests"
-                or path.stem.startswith("test_")
-                or path.stem.startswith("tests_")
-            ):
-                continue
             imports = sorted(
                 name for name in _module_imports(path)
                 if name == module or name.startswith(f"{module}.")

@@ -793,19 +793,24 @@ and current contracts before applying a historical example to a new deployment.
   as part of the move. Rebuilding generated model sources does not authorize
   rewriting or deleting a deployment's migration history.
 - **Framework runtime-migration history is carried forward.** Existing stacks
-  must first build and migrate on the previous release line before upgrading,
-  so retired addon declarations have already been materialized and applied.
+  must first build and migrate at the upgrade floor: django-angee source revision
+  [`0a55a6fb6c249106d2f5d1407cd82865bb3175f8`](https://github.com/ang-ee/angee-django/commit/0a55a6fb6c249106d2f5d1407cd82865bb3175f8),
+  which still carries the 42 retired addon migration declarations. This ensures
+  applicable declarations have been materialized and applied before upgrading.
   Preserve those files and generate incremental migrations after the next build;
-  [the composer](../composer.md#addon-owned-runtime-migrations) preserves existing
+  [`RuntimeMigrations`](../../angee/compose/migrations.py) preserves existing
   materialized bodies when their declarations are removed.
+  Stacks whose migration graph depends on `workflows_ocr` must stop at this floor:
+  the history-only app is absent from newer code. Resolving historical imports
+  alone does not validate dependency labels or establish a forward upgrade path.
 - **Never empty `runtime/*/migrations` on a stack whose database is carried forward.**
   Gitignored migrations can still be applied history; recreating their names or
   numbering can cause Django to apply existing schema again. Durable deployments
   retain and version runtime migration history with their deployment artifacts.
   Investigate the recorded graph before recovery; blanket migration deletion and
-  `--fake` must not hide a mismatch. Consumer repositories own their history
-  policy, including any reset of consumer labels on a rebuilt database; framework
-  upgrades do not authorize a reset.
+  `--fake` must not hide a mismatch. A consumer repository must explicitly
+  authorize any reset of its own labels on a rebuilt database; framework upgrades
+  do not authorize a reset.
 - **Data migrations access REBAC-scoped models through `_base_manager`, and
   backfills need a rows-present proof.** A manager with `use_in_migrations = True`
   (iam's `UserManager`, inherited from Django's) rides into the historical model,
