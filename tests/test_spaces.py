@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from django.test import override_settings
@@ -488,6 +489,30 @@ def test_public_visibility_reconciles_the_wildcard_reader(spaces_tables: None) -
         group.visibility = Group.GroupVisibility.PRIVATE
         group.save(update_fields=["visibility", "updated_at"])
         assert not _wildcard_reader_exists(group)
+
+
+def test_visibility_reads_persisted_facts_and_rejects_bulk_bypasses(spaces_tables: None) -> None:
+    """Dirty or deferred visibility cannot leak access outside its native save."""
+
+    with system_context(reason="spaces visibility persisted policy"):
+        group = Group.objects.create(name="Community", visibility=Group.GroupVisibility.PUBLIC)
+        group.visibility = Group.GroupVisibility.PRIVATE
+        group.description = "Only content changed"
+        group.save(update_fields=["description"])
+        assert _wildcard_reader_exists(group)
+
+        group = Group.objects.defer("visibility").get(pk=group.pk)
+        group.description = "Deferred policy"
+        group.save(update_fields=["description"])
+        assert _wildcard_reader_exists(group)
+        group.visibility = Group.GroupVisibility.PRIVATE
+        group.save(update_fields=["visibility"])
+        assert not _wildcard_reader_exists(group)
+
+        with pytest.raises(ValidationError, match="eligibility"):
+            Group.objects.filter(pk=group.pk).update(visibility=Group.GroupVisibility.PUBLIC)
+        with pytest.raises(ValidationError, match="native owner"):
+            Group.objects.bulk_create([Group(name="Bypass", slug="bypass")])
 
 
 def test_visibility_double_flip_is_idempotent(spaces_tables: None) -> None:

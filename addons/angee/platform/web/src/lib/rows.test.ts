@@ -4,10 +4,10 @@ import { addonDisplayLabel } from "./rows";
 
 describe("addonDisplayLabel", () => {
   test("preserves the resolved Django label", () => {
-    expect(addonDisplayLabel("arp", "arp.base")).toBe("arp");
+    expect(addonDisplayLabel("example", "example.base")).toBe("example");
   });
 
   test("shows the canonical name when the Django label is unknown", () => {
-    expect(addonDisplayLabel("", "arp.base")).toBe("arp.base");
+    expect(addonDisplayLabel("", "example.base")).toBe("example.base");
   });
 });

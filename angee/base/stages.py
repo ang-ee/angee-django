@@ -101,10 +101,13 @@ class Stage(models.Model):
         The container is the single owner of an explicit default.  A stage model
         never carries an ``is_default`` flag; if no explicit default is set, the
         deterministic ordered first row is the primitive's fallback.
+        The caller must supply a container already pinned to the operation's
+        database; resolving a stage never changes a foreign object's affinity.
         """
 
         using = get_write_alias(cls, using=using, instance=container)
-        container._state.db = using
+        if container._state.db != using:
+            raise ValueError("Pin the stage container to the operation database before resolving its default.")
         default_attname = f"{cls.default_stage_field_name}_id"
         refresh_deferred(container, using=using, fields=(default_attname,))
         default_id = getattr(container, default_attname, None)

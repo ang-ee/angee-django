@@ -1018,7 +1018,10 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
 
     def check_disconnect(self) -> None:
-        """Validate explicit disconnect; installed model contributions extend this invariant."""
+        """Validate explicit disconnect; contributions raise a coded ``ValidationError``.
+
+        The disconnect entry owner pins ``_state.db`` before invoking this hook.
+        """
 
     def revoke_remote(self, *, using: str | None = None) -> None:
         """Revoke this credential's OAuth token when its provider supports it."""

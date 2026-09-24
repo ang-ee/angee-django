@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any, TypeVar, cast
 
 from django.db import models
+from rebac import system_context
+from rebac.actors import is_sudo
 from rebac.resources import model_resource_type
 
 from angee.base.db import get_write_alias
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+
+
+def elevated(*, reason: str) -> AbstractContextManager[Any]:
+    """Elevate once, preserving an existing system actor and its audit reason."""
+
+    return nullcontext() if is_sudo() else system_context(reason=reason)
 
 
 def bind_actor(instance: models.Model, actor: Any | None) -> None:

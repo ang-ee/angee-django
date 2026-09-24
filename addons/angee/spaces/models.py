@@ -2,7 +2,7 @@
 
 ``Group`` is a shared tree rather than a user-scoped organising list. Its
 ``visibility`` is a persisted fact whose owner maintains the public
-``reader@auth/user:*`` tuple. ``Membership`` is the one canonical roster edge;
+wildcard reader tuple. ``Membership`` is the one canonical roster edge;
 confirmed rows reach platform users live through the schema's filtered relation
 paths. A party without a platform user remains valid and grants nothing.
 
@@ -17,41 +17,28 @@ cannot leave mirrored relationship rows stale.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.utils.text import slugify
-from rebac import (
-    RelationshipTuple,
-    SubjectRef,
-    delete_relationships,
-    to_object_ref,
-    write_relationships,
-)
-from rebac.types import RelationshipFilter
 
 from angee.base.db import get_write_alias
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
+from angee.base.mixins import AuditMixin, ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.permissions import require_authorization_database
 from angee.parties.mixins import ScoredLinkMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 
-PUBLIC_READER_RELATION = "reader"
-"""Wildcard-subject relation opening a public group to authenticated actors."""
 
-_EVERYONE = SubjectRef.of("auth/user", "*")
-_NEVER_LOADED = object()
-
-
-class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
+class Group(ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
     """A shared group with one canonical roster and an unscoped parent tree."""
 
-    _loaded_visibility: object
     runtime = True
     sqid_prefix = "grp_"
+    shared_reader_relation = "reader"
+    shared_reader_policy_fields = ("visibility",)
 
     class GroupVisibility(models.TextChoices):
         """Whether membership is required to read the group and its threads."""
@@ -81,15 +68,11 @@ class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
 
         return self.name
 
-    @classmethod
-    def from_db(cls, db: Any, field_names: Any, values: Any) -> Group:
-        """Load a row and snapshot visibility for save-time tuple reconciliation."""
+    @property
+    def shared_reader_eligible(self) -> bool:
+        """Make public groups readable by every authenticated actor."""
 
-        instance = super().from_db(db, field_names, values)
-        instance._loaded_visibility = (
-            instance.visibility if "visibility" in field_names else _NEVER_LOADED
-        )
-        return cast(Group, instance)
+        return self.visibility == self.GroupVisibility.PUBLIC
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the group with a unique slug and reconcile its reader tuple."""
@@ -101,24 +84,13 @@ class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
             error_class=ImproperlyConfigured,
         )
         kwargs["using"] = using
-        adding = self._state.adding
-        loaded_visibility = getattr(self, "_loaded_visibility", _NEVER_LOADED)
         with transaction.atomic(using=using):
             if not self.slug:
                 self.slug = self._available_slug(using=using)
                 update_fields = kwargs.get("update_fields")
                 if update_fields is not None:
-                    kwargs["update_fields"] = tuple(
-                        dict.fromkeys((*update_fields, "slug"))
-                    )
+                    kwargs["update_fields"] = tuple(dict.fromkeys((*update_fields, "slug")))
             super().save(*args, **kwargs)
-            if (
-                adding
-                or loaded_visibility is _NEVER_LOADED
-                or loaded_visibility != self.visibility
-            ):
-                self._reconcile_public_reader()
-        self._loaded_visibility = self.visibility
 
     def _available_slug(self, *, using: str) -> str:
         """Return the first name-derived slug unused in the shared Group table."""
@@ -138,31 +110,6 @@ class Group(HierarchyMixin, SqidMixin, AuditMixin, AngeeModel):
             ending = f"-{suffix}"
             candidate = f"{base[: max_length - len(ending)]}{ending}"
         return candidate
-
-    def _reconcile_public_reader(self) -> None:
-        """Grant or revoke this group's ``reader@auth/user:*`` relationship."""
-
-        resource = to_object_ref(self)
-        if self.visibility == self.GroupVisibility.PUBLIC:
-            write_relationships(
-                [
-                    RelationshipTuple(
-                        resource=resource,
-                        relation=PUBLIC_READER_RELATION,
-                        subject=_EVERYONE,
-                    )
-                ]
-            )
-            return
-        delete_relationships(
-            RelationshipFilter(
-                resource_type=resource.resource_type,
-                resource_id=resource.resource_id,
-                relation=PUBLIC_READER_RELATION,
-                subject_type=_EVERYONE.subject_type,
-                subject_id=_EVERYONE.subject_id,
-            )
-        )
 
 
 class Membership(ScoredLinkMixin, SqidMixin, AuditMixin, AngeeModel):

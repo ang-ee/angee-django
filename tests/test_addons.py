@@ -12,6 +12,7 @@ import sys
 from importlib.machinery import ModuleSpec
 from importlib.metadata import EntryPoint
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from django.apps import apps
@@ -256,15 +257,11 @@ def test_unresolvable_app_identity_is_unknown() -> None:
 @pytest.mark.parametrize(
     ("source", "diagnostic"),
     [
-        ("raise RuntimeError('optional dependency failed')\n", "optional dependency failed"),
+        ("raise ImportError('optional dependency failed')\n", "optional dependency failed"),
         (
-            "from django.apps import AppConfig\n"
-            "class FirstConfig(AppConfig):\n"
-            "    name = 'arp.base'\n"
-            "    default = True\n"
-            "class SecondConfig(FirstConfig):\n"
-            "    default = True\n",
-            "more than one default AppConfig",
+            "from django.core.exceptions import ImproperlyConfigured\n"
+            "raise ImproperlyConfigured('missing app configuration')\n",
+            "missing app configuration",
         ),
     ],
 )
@@ -285,6 +282,29 @@ def test_discovery_cannot_claim_another_apps_identity(disabled_app) -> None:
     del disabled_app
     with pytest.raises(ImproperlyConfigured, match="disagrees with AppConfig.name"):
         resolve_app_config("arp.base", expected_name="example.other")
+
+
+@pytest.mark.parametrize(
+    "source, diagnostic",
+    [
+        ("raise RuntimeError('broken app configuration')\n", "broken app configuration"),
+        (
+            "from django.apps import AppConfig\n"
+            "class FirstConfig(AppConfig):\n"
+            "    name = 'arp.base'\n"
+            "    default = True\n"
+            "class SecondConfig(FirstConfig):\n"
+            "    default = True\n",
+            "more than one default AppConfig",
+        ),
+    ],
+)
+def test_app_identity_does_not_hide_application_errors(disabled_app, source, diagnostic) -> None:
+    """A bug in apps.py remains visible instead of masquerading as missing identity."""
+
+    (disabled_app / "apps.py").write_text(source)
+    with pytest.raises(RuntimeError, match=diagnostic):
+        resolve_app_config("arp.base")
 
 
 def test_manifest_root_resolution_uses_exact_app_config_aliases() -> None:
@@ -506,6 +526,11 @@ def test_resource_counts_forward_the_requested_database_alias(monkeypatch, resou
 
     monkeypatch.setattr(queryset_type, "counts_by_addon", counts_by_addon)
     monkeypatch.setattr(platform_models.composed.router, "allow_migrate_model", allow_migrate_model)
+    monkeypatch.setattr(
+        platform_models.composed,
+        "connections",
+        {"catalogue": SimpleNamespace(introspection=SimpleNamespace(table_names=lambda: [resource._meta.db_table]))},
+    )
 
     assert platform_models.composed.resource_counts(using="catalogue") == {"example.addon": 3}
     assert aliases == ["catalogue"]
@@ -520,13 +545,38 @@ def test_resource_counts_tolerate_routed_away_or_uncreated_ledger(monkeypatch, r
 
     def unavailable(queryset):
         queried.append(queryset.db)
-        raise DatabaseError("resource ledger does not exist yet")
+        raise AssertionError("a missing ledger must not be queried")
 
     monkeypatch.setattr(queryset_type, "counts_by_addon", unavailable)
     monkeypatch.setattr(platform_models.composed.router, "allow_migrate_model", lambda alias, model: routed_here)
+    monkeypatch.setattr(
+        platform_models.composed,
+        "connections",
+        {"catalogue": SimpleNamespace(introspection=SimpleNamespace(table_names=lambda: []))} if routed_here else {},
+    )
 
     assert platform_models.composed.resource_counts(using="catalogue") == {}
-    assert queried == (["catalogue"] if routed_here else [])
+    assert queried == []
+
+
+def test_resource_counts_propagate_database_failures(monkeypatch, resource_model) -> None:
+    """An existing ledger's database failure aborts reconciliation instead of reporting zero."""
+
+    resource = resource_model
+
+    def unavailable(queryset):
+        raise DatabaseError("ledger unavailable")
+
+    monkeypatch.setattr(type(resource.objects.all()), "counts_by_addon", unavailable)
+    monkeypatch.setattr(platform_models.composed.router, "allow_migrate_model", lambda alias, model: True)
+    monkeypatch.setattr(
+        platform_models.composed,
+        "connections",
+        {"catalogue": SimpleNamespace(introspection=SimpleNamespace(table_names=lambda: [resource._meta.db_table]))},
+    )
+
+    with pytest.raises(DatabaseError, match="ledger unavailable"):
+        platform_models.composed.resource_counts(using="catalogue")
 
 
 @pytest.mark.parametrize("addon_count", [1, 3])

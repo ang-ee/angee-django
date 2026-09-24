@@ -14,7 +14,7 @@ from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db.models import Q
-from rebac import PermissionDenied, system_context
+from rebac import PermissionDenied
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -243,21 +243,11 @@ class DashboardQuery:
         if not 1 <= limit <= 100:
             raise ValidationError({"limit": "Dashboard summary pages contain from 1 to 100 items."})
         rows = list(
-            Dashboard.objects.filter(Q(scope="personal") | Q(owner=user))
+            Dashboard.objects.filter(Q(scope="personal") | Q(owner=user) | Q(owner__isnull=True))
             .select_related("owner")
             .prefetch_related("widgets")
             .order_by("sqid")[:5_001]
         )
-        with system_context(reason="dashboards.installed catalogue"):
-            installed = list(
-                Dashboard.system_queryset()
-                .filter(owner__isnull=True)
-                .select_related("owner")
-                .prefetch_related("widgets")
-                .order_by("sqid")[:5_001]
-            )
-        rows.extend(installed)
-        rows.sort(key=lambda row: row.sqid)
         if len(rows) > 5_000:
             return DashboardSummaryPageType(status="limit", total=len(rows))
         items = [_summary_item(row, info) for row in rows]

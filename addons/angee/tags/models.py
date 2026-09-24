@@ -14,13 +14,12 @@ through the framework's conditional wildcard-reader contract. Downstream addons
 may extend the row with their own scope field, declare it through
 ``shared_reader_policy_fields``, and override ``shared_reader_eligible``.
 
-**Pitfalls.** Shared-tag visibility rides the conditional-reader save seam: any write path that
-skips ``save()`` — ``bulk_create``, ``queryset.update(...)``, raw
-``loaddata`` — leaves the wildcard reader stale (an invisible shared tag or a
-lingering everyone-grant); route scope changes through instance saves. And the
-tuple write validates against the *loaded* REBAC schema, so creating a tag
-requires ``rebac sync`` to have run first — the standard loop order
-(``migrate`` → ``rebac sync`` → ``resources load``) already guarantees it.
+**Pitfalls.** Shared-tag visibility rides the conditional-reader save seam.
+The shared queryset rejects ``bulk_create`` and policy-field ``update`` writes;
+route eligibility changes through instance saves. Raw fixture loading bypasses
+this seam and requires explicit reader reconciliation afterward. Tuple writes
+validate against the loaded REBAC schema, so ``rebac sync`` must run before
+``resources load``; the standard provisioning sequence guarantees that order.
 
 **Party tags** compose this addon without any ``parties`` change: a party is
 tagged by attaching to its ``Party`` row (the canon's explicit-attach path). The
@@ -79,7 +78,6 @@ class Tag(ConditionalSharedReaderMixin, ArchiveMixin, AngeeDataModel):
 
     runtime = True
     sqid_prefix = "tag_"
-    shared_reader_eligible = True
 
     name = models.CharField(max_length=128)
     color = models.CharField(max_length=32, blank=True, default="")
@@ -92,6 +90,12 @@ class Tag(ConditionalSharedReaderMixin, ArchiveMixin, AngeeDataModel):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "tags/tag"
+
+    @property
+    def shared_reader_eligible(self) -> bool:
+        """Base tags are shared vocabulary for every authenticated actor."""
+
+        return True
 
     def __str__(self) -> str:
         """Return the tag name for Django displays."""

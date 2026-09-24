@@ -5,6 +5,14 @@ The dashboards addon validates their queries against the composed console
 resource metadata after resource loading and when saving a snapshot.
 `@angee/ui` owns the built-in widget renderers.
 
+Installed baselines have no actor owner and receive a shared reader through
+`ConditionalSharedReaderMixin`. Dashboard and widget reads use the same REBAC
+scope as authored dashboards; the shared reader grants no write access. Load
+resources only after `migrate` and `rebac sync`, because reader reconciliation
+validates against the persisted permission schema. `angee provision` already
+runs those steps in that order. When adopting this policy for existing rows,
+sync permissions and reload their declared resources to reconcile readers.
+
 ## Declared table columns
 
 Any `data.shape: rows` widget can declare `options.columns` as an ordered list

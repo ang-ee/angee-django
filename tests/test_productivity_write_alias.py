@@ -399,6 +399,17 @@ def test_noop_refresh_preserves_authored_work_state_and_loaded_queue() -> None:
     assert task._work_loaded_queue_id == 1
 
 
+def test_stage_default_requires_caller_to_pin_container() -> None:
+    """A mismatched alias fails before mutating or querying the caller's object."""
+
+    container = RoutingStageContainer(default_stage_id=1)
+    container._state.db = "original"
+    with pytest.raises(ValueError, match="Pin the stage container"):
+        RoutingPipelineStage.resolve_default(container, using="other")
+    assert container._state.db == "original"
+    assert container.default_stage_id == 1
+
+
 @pytest.mark.django_db(transaction=True)
 def test_stage_default_and_validation_use_selected_alias_with_legacy_hooks(
     productivity_writer: str, monkeypatch: pytest.MonkeyPatch
@@ -467,7 +478,6 @@ def test_bulk_snooze_wake_reads_and_writes_only_the_selected_connection(
     [
         (ProjectManager, "from_task", (None,), {}),
         (TaskManager, "from_activity", (None,), {}),
-        (TaskManager, "check_create", (), {}),
         (LinkManager, "upsert", (), {"target": None, "url": "https://example.test"}),
         (ProductManager, "from_project", (None,), {}),
         (UpdateManager, "report", (), {"target": None, "health": "on_track"}),

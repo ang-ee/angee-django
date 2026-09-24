@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, cast
 
 from django.apps import apps
@@ -102,26 +102,7 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
 
 
 class TaskManager(AngeeManager):
-    """Own task creation policy and ThreadActivity maturation."""
-
-    def _require_project_write(self, projects: Sequence[Any]) -> None:
-        """Require each proposed project to admit a new task."""
-
-        if any(not project.has_access("write") for project in projects):
-            raise PermissionDenied("Write access to the project is required to add a task.")
-
-    def check_create(
-        self,
-        relationships: Mapping[str, Sequence[Any]] | None = None,
-        *,
-        using: str | None = None,
-    ) -> SubjectRef:
-        """Require project write when a new task is attached to a project."""
-
-        using = get_write_alias(self.model, using=using, bound=self)
-        require_authorization_database(using, operation="Task creation preflight", error_class=ImproperlyConfigured)
-        self._require_project_write((relationships or {}).get("project", ()))
-        return super().check_create(relationships)
+    """Own idempotent task promotion from a ThreadActivity."""
 
     def from_activity(self, activity: models.Model, *, using: str | None = None) -> models.Model:
         """Return the one task promoted from ``activity``, creating it if needed."""
@@ -651,10 +632,13 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
             if not bypass:
                 assert actor is not None
                 require_authorization_database(
-                    using, operation="Task creation preflight", error_class=ImproperlyConfigured,
+                    using,
+                    operation="Task creation preflight",
+                    error_class=ImproperlyConfigured,
                 )
                 project = cast(Project, related_on(self, "project", using=using)).with_actor(actor)
-                cast(TaskManager, type(self)._default_manager)._require_project_write((project,))
+                if not project.has_access("write"):
+                    raise PermissionDenied("Write access to the project is required to add a task.")
 
         self._normalize_insert_lifecycle()
         update_fields = kwargs.get("update_fields")

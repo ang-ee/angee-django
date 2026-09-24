@@ -756,7 +756,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         return self.status in {WorkflowStatus.TEST, WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}
 
 
-class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
+class Step(ResourceLoadMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     """One node in a workflow definition graph."""
 
     resource_class = WorkflowDefinitionResource
@@ -925,7 +925,7 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
                 session.changed(workflow_id)
             return _combined_delete_results(edges, step)
 
-class Edge(AuditMixin, AngeeDataModel):
+class Edge(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """Directed edge between two workflow steps."""
 
     resource_class = WorkflowDefinitionResource

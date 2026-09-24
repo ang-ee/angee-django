@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection
 from rebac import (
@@ -502,6 +503,33 @@ def test_cadence_orm_create_defaults_the_queryset_actor(nexus_tables: None) -> N
 
     assert cadence.user_id == viewer.pk
     assert Cadence._base_manager.get(pk=cadence.pk).user_id == viewer.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_cadence_clean_defaults_user_before_unique_validation(nexus_tables: None) -> None:
+    """Native full_clean includes the actor-derived user in its uniqueness check."""
+
+    viewer = User.objects.create_user(username="cadence-clean-viewer")
+    with system_context(reason="test nexus cadence clean seed"):
+        party = Party._base_manager.create(display_name="Party", created_by=viewer)
+    cadence = Cadence(party=party, cadence_days=10).with_actor(viewer)
+    with actor_context(viewer):
+        cadence.full_clean()
+        assert cadence.user_id == viewer.pk
+        cadence.save()
+
+    duplicate = Cadence(party=party, cadence_days=20).with_actor(viewer)
+    with actor_context(viewer), pytest.raises(ValidationError, match="already exists"):
+        duplicate.full_clean()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_cadence_clean_requires_an_actor_for_default_user(nexus_tables: None) -> None:
+    """A field allowed to defer its default still cannot validate without an actor."""
+
+    with pytest.raises(ValidationError) as exc_info:
+        Cadence(cadence_days=10).full_clean()
+    assert exc_info.value.message_dict["user"] == ["An authenticated user is required."]
 
 
 @pytest.mark.django_db(transaction=True)

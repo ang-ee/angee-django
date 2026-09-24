@@ -104,8 +104,9 @@ def resolve_app_config(declaration: str, *, expected_name: str | None = None) ->
 
     Reuse a populated config by its canonical name.
     Otherwise Django's factory preserves explicit config-class declarations and
-    default-config selection. A config that cannot be constructed leaves identity
-    unknown and logs its declaration. Construction may import app packages and
+    default-config selection. Import and configuration errors leave identity
+    unknown and log the declaration; unexpected application errors propagate.
+    Construction may import app packages and
     ``apps.py`` but never populates a registry or calls ``ready()``. A supplied
     manifest name must agree with the resolved native name.
     """
@@ -119,7 +120,7 @@ def resolve_app_config(declaration: str, *, expected_name: str | None = None) ->
     if config is None:
         try:
             config = AppConfig.create(declaration)
-        except Exception as error:
+        except (ImportError, ImproperlyConfigured) as error:
             logger.warning("Cannot resolve addon app declaration %r: %s", declaration, error)
             return None
     if expected_name is not None and config.name != expected_name:

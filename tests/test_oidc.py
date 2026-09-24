@@ -15,7 +15,7 @@ import pytest
 from asgiref.sync import async_to_sync, sync_to_async
 from cryptography.hazmat.primitives.asymmetric import rsa
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import call_command
 from django.db import connection
 from django.test import override_settings
@@ -1187,10 +1187,12 @@ def test_credential_upsert_reasserts_active_status(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("deferred", (False, True), ids=("loaded", "deferred"))
 def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
     oidc_tables: None,
+    deferred: bool,
 ) -> None:
-    """Explicit disconnect refuses the only sign-in method for a passwordless user."""
+    """The invariant reads only its pinned alias, including deferred relations."""
 
     user = get_user_model().objects.create_user(username="oidc-only", email="oidc-only@example.com")
     oauth_client = _oauth_client()
@@ -1209,11 +1211,18 @@ def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
         external_account=account,
     )
 
-    with pytest.raises(OAuthFlowError) as exc_info:
+    if deferred:
+        credential = Credential._base_manager.only("pk").get(pk=credential.pk)
+
+    class RejectUnboundReadRouter:
+        def db_for_read(self, model: Any, **hints: Any) -> str:
+            raise AssertionError(f"Unbound disconnect read: {model._meta.label}")
+
+    with override_settings(DATABASE_ROUTERS=[RejectUnboundReadRouter()]), pytest.raises(ValidationError) as exc_info:
         Credential.objects.prepare_disconnect(credential)
 
     assert exc_info.value.code == "only_sign_in_method"
-    assert exc_info.value.http_status == 409
+    assert exc_info.value.messages == ["This is your only sign-in method."]
 
 
 @pytest.mark.django_db(transaction=True)

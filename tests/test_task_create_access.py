@@ -188,3 +188,21 @@ def test_pinned_task_insert_requires_project_write_inside_system_context(
         ProjectAccessTask.objects.as_user(reader).insert(candidate)
     assert ProjectAccessTask._base_manager.count() == 0
     assert ProjectAccessTask.history.count() == 0
+
+
+@pytest.mark.parametrize("allowed", (False, True), ids=("project-reader", "project-writer"))
+def test_direct_task_save_requires_project_write(
+    task_create_case: tuple[Scope, Any, Any],
+    allowed: bool,
+) -> None:
+    """Native instance saves enforce the same project policy as GraphQL inserts."""
+
+    project, reader, admin = task_create_case
+    candidate = ProjectAccessTask(title="Direct task", project=project).with_actor(admin if allowed else reader)
+    if allowed:
+        candidate.save()
+        assert ProjectAccessTask._base_manager.get(pk=candidate.pk).project_id == project.pk
+    else:
+        with pytest.raises(PermissionDenied, match="Write access to the project is required to add a task."):
+            candidate.save()
+        assert not ProjectAccessTask._base_manager.exists()

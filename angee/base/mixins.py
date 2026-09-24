@@ -48,7 +48,15 @@ _EVERY_AUTHENTICATED_USER = SubjectRef.of("auth/user", "*")
 
 
 def audit_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
-    """Schedule audit-FK nullification through the collector's materialized batch path."""
+    """Null audit attribution even when the referencing rows are append-only.
+
+    Django's unevaluated SET_NULL path calls QuerySet.update(), which append-only
+    querysets reject. Materializing here selects the collector's native
+    UpdateQuery.update_batch path without opening a general update escape hatch.
+    This loads all matching audit rows into memory for each FK being nullified;
+    deleting a heavily referenced actor can therefore require substantial memory.
+    AuditMixin uses one policy so its fields also work on append-only consumers.
+    """
 
     del using
     collector.add_field_update(field, None, list(sub_objs))
