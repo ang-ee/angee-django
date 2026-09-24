@@ -193,7 +193,7 @@ def test_slack_serial_drain_discovers_and_caches_workspace_lists_once(monkeypatc
     assert messages[2].metadata["thread_ts"] == "100.000001"
     assert backend.test_pages.cursors == {
         "C1": {"conversation": {"last_ts": "104.000001"}, "threads": {"100.000001": "102.000001"}},
-        "D1": {"conversation": {"last_ts": "200.000001"}, "threads": {}},
+        "D1": {"conversation": {"last_ts": "200.000001"}},
     }
     assert backend.bridge.cursor == {}
 
@@ -522,7 +522,8 @@ def test_rate_limit_honors_retry_after_then_retries(monkeypatch: pytest.MonkeyPa
     assert delays == [60.0]
 
 
-def test_rate_limit_stops_before_the_sync_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("discovery", [True, False])
+def test_rate_limit_stops_before_the_sync_deadline(monkeypatch: pytest.MonkeyPatch, discovery: bool) -> None:
     """A retry that cannot fit before the drain deadline becomes a transient error."""
 
     class RateLimitedWebClient:
@@ -535,10 +536,13 @@ def test_rate_limit_stops_before_the_sync_deadline(monkeypatch: pytest.MonkeyPat
     delays: list[float] = []
     monkeypatch.setattr("angee.messaging_integrate_slack.backend.sleep", delays.append)
     backend = _backend(monkeypatch, RateLimitedWebClient)
-    backend.sync_deadline = monotonic() + 1
+    stream = SimpleNamespace(partition="C1", generation=1, cursor={})
 
     with pytest.raises(SlackRateLimitError, match="time budget exhausted"):
-        backend.test_pages.next_batch()
+        if discovery:
+            backend.test_pages.next_batch(deadline=monotonic() + 1)
+        else:
+            backend.extract(stream, 200, deadline=monotonic() + 1, using="default")
     assert delays == []
 
 
@@ -571,7 +575,7 @@ def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.Monk
     def drain(backend_class: type[ChannelBackend]) -> None:
         backend = backend_class(_BridgeStub())
         page = StreamPage(records=[ParsedMessage(external_id="one", platform="test", body=body_part("one"))], cursor={})
-        outcomes = tuple(backend.apply(None, page, using="default"))
+        outcomes = tuple(backend.apply_record(None, record, using="default") for record in page.records)
         assert len(outcomes) == 1
         backend.finish_page(None, page, outcomes, using="default")
 
@@ -703,6 +707,45 @@ def _slack_channel(slug: str = "slack") -> Any:
         backend_class="slack",
         subscription_state={"team_id": "T1", "own_id": "U0"},
     )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("existing_stream", [False, True])
+def test_legacy_slack_position_seeds_only_an_empty_stream(
+    slack_tables: None, monkeypatch: pytest.MonkeyPatch, existing_stream: bool
+) -> None:
+    """The first stream continues the retained conversation watermark without re-import."""
+
+    monkeypatch.setattr(SlackChannelBackend, "client_class", IncrementalWebClient)
+    channel = _slack_channel("slack-legacy")
+    seeds: list[str] = []
+    seed_cursor = SlackChannelBackend.seed_cursor
+
+    def track_seed(self: Any, stream: Any, legacy_cursor: Any) -> Any:
+        seeds.append(stream.partition)
+        return seed_cursor(self, stream, legacy_cursor)
+
+    monkeypatch.setattr(SlackChannelBackend, "seed_cursor", track_seed)
+    with system_context(reason="test slack legacy stream position"):
+        channel.cursor = {"conversations": {"C1": {"last_ts": "1784700000.000001"}}, "threads": {}}
+        channel.save(update_fields=["cursor"])
+        if existing_stream:
+            SyncStream.objects.current(
+                channel,
+                "messages",
+                "C1",
+                cursor={
+                    "conversation": {"last_ts": "1784700002.000001"},
+                    "threads": {},
+                },
+            )
+        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == (0 if existing_stream else 1)
+        assert seeds == ([] if existing_stream else ["C1"])
+        channel.cursor = {"conversations": {"C1": {"last_ts": "1784600000.000001"}}, "threads": {}}
+        channel.save(update_fields=["cursor"])
+        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 0
+        assert seeds == ([] if existing_stream else ["C1"])
+    assert Message._base_manager.count() == (0 if existing_stream else 1)
 
 
 @pytest.mark.django_db(transaction=True)

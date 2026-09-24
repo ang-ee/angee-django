@@ -50,7 +50,11 @@ class BridgeProgressReporter:
         details: Mapping[str, Any] | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
-        """Merge progress under a row lock without clobbering a queued run."""
+        """Merge telemetry under a row lock; supplied details replace prior details.
+
+        Dispatch identity belongs to Bridge.sync_run_id, independently of this
+        payload. A progress report preserves a queued stage until work starts.
+        """
 
         with transaction.atomic(using=self.using):
             row = (

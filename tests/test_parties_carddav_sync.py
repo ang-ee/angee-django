@@ -30,7 +30,7 @@ from rebac import system_context
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClient
-from angee.integrate.records import (
+from angee.integrate.impl import (
     DiscrepancyKind,
     DiscrepancyStatus,
     LinkStatus,
@@ -246,7 +246,7 @@ class Replica:
         for _ in range(20):
             absent += reconcile_stream(self.stream, self.backend, page_bound=page_bound, using="default")
             self.stream.refresh_from_db()
-            if "_angee_reconcile" not in self.stream.cursor:
+            if not self.stream.reconcile_state:
                 return absent
         pytest.fail("The CardDAV reconciliation checkpoint did not finish")
 
@@ -388,6 +388,40 @@ def test_put_etag_mismatch_records_conflict_without_local_overwrite(replica: Rep
     assert person.notes == "Keep local edit"
     assert (link.remote_base_hash, link.local_base_hash, link.remote_version) == old_bases
     assert "Concurrent remote edit" in replica.server.cards[_HREF][0]
+
+
+@pytest.mark.parametrize("keep", ["remote", "local"])
+def test_etag_conflict_resolution_re_reads_before_keeping_a_side(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, keep: str
+) -> None:
+    person, link = replica.baseline()
+    original_version = link.remote_version
+    person.notes = "Chosen local edit"
+    person.save(update_fields=["notes"])
+    remote_version = replica.server.store(_HREF, _card(notes="Concurrent remote edit"))
+    assert push_stream(replica.stream, replica.backend, using="default").count == 0
+    failed_put = [request for request in replica.server.requests if request[0] == "PUT"][-1]
+    assert failed_put[2]["if-match"] == original_version
+    discrepancy = SyncDiscrepancy.objects.get(link=link)
+    monkeypatch.setattr(CardDavDirectoryBackend, "http", property(lambda self: replica.server))
+    replica.server.requests.clear()
+
+    resolved = SyncDiscrepancy.objects.resolve_conflict(discrepancy, keep=keep, using="default")
+
+    person.refresh_from_db()
+    link.refresh_from_db()
+    assert resolved.status == DiscrepancyStatus.RESOLVED
+    assert not SyncDiscrepancy.objects.unresolved().filter(link=link).exists()
+    puts = [request for request in replica.server.requests if request[0] == "PUT"]
+    if keep == "local":
+        assert person.notes == "Chosen local edit"
+        assert "Chosen local edit" in replica.server.cards[_HREF][0]
+        assert puts[0][2]["if-match"] == remote_version
+    else:
+        assert person.notes == "Concurrent remote edit"
+        assert not puts
+    assert link.remote_version == replica.server.cards[_HREF][1]
+    assert push_stream(replica.stream, replica.backend, using="default").count == 0
 
 
 @pytest.mark.parametrize("policy", ["retain", "propagate"])
@@ -792,19 +826,19 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
         del args, kwargs
         pytest.fail("Apply and local comparison must not open avatar storage")
 
-    original_apply = replica.backend.apply
+    original_apply = replica.backend.apply_record
 
-    def apply_after_intake(stream: Any, page: Any, *, using: str | None = None) -> Any:
+    def apply_after_intake(stream: Any, record: Any, *, using: str | None = None) -> Any:
         assert connection.in_atomic_block
         assert phases == ["extract"]
         assert File.objects.get(content_hash=digest).upload_state == UploadState.READY
-        assert page.records[0].source_payload["contact"]["photo"] == {"hash": digest, "mime": "image/png"}
+        assert record.source_payload["contact"]["photo"] == {"hash": digest, "mime": "image/png"}
         phases.append("apply")
-        yield from original_apply(stream, page, using=using)
+        return original_apply(stream, record, using=using)
 
     monkeypatch.setattr(type(File.objects), "ingest_bytes", ingest_bytes)
     monkeypatch.setattr(File, "open_stream", unexpected_open)
-    monkeypatch.setattr(replica.backend, "apply", apply_after_intake)
+    monkeypatch.setattr(replica.backend, "apply_record", apply_after_intake)
     replica.server.store(_HREF, _card().replace("END:VCARD", "PHOTO;ENCODING=b;TYPE=PNG:QUJD\r\nEND:VCARD"))
     person, link = replica.baseline()
     stored = File.objects.get(content_hash=digest)
@@ -857,9 +891,7 @@ def test_uidless_cards_with_same_name_use_distinct_resource_hrefs(replica: Repli
 
 
 @pytest.mark.parametrize("sweep", [False, True])
-def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(
-    replica: Replica, sweep: bool
-) -> None:
+def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(replica: Replica, sweep: bool) -> None:
     collision_href = f"{_BOOK}duplicate.vcf"
     replica.server.store(_HREF, _card(uid=collision_href))
     assert replica.pull().count == 1
@@ -1048,22 +1080,24 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     assert reconcile_stream(replica.stream, replica.backend, page_bound=1, using="default") == 0
     replica.stream.refresh_from_db()
     committed_cursor = dict(replica.stream.cursor)
-    assert committed_cursor["_angee_reconcile"]["after"] == "zulu"
+    committed_reconcile_state = dict(replica.stream.reconcile_state)
+    assert committed_reconcile_state["after"] == "zulu"
     assert Person.objects.get(source_uid="zulu").notes == "First committed page"
-    original_apply = replica.backend.apply
+    original_apply = replica.backend.apply_record
 
-    def crash_after_apply(stream: Any, page: Any, *, using: str | None = None) -> Any:
-        outcomes = tuple(original_apply(stream, page, using=using))
-        assert page.records[0].external_key == "alpha"
+    def crash_after_apply(stream: Any, record: Any, *, using: str | None = None) -> Any:
+        outcome = original_apply(stream, record, using=using)
+        assert record.external_key == "alpha"
         assert Person.objects.get(source_uid="alpha").notes == "Second page"
-        assert outcomes
+        assert outcome
         raise RuntimeError("Interrupted CardDAV sweep apply")
 
-    monkeypatch.setattr(replica.backend, "apply", crash_after_apply)
+    monkeypatch.setattr(replica.backend, "apply_record", crash_after_apply)
     with pytest.raises(RuntimeError, match="Interrupted CardDAV sweep apply"):
         reconcile_stream(replica.stream, replica.backend, page_bound=1, using="default")
     replica.stream.refresh_from_db()
     assert replica.stream.cursor == committed_cursor
+    assert replica.stream.reconcile_state == committed_reconcile_state
     assert Person.objects.get(source_uid="alpha").notes == "Original"
     assert Person.objects.count() == 2
     assert RecordRevision.objects.count() == 3

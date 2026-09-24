@@ -21,9 +21,8 @@ from django.db.models.functions import Coalesce
 from angee.base.db import get_write_alias, refresh_deferred
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClientMixin
-from angee.integrate.impl import BridgeImpl
-from angee.integrate.records import DiscrepancyKind, StreamDirection, StreamKind
-from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamDefinition, StreamPage
+from angee.integrate.impl import BridgeImpl, DiscrepancyKind, StreamDirection, StreamKind
+from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamDefinition
 
 
 @dataclass(frozen=True)
@@ -182,7 +181,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
 
         raise NotImplementedError("DirectoryBackend subclasses must implement discover().")
 
-    def streams(self, *, using: str | None = None) -> Iterable[StreamDefinition]:
+    def streams(self, *, deadline: float | None = None, using: str | None = None) -> Iterable[StreamDefinition]:
         """Discover folders and seed per-collection policy on their first epoch."""
 
         using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
@@ -218,11 +217,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 config=policy,
             )
 
-    def extract(self, stream: Any, page_bound: int, *, using: str | None = None) -> StreamPage:
-        """Extract one protocol page; subclasses own tokens and resource versions."""
-
-        raise NotImplementedError("Directory backends must implement extract().")
-
     def _folder(self, stream: Any, *, using: str) -> Any:
         return (
             apps.get_model("parties", "Folder")
@@ -237,11 +231,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         revision = (
             apps.get_model("integrate", "RecordRevision")
             .objects.db_manager(using)
-            .filter(
-                link=link,
-                applied_at__isnull=False,
-            )
-            .order_by("-number")
+            .filter(applied_at__isnull=False)
+            .latest_for(link)
             .first()
         )
         return dict(revision.source_payload) if revision is not None else {}
@@ -250,8 +241,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         """Store fetched media before the driver's page transaction begins."""
 
         refresh_deferred(self.bridge, using=using, fields=("owner_id",))
-        return apps.get_model("parties", "Party").objects.db_manager(using).prepare_contact(
-            parsed, created_by_id=self.bridge.owner_id, using=using
+        return (
+            apps.get_model("parties", "Party")
+            .objects.db_manager(using)
+            .prepare_contact(parsed, created_by_id=self.bridge.owner_id, using=using)
         )
 
     def _links(self, stream: Any, *, using: str) -> tuple[Any, ...]:
@@ -260,19 +253,17 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         latest = (
             apps.get_model("integrate", "RecordRevision")
             .objects.db_manager(using)
-            .filter(link_id=OuterRef("pk"), applied_at__isnull=False)
-            .order_by("-number")
+            .filter(applied_at__isnull=False)
+            .latest_for(OuterRef("pk"))
             .annotate(href=KeyTextTransform("href", "source_payload"))
-            .values("href")[:1]
+            .values("href")
         )
         return tuple(
             apps.get_model("integrate", "RecordLink")
             .objects.db_manager(using)
             .filter(stream=stream)
             .annotate(
-                source_href=Coalesce(
-                    KeyTextTransform("href", "metadata"), Subquery(latest), output_field=CharField()
-                )
+                source_href=Coalesce(KeyTextTransform("href", "metadata"), Subquery(latest), output_field=CharField())
             )
             .order_by("pk")
         )
@@ -307,8 +298,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         return states
 
     def _local_state(self, stream: Any, external_key: str, *, using: str) -> tuple[Any, Any, str]:
-        links = apps.get_model("integrate", "RecordLink").objects.db_manager(using).filter(
-            stream=stream, external_key=external_key
+        links = (
+            apps.get_model("integrate", "RecordLink")
+            .objects.db_manager(using)
+            .filter(stream=stream, external_key=external_key)
         )
         return self._local_states(stream, (external_key,), links=links, using=using)[external_key]
 
@@ -418,7 +411,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             key = key.removeprefix("href:")
         return key
 
-    def apply(self, stream: Any, page: StreamPage, *, using: str | None = None) -> Iterable[ApplyResult]:
+    def apply_record(self, stream: Any, record: RecordChange, *, using: str | None = None) -> ApplyResult:
         """Revalidate under domain locks, then use the single contact ingest verb.
 
         The fixed contact projection has mapping version 1 and no dependency
@@ -428,43 +421,41 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
         refresh_deferred(self.bridge, using=using, fields=("owner_id",))
         parties = apps.get_model("parties", "Party").objects.db_manager(using)
-        for record in page.records:
-            if record.source_payload.get("error"):
-                raise SemanticError(record.source_payload["error"])
-            parsed = (
-                None
-                if record.tombstone
-                else replace(
-                    contact_from_projection(record.source_payload["contact"]),
-                    uid=record.external_key,
-                    etag=record.remote_version,
-                    raw_vcard=record.source_payload["raw_vcard"],
-                )
+        if record.source_payload.get("error"):
+            raise SemanticError(record.source_payload["error"])
+        parsed = (
+            None
+            if record.tombstone
+            else replace(
+                contact_from_projection(record.source_payload["contact"]),
+                uid=record.external_key,
+                etag=record.remote_version,
+                raw_vcard=record.source_payload["raw_vcard"],
             )
-            parties.lock_contact(record.target, parsed=parsed, using=using)
-            target, projection, local_hash = self._local_state(stream, record.external_key, using=using)
-            if local_hash != record.local_hash:
-                raise SemanticError("local_changed_during_pull", kind=DiscrepancyKind.CONFLICT)
-            if record.tombstone:
-                if target is not None and stream.config.get("remote_delete", "retain") == "propagate":
-                    parties.filter(pk=target.pk).delete()
-                    target, projection, local_hash = None, None, ""
-            else:
-                target = parties.ingest_contact(
-                    parsed,
-                    folder=self._folder(stream, using=using),
-                    target=target,
-                    created_by_id=self.bridge.owner_id,
-                    using=using,
-                )
-                projection = contact_projection(parties.project_contact(target, using=using))
-                local_hash = canonical_json_sha256(projection)
-            yield ApplyResult(
-                record.external_key,
+        )
+        parties.lock_contact(record.target, parsed=parsed, using=using)
+        target, projection, local_hash = self._local_state(stream, record.external_key, using=using)
+        if local_hash != record.local_hash:
+            raise SemanticError("local_changed_during_pull", kind=DiscrepancyKind.CONFLICT)
+        if record.tombstone:
+            if target is not None and stream.config.get("remote_delete", "retain") == "propagate":
+                parties.filter(pk=target.pk).delete()
+                target, projection, local_hash = None, None, ""
+        else:
+            target = parties.ingest_contact(
+                parsed,
+                folder=self._folder(stream, using=using),
                 target=target,
-                local_hash=local_hash,
-                mapped_payload=projection,
+                created_by_id=self.bridge.owner_id,
+                using=using,
             )
+            projection = contact_projection(parties.project_contact(target, using=using))
+            local_hash = canonical_json_sha256(projection)
+        return ApplyResult(
+            target=target,
+            local_hash=local_hash,
+            mapped_payload=projection,
+        )
 
     def local_changes(self, stream: Any, *, using: str | None = None) -> Iterable[LocalChange]:
         """Compare every linked local projection to its base, including deletions."""
@@ -500,9 +491,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 canonical_json_sha256(projection),
                 target=person,
             )
-
-    def close(self) -> None:
-        """The shared HTTP client closes each request's transport itself."""
 
 
 class ManualDirectoryBackend(DirectoryBackend):

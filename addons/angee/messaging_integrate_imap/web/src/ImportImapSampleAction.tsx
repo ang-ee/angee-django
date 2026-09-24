@@ -5,7 +5,9 @@ import type { DocumentType } from "@angee/gql/console";
 import * as React from "react";
 
 import { ImportImapSample } from "./documents";
-import { samplePreviewCursor, useSamplePreviewFeed, type SampleRow } from "./sample-preview-feed";
+import { useSamplePreviewFeed, type SampleRow } from "./sample-preview-feed";
+
+const IMAP_SAMPLE_LIMIT = 50;
 
 type Outcome = DocumentType<typeof ImportImapSample>["import_imap_sample"];
 
@@ -17,7 +19,7 @@ function isoDate(offsetDays = 0): string {
 
 /** Operator-selected historical import. The server owns IMAP safety and admission. */
 export function ImportImapSampleAction(): React.ReactElement {
-  return <ResourceViewProvider scope="local" initialState={{ pageSize: 50 }}>
+  return <ResourceViewProvider scope="local" initialState={{ pageSize: IMAP_SAMPLE_LIMIT }}>
     <ImportImapSampleDialog />
   </ResourceViewProvider>;
 }
@@ -45,8 +47,8 @@ function ImportImapSampleDialog(): React.ReactElement | null {
   const busy = previewFeed.isFetching || importState.fetching;
   const operationError = (previewStarted ? previewFeed.error : null) ?? importState.error;
   const rows = keysetFeedRows(previewStarted ? previewFeed.data : undefined, (left, right) => right.uid - left.uid);
-  const cursor = previewStarted ? previewFeed.data?.pages.at(-1)?.through : null;
-  const preview = cursor ? samplePreviewCursor(cursor) : null;
+  const page = previewStarted ? previewFeed.data?.pages.at(-1) : undefined;
+  const preview = page?.metadata;
   const columns: readonly ListColumn<SampleRow>[] = [
     { field: "subject", header: t("channel.imap.sample.subject"), render: (row) => row.subject || t("channel.imap.sample.noSubject") },
     { field: "sender", header: t("channel.imap.sample.sender") },
@@ -104,9 +106,9 @@ function ImportImapSampleDialog(): React.ReactElement | null {
       <FieldRoot><FieldRoot.Label>{t("channel.imap.sample.allDates")}</FieldRoot.Label><Checkbox checked={allDates} disabled={busy} onCheckedChange={(checked) => { setAllDates(checked); invalidatePreview(); }} /></FieldRoot>
       <FieldRow label={t("channel.imap.sample.since")}><Input type="date" value={since} disabled={busy || allDates} onChange={(event) => { setSince(event.target.value); invalidatePreview(); }} /></FieldRow>
       <FieldRow label={t("channel.imap.sample.before")}><Input type="date" value={before} disabled={busy || allDates} onChange={(event) => { setBefore(event.target.value); invalidatePreview(); }} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.limit")}><Input type="number" min={1} max={50} value={limit} disabled={busy} onChange={(event) => {
+      <FieldRow label={t("channel.imap.sample.limit")}><Input type="number" min={1} max={IMAP_SAMPLE_LIMIT} value={limit} disabled={busy} onChange={(event) => {
         const parsed = event.target.valueAsNumber;
-        setLimit(Number.isFinite(parsed) ? Math.max(1, Math.min(50, Math.trunc(parsed))) : 1);
+        setLimit(Number.isFinite(parsed) ? Math.max(1, Math.min(IMAP_SAMPLE_LIMIT, Math.trunc(parsed))) : 1);
         invalidatePreview();
       }} /></FieldRow>
       {localError || operationError ? <Alert className="col-span-full" tone="danger">{localError ?? errorMessage(operationError, t("channel.imap.sample.failed"))}</Alert> : null}
@@ -124,13 +126,13 @@ function ImportImapSampleDialog(): React.ReactElement | null {
       </Alert> : null}
       {preview ? <div className="col-span-full min-h-0 space-y-3">
         <Alert tone="info">{t("channel.imap.sample.count", {
-          loaded: rows.length, total: preview.totalCount,
+          loaded: rows.length, total: page?.count,
           uidvalidity: preview.uidvalidity, upperUid: preview.upperUid,
         })}</Alert>
         <ControlBandProvider host={undefined}>
           <RowsListView scope="inherit" rows={rows} columns={columns} selectable emptyContent={t("channel.imap.sample.empty")}
-            bulkActions={(selectedIds, clear) => <Button size="sm" variant="primary" disabled={busy || selectedIds.size > 50}
-              title={selectedIds.size > 50 ? t("channel.imap.sample.selectionTooLarge") : undefined}
+            bulkActions={(selectedIds, clear) => <Button size="sm" variant="primary" disabled={busy || selectedIds.size > IMAP_SAMPLE_LIMIT}
+              title={selectedIds.size > IMAP_SAMPLE_LIMIT ? t("channel.imap.sample.selectionTooLarge", { limit: IMAP_SAMPLE_LIMIT }) : undefined}
               onClick={() => void importSelected(selectedIds, clear)}>{importState.fetching ? t("channel.imap.sample.importing") : t("channel.imap.sample.importSelected", { count: selectedIds.size })}</Button>} />
         </ControlBandProvider>
         {previewFeed.hasNextPage ? <Button type="button" variant="secondary" disabled={busy}

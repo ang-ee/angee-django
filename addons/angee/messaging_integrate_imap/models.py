@@ -13,6 +13,7 @@ from angee.base.db import get_write_alias
 from angee.base.permissions import require_authorization_database
 from angee.integrate.locks import bridge_advisory_lock
 from angee.messaging_integrate_imap.backend import (
+    NEW_MAIL_DELIVERY_MODE,
     ImapChannelBackend,
     ImapSampleImport,
     ImapSamplePreview,
@@ -38,34 +39,12 @@ class ImapChannelSampling(models.Model):
         if not isinstance(self.backend, ImapChannelBackend):
             raise ValidationError("Mailbox positioning is available for IMAP channels.")
 
-    def _imap_stream_cursor(self, *, using: str) -> dict[str, Any]:
-        """Project current mailbox streams into the transport's boundary snapshot."""
-
-        streams = list(
-            apps.get_model("integrate", "SyncStream").objects.current_for_bridge(
-                self,
-                "messages",
-                using=using,
-            )
-        )
-        if not streams:
-            return self.cursor if isinstance(self.cursor, dict) else {}
-        boundary = self.backend.delivery_boundary(using=using)
-        return {
-            "delivery_mode": boundary.get("delivery_mode", ""),
-            "source_identity": boundary.get("source_identity", ""),
-            "mailboxes": {
-                stream.partition: {name: stream.cursor.get(name, 0) for name in ("uidvalidity", "last_uid")}
-                for stream in streams
-            },
-        }
-
     def prepare_imap_new_mail(self, *, actor: Any, using: str | None = None) -> tuple[int, bool]:
         """Atomically exclude the selected mailboxes' current contents from live sync.
 
         The transport snapshot happens under the bridge's normal sync lock but
-        outside a database transaction. The locked row then revalidates every
-        fact used by that snapshot before it commits the complete cursor at once.
+        outside a database transaction. The locked row revalidates configuration
+        and credential identity before the driver installs all boundaries atomically.
         """
 
         using = get_write_alias(type(self), using=using, instance=self)
@@ -84,8 +63,7 @@ class ImapChannelSampling(models.Model):
             with bridge_advisory_lock(current) as acquired:
                 if not acquired:
                     raise ValidationError("The channel is busy. Retry when its current operation finishes.")
-                original_cursor = current._imap_stream_cursor(using=using)
-                cursor, changed = current.backend.prepare_new_mail_cursor(original_cursor, using=using)
+                boundary = current.backend.prepare_new_mail_boundary(using=using)
                 with transaction.atomic(using=using):
                     locked = (
                         channel_model.objects.db_manager(using)
@@ -98,23 +76,15 @@ class ImapChannelSampling(models.Model):
                     locked._require_paused_imap(actor)
                     if locked.config != current.config or locked.credential_id != current.credential_id:
                         raise ValidationError("The channel configuration changed. Set the starting point again.")
-                    locked_cursor = locked._imap_stream_cursor(using=using)
-                    if locked_cursor != original_cursor:
-                        raise ValidationError("The channel cursor changed. Set the starting point again.")
                     locked.config = {
                         **locked.config,
-                        "delivery_mode": cursor["delivery_mode"],
-                        "source_identity": cursor["source_identity"],
-                        "mailbox_selection": sorted(cursor["mailboxes"]),
+                        "delivery_mode": NEW_MAIL_DELIVERY_MODE,
+                        "source_identity": boundary.source_identity,
+                        "mailbox_selection": sorted(boundary.cursors),
                     }
                     locked.save(using=using, update_fields=["config", "updated_at"])
-                    streams = apps.get_model("integrate", "SyncStream").objects.db_manager(using)
-                    for partition, value in sorted(cursor["mailboxes"].items()):
-                        stream = streams.current(locked, "messages", partition, cursor=value, using=using)
-                        if stream.cursor != value:
-                            stream = streams.bump_generation(stream, using=using)
-                            streams.advance(stream, value, using=using)
-            return len(cursor.get("mailboxes", {})), changed
+                    locked.backend.apply_new_mail_boundary(boundary, using=using)
+            return len(boundary.cursors), boundary.changed
 
     def preview_imap_sample(
         self,

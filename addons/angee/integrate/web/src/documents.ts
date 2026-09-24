@@ -59,3 +59,14 @@ export const RotateWebhookSecret = graphql(`
     rotate_webhook_secret(id: $id) { ok secret }
   }
 `);
+
+/** Optional conflict resolution input is an authored operation. */
+export const ResolveSyncDiscrepancy = graphql(`
+  mutation ResolveSyncDiscrepancy($id: ID!, $keep: String) {
+    resolveSyncDiscrepancy(id: $id, keep: $keep) {
+      ok
+      message
+      validation_errors
+    }
+  }
+`);

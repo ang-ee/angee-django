@@ -49,7 +49,7 @@ export const enMessagingImapMessages: Record<string, string> = {
   "channel.imap.sample.empty": "No messages were found in this mailbox window.",
   "channel.imap.sample.count": "Mailbox snapshot {uidvalidity}:{upperUid}. Loaded {loaded} of {total} matching messages (initial count, less confirmed missing messages).",
   "channel.imap.sample.loadOlder": "Load older messages",
-  "channel.imap.sample.selectionTooLarge": "Import at most 50 selected messages at a time.",
+  "channel.imap.sample.selectionTooLarge": "Import at most {limit} selected messages at a time.",
   "channel.imap.sample.imported": "Imported {imported}; {missing} were no longer available.",
   "channel.imap.sample.flagsUnchanged": "Mailbox flags were unchanged.",
   "channel.imap.sample.flagsChanged": "Mailbox flags changed during import; review the mailbox before continuing.",

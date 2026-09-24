@@ -1,5 +1,6 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import type { Row } from "@angee/metadata";
+import { extractActionOutcome, useAuthoredMutation } from "@angee/refine";
 import {
   Button,
   Code,
@@ -9,7 +10,10 @@ import {
   jsonObjectFromUnknown,
   optionToken,
   useActionResultMutation,
-  useEnumOptions,
+  useActionResultRun,
+  routeSearchParam,
+  updateRouteSearch,
+  useRouteSearch,
   useRecordChromeContext,
   useResourceRecordHrefLookup,
   type ListColumn,
@@ -18,10 +22,11 @@ import {
   type WidgetDefinition,
   type WidgetRenderProps,
 } from "@angee/ui";
-import { useMemo, useState, type ReactElement } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { useCallback, useMemo, type ReactElement } from "react";
 
 import { useIntegrateT } from "./i18n";
-import { IntegrationSyncRunLink } from "./sync-fragments";
+import { ResolveSyncDiscrepancy } from "./documents";
 
 export const INTEGRATION_STREAMS_TAB_ID = "integrate.streams";
 export const SYNC_STREAM_MODEL = "integrate.SyncStream";
@@ -36,7 +41,8 @@ interface StreamRow extends StringIdRow {
 }
 
 interface DiscrepancyRow extends StringIdRow {
-  status?: string;
+  kind?: string;
+  is_open?: boolean;
 }
 
 interface LinkRow extends StringIdRow {
@@ -44,9 +50,13 @@ interface LinkRow extends StringIdRow {
   record_id?: string;
 }
 
-type StreamSelection =
-  | { view: "streams" }
-  | { view: "discrepancies" | "links"; stream: StreamRow };
+export const INTEGRATION_STREAM_SEARCH_KEYS = {
+  integration: "syncIntegration",
+  stream: "syncStream",
+  view: "syncView",
+} as const;
+
+type StreamView = "streams" | "discrepancies" | "links";
 
 /** The saved-record tab reads its declared, backend-annotated presence field. */
 export function integrationHasStreams(record: Row): boolean {
@@ -58,39 +68,34 @@ export function StreamsLabel(): ReactElement {
   return <>{t("streams.title")}</>;
 }
 
-/** A record change resets the drill-down while the form owns the parent identity. */
+/** The parent record owns scope; route search owns the portable drill-down. */
 export function IntegrationStreamsPane(): ReactElement {
-  const { recordId, record, dataProviderName } = useRecordChromeContext();
-  return (
-    <IntegrationStreams
-      key={recordId}
-      integrationId={recordId}
-      progress={record?.sync_progress}
-      dataProviderName={dataProviderName}
-    />
-  );
-}
-
-function IntegrationStreams({ integrationId, progress, dataProviderName }: {
-  integrationId: string;
-  progress: unknown;
-  dataProviderName: string | undefined;
-}): ReactElement {
+  const { recordId: integrationId, dataProviderName } = useRecordChromeContext();
   const t = useIntegrateT();
   const recordHref = useResourceRecordHrefLookup();
-  const discrepancyStatuses = useEnumOptions(SYNC_DISCREPANCY_MODEL, "status");
-  const openStatuses = discrepancyStatuses
-    .filter((option) => ["open", "retry"].includes(optionToken(option.value)))
-    .map((option) => option.value);
-  const [selection, setSelection] = useState<StreamSelection>({ view: "streams" });
+  const search = useRouteSearch();
+  const navigate = useNavigate();
+  const streamId = routeSearchParam(search, INTEGRATION_STREAM_SEARCH_KEYS.integration) === integrationId
+    ? routeSearchParam(search, INTEGRATION_STREAM_SEARCH_KEYS.stream) : undefined;
+  const requestedView = routeSearchParam(search, INTEGRATION_STREAM_SEARCH_KEYS.view);
+  const view: StreamView = streamId && (requestedView === "discrepancies" || requestedView === "links")
+    ? requestedView : "streams";
+  const show = useCallback((nextView: StreamView, id?: string): void => {
+    void navigate({ to: ".", search: updateRouteSearch({
+      [INTEGRATION_STREAM_SEARCH_KEYS.integration]: id ? integrationId : undefined,
+      [INTEGRATION_STREAM_SEARCH_KEYS.stream]: id,
+      [INTEGRATION_STREAM_SEARCH_KEYS.view]: id ? nextView : undefined,
+    }) });
+  }, [integrationId, navigate]);
   const [resync] = useActionResultMutation<ActionFieldName>("resyncSyncStream", {
     dataProviderName,
     invalidateModels: [SYNC_STREAM_MODEL],
   });
-  const [resolve] = useActionResultMutation<ActionFieldName>("resolveSyncDiscrepancy", {
+  const [resolve] = useAuthoredMutation(ResolveSyncDiscrepancy, {
     dataProviderName,
-    invalidateModels: [SYNC_DISCREPANCY_MODEL, SYNC_STREAM_MODEL],
+    invalidateModels: [SYNC_DISCREPANCY_MODEL, SYNC_STREAM_MODEL, RECORD_LINK_MODEL],
   });
+  const settle = useActionResultRun();
   const [retry] = useActionResultMutation<ActionFieldName>("retrySyncDiscrepancy", {
     dataProviderName,
     invalidateModels: [SYNC_DISCREPANCY_MODEL, SYNC_STREAM_MODEL],
@@ -102,7 +107,7 @@ function IntegrationStreams({ integrationId, progress, dataProviderName }: {
     { field: "direction" },
     { field: "generation" },
     { field: "phase" },
-    { field: "cursor", widget: "angee.integrate.sync_cursor", sortable: false },
+    { field: "cursor", sortable: false },
     { field: "last_advanced_at" },
     { field: "last_reconciled_at" },
     { field: "open_discrepancy_count", header: t("streams.openDiscrepancies") },
@@ -130,7 +135,7 @@ function IntegrationStreams({ integrationId, progress, dataProviderName }: {
       label: t("streams.openDiscrepancies"),
       variant: "ghost",
       pendingPolicy: "disable-actions",
-      onSelect: (stream) => setSelection({ view: "discrepancies", stream }),
+      onSelect: (stream) => show("discrepancies", stream.id),
     }),
     defineRowAction<StreamRow>({
       kind: "page",
@@ -139,9 +144,9 @@ function IntegrationStreams({ integrationId, progress, dataProviderName }: {
       variant: "ghost",
       pendingPolicy: "disable-actions",
       visible: (row) => optionToken(row.kind) === "record_replica",
-      onSelect: (stream) => setSelection({ view: "links", stream }),
+      onSelect: (stream) => show("links", stream.id),
     }),
-  ], [resync, t]);
+  ], [resync, show, t]);
   const discrepancyColumns = useMemo<readonly ListColumn<DiscrepancyRow>[]>(() => [
     { field: "kind" },
     { field: "code" },
@@ -157,19 +162,32 @@ function IntegrationStreams({ integrationId, progress, dataProviderName }: {
       label: t("streams.resolve"),
       variant: "ghost",
       pendingPolicy: "active-row",
-      visible: (row) => optionToken(row.status) !== "resolved",
-      onSelect: (row) => resolve(row.id),
+      visible: (row) => row.is_open === true && optionToken(row.kind) !== "conflict",
+      onSelect: async (row) => { await settle(async () => extractActionOutcome(
+        await resolve({ id: row.id }), "resolveSyncDiscrepancy",
+      )); },
     }),
+    ...(["remote", "local"] as const).map((keep) => defineRowAction<DiscrepancyRow>({
+      kind: "page",
+      id: `keep-${keep}`,
+      label: t(keep === "remote" ? "streams.keepRemote" : "streams.keepLocal"),
+      variant: "ghost",
+      pendingPolicy: "active-row",
+      visible: (row) => row.is_open === true && optionToken(row.kind) === "conflict",
+      onSelect: async (row) => { await settle(async () => extractActionOutcome(
+        await resolve({ id: row.id, keep }), "resolveSyncDiscrepancy",
+      )); },
+    })),
     defineRowAction<DiscrepancyRow>({
       kind: "page",
       id: "retry",
       label: t("streams.retry"),
       variant: "ghost",
       pendingPolicy: "active-row",
-      visible: (row) => optionToken(row.status) !== "resolved",
+      visible: (row) => row.is_open === true,
       onSelect: (row) => retry(row.id),
     }),
-  ], [resolve, retry, t]);
+  ], [resolve, retry, settle, t]);
   const linkColumns = useMemo<readonly ListColumn<LinkRow>[]>(() => [
     { field: "external_key" },
     { field: "status" },
@@ -191,8 +209,7 @@ function IntegrationStreams({ integrationId, progress, dataProviderName }: {
       },
     },
   ], [recordHref, t]);
-  const runLink = <IntegrationSyncRunLink value={progress} />;
-  if (selection.view === "streams") {
+  if (view === "streams") {
     return (
       <ListView<StreamRow>
         resource={SYNC_STREAM_MODEL}
@@ -203,41 +220,37 @@ function IntegrationStreams({ integrationId, progress, dataProviderName }: {
         order={{ key: "ASC", partition: "ASC", generation: "DESC" }}
         columns={streamColumns}
         rowActions={streamActions}
-        toolbarActions={runLink}
       />
     );
   }
   const toolbar = <>
-    <Button size="sm" variant="ghost" onClick={() => setSelection({ view: "streams" })}>
+    <Button size="sm" variant="ghost" onClick={() => show("streams")}>
       {t("streams.back")}
     </Button>
     <span className="text-13 text-fg-muted">
-      {t(selection.view === "discrepancies" ? "streams.discrepancyScope" : "streams.linkScope", {
-        key: selection.stream.key ?? "",
-        partition: selection.stream.partition ?? "",
-      })}
+      {t(view === "discrepancies" ? "streams.discrepancyScope" : "streams.linkScope", { stream: streamId })}
     </span>
-    {runLink}
   </>;
-  return selection.view === "discrepancies" ? (
+  return view === "discrepancies" ? (
     <ListView<DiscrepancyRow>
-      key={`discrepancies:${selection.stream.id}`}
+      key={`discrepancies:${streamId}`}
       resource={SYNC_DISCREPANCY_MODEL}
       presentation="embedded"
       scope="local"
-      baseFilter={{ stream: { exact: selection.stream.id }, status: { inList: openStatuses } }}
+      baseFilter={{ stream: { exact: streamId }, is_open: { exact: true } }}
       order={{ created_at: "DESC" }}
+      fields={["is_open"]}
       columns={discrepancyColumns}
       rowActions={discrepancyActions}
       toolbarActions={toolbar}
     />
   ) : (
     <ListView<LinkRow>
-      key={`links:${selection.stream.id}`}
+      key={`links:${streamId}`}
       resource={RECORD_LINK_MODEL}
       presentation="embedded"
       scope="local"
-      baseFilter={{ stream: { exact: selection.stream.id } }}
+      baseFilter={{ stream: { exact: streamId } }}
       order={{ external_key: "ASC" }}
       fields={["model_label"]}
       columns={linkColumns}

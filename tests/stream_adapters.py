@@ -13,7 +13,7 @@ class AdapterPages:
         self.rows: dict[str, Any] = {}
         self.pending: deque[Any] | None = None
 
-    def next_batch(self) -> list[Any]:
+    def next_batch(self, *, deadline: float | None = None) -> list[Any]:
         """Return the next nonempty page, committing only successful extractions."""
 
         if self.pending is None:
@@ -23,13 +23,17 @@ class AdapterPages:
                     partition=spec.partition,
                     generation=1,
                     cursor=spec.cursor,
+                    config=spec.config,
                 )
-                for spec in self.backend.streams(using="default")
+                for spec in self.backend.streams(deadline=deadline, using="default")
             }
+            for stream in self.rows.values():
+                if not stream.cursor and self.backend.bridge.cursor:
+                    stream.cursor = self.backend.seed_cursor(stream, self.backend.bridge.cursor) or {}
             self.pending = deque(self.rows.values())
         while self.pending:
             stream = self.pending[0]
-            page = self.backend.extract(stream, 200, using="default")
+            page = self.backend.extract(stream, 200, deadline=deadline, using="default")
             stream.cursor = page.cursor
             if page.exhausted:
                 self.pending.popleft()

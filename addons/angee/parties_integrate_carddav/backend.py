@@ -19,7 +19,7 @@ import binascii
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date, datetime
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 from xml.sax.saxutils import escape
 
@@ -29,7 +29,7 @@ from django.apps import apps
 
 from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.serialization import canonical_json_sha256
-from angee.integrate.records import LinkStatus
+from angee.integrate.impl import LinkStatus
 from angee.integrate.streams import CursorInvalid, RecordChange, RemoteRejected, StreamPage, WriteBackResult
 from angee.parties.backends import (
     DirectoryBackend,
@@ -91,6 +91,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
     label = "CardDAV"
     icon = "address-book"
     defaults = {"vendor": "carddav"}
+    supports_identity_reads: ClassVar[bool] = True
 
     # --- discovery (DirectoryBackend contract) ---
 
@@ -129,7 +130,9 @@ class CardDavDirectoryBackend(DirectoryBackend):
         home = self._first_href(principal, _HOME_BODY, ".//card:addressbook-home-set/d:href", using=using) or principal
         return self._enumerate(home, using=using)
 
-    def extract(self, stream: Any, page_bound: int, *, using: str | None = None) -> StreamPage:
+    def extract(
+        self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
+    ) -> StreamPage:
         """Fetch a bounded page; its cursor commits only alongside applied records.
 
         Baselines capture the token before listing, so concurrent edits replay
@@ -241,9 +244,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         photo = contact_from_projection(projection).photo
         if photo is not None:
             file = (
-                apps.get_model("parties", "Party")
-                .objects.db_manager(using)
-                .resolve_contact_photo(photo, using=using)
+                apps.get_model("parties", "Party").objects.db_manager(using).resolve_contact_photo(photo, using=using)
             )
             with file.open_stream() as content:
                 photo_data = content.read()
@@ -782,7 +783,7 @@ def _b64decode(text: str) -> bytes | None:
 
     try:
         return base64.b64decode("".join(text.split()), validate=True)
-    except (binascii.Error, ValueError):
+    except binascii.Error, ValueError:
         return None
 
 

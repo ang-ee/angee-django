@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from django.core.exceptions import ImproperlyConfigured
+from django.db import models
 from django.utils.module_loading import import_string
 
 from angee.base.db import get_write_alias, related_on
@@ -18,7 +20,68 @@ from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey
 
 if TYPE_CHECKING:
-    from angee.integrate.streams import ApplyResult, LocalChange, StreamPage, WriteBackResult
+    from angee.integrate.streams import (
+        ApplyResult,
+        LocalChange,
+        RecordChange,
+        StreamDefinition,
+        StreamPage,
+        WriteBackResult,
+    )
+
+
+UNSET = object()
+"""Omitted record binding; ``None`` explicitly clears the target."""
+
+
+class StreamKind(models.TextChoices, StrEnum):
+    """Whether a stream carries append-only events or mutable replicas."""
+
+    EVENT_FEED = "event_feed", "Event feed"
+    RECORD_REPLICA = "record_replica", "Record replica"
+
+
+class StreamDirection(models.TextChoices, StrEnum):
+    """The sides a stream may write."""
+
+    PULL = "pull", "Pull"
+    PUSH = "push", "Push"
+    BIDIRECTIONAL = "bidirectional", "Bidirectional"
+
+
+class StreamPhase(models.TextChoices, StrEnum):
+    """A new epoch verifies a baseline before accepting deltas."""
+
+    BASELINE = "baseline", "Baseline"
+    DELTA = "delta", "Delta"
+
+
+class LinkStatus(models.TextChoices, StrEnum):
+    """Observed identity and reconciliation state."""
+
+    CURRENT = "current", "Current"
+    OBSERVED = "observed", "Observed"
+    UNAVAILABLE = "unavailable", "Unavailable"
+    DISCREPANT = "discrepant", "Discrepant"
+    WITHDRAWN = "withdrawn", "Withdrawn"
+    TOMBSTONE = "tombstone", "Tombstone"
+
+
+class DiscrepancyKind(models.TextChoices, StrEnum):
+    """Recoverable record failures, independent of transport failures."""
+
+    SEMANTIC = "semantic", "Semantic"
+    CONFLICT = "conflict", "Conflict"
+    MISSING_DEPENDENCY = "missing_dependency", "Missing dependency"
+    REMOTE_REJECTED = "remote_rejected", "Remote rejected"
+
+
+class DiscrepancyStatus(models.TextChoices, StrEnum):
+    """Quarantine remains open until a successful rescan resolves it."""
+
+    OPEN = "open", "Open"
+    RETRY = "retry", "Retry"
+    RESOLVED = "resolved", "Resolved"
 
 
 class IntegrationImpl(ImplBase):
@@ -68,8 +131,37 @@ class BridgeImpl(IntegrationImpl):
     icon = "plug"
     sync_parallelism: ClassVar[int | None] = None
     """Optional protocol cap; the bridge config and database may lower it."""
-    sync_deadline: float | None = None
-    """Monotonic budget shared with bounded transport retries."""
+    supports_identity_reads: ClassVar[bool] = False
+    """Declare identity reads; otherwise retries request a fresh baseline."""
+
+    def streams(self, *, deadline: float | None = None, using: str | None = None) -> Iterable[StreamDefinition]:
+        """Declare each independently ordered partition exactly once."""
+        raise NotImplementedError("Stream adapters must declare their partitions.")
+
+    def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
+        """Translate a legacy bridge position once when opening its first empty epoch."""
+        return None
+
+    def extract(
+        self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
+    ) -> StreamPage:
+        """Fetch at most page_bound records outside transactions within the deadline."""
+        raise NotImplementedError("Stream adapters must extract bounded pages.")
+
+    def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
+        """Read every requested identity exactly once, including missing-key tombstones."""
+        raise NotImplementedError("This adapter does not support identity reads.")
+
+    def apply_record(self, stream: Any, record: Any, *, using: str | None = None) -> ApplyResult:
+        """Apply one record using database work only; return its applied evidence.
+
+        The driver owns primary link promotion. Record-local refusals raise
+        SemanticError or ValidationError; infrastructure failures propagate.
+        """
+        raise NotImplementedError("Stream adapters must apply individual records.")
+
+    def close(self) -> None:
+        """Release any transport resources after the caller finishes the cycle."""
 
     @property
     def bridge(self) -> Any:

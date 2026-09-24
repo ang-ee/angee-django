@@ -132,6 +132,14 @@ describe("ImportImapSampleAction snapshot selection", () => {
     expect(screen.getByText(/Loaded 2 of 2 matching messages/)).toBeTruthy();
   });
 
+  test("an empty first page retains mailbox identity without a continuation cursor", async () => {
+    mocks.previewPages = [page([], null, 0)];
+    await openDialog();
+    await preview();
+    expect(screen.getByText("Mailbox snapshot 10:100. Loaded 0 of 0 matching messages (initial count, less confirmed missing messages).")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Load older messages" })).toBeNull();
+  });
+
   test("imports selected UIDs through the mutation without refreshing the mailbox", async () => {
     await openDialog();
     await preview();

@@ -196,7 +196,6 @@ describe("integrate addon manifest", () => {
     expect(sections[0]?.impl).toBeUndefined();
     expect((integrate.routes ?? []).some((route) => /stream|discrepancy|record-link/.test(route.name)))
       .toBe(false);
-    expect(integrate.widgets?.integrationSyncProgress).toBeDefined();
-    expect(integrate.widgets?.["angee.integrate.sync_cursor"]).toBeDefined();
+    expect(integrate.widgets?.["angee.integrate.integrationSyncCursor"]).toBeDefined();
   });
 });

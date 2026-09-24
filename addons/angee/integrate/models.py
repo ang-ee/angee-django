@@ -22,16 +22,19 @@ from collections.abc import Iterable, Mapping
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any, ClassVar, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connections, models, transaction
-from django.db.models import Prefetch, Q
+from django.db.models import OuterRef, Prefetch, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.module_loading import import_string
 from django.utils.text import capfirst
@@ -49,19 +52,30 @@ from rebac.mixins import RebacModelBase
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
-from angee.base.db import get_write_alias, related_on
+from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import EncryptedField, StateField
 from angee.base.identity import public_id_for
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.mixins import AppendOnlyQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.permissions import require_authorization_database
+from angee.base.refs import RecordRefMixin
 from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
 from angee.integrate.errors import INTEGRATION_FAILURE_MESSAGE, IntegrationError
 from angee.integrate.events import EventKind
-from angee.integrate.impl import IntegrationImpl
+from angee.integrate.fields import DiscrepancyOpenField
+from angee.integrate.impl import (
+    UNSET,
+    DiscrepancyKind,
+    DiscrepancyStatus,
+    IntegrationImpl,
+    LinkStatus,
+    StreamDirection,
+    StreamKind,
+    StreamPhase,
+)
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.locks import bridge_is_locked
 from angee.integrate.net import validate_public_url
@@ -69,19 +83,10 @@ from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
-from angee.integrate.records import (  # noqa: F401 -- model discovery
-    RecordLink,
-    RecordRevision,
-    SyncDiscrepancy,
-    SyncStream,
-)
-from angee.integrate.streams import sync_bridge
+from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -2081,6 +2086,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         db_index=True,
     )
     sync_error = models.TextField(blank=True, default="")
+    sync_run_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
+    """Opaque execution-owner run identity, retained after terminal settlement."""
     sync_progress = models.JSONField(default=dict, blank=True)
     last_sync_summary = models.JSONField(default=dict, blank=True)
     next_sync_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -2334,13 +2341,57 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     def sync_is_dispatched(self) -> bool:
         """Whether a retained run owns terminal reporting for this bridge."""
 
-        progress = self.sync_progress if isinstance(self.sync_progress, Mapping) else {}
-        details = progress.get("details", {})
-        return (
-            self.sync_stage in self.LIVE_SYNC_STAGES
-            and isinstance(details, Mapping)
-            and bool(details.get("run"))
-        )
+        return self.sync_run_id is not None and self.sync_stage in (self.SyncStage.QUEUED, *self.LIVE_SYNC_STAGES)
+
+    def claim_dispatch(self, run_id: int, *, now: datetime | None = None, using: str | None = None) -> bool:
+        """Claim a run only while the caller's observed execution owner is current.
+
+        Admission owns run eligibility. This compare-and-set may replace a
+        terminal run awaiting delivery, but never a concurrently claimed run.
+        Repeating the same claim leaves its start time and telemetry intact.
+        """
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if type(run_id) is not int or run_id <= 0:
+            raise ValueError("A positive run identity is required.")
+        refresh_deferred(self, using=using, fields=("sync_run_id",))
+        expected_run_id = self.sync_run_id
+        with system_context(reason="integrate.bridge.claim_dispatch"), transaction.atomic(using=using):
+            row = type(self).objects.db_manager(using).lock_if_supported().get(pk=self.pk)
+            if row.sync_run_id != expected_run_id or row.sync_run_id == run_id:
+                return False
+            row.sync_run_id = run_id
+            row.next_sync_at = None
+            row.mark_sync_started(now=now or timezone.now(), using=using)
+            row.save(update_fields=["sync_run_id", "next_sync_at", "updated_at"], using=using)
+        self.refresh_from_db(using=using)
+        return True
+
+    def settle_dispatch(
+        self,
+        run_id: int,
+        *,
+        result: int = 0,
+        error: Exception | None = None,
+        now: datetime | None = None,
+        using: str | None = None,
+    ) -> bool:
+        """Settle the expected busy dispatch once, retaining its inspection ID."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        with system_context(reason="integrate.bridge.settle_dispatch"), transaction.atomic(using=using):
+            row = type(self).objects.db_manager(using).lock_if_supported().get(pk=self.pk)
+            if row.sync_run_id != run_id or not row.sync_is_dispatched:
+                return False
+            at = now or timezone.now()
+            if error is None:
+                row.record_sync(result, now=at, using=using)
+            else:
+                row.record_sync_error(error, now=at, using=using)
+        self.refresh_from_db(using=using)
+        return True
 
     def sync_lock_key(self) -> LockKey:
         """Return the advisory task lock key for this bridge sync."""
@@ -2452,19 +2503,23 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         with transaction.atomic(using=using):
             row = (
-                type(self).objects.db_manager(using)
-                .sudo(reason="integrate.bridge.queue").lock_if_supported().get(pk=self.pk)
+                type(self)
+                .objects.db_manager(using)
+                .sudo(reason="integrate.bridge.queue")
+                .lock_if_supported()
+                .get(pk=self.pk)
             )
             if not row.sync_is_dispatched:
                 row.sync_stage = self.SyncStage.QUEUED
                 row.sync_error = ""
+                row.sync_run_id = None
                 row.sync_progress = row._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
-                # A previous run's inspection pointer must not claim the next attempt.
-                details = row.sync_progress.get("details")
-                if isinstance(details, Mapping) and "run" in details:
-                    row.sync_progress["details"] = {key: value for key, value in details.items() if key != "run"}
-                row.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"], using=using)
+                row.save(
+                    update_fields=["sync_error", "sync_run_id", "sync_progress", "sync_stage", "updated_at"],
+                    using=using,
+                )
         self.sync_stage, self.sync_error, self.sync_progress = row.sync_stage, row.sync_error, row.sync_progress
+        self.sync_run_id = row.sync_run_id
 
     def reset_sync_queue(self, *, now: datetime, using: str | None = None) -> None:
         """Make a failed queue dispatch due again for the next scheduler pass."""
@@ -3011,3 +3066,817 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
         self.consecutive_failures = models.F("consecutive_failures") + 1
         self.save(update_fields=self._delivery_update_fields, using=using)
         self.refresh_from_db(fields=("consecutive_failures",), using=using)
+
+
+class SyncStreamManager(AngeeManager):
+    """Serialize stream discovery and epoch changes on the integration row."""
+
+    def lock_current(self, stream: Any, *, using: str | None = None) -> Any:
+        """Fence one page against epoch changes inside the caller's transaction.
+
+        The stream row lock is shared with epoch retirement. A stale extracted
+        page must fail before any domain records or cursor state are applied.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=stream)
+        if not connections[using].in_atomic_block:
+            raise RuntimeError("Locking a stream requires the page transaction.")
+        with system_context(reason="integrate.stream.lock_current"):
+            manager = self.db_manager(using)
+            locked = manager.filter(pk=stream.pk).lock_if_supported().get()
+            if manager.filter(
+                integration_id=locked.integration_id,
+                key=locked.key,
+                partition=locked.partition,
+                generation__gt=locked.generation,
+            ).exists():
+                raise RuntimeError("The extracted page belongs to a retired stream generation.")
+            return locked
+
+    def current_for_bridge(self, bridge: models.Model, key: str, *, using: str | None = None) -> Any:
+        """Return one current epoch per partition for the bridge's named stream."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=bridge)
+        rows = (
+            self.db_manager(using)
+            .sudo(reason="integrate.stream.current_for_bridge")
+            .filter(
+                integration_id=bridge.pk,
+                key=key,
+            )
+        )
+        latest = rows.filter(partition=OuterRef("partition")).order_by("-generation").values("generation")[:1]
+        return rows.filter(generation=Subquery(latest)).order_by("partition")
+
+    def current(
+        self,
+        bridge: models.Model,
+        key: str,
+        partition: str = "",
+        *,
+        kind: StreamKind = StreamKind.EVENT_FEED,
+        direction: StreamDirection = StreamDirection.PULL,
+        cursor: Any = None,
+        reconcile_interval: timedelta | None = None,
+        absence_threshold: int = 2,
+        tombstone_retention: timedelta | None = None,
+        config: Mapping[str, Any] | None = None,
+        using: str | None = None,
+    ) -> Any:
+        """Return the latest epoch, creating its baseline once per partition.
+
+        Cursor and policy arguments seed only the first epoch; subsequent calls
+        preserve persisted progress and policy. Kind and direction cannot change
+        for an existing identity. Change persisted policy explicitly on the row.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=bridge)
+        bridge._state.db = using
+        if absence_threshold < 1:
+            raise ValidationError("A stream absence threshold must be positive.")
+        integration = apps.get_model("integrate", "Integration")
+        if bridge._meta.proxy or integration not in bridge._meta.get_parent_list():
+            raise ValidationError("A stream bridge must be a concrete Integration child.")
+        with system_context(reason="integrate.stream.current"), transaction.atomic(using=using):
+            integration.objects.db_manager(using).filter(pk=bridge.pk).lock_if_supported().get()
+            identity = {"integration_id": bridge.pk, "key": key, "partition": partition}
+            manager = self.db_manager(using)
+            stream = manager.filter(**identity).order_by("-generation").first()
+            if stream is None:
+                return manager.create(
+                    **identity,
+                    kind=kind,
+                    direction=direction,
+                    cursor={} if cursor is None else cursor,
+                    reconcile_interval=reconcile_interval,
+                    absence_threshold=absence_threshold,
+                    tombstone_retention=tombstone_retention,
+                    config=dict(config or {}),
+                )
+            if (stream.kind, stream.direction) != (kind, direction):
+                raise ValidationError("A stream's kind and direction cannot change between declarations.")
+            return stream
+
+    def bump_generation(self, stream: Any, *, cursor: dict[str, Any] | None = None, using: str | None = None) -> Any:
+        """Create one new baseline while retaining identities and history.
+
+        Concurrent requests against a retired epoch return its successor. Links
+        follow the current epoch without changing their verification marker.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=stream)
+        with system_context(reason="integrate.stream.bump_generation"), transaction.atomic(using=using):
+            manager = self.db_manager(using)
+            latest = manager._lock_latest(stream, using=using)
+            if latest.pk != stream.pk:
+                return latest
+            successor = manager.create(
+                integration_id=latest.integration_id,
+                key=latest.key,
+                partition=latest.partition,
+                kind=latest.kind,
+                direction=latest.direction,
+                generation=latest.generation + 1,
+                cursor={} if cursor is None else cursor,
+                last_advanced_at=timezone.now() if cursor else None,
+                reconcile_interval=latest.reconcile_interval,
+                absence_threshold=latest.absence_threshold,
+                tombstone_retention=latest.tombstone_retention,
+                config=deepcopy(latest.config),
+            )
+            for model_name in ("RecordLink", "SyncDiscrepancy"):
+                apps.get_model("integrate", model_name).objects.db_manager(using).filter(stream=latest).update(
+                    stream=successor,
+                )
+            return successor
+
+    def request_resync(self, stream: Any, *, using: str | None = None) -> Any:
+        """Request a baseline on the next cycle, even from a retained old epoch.
+
+        The driver owns the generation bump. Serialize this intent with that
+        transition so a concurrent bump cannot lose the request on the old row.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=stream)
+        with system_context(reason="integrate.stream.request_resync"), transaction.atomic(using=using):
+            latest = self.db_manager(using)._lock_latest(stream, using=using)
+            if not latest.resync_required:
+                latest.resync_required = True
+                latest.save(using=using, update_fields=["resync_required", "updated_at"])
+            return latest
+
+    def _lock_latest(self, stream: Any, *, using: str) -> Any:
+        """Lock the integration and its latest epoch in generation-change order."""
+
+        refresh_deferred(stream, using=using)
+        integration = apps.get_model("integrate", "Integration")
+        integration.objects.db_manager(using).filter(pk=stream.integration_id).lock_if_supported().get()
+        return (
+            self.db_manager(using)
+            .filter(
+                integration_id=stream.integration_id,
+                key=stream.key,
+                partition=stream.partition,
+            )
+            .order_by("-generation")
+            .lock_if_supported()
+            .first()
+        )
+
+    def advance(
+        self,
+        stream: Any,
+        cursor: Any,
+        *,
+        exhausted: bool = False,
+        cursor_expires_at: datetime | None = None,
+        using: str | None = None,
+    ) -> Any:
+        """Persist an opaque page cursor inside the caller's apply transaction."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=stream)
+        with system_context(reason="integrate.stream.advance"), transaction.atomic(using=using):
+            locked = self.lock_current(stream, using=using)
+            locked.cursor = cursor
+            locked.cursor_expires_at = cursor_expires_at
+            locked.last_advanced_at = timezone.now()
+            if exhausted:
+                locked.phase = StreamPhase.DELTA
+            fields = ["cursor", "cursor_expires_at", "last_advanced_at", "phase"]
+            locked.save(using=using, update_fields=[*fields, "updated_at"])
+            for field in fields:
+                setattr(stream, field, getattr(locked, field))
+            return stream
+
+
+class SyncStream(SqidMixin, AuditMixin, AngeeModel):
+    """An epoch's opaque progress and adapter-owned policy for one partition."""
+
+    runtime = True
+    sqid_prefix = "sst_"
+    integration = models.ForeignKey("integrate.Integration", on_delete=models.PROTECT, related_name="sync_streams")
+    key = models.CharField(max_length=160)
+    partition = models.CharField(max_length=255, blank=True)
+    kind = StateField(choices_enum=StreamKind)
+    direction = StateField(choices_enum=StreamDirection)
+    generation = models.PositiveIntegerField(default=1)
+    phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
+    cursor = models.JSONField(default=dict, blank=True)
+    reconcile_state = models.JSONField(default=dict, blank=True)
+    config = models.JSONField(default=dict, blank=True)
+    cursor_expires_at = models.DateTimeField(null=True, blank=True)
+    resync_required = models.BooleanField(default=False)
+    last_advanced_at = models.DateTimeField(null=True, blank=True)
+    last_reconciled_at = models.DateTimeField(null=True, blank=True)
+    reconcile_interval = models.DurationField(null=True, blank=True)
+    absence_threshold = models.PositiveIntegerField(default=2)
+    tombstone_retention = models.DurationField(null=True, blank=True)
+    objects = SyncStreamManager()
+    unscoped_objects = AngeeUnscopedManager()
+
+    class Meta:
+        abstract = True
+        base_manager_name = "unscoped_objects"
+        rebac_resource_type = "integrate/sync_stream"
+        rebac_id_attr = "pk"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("integration", "key", "partition", "generation"), name="uniq_sync_stream_generation"
+            ),
+            models.CheckConstraint(condition=Q(absence_threshold__gte=1), name="sync_stream_absence_positive"),
+        )
+
+
+class RecordLinkManager(AngeeManager):
+    """Own replica identity, applied bases and count-based absence policy."""
+
+    def observe(
+        self,
+        stream: Any,
+        external_key: str,
+        *,
+        remote_version: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        parent: Any = UNSET,
+        target: Any = UNSET,
+        using: str | None = None,
+    ) -> Any:
+        """Retain identity without advancing applied bases.
+
+        A child belongs to one root link in the same stream. Omitted bindings
+        remain unchanged; ``target=None`` withdraws the projection explicitly.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=stream)
+        with system_context(reason="integrate.record.observe"), transaction.atomic(using=using):
+            stream = type(stream).objects.db_manager(using).lock_current(stream, using=using)
+            if stream.kind != StreamKind.RECORD_REPLICA:
+                raise ValidationError("Event feeds do not create record links.")
+            link, _ = self.db_manager(using).lock_if_supported().get_or_create(stream=stream, external_key=external_key)
+            if parent is not UNSET:
+                if parent is not None:
+                    parent = self.db_manager(using).filter(pk=parent.pk).lock_if_supported().get()
+                    if parent.stream_id != stream.pk or parent.parent_id is not None or parent.pk == link.pk:
+                        raise ValidationError("A record parent must be another root link in the same stream.")
+                    if self.db_manager(using).filter(parent=link).exists():
+                        raise ValidationError("A root with children cannot become a child link.")
+                parent_id = None if parent is None else parent.pk
+                if link.parent_id is not None and link.parent_id != parent_id:
+                    raise ValidationError("A record link's aggregate parent is immutable.")
+                link.parent_id = parent_id
+            if (
+                remote_version is not None
+                and remote_version != link.remote_version
+                and link.status != LinkStatus.DISCREPANT
+            ):
+                link.status = LinkStatus.OBSERVED
+            # The stored version belongs to the last applied change. Observation
+            # cannot turn a failed write-back into applied evidence.
+            link.last_seen_at = timezone.now()
+            link.last_verified_generation = stream.generation
+            link.absence_count = 0
+            if metadata is not None:
+                link.metadata = dict(metadata)
+            if target is not UNSET:
+                self._set_target(link, target, using=using)
+                if target is None:
+                    link.status = LinkStatus.WITHDRAWN
+            link.save(
+                using=using,
+                update_fields=[
+                    "status",
+                    "last_seen_at",
+                    "last_verified_generation",
+                    "absence_count",
+                    "metadata",
+                    "parent_id",
+                    "target_ct_id",
+                    "target_id",
+                    "updated_at",
+                ],
+            )
+            return link
+
+    def promote(
+        self,
+        link: Any,
+        *,
+        source_payload: Any,
+        source_hash: str,
+        mapped_payload: Any,
+        local_hash: str,
+        mapping_version: int = 1,
+        dependency_digest: str = "",
+        target: Any = UNSET,
+        remote_version: str = "",
+        origin: str = "remote",
+        using: str | None = None,
+    ) -> Any:
+        """Append applied evidence and advance both bases; the driver owns promotion.
+
+        Adapters return their evidence to the driver, never promote its link
+        themselves. Omit ``target`` to retain its binding; pass ``None`` to clear
+        it and retain a WITHDRAWN identity.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=link)
+        with system_context(reason="integrate.record.promote"), transaction.atomic(using=using):
+            locked = self.db_manager(using).filter(pk=link.pk).lock_if_supported().get()
+            revisions = apps.get_model("integrate", "RecordRevision").objects.db_manager(using)
+            previous = revisions.latest_for(locked).first()
+            if mapped_payload is None:
+                mapped_payload = previous.mapped_payload if previous is not None else {}
+            facts = dict(
+                source_payload={} if source_payload is None else source_payload,
+                source_hash=source_hash,
+                mapping_version=mapping_version,
+                mapped_payload=mapped_payload,
+                dependency_digest=dependency_digest,
+            )
+            if (
+                previous is not None
+                and previous.applied_at is not None
+                and all(getattr(previous, field) == value for field, value in facts.items())
+            ):
+                revision = previous
+            else:
+                revision = revisions.append(locked, **facts, applied_at=timezone.now(), using=using)
+            if target is not UNSET:
+                self._set_target(locked, target, using=using)
+            locked.remote_base_hash, locked.local_base_hash = source_hash, local_hash
+            locked.remote_version, locked.origin, locked.status = remote_version, origin, LinkStatus.CURRENT
+            if target is None:
+                locked.status = LinkStatus.WITHDRAWN
+            locked.tombstoned_at = None
+            fields = [
+                "target_ct_id",
+                "target_id",
+                "remote_base_hash",
+                "local_base_hash",
+                "remote_version",
+                "origin",
+                "status",
+                "tombstoned_at",
+            ]
+            locked.save(using=using, update_fields=[*fields, "updated_at"])
+            for field in fields:
+                setattr(link, field, getattr(locked, field))
+            return revision
+
+    def _set_target(self, link: Any, target: models.Model | None, *, using: str) -> None:
+        if target is None:
+            link.target_ct_id = link.target_id = None
+        else:
+            if target.pk is None:
+                raise ValidationError("A record target must be saved.")
+            target._state.db = using
+            link.target_ct = ContentType.objects.db_manager(using).get_for_model(target)
+            link.target_id = str(target.pk)
+
+    def mark_absent(self, stream: Any, keys: Iterable[str], *, using: str | None = None) -> int:
+        """Count a bounded batch of missing keys, retaining tombstones.
+
+        Children may be included only after their parent has absence evidence;
+        the sweep supplies bounded child batches after marking missing roots.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=stream)
+        with system_context(reason="integrate.record.mark_absent"), transaction.atomic(using=using):
+            stream = type(stream).objects.db_manager(using).lock_current(stream, using=using)
+            rows = (
+                self.db_manager(using)
+                .filter(stream=stream, external_key__in=tuple(keys))
+                .filter(
+                    Q(parent__isnull=True)
+                    | Q(parent_id__in=self.db_manager(using).filter(absence_count__gt=0).values("pk"))
+                )
+                .exclude(
+                    status=LinkStatus.TOMBSTONE,
+                )
+                .order_by("pk")
+                .lock_if_supported()
+            )
+            count = 0
+            for link in rows:
+                link.absence_count += 1
+                if link.status != LinkStatus.DISCREPANT:
+                    link.status = LinkStatus.UNAVAILABLE
+                    if link.absence_count >= stream.absence_threshold:
+                        link.status, link.tombstoned_at = LinkStatus.TOMBSTONE, timezone.now()
+                link.save(using=using, update_fields=["absence_count", "status", "tombstoned_at", "updated_at"])
+                count += 1
+            return count
+
+    def tombstone(self, link: Any, *, using: str | None = None) -> Any:
+        """Retain a confirmed remote deletion; never delete the identity."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=link)
+        with system_context(reason="integrate.record.tombstone"), transaction.atomic(using=using):
+            locked = self.db_manager(using).filter(pk=link.pk).lock_if_supported().get()
+            if locked.status != LinkStatus.TOMBSTONE:
+                locked.status, locked.tombstoned_at = LinkStatus.TOMBSTONE, timezone.now()
+                locked.save(using=using, update_fields=["status", "tombstoned_at", "updated_at"])
+            link.status, link.tombstoned_at = locked.status, locked.tombstoned_at
+            return link
+
+
+class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
+    """A stable remote identity with the two last-applied comparison bases."""
+
+    runtime = True
+    sqid_prefix = "rlk_"
+    stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
+    external_key = models.CharField(max_length=512)
+    target_ct = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+")
+    target_id = models.CharField(max_length=255, null=True, blank=True)
+    target = GenericForeignKey("target_ct", "target_id")
+    status = StateField(choices_enum=LinkStatus, default=LinkStatus.OBSERVED)
+    remote_version = models.CharField(max_length=512, blank=True)
+    remote_base_hash = models.CharField(max_length=64, blank=True)
+    local_base_hash = models.CharField(max_length=64, blank=True)
+    origin = models.CharField(max_length=16, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    last_verified_generation = models.PositiveIntegerField(default=0)
+    absence_count = models.PositiveIntegerField(default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+    tombstoned_at = models.DateTimeField(null=True, blank=True)
+    objects = RecordLinkManager()
+    unscoped_objects = AngeeUnscopedManager()
+
+    @classmethod
+    def _record_ref_content_type_field_name(cls) -> str:
+        return "target_ct"
+
+    @classmethod
+    def _record_ref_object_id_field_name(cls) -> str:
+        return "target_id"
+
+    class Meta:
+        abstract = True
+        base_manager_name = "unscoped_objects"
+        rebac_resource_type = "integrate/record_link"
+        rebac_id_attr = "pk"
+        constraints = (models.UniqueConstraint(fields=("stream", "external_key"), name="uniq_stream_record_key"),)
+
+
+class RecordRevisionQuerySet(AppendOnlyQuerySet, AngeeQuerySet[Any]):
+    """Reject every bulk mutation of retained applied evidence."""
+
+    def latest_for(self, link: Any) -> Any:
+        """Select the latest revision for a link, usable as a row read or subquery."""
+        return self.filter(link=link).order_by("-number")[:1]
+
+    def immutable_error(self, operation: str) -> Exception:
+        """Report one invariant for instance and collection mutation paths."""
+
+        return ValidationError("Record revisions are immutable.")
+
+
+class RecordRevisionManager(AngeeManager.from_queryset(RecordRevisionQuerySet)):  # type: ignore[misc]
+    """Allocate revision numbers while holding the stable identity lock."""
+
+    def append(
+        self,
+        link: Any,
+        *,
+        source_payload: Any,
+        source_hash: str,
+        mapping_version: int,
+        mapped_payload: Any = None,
+        dependency_digest: str = "",
+        applied_at: datetime | None = None,
+        using: str | None = None,
+    ) -> Any:
+        """Append one revision; numbering and prior come from retained rows."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=link)
+        with system_context(reason="integrate.revision.append"), transaction.atomic(using=using):
+            locked = type(link).objects.db_manager(using).filter(pk=link.pk).lock_if_supported().get()
+            manager = self.db_manager(using)
+            prior = manager.latest_for(locked).first()
+            return manager.create(
+                link=locked,
+                number=1 if prior is None else prior.number + 1,
+                prior=prior,
+                source_payload={} if source_payload is None else source_payload,
+                source_hash=source_hash,
+                mapping_version=mapping_version,
+                mapped_payload={} if mapped_payload is None else mapped_payload,
+                dependency_digest=dependency_digest,
+                applied_at=applied_at,
+            )
+
+
+class RecordRevision(SqidMixin, AuditMixin, AngeeModel):
+    """Immutable observed and mapped payload history for one replica identity.
+
+    Retention is unbounded by design. Full payload evidence grows with every
+    substantive application; deployments must budget storage for that history.
+    """
+
+    runtime = True
+    sqid_prefix = "rrv_"
+    link = models.ForeignKey("integrate.RecordLink", on_delete=models.PROTECT, related_name="revisions")
+    number = models.PositiveIntegerField()
+    source_payload = models.JSONField()
+    source_hash = models.CharField(max_length=64)
+    mapping_version = models.PositiveIntegerField()
+    mapped_payload = models.JSONField(default=dict, blank=True)
+    dependency_digest = models.CharField(max_length=64, blank=True)
+    prior = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="successors")
+    applied_at = models.DateTimeField(null=True, blank=True)
+    objects = RecordRevisionManager()
+
+    class Meta:
+        abstract = True
+        base_manager_name = "objects"
+        rebac_resource_type = "integrate/record_revision"
+        rebac_id_attr = "pk"
+        constraints = (models.UniqueConstraint(fields=("link", "number"), name="uniq_record_revision_number"),)
+
+    def save(self, *args: Any, using: str | None = None, **kwargs: Any) -> None:
+        """Permit insertion only; applied evidence never changes in place."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        if self.pk and type(self)._base_manager.using(using).filter(pk=self.pk).exists():
+            raise ValidationError("Record revisions are immutable.")
+        super().save(*args, using=using, **kwargs)
+
+    def delete(self, *args: Any, using: str | None = None, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Refuse deletion even when no successor references the revision."""
+
+        raise ValidationError("Record revisions are immutable.")
+
+
+class SyncDiscrepancyQuerySet(AngeeQuerySet[Any]):
+    """Read scopes for retained record quarantine."""
+
+    def unresolved(self) -> Any:
+        """Return open quarantine, including requested retries."""
+        return self.filter(is_open=True)
+
+
+class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)):  # type: ignore[misc]
+    """Coalesce unresolved record failures and expose due rescan candidates."""
+
+    def record(
+        self,
+        stream: Any,
+        *,
+        kind: DiscrepancyKind,
+        code: str,
+        source_hash: str = "",
+        mapping_version: int = 1,
+        details: Mapping[str, Any] | None = None,
+        link: Any = None,
+        retry_at: datetime | None = None,
+        using: str | None = None,
+    ) -> Any:
+        """Refresh an open source-version failure, retaining resolved history."""
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=stream)
+        with system_context(reason="integrate.discrepancy.record"), transaction.atomic(using=using):
+            stream = type(stream).objects.db_manager(using).lock_current(stream, using=using)
+            if link is not None:
+                link._state.db = using
+                locked_link = type(link).objects.db_manager(using).filter(pk=link.pk).lock_if_supported().get()
+                if locked_link.stream_id != stream.pk:
+                    raise ValidationError("A discrepancy link must belong to its stream.")
+            row, _ = (
+                self.db_manager(using)
+                .unresolved()
+                .get_or_create(
+                    stream=stream,
+                    kind=kind,
+                    code=code,
+                    source_hash=source_hash,
+                    mapping_version=mapping_version,
+                    defaults={"link": link, "status": DiscrepancyStatus.OPEN},
+                )
+            )
+            row.link = link
+            row.details = {**row.details, **dict(details or {})}
+            row.status, row.resolved_at = DiscrepancyStatus.OPEN, None
+            row.retry_at = None if kind == DiscrepancyKind.CONFLICT else retry_at
+            row.attempts += 1
+            row.save(
+                using=using,
+                update_fields=["link", "details", "status", "retry_at", "resolved_at", "attempts", "updated_at"],
+            )
+            if link is not None:
+                type(link).objects.db_manager(using).filter(pk=link.pk).update(status=LinkStatus.DISCREPANT)
+                link.status = LinkStatus.DISCREPANT
+            return row
+
+    def resolve(
+        self, discrepancy: Any, *, keep: Literal["remote", "local"] | None = None, using: str | None = None
+    ) -> Any:
+        """Resolve non-conflict quarantine, or dispatch an explicit conflict choice."""
+        using = get_write_alias(self.model, using=using, bound=self, instance=discrepancy)
+        if keep is not None:
+            return self.db_manager(using).resolve_conflict(discrepancy, keep=keep, using=using)
+        return self._mark_resolved(discrepancy, using=using)
+
+    def resolve_conflict(self, discrepancy: Any, *, keep: Literal["remote", "local"], using: str | None = None) -> Any:
+        """Keep a chosen side after a fresh read, preserving conditional remote writes.
+
+        Transport stays outside transactions. A failed apply/write retains open
+        quarantine; a newer remote version can reject the local choice again.
+        """
+        using = get_write_alias(self.model, using=using, bound=self, instance=discrepancy)
+        if keep not in ("remote", "local"):
+            raise ValidationError("Choose remote or local changes.")
+        if connections[using].in_atomic_block:
+            raise RuntimeError("Conflict resolution must run outside a database transaction.")
+        with system_context(reason="integrate.discrepancy.resolve_conflict"):
+            row = self.db_manager(using).get(pk=discrepancy.pk)
+            if row.kind != DiscrepancyKind.CONFLICT or row.link_id is None:
+                raise ValidationError("Conflict resolution requires a linked conflict.")
+            if not row.is_open:
+                return row
+            stream = related_on(row, "stream", using=using)
+            link = related_on(row, "link", using=using)
+            assert stream is not None and link is not None
+            parent = related_on(link, "parent", required=False, using=using)
+            owner = parent if parent is not None else link
+            integration = related_on(stream, "integration", using=using)
+            assert integration is not None
+            adapter = integration.concrete_capability(using=using).backend
+            keys = frozenset((owner.external_key,))
+            resolved = False
+            try:
+                if stream.kind != StreamKind.RECORD_REPLICA:
+                    raise ValidationError("Conflict resolution requires a replica stream.")
+                if not adapter.supports_identity_reads:
+                    raise ValidationError("Conflict resolution requires an adapter with identity reads.")
+                if stream.resync_required:
+                    raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
+                if keep == "local" and stream.direction == StreamDirection.PULL:
+                    raise ValidationError("A pull-only stream cannot keep local changes remotely.")
+                bases = (owner.remote_base_hash, owner.local_base_hash, owner.remote_version)
+                remote = read_stream_keys(adapter, stream, tuple(keys), using=using)[0] if keep == "local" else None
+                with transaction.atomic(using=using):
+                    type(stream).objects.db_manager(using).lock_current(stream, using=using)
+                    locked = type(owner).objects.db_manager(using).filter(pk=owner.pk).lock_if_supported().get()
+                    current = self.db_manager(using).filter(pk=row.pk).lock_if_supported().get()
+                    if not current.is_open:
+                        return current
+                    if (locked.remote_base_hash, locked.local_base_hash, locked.remote_version) != bases:
+                        raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
+                    if remote is not None:
+                        locked.remote_base_hash, locked.remote_version = remote.source_hash, remote.remote_version
+                        locked.save(using=using, update_fields=["remote_base_hash", "remote_version", "updated_at"])
+                    self._mark_resolved(current, conflict=True, using=using)
+                resolved = True
+                if keep == "remote":
+                    prepared = begin_stream_cycle(stream, adapter, force_apply=keys, using=using)
+                    if prepared.resync_required:
+                        raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
+                else:
+                    pushed = push_stream(stream, adapter, external_keys=keys, using=using)
+                    if not pushed.count:
+                        raise ValidationError(
+                            "The selected local record could not be written; its discrepancy remains open."
+                        )
+                if self.db_manager(using).unresolved().filter(link_id__in=(link.pk, owner.pk)).exists():
+                    raise ValidationError("The record could not be synchronized; its discrepancy remains open.")
+                return self.db_manager(using).get(pk=row.pk)
+            except Exception:
+                # An interruption between status change and remote application
+                # must never silently turn the chosen side into synchronized data.
+                if resolved:
+                    # The driver may already have retained a newer provider or
+                    # semantic refusal. Preserve that evidence instead of adding
+                    # the obsolete conflict alongside it. Reload the link so a
+                    # racing epoch reset cannot strand quarantine on its predecessor.
+                    current_link = type(link).objects.db_manager(using).get(pk=link.pk)
+                    current_stream = related_on(current_link, "stream", using=using)
+                    assert current_stream is not None
+                    with transaction.atomic(using=using):
+                        type(current_stream).objects.db_manager(using).lock_current(current_stream, using=using)
+                        if not self.db_manager(using).unresolved().filter(link_id__in=(link.pk, owner.pk)).exists():
+                            self.db_manager(using).record(
+                                current_stream,
+                                link=current_link,
+                                kind=row.kind,
+                                code=row.code,
+                                source_hash=row.source_hash,
+                                mapping_version=row.mapping_version,
+                                details=row.details,
+                                using=using,
+                            )
+                raise
+            finally:
+                adapter.close()
+
+    def _mark_resolved(self, discrepancy: Any, *, conflict: bool = False, using: str) -> Any:
+        """Close one retained failure and restore a link with no remaining quarantine."""
+
+        with system_context(reason="integrate.discrepancy.resolve"), transaction.atomic(using=using):
+            link = related_on(discrepancy, "link", required=False, using=using)
+            if link is not None:
+                link = type(link).objects.db_manager(using).filter(pk=link.pk).lock_if_supported().get()
+            row = self.db_manager(using).filter(pk=discrepancy.pk).lock_if_supported().get()
+            if row.kind == DiscrepancyKind.CONFLICT and not conflict:
+                raise ValidationError("A conflict requires keeping remote or local changes.")
+            if row.status != DiscrepancyStatus.RESOLVED:
+                row.status, row.resolved_at, row.retry_at = DiscrepancyStatus.RESOLVED, timezone.now(), None
+                row.save(using=using, update_fields=["status", "resolved_at", "retry_at", "updated_at"])
+                row.refresh_from_db(fields=["is_open"], using=using)
+            if (
+                link is not None
+                and link.status == LinkStatus.DISCREPANT
+                and not self.db_manager(using).unresolved().filter(link=link).exists()
+            ):
+                link.status = (
+                    LinkStatus.CURRENT if link.remote_base_hash and link.local_base_hash else LinkStatus.OBSERVED
+                )
+                link.save(using=using, update_fields=["status", "updated_at"])
+            return row
+
+    def retry(self, discrepancy: Any, *, using: str | None = None) -> Any:
+        """Make unresolved quarantine due now without bypassing conflict policy.
+
+        Resolved history cannot be reopened: a later observation may already own
+        the unresolved source-version identity. Conflicts still require explicit
+        resolution before the normal rescan owner will apply their records.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=discrepancy)
+        with system_context(reason="integrate.discrepancy.retry"), transaction.atomic(using=using):
+            row = self.db_manager(using).filter(pk=discrepancy.pk).lock_if_supported().get()
+            if row.status == DiscrepancyStatus.RESOLVED:
+                raise ValidationError("A resolved discrepancy cannot be retried.")
+            row.status, row.retry_at = DiscrepancyStatus.RETRY, timezone.now()
+            row.save(using=using, update_fields=["status", "retry_at", "updated_at"])
+            return row
+
+    def rescan(self, stream: Any, *, limit: int | None = None, using: str | None = None) -> tuple[Any, ...]:
+        """Return bounded due identities whose aggregate has no open conflict.
+
+        Eligibility is filtered before the limit so parked conflicts cannot
+        starve later retryable identities. Unlinked failures have no rescan key.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=stream)
+        if limit is not None and limit < 1:
+            raise ValueError("A discrepancy rescan limit must be positive.")
+        with system_context(reason="integrate.discrepancy.rescan"):
+            unresolved = (
+                self.db_manager(using)
+                .unresolved()
+                .filter(
+                    stream=stream,
+                    link__isnull=False,
+                )
+            )
+            conflicts = (
+                unresolved.filter(kind=DiscrepancyKind.CONFLICT)
+                .annotate(aggregate=Coalesce("link__parent_id", "link_id"))
+                .values("aggregate")
+            )
+            rows = (
+                unresolved.alias(aggregate=Coalesce("link__parent_id", "link_id"))
+                .exclude(aggregate__in=conflicts)
+                .filter(Q(retry_at__isnull=True) | Q(retry_at__lte=timezone.now()))
+                .order_by("pk")
+            )
+            return tuple(rows if limit is None else rows[:limit])
+
+
+class SyncDiscrepancy(SqidMixin, AuditMixin, AngeeModel):
+    """A per-source-version failure to revisit through the adapter's rescan."""
+
+    runtime = True
+    sqid_prefix = "sdc_"
+    stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="discrepancies")
+    link = models.ForeignKey(
+        "integrate.RecordLink", null=True, blank=True, on_delete=models.PROTECT, related_name="discrepancies"
+    )
+    kind = StateField(choices_enum=DiscrepancyKind)
+    code = models.CharField(max_length=160)
+    source_hash = models.CharField(max_length=64, blank=True)
+    mapping_version = models.PositiveIntegerField(default=1)
+    details = models.JSONField(default=dict, blank=True)
+    status = StateField(choices_enum=DiscrepancyStatus, default=DiscrepancyStatus.OPEN)
+    is_open = DiscrepancyOpenField()
+    attempts = models.PositiveIntegerField(default=0)
+    retry_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    objects = SyncDiscrepancyManager()
+    unscoped_objects = AngeeUnscopedManager()
+
+    class Meta:
+        abstract = True
+        base_manager_name = "unscoped_objects"
+        rebac_resource_type = "integrate/sync_discrepancy"
+        rebac_id_attr = "pk"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("stream", "kind", "code", "source_hash", "mapping_version"),
+                condition=Q(is_open=True),
+                name="uniq_open_sync_discrepancy",
+            ),
+        )

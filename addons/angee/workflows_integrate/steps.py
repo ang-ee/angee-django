@@ -9,17 +9,28 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.db import get_write_alias, related_on
 from angee.base.identity import instance_from_public_id, public_id_of
+from angee.integrate.impl import DiscrepancyKind
 from angee.integrate.models import Bridge
-from angee.integrate.records import DiscrepancyKind, DiscrepancyStatus
 from angee.integrate.streams import advance_stream, begin_stream_cycle, open_stream
 from angee.workflows.attempts import RecoveryMode
 from angee.workflows.configs import WorkflowStepConfig
 from angee.workflows.decision_actions import ReviewAction, ReviewRecordReference, build_decision_action
 from angee.workflows.steps import GateStep, StepEffect, StepExecutionMode, StepImpl, StepResult, TransientStepError
+
+_PASSTHROUGH_STREAM_ERRORS = (
+    ValidationError,
+    PydanticValidationError,
+    TypeError,
+    AttributeError,
+    NotImplementedError,
+    TransientStepError,
+)
+"""Preserve authoring/contract failures and explicit native retry classification."""
 
 
 class BridgeReference(BaseModel):
@@ -119,21 +130,7 @@ class BoundedStreamStage(StepImpl):
                 closing(bridge.backend) as adapter,
                 system_context(reason="workflows_integrate.stream"),
             ):
-                streams = apps.get_model("integrate", "SyncStream").objects.db_manager(alias)
-                stream = (
-                    streams.current_for_bridge(bridge, value.key, using=alias).filter(partition=value.partition).first()
-                )
-                if stream is None:
-                    definitions = [
-                        definition
-                        for definition in adapter.streams(using=alias)
-                        if (definition.key, definition.partition) == (value.key, value.partition)
-                    ]
-                    if len(definitions) != 1:
-                        raise ValidationError(
-                            {"stream": "The backend must declare the requested partition exactly once."}
-                        )
-                    stream = open_stream(bridge, definitions[0], using=alias)
+                stream = open_stream(bridge, value.key, value.partition, adapter, using=alias)
                 # The page commits its timestamp with its cursor. Preparation
                 # repeats safely before that first commit, including a crashed
                 # first attempt, but never rescans a page this stage committed.
@@ -157,10 +154,8 @@ class BoundedStreamStage(StepImpl):
                 discrepancies = list(
                     apps.get_model("integrate", "SyncDiscrepancy")
                     .objects.db_manager(alias)
-                    .filter(
-                        stream=page.stream,
-                        status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
-                    )
+                    .unresolved()
+                    .filter(stream=page.stream)
                     .order_by("pk")
                 )
                 return StepResult.done(
@@ -170,7 +165,7 @@ class BoundedStreamStage(StepImpl):
                         evidence=[_evidence(page.stream), *(_evidence(row) for row in discrepancies)],
                     ).model_dump(mode="json")
                 )
-        except ValidationError, TransientStepError:
+        except _PASSTHROUGH_STREAM_ERRORS:
             raise
         except Exception as error:  # noqa: BLE001 -- driver quarantines semantic failures itself.
             raise TransientStepError(str(error) or type(error).__name__) from error
@@ -181,7 +176,7 @@ class CoverageGate(GateStep):
 
     Conflict Decisions request review, never authorize automatic reconciliation.
     Their completion only rechecks coverage: the discrepancy remains authoritative
-    until its own domain resolution calls SyncDiscrepancy.objects.resolve().
+    until its own domain resolution calls SyncDiscrepancy.objects.resolve_conflict().
     Waiting pulses retry at most one bounded stream page, rotating through the
     admitted partitions. Provider reads run outside workflow finalization; native
     gate results still let the engine retain Decisions atomically.
@@ -217,12 +212,7 @@ class CoverageGate(GateStep):
                 for reference in value.streams
             ]
             discrepancy_manager = apps.get_model("integrate", "SyncDiscrepancy").objects.db_manager(alias)
-            discrepancies = list(
-                discrepancy_manager.filter(
-                    stream__in=streams,
-                    status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
-                ).order_by("pk")
-            )
+            discrepancies = list(discrepancy_manager.unresolved().filter(stream__in=streams).order_by("pk"))
             state = step_run.resume_state.get("state", step_run.resume_state)
             index = state.get("rescan_index", 0) % len(streams)
             baseline = state.get("rescan_baseline", "")
@@ -240,18 +230,13 @@ class CoverageGate(GateStep):
                             stream = page.stream
                             baseline = "" if page.exhausted else public_id_of(stream)
                         streams[index] = stream
-                except ValidationError, TransientStepError:
+                except _PASSTHROUGH_STREAM_ERRORS:
                     raise
                 except Exception as error:  # noqa: BLE001 -- transport failures use native retained retries.
                     raise TransientStepError(str(error) or type(error).__name__) from error
                 if not baseline:
                     index = (index + 1) % len(streams)
-                discrepancies = list(
-                    discrepancy_manager.filter(
-                        stream__in=streams,
-                        status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY),
-                    ).order_by("pk")
-                )
+                discrepancies = list(discrepancy_manager.unresolved().filter(stream__in=streams).order_by("pk"))
             resume_state = {
                 "streams": [public_id_of(stream) for stream in streams],
                 "rescan_index": index,

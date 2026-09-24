@@ -17,7 +17,7 @@ Per-identity discrepancy rescans use CardDAV multiget without advancing that
 cursor. A daily depth-one PROPFIND sweep seeks in href order and reads bounded
 multiget pages through the same apply path, importing contacts missed by the
 change feed. The driver checkpoints each page before counting absent resources;
-callers pulse until its `_angee_reconcile` checkpoint disappears. A silently
+callers pulse until `SyncStream.reconcile_state` is empty. A silently
 vanished resource becomes unavailable even when the change feed omits it.
 
 `RecordLink.external_key` preserves the existing `(folder, source_uid)` identity:
@@ -54,7 +54,10 @@ the resource ETag as `If-Match`, following
 New resources use `If-None-Match: *`. Successful writes refresh both bases and the
 remote version and retain origin `local`, so the next pull recognizes the write.
 Both-sided changes and HTTP 412 responses remain unresolved `CONFLICT`
-discrepancies. No timestamp or last-writer-wins rule selects a winner.
+discrepancies until the operator chooses Keep remote or Keep local. Keeping the
+remote re-reads and applies that record; keeping the local re-reads the remote
+version before a conditional write. A newer remote edit can reject that write
+and leave the conflict open.
 
 Deletion defaults preserve data: remote deletion tombstones the link and retains
 the local person; local deletion while the remote remains live produces a

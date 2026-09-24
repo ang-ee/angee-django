@@ -9,12 +9,13 @@ backend stream declarations.
 |---|---|
 | Cadence and occurrence token | `Bridge.mark_sync_queued`, `sync_progress.queued_at` |
 | Publication, frozen input, deduplication, actor admission | `WorkflowRunManager.start` |
-| One active cycle and run pointer | `admit_bridge_cycle`, `BridgeProgressReporter` |
+| One active cycle | `admit_bridge_cycle` |
+| Current execution owner | `Bridge.sync_run_id`, `Bridge.claim_dispatch` |
 | Cursor, epoch, page application and quarantine | `SyncStream`, `advance_stream` |
 | Lease, retry/backoff and attempt history | `StepImpl`, workflow engine |
 | Conflict review | `CoverageGate` composing the native `GateStep`/Decision contract |
 | Durable terminal delivery | `WorkflowDispatchKind.RUN_SETTLE`, subject settlement |
-| Final bridge telemetry and cadence | `settle_bridge_run` composing Bridge terminal methods |
+| Final bridge telemetry and cadence | `settle_bridge_run` composing `Bridge.settle_dispatch` |
 
 ## Admission
 
@@ -52,8 +53,8 @@ platform installs and non-default databases at the existing authorization
 frontier; it never substitutes the workflow author.
 
 The manager's `validate_new` runs under the Bridge lock and rejects another non-terminal
-run for that subject, including another workflow lineage. Admission records the
-run public ID at `sync_progress.details.run`, marks syncing and pauses cadence
+run for that subject, including another workflow lineage. Admission claims the
+run through `Bridge.claim_dispatch`, marks syncing and pauses cadence
 until terminal settlement. Duplicate admission never rewrites a newer pointer.
 
 ## Bounded execution
@@ -79,7 +80,8 @@ cursor together; workflow finalization follows separately. A crash between
 those commits resumes from the durable cursor. `heartbeat_during` renews the
 exact retained attempt lease during long pages. Declare automatic retry/backoff
 in native step config; semantic records remain quarantined while infrastructure
-failures retry the attempt.
+failures retry the attempt. Adapter contract violations fail immediately without
+retaining a retry.
 Consumer stages resolve the admitted Bridge with the public `bridge_for_step`.
 
 Each invocation handles one page. Incomplete pages return a timer wait due now,
@@ -97,8 +99,8 @@ stages; a single logical stream partition must have one writer stage at a time.
 while any required discrepancy is OPEN/RETRY, and uses native GateStep slots for
 one Decision per open CONFLICT. A Decision asks for review and rechecking; it
 does not resolve a data conflict. The domain resolution must call the discrepancy
-owner's `resolve()` operation. A timed recheck keeps missing dependencies and
-semantic quarantine from silently accepting the cycle.
+owner's `resolve_conflict(keep=...)` operation. A timed recheck keeps missing
+dependencies and semantic quarantine from silently accepting the cycle.
 Coverage uses STANDARD execution so waiting pulses can perform remote reads.
 Each pulse re-drives due discrepancies for one partition, bounded by
 `rescan_bound` (default 100), and rotates through admitted streams. Adapters
@@ -113,9 +115,11 @@ atomically retain a `RUN_SETTLE` dispatch.
 The explicit `ANGEE_WORKFLOW_SUBJECT_SETTLERS` contribution declares the Bridge
 base and `settle_bridge_run`; the workflows owner expands it to concrete content
 type keys with collision rejection. Handler delivery and dispatch consumption
-share one transaction. Bridge row locking compares `details.run` to the expected
-run public ID and requires a busy stage. Success calls `record_sync`; failure,
-retry exhaustion and direct Run-UI cancel call `record_sync_error`. Repeated or
-late delivery cannot settle twice or overwrite a newer cycle. The pointer is
+share one transaction. `Bridge.settle_dispatch` compares `sync_run_id` to the
+expected run ID under the Bridge row lock and requires a busy stage. Success calls
+`record_sync`; failure, retry exhaustion and direct Run-UI cancel call
+`record_sync_error`. Repeated or late delivery cannot settle twice or overwrite a
+newer cycle. The pointer is
 retained for inspection through the existing WorkflowRun UI, linked from the
-shared integration sync fields. No connector execution UI is introduced.
+integration sync card through this addon's web fragment. Progress details can be
+replaced freely without changing execution ownership.

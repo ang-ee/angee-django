@@ -335,7 +335,8 @@ Use these owners instead of maintaining another contract in an addon:
   `angee_widget`, `angee_scalar_hint`, and `angee_currency_field` on the field;
   `angee.data.field_classification` reads those declarations and does
   not special-case addon-owned field classes. Custom widget keys use
-  `namespace.addon.widget` (lowercase segments with digits/underscores); the
+  `namespace.addon.widget` (lowercase namespace segments with digits/underscores;
+  the final widget name also accepts camelCase); the
   owning web addon registers the identical key. Unknown bare built-in names
   remain schema errors.
 - A computed GraphQL field may declare presentation facts through
@@ -1199,24 +1200,25 @@ validated at the driver boundary.
   absences before confirming tombstones and preserve existing quarantine.
 - **Inventory is a resumable import.** `reconcile_stream` consumes one bounded
   iterator page per pulse, reading and applying enumerated keys before absence.
-  The driver reserves `_angee_reconcile` in `SyncStream.cursor`; adapters seek
-  exclusively after the committed key in their own deterministic ordering.
+  The driver retains its checkpoint in `SyncStream.reconcile_state`; adapters
+  seek exclusively after the committed key in their own deterministic ordering.
   Without `read_keys`, a bounded extraction baseline precedes enumeration.
-  Callers pulse until the reserved cursor member disappears; only then is
-  reconciliation complete. Root and child absence passes are bounded too.
+  Callers pulse until the checkpoint is empty; only then is reconciliation
+  complete. Root and child absence passes are bounded too.
 - **Compound children belong to one aggregate.** A link's optional immutable
   `parent` is a root link in the same stream. Enumerate aggregate keys only:
   children cannot independently become absent, and child retries read and
   reapply the parent's key. The aggregate adapter owns successful child evidence
   and discrepancy resolution; a successful parent alone does not resolve them.
 - **Quarantine is not a work queue.** Stream-cycle rescan re-reads due replica
-  identities through the optional `StreamAdapter.read_keys` operation, including
-  tombstones for missing remote keys. It composes the same transactional apply
-  path while preserving the cursor. Only adapters without this operation fall
-  back to a baseline, with that fallback recorded in discrepancy details. Event
-  feeds skip rescan. Semantic failures back off between attempts; conflicts await
-  explicit resolution and never auto-retry. The shared driver owns budgets,
-  repeated-page detection and partition concurrency.
+  identities through `BridgeImpl.read_keys` when `supports_identity_reads` is
+  declared, including tombstones for missing remote keys. It composes the same
+  transactional apply path while preserving the cursor. Only adapters without
+  this operation fall back to a baseline, with that fallback recorded in
+  discrepancy details. Event feeds skip rescan. Semantic failures back off
+  between attempts; conflicts await explicit resolution and never auto-retry.
+  The shared driver owns budgets, repeated-page detection and partition
+  concurrency.
   Workflow execution, decisions and durable scheduling stay with their existing
   owners; integrate must not import workflows.
 - **Native imports keep native lifecycle validation.**
@@ -1262,9 +1264,10 @@ from the composition addon to both owners; integrate never imports workflows.
   to enforce the admitted subject identity.
 - **Terminal delivery uses expected-run CAS.** A terminal run transition retains
   `RUN_SETTLE` only for a subject with an explicitly registered settler. The Bridge
-  handler locks the row and compares `sync_progress.details.run` plus its
-  busy stage before composing `record_sync` or `record_sync_error`. Direct cancel
-  and retry exhaustion therefore clear syncing, and old delivery cannot overwrite
+  handler delegates to `Bridge.settle_dispatch`, which locks the row and compares
+  `sync_run_id` plus its busy stage before composing `record_sync` or
+  `record_sync_error`. Direct cancel and retry exhaustion therefore clear syncing,
+  and old delivery cannot overwrite
   a newer cycle. Keep the run pointer for the shared inspection link.
 
 ### Integrations and workers

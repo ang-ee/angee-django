@@ -9,7 +9,6 @@ export const enIntegrateMessages: Record<string, string> = {
   // it is a real handshake per subtype, so the addon that owns the vendor owns
   // its label as well as its UX.
   "connection.test": "Test connection",
-  "sync.openRun": "View sync run",
   "streams.title": "Streams",
   "streams.openDiscrepancies": "Open discrepancies",
   "streams.links": "Links",
@@ -19,13 +18,15 @@ export const enIntegrateMessages: Record<string, string> = {
   "streams.resyncConfirm.body":
     "The next sync cycle starts a new generation and verifies a fresh baseline. Existing links are retained.",
   "streams.resolve": "Resolve",
+  "streams.keepRemote": "Keep remote",
+  "streams.keepLocal": "Keep local",
   "streams.retry": "Retry",
   "streams.target": "Target",
   "streams.openTarget": "Open target",
   "streams.targetUnavailable": "Target unavailable",
   "streams.back": "Back to streams",
-  "streams.discrepancyScope": "Discrepancies · {{key}} · {{partition}}",
-  "streams.linkScope": "Links · {{key}} · {{partition}}",
+  "streams.discrepancyScope": "Discrepancies · {{stream}}",
+  "streams.linkScope": "Links · {{stream}}",
   "streams.cursor.items_one": "{{count}} item",
   "streams.cursor.items_other": "{{count}} items",
   "streams.cursor.object": "Object",

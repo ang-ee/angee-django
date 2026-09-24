@@ -1,4 +1,4 @@
-"""Execution composition over real driver commits; authored for supervisor execution."""
+"""Workflow execution composes real stream-driver commits and retained retries."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from rebac import system_context
 
 from angee.base.db import related_on
 from angee.base.identity import public_id_of
-from angee.integrate.records import DiscrepancyKind, DiscrepancyStatus, StreamKind
-from angee.integrate.streams import RecordChange, StreamAdapter, StreamDefinition, StreamPage, open_stream
+from angee.integrate.impl import BridgeImpl, DiscrepancyKind, DiscrepancyStatus, StreamKind
+from angee.integrate.streams import RecordChange, StreamPage
 from angee.workflows.attempts import AttemptResultKind
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepExecutionMode, StepResult, TransientStepError
@@ -184,6 +184,75 @@ def test_infrastructure_failure_raises_and_engine_retains_declared_retry(
     assert successor.available_at == original.result_recorded_at + timedelta(seconds=7)
 
 
+@pytest.mark.parametrize("coverage", [False, True])
+@pytest.mark.parametrize("missing_implementation", [False, True])
+def test_adapter_contract_failure_does_not_retain_a_retry(
+    coverage: bool,
+    missing_implementation: bool,
+    stream_bridge: Channel,
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingIdentityAdapter(ReadKeysAdapter):
+        def read_keys(self, stream: Any, keys: Any, *, using: str | None = None) -> tuple[RecordChange, ...]:
+            if missing_implementation:
+                raise NotImplementedError("The declared identity-read capability must be implemented.")
+            return ()
+
+    stream = SyncStream.objects.current(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA)
+    link = RecordLink.objects.observe(stream, "missing")
+    SyncDiscrepancy.objects.record(
+        stream,
+        link=link,
+        kind=DiscrepancyKind.SEMANTIC,
+        code="needs-read",
+        retry_at=timezone.now() - timedelta(seconds=1),
+    )
+    adapter = MissingIdentityAdapter()
+    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    run, step_run = _start_stage(stream_bridge, coverage=coverage, retry=True)
+
+    execute_started(run)
+    if coverage:
+        step_run.refresh_from_db()
+        assert step_run.status == StepRunStatus.WAITING
+        advance_once(run, now=step_run.wait_until)
+        execute_started(run, now=step_run.wait_until)
+
+    step_run.refresh_from_db()
+    assert step_run.status == StepRunStatus.FAILED
+    with system_context(reason="test adapter contract fails without retry"):
+        attempt = related_on(step_run, "current_attempt", using="default")
+        assert attempt is not None
+        assert attempt.result_kind == AttemptResultKind.ERROR
+        assert not StepAttempt.objects.filter(step_run=step_run, retry_of__isnull=False).exists()
+        assert SyncStream.objects.get(pk=stream.pk).cursor == {}
+
+
+def test_invalid_adapter_cursor_fails_without_retry_or_page_commit(
+    stream_bridge: Channel,
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = MemoryAdapter(pages=[StreamPage(("uncommitted",), {"offset": float("nan")})])
+    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    run, step_run = _start_stage(stream_bridge, retry=True)
+
+    execute_started(run)
+
+    step_run.refresh_from_db()
+    assert step_run.status == StepRunStatus.FAILED
+    with system_context(reason="test invalid cursor rejects the page without retry"):
+        attempt = related_on(step_run, "current_attempt", using="default")
+        assert attempt is not None
+        assert attempt.result_kind == AttemptResultKind.ERROR
+        assert not StepAttempt.objects.filter(step_run=step_run, retry_of__isnull=False).exists()
+        assert SyncStream.objects.get().cursor == {}
+    assert not AppliedRecord.objects.filter(key="uncommitted").exists()
+
+
 def test_crash_after_commit_replays_from_stream_cursor(
     stream_bridge: Channel,
     workflow_engine_tables: None,
@@ -194,7 +263,9 @@ def test_crash_after_commit_replays_from_stream_cursor(
         pass
 
     class CursorAdapter(MemoryAdapter):
-        def extract(self, stream: Any, page_bound: int, *, using: str | None = None) -> StreamPage:
+        def extract(
+            self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
+        ) -> StreamPage:
             position = stream.cursor.get("offset", 0)
             self.extracted += 1
             return StreamPage((f"record-{position}",), {"offset": position + 1}, exhausted=position == 1)
@@ -239,7 +310,7 @@ def test_retry_prepares_cycle_when_first_attempt_never_reached_first_page(
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stream = open_stream(stream_bridge, StreamDefinition("records", kind=StreamKind.RECORD_REPLICA))
+    stream = SyncStream.objects.current(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA)
     link = RecordLink.objects.observe(stream, "repaired")
     SyncDiscrepancy.objects.record(stream, link=link, kind=DiscrepancyKind.SEMANTIC, code="retry-on-baseline")
     adapter = MemoryAdapter(pages=[StreamPage((RecordChange("repaired", {}, "repaired"),), {"offset": 1})])
@@ -248,7 +319,7 @@ def test_retry_prepares_cycle_when_first_attempt_never_reached_first_page(
     calls = []
 
     def interrupted_prepare(
-        stream: Any, adapter: StreamAdapter | None = None, *, page_bound: int = 100, using: str | None = None
+        stream: Any, adapter: BridgeImpl | None = None, *, page_bound: int = 100, using: str | None = None
     ) -> Any:
         calls.append(stream.pk)
         if len(calls) == 1:
@@ -305,7 +376,7 @@ def test_coverage_waits_for_unresolved_semantic_and_dependency_rows(
     workflow_engine_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    stream = open_stream(stream_bridge, StreamDefinition("records"))
+    stream = SyncStream.objects.current(stream_bridge, "records")
     discrepancy = SyncDiscrepancy.objects.record(stream, kind=kind, code="blocked")
     run, step_run = _start_stage(stream_bridge, coverage=True)
 
@@ -328,7 +399,7 @@ def test_waiting_coverage_redrives_due_identities_with_one_bounded_page(
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stream = open_stream(stream_bridge, StreamDefinition("records", kind=StreamKind.RECORD_REPLICA))
+    stream = SyncStream.objects.current(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA)
     adapter = ReadKeysAdapter(
         remote={key: RecordChange(key, {"name": key}, key) for key in ("first", "second", "future")}
     )
@@ -376,7 +447,7 @@ def test_waiting_coverage_finishes_bounded_baseline_fallback_before_accepting(
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stream = open_stream(stream_bridge, StreamDefinition("records", kind=StreamKind.RECORD_REPLICA))
+    stream = SyncStream.objects.current(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA)
     link = RecordLink.objects.observe(stream, "first")
     discrepancy = SyncDiscrepancy.objects.record(
         stream, link=link, kind=DiscrepancyKind.SEMANTIC, code="repair", source_hash="first"
@@ -411,7 +482,7 @@ def test_coverage_raises_one_native_decision_per_conflict(
     workflow_engine_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    stream = open_stream(stream_bridge, StreamDefinition("records"))
+    stream = SyncStream.objects.current(stream_bridge, "records")
     rows = [
         SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.CONFLICT, code=f"conflict-{index}")
         for index in range(2)
@@ -443,7 +514,7 @@ def test_coverage_includes_conflicts_retained_through_epoch_reset(
     workflow_engine_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    stream = open_stream(stream_bridge, StreamDefinition("records"))
+    stream = SyncStream.objects.current(stream_bridge, "records")
     discrepancy = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.CONFLICT, code="prior-epoch")
     successor = SyncStream.objects.bump_generation(stream)
     run, step_run = _start_stage(stream_bridge, coverage=True)

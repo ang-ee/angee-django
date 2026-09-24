@@ -26,7 +26,15 @@ The frozen `ImapSamplePreviewRequest` carries this contract from the flat
 GraphQL arguments through the model to the backend.
 
 The [web action](web/src/ImportImapSampleAction.tsx) composes
-`useAuthoredKeysetFeed`: native Query pages retain loaded headers, including
-when an older page is empty. The preview opts out of automatic refetches and
+`useAuthoredKeysetFeed`: native Query pages retain loaded headers, mailbox
+identity, and the snapshot count, including when a page is empty. The dialog
+reads those page facts; continuation cursors stay private to the feed adapter. The preview opts out of automatic refetches and
 retries; mailbox probes follow explicit preview and load-older actions. A fresh
 preview resets the query's pages through the shared owner.
+
+Mailbox polling uses one stream cursor per mailbox. On the first stream open,
+`seed_cursor` translates a retained `Bridge.cursor` position once; an existing
+stream never reseeds. Legacy future-only policy moves into the stream's config,
+so a later epoch reset preserves it. The paused starting-point action snapshots
+remote boundaries before its transaction and installs them through the driver's
+stream reset owner.

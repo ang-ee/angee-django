@@ -11,7 +11,6 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.db import related_on
-from angee.base.identity import public_id_of
 from angee.integrate.models import Bridge
 from angee.integrate.sync import SyncDispatch
 from angee.workflows import managers as workflow_managers
@@ -58,9 +57,32 @@ def test_duplicate_delivery_retains_run_and_pointer(cycle: tuple[Any, Any, Any, 
     with system_context(reason="test bridge admission evidence"):
         assert WorkflowRun.objects.for_subject(bridge).count() == 1
         bridge.refresh_from_db()
-    assert bridge.sync_progress["details"]["run"] == public_id_of(first)
+    assert bridge.sync_run_id == first.pk
     assert bridge.next_sync_at is None
     assert bridge.sync_stage == bridge.SyncStage.SYNCING
+
+
+def test_dispatch_claim_fences_stale_callers_and_queue_clears_settled_pointer(
+    cycle: tuple[Any, Any, Any, str],
+) -> None:
+    bridge, _, _, _ = cycle
+    with system_context(reason="test dispatch claim compare-and-set"):
+        stale = Channel.objects.get(pk=bridge.pk)
+        assert bridge.claim_dispatch(17)
+        started_at = bridge.last_sync_started_at
+        assert not stale.claim_dispatch(18)
+        assert not bridge.claim_dispatch(17)
+        bridge.refresh_from_db()
+        assert bridge.sync_run_id == 17
+        assert bridge.last_sync_started_at == started_at
+        assert not bridge.settle_dispatch(18, result=99)
+        assert bridge.settle_dispatch(17, result=3)
+        assert not bridge.settle_dispatch(17, result=99)
+        assert bridge.last_sync_items == 3
+        assert bridge.sync_run_id == 17
+        bridge.mark_sync_queued(now=timezone.now())
+        assert bridge.sync_run_id is None
+        assert not bridge.sync_is_dispatched
 
 
 def test_conflicting_frozen_input_rejects_same_identity(cycle: tuple[Any, Any, Any, str]) -> None:
@@ -188,11 +210,11 @@ def test_declared_key_dispatches_without_early_settlement(cycle: tuple[Any, Any,
             assert bridge.run_sync(now=timezone.now()) is SyncDispatch.DISPATCHED
             assert starts == [bridge.pk]
             bridge.refresh_from_db()
-            run_pointer = bridge.sync_progress["details"]["run"]
+            run_pointer = bridge.sync_run_id
             assert bridge.last_sync_status != "ok"
             bridge.mark_sync_queued(now=timezone.now() + timedelta(minutes=1))
             assert bridge.sync_stage == bridge.SyncStage.SYNCING
-            assert bridge.sync_progress["details"]["run"] == run_pointer
+            assert bridge.sync_run_id == run_pointer
     monkeypatch.setattr("angee.integrate.models.task_locks_are_cross_process", lambda: True)
     monkeypatch.setattr(Bridge, "is_syncing", property(lambda self: False))
     assert bridge.effective_sync_stage == bridge.SyncStage.SYNCING

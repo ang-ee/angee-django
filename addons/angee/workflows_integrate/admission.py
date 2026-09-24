@@ -10,14 +10,12 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.utils import timezone
 from rebac import system_context, to_subject_ref
 
 from angee.base.db import get_write_alias, related_on
-from angee.base.identity import public_id_for
 from angee.base.permissions import require_authorization_database
 from angee.integrate.models import Bridge
-from angee.integrate.sync import BridgeProgressReporter, SyncDispatch
+from angee.integrate.sync import SyncDispatch
 from angee.workflows.attempts import JsonPresence
 from angee.workflows.states import RunStatus
 
@@ -96,16 +94,9 @@ def admit_bridge_cycle(
             using=using,
         )
         if new_bridge is not None:
-            now = timezone.now()
-            new_bridge.mark_sync_started(now=now, using=using)
-            new_bridge.next_sync_at = None
-            new_bridge.save(update_fields=["next_sync_at", "updated_at"], using=using)
-            details = dict(new_bridge.sync_progress.get("details", {}))
-            details["run"] = public_id_for(type(run), run.pk)
-            BridgeProgressReporter(new_bridge, using=using).report(new_bridge.SyncStage.SYNCING, details=details)
-            bridge.sync_stage = new_bridge.sync_stage
-            bridge.sync_progress = new_bridge.sync_progress
-            bridge.next_sync_at = None
+            if not new_bridge.claim_dispatch(run.pk, using=using):
+                raise ValidationError({"bridge": "The Bridge dispatch changed during admission."})
+            bridge.refresh_from_db(using=using)
         return run
 
 

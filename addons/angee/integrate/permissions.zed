@@ -76,7 +76,7 @@ definition integrate/webhook_subscription {
 }
 
 definition integrate/sync_stream {
-    // The ORM owner relation derives from the concrete Bridge GFK's id.
+    // The retained stream belongs to its protected Integration identity.
     relation integration: integrate/integration // rebac:field=integration
 
     permission create = integration->write

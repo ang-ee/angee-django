@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import enum
 import logging
+from functools import partial
 from typing import Any, cast
 
 import strawberry
@@ -61,7 +62,6 @@ from angee.integrate.models import Bridge, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.queue import queue_bridge_sync
-from angee.integrate.records import DiscrepancyStatus
 from angee.integrate.registry import models_with
 
 logger = logging.getLogger(__name__)
@@ -512,17 +512,6 @@ def _console_credentials(info: strawberry.Info) -> Any:
 
     del info
     return cast(Any, Credential.objects).console_credentials()
-
-
-def _console_integrations(info: strawberry.Info) -> Any:
-    """Return admin-visible integrations with authorized concrete children batched."""
-
-    actor = _session_user(info)
-    exposed = _exposed_model_labels(info)
-    return Integration.objects.all().with_concrete_children(
-        actor=actor,
-        exposed_model_labels=exposed,
-    )
 
 
 def _exposed_model_labels(info: strawberry.Info) -> set[str]:
@@ -1242,7 +1231,7 @@ class IntegrationLabelMixin:
     type without adding a GraphQL interface to the SDL.
     """
 
-    @strawberry_django.field(only=["display_name", "vendor", "lifecycle"])
+    @strawberry_django.field(only=["display_name", "vendor", "lifecycle"], prefetch_related=["vendor"])
     def display_name(self) -> str:
         """Return the operator label, falling back to the vendor-derived one."""
 
@@ -1271,7 +1260,7 @@ class BridgeSyncStatusMixin:
 
         return bool(cast(Any, self).is_syncing)
 
-    @strawberry_django.field(name="sync_stage", only=["id", "sync_stage", "sync_progress"])
+    @strawberry_django.field(name="sync_stage", only=["id", "sync_stage", "sync_run_id"])
     def sync_stage(self) -> str:
         """Reconcile direct workers against their lock; retained runs settle durably."""
 
@@ -1293,6 +1282,7 @@ class BridgeTypeMixin(IntegrationLabelMixin, BridgeSyncStatusMixin):
     last_sync_summary: strawberry.scalars.JSON
     sync_error: auto
     sync_progress: strawberry.scalars.JSON
+    sync_run_id: auto
     created_at: auto
     updated_at: auto
 
@@ -1320,6 +1310,15 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     last_error: auto
     created_at: auto
     updated_at: auto
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: strawberry.Info) -> Any:
+        """Batch authorized concrete children for root and nested projections."""
+
+        return queryset.with_concrete_children(
+            actor=_session_user(info),
+            exposed_model_labels=_exposed_model_labels(info),
+        )
 
     @strawberry.field
     def concrete_target(self, info: strawberry.Info) -> ConcreteIntegrationTarget:
@@ -1399,14 +1398,14 @@ _VENDOR_RESOURCE = hasura_model_resource(
 class SyncStreamType(AngeeNode):
     """Read-only inspection of a bridge partition's retained epoch."""
 
-    integration: IntegrationType = strawberry_django.field(only=["bridge_id"], prefetch_related=["integration"])
+    integration: IntegrationType
     key: auto
     partition: auto
     kind: auto
     direction: auto
     generation: auto
     phase: auto
-    cursor: JSON = strawberry_django.field(metadata={"angee_widget": "angee.integrate.sync_cursor"})
+    cursor: JSON = strawberry_django.field(metadata={"angee_widget": "angee.integrate.integrationSyncCursor"})
     cursor_expires_at: auto
     resync_required: auto
     last_advanced_at: auto
@@ -1418,7 +1417,7 @@ class SyncStreamType(AngeeNode):
     @strawberry_django.field(
         annotate=Count(
             "discrepancies",
-            filter=Q(discrepancies__status__in=(DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY)),
+            filter=Q(discrepancies__in=SyncDiscrepancy.objects.unresolved().values("pk")),
             distinct=True,
         )
     )
@@ -1493,6 +1492,7 @@ class SyncDiscrepancyType(AngeeNode):
     mapping_version: auto
     details: JSON
     status: auto
+    is_open: auto
     attempts: auto
     retry_at: auto
     resolved_at: auto
@@ -1518,7 +1518,14 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
         "last_reconciled_at",
     ],
     sortable=[
-        "key", "partition", "kind", "direction", "phase", "generation", "last_advanced_at", "last_reconciled_at",
+        "key",
+        "partition",
+        "kind",
+        "direction",
+        "phase",
+        "generation",
+        "last_advanced_at",
+        "last_reconciled_at",
     ],
     aggregatable=["id"],
     groupable=["key", "partition", "kind", "direction", "phase", "resync_required"],
@@ -1532,7 +1539,14 @@ _RECORD_LINK_RESOURCE = hasura_model_resource(
     model=RecordLink,
     name="record_links",
     filterable=[
-        "id", "stream", "stream__integration", "external_key", "status", "origin", "remote_version", "last_seen_at",
+        "id",
+        "stream",
+        "stream__integration",
+        "external_key",
+        "status",
+        "origin",
+        "remote_version",
+        "last_seen_at",
     ],
     sortable=["external_key", "last_seen_at", "status", "origin", "remote_version"],
     aggregatable=["id"],
@@ -1558,7 +1572,18 @@ _SYNC_DISCREPANCY_RESOURCE = hasura_model_resource(
     SyncDiscrepancyType,
     model=SyncDiscrepancy,
     name="sync_discrepancies",
-    filterable=["id", "stream", "stream__integration", "link", "kind", "code", "status", "retry_at", "created_at"],
+    filterable=[
+        "id",
+        "stream",
+        "stream__integration",
+        "link",
+        "kind",
+        "code",
+        "status",
+        "is_open",
+        "retry_at",
+        "created_at",
+    ],
     sortable=["kind", "status", "retry_at", "created_at"],
     aggregatable=["id"],
     groupable=["kind", "code", "status"],
@@ -1575,12 +1600,12 @@ class SyncRecordActionMutation:
 
     @strawberry.mutation(name="resolveSyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
     @action_guard("Could not resolve the discrepancy.")
-    def resolve_sync_discrepancy(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+    def resolve_sync_discrepancy(self, info: strawberry.Info, id: PublicID, keep: str | None = None) -> ActionResult:
         """Dispatch resolution through the discrepancy manager after row authorization."""
 
         using = get_write_alias(SyncDiscrepancy)
         discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write", using=using)
-        SyncDiscrepancy.objects.db_manager(using).resolve(discrepancy, using=using)
+        SyncDiscrepancy.objects.db_manager(using).resolve(discrepancy, keep=keep, using=using)
         return ActionResult(ok=True, message=_("Discrepancy resolved."))
 
     @strawberry.mutation(name="retrySyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -1628,7 +1653,7 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
         "credential": public_pk_decoder(Credential),
         "account": public_pk_decoder(ExternalAccount),
     },
-    get_queryset=_console_integrations,
+    get_queryset=partial(IntegrationType.get_queryset, Integration.objects),
     write_backend=AngeeHasuraWriteBackend(
         Integration,
         public_id_fields=("vendor", "owner", "credential", "account"),

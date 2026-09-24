@@ -20,13 +20,15 @@ import { authoredQueryKey, requestAuthoredData, sharedAuthoredMeta, useAuthoredE
 export interface KeysetRow { id: string }
 
 /** A server-owned fixed window; an empty window can still have older history. */
-export interface KeysetFeedWindow<TRow extends KeysetRow> {
+export interface KeysetFeedWindow<TRow extends KeysetRow, TMetadata = undefined> {
   rows: readonly TRow[];
   count: number;
   older_cursor: string | null;
   has_older: boolean;
   has_more_in_window: boolean;
   has_older_than_through: boolean;
+  /** Domain-owned snapshot facts remain alongside every page, including empty pages. */
+  metadata?: TMetadata;
   newer_cursor?: string | null;
   has_newer?: boolean;
   has_newer_than_before?: boolean;
@@ -42,17 +44,18 @@ export interface KeysetFeedRevalidation<TRow extends KeysetRow> {
 }
 
 /** Native pages retain fixed cuts even when every row in a window disappears. */
-export interface KeysetFeedPage<TRow extends KeysetRow> {
+export interface KeysetFeedPage<TRow extends KeysetRow, TMetadata = undefined> {
   rows: readonly TRow[];
   through: string | null;
   hasOlder: boolean;
   count: number;
+  metadata?: TMetadata;
   before?: string | null;
   newer?: string | null;
   hasNewer?: boolean;
 }
 
-interface KeysetFeedReads<TRow extends KeysetRow> {
+interface KeysetFeedReads<TRow extends KeysetRow, TMetadata = undefined> {
   queryKey: QueryKey;
   pageSize: number;
   window: (
@@ -60,12 +63,12 @@ interface KeysetFeedReads<TRow extends KeysetRow> {
     through: string | null,
     limit: number,
     context: QueryFunctionContext,
-  ) => Promise<KeysetFeedWindow<TRow>>;
+  ) => Promise<KeysetFeedWindow<TRow, TMetadata>>;
   revalidate?: (
     ids: string[],
     context: QueryFunctionContext,
   ) => Promise<KeysetFeedRevalidation<TRow>>;
-  newer?: (after: string, limit: number, context: QueryFunctionContext) => Promise<KeysetFeedWindow<TRow>>;
+  newer?: (after: string, limit: number, context: QueryFunctionContext) => Promise<KeysetFeedWindow<TRow, TMetadata>>;
 }
 
 /**
@@ -78,14 +81,14 @@ interface KeysetFeedReads<TRow extends KeysetRow> {
  * Every HTTP request is bounded, but a complete refresh grows with loaded history
  * and new head arrivals. The adapter owns any cross-request server snapshot.
  */
-export function keysetFeedOptions<TRow extends KeysetRow>(
+export function keysetFeedOptions<TRow extends KeysetRow, TMetadata = undefined>(
   client: QueryClient,
-  reads: KeysetFeedReads<TRow>,
+  reads: KeysetFeedReads<TRow, TMetadata>,
 ): ReturnType<typeof infiniteQueryOptions<
-  KeysetFeedPage<TRow>, Error, InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>,
+  KeysetFeedPage<TRow, TMetadata>, Error, InfiniteData<KeysetFeedPage<TRow, TMetadata>, KeysetFeedCursor>,
   QueryKey, KeysetFeedCursor
 >> {
-  type Page = KeysetFeedPage<TRow>;
+  type Page = KeysetFeedPage<TRow, TMetadata>;
   const cached = () => client.getQueryData<InfiniteData<Page, KeysetFeedCursor>>(reads.queryKey);
   if (!Number.isInteger(reads.pageSize) || reads.pageSize < 1 || reads.pageSize > 200) {
     throw new Error("Keyset feed page size must be between 1 and 200.");
@@ -113,6 +116,7 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
           through: page.older_cursor,
           hasOlder: page.has_older,
           count: page.count,
+          metadata: page.metadata,
           before: newer ? page.newer_cursor : undefined,
           newer: page.newer_cursor,
           hasNewer: page.has_newer,
@@ -127,8 +131,8 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
       const freshIds = new Set<string>();
       const visited = new Set<string | null>();
       let before = newer ? oldPage.before ?? null : older;
-      let page: KeysetFeedWindow<TRow>;
-      let firstWindow: KeysetFeedWindow<TRow> | undefined;
+      let page: KeysetFeedWindow<TRow, TMetadata>;
+      let firstWindow: KeysetFeedWindow<TRow, TMetadata> | undefined;
       do {
         visited.add(before);
         page = await reads.window(before, oldPage.through, reads.pageSize, context);
@@ -163,6 +167,7 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
         through: oldPage.through,
         hasOlder: page.has_older_than_through,
         count: page.count,
+        metadata: page.metadata,
         before: oldPage.before,
         newer: newer ? oldPage.newer : firstWindow.newer_cursor,
         hasNewer: newer ? firstWindow.has_newer_than_before : firstWindow.has_newer,
@@ -185,8 +190,8 @@ export function keysetFeedOptions<TRow extends KeysetRow>(
 }
 
 /** Derive display order without retaining a second copy outside Query's pages. */
-export function keysetFeedRows<TRow extends KeysetRow>(
-  data: InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor> | undefined,
+export function keysetFeedRows<TRow extends KeysetRow, TMetadata = unknown>(
+  data: InfiniteData<KeysetFeedPage<TRow, TMetadata>, KeysetFeedCursor> | undefined,
   compare: (left: TRow, right: TRow) => number,
 ): TRow[] {
   const seen = new Set<string>();
@@ -207,6 +212,7 @@ export interface AuthoredKeysetFeedOptions<
   TRow extends KeysetRow,
   TWindow extends AuthoredDocument,
   TRevalidation extends AuthoredDocument,
+  TMetadata = undefined,
 > {
   /** Supplied by the session owner; Refine never imports App or domain auth. */
   actor: string | undefined;
@@ -216,7 +222,7 @@ export interface AuthoredKeysetFeedOptions<
   pageSize: number;
   /** Native request lifecycle policy; identity and retained pages stay with this owner. */
   queryOptions?: Pick<UseInfiniteQueryOptions<
-    KeysetFeedPage<TRow>, Error, InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>,
+    KeysetFeedPage<TRow, TMetadata>, Error, InfiniteData<KeysetFeedPage<TRow, TMetadata>, KeysetFeedCursor>,
     QueryKey, KeysetFeedCursor
   >, "staleTime" | "gcTime" | "retry" | "retryDelay" | "retryOnMount"
     | "refetchOnMount" | "refetchOnWindowFocus" | "refetchOnReconnect"
@@ -224,7 +230,7 @@ export interface AuthoredKeysetFeedOptions<
   window: {
     document: TWindow;
     variables: (before: string | null, through: string | null, limit: number) => AuthoredVariables<TWindow>;
-    select: (data: DocumentData<TWindow>) => KeysetFeedWindow<TRow>;
+    select: (data: DocumentData<TWindow>) => KeysetFeedWindow<TRow, TMetadata>;
     /** Optional native newer-page read using the same operation and scope. */
     newerVariables?: (after: string, limit: number) => AuthoredVariables<TWindow>;
   };
@@ -241,8 +247,9 @@ export function useAuthoredKeysetFeed<
   TRow extends KeysetRow,
   TWindow extends AuthoredDocument,
   TRevalidation extends AuthoredDocument,
->(options: AuthoredKeysetFeedOptions<TRow, TWindow, TRevalidation>): UseInfiniteQueryResult<
-  InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>, Error
+  TMetadata = undefined,
+>(options: AuthoredKeysetFeedOptions<TRow, TWindow, TRevalidation, TMetadata>): UseInfiniteQueryResult<
+  InfiniteData<KeysetFeedPage<TRow, TMetadata>, KeysetFeedCursor>, Error
 > & {
   /** Discard loaded history and explicitly fetch the first page, including disabled/static feeds. */
   restart: () => Promise<void>;
